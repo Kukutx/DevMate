@@ -1,0 +1,76 @@
+name: Sync runtime version
+
+on:
+  push:
+    branches:
+      - fix/sync-1.15.0-runtime-version
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/sync-1.15.0-runtime-version
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Synchronize version metadata
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const version = require('./package.json').version;
+
+          function replaceExact(file, pattern, replacement) {
+            const before = fs.readFileSync(file, 'utf8');
+            const after = before.replace(pattern, replacement);
+            if (after === before) throw new Error(`Expected version pattern not found in ${file}`);
+            fs.writeFileSync(file, after, 'utf8');
+          }
+
+          replaceExact('extension.js', /const VERSION = '[^']+';/, `const VERSION = '${version}';`);
+          replaceExact('gateway/server.mjs', /const VERSION = '[^']+';/, `const VERSION = '${version}';`);
+
+          const smokePath = 'tests/smoke-gateway.mjs';
+          const smokeBefore = fs.readFileSync(smokePath, 'utf8');
+          const smokeAfter = smokeBefore.replaceAll('1.14.0', version);
+          if (smokeAfter === smokeBefore) throw new Error('Expected smoke test version values were not found.');
+          fs.writeFileSync(smokePath, smokeAfter, 'utf8');
+
+          const lockPath = 'package-lock.json';
+          const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+          lock.version = version;
+          lock.packages[''].version = version;
+          fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n', 'utf8');
+
+          fs.unlinkSync('.github/workflows/sync-runtime-version.yml');
+          NODE
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify
+        run: |
+          npm run check
+          npm run test:unit
+          npm run smoke:gateway
+          npm run package:vsix
+
+      - name: Commit synchronized files
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extension.js gateway/server.mjs tests/smoke-gateway.mjs package-lock.json .github/workflows/sync-runtime-version.yml
+          git commit -m "Sync runtime metadata for DevMate 1.15.0"
+          git push origin HEAD:fix/sync-1.15.0-runtime-version
