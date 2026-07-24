@@ -17,27 +17,75 @@ const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
 const NGROK_DOMAINS_URL = 'https://dashboard.ngrok.com/domains';
 const NGROK_AGENTS_URL = 'https://dashboard.ngrok.com/agents';
 const NOTICE_DEBOUNCE_MS = 15000;
+const PREFERENCE_STATE_PREFIX = 'devMate.ngrokPreference.';
 
 let baseExtension = null;
 let managedAuthtoken = '';
 let setupOutput = null;
 let lastNoticeKey = '';
 let lastNoticeAt = 0;
+let globalContext = null;
 
 function config() {
   return vscode.workspace.getConfiguration('devMate');
 }
 
+function preferenceStateKey(name) {
+  return `${PREFERENCE_STATE_PREFIX}${name}`;
+}
+
+function preferenceValue(name, fallback) {
+  const cfg = config();
+  let inspected;
+  try { inspected = cfg.inspect(name); } catch {}
+
+  if (inspected) {
+    const explicit = inspected.workspaceFolderValue ?? inspected.workspaceValue ?? inspected.globalValue;
+    if (explicit !== undefined) return explicit;
+  }
+
+  const stored = globalContext?.globalState.get(preferenceStateKey(name));
+  if (stored !== undefined) return stored;
+
+  try {
+    const configured = cfg.get(name);
+    return configured === undefined ? fallback : configured;
+  } catch {
+    return fallback;
+  }
+}
+
+async function updatePreference(name, value) {
+  await globalContext?.globalState.update(preferenceStateKey(name), value);
+
+  try {
+    const cfg = config();
+    if (!cfg.inspect(name)) {
+      log(`Setting devMate.${name} is not registered by VS Code; using DevMate extension storage instead.`);
+      return false;
+    }
+    await cfg.update(name, value, vscode.ConfigurationTarget.Global);
+    return true;
+  } catch (error) {
+    log(`Could not update devMate.${name} in User Settings; using DevMate extension storage instead: ${error.message || error}`);
+    return false;
+  }
+}
+
 function ngrokCommand() {
-  return String(config().get('ngrokCommandPath') || 'ngrok').trim() || 'ngrok';
+  return String(preferenceValue('ngrokCommandPath', '') || 'ngrok').trim() || 'ngrok';
 }
 
 function usesManagedAccount() {
-  return config().get('ngrokUseManagedAccount') !== false;
+  return preferenceValue('ngrokUseManagedAccount', true) !== false;
 }
 
 function configuredUrl() {
-  return String(config().get('ngrokUrl') || '').trim();
+  return String(preferenceValue('ngrokUrl', '') || '').trim();
+}
+
+function poolingEnabled() {
+  return preferenceValue('ngrokPoolingEnabled', false) === true;
 }
 
 function log(message) {
@@ -75,7 +123,7 @@ function showMissingManagedToken() {
   ).then(async choice => {
     if (choice === 'Quick Setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
     if (choice === 'Use Global Config') {
-      await config().update('ngrokUseManagedAccount', false, vscode.ConfigurationTarget.Global);
+      await updatePreference('ngrokUseManagedAccount', false);
       await offerStartAgain('DevMate will now use the global ngrok.yml configuration.');
     }
   });
@@ -95,8 +143,8 @@ function showNgrokError(problem) {
       if (choice === 'Switch ngrok Account') await vscode.commands.executeCommand('devMate.ngrokSwitchAccount');
       if (choice === 'View Active Agents') await openExternal(NGROK_AGENTS_URL);
       if (choice === 'Use Account Default Domain') {
-        await config().update('ngrokUrl', '', vscode.ConfigurationTarget.Global);
-        await config().update('ngrokPoolingEnabled', false, vscode.ConfigurationTarget.Global);
+        await updatePreference('ngrokUrl', '');
+        await updatePreference('ngrokPoolingEnabled', false);
         await vscode.commands.executeCommand('devMate.stop');
         await offerStartAgain('The old custom URL was cleared. DevMate will use the selected account default domain.');
       }
@@ -123,8 +171,8 @@ function showNgrokError(problem) {
       'Open Domains'
     ).then(async choice => {
       if (choice === 'Use Account Default Domain') {
-        await config().update('ngrokUrl', '', vscode.ConfigurationTarget.Global);
-        await config().update('ngrokPoolingEnabled', false, vscode.ConfigurationTarget.Global);
+        await updatePreference('ngrokUrl', '');
+        await updatePreference('ngrokPoolingEnabled', false);
         await vscode.commands.executeCommand('devMate.stop');
         await offerStartAgain('DevMate will now use the selected account default domain.');
       }
@@ -153,16 +201,15 @@ function createExtensionSpawn(originalSpawn) {
       return originalSpawn.call(childProcess, command, args, options);
     }
 
-    const cfg = config();
-    const managed = cfg.get('ngrokUseManagedAccount') !== false;
+    const managed = usesManagedAccount();
     if (managed && !managedAuthtoken) {
       showMissingManagedToken();
       throw new Error('DevMate-managed ngrok account is not configured. Run DevMate: Configure ngrok.');
     }
 
     const effectiveArgs = buildNgrokArgs(args, {
-      url: cfg.get('ngrokUrl') || '',
-      poolingEnabled: cfg.get('ngrokPoolingEnabled') === true
+      url: configuredUrl(),
+      poolingEnabled: poolingEnabled()
     });
     const effectiveOptions = buildNgrokSpawnOptions(options, {
       authtoken: managedAuthtoken,
@@ -170,7 +217,7 @@ function createExtensionSpawn(originalSpawn) {
     });
     const child = originalSpawn.call(childProcess, command, effectiveArgs, effectiveOptions);
     attachNgrokDiagnostics(child);
-    log(`Starting ngrok with ${managed ? 'DevMate-managed account' : 'global ngrok config'}${cfg.get('ngrokUrl') ? ` at ${cfg.get('ngrokUrl')}` : ' using the account default domain'}.`);
+    log(`Starting ngrok with ${managed ? 'DevMate-managed account' : 'global ngrok config'}${configuredUrl() ? ` at ${configuredUrl()}` : ' using the account default domain'}.`);
     return child;
   };
 }
@@ -189,7 +236,7 @@ async function saveManagedAuthtoken(context, value) {
   const token = validateAuthtoken(value);
   await context.secrets.store(SECRET_KEY, token);
   managedAuthtoken = token;
-  await config().update('ngrokUseManagedAccount', true, vscode.ConfigurationTarget.Global);
+  await updatePreference('ngrokUseManagedAccount', true);
   log('Saved a DevMate-managed ngrok Authtoken in VS Code Secret Storage.');
 }
 
@@ -261,7 +308,7 @@ async function configureDomain({ includeKeep = true } = {}) {
   });
   if (!choice || choice.value === 'keep') return false;
   if (choice.value === 'default') {
-    await config().update('ngrokUrl', '', vscode.ConfigurationTarget.Global);
+    await updatePreference('ngrokUrl', '');
     log('Configured ngrok to use the account default development domain.');
     return true;
   }
@@ -277,13 +324,13 @@ async function configureDomain({ includeKeep = true } = {}) {
   });
   if (value === undefined) return false;
   const normalized = normalizeNgrokUrl(value);
-  await config().update('ngrokUrl', normalized, vscode.ConfigurationTarget.Global);
+  await updatePreference('ngrokUrl', normalized);
   log(`Configured ngrok URL: ${normalized}`);
   return true;
 }
 
 async function completeSetup(message) {
-  await config().update('ngrokPoolingEnabled', false, vscode.ConfigurationTarget.Global);
+  await updatePreference('ngrokPoolingEnabled', false);
   await vscode.commands.executeCommand('devMate.stop');
   await offerStartAgain(message);
 }
@@ -291,7 +338,7 @@ async function completeSetup(message) {
 async function recommendedSetup(context) {
   const saved = await promptForAuthtoken(context, 'DevMate · Quick ngrok Setup');
   if (!saved) return;
-  await config().update('ngrokUrl', '', vscode.ConfigurationTarget.Global);
+  await updatePreference('ngrokUrl', '');
   await completeSetup('ngrok setup is complete. DevMate will use the new account and its default development domain.');
 }
 
@@ -318,7 +365,7 @@ async function advancedSetup(context) {
     const saved = await promptForAuthtoken(context);
     if (!saved) return;
   } else {
-    await config().update('ngrokUseManagedAccount', false, vscode.ConfigurationTarget.Global);
+    await updatePreference('ngrokUseManagedAccount', false);
     log('Configured DevMate to use the global ngrok configuration.');
   }
 
@@ -390,7 +437,7 @@ async function switchAccount(context) {
     ignoreFocusOut: true
   });
   if (!domainChoice) return;
-  if (domainChoice.value === 'default') await config().update('ngrokUrl', '', vscode.ConfigurationTarget.Global);
+  if (domainChoice.value === 'default') await updatePreference('ngrokUrl', '');
   if (domainChoice.value === 'custom') await configureDomain({ includeKeep: false });
 
   await completeSetup('DevMate now uses the new ngrok account. The previous global ngrok.yml account does not affect managed mode.');
@@ -405,7 +452,7 @@ async function clearManagedAccount(context) {
   if (confirm !== 'Delete and Use Global Config') return;
   await context.secrets.delete(SECRET_KEY);
   managedAuthtoken = '';
-  await config().update('ngrokUseManagedAccount', false, vscode.ConfigurationTarget.Global);
+  await updatePreference('ngrokUseManagedAccount', false);
   await vscode.commands.executeCommand('devMate.stop');
   vscode.window.showInformationMessage('Deleted the DevMate-managed ngrok account.');
 }
@@ -421,7 +468,7 @@ async function ngrokDoctor() {
   log(`Managed token present: ${managedAuthtoken ? 'yes' : 'no'}`);
   log(`Ready to launch: ${installed.ok && (!managed || !!managedAuthtoken) ? 'yes' : 'no'}`);
   log(`Configured URL: ${configuredUrl() || 'account default'}`);
-  log(`Pooling: ${config().get('ngrokPoolingEnabled') === true ? 'enabled (not recommended)' : 'disabled (recommended)'}`);
+  log(`Pooling: ${poolingEnabled() ? 'enabled (not recommended)' : 'disabled (recommended)'}`);
 
   const configCheck = childProcess.spawnSync(ngrokCommand(), ['config', 'check'], {
     encoding: 'utf8',
@@ -443,10 +490,11 @@ async function maybePromptForNgrokSetup(context) {
     'Use Global Config'
   );
   if (action === 'Quick Setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
-  if (action === 'Use Global Config') await config().update('ngrokUseManagedAccount', false, vscode.ConfigurationTarget.Global);
+  if (action === 'Use Global Config') await updatePreference('ngrokUseManagedAccount', false);
 }
 
 async function activate(context) {
+  globalContext = context;
   setupOutput = vscode.window.createOutputChannel('DevMate Setup');
   context.subscriptions.push(setupOutput);
   managedAuthtoken = await context.secrets.get(SECRET_KEY) || '';
