@@ -82,7 +82,8 @@ test('trusted writable root lifecycle is persisted and restored into workspaces'
 
 test('persistent process supports output cursors, stdin, status, and clean exit', async () => {
   const trusted = structured(await call('list_trusted_roots')).roots[0];
-  fs.writeFileSync(path.join(trustedRoot, 'echo-process.cjs'), [
+  const scriptPath = path.join(trustedRoot, 'echo-process.cjs');
+  fs.writeFileSync(scriptPath, [
     "process.stdin.setEncoding('utf8');",
     "console.log('ready');",
     "process.stdin.on('data', data => {",
@@ -98,15 +99,23 @@ test('persistent process supports output cursors, stdin, status, and clean exit'
   assert.equal(started.started, true);
   assert.equal(started.process.status, 'running');
 
-  await delay(300);
-  const first = structured(await call('read_process_output', { id, afterSequence: 0, maxChars: 20000 }));
-  assert(first.events.some(event => event.text.includes('ready')));
+  let first = null;
+  for (let i = 0; i < 50; i++) {
+    await delay(100);
+    first = structured(await call('read_process_output', { id, afterSequence: 0, maxChars: 20000 }));
+    if (first.events.some(event => event.text.includes('ready'))) break;
+  }
+  assert(first?.events.some(event => event.text.includes('ready')));
   assert(first.nextSequence > 0);
 
   await call('send_process_input', { id, input: 'hello' });
-  await delay(250);
-  const second = structured(await call('read_process_output', { id, afterSequence: first.nextSequence, maxChars: 20000 }));
-  assert(second.events.some(event => event.text.includes('echo:hello')));
+  let second = null;
+  for (let i = 0; i < 50; i++) {
+    await delay(100);
+    second = structured(await call('read_process_output', { id, afterSequence: first.nextSequence, maxChars: 20000 }));
+    if (second.events.some(event => event.text.includes('echo:hello'))) break;
+  }
+  assert(second?.events.some(event => event.text.includes('echo:hello')));
   assert.equal(second.missed, false);
 
   await call('send_process_input', { id, input: 'quit' });
