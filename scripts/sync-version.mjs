@@ -61,6 +61,19 @@ replaceRequired('tests/smoke-gateway.mjs', [
   }
 ]);
 
+replaceRequired('tests/smoke-local-capabilities.mjs', [
+  {
+    pattern: /appVersion: '[^']+',/,
+    replacement: `appVersion: '${version}',`,
+    label: 'local smoke config version'
+  },
+  {
+    pattern: /clientInfo: \{ name: 'devmate-local-smoke', version: '[^']+' \}/,
+    replacement: `clientInfo: { name: 'devmate-local-smoke', version: '${version}' }`,
+    label: 'local smoke client version'
+  }
+]);
+
 const lockPath = path.join(root, 'package-lock.json');
 if (fs.existsSync(lockPath)) {
   const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
