@@ -24,6 +24,18 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Capture runtime audit report
+        shell: pwsh
+        run: |
+          npm audit --omit=dev --json | Out-File -FilePath npm-audit-runtime.json -Encoding utf8
+          exit 0
+
+      - name: Upload runtime audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-runtime
+          path: npm-audit-runtime.json
+
       - name: Audit runtime dependencies
         run: npm audit --omit=dev --audit-level=moderate
 
