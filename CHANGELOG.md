@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.15.0
 
+- Released the simplified ngrok account workflow under a new extension version so VS Code reliably upgrades existing 1.14.0 installations.
 - Added a one-prompt recommended ngrok setup that stores the Authtoken, disables pooling, and uses the account default domain automatically.
 - Added an explicit developer setup path for global `ngrok.yml` and account-owned stable URLs.
 - Prevented managed-account mode from silently falling back to an old or shared global ngrok configuration when no saved Authtoken exists.
@@ -9,6 +10,7 @@
 - Expanded ngrok diagnostics with launch readiness and managed-environment configuration checks.
 - Added unit coverage for managed-account fallback prevention and domain error classification.
 - Stored the DevMate-specific ngrok Authtoken in VS Code Secret Storage and injected it through `NGROK_AUTHTOKEN` without overwriting global `ngrok.yml`.
+- Renamed the account-switching command to make replacing the ngrok token easier to discover.
 
 ## 1.14.0
 
