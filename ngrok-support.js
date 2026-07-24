@@ -57,8 +57,11 @@ function buildNgrokSpawnOptions(options, { authtoken = '', useManagedAccount = t
   const next = { ...(options || {}) };
   const baseEnv = options?.env || process.env;
   next.env = { ...baseEnv };
-  if (useManagedAccount && String(authtoken || '').trim()) {
-    next.env.NGROK_AUTHTOKEN = String(authtoken).trim();
+
+  if (useManagedAccount) {
+    const token = String(authtoken || '').trim();
+    if (!token) throw new Error('DevMate-managed ngrok account requires an Authtoken.');
+    next.env.NGROK_AUTHTOKEN = token;
   }
   return next;
 }
