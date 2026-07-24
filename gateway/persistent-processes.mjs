@@ -67,7 +67,7 @@ function waitForExit(record, timeoutMs) {
   });
 }
 export async function killProcessTree(record, force = false) {
-  if (!record.child || (record.status !== 'running' && record.status !== 'stopping')) return;
+  if (!record.child || (record.status !== 'running' && record.status !== 'stopping')) return true;
   record.status = 'stopping';
   const pid = record.child.pid;
   if (process.platform === 'win32' && pid) {
@@ -75,14 +75,29 @@ export async function killProcessTree(record, force = false) {
       const args = ['/PID', String(pid), '/T'];
       if (force) args.push('/F');
       const killer = spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' });
-      killer.once('error', resolve);
-      killer.once('close', resolve);
+      let settled = false;
+      const done = () => { if (settled) return; settled = true; resolve(); };
+      killer.once('error', done);
+      killer.once('close', done);
     });
   } else if (pid) {
     try { process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM'); }
     catch { try { record.child.kill(force ? 'SIGKILL' : 'SIGTERM'); } catch {} }
+  } else {
+    try { record.child.kill(force ? 'SIGKILL' : 'SIGTERM'); } catch {}
   }
-  if (!force && !await waitForExit(record, 3000)) await killProcessTree(record, true);
+
+  if (await waitForExit(record, force ? 4000 : 3000)) return true;
+  if (!force) return killProcessTree(record, true);
+
+  try { record.child.kill('SIGKILL'); } catch {}
+  if (await waitForExit(record, 1500)) return true;
+
+  record.status = 'terminated';
+  record.finishedAt = now();
+  record.signal = record.signal || 'forced';
+  appendOutput(record, 'system', 'Process tree was force-terminated.\n');
+  return false;
 }
 export async function shutdownPersistentProcesses() {
   await Promise.allSettled(runningProcesses().map(record => killProcessTree(record, true)));
