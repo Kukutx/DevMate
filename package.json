@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Personal VS Code extension for ChatGPT MCP development: workspace editing, trusted writable roots, persistent local processes, commands, Git workflows, and readonly references.",
-  "version": "1.16.0",
+  "version": "1.16.1",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "engines": {
@@ -34,7 +34,7 @@
     "onCommand:devMate.ngrokDoctor",
     "onCommand:devMate.openNgrokDashboard"
   ],
-  "main": "./extension-entry.js",
+  "main": "./extension-entry-win32.js",
   "contributes": {
     "configuration": {
       "title": "DevMate",
@@ -131,7 +131,7 @@
         "devMate.requireAuthToken": {
           "type": "boolean",
           "default": true,
-          "description": "Require a per-install secret token for public MCP requests. The copied URL includes the token."
+          "description": "Require a per-install secret token for public MCP requests. The copied MCP URL includes the token."
         },
         "devMate.allowDirectoryMutations": {
           "type": "boolean",
@@ -252,8 +252,8 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",
     "build": "npm run version:sync && esbuild gateway/server-entry.mjs --bundle --platform=node --format=esm --target=node18 --outfile=gateway/server.bundle.mjs",
-    "check": "npm run version:sync && node --check extension-entry.js && node --check ngrok-support.js && node --check extension.js && node --check gateway/server-entry.mjs && node --check gateway/local-capabilities.mjs && node --check gateway/local-shared.mjs && node --check gateway/persistent-processes.mjs && node --check gateway/server.mjs && node --check gateway/maintenance.mjs && node --check tests/smoke-gateway.mjs && node --check tests/maintenance.test.mjs && node --check tests/ngrok-support.test.mjs && node --check tests/local-capabilities.test.mjs && node --check tests/smoke-local-capabilities.mjs",
-    "test:unit": "node --test tests/maintenance.test.mjs tests/ngrok-support.test.mjs tests/local-capabilities.test.mjs",
+    "check": "npm run version:sync && node --check extension-entry-win32.js && node --check extension-entry.js && node --check ngrok-launch-compat.js && node --check ngrok-support.js && node --check extension.js && node --check gateway/server-entry.mjs && node --check gateway/local-capabilities.mjs && node --check gateway/local-shared.mjs && node --check gateway/persistent-processes.mjs && node --check gateway/server.mjs && node --check gateway/maintenance.mjs && node --check tests/smoke-gateway.mjs && node --check tests/maintenance.test.mjs && node --check tests/ngrok-support.test.mjs && node --check tests/ngrok-launch-compat.test.mjs && node --check tests/local-capabilities.test.mjs && node --check tests/smoke-local-capabilities.mjs",
+    "test:unit": "node --test tests/maintenance.test.mjs tests/ngrok-support.test.mjs tests/ngrok-launch-compat.test.mjs tests/local-capabilities.test.mjs",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package"
   },
