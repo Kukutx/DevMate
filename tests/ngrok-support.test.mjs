@@ -42,10 +42,17 @@ test('decorates ngrok http arguments without duplicating explicit flags', () => 
   assert.deepEqual(buildNgrokArgs(['version'], { url: 'example.ngrok-free.app' }), ['version']);
 });
 
-test('injects managed authtoken through environment only', () => {
+test('injects managed Authtoken through environment only', () => {
   const options = buildNgrokSpawnOptions({ env: { EXISTING: '1' } }, { authtoken: 'abcdefghijklmnopqrstuvwxyz', useManagedAccount: true });
   assert.equal(options.env.EXISTING, '1');
   assert.equal(options.env.NGROK_AUTHTOKEN, 'abcdefghijklmnopqrstuvwxyz');
+});
+
+test('managed account mode never silently falls back to global ngrok config', () => {
+  assert.throws(
+    () => buildNgrokSpawnOptions({ env: {} }, { authtoken: '', useManagedAccount: true }),
+    /requires an Authtoken/
+  );
 });
 
 test('does not inject token in global config mode', () => {
@@ -53,13 +60,14 @@ test('does not inject token in global config mode', () => {
   assert.equal(options.env.NGROK_AUTHTOKEN, undefined);
 });
 
-test('classifies endpoint and authentication errors', () => {
+test('classifies endpoint, authentication, and domain errors', () => {
   assert.deepEqual(classifyNgrokError('ERROR: ERR_NGROK_334 endpoint is already online'), { kind: 'endpoint-conflict', code: 'ERR_NGROK_334' });
   assert.equal(classifyNgrokError('authentication failed: invalid authtoken')?.kind, 'authentication');
+  assert.equal(classifyNgrokError('domain does not belong to this account')?.kind, 'domain');
   assert.equal(classifyNgrokError('ordinary output'), null);
 });
 
-test('validates complete authtokens', () => {
+test('validates complete Authtokens', () => {
   assert.equal(validateAuthtoken('abcdefghijklmnopqrstuvwxyz'), 'abcdefghijklmnopqrstuvwxyz');
   assert.throws(() => validateAuthtoken('short'), /too short/);
   assert.throws(() => validateAuthtoken('token with spaces and enough length'), /spaces/);
