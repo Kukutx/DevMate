@@ -268,6 +268,11 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   },
+  "overrides": {
+    "@hono/node-server": "2.0.11",
+    "hono": "4.12.31",
+    "fast-uri": "3.1.4"
+  },
   "devDependencies": {
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1"
