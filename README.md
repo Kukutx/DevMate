@@ -1,6 +1,6 @@
 # DevMate
 
-DevMate is a personal VS Code extension that exposes the current workspace to ChatGPT through an MCP gateway.
+DevMate is a personal VS Code extension that exposes local development workspaces to ChatGPT through an authenticated MCP gateway.
 
 ## First-time setup
 
@@ -11,7 +11,7 @@ DevMate is a personal VS Code extension that exposes the current workspace to Ch
 
 Quick setup stores the Authtoken in VS Code Secret Storage, disables endpoint pooling, and uses the selected account's default development domain. It does not write the token to the project, `settings.json`, DevMate `config.json`, or the global `ngrok.yml`.
 
-To change accounts later, run `DevMate: Switch ngrok Account`. DevMate recommends the new account's default domain so a URL belonging to the previous account cannot cause ownership errors or `ERR_NGROK_334`.
+To change accounts later, run `DevMate: Use New ngrok Token / Switch Account`. DevMate recommends the new account's default domain so a URL belonging to the previous account cannot cause ownership errors or `ERR_NGROK_334`.
 
 Developers who intentionally manage ngrok themselves can choose **Developer setup** and use the global `ngrok.yml` or configure an account-owned stable URL.
 
@@ -26,15 +26,31 @@ Core abilities:
 
 - Read project instructions from `AGENTS.md` / `CLAUDE.md`.
 - Read, search, write, create, delete, move, and patch files.
-- Run project commands.
+- Run one-shot commands and project validation.
+- Start, inspect, interact with, and stop persistent local processes such as development servers and watchers.
 - Use Git: status, diff, add, commit, push, pull, branch, switch, log, blame, stash.
-- Add, remove, and edit readonly reference projects, including GitHub repository URLs, clipboard input, and extra VS Code workspace folders.
-- Keep the current VS Code folder as the only writable workspace; additional projects belong in readonly References.
+- Add readonly reference projects from local folders, GitHub URLs, clipboard input, and extra VS Code workspace folders.
+- Add explicit trusted writable roots for other local projects or data directories.
 - Copy a compact context bundle for ChatGPT model surfaces that cannot call MCP tools.
 - Review current changes with bounded Git summaries.
 - Show a ChatGPT Apps status panel for connection, VS Code context, diagnostics, and permissions.
 - Keep automatic backups and audit logs in VS Code global storage, not in your project.
-- Automatically prune old backups and audit logs so long-running local use stays bounded.
+
+## Trusted local capabilities
+
+The current VS Code folder remains the active writable workspace. Under the `fullAccess` permission profile, ChatGPT can also call:
+
+- `add_trusted_root` / `remove_trusted_root` to grant or revoke a specific external directory.
+- `start_process` to launch a long-running command inside a writable workspace.
+- `read_process_output` with a sequence cursor so polling does not repeat old output.
+- `send_process_input` for interactive local tools.
+- `stop_process` to terminate the complete process tree.
+- `local_capabilities_status` to inspect roots, processes, and limits.
+- `configure_local_capabilities` to change bounded process count and output retention limits.
+
+Trusted roots are explicit directories, not unrestricted filesystem roots. Existing file protections still block hidden credential paths, private keys, real `.env` files, databases, and other sensitive/binary paths from normal file tools. Persistent process commands run with the same operating-system account and permissions as VS Code; DevMate does not bypass Windows permissions, UAC, `sudo`, containers, or remote-host boundaries.
+
+Persistent processes are stopped when the DevMate gateway exits. The default limits are eight simultaneous processes and 1 MiB of retained output per process; both are bounded to prevent accidental resource exhaustion.
 
 ## ngrok modes
 
@@ -51,9 +67,10 @@ When ngrok reports `ERR_NGROK_334`, DevMate offers direct recovery actions: swit
 - Hidden, binary, log, database, key, and real `.env` files are blocked from normal file tools.
 - `devMate.permissionProfile` defaults to `fullAccess` for single-user local development.
 - Use `readOnly` for inspection-only sessions or `balanced` when you want destructive shell/Git guards.
+- Adding or removing trusted writable roots requires `fullAccess`.
 - Directory delete/move operations are blocked unless `devMate.allowDirectoryMutations` is enabled.
 - Set `devMate.confirmBeforePush` to block MCP push requests until you deliberately disable it.
-- Backups and audit logs default to 30-day retention with size caps; tune `devMate.backupRetentionDays`, `devMate.auditRetentionDays`, `devMate.maxBackupBytes`, and `devMate.maxAuditBytes` if needed.
+- Backups and audit logs default to 30-day retention with size caps.
 - The ChatGPT Apps status panel displays a redacted connection snapshot only. It does not store or show the full token URL.
 
 Runtime requirement: `ngrok` must be installed so ChatGPT can reach the local MCP endpoint over HTTPS.
@@ -68,4 +85,4 @@ npm run smoke:gateway
 npm run package:vsix
 ```
 
-See `docs/NGROK_SETUP.md` for account switching and domain setup, `docs/MCP_TOOLS.md` for the MCP tool list, `docs/TROUBLESHOOTING.md` for ChatGPT Connector issues, and `SECURITY.md` for the local gateway security model.
+See `docs/LOCAL_CAPABILITIES.md` for trusted roots and persistent processes, `docs/NGROK_SETUP.md` for account switching and domain setup, `docs/MCP_TOOLS.md` for the MCP tool list, `docs/TROUBLESHOOTING.md` for ChatGPT Connector issues, and `SECURITY.md` for the local gateway security model.

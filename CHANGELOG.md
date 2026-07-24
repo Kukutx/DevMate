@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.16.0
+
+- Added explicit trusted writable roots so `fullAccess` sessions can work across selected local projects and data directories without opening unrestricted filesystem access.
+- Rehydrated trusted roots into the existing workspace model before each MCP connection, allowing current file, command, validation, and Git tools to use them by `workspaceId`.
+- Added persistent local process tools for starting development servers and watchers, polling stdout/stderr with sequence cursors, sending stdin, checking status, and stopping complete process trees.
+- Added bounded configurable limits for simultaneous processes and retained output, plus automatic process cleanup when the gateway exits.
+- Added a dedicated enhanced gateway entrypoint while preserving the established core MCP server implementation.
+- Added unit and end-to-end bundled gateway coverage for trusted-root lifecycle, containment, process input/output, limits, and shutdown behavior.
+
 ## 1.15.1
 
 - Fixed ngrok account switching when VS Code reports the DevMate ngrok settings as unregistered.
