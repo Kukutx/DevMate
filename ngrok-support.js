@@ -53,10 +53,19 @@ function buildNgrokArgs(args, { url = '', poolingEnabled = false } = {}) {
   return next;
 }
 
+function copyEnvWithoutKey(env, name) {
+  const wanted = String(name || '').toLowerCase();
+  const next = {};
+  for (const [key, value] of Object.entries(env || {})) {
+    if (key.toLowerCase() !== wanted) next[key] = value;
+  }
+  return next;
+}
+
 function buildNgrokSpawnOptions(options, { authtoken = '', useManagedAccount = true } = {}) {
   const next = { ...(options || {}) };
   const baseEnv = options?.env || process.env;
-  next.env = { ...baseEnv };
+  next.env = copyEnvWithoutKey(baseEnv, 'NGROK_AUTHTOKEN');
 
   if (useManagedAccount) {
     const token = String(authtoken || '').trim();
@@ -94,6 +103,7 @@ module.exports = {
   buildNgrokArgs,
   buildNgrokSpawnOptions,
   classifyNgrokError,
+  copyEnvWithoutKey,
   isNgrokExecutable,
   isNgrokHttpArgs,
   normalizeNgrokUrl,
