@@ -107,9 +107,13 @@ try {
   const started = await callTool('start_process', { workspaceId: trusted.root.id, command, label: 'smoke-process' });
   assert(started.started === true && started.process?.id, 'persistent process did not start');
 
-  await delay(400);
-  const output = await callTool('read_process_output', { id: started.process.id, afterSequence: 0, maxChars: 20000 });
-  assert(output.events?.some(event => event.text.includes('persistent-ready')), `persistent output missing: ${JSON.stringify(output)}`);
+  let output = null;
+  for (let i = 0; i < 50; i++) {
+    await delay(100);
+    output = await callTool('read_process_output', { id: started.process.id, afterSequence: 0, maxChars: 20000 });
+    if (output.events?.some(event => event.text.includes('persistent-ready'))) break;
+  }
+  assert(output?.events?.some(event => event.text.includes('persistent-ready')), `persistent output missing: ${JSON.stringify(output)}`);
   const stopped = await callTool('stop_process', { id: started.process.id, force: false });
   assert(stopped.stopped === true, `persistent process did not stop: ${JSON.stringify(stopped)}`);
   const removed = await callTool('remove_trusted_root', { id: trusted.root.id });
