@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Personal open-source VS Code extension for ChatGPT MCP development: one-click local gateway, workspace editing, commands, Git workflow, and readonly reference projects.",
-  "version": "1.15.0",
+  "version": "1.15.1",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "engines": {
@@ -49,22 +49,30 @@
         "devMate.ngrokCommandPath": {
           "type": "string",
           "default": "",
-          "description": "Optional path to ngrok executable."
+          "description": "Optional path to ngrok executable.",
+          "scope": "machine",
+          "ignoreSync": true
         },
         "devMate.ngrokUseManagedAccount": {
           "type": "boolean",
           "default": true,
-          "description": "Use the ngrok Authtoken saved by DevMate in VS Code Secret Storage. If no token is saved, DevMate asks you to configure one instead of silently using an old global account."
+          "description": "Use the ngrok Authtoken saved by DevMate in VS Code Secret Storage. If no token is saved, DevMate asks you to configure one instead of silently using an old global account.",
+          "scope": "machine",
+          "ignoreSync": true
         },
         "devMate.ngrokUrl": {
           "type": "string",
           "default": "",
-          "description": "Optional stable ngrok endpoint URL or hostname owned by the selected account. Empty uses the account default development domain. Do not include /mcp."
+          "description": "Optional stable ngrok endpoint URL or hostname owned by the selected account. Empty uses the account default development domain. Do not include /mcp.",
+          "scope": "machine",
+          "ignoreSync": true
         },
         "devMate.ngrokPoolingEnabled": {
           "type": "boolean",
           "default": false,
-          "description": "Advanced: allow multiple agents to share the configured ngrok URL. Keep disabled for DevMate because pooled requests may reach another machine."
+          "description": "Advanced: allow multiple agents to share the configured ngrok URL. Keep disabled for DevMate because pooled requests may reach another machine.",
+          "scope": "machine",
+          "ignoreSync": true
         },
         "devMate.autoUseCurrentWorkspace": {
           "type": "boolean",
@@ -158,7 +166,8 @@
           "maximum": 104857600,
           "description": "Maximum audit log size in bytes before oldest entries are pruned."
         }
-      }
+      },
+      "type": "object"
     },
     "commands": [
       {
