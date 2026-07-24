@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added a guided ngrok setup and one-step account switching flow.
+- Stored the DevMate-specific ngrok Authtoken in VS Code Secret Storage and injected it through `NGROK_AUTHTOKEN` without overwriting global `ngrok.yml`.
+- Added optional stable URL configuration and an explicit advanced global-config mode.
+- Added actionable diagnostics for authentication, domain ownership, and `ERR_NGROK_334` endpoint conflicts.
+- Added unit coverage for ngrok URL validation, process argument decoration, token environment injection, and error classification.
+
 ## 1.14.0
 
 - Stopped historical writable workspaces from accumulating when switching VS Code projects.
