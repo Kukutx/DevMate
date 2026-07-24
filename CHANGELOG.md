@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.15.1
+
+- Fixed ngrok account switching when VS Code reports the DevMate ngrok settings as unregistered.
+- Added extension-state fallbacks so saving a new Authtoken no longer depends on writing User Settings.
+- Declared the configuration contribution explicitly as an object and marked ngrok preferences as machine-local.
+
 ## 1.15.0
 
 - Released the simplified ngrok account workflow under a new extension version so VS Code reliably upgrades existing 1.14.0 installations.
