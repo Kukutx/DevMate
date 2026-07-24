@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.16.1
+
+- Fixed Windows Microsoft Store/MSIX ngrok account switching when the packaged launcher ignored or lost the managed `NGROK_AUTHTOKEN` environment override.
+- Added a Windows compatibility launcher that passes the Secret Storage token through ngrok's official `--authtoken` CLI flag while retaining the environment override.
+- Removed case-variant stale `NGROK_AUTHTOKEN` variables before launching ngrok so an old machine-level token cannot win through Windows' case-insensitive environment handling.
+- Added regression tests for Windows command-line credential injection, duplicate-flag prevention, case-insensitive environment cleanup, and non-Windows behavior.
+
 ## 1.16.0
 
 - Added explicit trusted writable roots so `fullAccess` sessions can work across selected local projects and data directories without opening unrestricted filesystem access.
@@ -63,7 +70,7 @@
 
 ## 1.9.0
 
-- Added `connection_diagnostics` for checking ChatGPT-to-DevMate reachability, VS Code context freshness, workspace state, diagnostics, permissions, and recent public MCP preflight snapshots.
+- Added `connection_diagnostics` for checking ChatGPT-to-DevMate reachability, VS Code context freshness, workspace state, diagnostics, permissions, and recent public preflight snapshots.
 - Added `devmate_status_panel`, a lightweight ChatGPT Apps UI panel backed by an inline MCP resource.
 - Persisted a redacted VS Code-side connection snapshot after successful or failed public MCP preflight checks.
 - Added smoke coverage for MCP Apps resource registration and status UI rendering.
