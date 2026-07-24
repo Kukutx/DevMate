@@ -4,15 +4,16 @@ DevMate is a personal VS Code extension that exposes the current workspace to Ch
 
 ## First-time setup
 
-1. Install and sign in to ngrok.
+1. Install ngrok.
 2. Run `DevMate: Configure ngrok (Recommended)`.
-3. Choose **DevMate-managed account** and paste the ngrok Authtoken.
-4. Use the account default development domain unless you intentionally own another stable ngrok URL.
-5. Select **Start Now**.
+3. Choose **Quick setup**, then paste the ngrok Authtoken.
+4. Select **Start Now**.
 
-The Authtoken is stored in VS Code Secret Storage. It is not written to the project, `settings.json`, or DevMate `config.json`. This keeps DevMate isolated from an old or shared global `ngrok.yml` account.
+Quick setup stores the Authtoken in VS Code Secret Storage, disables endpoint pooling, and uses the selected account's default development domain. It does not write the token to the project, `settings.json`, DevMate `config.json`, or the global `ngrok.yml`.
 
-To change accounts later, run `DevMate: Switch ngrok Account`. For advanced multi-agent setups, choose the global ngrok configuration mode instead.
+To change accounts later, run `DevMate: Switch ngrok Account`. DevMate recommends the new account's default domain so a URL belonging to the previous account cannot cause ownership errors or `ERR_NGROK_334`.
+
+Developers who intentionally manage ngrok themselves can choose **Developer setup** and use the global `ngrok.yml` or configure an account-owned stable URL.
 
 ## Daily flow
 
@@ -37,11 +38,11 @@ Core abilities:
 
 ## ngrok modes
 
-**Recommended mode:** DevMate injects the selected account through the `NGROK_AUTHTOKEN` process environment. The global ngrok configuration remains untouched, so switching accounts does not affect other projects.
+**Recommended mode:** DevMate injects the selected account through the `NGROK_AUTHTOKEN` process environment. The global ngrok configuration remains untouched. Managed mode refuses to start without a saved Authtoken instead of silently falling back to an old or shared global account.
 
 **Developer mode:** set `devMate.ngrokUseManagedAccount` to `false` to use the global `ngrok.yml`. Set `devMate.ngrokUrl` only when the URL belongs to the selected account. Keep `devMate.ngrokPoolingEnabled` disabled for normal DevMate use; pooled requests can reach a different machine.
 
-When ngrok reports `ERR_NGROK_334`, stop the old online agent or switch accounts. Do not solve this by enabling pooling unless both machines intentionally serve the same trusted DevMate instance.
+When ngrok reports `ERR_NGROK_334`, DevMate offers direct recovery actions: switch accounts, clear the previous custom URL and use the account default domain, or open the active Agents page. Do not solve this by enabling pooling unless every agent intentionally serves the same trusted DevMate instance.
 
 ## Safety defaults
 
