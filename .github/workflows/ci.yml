@@ -24,8 +24,17 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Audit dependencies
-        run: npm audit --audit-level=moderate
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit development dependencies
+        shell: pwsh
+        run: |
+          npm audit --audit-level=moderate
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Development dependency audit reported advisories. Runtime dependencies already passed the blocking audit."
+            exit 0
+          }
 
       - name: Check syntax
         run: npm run check

@@ -1,5 +1,37 @@
 # Troubleshooting
 
+## ngrok account changed or old account is shared
+
+Run `DevMate: Switch ngrok Account`, paste the complete Authtoken from the new account, and select **Start Now**. DevMate stores the token in VS Code Secret Storage and injects it only into the ngrok process it starts, so the old global `ngrok.yml` account no longer controls DevMate.
+
+For first-time configuration, run `DevMate: Configure ngrok (Recommended)`.
+
+## ERR_NGROK_334: endpoint already online
+
+The endpoint URL is active on another ngrok Agent. This commonly happens when an old machine, another user, a background service, or a second DevMate instance still uses the same account domain.
+
+1. Run `DevMate: Stop`.
+2. Stop the old Agent or endpoint in the ngrok dashboard, or switch DevMate to the new account.
+3. Clear `devMate.ngrokUrl` when it points to a domain owned by the old account.
+4. Run `DevMate: Start` again.
+
+Do not enable pooling as a normal fix. Pooling can route ChatGPT requests to another machine and therefore another workspace.
+
+## ngrok authentication fails
+
+Run `DevMate: Switch ngrok Account` and paste the new Authtoken again. Use `DevMate: ngrok Diagnostics` to confirm that account mode is `DevMate-managed Secret Storage` and that a managed token is present.
+
+When intentionally using the global configuration instead, run:
+
+```powershell
+ngrok config add-authtoken "<AUTHTOKEN>"
+ngrok config check
+```
+
+## Configured domain belongs to another account
+
+Clear `devMate.ngrokUrl` and use the selected account's default development domain. A domain from the old account does not move to the new account when the Authtoken changes.
+
 ## ChatGPT Connector Creation Fails
 
 Use the URL copied by `DevMate: Start` or `DevMate: Copy URL`. The URL must look like:

@@ -2,7 +2,19 @@
 
 DevMate is a personal VS Code extension that exposes the current workspace to ChatGPT through an MCP gateway.
 
-Daily flow:
+## First-time setup
+
+1. Install and sign in to ngrok.
+2. Run `DevMate: Configure ngrok (Recommended)`.
+3. Choose **DevMate-managed account** and paste the ngrok Authtoken.
+4. Use the account default development domain unless you intentionally own another stable ngrok URL.
+5. Select **Start Now**.
+
+The Authtoken is stored in VS Code Secret Storage. It is not written to the project, `settings.json`, or DevMate `config.json`. This keeps DevMate isolated from an old or shared global `ngrok.yml` account.
+
+To change accounts later, run `DevMate: Switch ngrok Account`. For advanced multi-agent setups, choose the global ngrok configuration mode instead.
+
+## Daily flow
 
 1. Open a project in VS Code.
 2. Run `DevMate: Start`.
@@ -23,7 +35,15 @@ Core abilities:
 - Keep automatic backups and audit logs in VS Code global storage, not in your project.
 - Automatically prune old backups and audit logs so long-running local use stays bounded.
 
-Safety defaults:
+## ngrok modes
+
+**Recommended mode:** DevMate injects the selected account through the `NGROK_AUTHTOKEN` process environment. The global ngrok configuration remains untouched, so switching accounts does not affect other projects.
+
+**Developer mode:** set `devMate.ngrokUseManagedAccount` to `false` to use the global `ngrok.yml`. Set `devMate.ngrokUrl` only when the URL belongs to the selected account. Keep `devMate.ngrokPoolingEnabled` disabled for normal DevMate use; pooled requests can reach a different machine.
+
+When ngrok reports `ERR_NGROK_334`, stop the old online agent or switch accounts. Do not solve this by enabling pooling unless both machines intentionally serve the same trusted DevMate instance.
+
+## Safety defaults
 
 - Public MCP requests require a per-install token by default. The copied URL includes it.
 - The gateway binds to `127.0.0.1`; ngrok is the only intended public entry point.
@@ -35,7 +55,7 @@ Safety defaults:
 - Backups and audit logs default to 30-day retention with size caps; tune `devMate.backupRetentionDays`, `devMate.auditRetentionDays`, `devMate.maxBackupBytes`, and `devMate.maxAuditBytes` if needed.
 - The ChatGPT Apps status panel displays a redacted connection snapshot only. It does not store or show the full token URL.
 
-Runtime requirement: `ngrok` must be installed and authenticated so ChatGPT can reach your local MCP endpoint over HTTPS.
+Runtime requirement: `ngrok` must be installed so ChatGPT can reach the local MCP endpoint over HTTPS.
 
 Development checks:
 
@@ -47,4 +67,4 @@ npm run smoke:gateway
 npm run package:vsix
 ```
 
-See `docs/MCP_TOOLS.md` for the MCP tool list, `docs/TROUBLESHOOTING.md` for ChatGPT Connector setup issues, and `SECURITY.md` for the local gateway security model.
+See `docs/NGROK_SETUP.md` for account switching and domain setup, `docs/MCP_TOOLS.md` for the MCP tool list, `docs/TROUBLESHOOTING.md` for ChatGPT Connector issues, and `SECURITY.md` for the local gateway security model.
