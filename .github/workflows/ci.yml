@@ -7,6 +7,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     runs-on: windows-latest
@@ -14,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -24,26 +29,23 @@ jobs:
       - name: Refresh lockfile for dependency verification
         run: npm install --package-lock-only --ignore-scripts
 
-      - name: Upload generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-package-lock
-          path: package-lock.json
+      - name: Commit refreshed lockfile
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        run: |
+          git diff --quiet -- package-lock.json
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "package-lock.json is already current."
+            exit 0
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "Update package lock for security overrides"
+          git push origin "HEAD:${{ github.head_ref }}"
 
       - name: Install
         run: npm ci
-
-      - name: Capture runtime audit report
-        shell: pwsh
-        run: |
-          npm audit --omit=dev --json | Out-File -FilePath npm-audit-runtime.json -Encoding utf8
-          exit 0
-
-      - name: Upload runtime audit report
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-audit-runtime
-          path: npm-audit-runtime.json
 
       - name: Audit runtime dependencies
         run: npm audit --omit=dev --audit-level=moderate
