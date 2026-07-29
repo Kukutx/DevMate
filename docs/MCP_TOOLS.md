@@ -24,8 +24,48 @@ DevMate exposes development tools over MCP after `DevMate: Start` verifies the p
 - `search_text`
 
 `project_snapshot` includes root project instructions by default. `project_instructions` reads root `AGENTS.md` / `CLAUDE.md` and lists nested instruction files so ChatGPT can follow project-specific rules.
+
 `maintenance_status` reports local backup/audit retention settings and current storage size.
+
 `connection_diagnostics` returns a text/JSON health snapshot for ChatGPT-to-DevMate reachability, VS Code context freshness, diagnostics, workspace state, and recent public preflight. `devmate_status_panel` renders the same status as a lightweight ChatGPT Apps UI component.
+
+## Capability Plugins
+
+Plugin management tools are always available:
+
+- `plugin_catalog`
+- `plugin_diagnostics`
+- `plugin_enable`
+- `plugin_disable`
+- `plugin_configure`
+- `devmate_plugins_panel`
+
+Optional plugins are disabled by default. Enabling a plugin also enables its declared dependencies. Tool-list caching may require reconnecting the DevMate App after a capability change.
+
+### Browser QA plugin
+
+Enable `devmate.browser-qa` to expose:
+
+- `web_preview_start`
+- `web_preview_status`
+- `web_preview_stop`
+- `browser_qa_status`
+- `browser_qa_run`
+
+Local previews bind to `127.0.0.1`, enforce root containment, support byte ranges and WebAssembly MIME types, and stop with the gateway. Browser QA resolves `playwright` or `playwright-core` from the active workspace and blocks non-local URLs unless explicitly configured.
+
+### Godot plugin
+
+Enable `devmate.godot` to expose:
+
+- `godot_status`
+- `godot_doctor`
+- `godot_validate`
+- `godot_run`
+- `godot_export_web`
+- `godot_acceptance_test`
+
+Godot automatically enables Browser QA. The combined acceptance tool validates the project, exports Web, starts a preview, executes bounded browser actions, captures a screenshot, and returns structured console, page, network, canvas, and build checks.
 
 ## Trusted Local Capabilities
 
@@ -72,6 +112,7 @@ File tools block hidden, secret, binary, log, database, private key, and real `.
 - `run_smart_checks`
 
 `run_command` is intentionally powerful but waits for completion. Use `start_process` for long-running development servers, watchers, and interactive tools.
+
 The default `fullAccess` profile is intended for single-user local development. Use `balanced` when you want obvious destructive shell commands and dangerous Git operations blocked, or `readOnly` for inspection-only sessions.
 
 Task sessions add a `taskId` to audit entries. `rollback_task` restores file changes from DevMate backups where safe; commands, persistent process side effects, and Git history operations are reported but not automatically reversed.

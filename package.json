@@ -1,7 +1,7 @@
 {
   "name": "devmate",
   "displayName": "DevMate",
-  "description": "Personal VS Code extension for ChatGPT MCP development: workspace editing, trusted writable roots, persistent local processes, commands, Git workflows, and readonly references.",
+  "description": "Personal VS Code extension for ChatGPT MCP development: workspace editing, trusted writable roots, persistent local processes, commands, Git workflows, and optional platform plugins.",
   "version": "1.16.1",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
@@ -131,7 +131,7 @@
         "devMate.requireAuthToken": {
           "type": "boolean",
           "default": true,
-          "description": "Require a per-install secret token for public MCP requests. The copied MCP URL includes the token."
+          "description": "Require a per-install secret token for public MCP requests. The copied MCP URL includes it."
         },
         "devMate.allowDirectoryMutations": {
           "type": "boolean",
@@ -252,8 +252,8 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",
     "build": "npm run version:sync && esbuild gateway/server-entry.mjs --bundle --platform=node --format=esm --target=node18 --outfile=gateway/server.bundle.mjs",
-    "check": "npm run version:sync && node --check extension-entry-win32.js && node --check extension-entry.js && node --check ngrok-launch-compat.js && node --check ngrok-support.js && node --check extension.js && node --check gateway/server-entry.mjs && node --check gateway/local-capabilities.mjs && node --check gateway/local-shared.mjs && node --check gateway/persistent-processes.mjs && node --check gateway/server.mjs && node --check gateway/maintenance.mjs && node --check tests/smoke-gateway.mjs && node --check tests/maintenance.test.mjs && node --check tests/ngrok-support.test.mjs && node --check tests/ngrok-launch-compat.test.mjs && node --check tests/local-capabilities.test.mjs && node --check tests/smoke-local-capabilities.mjs",
-    "test:unit": "node --test tests/maintenance.test.mjs tests/ngrok-support.test.mjs tests/ngrok-launch-compat.test.mjs tests/local-capabilities.test.mjs",
+    "check": "npm run version:sync && node --check extension-entry-win32.js && node --check extension-entry.js && node --check ngrok-launch-compat.js && node --check ngrok-support.js && node --check extension.js && node --check gateway/server-entry.mjs && node --check gateway/local-capabilities.mjs && node --check gateway/local-shared.mjs && node --check gateway/persistent-processes.mjs && node --check gateway/plugins/plugin-sdk.mjs && node --check gateway/plugins/plugin-runtime.mjs && node --check gateway/plugins/plugin-config.mjs && node --check gateway/plugins/plugin-host.mjs && node --check gateway/plugins/builtins.mjs && node --check gateway/plugins/preview-manager.mjs && node --check gateway/plugins/browser-runner.mjs && node --check gateway/plugins/browser-qa.mjs && node --check gateway/plugins/godot-project.mjs && node --check gateway/plugins/godot.mjs && node --check gateway/server.mjs && node --check gateway/maintenance.mjs && node --check tests/smoke-gateway.mjs && node --check tests/maintenance.test.mjs && node --check tests/ngrok-support.test.mjs && node --check tests/ngrok-launch-compat.test.mjs && node --check tests/local-capabilities.test.mjs && node --check tests/plugin-sdk.test.mjs && node --check tests/plugin-host.test.mjs && node --check tests/godot-plugin.test.mjs && node --check tests/browser-runner.test.mjs && node --check tests/preview-manager.test.mjs && node --check tests/smoke-local-capabilities.mjs",
+    "test:unit": "node --test tests/maintenance.test.mjs tests/ngrok-support.test.mjs tests/ngrok-launch-compat.test.mjs tests/local-capabilities.test.mjs tests/plugin-sdk.test.mjs tests/plugin-host.test.mjs tests/godot-plugin.test.mjs tests/browser-runner.test.mjs tests/preview-manager.test.mjs",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package"
   },
@@ -266,7 +266,11 @@
     "developer-tools",
     "vscode",
     "local-processes",
-    "trusted-roots"
+    "trusted-roots",
+    "plugins",
+    "godot",
+    "playwright",
+    "browser-testing"
   ],
   "repository": {
     "type": "git",
