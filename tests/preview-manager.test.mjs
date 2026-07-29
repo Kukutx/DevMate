@@ -23,4 +23,15 @@ test('serves a local preview with byte-range support', async t => {
   assert.equal(blocked.status, 404);
   const hidden = await fetch(new URL('.npmrc', preview.url));
   assert.equal(hidden.status, 404);
+
+  const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-preview-outside-'));
+  t.after(async () => { await fsp.rm(outside, { recursive: true, force: true }); });
+  await fsp.writeFile(path.join(outside, 'outside.txt'), 'must-not-leak', 'utf8');
+  try {
+    await fsp.symlink(outside, path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+    const escaped = await fetch(new URL('escape/outside.txt', preview.url));
+    assert.equal(escaped.status, 404);
+  } catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) throw error;
+  }
 });

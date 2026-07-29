@@ -78,6 +78,7 @@ function registerManagementTools(server, plugins, states, registeredToolNames) {
     title: 'DevMate plugin catalog',
     description: 'List core and optional DevMate capabilities, dependencies, activation state, and public settings.',
     inputSchema: {},
+    _meta: { ui: { visibility: ['model', 'app'] }, 'openai/widgetAccessible': true },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, async () => toolText(catalog(readConfig(), plugins, states)));
 
@@ -112,6 +113,7 @@ function registerManagementTools(server, plugins, states, registeredToolNames) {
     title: 'Enable DevMate plugin',
     description: 'Enable one optional DevMate plugin and its dependencies. Requires fullAccess; reconnect ChatGPT if its MCP tool list is cached.',
     inputSchema: { id: z.string().min(1) },
+    _meta: { ui: { visibility: ['model', 'app'] }, 'openai/widgetAccessible': true },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   }, async ({ id }) => {
     const result = enablePlugin(id, plugins);
@@ -123,6 +125,7 @@ function registerManagementTools(server, plugins, states, registeredToolNames) {
     title: 'Disable DevMate plugin',
     description: 'Disable one optional DevMate plugin. Dependents are protected unless cascade=true. Requires fullAccess.',
     inputSchema: { id: z.string().min(1), cascade: z.boolean().optional() },
+    _meta: { ui: { visibility: ['model', 'app'] }, 'openai/widgetAccessible': true },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   }, async ({ id, cascade = false }) => {
     const result = disablePlugin(id, cascade, plugins);

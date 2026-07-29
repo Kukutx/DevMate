@@ -35,6 +35,9 @@ test('registers management tools while optional plugins remain disabled', async 
   assert.equal(server.tools.has('plugin_catalog'), true);
   assert.equal(server.tools.has('devmate_plugins_panel'), true);
   assert.equal(server.tools.has('godot_status'), false);
+  assert.equal(server.tools.get('plugin_catalog').config._meta['openai/widgetAccessible'], true);
+  assert.equal(server.tools.get('plugin_enable').config._meta['openai/widgetAccessible'], true);
+  assert.equal(server.tools.get('plugin_disable').config._meta['openai/widgetAccessible'], true);
 });
 
 test('enabling Godot also enables Browser QA on the next server instance', async () => {

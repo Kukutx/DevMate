@@ -40,6 +40,15 @@ function isInside(root, candidate) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function containedExistingPath(root, candidate) {
+  if (!isInside(root, candidate)) return null;
+  let real;
+  try { real = fs.realpathSync.native(candidate); } catch { return null; }
+  if (!isInside(root, real)) return null;
+  const stat = fs.statSync(real, { throwIfNoEntry: false });
+  return stat ? { file: real, stat } : null;
+}
+
 function safeFile(root, pathname, entryPath, spaFallback) {
   let decoded;
   try { decoded = decodeURIComponent(pathname); } catch { return null; }
@@ -48,19 +57,15 @@ function safeFile(root, pathname, entryPath, spaFallback) {
   const basename = parts.at(-1) || '';
   if (parts.some(part => part.startsWith('.') || BLOCKED_SEGMENTS.has(part) || part.startsWith('.env.')) || BLOCKED_EXTENSIONS.has(path.extname(basename))) return null;
   const candidate = path.resolve(root, `.${requested}`);
-  if (!isInside(root, candidate)) return null;
-  let stat = fs.statSync(candidate, { throwIfNoEntry: false });
-  if (stat?.isDirectory()) {
-    const index = path.join(candidate, 'index.html');
-    const indexStat = fs.statSync(index, { throwIfNoEntry: false });
-    if (indexStat?.isFile()) return { file: index, stat: indexStat };
+  const resolved = containedExistingPath(root, candidate);
+  if (resolved?.stat.isDirectory()) {
+    const index = containedExistingPath(root, path.join(resolved.file, 'index.html'));
+    if (index?.stat.isFile()) return index;
   }
-  if (stat?.isFile()) return { file: candidate, stat };
+  if (resolved?.stat.isFile()) return resolved;
   if (spaFallback) {
-    const fallback = path.resolve(root, entryPath);
-    if (!isInside(root, fallback)) return null;
-    stat = fs.statSync(fallback, { throwIfNoEntry: false });
-    if (stat?.isFile()) return { file: fallback, stat };
+    const fallback = containedExistingPath(root, path.resolve(root, entryPath));
+    if (fallback?.stat.isFile()) return fallback;
   }
   return null;
 }
@@ -106,9 +111,8 @@ export async function startPreview({ workspaceId, root, entryPath = 'index.html'
   const realRoot = fs.realpathSync.native(root);
   const entry = String(entryPath || 'index.html').replace(/^[/\\]+/, '').replace(/\\/g, '/');
   const entryFull = path.resolve(realRoot, entry);
-  if (!isInside(realRoot, entryFull)) throw new Error('Preview entry escapes preview root');
-  const entryStat = fs.statSync(entryFull, { throwIfNoEntry: false });
-  if (!entryStat?.isFile()) throw new Error(`Preview entry not found: ${entry}`);
+  const resolvedEntry = containedExistingPath(realRoot, entryFull);
+  if (!resolvedEntry?.stat.isFile()) throw new Error(`Preview entry not found or escapes preview root: ${entry}`);
   const id = `preview-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
   const record = {
     id, workspaceId, root: realRoot, entryPath: entry, host: '127.0.0.1', port: 0, url: '',
@@ -196,4 +200,4 @@ export async function writePreviewManifest(root, payload) {
   return target;
 }
 
-export const __test = { BLOCKED_EXTENSIONS, BLOCKED_SEGMENTS, MIME_TYPES, isInside, parseRange, safeFile };
+export const __test = { BLOCKED_EXTENSIONS, BLOCKED_SEGMENTS, MIME_TYPES, containedExistingPath, isInside, parseRange, safeFile };
