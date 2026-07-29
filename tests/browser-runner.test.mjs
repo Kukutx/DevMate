@@ -6,6 +6,7 @@ test('Browser QA accepts only browser-shaped executable names', () => {
   assert.equal(__test.browserExecutableAllowed('/Applications/Google Chrome'), true);
   assert.equal(__test.browserExecutableAllowed('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'), true);
   assert.equal(__test.browserExecutableAllowed('/tmp/arbitrary-shell'), false);
+  assert.equal(__test.browserExecutableAllowed('/tmp/chrome-malware'), false);
 });
 
 test('Browser QA blocks remote URLs by default', () => {

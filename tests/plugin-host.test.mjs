@@ -18,7 +18,7 @@ await fsp.writeFile(configPath, `${JSON.stringify({
 }, null, 2)}\n`, 'utf8');
 process.env.DEVMATE_CONFIG = configPath;
 
-const { installPluginHost } = await import('../gateway/plugins/plugin-host.mjs');
+const { installPluginHost, __test } = await import('../gateway/plugins/plugin-host.mjs');
 
 class MockServer {
   constructor() { this.tools = new Map(); this.resources = new Map(); }
@@ -46,6 +46,15 @@ test('enabling Godot also enables Browser QA on the next server instance', async
   assert.equal(next.tools.has('godot_status'), true);
   assert.equal(next.tools.has('browser_qa_status'), true);
   assert.equal(next.tools.has('web_preview_start'), true);
+});
+
+
+test('rejects multi-plugin dependency cycles', () => {
+  const map = new Map([
+    ['a', { manifest: { id: 'a', dependencies: ['b'] } }],
+    ['b', { manifest: { id: 'b', dependencies: ['a'] } }]
+  ]);
+  assert.throws(() => __test.expandDependencies(new Set(['a']), map), /dependency cycle/);
 });
 
 test.after(async () => { await fsp.rm(temp, { recursive: true, force: true }); });

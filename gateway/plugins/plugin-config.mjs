@@ -33,13 +33,20 @@ export function enabledSet(config, plugins = builtinPlugins) {
 
 export function expandDependencies(ids, map) {
   const expanded = new Set(ids);
+  const visiting = new Set();
+  const visited = new Set();
   const visit = id => {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new Error(`Plugin dependency cycle detected at ${id}`);
     const plugin = map.get(id);
     if (!plugin) throw new Error(`Unknown DevMate plugin: ${id}`);
+    visiting.add(id);
     for (const dependency of plugin.manifest.dependencies) {
-      if (!expanded.has(dependency)) expanded.add(dependency);
+      expanded.add(dependency);
       visit(dependency);
     }
+    visiting.delete(id);
+    visited.add(id);
   };
   for (const id of [...expanded]) visit(id);
   return expanded;

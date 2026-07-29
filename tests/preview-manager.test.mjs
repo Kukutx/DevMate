@@ -11,6 +11,7 @@ test('serves a local preview with byte-range support', async t => {
   await fsp.writeFile(path.join(root, 'index.html'), '<!doctype html><title>Preview</title><canvas></canvas>', 'utf8');
   await fsp.writeFile(path.join(root, 'game.pck'), '0123456789', 'utf8');
   await fsp.writeFile(path.join(root, '.env'), 'SECRET=blocked', 'utf8');
+  await fsp.writeFile(path.join(root, '.npmrc'), 'TOKEN=blocked', 'utf8');
   const preview = await startPreview({ workspaceId: 'test', root, entryPath: 'index.html' });
   const page = await fetch(preview.url);
   assert.equal(page.status, 200);
@@ -20,4 +21,6 @@ test('serves a local preview with byte-range support', async t => {
   assert.equal(await range.text(), '2345');
   const blocked = await fetch(new URL('.env', preview.url));
   assert.equal(blocked.status, 404);
+  const hidden = await fetch(new URL('.npmrc', preview.url));
+  assert.equal(hidden.status, 404);
 });

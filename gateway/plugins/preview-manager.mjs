@@ -46,7 +46,7 @@ function safeFile(root, pathname, entryPath, spaFallback) {
   const requested = decoded === '/' ? `/${entryPath}` : decoded;
   const parts = requested.split(/[\\/]+/).filter(Boolean).map(part => part.toLowerCase());
   const basename = parts.at(-1) || '';
-  if (parts.some(part => BLOCKED_SEGMENTS.has(part) || part.startsWith('.env.')) || BLOCKED_EXTENSIONS.has(path.extname(basename))) return null;
+  if (parts.some(part => part.startsWith('.') || BLOCKED_SEGMENTS.has(part) || part.startsWith('.env.')) || BLOCKED_EXTENSIONS.has(path.extname(basename))) return null;
   const candidate = path.resolve(root, `.${requested}`);
   if (!isInside(root, candidate)) return null;
   let stat = fs.statSync(candidate, { throwIfNoEntry: false });

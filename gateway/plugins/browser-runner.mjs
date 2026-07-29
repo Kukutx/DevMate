@@ -20,7 +20,7 @@ function assertAllowedUrl(rawUrl, allowRemoteUrls) {
 function browserExecutableAllowed(value) {
   if (!value) return true;
   const base = path.basename(String(value).replace(/\\/g, '/')).toLowerCase();
-  return /^(?:google chrome|chrome|chrome-headless-shell|chromium|chromium-browser|msedge)(?:[._ -].*)?(?:\.exe)?$/.test(base);
+  return /^(?:google chrome|chrome|chrome-headless-shell|chromium|chromium-browser|msedge)(?:\.exe)?$/.test(base);
 }
 
 function resolveModuleFromWorkspace(workspaceRoot, configuredPath = '') {
@@ -192,7 +192,7 @@ export async function runBrowserScenario({ workspaceRoot, url, settings = {}, ac
     });
     const consoleErrors = consoleMessages.filter(item => item.type === 'error');
     return {
-      ok: !!response && response.status() < 400 && pageErrors.length === 0 && consoleErrors.length === 0,
+      ok: !!response && response.status() < 400 && pageErrors.length === 0 && consoleErrors.length === 0 && requestFailures.length === 0,
       modulePath,
       url: page.url(),
       response: response ? { status: response.status(), ok: response.ok(), url: response.url() } : null,
