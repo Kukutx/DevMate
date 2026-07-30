@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RUNNER_SECRET_ENV = [
@@ -136,39 +138,52 @@ async function waitGateway(port, child, timeoutMs = 30000) {
   throw new Error(`Local Gateway did not become ready on port ${port}`);
 }
 
-function localRpcFactory(config) {
+function localMcpClient(config) {
   const port = Number(config.server?.port || 8787);
   const mcpPath = config.server?.mcpPath || '/mcp';
   const token = String(config.auth?.token || '');
   if (!token) throw new Error('Runner local DevMate config must contain an owner auth token');
-  let initialized = false;
-  async function rpc(method, params, signal) {
-    const result = await fetchJson(`http://127.0.0.1:${port}${mcpPath}`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream'
-      },
-      body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000000), method, params }),
-      signal
-    });
-    if (result?.error) throw new Error(result.error.message || 'Local MCP request failed');
-    return result?.result;
+  let client = null;
+  let transport = null;
+  let connecting = null;
+  async function initialize() {
+    if (client) return;
+    if (connecting) return connecting;
+    connecting = (async () => {
+      const nextTransport = new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${port}${mcpPath}`),
+        { requestInit: { headers: { Authorization: `Bearer ${token}` } } }
+      );
+      const nextClient = new Client(
+        { name: 'devmate-external-runner', version: config.appVersion || 'unknown' },
+        { capabilities: {} }
+      );
+      await nextClient.connect(nextTransport, { timeout: 30000 });
+      transport = nextTransport;
+      client = nextClient;
+    })();
+    try { await connecting; }
+    finally { connecting = null; }
   }
   return {
-    async initialize() {
-      if (initialized) return;
-      await rpc('initialize', {
-        protocolVersion: '2025-03-26',
-        capabilities: {},
-        clientInfo: { name: 'devmate-external-runner', version: config.appVersion || 'unknown' }
-      });
-      initialized = true;
+    initialize,
+    async callTool(name, args, signal, timeout = 900000) {
+      await initialize();
+      const boundedTimeout = Math.min(60 * 60 * 1000, Math.max(1000, Number(timeout) || 900000));
+      return client.callTool(
+        { name, arguments: args || {} },
+        undefined,
+        { signal, timeout: boundedTimeout, maxTotalTimeout: boundedTimeout }
+      );
     },
-    async callTool(name, args, signal) {
-      await this.initialize();
-      return rpc('tools/call', { name, arguments: args || {} }, signal);
+    async close() {
+      const currentClient = client;
+      client = null;
+      transport = null;
+      if (currentClient) await currentClient.close();
+    },
+    status() {
+      return { connected: !!client, transport: transport ? 'streamable-http' : null };
     }
   };
 }
@@ -227,7 +242,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
   const pollMs = Math.min(30000, Math.max(500, Math.trunc(Number(options['poll-ms']) || 2000)));
   const maximum = metadata.maxConcurrent;
   const control = controlClient(origin, token, metadata);
-  const local = localRpcFactory(config);
+  const local = localMcpClient(config);
   const { indexJobArtifacts } = await import('../gateway/job-artifacts.mjs');
   const inflight = new Map();
   let child = null;
@@ -266,7 +281,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
     renewTimer.unref?.();
     try {
       publicLog('Job started', `${job.id} ${job.tool}`);
-      const result = await local.callTool(job.tool, job.arguments || {}, abort.signal);
+      const result = await local.callTool(job.tool, job.arguments || {}, abort.signal, job.timeoutMs);
       const returned = toolError(result);
       if (returned) throw returned;
       const artifacts = await indexJobArtifacts(job, result);
@@ -295,6 +310,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
     stopping = true;
     publicLog('Runner stopping', `inflight=${inflight.size}`);
     await Promise.race([Promise.allSettled([...inflight.values()]), delay(15000)]);
+    try { await local.close(); } catch {}
     if (child && child.exitCode === null) child.kill();
   }
 
@@ -337,6 +353,7 @@ export const __test = {
   clearRunnerSecretsFromProcess,
   customCapabilities,
   gatewayEnvironment,
+  localMcpClient,
   normalizeControlUrl,
   parseArgs,
   runnerCapabilities,
