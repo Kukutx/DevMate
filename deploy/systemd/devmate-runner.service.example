@@ -1,0 +1,39 @@
+[Unit]
+Description=DevMate External Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devmate-runner
+Group=devmate-runner
+WorkingDirectory=/opt/devmate
+EnvironmentFile=/etc/devmate/runner.env
+ExecStart=/usr/bin/node /opt/devmate/scripts/devmate-runner.mjs \
+  --config /var/lib/devmate-runner/config.json \
+  --control-url https://devmate.example.com \
+  --capabilities linux-x64 \
+  --concurrency 2
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=25
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/devmate-runner /srv/devmate-workspaces
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/devmate/runner.env must be owned by root and mode 0600:
+# DEVMATE_RUNNER_TOKEN=dmr_...
+# Never place the token directly in ExecStart.
