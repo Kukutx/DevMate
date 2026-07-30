@@ -6,7 +6,7 @@ import { normalizeSlash, readConfig } from './local-shared.mjs';
 
 const BLOCKED_SEGMENTS = new Set(['.git', '.env', 'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys', 'service-account', 'service_accounts']);
 const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3', '.log']);
-const PATH_KEY = /(?:^|_)(?:path|file|report|screenshot|output|artifact)s?$/i;
+const PATH_KEY = /(?:path|file|report|screenshot|output|artifact)s?$/i;
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
