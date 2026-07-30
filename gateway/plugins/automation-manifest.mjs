@@ -72,7 +72,22 @@ export function automationManifestTemplate() {
         preset: 'Web',
         outputPath: 'build/web/index.html',
         mode: 'debug',
-        scenarios: []
+        exportMode: 'release',
+        exportOutputRoot: 'build/exports',
+        exports: [
+          { preset: 'Web', outputPath: 'build/web/index.html' }
+        ],
+        scenarios: [
+          {
+            id: 'native-smoke',
+            kind: 'native',
+            runForMs: 3000,
+            reportPath: 'artifacts/godot-qa/native-smoke.json',
+            assertions: [
+              { statePath: 'runtime.bridge_ready', operator: 'truthy' }
+            ]
+          }
+        ]
       }
     }
   };

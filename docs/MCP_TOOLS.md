@@ -123,11 +123,38 @@ Enable `devmate.browser-qa`:
 
 ### Godot
 
-Enable `devmate.godot`:
+Enable `devmate.godot`.
 
-- `godot_status`, `godot_doctor`, `godot_validate`, `godot_run`, `godot_export_web`
-- `godot_qa_bridge_status`, `godot_qa_bridge_template`
-- `godot_automation_manifest`, `godot_acceptance_test`, `godot_acceptance_run_saved`, `godot_acceptance_suite`
+Project and runtime inspection:
+
+- `godot_status`
+- `godot_project_audit`
+- `godot_doctor`
+- `godot_validate`
+- `godot_run`
+
+QA Bridge lifecycle:
+
+- `godot_qa_bridge_status`
+- `godot_qa_bridge_template`
+- `godot_qa_bridge_install`
+- `godot_qa_bridge_remove`
+
+Exports:
+
+- `godot_export`
+- `godot_export_matrix`
+- `godot_export_web`
+
+Acceptance:
+
+- `godot_native_test`
+- `godot_acceptance_test`
+- `godot_automation_manifest`
+- `godot_acceptance_run_saved`
+- `godot_acceptance_suite`
+
+`godot_project_audit` is read-only. Validation, export, native QA, and Web acceptance are `validate` operations. QA Bridge installation/removal are workspace mutations. All approved Godot audit, export, and acceptance tools can run as durable jobs on a Runner with the `godot` capability.
 
 ## Trusted local capabilities
 
@@ -167,4 +194,4 @@ Publishing requires Maintainer capability and, in production, normally requires 
 
 Prometheus-compatible metrics are also available from loopback only at `/control/metrics`. HTTP, job, approval, embedded Runner, and external Runner-control metrics are included.
 
-See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `EXTERNAL_RUNNERS.md` for remote execution, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
+See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `EXTERNAL_RUNNERS.md` for remote execution, `GODOT_AUTOMATION.md` for Godot audit/export/QA workflows, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.

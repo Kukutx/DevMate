@@ -26,7 +26,7 @@ const PUBLISH_TOOLS = new Set(['git_push', 'git_pull', 'deployment_publish', 'de
 const VALIDATE_TOOLS = new Set([
   'run_smart_checks', 'job_submit', 'job_retry',
   'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
-  'godot_doctor', 'godot_validate', 'godot_export_web', 'godot_acceptance_test',
+  'godot_doctor', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web', 'godot_native_test', 'godot_acceptance_test',
   'godot_acceptance_run_saved', 'godot_acceptance_suite'
 ]);
 const EXECUTE_TOOLS = new Set([
@@ -34,7 +34,7 @@ const EXECUTE_TOOLS = new Set([
 ]);
 const WRITE_TOOLS = new Set([
   'write_file', 'create_file', 'apply_patch',
-  'delete_file', 'move_file', 'restore_backup', 'godot_qa_bridge_install', 'job_cancel'
+  'delete_file', 'move_file', 'restore_backup', 'godot_qa_bridge_install', 'godot_qa_bridge_remove', 'job_cancel'
 ]);
 
 const NON_WORKSPACE_TOOLS = new Set([

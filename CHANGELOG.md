@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.5.0
+
+- Added a deep Godot project audit for main scene, Autoloads, InputMap actions, icons, addons, C# setup, Web renderer risk, export presets, and missing `res://` references.
+- Added QA Bridge v2 with atomic install/upgrade/removal, project-local backups, native JSON state reports, deterministic InputMap replay, checkpoints, explicit success/failure, and process exit codes.
+- Added `godot_native_test` for real native/headless scene acceptance with bounded input plans, structured state assertions, required checkpoints, diagnostics, reports, and timeout handling.
+- Added generic `godot_export` and sequential `godot_export_matrix` workflows for desktop, mobile, Web, dedicated-server, and custom export presets with safe generated outputs and artifact metadata.
+- Expanded `.devmate/automation.json` to store export targets plus mixed Web/native Godot acceptance scenarios.
+- Added durable Job support and Runner capability routing for Godot project audits, native QA, generic exports, export matrices, and existing Web acceptance workflows.
+- Upgraded Godot status and doctor output with InputMap, Autoload, QA version, project readiness, native QA readiness, and export readiness.
+- Added production workflow tests for project auditing, missing-resource detection, bridge lifecycle, native input/state orchestration, arbitrary preset export, and export matrices.
+
 ## 2.4.0
 
 - Replaced the active chain of separately patched MCP tool-registration and connection hooks with one deterministic Capability Host.

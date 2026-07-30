@@ -79,7 +79,7 @@ External Runner hosts
   └─ loopback DevMate Gateway + local toolchain
 ```
 
-DevMate 2.4 uses one deterministic Capability Host for tool authorization and capability initialization. Team, Runner, local-process, and plugin registration no longer depend on a chain of separately patched `McpServer.connect()` implementations.
+DevMate uses one deterministic Capability Host for tool authorization and capability initialization. Team, Runner, local-process, and plugin registration do not depend on a chain of separately patched `McpServer.connect()` implementations.
 
 ## Team controls
 
@@ -117,7 +117,7 @@ job_retry
 runner_status
 ```
 
-The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot validation/export/acceptance, reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
+The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot project audits, native/Web acceptance, single/matrix exports, reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
 
 External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Capabilities and workspace IDs reported by a Runner are intersected with its credential scope. Results are bounded and redacted; artifact files remain on the Runner host and only metadata is returned.
 
@@ -128,9 +128,34 @@ See [`docs/JOBS.md`](docs/JOBS.md) and [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNA
 Optional plugins are disabled until enabled:
 
 - `devmate.browser-qa`: local previews, Playwright scenarios, screenshots, reports, and structured application-state assertions.
-- `devmate.godot`: project inspection, headless validation, execution, Web export, QA Bridge, and browser-driven acceptance suites.
+- `devmate.godot`: deep project audit, QA Bridge installation, supervised project/scene execution, native/headless state tests, Web acceptance, and multi-platform export matrices.
 
-Repeatable scenarios are stored in `.devmate/automation.json` and can be reviewed in Git.
+Repeatable scenarios and export targets are stored in `.devmate/automation.json` and can be reviewed in Git.
+
+## Godot development loop
+
+DevMate can run a production-oriented Godot workflow:
+
+```text
+godot_project_audit
+→ godot_doctor
+→ godot_qa_bridge_install
+→ godot_validate
+→ godot_native_test and/or godot_acceptance_test
+→ godot_export_matrix
+```
+
+Key capabilities:
+
+- verify main scene, Autoload, icon, InputMap, C# setup, addons, export presets, and missing `res://` references;
+- install or upgrade QA Bridge v2 with project-local backups;
+- replay declared Godot Input actions and assert native runtime state/checkpoints;
+- preserve browser-driven Web acceptance with screenshots and network/console checks;
+- export desktop, mobile, Web, dedicated-server, or custom presets;
+- route platform-specific exports to matching external Runners;
+- save mixed Web/native scenarios and export targets in `.devmate/automation.json`.
+
+Godot, matching export templates, platform SDKs, and signing configuration must exist on the selected Runner. See [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md).
 
 ## Operations
 
@@ -156,6 +181,7 @@ Use drain mode before upgrades so new mutations and job claims stop while in-fli
 - MCP, Runner, and preview credentials are separate.
 - Workspace paths use realpath containment and block secrets, keys, databases, logs, and real `.env` files.
 - Runner capabilities are scheduling metadata, not an operating-system sandbox.
+- Godot QA inputs are limited to declared InputMap actions; report and export paths remain workspace-contained.
 - DevMate is intended for trusted organizational collaboration, not hostile multi-tenancy.
 - Use separate OS accounts, containers, VMs, machines, or DevMate instances for unrelated trust domains.
 - The central durable state is single-host. External Runners do not make the control plane horizontally replicated.
