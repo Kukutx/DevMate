@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { audit, readConfig, redactSensitiveString, writeConfig } from './local-shared.mjs';
+import { readDurableNamespace } from './durable-state.mjs';
 import { preflightQueuedJob } from './job-preflight.mjs';
 import {
   claimJob,
@@ -7,7 +8,6 @@ import {
   deferJob,
   failJob,
   getJob,
-  heartbeatRunner,
   registerRunner,
   renewJobLease
 } from './job-queue.mjs';
@@ -108,12 +108,15 @@ function intersect(reported, allowed, fallback = []) {
 }
 
 function runnerRegistration(principal, body = {}) {
-  const capabilities = intersect(body.capabilities, principal.capabilities, principal.capabilities).map(value => value.toLowerCase());
-  const workspaceIds = intersect(body.workspaceIds, principal.workspaceIds, principal.workspaceIds);
+  const reportedCapabilities = intersect(body.capabilities, principal.capabilities, principal.capabilities).map(value => value.toLowerCase());
+  const capabilities = reportedCapabilities.length ? reportedCapabilities : ['core'];
+  if (!capabilities.includes('core')) capabilities.unshift('core');
+  const reportedWorkspaces = intersect(body.workspaceIds, principal.workspaceIds, principal.workspaceIds);
+  const workspaceIds = reportedWorkspaces.length ? reportedWorkspaces : [...principal.workspaceIds];
   return {
     id: principal.id,
     name: principal.name,
-    capabilities: capabilities.includes('core') ? capabilities : ['core', ...capabilities],
+    capabilities,
     workspaceIds,
     maxConcurrent: Math.min(principal.maxConcurrent, Math.max(1, Math.trunc(Number(body.maxConcurrent) || principal.maxConcurrent))),
     version: String(body.version || '').slice(0, 100),
@@ -121,6 +124,19 @@ function runnerRegistration(principal, body = {}) {
     arch: String(body.arch || '').slice(0, 100),
     labels: body.labels && typeof body.labels === 'object' && !Array.isArray(body.labels) ? body.labels : {}
   };
+}
+
+function executionEnvelope(job) {
+  try {
+    const store = readDurableNamespace('jobs', { jobs: [] });
+    const internal = Array.isArray(store?.jobs) ? store.jobs.find(item => item.id === job.id) : null;
+    return {
+      ...job,
+      artifactPaths: Array.isArray(internal?.artifactPaths) ? [...internal.artifactPaths] : []
+    };
+  } catch {
+    return { ...job, artifactPaths: [] };
+  }
 }
 
 function sanitize(value, key = '', depth = 0) {
@@ -172,9 +188,7 @@ function classifyPreflight(error) {
 async function routeRequest(req, res, url, config, principal, body, requestId) {
   const path = url.pathname;
   const registration = runnerRegistration(principal, body.runner || body);
-  let runner;
-  try { runner = heartbeatRunner(principal.id, registration); }
-  catch { runner = registerRunner(registration); }
+  const runner = registerRunner(registration);
 
   if (path === `${PREFIX}/heartbeat`) {
     return json(res, 200, { runner, serverTime: new Date().toISOString() }, requestId);
@@ -185,7 +199,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     if (!job) return json(res, 200, { runner, job: null }, requestId);
     try {
       preflightQueuedJob(job);
-      return json(res, 200, { runner, job }, requestId);
+      return json(res, 200, { runner, job: executionEnvelope(job) }, requestId);
     } catch (error) {
       const classification = classifyPreflight(error);
       if (classification.status) {
@@ -239,6 +253,9 @@ export function runnerControlListener(listener) {
       const config = normalizeRunnerControlConfig(readConfig());
       if (!config.runnerControl.enabled) return json(res, 404, { error: 'External runner control plane is disabled', code: 'runner_control_disabled' }, requestId);
       if (req.method !== 'POST') return json(res, 405, { error: 'Runner control endpoints require POST', code: 'method_not_allowed' }, requestId);
+      if (String(req.headers?.['x-devmate-runner-protocol'] || '') !== String(RUNNER_PROTOCOL_VERSION)) {
+        return json(res, 426, { error: `Runner protocol ${RUNNER_PROTOCOL_VERSION} is required`, code: 'protocol_version_required' }, requestId);
+      }
       if (!hostAllowed(req, config)) return json(res, 421, { error: 'Request host is not allowed', code: 'host_not_allowed' }, requestId);
       const token = bearerToken(req);
       const principal = verifyRunnerToken(token, config);
@@ -285,4 +302,4 @@ export function resetRunnerControlState() {
   rateWindows.clear();
 }
 
-export const __test = { bearerToken, hostAllowed, intersect, sanitizeArtifacts, sanitizeResult };
+export const __test = { bearerToken, executionEnvelope, hostAllowed, intersect, runnerRegistration, sanitizeArtifacts, sanitizeResult };
