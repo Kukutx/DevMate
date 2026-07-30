@@ -1,0 +1,29 @@
+devmate.example.com {
+  encode zstd gzip
+
+  request_body {
+    max_size 2MB
+  }
+
+  reverse_proxy 127.0.0.1:8787 {
+    header_up X-Forwarded-Proto https
+    transport http {
+      read_timeout 15m
+      write_timeout 15m
+    }
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+  }
+
+  log {
+    output file /var/log/caddy/devmate-access.log {
+      roll_size 100mb
+      roll_keep 10
+    }
+    format json
+  }
+}
