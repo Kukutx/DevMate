@@ -97,6 +97,13 @@ export function jobTargetEligible(name, config = {}) {
   return true;
 }
 
+export function jobTargetEnabled(name, config = readConfig()) {
+  const enabled = new Set(config.plugins?.enabled || []);
+  if (name.startsWith('godot_')) return enabled.has('devmate.godot');
+  if (name.startsWith('browser_') || name.startsWith('web_preview_')) return enabled.has('devmate.browser-qa');
+  return true;
+}
+
 export function registerJobTarget(name, config, handler) {
   if (!jobTargetEligible(name, readConfig()?.jobs || {})) return false;
   targets.set(name, {
@@ -110,11 +117,13 @@ export function registerJobTarget(name, config, handler) {
 }
 
 export function jobTarget(name) {
-  return targets.get(name) || null;
+  const target = targets.get(name) || null;
+  return target && jobTargetEnabled(name) ? target : null;
 }
 
 export function jobTargetCatalog() {
-  return [...targets.values()].map(target => ({
+  const config = readConfig();
+  return [...targets.values()].filter(target => jobTargetEnabled(target.name, config)).map(target => ({
     name: target.name,
     title: target.config?.title || target.name,
     description: target.config?.description || '',
@@ -126,7 +135,7 @@ export function jobTargetCatalog() {
 
 function localRunnerCapabilities() {
   const output = new Set(['core']);
-  for (const target of targets.values()) for (const capability of target.requiredCapabilities) output.add(capability);
+  for (const target of jobTargetCatalog()) for (const capability of target.requiredCapabilities) output.add(capability);
   return [...output].sort();
 }
 
@@ -159,9 +168,9 @@ export function refreshLocalRunner() {
 }
 
 async function executeClaimedJob(job) {
-  const target = targets.get(job.tool);
+  const target = jobTarget(job.tool);
   if (!target) {
-    failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently registered: ${job.tool}`, retryable: true });
+    failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently enabled or registered: ${job.tool}`, retryable: true });
     return;
   }
   const started = Date.now();
@@ -271,4 +280,4 @@ export function jobRuntimeStatus() {
   };
 }
 
-export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, resultError, resultSummary, safeValue, targets, withTimeout };
+export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, jobTargetEnabled, resultError, resultSummary, safeValue, targets, withTimeout };
