@@ -42,6 +42,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Production gateway policy tests
+        run: node --test tests/request-guard-stream.test.mjs
+
       - name: Smoke test gateway
         run: npm run smoke:gateway
 
