@@ -65,6 +65,9 @@ export function finishWorkSession({ id, principal, force = false, releaseLease =
   prune();
   const session = sessions.get(id);
   if (!session) return { finished: false, id, reason: 'not found or expired' };
+  if (principal?.workspaceIds?.length && !principal.workspaceIds.includes(session.workspaceId)) {
+    throw new Error(`Principal ${principal.id} is not allowed to finish a session for workspace ${session.workspaceId}`);
+  }
   const canForce = principal?.role === 'owner' || principal?.role === 'maintainer';
   if (session.principalId !== principal?.id && !(force && canForce)) throw new Error(`Work session ${id} belongs to ${session.principalName || session.principalId}`);
   sessions.delete(id);
