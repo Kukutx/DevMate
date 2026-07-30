@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { normalizeSlash, readConfig } from './local-shared.mjs';
+import { readDurableNamespace } from './durable-state.mjs';
 
 const BLOCKED_SEGMENTS = new Set(['.git', '.env', 'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys', 'service-account', 'service_accounts']);
 const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3', '.log']);
@@ -24,6 +25,16 @@ function workspaceFor(job) {
   const workspace = (config.workspaces || []).find(item => item.id === job.workspaceId || item.name === job.workspaceId) || null;
   if (!workspace) throw new Error(`Workspace not found for job artifact indexing: ${job.workspaceId}`);
   return workspace;
+}
+
+function persistedArtifactPaths(jobId) {
+  try {
+    const store = readDurableNamespace('jobs', { jobs: [] });
+    const job = Array.isArray(store?.jobs) ? store.jobs.find(item => item.id === jobId) : null;
+    return Array.isArray(job?.artifactPaths) ? job.artifactPaths : [];
+  } catch {
+    return [];
+  }
 }
 
 function collectCandidateValues(value, key = '', depth = 0, output = []) {
@@ -111,6 +122,7 @@ export async function indexJobArtifacts(job, result) {
   if (!job.workspaceId) return [];
   const workspace = workspaceFor(job);
   const candidates = [
+    ...persistedArtifactPaths(job.id),
     ...(Array.isArray(job.artifactPaths) ? job.artifactPaths : []),
     ...collectCandidateValues(result?.structuredContent ?? result ?? {})
   ];
@@ -129,4 +141,4 @@ export async function indexJobArtifacts(job, result) {
   return records;
 }
 
-export const __test = { artifactRecords, blocked, collectCandidateValues, isInside };
+export const __test = { artifactRecords, blocked, collectCandidateValues, isInside, persistedArtifactPaths };
