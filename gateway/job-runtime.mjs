@@ -238,13 +238,25 @@ export function startJobRuntime() {
   heartbeatTimer.unref?.();
 }
 
-export async function shutdownJobRuntime() {
+export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {
   stopping = true;
   if (workerTimer) clearInterval(workerTimer);
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   workerTimer = null;
   heartbeatTimer = null;
-  await Promise.allSettled([...inflight.values()]);
+  const pending = Promise.allSettled([...inflight.values()]);
+  let timer = null;
+  try {
+    await Promise.race([
+      pending,
+      new Promise(resolve => {
+        timer = setTimeout(resolve, Math.min(60000, Math.max(0, Number(graceMs) || 15000)));
+        timer.unref?.();
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   inflight.clear();
   setGauge('devmate_jobs_inflight', {}, 0);
 }
