@@ -38,7 +38,7 @@ export async function loadAutomationManifest(context, { workspaceId, manifestPat
   const manifest = validateTopLevel(parsed);
   return {
     workspace: { id: workspace.id, name: workspace.name },
-    manifestPath: path.relative(workspace.root, file).replace(/\\/g, '/'),
+    manifestPath: path.relative(workspace.root, file).replace(/\/g, '/'),
     exists: true,
     manifest
   };
@@ -72,7 +72,22 @@ export function automationManifestTemplate() {
         preset: 'Web',
         outputPath: 'build/web/index.html',
         mode: 'debug',
-        scenarios: []
+        exportMode: 'release',
+        exportOutputRoot: 'build/exports',
+        exports: [
+          { preset: 'Web', outputPath: 'build/web/index.html' }
+        ],
+        scenarios: [
+          {
+            id: 'native-smoke',
+            kind: 'native',
+            runForMs: 3000,
+            reportPath: 'artifacts/godot-qa/native-smoke.json',
+            assertions: [
+              { statePath: 'runtime.bridge_ready', operator: 'truthy' }
+            ]
+          }
+        ]
       }
     }
   };
