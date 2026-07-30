@@ -160,7 +160,7 @@ export function revokeRunnerCredential(config, id) {
 }
 
 function parseRunnerToken(token) {
-  const match = String(token || '').match(/^dmr_([a-z0-9_-]{1,120})_([A-Za-z0-9_-]{20,})$/);
+  const match = String(token || '').match(/^dmr_([a-z0-9_-]{1,120})_([A-Za-z0-9_-]{43})$/);
   return match ? { id: match[1], secret: match[2] } : null;
 }
 

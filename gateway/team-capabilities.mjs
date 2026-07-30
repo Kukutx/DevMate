@@ -13,6 +13,7 @@ import { assertDrainAllows } from './job-queue.mjs';
 import { registerJobTarget } from './job-runtime.mjs';
 import { registerJobTools } from './job-tools.mjs';
 import { incrementCounter, observeDuration } from './observability.mjs';
+import { registerServerInitializer, registerToolDecorator } from './server-extension-host.mjs';
 import { registerTeamManagementTools } from './team-management-tools.mjs';
 import { registerTeamCollaborationTools } from './team-collaboration-tools.mjs';
 import {
@@ -23,11 +24,9 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
-const INSTALLED = Symbol.for('devmate.teamCapabilitiesInstalled');
 const REGISTERED = Symbol.for('devmate.teamToolsRegistered');
-const AUTH_WRAPPED = Symbol.for('devmate.teamToolAuthorizationWrapped');
 
-function registerTeamTools(server) {
+export function registerTeamTools(server) {
   if (server[REGISTERED]) return;
   server[REGISTERED] = true;
   const register = (name, config, handler) => server.registerTool(name, {
@@ -120,121 +119,119 @@ function filterResult(name, result, principal) {
   return syncTextContent(result);
 }
 
-function installAuthorizationWrapper(McpServerClass) {
-  if (McpServerClass.prototype[AUTH_WRAPPED]) return;
-  const originalRegisterTool = McpServerClass.prototype.registerTool;
-  Object.defineProperty(McpServerClass.prototype, AUTH_WRAPPED, { value: true });
+export function wrapAuthorizedTool(name, config, handler) {
+  return async function authorizedToolHandler(args = {}, ...rest) {
+    const current = normalizeDeploymentConfig(readConfig());
+    const inferred = inferredWorkspace(name, args);
+    const authorizationArgs = inferred && !args.workspaceId
+      ? { ...args, workspaceId: inferred }
+      : args;
+    const authorized = authorizeToolCall({
+      name,
+      annotations: config?.annotations || {},
+      args: authorizationArgs,
+      config: current,
+      principal: principalNow()
+    });
 
-  McpServerClass.prototype.registerTool = function authorizedRegisterTool(name, config, handler) {
-    const wrappedHandler = async (args = {}, ...rest) => {
-      const current = normalizeDeploymentConfig(readConfig());
-      const inferred = inferredWorkspace(name, args);
-      const authorizationArgs = inferred && !args.workspaceId
-        ? { ...args, workspaceId: inferred }
-        : args;
-      const authorized = authorizeToolCall({
-        name,
-        annotations: config?.annotations || {},
-        args: authorizationArgs,
-        config: current,
-        principal: principalNow()
+    if (name !== 'job_cancel') {
+      assertDrainAllows({
+        principal: authorized.principal,
+        capability: authorized.capability,
+        tool: name
       });
+    }
 
-      if (name !== 'job_cancel') {
-        assertDrainAllows({
-          principal: authorized.principal,
-          capability: authorized.capability,
-          tool: name
-        });
-      }
+    if (!name.startsWith('workspace_lease_')) {
+      assertWorkspaceLease({
+        workspaceId: authorized.workspaceId,
+        principal: authorized.principal,
+        capability: authorized.capability,
+        config: current
+      });
+    }
 
-      if (!name.startsWith('workspace_lease_')) {
-        assertWorkspaceLease({
-          workspaceId: authorized.workspaceId,
-          principal: authorized.principal,
-          capability: authorized.capability,
-          config: current
-        });
-      }
-
-      const started = Date.now();
-      const labels = {
+    const started = Date.now();
+    const labels = {
+      tool: name,
+      capability: authorized.capability,
+      role: authorized.principal.role,
+      source: authorized.principal.source
+    };
+    const active = authorized.workspaceId
+      ? activeWorkSession(authorized.principal.id, authorized.workspaceId)
+      : null;
+    try {
+      const approval = ensureToolApproval({
+        config: current,
+        principal: authorized.principal,
         tool: name,
         capability: authorized.capability,
-        role: authorized.principal.role,
-        source: authorized.principal.source
-      };
-      const active = authorized.workspaceId
-        ? activeWorkSession(authorized.principal.id, authorized.workspaceId)
-        : null;
-      try {
-        const approval = ensureToolApproval({
-          config: current,
-          principal: authorized.principal,
-          tool: name,
-          capability: authorized.capability,
-          workspaceId: authorized.workspaceId,
-          args: authorizationArgs
-        });
-        if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
+        workspaceId: authorized.workspaceId,
+        args: authorizationArgs
+      });
+      if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
-        const result = filterResult(name, await handler(args, ...rest), authorized.principal);
-        const session = authorized.workspaceId
-          ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
-          : null;
-        incrementCounter('devmate_tool_calls_total', { ...labels, status: 'success' }, 1);
-        observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
-        await audit('team_tool_call', {
-          requestId: requestContext()?.requestId || null,
-          principalId: authorized.principal.id,
-          principalRole: authorized.principal.role,
-          tool: name,
-          capability: authorized.capability,
-          workspace: authorized.workspaceId,
-          workSessionId: session?.id || active?.id || null,
-          approvalId: approval?.request?.id || null,
-          ok: true,
-          durationMs: Date.now() - started
-        });
-        return result;
-      } catch (error) {
-        const session = authorized.workspaceId
-          ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
-          : null;
-        const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
-        incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
-        observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
-        if (error?.code === 'approval_required') incrementCounter('devmate_approvals_total', { status: 'pending', tool: name }, 1);
-        await audit('team_tool_call', {
-          requestId: requestContext()?.requestId || null,
-          principalId: authorized.principal.id,
-          principalRole: authorized.principal.role,
-          tool: name,
-          capability: authorized.capability,
-          workspace: authorized.workspaceId,
-          workSessionId: session?.id || active?.id || null,
-          approvalId: error?.approvalRequest?.id || null,
-          ok: false,
-          durationMs: Date.now() - started,
-          error: String(error?.message || error).slice(0, 1000)
-        });
-        throw error;
-      }
-    };
-    registerJobTarget(name, config, wrappedHandler);
-    return originalRegisterTool.call(this, name, config, wrappedHandler);
+      const result = filterResult(name, await handler(args, ...rest), authorized.principal);
+      const session = authorized.workspaceId
+        ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
+        : null;
+      incrementCounter('devmate_tool_calls_total', { ...labels, status: 'success' }, 1);
+      observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
+      await audit('team_tool_call', {
+        requestId: requestContext()?.requestId || null,
+        principalId: authorized.principal.id,
+        principalRole: authorized.principal.role,
+        tool: name,
+        capability: authorized.capability,
+        workspace: authorized.workspaceId,
+        workSessionId: session?.id || active?.id || null,
+        approvalId: approval?.request?.id || null,
+        ok: true,
+        durationMs: Date.now() - started
+      });
+      return result;
+    } catch (error) {
+      const session = authorized.workspaceId
+        ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
+        : null;
+      const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
+      incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
+      observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
+      if (error?.code === 'approval_required') incrementCounter('devmate_approvals_total', { status: 'pending', tool: name }, 1);
+      await audit('team_tool_call', {
+        requestId: requestContext()?.requestId || null,
+        principalId: authorized.principal.id,
+        principalRole: authorized.principal.role,
+        tool: name,
+        capability: authorized.capability,
+        workspace: authorized.workspaceId,
+        workSessionId: session?.id || active?.id || null,
+        approvalId: error?.approvalRequest?.id || null,
+        ok: false,
+        durationMs: Date.now() - started,
+        error: String(error?.message || error).slice(0, 1000)
+      });
+      throw error;
+    }
   };
 }
 
 export function installTeamCapabilities(McpServerClass) {
-  installAuthorizationWrapper(McpServerClass);
-  if (McpServerClass.prototype[INSTALLED]) return;
-  const originalConnect = McpServerClass.prototype.connect;
-  Object.defineProperty(McpServerClass.prototype, INSTALLED, { value: true });
-  McpServerClass.prototype.connect = async function teamCapabilitiesConnect(...args) {
-    registerTeamTools(this);
-    return originalConnect.apply(this, args);
-  };
+  registerToolDecorator(McpServerClass, {
+    id: 'devmate.team-authorization',
+    order: 10,
+    decorate({ name, config, handler }) {
+      const wrapped = wrapAuthorizedTool(name, config, handler);
+      registerJobTarget(name, config, wrapped);
+      return { handler: wrapped };
+    }
+  });
+  registerServerInitializer(McpServerClass, {
+    id: 'devmate.team-tools',
+    order: 10,
+    initialize: registerTeamTools
+  });
 }
 
 export async function shutdownTeamServices() {
@@ -249,5 +246,6 @@ export const __test = {
   readiness,
   registerTeamTools,
   syncTextContent,
-  workspaceIds
+  workspaceIds,
+  wrapAuthorizedTool
 };

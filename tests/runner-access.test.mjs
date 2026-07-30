@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  __test,
   createRunnerCredential,
   normalizeRunnerControlConfig,
   revokeRunnerCredential,
@@ -13,9 +14,19 @@ function config() {
   return { runnerControl: { enabled: false, credentials: [] } };
 }
 
+test('parses fixed-length Runner secrets without confusing underscores', () => {
+  const secret = `${'a'.repeat(20)}_${'b'.repeat(22)}`;
+  assert.equal(secret.length, 43);
+  assert.deepEqual(__test.parseRunnerToken(`dmr_linux_builder_${secret}`), {
+    id: 'linux_builder',
+    secret
+  });
+});
+
 test('creates hashed, explicitly scoped runner credentials', () => {
   const current = config();
   const created = createRunnerCredential(current, {
+    id: 'linux_builder',
     name: 'Linux Builder',
     workspaceIds: ['app'],
     capabilities: ['core', 'external', 'linux-x64'],

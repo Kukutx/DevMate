@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.0
+
+- Replaced the active chain of separately patched MCP tool-registration and connection hooks with one deterministic Capability Host.
+- Added ordered, idempotent capability initialization for team authorization, Runner tools, trusted local capabilities, and optional plugins while preserving existing installer APIs.
+- Added `devmate bootstrap` presets for personal, team, production control-plane, and external Runner hosts.
+- Added one-command creation of optional first-member and scoped Runner credentials without persisting plaintext `dmt_` or `dmr_` tokens.
+- Added the offline token-free `devmate status` command and retained transparent support for the existing granular CLI commands.
+- Simplified the README and added a focused bootstrap/deployment guide.
+- Fixed ambiguous parsing of existing team and Runner tokens when Base64URL secrets contain underscores, without changing or invalidating the token format.
+- Added deterministic extension-host, concurrent-connect, bootstrap, partial-config prevention, and token-separator regression coverage.
+
 ## 2.3.0
 
 - Added an authenticated external Runner control plane under `/runner/v1` with protocol versioning, heartbeat, capability/workspace registration, job claim, lease renewal, completion, failure, and cancellation acknowledgement.

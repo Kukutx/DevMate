@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  __test,
   authorizeToolCall,
   createTeamMember,
   normalizeDeploymentConfig,
@@ -20,10 +21,20 @@ function config() {
   };
 }
 
+test('parses fixed-length member secrets without confusing underscores', () => {
+  const secret = `${'a'.repeat(20)}_${'b'.repeat(22)}`;
+  assert.equal(secret.length, 43);
+  assert.deepEqual(__test.parseTeamToken(`dmt_data_ops_${secret}`), {
+    id: 'data_ops',
+    secret
+  });
+});
+
 test('creates hashed team tokens and verifies scoped principals', () => {
   const current = config();
   normalizeDeploymentConfig(current);
   const created = createTeamMember(current, {
+    id: 'data_ops',
     name: 'Alice',
     role: 'developer',
     workspaceIds: ['app']
