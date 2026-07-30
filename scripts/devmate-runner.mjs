@@ -3,8 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { indexJobArtifacts } from '../gateway/job-artifacts.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,8 +56,15 @@ function gatewayScript(options) {
   return path.join(root, 'gateway', 'server-entry.mjs');
 }
 
-function runnerCapabilities(config) {
-  const output = new Set(['core']);
+function customCapabilities(options) {
+  return String(options.capabilities || process.env.DEVMATE_RUNNER_CAPABILITIES || '')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function runnerCapabilities(config, options = {}) {
+  const output = new Set(['core', 'external', ...customCapabilities(options)]);
   const enabled = new Set(config.plugins?.enabled || []);
   if (enabled.has('devmate.browser-qa')) output.add('browser-qa');
   if (enabled.has('devmate.godot')) { output.add('godot'); output.add('browser-qa'); }
@@ -70,7 +76,7 @@ function runnerMetadata(config, options) {
     version: config.appVersion || 'unknown',
     platform: process.platform,
     arch: process.arch,
-    capabilities: runnerCapabilities(config),
+    capabilities: runnerCapabilities(config, options),
     workspaceIds: (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id),
     maxConcurrent: Math.min(16, Math.max(1, Math.trunc(Number(options.concurrency) || Number(config.runtime?.maxConcurrentJobs) || 1))),
     labels: {
@@ -182,25 +188,28 @@ function toolError(result) {
   return new Error(text || 'Local MCP tool returned an error result');
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const configPath = path.resolve(String(options.config || process.env.DEVMATE_RUNNER_CONFIG || ''));
-  if (!configPath || !fs.existsSync(configPath)) throw new Error('Existing local DevMate config is required through --config or DEVMATE_RUNNER_CONFIG');
+export async function runExternalRunner(options = parseArgs(process.argv.slice(2))) {
+  const rawConfigPath = String(options.config || process.env.DEVMATE_RUNNER_CONFIG || '').trim();
+  if (!rawConfigPath) throw new Error('Existing local DevMate config is required through --config or DEVMATE_RUNNER_CONFIG');
+  const configPath = path.resolve(rawConfigPath);
+  if (!fs.statSync(configPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Runner config is not a file: ${configPath}`);
   process.env.DEVMATE_CONFIG = configPath;
   const config = loadJson(configPath);
   if ((config.deployment?.mode || 'personal') !== 'personal') {
     throw new Error('External Runner local config must use personal deployment mode. Central team policy belongs to the control-plane Gateway.');
   }
   if (config.auth?.required === false) throw new Error('External Runner local Gateway must keep owner-token authentication enabled');
+  const metadata = runnerMetadata(config, options);
+  if (!metadata.workspaceIds.length) throw new Error('External Runner local config must contain at least one writable workspace');
   const origin = normalizeControlUrl(options['control-url'] || process.env.DEVMATE_RUNNER_CONTROL_URL, options['allow-http'] === true);
   const token = runnerToken(options);
-  const metadata = runnerMetadata(config, options);
   const port = Number(config.server?.port || 8787);
   const leaseSeconds = Math.min(300, Math.max(30, Math.trunc(Number(options['lease-seconds']) || 90)));
   const pollMs = Math.min(30000, Math.max(500, Math.trunc(Number(options['poll-ms']) || 2000)));
   const maximum = metadata.maxConcurrent;
   const control = controlClient(origin, token, metadata);
   const local = localRpcFactory(config);
+  const { indexJobArtifacts } = await import('../gateway/job-artifacts.mjs');
   const inflight = new Map();
   let child = null;
   let stopping = false;
@@ -297,7 +306,12 @@ async function main() {
   await stop();
 }
 
-main().catch(error => {
-  process.stderr.write(`DevMate Runner failed: ${error?.message || error}\n`);
-  process.exitCode = 1;
-});
+const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : '';
+if (import.meta.url === invokedPath) {
+  runExternalRunner().catch(error => {
+    process.stderr.write(`DevMate Runner failed: ${error?.message || error}\n`);
+    process.exitCode = 1;
+  });
+}
+
+export const __test = { customCapabilities, normalizeControlUrl, parseArgs, runnerCapabilities, runnerMetadata, toolError };
