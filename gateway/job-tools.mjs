@@ -42,13 +42,22 @@ function ensureVisible(job, principal) {
   return job;
 }
 
+function assertMaintainer(principal, action) {
+  if (!['owner', 'maintainer'].includes(principal?.role)) throw new Error(`${action} requires maintainer or owner role`);
+}
+
+function withWorkspace(args, workspaceId) {
+  if (!workspaceId || args.workspaceId) return args;
+  return { ...args, workspaceId };
+}
+
 export function registerJobTools(register, annotations) {
   const { ro, rw } = annotations;
 
   register('job_target_catalog', {
     title: 'DevMate job target catalog',
     description: 'List reviewed tools that may be executed by the durable embedded job runner.',
-    inputSchema: {},
+    inputSchema: { workspaceId: z.string().optional() },
     annotations: ro
   }, async () => toolText({ targets: jobTargetCatalog() }));
 
@@ -56,6 +65,7 @@ export function registerJobTools(register, annotations) {
     title: 'Submit durable DevMate job',
     description: 'Queue a reviewed build, validation, Browser QA, Godot acceptance, report, or safe Git-save tool for durable execution. Credential-like arguments and arbitrary shell commands are rejected.',
     inputSchema: {
+      workspaceId: z.string().optional(),
       tool: z.string().min(1).max(200),
       arguments: z.record(z.string(), z.unknown()).optional(),
       title: z.string().max(300).optional(),
@@ -66,9 +76,10 @@ export function registerJobTools(register, annotations) {
       artifactPaths: z.array(z.string().min(1).max(2000)).max(100).optional()
     },
     annotations: rw
-  }, async ({ tool, arguments: args = {}, title = '', priority = 50, maxAttempts = 2, timeoutMs = 900000, requiredCapabilities = [], artifactPaths = [] }) => {
+  }, async ({ workspaceId, tool, arguments: rawArgs = {}, title = '', priority = 50, maxAttempts = 2, timeoutMs = 900000, requiredCapabilities = [], artifactPaths = [] }) => {
     const target = jobTarget(tool);
     if (!target) throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
+    const args = withWorkspace(rawArgs, workspaceId);
     if (tool === 'git_save' && args.push) throw new Error('Durable git_save jobs cannot push. Review and publish synchronously through the approval flow.');
     const principal = principalNow();
     const authorized = targetAuthorization(target, args, principal);
@@ -99,7 +110,7 @@ export function registerJobTools(register, annotations) {
   register('job_status', {
     title: 'DevMate job status',
     description: 'Read one durable job, including bounded events and indexed artifacts.',
-    inputSchema: { id: z.string().min(1), includeArguments: z.boolean().optional(), includeResult: z.boolean().optional() },
+    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional(), includeArguments: z.boolean().optional(), includeResult: z.boolean().optional() },
     annotations: ro
   }, async ({ id, includeArguments = false, includeResult = true }) => {
     const principal = principalNow();
@@ -109,7 +120,7 @@ export function registerJobTools(register, annotations) {
   register('job_artifacts', {
     title: 'DevMate job artifacts',
     description: 'List indexed files produced by a completed durable job.',
-    inputSchema: { id: z.string().min(1) },
+    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: ro
   }, async ({ id }) => {
     const principal = principalNow();
@@ -120,7 +131,7 @@ export function registerJobTools(register, annotations) {
   register('job_cancel', {
     title: 'Cancel DevMate job',
     description: 'Cancel a queued/deferred job immediately or request cooperative cancellation of a running job.',
-    inputSchema: { id: z.string().min(1), force: z.boolean().optional() },
+    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional(), force: z.boolean().optional() },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, force = false }) => {
     const principal = principalNow();
@@ -132,7 +143,7 @@ export function registerJobTools(register, annotations) {
   register('job_retry', {
     title: 'Retry DevMate job',
     description: 'Requeue a failed, cancelled, approval-blocked, or lease-blocked job after correcting its prerequisite.',
-    inputSchema: { id: z.string().min(1) },
+    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: rw
   }, async ({ id }) => {
     const principal = principalNow();
@@ -148,7 +159,7 @@ export function registerJobTools(register, annotations) {
   register('runner_status', {
     title: 'DevMate runner status',
     description: 'Show embedded runner capabilities, availability, concurrency, and current runtime state.',
-    inputSchema: {},
+    inputSchema: { workspaceId: z.string().optional() },
     annotations: ro
   }, async () => toolText({ runners: listRunners(), runtime: jobRuntimeStatus() }));
 
@@ -166,6 +177,7 @@ export function registerJobTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async ({ reason = '' }) => {
     const principal = principalNow();
+    assertMaintainer(principal, 'Starting deployment drain');
     const drain = startDrain({ principal, reason });
     await audit('deployment_drain_start', { principalId: principal.id, reason });
     return toolText({ drain, runtime: jobRuntimeStatus() });
@@ -178,10 +190,11 @@ export function registerJobTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async () => {
     const principal = principalNow();
+    assertMaintainer(principal, 'Cancelling deployment drain');
     const result = cancelDrain({ principal });
     await audit('deployment_drain_cancel', { principalId: principal.id, cancelled: result.cancelled });
     return toolText(result);
   });
 }
 
-export const __test = { ensureVisible, targetAuthorization };
+export const __test = { assertMaintainer, ensureVisible, targetAuthorization, withWorkspace };
