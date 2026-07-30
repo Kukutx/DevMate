@@ -1,25 +1,22 @@
 #!/usr/bin/env node
 import http from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { installLocalCapabilities, shutdownPersistentProcesses } from './local-capabilities.mjs';
+import { shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { readConfig } from './local-shared.mjs';
-import { installPluginHost, shutdownPluginServices } from './plugins/plugin-host.mjs';
+import { installPlatformCapabilities } from './platform-capabilities.mjs';
+import { shutdownPluginServices } from './plugins/plugin-host.mjs';
 import { installGatewayRequestGuard, resetRequestGuardState } from './request-guard.mjs';
 import { installHttpObservability } from './http-observability.mjs';
 import { acquireGatewayInstanceLock, releaseGatewayInstanceLock } from './durable-state.mjs';
-import { installTeamCapabilities, shutdownTeamServices } from './team-capabilities.mjs';
+import { shutdownTeamServices } from './team-capabilities.mjs';
 import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
-import { installRunnerCapabilities } from './runner-capabilities.mjs';
 
 acquireGatewayInstanceLock();
 installHttpObservability(http);
 installGatewayRequestGuard(http);
 installRunnerControlPlane(http);
-installTeamCapabilities(McpServer);
-installRunnerCapabilities(McpServer);
-installLocalCapabilities(McpServer);
-installPluginHost(McpServer);
+installPlatformCapabilities(McpServer);
 if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
 
 let shuttingDown = false;
