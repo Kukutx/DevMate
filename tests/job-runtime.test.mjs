@@ -26,7 +26,7 @@ process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const { installTeamCapabilities } = await import('../gateway/team-capabilities.mjs');
 const { getJob, clearJobsForTests } = await import('../gateway/job-queue.mjs');
-const { runJobWorkerOnce, shutdownJobRuntime } = await import('../gateway/job-runtime.mjs');
+const { jobTargetEnabled, runJobWorkerOnce, shutdownJobRuntime } = await import('../gateway/job-runtime.mjs');
 const { resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
 
 class MockServer {
@@ -37,7 +37,7 @@ class MockServer {
 
 installTeamCapabilities(MockServer);
 
-test('executes a reviewed target and indexes generated artifacts', async () => {
+test('executes a reviewed target and indexes generated artifact directories', async () => {
   resetDurableStateForTests();
   clearJobsForTests();
   const server = new MockServer();
@@ -49,6 +49,8 @@ test('executes a reviewed target and indexes generated artifacts', async () => {
   }, async ({ workspaceId }) => {
     assert.equal(workspaceId, 'app');
     await fsp.writeFile(path.join(workspace, 'artifacts', 'checks.json'), '{"ok":true}\n', 'utf8');
+    await fsp.writeFile(path.join(workspace, 'artifacts', 'screenshot.png'), 'fake-image', 'utf8');
+    await fsp.writeFile(path.join(workspace, 'artifacts', 'ignored.log'), 'sensitive log', 'utf8');
     return {
       content: [{ type: 'text', text: 'checks passed' }],
       structuredContent: { ok: true, reportPath: 'artifacts/checks.json' }
@@ -59,7 +61,7 @@ test('executes a reviewed target and indexes generated artifacts', async () => {
     workspaceId: 'app',
     tool: 'run_smart_checks',
     arguments: { workspaceId: 'app' },
-    artifactPaths: ['artifacts/checks.json']
+    artifactPaths: ['artifacts']
   });
   const id = submitted.structuredContent.job.id;
   const claimed = await runJobWorkerOnce();
@@ -72,9 +74,17 @@ test('executes a reviewed target and indexes generated artifacts', async () => {
   const job = getJob(id, { includeResult: true });
   assert.equal(job.status, 'succeeded');
   assert.equal(job.result.structuredContent.ok, true);
-  assert.equal(job.artifacts[0].path, 'artifacts/checks.json');
+  const artifactPaths = job.artifacts.map(item => item.path);
+  assert.deepEqual(artifactPaths, ['artifacts/checks.json', 'artifacts/screenshot.png']);
   assert.match(job.artifacts[0].sha256, /^[a-f0-9]{64}$/);
   await shutdownJobRuntime();
+});
+
+test('plugin job targets require the plugin to remain enabled', () => {
+  assert.equal(jobTargetEnabled('godot_validate', { plugins: { enabled: [] } }), false);
+  assert.equal(jobTargetEnabled('godot_validate', { plugins: { enabled: ['devmate.godot'] } }), true);
+  assert.equal(jobTargetEnabled('browser_qa_run', { plugins: { enabled: ['devmate.browser-qa'] } }), true);
+  assert.equal(jobTargetEnabled('run_smart_checks', { plugins: { enabled: [] } }), true);
 });
 
 test.after(async () => fsp.rm(root, { recursive: true, force: true }));
