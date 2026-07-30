@@ -42,10 +42,12 @@ DevMate keeps platform-specific integrations out of the default MCP surface. Use
 
 Bundled optional plugins:
 
-- `devmate.browser-qa`: safe localhost previews and Playwright browser acceptance scenarios.
-- `devmate.godot`: Godot project inspection, headless validation, persistent execution, Web export, preview, and combined browser acceptance testing.
+- `devmate.browser-qa`: safe localhost previews, Playwright browser acceptance scenarios, report artifacts, and structured game-state assertions.
+- `devmate.godot`: Godot project inspection, headless validation, persistent execution, Web export, QA bridge support, saved test suites, preview, and combined browser acceptance testing.
 
-Godot is disabled by default and automatically enables Browser QA as a dependency. No Godot engine fork is required. See `docs/PLUGINS.md` and `docs/GODOT_AUTOMATION.md`.
+Godot is disabled by default and automatically enables Browser QA as a dependency. No Godot engine fork is required. Platform plugins communicate through declared, dependency-checked service contracts instead of importing each other's private runtime state.
+
+Repeatable acceptance scenarios live in the project at `.devmate/automation.json`, so tests can be reviewed in Git and rerun by ChatGPT. See `docs/PLUGINS.md`, `docs/AUTOMATION_MANIFEST.md`, and `docs/GODOT_AUTOMATION.md`.
 
 ## Trusted local capabilities
 
@@ -80,10 +82,11 @@ When ngrok reports `ERR_NGROK_334`, DevMate offers direct recovery actions: swit
 - Use `readOnly` for inspection-only sessions or `balanced` when you want destructive shell/Git guards.
 - Adding or removing trusted writable roots requires `fullAccess`.
 - Directory delete/move operations are blocked unless `devMate.allowDirectoryMutations` is enabled.
-- Set `devMate.confirmBeforePush` to block MCP push requests until you deliberately disable it.
+- Set `devMate.confirmBeforePush` to block push operations through MCP until you deliberately disable it.
 - Backups and audit logs default to 30-day retention with size caps.
-- Optional plugins are disabled by default, validate settings and dependencies, and retain workspace/path containment.
+- Optional plugins are disabled by default, validate settings, dependencies, services, executables, and workspace paths.
 - Browser QA only opens localhost URLs unless remote access is explicitly enabled.
+- Browser assertions use bounded actions and structured state paths rather than arbitrary JavaScript evaluation.
 - The ChatGPT Apps status panels display redacted connection and capability snapshots only.
 
 Runtime requirement: `ngrok` must be installed so ChatGPT can reach the local MCP endpoint over HTTPS.
@@ -98,4 +101,4 @@ npm run smoke:gateway
 npm run package:vsix
 ```
 
-See `docs/LOCAL_CAPABILITIES.md` for trusted roots and persistent processes, `docs/PLUGINS.md` for the plugin host, `docs/GODOT_AUTOMATION.md` for the Godot workflow, `docs/NGROK_SETUP.md` for account switching and domain setup, `docs/MCP_TOOLS.md` for the MCP tool list, `docs/TROUBLESHOOTING.md` for ChatGPT Connector issues, and `SECURITY.md` for the local gateway security model.
+See `docs/LOCAL_CAPABILITIES.md` for trusted roots and persistent processes, `docs/PLUGINS.md` for the plugin host, `docs/AUTOMATION_MANIFEST.md` for saved acceptance suites, `docs/GODOT_AUTOMATION.md` for the Godot workflow, `docs/NGROK_SETUP.md` for account switching and domain setup, `docs/MCP_TOOLS.md` for the MCP tool list, `docs/TROUBLESHOOTING.md` for ChatGPT Connector issues, and `SECURITY.md` for the local gateway security model.

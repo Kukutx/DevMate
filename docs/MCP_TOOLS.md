@@ -31,7 +31,7 @@ DevMate exposes development tools over MCP after `DevMate: Start` verifies the p
 
 ## Capability Plugins
 
-Plugin management tools are always available:
+Plugin and automation management tools are always available:
 
 - `plugin_catalog`
 - `plugin_diagnostics`
@@ -39,8 +39,10 @@ Plugin management tools are always available:
 - `plugin_disable`
 - `plugin_configure`
 - `devmate_plugins_panel`
+- `automation_manifest_status`
+- `automation_manifest_template`
 
-Optional plugins are disabled by default. Enabling a plugin also enables its declared dependencies. Tool-list caching may require reconnecting the DevMate App after a capability change.
+Optional plugins are disabled by default. Enabling a plugin also enables its declared dependencies. Plugins expose dependency-checked service contracts for cross-plugin orchestration. Tool-list caching may require reconnecting the DevMate App after a capability change.
 
 ### Browser QA plugin
 
@@ -50,9 +52,13 @@ Enable `devmate.browser-qa` to expose:
 - `web_preview_status`
 - `web_preview_stop`
 - `browser_qa_status`
+- `browser_qa_manifest`
+- `browser_qa_run_saved`
 - `browser_qa_run`
 
 Local previews bind to `127.0.0.1`, enforce root containment, support byte ranges and WebAssembly MIME types, and stop with the gateway. Browser QA resolves `playwright` or `playwright-core` from the active workspace and blocks non-local URLs unless explicitly configured.
+
+Browser actions include bounded keyboard, mouse, DOM, screenshot, `capture_state`, and `expect_state` operations. Structured state is read from `globalThis.__DEVMATE_QA_STATE__`; arbitrary JavaScript evaluation is not exposed. Runs can write a screenshot and JSON report inside the workspace.
 
 ### Godot plugin
 
@@ -60,12 +66,17 @@ Enable `devmate.godot` to expose:
 
 - `godot_status`
 - `godot_doctor`
+- `godot_qa_bridge_status`
+- `godot_qa_bridge_template`
 - `godot_validate`
 - `godot_run`
 - `godot_export_web`
+- `godot_automation_manifest`
 - `godot_acceptance_test`
+- `godot_acceptance_run_saved`
+- `godot_acceptance_suite`
 
-Godot automatically enables Browser QA. The combined acceptance tool validates the project, exports Web, starts a preview, executes bounded browser actions, captures a screenshot, and returns structured console, page, network, canvas, and build checks.
+Godot automatically enables Browser QA. The combined acceptance workflow validates the project, verifies the Web preset, exports Web, starts a preview, executes bounded browser and game-state actions, captures artifacts, and returns structured console, page, network, canvas, QA-state, and build checks.
 
 ## Trusted Local Capabilities
 
@@ -115,7 +126,7 @@ File tools block hidden, secret, binary, log, database, private key, and real `.
 
 The default `fullAccess` profile is intended for single-user local development. Use `balanced` when you want obvious destructive shell commands and dangerous Git operations blocked, or `readOnly` for inspection-only sessions.
 
-Task sessions add a `taskId` to audit entries. `rollback_task` restores file changes from DevMate backups where safe; commands, persistent process side effects, and Git history operations are reported but not automatically reversed.
+Task sessions add a `taskId` to audit entries. `rollback_task` restores file changes from DevMate backups where safe; commands, persistent process side effects, generated build artifacts, and Git history operations are reported but not automatically reversed.
 
 ## Git
 

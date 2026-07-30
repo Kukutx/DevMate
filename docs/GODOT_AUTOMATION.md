@@ -1,6 +1,6 @@
 # Godot automation with DevMate
 
-The optional Godot capability lets ordinary ChatGPT modify a Godot workspace through DevMate, run headless checks, export a browser build, open a local preview, and perform automated acceptance tests.
+The optional Godot capability lets ordinary ChatGPT modify a Godot workspace through DevMate, run headless checks, export a browser build, open a local preview, inspect structured game state, and run repeatable acceptance suites.
 
 ## Requirements
 
@@ -8,7 +8,7 @@ The optional Godot capability lets ordinary ChatGPT modify a Godot workspace thr
 - A standard Godot editor executable. No engine fork is required.
 - Export templates matching the installed Godot version.
 - A Web export preset in `export_presets.cfg`.
-- GDScript for Web targets; confirm current Godot platform restrictions before relying on C# Web export.
+- A Web-compatible project configuration.
 - For browser automation, install `playwright` or `playwright-core` in the project and ensure Chromium is available.
 
 Example project setup:
@@ -32,7 +32,8 @@ Equivalent MCP sequence:
 
 1. `plugin_enable({"id":"devmate.godot"})`
 2. Reconnect the DevMate App if the tool list is cached.
-3. `plugin_configure` when Godot is not on `PATH`:
+3. Run `godot_doctor`.
+4. Use `plugin_configure` when Godot is not on `PATH`.
 
 ```json
 {
@@ -51,11 +52,11 @@ On Windows the configured executable may be `Godot_v4.x-stable_win64.exe`; on ma
 
 ### Inspect
 
-`godot_status` reads `project.godot`, export presets, renderer metadata, main scene, and bounded project file statistics without launching Godot.
+`godot_status` reads `project.godot`, export presets, renderer metadata, main scene, bounded project file statistics, executable status, and QA bridge status without launching Godot.
 
 ### Diagnose
 
-`godot_doctor` runs `Godot --version`, verifies a Web preset, and reports Browser QA readiness.
+`godot_doctor` runs `Godot --version`, verifies a Web preset, and reports Browser QA and QA bridge readiness.
 
 ### Validate
 
@@ -73,53 +74,88 @@ Output is converted into structured errors and warnings.
 
 ### Export and preview
 
-`godot_export_web` runs a debug or release export and, by default, serves the generated `index.html` from a safe `127.0.0.1` URL. The static server supports Godot MIME types, byte ranges, optional cross-origin isolation headers, path containment, and shutdown cleanup.
+`godot_export_web` verifies that the selected preset exists and targets Web, runs a debug or release export, and by default serves the generated `index.html` from a safe `127.0.0.1` URL. The static server supports Godot MIME types, byte ranges, optional cross-origin isolation headers, path containment, and shutdown cleanup.
 
-### Acceptance test
+### One-off acceptance test
 
 `godot_acceptance_test` performs:
 
 1. Headless validation.
-2. Web export.
+2. Web preset verification and export.
 3. Local preview startup.
-4. Playwright launch.
-5. Bounded keyboard, mouse, selector, wait, and assertion actions.
-6. Screenshot capture.
-7. Canvas visibility, console error, page error, request failure, and HTTP checks.
+4. Playwright launch through the Browser QA plugin service.
+5. Bounded keyboard, mouse, DOM, screenshot, and structured state actions.
+6. Screenshot and JSON report creation.
+7. Canvas visibility, navigation, action, console, page, request, and QA state checks.
 
-Example action sequence:
+Example actions:
 
 ```json
 [
-  {"type":"wait","ms":2000},
-  {"type":"click","x":640,"y":360},
-  {"type":"key_down","key":"KeyW"},
-  {"type":"wait","ms":800},
-  {"type":"key_up","key":"KeyW"},
+  {"type":"wait","ms":1500},
   {"type":"press","key":"Space"},
-  {"type":"wait","ms":1000}
+  {
+    "type":"expect_state",
+    "statePath":"boss.phase",
+    "operator":"gte",
+    "value":2,
+    "timeoutMs":10000
+  },
+  {"type":"capture_state","statePath":"player.health"}
 ]
 ```
 
-The result is a combined validation, export, browser, screenshot, and pass/fail report. ChatGPT can inspect the failures, patch the project, and repeat the test.
+### Saved scenarios and suites
 
-## QA bridge recommendation
-
-Visual browser testing cannot reliably prove gameplay state. Mature Godot projects should include an optional project-local bridge such as:
+Commit `.devmate/automation.json` and use:
 
 ```text
-addons/devmate_qa/
+godot_automation_manifest
+godot_acceptance_run_saved({"scenarioId":"combat-smoke"})
+godot_acceptance_suite({"stopOnFailure":true})
 ```
 
-It can expose deterministic test state through `JavaScriptBridge`, including scene, player health, positions, enemies alive, boss phase, current objective, and test checkpoints. Browser QA can then validate both pixels and game state. The bridge should be disabled or stripped from production exports unless explicitly required.
+See `AUTOMATION_MANIFEST.md` for the schema.
+
+## Optional QA bridge
+
+Screenshots cannot reliably prove gameplay state. DevMate therefore provides:
+
+```text
+godot_qa_bridge_status
+godot_qa_bridge_template
+```
+
+The template contains a reviewed autoload script at:
+
+```text
+addons/devmate_qa/devmate_qa.gd
+```
+
+Install it through the normal DevMate file tools and add the returned `[autoload]` entry to `project.godot`. Game code can then publish deterministic state:
+
+```gdscript
+DevMateQA.set_value("player.health", health)
+DevMateQA.set_value("boss.phase", phase)
+DevMateQA.checkpoint("boss_phase_changed", {"phase": phase})
+```
+
+For debug Web exports, the bridge publishes a JSON snapshot to:
+
+```text
+globalThis.__DEVMATE_QA_STATE__
+```
+
+Browser QA reads that state with bounded dotted paths and operators. It does not expose arbitrary JavaScript evaluation. The bridge does not publish state in release exports unless `devmate_qa/allow_release` is explicitly enabled.
 
 ## Security model
 
 - Godot tools are unavailable until the plugin is enabled.
+- Godot depends on a declared Browser QA service rather than private cross-plugin imports.
 - Executable names are restricted to Godot-shaped binaries.
-- Project and output paths cannot escape the selected workspace.
+- Project, output, screenshot, report, manifest, and preview paths cannot escape the selected workspace.
 - Commands require a mutable permission profile.
-- Browser QA defaults to localhost URLs; remote URLs require explicit configuration.
-- Screenshots stay inside the workspace.
-- Every execution and export is written to DevMate's audit log.
+- Browser QA defaults to localhost URLs and blocks non-local subresources.
+- QA state paths reject prototype traversal components.
+- Every execution, export, and acceptance run is written to DevMate's audit log.
 - Preview servers and Godot process trees stop with the gateway.
