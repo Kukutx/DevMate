@@ -6,6 +6,13 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const RUNNER_SECRET_ENV = [
+  'DEVMATE_RUNNER_TOKEN',
+  'DEVMATE_RUNNER_TOKEN_FILE',
+  'DEVMATE_RUNNER_CONTROL_URL',
+  'DEVMATE_RUNNER_CONFIG',
+  'DEVMATE_RUNNER_CAPABILITIES'
+];
 
 function parseArgs(argv) {
   const output = {};
@@ -47,6 +54,16 @@ function runnerToken(options) {
   const tokenFile = String(options['token-file'] || process.env.DEVMATE_RUNNER_TOKEN_FILE || '').trim();
   if (tokenFile) return fs.readFileSync(path.resolve(tokenFile), 'utf8').trim();
   throw new Error('Runner token is required in DEVMATE_RUNNER_TOKEN or --token-file. Command-line token values are intentionally unsupported.');
+}
+
+function gatewayEnvironment(configPath) {
+  const environment = { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DISABLE_EMBEDDED_RUNNER: '1' };
+  for (const key of RUNNER_SECRET_ENV) delete environment[key];
+  return environment;
+}
+
+function clearRunnerSecretsFromProcess() {
+  for (const key of RUNNER_SECRET_ENV) delete process.env[key];
 }
 
 function gatewayScript(options) {
@@ -203,6 +220,8 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
   if (!metadata.workspaceIds.length) throw new Error('External Runner local config must contain at least one writable workspace');
   const origin = normalizeControlUrl(options['control-url'] || process.env.DEVMATE_RUNNER_CONTROL_URL, options['allow-http'] === true);
   const token = runnerToken(options);
+  const childEnvironment = gatewayEnvironment(configPath);
+  clearRunnerSecretsFromProcess();
   const port = Number(config.server?.port || 8787);
   const leaseSeconds = Math.min(300, Math.max(30, Math.trunc(Number(options['lease-seconds']) || 90)));
   const pollMs = Math.min(30000, Math.max(500, Math.trunc(Number(options['poll-ms']) || 2000)));
@@ -217,7 +236,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
   if (options['no-spawn'] !== true) {
     child = spawn(process.execPath, [gatewayScript(options)], {
       cwd: root,
-      env: { ...process.env, DEVMATE_CONFIG: configPath },
+      env: childEnvironment,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -314,4 +333,13 @@ if (import.meta.url === invokedPath) {
   });
 }
 
-export const __test = { customCapabilities, normalizeControlUrl, parseArgs, runnerCapabilities, runnerMetadata, toolError };
+export const __test = {
+  clearRunnerSecretsFromProcess,
+  customCapabilities,
+  gatewayEnvironment,
+  normalizeControlUrl,
+  parseArgs,
+  runnerCapabilities,
+  runnerMetadata,
+  toolError
+};
