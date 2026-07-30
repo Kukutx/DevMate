@@ -17,14 +17,36 @@ const localServer = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ name: 'devmate', status: 'ok' }));
     return;
   }
+  if (url.pathname === '/mcp' && req.method === 'GET') {
+    res.writeHead(405, { allow: 'POST' });
+    res.end();
+    return;
+  }
+  if (url.pathname === '/mcp' && req.method === 'DELETE') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
   if (url.pathname === '/mcp' && req.method === 'POST') {
+    assert.match(String(req.headers.authorization || ''), /^Bearer local-owner-token/);
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (rpc.id === undefined) {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
     let result;
     if (rpc.method === 'initialize') {
-      result = { protocolVersion: '2025-03-26', capabilities: {}, serverInfo: { name: 'devmate', version: '2.3.0' } };
+      result = {
+        protocolVersion: '2025-03-26',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'devmate', version: '2.3.0' }
+      };
     } else if (rpc.method === 'tools/call') {
+      assert.equal(rpc.params.name, 'run_smart_checks');
+      assert.equal(rpc.params.arguments.workspaceId, 'app');
       await fsp.writeFile(path.join(workspace, 'artifacts', 'remote.json'), '{"ok":true}\n', 'utf8');
       result = {
         isError: false,
@@ -48,6 +70,8 @@ let claimCount = 0;
 let completion = null;
 const controlServer = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
+  assert.equal(req.headers['x-devmate-runner-protocol'], '1');
+  assert.match(String(req.headers.authorization || ''), /^Bearer dmr_remote_/);
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
@@ -98,7 +122,7 @@ await fsp.writeFile(configPath, JSON.stringify({
 
 process.env.DEVMATE_RUNNER_TOKEN = 'dmr_remote_token-value-long-enough';
 
-test('executes a remote job through the local MCP gateway and reports artifacts', async () => {
+test('executes a remote job through the official local MCP client and reports artifacts', async () => {
   await runExternalRunner({
     config: configPath,
     'control-url': `http://127.0.0.1:${controlPort}`,
