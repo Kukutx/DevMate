@@ -25,4 +25,7 @@ export function installRunnerCapabilities(McpServerClass) {
   });
 }
 
-export const __test = { registerRunnerCapabilityTools };
+export const __test = {
+  registerRunnerCapabilityTools,
+  registerTools: registerRunnerCapabilityTools
+};
