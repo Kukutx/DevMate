@@ -1,156 +1,97 @@
 # MCP Tools
 
-DevMate exposes development tools over MCP after `DevMate: Start` verifies the public URL.
+DevMate exposes a common development tool surface in personal, team, and production modes. Team authorization is applied to both core and plugin tools.
 
-## Workspace Context
+## Deployment and team operations
 
-- `gateway_status`
-- `gateway_self_test`
-- `maintenance_status`
-- `connection_diagnostics`
-- `devmate_status_panel`
-- `start_task`
-- `finish_task`
-- `task_status`
-- `rollback_task`
-- `list_workspaces`
-- `vscode_context`
-- `active_editor_context`
-- `list_diagnostics`
-- `workspace_map`
-- `project_snapshot`
-- `project_instructions`
-- `list_files`
-- `search_text`
+Always available:
 
-`project_snapshot` includes root project instructions by default. `project_instructions` reads root `AGENTS.md` / `CLAUDE.md` and lists nested instruction files so ChatGPT can follow project-specific rules.
+- `deployment_status`
+- `deployment_readiness`
+- `deployment_policy_template`
+- `team_status`
+- `team_configure`
+- `team_member_list`
+- `team_member_create`
+- `team_member_update`
+- `team_member_rotate`
+- `team_member_revoke`
+- `team_activity_status`
+- `workspace_lease_acquire`
+- `workspace_lease_status`
+- `workspace_lease_release`
+- `team_work_session_start`
+- `team_work_session_status`
+- `team_work_session_finish`
+- `published_preview_share`
+- `published_preview_list`
+- `published_preview_revoke`
 
-`maintenance_status` reports local backup/audit retention settings and current storage size.
+Member-management and deployment configuration require the owner role. Publishing, cross-team activity, and administrative operations require maintainer or owner capability. Workspace-scoped results are filtered for restricted principals.
 
-`connection_diagnostics` returns a text/JSON health snapshot for ChatGPT-to-DevMate reachability, VS Code context freshness, diagnostics, workspace state, and recent public preflight. `devmate_status_panel` renders the same status as a lightweight ChatGPT Apps UI component.
+## Workspace context
 
-## Capability Plugins
+- `gateway_status`, `gateway_self_test`, `maintenance_status`
+- `connection_diagnostics`, `devmate_status_panel`
+- legacy personal task tools: `start_task`, `finish_task`, `task_status`, `rollback_task`
+- `list_workspaces`, `vscode_context`, `active_editor_context`, `list_diagnostics`
+- `workspace_map`, `project_snapshot`, `project_instructions`
+- `list_files`, `search_text`
 
-Plugin and automation management tools are always available:
+In team mode, use team work sessions rather than the legacy singleton task session. Global task/audit administration is restricted.
 
-- `plugin_catalog`
-- `plugin_diagnostics`
-- `plugin_enable`
-- `plugin_disable`
-- `plugin_configure`
-- `devmate_plugins_panel`
-- `automation_manifest_status`
-- `automation_manifest_template`
+## Capability plugins and automation
 
-Optional plugins are disabled by default. Enabling a plugin also enables its declared dependencies. Plugins expose dependency-checked service contracts for cross-plugin orchestration. Tool-list caching may require reconnecting the DevMate App after a capability change.
+- `plugin_catalog`, `plugin_diagnostics`, `plugin_enable`, `plugin_disable`, `plugin_configure`, `devmate_plugins_panel`
+- `automation_manifest_status`, `automation_manifest_template`
 
-### Browser QA plugin
+### Browser QA
 
-Enable `devmate.browser-qa` to expose:
+Enable `devmate.browser-qa`:
 
-- `web_preview_start`
-- `web_preview_status`
-- `web_preview_stop`
-- `browser_qa_status`
-- `browser_qa_manifest`
-- `browser_qa_run_saved`
-- `browser_qa_run`
+- `web_preview_start`, `web_preview_status`, `web_preview_stop`
+- `browser_qa_status`, `browser_qa_manifest`, `browser_qa_run_saved`, `browser_qa_run`
 
-Local previews bind to `127.0.0.1`, enforce root containment, support byte ranges and WebAssembly MIME types, and stop with the gateway. Browser QA resolves `playwright` or `playwright-core` from the active workspace and blocks non-local URLs unless explicitly configured.
+### Godot
 
-Browser actions include bounded keyboard, mouse, DOM, screenshot, `capture_state`, and `expect_state` operations. Structured state is read from `globalThis.__DEVMATE_QA_STATE__`; arbitrary JavaScript evaluation is not exposed. Runs can write a screenshot and JSON report inside the workspace.
+Enable `devmate.godot`:
 
-### Godot plugin
+- `godot_status`, `godot_doctor`, `godot_validate`, `godot_run`, `godot_export_web`
+- `godot_qa_bridge_status`, `godot_qa_bridge_template`
+- `godot_automation_manifest`, `godot_acceptance_test`, `godot_acceptance_run_saved`, `godot_acceptance_suite`
 
-Enable `devmate.godot` to expose:
+## Trusted local capabilities
 
-- `godot_status`
-- `godot_doctor`
-- `godot_qa_bridge_status`
-- `godot_qa_bridge_template`
-- `godot_validate`
-- `godot_run`
-- `godot_export_web`
-- `godot_automation_manifest`
-- `godot_acceptance_test`
-- `godot_acceptance_run_saved`
-- `godot_acceptance_suite`
+- `local_capabilities_status`, `configure_local_capabilities`
+- `list_trusted_roots`, `add_trusted_root`, `remove_trusted_root`
+- `start_process`, `list_processes`, `process_status`, `read_process_output`, `send_process_input`, `stop_process`
 
-Godot automatically enables Browser QA. The combined acceptance workflow validates the project, verifies the Web preset, exports Web, starts a preview, executes bounded browser and game-state actions, captures artifacts, and returns structured console, page, network, canvas, QA-state, and build checks.
+Process and preview identifiers are resolved back to their workspace before team authorization.
 
-## Trusted Local Capabilities
+## Files
 
-- `local_capabilities_status`
-- `configure_local_capabilities`
-- `list_trusted_roots`
-- `add_trusted_root`
-- `remove_trusted_root`
-- `start_process`
-- `list_processes`
-- `process_status`
-- `read_process_output`
-- `send_process_input`
-- `stop_process`
-
-Trusted writable roots are explicit external directories that existing file, command, validation, and Git tools can address by `workspaceId`. Adding or removing a root requires `fullAccess`; filesystem roots are rejected. Removing a root does not delete it.
-
-Persistent processes survive across MCP calls and support bounded output polling, stdin, status inspection, and complete process-tree termination. They are stopped when the gateway exits. Defaults are eight simultaneous processes and 1 MiB retained output per process. Use `configure_local_capabilities` to change these within hard safety bounds.
-
-See `LOCAL_CAPABILITIES.md` for lifecycle, cursor, security, and platform-specific termination details.
-
-## File Operations
-
-- `read_file`
-- `write_file`
-- `create_file`
-- `apply_patch`
-- `delete_file`
-- `move_file`
-- `list_backups`
-- `restore_backup`
-- `read_audit_log`
-
-File tools block hidden, secret, binary, log, database, private key, and real `.env` paths by default. Directory delete/move is disabled unless `devMate.allowDirectoryMutations` is enabled. Trusted writable roots keep the same file protections and path-containment checks.
+- `read_file`, `write_file`, `create_file`, `apply_patch`, `delete_file`, `move_file`
+- `list_backups`, `restore_backup`, `read_audit_log`
 
 ## Commands
 
-- `list_project_scripts`
-- `run_project_script`
-- `list_configured_commands`
-- `run_configured_command`
-- `run_command`
-- `detect_validation`
-- `run_smart_checks`
+- `list_project_scripts`, `run_project_script`
+- `list_configured_commands`, `run_configured_command`, `run_command`
+- `detect_validation`, `run_smart_checks`
 
-`run_command` is intentionally powerful but waits for completion. Use `start_process` for long-running development servers, watchers, and interactive tools.
-
-The default `fullAccess` profile is intended for single-user local development. Use `balanced` when you want obvious destructive shell commands and dangerous Git operations blocked, or `readOnly` for inspection-only sessions.
-
-Task sessions add a `taskId` to audit entries. `rollback_task` restores file changes from DevMate backups where safe; commands, persistent process side effects, generated build artifacts, and Git history operations are reported but not automatically reversed.
+Reviewers can run bounded validation tools. General project scripts, configured commands, arbitrary commands, and persistent processes require developer-level write/execute capability.
 
 ## Git
 
-- `git_status`
-- `git_diff`
-- `git_add`
-- `git_stage`
-- `git_staged_files`
-- `git_commit`
-- `git_save`
-- `git_push`
-- `git_pull`
-- `git_branch`
-- `git_checkout`
-- `git_log`
-- `git_blame`
-- `git_stash`
-- `git_raw`
+- `git_status`, `git_diff`, `git_staged_files`, `git_log`, `git_blame`
+- `git_add`, `git_stage`, `git_commit`, `git_save`
+- `git_push`, `git_pull`, `git_branch`, `git_checkout`, `git_stash`, `git_raw`
 
-Reference workspaces cannot mutate Git state. Trusted roots are writable workspaces and can use Git tools. Set `devMate.confirmBeforePush` to block push operations through MCP until you deliberately disable it.
+Publishing requires maintainer capability. High-risk recovery/force operations are blocked for team tokens and reserved for the local owner credential.
 
 ## Reporting
 
 - `show_changes`
 - `task_report`
 
-Use `show_changes` for compact status, diff stats, file totals, and a bounded patch. Use `task_report` after edits when you also need staged changes and recent audit entries.
+See `TEAM_DEPLOYMENT.md` for role and lease behavior, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.

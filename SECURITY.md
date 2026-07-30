@@ -1,33 +1,60 @@
 # Security Policy
 
-DevMate is a local development gateway. It can read, edit, run commands, manage persistent processes, and use Git in explicitly writable workspaces, so treat its MCP URL as sensitive.
+DevMate is a local-first development gateway with filesystem, process, Git, browser, and optional platform capabilities. Treat every owner/member token and public MCP endpoint as sensitive.
 
-## Default Protections
+## Network boundary
 
 - The gateway listens on `127.0.0.1` only.
-- Public MCP access requires a generated token by default.
-- The copied MCP URL includes the token; do not post it publicly.
-- `/control/health` is local-only.
-- Public `/health` omits instance, path, and storage details unless explicitly enabled.
-- `devMate.permissionProfile` defaults to `fullAccess` for single-user local development. Switch to `balanced` when you want obvious destructive shell/Git operations blocked.
-- Hidden, secret, binary, log, database, and private-key paths are blocked by file tools.
-- Recursive workspace scans and directory mutation preflight reject directories whose real path leaves the workspace.
-- Reference workspaces are readonly.
-- Trusted writable roots require `fullAccess`, must be explicit existing absolute directories, reject filesystem roots, and are deduplicated by real path.
-- Trusted roots retain all normal file protections and path-containment checks; granting a root does not expose sibling directories.
-- Directory delete/move is blocked unless `devMate.allowDirectoryMutations` is enabled.
-- Persistent processes run as the same operating-system user as VS Code and cannot bypass UAC, filesystem permissions, `sudo`, containers, or remote-host boundaries.
-- Persistent process count and retained output are bounded; all remaining process trees are stopped when the gateway exits.
-- In `balanced` mode, persistent process commands use the same destructive-command guard as `run_command`.
-- Git push can be blocked with `devMate.confirmBeforePush`.
-- Audit entries redact common token, password, authorization, and API key patterns before they are written or returned.
-- Local backups and audit logs are pruned by retention days and size caps to reduce long-term data accumulation.
-- The ChatGPT Apps status panel uses a redacted connection snapshot and does not store or render the full tokenized MCP URL.
+- A tunnel or reverse proxy provides public HTTPS ingress.
+- `/control/health` remains local-only.
+- Public `/health` is minimal unless detailed health is explicitly enabled.
+- Production mode can enforce a public Host allowlist, request-size declarations, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
+- Keep DevMate bearer authentication enabled even when ngrok, Cloudflare Access, a VPN, or an identity-aware proxy also authenticates traffic.
 
-`run_command` and `start_process` are intentionally powerful. Under `fullAccess`, they can invoke any program available to the VS Code user inside an authorized writable workspace. Do not grant trusted roots you do not need, and revoke them when a task is complete.
+## Credentials and identities
 
-## Reporting Issues
+- The original generated token is the owner credential.
+- Team tokens are returned once and stored as salted scrypt hashes.
+- Members support role, workspace scope, expiry, rotation, disable, and revocation.
+- Cloudflare and ngrok credentials stay in VS Code Secret Storage or external process environments, not project files or DevMate config.
+- Do not put tokenized MCP URLs in issues, screenshots, shared logs, shell history, or CI artifacts.
 
-For a private project, fix security issues locally before sharing the VSIX or MCP URL.
+## Authorization and coordination
 
-For a public repository, report vulnerabilities through the repository security advisory flow if available, or open a minimal issue that avoids posting secrets, tokens, tunnel URLs, or private file paths.
+- Roles are `observer`, `reviewer`, `developer`, `maintainer`, and `owner`.
+- Workspace scopes are checked for tools, processes, previews, leases, and work sessions.
+- Team deployments can require exclusive workspace leases before write, execute, Git, or publish operations.
+- Team tokens cannot perform force push, hard reset, Git clean, forced branch deletion, destructive recursive shell commands, or machine shutdown operations.
+- Global administrative tools, audit logs, backup lists, plugin configuration, and member management require maintainer or owner capability; member lifecycle requires owner.
+
+## Files and processes
+
+- Hidden credentials, private keys, databases, logs, and real `.env` files are blocked from normal file tools.
+- Recursive scans and mutations use realpath containment and reject symlink/reparse-point escapes.
+- Reference workspaces are readonly. Trusted writable roots are explicit and reject filesystem roots.
+- Directory deletion/move remains disabled unless explicitly enabled.
+- Processes run as the DevMate operating-system account and cannot bypass UAC, filesystem permissions, sudo, container, VM, or remote-host boundaries.
+- Process count/output are bounded and remaining process trees are stopped on shutdown.
+
+## Preview publishing
+
+- Local previews bind to loopback.
+- Public review shares use separate scoped tokens; only hashes are stored.
+- The initial token is exchanged for an HttpOnly, SameSite=Strict cookie limited to the preview path.
+- Shares expire within 24 hours, can limit browser sessions, and can be revoked.
+- Review previews are not a production application hosting service.
+
+## Audit and retention
+
+- Mutations, commands, Git operations, team member changes, leases, work sessions, preview publication, and tool calls produce audit metadata.
+- Request IDs correlate ingress responses with tool-call audit entries.
+- Common passwords, tokens, authorization headers, and API-key patterns are redacted.
+- Backups and audit logs are pruned by age and size. Protect the state directory as development-sensitive data.
+
+## Multi-tenant limitation
+
+DevMate team mode is designed for trusted organizational collaboration, not hostile multi-tenancy. All permitted commands share the host OS identity. Use separate machines, VMs, containers, or OS accounts for unrelated trust domains.
+
+## Reporting issues
+
+Use the repository security advisory flow where available. Never include live tokens, private tunnel URLs, credentials, or private filesystem paths in a public report.

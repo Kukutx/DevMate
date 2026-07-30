@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0
+
+- Expanded DevMate from a personal VS Code bridge into a local-first MCP development gateway with personal, team, and production deployment profiles.
+- Added per-member tokens stored as salted scrypt hashes, role-based capabilities, workspace scopes, expiry, rotation, disable, and revocation.
+- Added exclusive workspace leases and principal-scoped complex work sessions for safe autonomous and multi-agent development.
+- Added request IDs, authentication throttling, per-principal rate limits, global/per-principal concurrency limits, Host allowlists, request-size limits, and bounded request timeouts.
+- Added scoped public review previews with independent tokens, HttpOnly path cookies, TTL, use limits, and revocation.
+- Added a tunnel-provider layer for ngrok Traffic Policy, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress.
+- Added a standalone `devmate` CLI for dedicated build hosts, production gateways, and offline team-member bootstrap.
+- Preserved the personal owner workflow and existing ngrok setup as the default backwards-compatible mode.
+
 ## 1.16.1
 
 - Fixed Windows Microsoft Store/MSIX ngrok account switching when the packaged launcher ignored or lost the managed `NGROK_AUTHTOKEN` environment override.
