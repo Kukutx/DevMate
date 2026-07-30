@@ -74,6 +74,15 @@ function filterArray(items, allowed, field = 'workspaceId') {
   return Array.isArray(items) ? items.filter(item => allowed.has(item?.[field] || item?.id)) : items;
 }
 
+function syncTextContent(result) {
+  if (!Array.isArray(result?.content) || !result?.structuredContent) return result;
+  const json = JSON.stringify(result.structuredContent, null, 2);
+  for (const item of result.content) {
+    if (item?.type === 'text') item.text = json;
+  }
+  return result;
+}
+
 function filterResult(name, result, principal) {
   if (!principal?.workspaceIds?.length || !result?.structuredContent) return result;
   const allowed = new Set(principal.workspaceIds);
@@ -100,7 +109,7 @@ function filterResult(name, result, principal) {
   if (name === 'list_trusted_roots') {
     data.roots = filterArray(data.roots, allowed, 'id');
   }
-  return result;
+  return syncTextContent(result);
 }
 
 function installAuthorizationWrapper(McpServerClass) {
@@ -199,5 +208,6 @@ export const __test = {
   publicDeployment,
   readiness,
   registerTeamTools,
+  syncTextContent,
   workspaceIds
 };
