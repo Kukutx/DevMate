@@ -17,8 +17,8 @@ const ELIGIBLE_TARGETS = new Set([
   'project_snapshot', 'show_changes', 'task_report',
   'run_smart_checks', 'run_project_script', 'run_configured_command',
   'browser_qa_run', 'browser_qa_run_saved',
-  'godot_validate', 'godot_export_web', 'godot_acceptance_test',
-  'godot_acceptance_run_saved', 'godot_acceptance_suite',
+  'godot_project_audit', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web',
+  'godot_native_test', 'godot_acceptance_test', 'godot_acceptance_run_saved', 'godot_acceptance_suite',
   'git_save'
 ]);
 
@@ -149,143 +149,120 @@ function localRunnerCapabilities() {
 function localRunnerId() {
   if (runnerId) return runnerId;
   const config = readConfig();
-  runnerId = `local-${String(config.instanceId || process.pid).replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 100)}`;
+  runnerId = `embedded-${config.instanceId || process.pid}`;
   return runnerId;
 }
 
-function runnerSettings() {
+export function refreshLocalRunner() {
   const config = readConfig();
-  return {
+  return registerRunner({
     id: localRunnerId(),
-    name: `DevMate ${config.instanceId || 'local'}`,
+    name: 'Embedded DevMate Runner',
     capabilities: localRunnerCapabilities(),
     workspaceIds: (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id),
     maxConcurrent: Math.min(8, Math.max(1, Math.trunc(Number(config.runtime?.maxConcurrentJobs) || 2))),
-    version: config.appVersion || '',
-    labels: { deploymentMode: config.deployment?.mode || 'personal', kind: 'embedded' }
-  };
+    version: config.appVersion || 'unknown',
+    labels: { kind: 'embedded' }
+  });
 }
 
-export function refreshLocalRunner() {
-  const settings = runnerSettings();
-  const existing = listRunners().find(item => item.id === settings.id);
-  return existing
-    ? heartbeatRunner(settings.id, { capabilities: settings.capabilities, workspaceIds: settings.workspaceIds })
-    : registerRunner(settings);
-}
-
-async function executeClaimedJob(job) {
+async function executeClaimed(job, runner) {
   const target = jobTarget(job.tool);
   if (!target) {
-    failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently enabled, allowed, or registered: ${job.tool}`, retryable: true });
+    failJob({ id: job.id, runnerId: runner.id, error: `Job target is no longer available: ${job.tool}`, retryable: false });
     return;
   }
+  const principal = job.requestedBy;
   const started = Date.now();
-  const leaseTimer = setInterval(() => {
-    try { renewJobLease({ id: job.id, runnerId: localRunnerId(), leaseSeconds: 90 }); } catch {}
-  }, 30000);
-  leaseTimer.unref?.();
+  let leaseTimer = null;
   try {
-    const context = {
-      requestId: `job-${job.id}`,
-      principal: clone(job.requestedBy),
-      startedAt: new Date().toISOString(),
-      remoteAddress: 'local-job-runner',
-      userAgent: 'DevMate embedded job runner',
-      deploymentMode: readConfig()?.deployment?.mode || 'personal',
-      jobId: job.id
-    };
-    const result = await withTimeout(
-      runWithRequestContext(context, () => target.handler(job.arguments || {})),
-      job.timeoutMs
+    leaseTimer = setInterval(() => {
+      try { renewJobLease({ id: job.id, runnerId: runner.id, leaseSeconds: 60 }); } catch {}
+    }, 20000);
+    leaseTimer.unref?.();
+    const result = await runWithRequestContext({ principal, jobId: job.id }, () =>
+      withTimeout(Promise.resolve(target.handler(job.arguments || {})), job.timeoutMs)
     );
-    const returnedError = resultError(result);
-    if (returnedError) throw returnedError;
+    const error = resultError(result);
+    if (error) throw error;
     const artifacts = await indexJobArtifacts(job, result);
-    completeJob({ id: job.id, runnerId: localRunnerId(), result: resultSummary(result), artifacts });
-    incrementCounter('devmate_jobs_total', { status: 'succeeded', tool: job.tool }, 1);
-    observeDuration('devmate_job_duration_ms', { tool: job.tool }, Date.now() - started);
+    completeJob({ id: job.id, runnerId: runner.id, result: resultSummary(result), artifacts });
+    incrementCounter('devmate_jobs_total', { tool: job.tool, status: 'succeeded' }, 1);
+    observeDuration('devmate_job_duration_ms', { tool: job.tool, status: 'succeeded' }, Date.now() - started);
   } catch (error) {
-    const message = String(error?.message || error);
+    const message = redactSensitiveString(error?.message || error).slice(0, 8000);
     if (error?.code === 'approval_required') {
-      deferJob({ id: job.id, runnerId: localRunnerId(), status: 'waiting_approval', error: message, delayMs: 5000 });
-      incrementCounter('devmate_jobs_total', { status: 'waiting_approval', tool: job.tool }, 1);
+      deferJob({ id: job.id, runnerId: runner.id, status: 'waiting_approval', error: message, delayMs: 5000 });
+      incrementCounter('devmate_jobs_total', { tool: job.tool, status: 'waiting_approval' }, 1);
     } else if (/requires a lease|is leased by/i.test(message)) {
-      deferJob({ id: job.id, runnerId: localRunnerId(), status: 'blocked_lease', error: message, delayMs: 5000 });
-      incrementCounter('devmate_jobs_total', { status: 'blocked_lease', tool: job.tool }, 1);
+      deferJob({ id: job.id, runnerId: runner.id, status: 'blocked_lease', error: message, delayMs: 5000 });
+      incrementCounter('devmate_jobs_total', { tool: job.tool, status: 'blocked_lease' }, 1);
     } else {
-      const retryable = error?.code !== 'job_timeout' && !/not allowed|requires the owner role|cannot use/i.test(message);
-      failJob({ id: job.id, runnerId: localRunnerId(), error: message, retryable });
-      incrementCounter('devmate_jobs_total', { status: error?.code === 'job_timeout' ? 'timed_out' : 'failed_attempt', tool: job.tool }, 1);
+      failJob({ id: job.id, runnerId: runner.id, error: message, retryable: error?.code !== 'job_timeout' });
+      incrementCounter('devmate_jobs_total', { tool: job.tool, status: 'failed' }, 1);
+      observeDuration('devmate_job_duration_ms', { tool: job.tool, status: 'failed' }, Date.now() - started);
     }
-    observeDuration('devmate_job_duration_ms', { tool: job.tool }, Date.now() - started);
   } finally {
-    clearInterval(leaseTimer);
+    if (leaseTimer) clearInterval(leaseTimer);
     inflight.delete(job.id);
-    setGauge('devmate_jobs_inflight', {}, inflight.size);
+    setGauge('devmate_job_inflight', { runner: runner.id }, inflight.size);
   }
 }
 
-export async function runJobWorkerOnce() {
-  if (stopping) return null;
-  refreshLocalRunner();
-  const settings = runnerSettings();
-  if (inflight.size >= settings.maxConcurrent) return null;
-  const job = claimJob({ runnerId: settings.id, leaseSeconds: 90 });
-  if (!job) return null;
-  const promise = executeClaimedJob(job);
-  inflight.set(job.id, promise);
-  setGauge('devmate_jobs_inflight', {}, inflight.size);
-  void promise;
-  return job;
+async function tick() {
+  if (stopping) return;
+  const runner = refreshLocalRunner();
+  while (!stopping && inflight.size < runner.maxConcurrent) {
+    const job = claimJob({ runnerId: runner.id, leaseSeconds: 60 });
+    if (!job) break;
+    const promise = executeClaimed(job, runner);
+    inflight.set(job.id, promise);
+    setGauge('devmate_job_inflight', { runner: runner.id }, inflight.size);
+    void promise;
+  }
 }
 
 export function startJobRuntime() {
   if (workerTimer) return;
   stopping = false;
   refreshLocalRunner();
-  workerTimer = setInterval(() => {
-    const max = runnerSettings().maxConcurrent;
-    for (let index = inflight.size; index < max; index += 1) void runJobWorkerOnce();
-  }, 1000);
+  workerTimer = setInterval(() => { void tick(); }, 1000);
   workerTimer.unref?.();
   heartbeatTimer = setInterval(() => {
-    try { refreshLocalRunner(); } catch {}
+    try { heartbeatRunner(localRunnerId(), { capabilities: localRunnerCapabilities(), workspaceIds: refreshLocalRunner().workspaceIds }); } catch {}
   }, 30000);
   heartbeatTimer.unref?.();
+  void tick();
 }
 
-export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {
+export async function shutdownJobRuntime() {
   stopping = true;
   if (workerTimer) clearInterval(workerTimer);
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   workerTimer = null;
   heartbeatTimer = null;
-  const pending = Promise.allSettled([...inflight.values()]);
-  let timer = null;
-  try {
-    await Promise.race([
-      pending,
-      new Promise(resolve => {
-        timer = setTimeout(resolve, Math.min(60000, Math.max(0, Number(graceMs) || 15000)));
-        timer.unref?.();
-      })
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  await Promise.race([
+    Promise.allSettled([...inflight.values()]),
+    new Promise(resolve => setTimeout(resolve, 15000))
+  ]);
   inflight.clear();
-  setGauge('devmate_jobs_inflight', {}, 0);
+  runnerId = null;
+  setGauge('devmate_job_inflight', { runner: 'embedded' }, 0);
 }
 
 export function jobRuntimeStatus() {
   return {
-    started: !!workerTimer,
+    running: !!workerTimer && !stopping,
     stopping,
-    runnerId: localRunnerId(),
-    inflight: [...inflight.keys()],
-    targets: jobTargetCatalog()
+    runnerId: runnerId || null,
+    inflight: inflight.size,
+    targetCount: jobTargetCatalog().length,
+    runners: listRunners()
   };
 }
 
-export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, jobTargetEnabled, resultError, resultSummary, safeValue, targets, withTimeout };
+export function clearJobTargetsForTests() {
+  targets.clear();
+}
+
+export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, resultError, resultSummary, safeValue, withTimeout };
