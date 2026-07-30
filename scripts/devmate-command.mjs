@@ -162,6 +162,7 @@ function bootstrap(options) {
 function status(options) {
   const file = configPath(options);
   const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readJson(file)));
+  const preset = inferPreset(config);
   const activeMembers = (config.team.members || []).filter(item =>
     !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
   );
@@ -175,11 +176,13 @@ function status(options) {
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
   if (config.team.enabled && !activeMembers.length) warnings.push('Team mode has no active member credentials.');
   if (config.runnerControl.enabled && !activeRunnerCredentials.length) warnings.push('External Runner control is enabled but no active scoped Runner credential exists.');
-  if (config.jobs?.embeddedRunnerEnabled === false && !config.runnerControl.enabled) warnings.push('Embedded Runner is disabled and external Runner control is not enabled.');
+  if (preset !== 'runner' && config.jobs?.embeddedRunnerEnabled === false && !config.runnerControl.enabled) {
+    warnings.push('Embedded Runner is disabled and external Runner control is not enabled.');
+  }
   return {
     ok: warnings.length === 0,
     config: file,
-    preset: inferPreset(config),
+    preset,
     deployment: {
       mode: config.deployment.mode,
       tunnelProvider: config.deployment.tunnelProvider,
@@ -216,16 +219,19 @@ async function forwardLegacy(argv) {
     env: process.env,
     windowsHide: true
   });
-  const forward = signal => {
-    try { child.kill(signal); } catch {}
+  const onSigint = () => {
+    try { child.kill('SIGINT'); } catch {}
   };
-  process.once('SIGINT', forward);
-  process.once('SIGTERM', forward);
+  const onSigterm = () => {
+    try { child.kill('SIGTERM'); } catch {}
+  };
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => {
-      process.removeListener('SIGINT', forward);
-      process.removeListener('SIGTERM', forward);
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
       if (signal) process.kill(process.pid, signal);
       else process.exitCode = code ?? 1;
       resolve();
