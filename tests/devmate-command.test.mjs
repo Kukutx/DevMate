@@ -23,6 +23,25 @@ test('validates and normalizes deployment presets', () => {
   assert.throws(() => __test.presetOptions({ preset: 'unknown' }), /Unknown preset/);
 });
 
+test('rejects incompatible bootstrap options before creating a config', async t => {
+  const current = await fixture('invalid');
+  t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
+  assert.throws(() => __test.bootstrap({
+    preset: 'personal',
+    workspace: current.workspace,
+    config: current.config,
+    'member-name': 'Alice'
+  }), /requires the team or control-plane preset/);
+  await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
+  assert.throws(() => __test.bootstrap({
+    preset: 'runner',
+    workspace: current.workspace,
+    config: current.config,
+    'runner-concurrency': '0'
+  }), /integer from 1 to 16/);
+  await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
+});
+
 test('team bootstrap creates one scoped member without persisting its plaintext token', async t => {
   const current = await fixture('team');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
