@@ -8,11 +8,15 @@ import { installHttpObservability } from './http-observability.mjs';
 import { acquireGatewayInstanceLock, releaseGatewayInstanceLock } from './durable-state.mjs';
 import { installTeamCapabilities, shutdownTeamServices } from './team-capabilities.mjs';
 import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
+import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
+import { installRunnerCapabilities } from './runner-capabilities.mjs';
 
 acquireGatewayInstanceLock();
 installHttpObservability(http);
 installGatewayRequestGuard(http);
+installRunnerControlPlane(http);
 installTeamCapabilities(McpServer);
+installRunnerCapabilities(McpServer);
 installLocalCapabilities(McpServer);
 installPluginHost(McpServer);
 startJobRuntime();
@@ -25,6 +29,7 @@ async function shutdown(signal) {
   try { await shutdownPluginServices(); } catch {}
   try { await shutdownTeamServices(); } catch {}
   try { await shutdownPersistentProcesses(); } catch {}
+  try { resetRunnerControlState(); } catch {}
   try { resetRequestGuardState(); } catch {}
   try { releaseGatewayInstanceLock(); } catch {}
   if (signal) process.exit(0);
