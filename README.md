@@ -1,12 +1,12 @@
 # DevMate
 
-DevMate is a local-first MCP development gateway that lets ChatGPT inspect, modify, run, test, and review controlled development workspaces. It works as a VS Code extension for interactive development and as a standalone gateway for team or production hosts.
+DevMate is a local-first MCP development gateway that lets ChatGPT inspect, modify, run, test, and review controlled development workspaces. It works as a VS Code extension for interactive development, as a standalone team Gateway, and as a control plane for scoped external Runner hosts.
 
 ## Deployment profiles
 
 - **Personal:** the existing single-owner workflow, optimized for one developer.
 - **Team:** per-member tokens, roles, workspace scopes, exclusive leases, durable work sessions, queued jobs, and optional approvals.
-- **Production:** stable HTTPS ingress, Host restrictions, request/rate/concurrency limits, persistent coordination state, dual-control approval, drain mode, metrics, and team audit metadata.
+- **Production:** stable HTTPS ingress, Host restrictions, request/rate/concurrency limits, persistent coordination state, dual-control approval, drain mode, metrics, external Runners, and team audit metadata.
 
 Run `DevMate: Configure Deployment` to select a profile and tunnel provider. Supported providers are ngrok, Cloudflare Quick Tunnel for development, Cloudflare managed tunnels, and an existing external HTTPS ingress.
 
@@ -27,11 +27,12 @@ Run `DevMate: Configure Deployment` to select a profile and tunnel provider. Sup
 5. Give each person or automation its own URL/token.
 6. Use `team_work_session_start` or `workspace_lease_acquire` before shared mutations.
 7. Submit long builds and acceptance suites through `job_submit`.
-8. Review protected production operations through the `team_approval_*` tools.
-9. Drain the gateway before upgrades with `deployment_drain_start`.
-10. Run `deployment_readiness`, `deployment_runtime_state`, `deployment_metrics`, and `runner_status` for operations.
+8. Add external build hosts with `runner_credential_create` where needed.
+9. Review protected production operations through the `team_approval_*` tools.
+10. Drain the gateway before upgrades with `deployment_drain_start`.
+11. Run `deployment_readiness`, `deployment_runtime_state`, `deployment_metrics`, `runner_status`, and `runner_control_status` for operations.
 
-Core team protections include salted token hashes, role capabilities, workspace scopes, token expiry/rotation/revocation, high-risk command blocking, request IDs, authentication throttling, bounded concurrency, durable workspace leases, persistent work sessions, durable jobs, separation-of-duties approvals, and team-aware audit entries.
+Core team protections include salted token hashes, role capabilities, workspace scopes, token expiry/rotation/revocation, high-risk command blocking, request IDs, authentication throttling, bounded concurrency, durable workspace leases, persistent work sessions, durable jobs, scoped Runner identities, separation-of-duties approvals, and team-aware audit entries.
 
 ## Durable coordination and approvals
 
@@ -52,9 +53,9 @@ deployment_runtime_state
 deployment_metrics
 ```
 
-## Durable jobs and embedded runner
+## Durable jobs and runners
 
-Long builds and automated acceptance work no longer need to remain inside one MCP request. The embedded runner executes a reviewed target catalog and preserves queue state across gateway restarts.
+Long builds and automated acceptance work no longer need to remain inside one MCP request. A reviewed target catalog can be executed by the embedded Runner or by authenticated external Runner hosts.
 
 ```text
 job_target_catalog
@@ -73,7 +74,40 @@ deployment_drain_cancel
 
 Built-in targets include smart checks, configured/project scripts, Browser QA, Godot validation/export/acceptance, reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, credentials, and direct push cannot be queued.
 
-Jobs may wait for dual-control approval or a workspace lease, retry after runner loss, and index bounded artifact metadata. Running cancellation is cooperative rather than forcefully terminating arbitrary in-process handlers. See `docs/JOBS.md`.
+Jobs may wait for dual-control approval or a workspace lease, retry after Runner loss, and index bounded artifact metadata. Running cancellation is cooperative rather than forcefully terminating arbitrary in-process handlers. See `docs/JOBS.md`.
+
+## External Runner control plane
+
+DevMate 2.3 can separate the team Gateway from machines that own compilers, Godot, browsers, GPUs, mobile SDKs, signing environments, or platform-specific hardware.
+
+Central management tools:
+
+```text
+runner_control_status
+runner_control_configure
+runner_credential_list
+runner_credential_create
+runner_credential_update
+runner_credential_rotate
+runner_credential_revoke
+```
+
+Each Runner receives a dedicated `dmr_` credential with explicit workspace scopes, capabilities, expiry, and concurrency limits. Runner tokens are salted `scrypt` hashes in the central config and are accepted only by `/runner/v1`; they cannot call MCP tools.
+
+The Runner Agent starts or connects to a loopback-only personal DevMate Gateway on its host and executes central jobs through the existing local MCP tools. The central Runner token is removed from the local Gateway environment, so project commands cannot inherit it.
+
+```bash
+export DEVMATE_RUNNER_TOKEN='dmr_...'
+node scripts/devmate-runner.mjs \
+  --config /var/lib/devmate-runner/config.json \
+  --control-url https://devmate.example.com \
+  --capabilities linux-x64,godot \
+  --concurrency 2
+```
+
+Disable the central embedded Runner with `runner_control_configure` to operate a control-plane-only Gateway. Use `requiredCapabilities` in `job_submit` to route work to `external`, `linux-x64`, `windows-x64`, `macos-arm64`, `cuda`, or other explicitly authorized capabilities.
+
+External Runners return bounded redacted results and artifact metadata, not artifact bytes. The central queue remains a single-host durable state service; external execution does not make the control plane horizontally replicated. See `docs/EXTERNAL_RUNNERS.md`.
 
 ## Core development capabilities
 
@@ -112,23 +146,27 @@ Prometheus-compatible metrics are available on loopback only:
 http://127.0.0.1:8787/control/metrics
 ```
 
-Job counters, job durations, and in-flight runner gauges are included with the existing HTTP, tool, and approval metrics.
+Job counters, Runner-control requests, job durations, and in-flight Runner gauges are included with the existing HTTP, tool, and approval metrics.
 
 Reference deployment assets are included for:
 
-- systemd: `deploy/systemd/devmate.service.example`
-- Docker: `deploy/docker/Dockerfile` and `deploy/docker/compose.example.yml`
+- central systemd service: `deploy/systemd/devmate.service.example`
+- external Runner systemd service: `deploy/systemd/devmate-runner.service.example`
+- central Docker: `deploy/docker/Dockerfile` and `deploy/docker/compose.example.yml`
+- external Runner Docker: `deploy/docker/runner.compose.example.yml`
 - Caddy: `deploy/caddy/Caddyfile.example`
 
 ## Safety model
 
 - The gateway always binds to `127.0.0.1`; ingress connects outward or proxies locally.
 - Public MCP requires an owner or member token by default.
+- External Runner API calls require a distinct `dmr_` token and protocol-version header.
 - File operations remain contained by real paths and block secrets, keys, databases, logs, and real `.env` files.
 - Team roles never grant OS isolation: permitted commands run as the host account.
 - Team tokens cannot invoke the highest-risk shell or Git recovery operations.
 - Production approvals provide dual control but do not replace OS or container isolation.
 - Durable jobs reject credential-shaped arguments and execute only reviewed targets.
+- Runner credentials require explicit workspace scopes and cannot grant themselves capabilities through heartbeat metadata.
 - Published previews have independent scoped tokens, short TTLs, optional browser-session limits, and explicit revocation.
 - Optional plugins validate dependencies, service contracts, executables, settings, and workspace paths.
 
@@ -146,6 +184,7 @@ npm run package:vsix
 
 Documentation:
 
+- `docs/EXTERNAL_RUNNERS.md`
 - `docs/JOBS.md`
 - `docs/OPERATIONS.md`
 - `docs/TEAM_DEPLOYMENT.md`
