@@ -9,8 +9,8 @@ import {
   readPersistentOutput, runningProcesses, sendPersistentInput, shutdownPersistentProcesses,
   startPersistentProcess, stopPersistentProcess
 } from './persistent-processes.mjs';
+import { registerServerInitializer } from './server-extension-host.mjs';
 
-const INSTALLED = Symbol.for('devmate.localCapabilitiesInstalled');
 const REGISTERED = Symbol.for('devmate.localToolsRegistered');
 
 function registerTool(server, name, config, handler) {
@@ -31,7 +31,7 @@ function statusPayload() {
     }
   };
 }
-function registerLocalTools(server) {
+export function registerLocalTools(server) {
   if (server[REGISTERED]) return;
   server[REGISTERED] = true;
 
@@ -183,15 +183,15 @@ function registerLocalTools(server) {
 }
 
 export function installLocalCapabilities(McpServerClass) {
-  if (McpServerClass.prototype[INSTALLED]) return;
-  const originalConnect = McpServerClass.prototype.connect;
-  Object.defineProperty(McpServerClass.prototype, INSTALLED, { value: true });
-  McpServerClass.prototype.connect = async function patchedConnect(...args) {
-    syncTrustedRootsIntoConfig();
-    registerLocalTools(this);
-    return originalConnect.apply(this, args);
-  };
+  registerServerInitializer(McpServerClass, {
+    id: 'devmate.local-tools',
+    order: 30,
+    initialize(server) {
+      syncTrustedRootsIntoConfig();
+      registerLocalTools(server);
+    }
+  });
 }
 
 export { shutdownPersistentProcesses };
-export const __test = { statusPayload };
+export const __test = { registerLocalTools, statusPayload };
