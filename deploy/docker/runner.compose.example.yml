@@ -3,9 +3,10 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-    command:
+    entrypoint:
       - node
-      - scripts/devmate-runner.mjs
+      - /opt/devmate/scripts/devmate-runner.mjs
+    command:
       - --config
       - /var/lib/devmate-runner/config.json
       - --control-url
