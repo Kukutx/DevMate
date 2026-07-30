@@ -131,13 +131,21 @@ function runnerRegistration(principal, body = {}) {
   ).map(value => value.toLowerCase());
   const capabilities = reportedCapabilities.length ? reportedCapabilities : ['core'];
   if (!capabilities.includes('core')) capabilities.unshift('core');
-  const reportedWorkspaces = intersect(body.workspaceIds, principal.workspaceIds, principal.workspaceIds);
-  const workspaceIds = reportedWorkspaces.length ? reportedWorkspaces : [...principal.workspaceIds];
+
+  const reportedWorkspaces = Array.isArray(body.workspaceIds)
+    ? intersect(body.workspaceIds, principal.workspaceIds, [])
+    : [];
+  if (!reportedWorkspaces.length) {
+    const error = new Error('Runner must report at least one local workspaceId allowed by its credential');
+    error.status = 400;
+    throw error;
+  }
+
   return {
     id: principal.id,
     name: principal.name,
     capabilities,
-    workspaceIds,
+    workspaceIds: reportedWorkspaces,
     maxConcurrent: Math.min(
       principal.maxConcurrent,
       Math.max(1, Math.trunc(Number(body.maxConcurrent) || principal.maxConcurrent))
