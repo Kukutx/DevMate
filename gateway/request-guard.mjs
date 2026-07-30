@@ -151,20 +151,26 @@ export function guardListener(listener) {
     const url = requestUrl(req);
     const path = url?.pathname || requestPath(req);
     if (req.method === 'OPTIONS') return listener(req, res);
-    if (isPublishedPreviewPath(path)) { handlePublishedPreview(req, res, url); return; }
-    if (path !== '/mcp') return listener(req, res);
+    const publishedPreview = isPublishedPreviewPath(path);
+    if (!publishedPreview && path !== '/mcp') return listener(req, res);
 
     const requestId = `req-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     let config;
     try {
       config = normalizeDeploymentConfig(readConfig());
-    } catch (error) {
+    } catch {
       jsonError(res, 500, 'DevMate configuration could not be loaded', 'config_error', requestId);
       return;
     }
 
     if (!hostAllowed(req, config)) {
       jsonError(res, 421, 'Request host is not allowed by the DevMate production profile', 'host_not_allowed', requestId);
+      return;
+    }
+    res.setHeader('x-devmate-request-id', requestId);
+
+    if (publishedPreview) {
+      handlePublishedPreview(req, res, url);
       return;
     }
 
@@ -217,7 +223,6 @@ export function guardListener(listener) {
     }
 
     req.setTimeout?.(config.production.requestTimeoutMs);
-    res.setHeader('x-devmate-request-id', requestId);
     let released = false;
     const release = () => {
       if (released) return;
