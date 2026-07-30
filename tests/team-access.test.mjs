@@ -123,13 +123,38 @@ test('resolves workspace names to scoped workspace ids', () => {
   }).workspaceId, 'app');
 });
 
-test('classifies queue tools without assigning the active workspace implicitly', () => {
+test('classifies queue and Runner tools without assigning the active workspace implicitly', () => {
   const current = config();
   current.workspaces = [{ id: 'app', name: 'Application' }];
   normalizeDeploymentConfig(current);
   assert.equal(requiredCapabilityForTool('job_submit', { destructiveHint: true }, {}), 'validate');
   assert.equal(requiredCapabilityForTool('job_cancel', { destructiveHint: true }, {}), 'write');
   assert.equal(requiredCapabilityForTool('job_runtime_configure', { destructiveHint: true }, {}), 'admin');
+  assert.equal(requiredCapabilityForTool('runner_control_status', { readOnlyHint: true }, {}), 'read');
+  assert.equal(requiredCapabilityForTool('runner_control_configure', { destructiveHint: true }, {}), 'admin');
+  assert.equal(requiredCapabilityForTool('runner_credential_create', { destructiveHint: true }, {}), 'admin');
   assert.equal(toolWorkspaceId('job_submit', { workspaceId: 'app' }, current), null);
   assert.equal(toolWorkspaceId('deployment_drain_start', {}, current), null);
+  assert.equal(toolWorkspaceId('runner_control_status', {}, current), null);
+  assert.equal(toolWorkspaceId('runner_credential_create', { workspaceId: 'app' }, current), null);
+});
+
+test('reserves Runner credential administration for owner', () => {
+  const current = config();
+  current.workspaces = [{ id: 'app', name: 'Application' }];
+  normalizeDeploymentConfig(current);
+  const maintainer = {
+    id: 'm',
+    name: 'Maintainer',
+    role: 'maintainer',
+    workspaceIds: ['app'],
+    source: 'team-token'
+  };
+  assert.throws(() => authorizeToolCall({
+    name: 'runner_credential_create',
+    annotations: { destructiveHint: true },
+    args: { workspaceIds: ['app'] },
+    config: current,
+    principal: maintainer
+  }), /owner role/);
 });

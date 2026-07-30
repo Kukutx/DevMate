@@ -1,42 +1,36 @@
 # DevMate operations
 
-DevMate 2.2 provides the controls needed for a long-running team or production gateway: durable coordination state, a single-instance lock, separation-of-duties approvals, queued jobs, an embedded runner, drain mode, local metrics, and deployment templates.
+DevMate 2.3 provides the controls needed for a long-running team or production platform: durable coordination state, a single-instance central lock, separation-of-duties approvals, queued jobs, embedded and external Runners, drain mode, local metrics, and deployment templates.
 
 ## Durable runtime state
 
-DevMate stores coordination state beside `config.json`:
+DevMate stores central coordination state beside `config.json`:
 
 ```text
 <config-directory>/state/runtime-state.json
 <config-directory>/state/gateway.lock
 ```
 
-The runtime state file uses atomic replacement and restrictive file permissions where supported. It currently persists:
+The runtime state file uses atomic replacement and restrictive file permissions where supported. It persists:
 
 - workspace leases;
 - complex team work sessions;
 - approval requests and decisions;
 - durable jobs and bounded event history;
-- runner registration and heartbeat state;
+- embedded and external Runner registration/heartbeat state;
 - deployment drain state.
 
-The file does not contain plaintext team tokens. Team tokens remain salted `scrypt` hashes in `config.json`. Job arguments are rejected when they contain credential-shaped fields or values, but the state file still contains operational inputs and result summaries and must be treated as sensitive.
+The file does not contain plaintext team or Runner tokens. Both are salted `scrypt` hashes in `config.json`. Job arguments reject credential-shaped fields or values, but the state file still contains operational inputs and result summaries and must be treated as sensitive.
 
-Use:
+Use `deployment_runtime_state` to inspect namespaces, file size, recovery information, and the active instance lock.
 
-```text
-deployment_runtime_state
-```
+### Central crash recovery
 
-to inspect namespaces, file size, recovery information, and the active instance lock.
+On startup the central Gateway acquires `gateway.lock`. If another live process owns the same state directory, startup fails instead of allowing two control planes to mutate the same coordination state. A lock whose PID is no longer alive is quarantined and replaced.
 
-### Crash recovery
+A Runner owns a running job through a short renewable lease. When the central Gateway or a Runner disappears, expired running jobs are requeued until their attempt budget is exhausted. This recovers queue ownership; it cannot undo external side effects already produced by the interrupted tool.
 
-On startup DevMate acquires `gateway.lock`. If another live process owns the same state directory, startup fails instead of allowing two gateways to mutate the same coordination state. A lock whose PID is no longer alive is quarantined and replaced.
-
-A runner owns a running job through a short renewable lease. When the gateway disappears, expired running jobs are requeued until their attempt budget is exhausted. This recovers queue ownership; it cannot undo external side effects already produced by the interrupted tool. Job targets should therefore be idempotent or write to isolated, reproducible output paths.
-
-Do not run multiple DevMate processes against the same config directory. For horizontal scaling, isolate each workspace or runner behind a separate DevMate instance until an external distributed state provider is implemented.
+Do not run multiple central DevMate processes against the same config directory. External Runner hosts use independent local configs/state and never share the central state directory.
 
 ## Durable jobs
 
@@ -56,16 +50,69 @@ job_retry
 runner_status
 ```
 
-The embedded runner reports its workspace and capability coverage. Keep concurrency low when jobs run Chromium, Godot exports, compilers, or memory-intensive test suites. Configure it through `job_runtime_configure`.
-
 Queued jobs can wait in:
 
-- `waiting_approval`, until a different maintainer or owner approves the exact target call;
+- `waiting_approval`, until a different Maintainer or Owner approves the exact target call;
 - `blocked_lease`, until the requester owns the workspace lease again.
 
-Artifact indexing is metadata-only. Files remain in their workspace and are not uploaded or copied into the state directory. Indexed directories are traversed with bounded depth/file counts and sensitive paths are excluded.
+Artifact indexing is metadata-only. Files remain on the embedded or external Runner workspace and are not uploaded into central state. Indexed directories use bounded depth/file counts and sensitive paths are excluded.
 
-Running cancellation is cooperative. DevMate records the cancellation request and marks the job cancelled when the in-process target settles. It does not forcibly abort arbitrary JavaScript handlers. Long-lived services should use the supervised persistent-process tools instead.
+Running cancellation is cooperative. DevMate records the cancellation request and reports it on the next Runner lease renewal. It does not guarantee interruption of an arbitrary JavaScript handler or native process.
+
+## Embedded and external Runners
+
+The embedded Runner executes inside the central Gateway process and is enabled by default. External Runners connect to `/runner/v1` with dedicated `dmr_` credentials.
+
+Use:
+
+```text
+runner_control_status
+runner_control_configure
+runner_credential_list
+runner_credential_create
+runner_credential_update
+runner_credential_rotate
+runner_credential_revoke
+```
+
+Set `embeddedRunnerEnabled` to `false` through `runner_control_configure` and restart the central Gateway to operate a control-plane-only deployment.
+
+A safe external Runner rollout is:
+
+1. prepare the Runner-local personal DevMate config and required toolchains;
+2. ensure the local workspace IDs match central IDs;
+3. create a credential with minimum workspace/capability scope;
+4. store the token in a secret manager, protected environment file, or token file;
+5. start `devmate-runner`;
+6. confirm `runner_control_status` and `runner_status` show a recent heartbeat;
+7. submit a small job requiring `external` and a host capability;
+8. verify result and remote artifact metadata;
+9. only then route production workloads to the node.
+
+The Agent removes central Runner variables from the local Gateway child environment. Verify this behavior after modifying service wrappers or container entrypoints.
+
+### Runner outage
+
+If a Runner stops:
+
+1. its heartbeat eventually becomes stale;
+2. running ownership leases expire;
+3. jobs are requeued when attempts remain;
+4. another matching Runner may claim them.
+
+Check the original target for partial outputs before allowing retries. External execution is at-least-once.
+
+### Credential rotation and revocation
+
+Rotate one Runner at a time:
+
+1. rotate the credential centrally;
+2. update the Runner secret;
+3. restart the Agent;
+4. verify the new heartbeat and a validation job;
+5. remove old secret copies.
+
+Revocation immediately prevents new requests, including renew/completion. Owned jobs recover after lease expiry, so planned decommissioning should drain or stop claiming work before revocation.
 
 ## Drain and maintenance
 
@@ -79,23 +126,27 @@ deployment_drain_cancel
 
 While draining:
 
-- new team mutations and new team job submissions are rejected;
-- the embedded runner stops claiming queued work;
+- new team mutations and team job submissions are rejected;
+- embedded and external Runners stop receiving queued work;
 - existing running jobs continue;
 - principals may continue reading state and cancelling visible jobs;
-- owner/local recovery credentials remain available.
+- Owner/local recovery credentials remain available.
 
-A safe upgrade flow is:
+A safe central upgrade flow is:
 
-1. Call `deployment_drain_start` and record the reason.
-2. Inspect `deployment_drain_status` and `runner_status` until no jobs are in flight.
-3. Back up config and state.
-4. Stop the gateway.
-5. Install the new version.
-6. Start the gateway and run readiness, metrics, and smoke checks.
-7. Call `deployment_drain_cancel` only after validation.
+1. call `deployment_drain_start` and record the reason;
+2. inspect `deployment_drain_status`, `runner_status`, and `runner_control_status` until no jobs are in flight;
+3. back up config and central state;
+4. stop the central Gateway;
+5. install the new version;
+6. start the Gateway and run readiness, metrics, and smoke checks;
+7. verify external Runner protocol/version compatibility;
+8. submit a small external validation job;
+9. call `deployment_drain_cancel` only after validation.
 
-If the gateway must be stopped before an in-flight job settles, the new process recovers it after the runner lease expires. Verify whether the interrupted target created partial external side effects before allowing the retry.
+If the central Gateway must stop before an in-flight job settles, the new process recovers it after the Runner lease expires. Verify whether the target produced partial external side effects before retry.
+
+External Runner Agents can be upgraded independently. Stop one node, let its leases expire or jobs complete, upgrade it, then verify its heartbeat before moving to the next node.
 
 ## Dual-control approvals
 
@@ -106,7 +157,7 @@ publish
 admin
 ```
 
-The first protected call creates a pending request and returns its ID. A different maintainer or owner reviews it through:
+The first protected call creates a pending request. A different Maintainer or Owner reviews it through:
 
 ```text
 team_approval_list
@@ -114,26 +165,11 @@ team_approval_status
 team_approval_decide
 ```
 
-After approval, the original requester retries the exact same tool call. DevMate verifies the requester, tool, workspace, and canonical argument digest, consumes the approval once, and executes the call.
+After approval, the original requester retries the exact same call. For queued work, approval is consumed when the central Gateway releases the job to a Runner. A Runner failure after claim may therefore require a new approval.
 
 Approval summaries redact token, secret, password, authorization, and API-key fields. Raw arguments are not stored.
 
-Configure policy with:
-
-```text
-team_approval_configure
-```
-
-Supported controls:
-
-- enable or disable approvals;
-- required capabilities;
-- explicitly required tools;
-- approval lifetime;
-- separation of duties;
-- owner bypass.
-
-Disabling separation of duties is not recommended for production.
+Configure policy through `team_approval_configure`. Disabling separation of duties is not recommended for production.
 
 ## Metrics
 
@@ -145,66 +181,58 @@ GET http://127.0.0.1:8787/control/metrics
 
 It includes bounded metrics for:
 
-- HTTP request counts and status codes;
-- HTTP request duration and in-flight requests;
+- HTTP request counts, status, duration, and in-flight requests;
 - MCP tool calls by tool, capability, role, source, and outcome;
-- tool duration aggregates;
-- approval requests and consumption;
+- approvals;
 - durable job outcomes and duration;
-- embedded runner in-flight jobs.
+- embedded Runner in-flight jobs;
+- Runner-control requests, route status, duration, and errors.
 
-The endpoint is intentionally local-only. Collect it with a node-local Prometheus agent, OpenTelemetry Collector, or reverse-proxy sidecar rather than exposing it through the public tunnel.
+The endpoint is intentionally local-only. Collect it with a node-local Prometheus agent, OpenTelemetry Collector, or sidecar rather than exposing it through the public tunnel.
 
-Maintainers and owners can also call:
+Alert on:
 
-```text
-deployment_metrics
-```
+- repeated Runner authentication failures or 429 responses;
+- rising offline Runner count;
+- jobs repeatedly returning to `queued` after lease expiry;
+- prolonged `waiting_approval` or `blocked_lease` states;
+- high queue age;
+- control-plane 5xx responses;
+- central runtime-state recovery/quarantine events.
+
+Maintainers and Owners can also call `deployment_metrics`.
 
 ## systemd
 
-Use `deploy/systemd/devmate.service.example` as a starting point. Adjust:
+Use:
 
-- `User` and `Group`;
-- `WorkingDirectory`;
-- config path;
-- writable workspace directories.
+- `deploy/systemd/devmate.service.example` for the central Gateway;
+- `deploy/systemd/devmate-runner.service.example` for external Runners.
 
-The template uses restart-on-failure, a restrictive umask, `NoNewPrivileges`, read-only system paths, and explicit writable paths.
+For Runner services, keep `DEVMATE_RUNNER_TOKEN` in a root-owned mode-0600 environment file or use a system secret mechanism. Never place it directly in `ExecStart`.
+
+Adjust service users, working directories, config paths, writable workspaces, and required device/toolchain access. Keep central and Runner hosts on separate low-privilege OS identities where practical.
 
 ## Docker
 
-The reference image and Compose file are under `deploy/docker/`.
+Reference assets are under `deploy/docker/`:
 
-Initialize state on the host before starting the service:
+- `Dockerfile` and `compose.example.yml` for the central Gateway;
+- `runner.compose.example.yml` for external Runners.
 
-```bash
-node scripts/devmate-cli.mjs init \
-  --config /var/lib/devmate/config.json \
-  --workspace /srv/devmate-workspaces/project \
-  --mode production \
-  --provider external \
-  --public-url https://devmate.example.com
-```
+Mount central `/var/lib/devmate` persistently. Runner containers use their own `/var/lib/devmate-runner` and workspace mounts. Do not mount central state into a Runner container.
 
-Mount `/var/lib/devmate` persistently. Mount only approved workspace roots. The container example drops Linux capabilities, uses a read-only root filesystem, and binds DevMate to loopback on the host.
-
-Godot, Chromium, cloudflared, ngrok, compilers, and other platform runtimes are not bundled into the minimal image. Build a derived image or use isolated DevMate instances when those capabilities are required.
+The minimal image does not include Godot, Chromium, Android/iOS SDKs, compilers, GPUs, or signing tools. Build narrowly scoped derived images for each Runner capability set.
 
 ## Reverse proxy
 
-`deploy/caddy/Caddyfile.example` provides a stable HTTPS example with:
+`deploy/caddy/Caddyfile.example` proxies the central Gateway. Ensure it forwards both `/mcp` and `/runner/v1`, preserves the original Host header, supports long request timeouts, and applies request-body limits.
 
-- request body limits;
-- long MCP read/write timeouts;
-- HSTS and `nosniff` headers;
-- JSON access logs.
-
-Keep DevMate bearer authentication enabled even behind SSO, Cloudflare Access, VPN, or an authenticated edge proxy.
+Keep DevMate application authentication enabled behind SSO, Cloudflare Access, VPN, or another identity-aware edge.
 
 ## Backup scope
 
-Back up the complete config directory while DevMate is drained and stopped, or from a filesystem snapshot:
+Back up the central config directory while drained/stopped or from a filesystem snapshot:
 
 ```text
 config.json
@@ -213,20 +241,22 @@ state/audit.jsonl
 state/backups/
 ```
 
-Artifact files are not copied into the state directory. Back up the corresponding workspaces separately when generated outputs must be retained.
+Runner-local configs and workspaces are separate backup domains. Central artifact metadata is not a backup of remote artifacts.
 
-These backups are sensitive because `config.json` includes the owner bearer token. Encrypt backups, restrict access, and rotate credentials after an untrusted restore or disclosure.
+Central `config.json` includes the Owner bearer token and Runner credential hashes. Runner-local config includes a local Owner token. Encrypt backups, restrict access, and rotate credentials after an untrusted restore or disclosure.
 
 ## Upgrade verification
 
-After restart:
+After central restart:
 
-1. Run `deployment_readiness`.
-2. Run `deployment_runtime_state` and confirm the expected namespaces, including `jobs`.
-3. Run `runner_status` and confirm the embedded runner is online with the expected workspaces and plugin capabilities.
-4. Run `deployment_metrics`.
-5. Verify the public MCP preflight and one non-destructive team call.
-6. Submit a small validation job and confirm it reaches `succeeded`.
-7. Cancel drain mode.
+1. run `deployment_readiness`;
+2. run `deployment_runtime_state` and confirm expected namespaces, including `jobs`;
+3. run `runner_control_status` and confirm the API and credential counts;
+4. run `runner_status` and confirm expected embedded/external nodes, workspaces, versions, and capabilities;
+5. run `deployment_metrics`;
+6. verify public MCP and `/runner/v1` preflight behavior;
+7. submit one small embedded job when enabled;
+8. submit one small external job for each critical capability class;
+9. cancel drain mode.
 
-Personal mode can continue using the existing VS Code Start flow without managing jobs, durable state, approvals, or drain mode directly.
+Personal mode can continue using the existing VS Code Start flow without directly managing external Runners, durable state, approvals, or drain mode.

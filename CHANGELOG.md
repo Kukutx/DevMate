@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0
+
+- Added an authenticated external Runner control plane under `/runner/v1` with protocol versioning, heartbeat, capability/workspace registration, job claim, lease renewal, completion, failure, and cancellation acknowledgement.
+- Added dedicated `dmr_` Runner credentials stored as salted `scrypt` hashes with explicit workspace scopes, capability limits, concurrency, expiry, rotation, disable, revocation, and Owner-only administration.
+- Added a `devmate-runner` Agent that reuses a loopback-only personal DevMate Gateway on the execution host, preserving existing file, command, Git, Browser QA, Godot, plugin, and artifact protections.
+- Added central execution preflight so RBAC, requester scope, workspace leases, approvals, target allowlisting, and plugin state are re-evaluated before a remote Runner receives job arguments.
+- Added control-plane-only mode by allowing the central embedded Runner to be disabled while external nodes claim capability-routed jobs.
+- Prevented Runner control tokens from entering the local Gateway or project-command environment, required HTTPS outside loopback, enforced protocol/Host/body/rate protections, and bound remote artifacts to the central job workspace.
+- Added external Runner systemd and Docker templates plus deployment, routing, recovery, rotation, security, and at-least-once execution documentation.
+- Added credential lifecycle, control-plane HTTP, Agent configuration, remote execution, result redaction, artifact hashing, scope narrowing, and protocol regression coverage.
+
 ## 2.2.0
 
 - Added a persistent job queue for reviewed build, validation, Browser QA, Godot acceptance, reporting, and non-pushing Git-save workflows.
@@ -123,7 +134,7 @@
 ## 1.7.0
 
 - Added `project_instructions` and included root `AGENTS.md` / `CLAUDE.md` context in `project_snapshot`.
-- Added `show_changes` for compact Git status, diff stats, file totals, and bounded patch review.
+- Added `show_changes` for compact Git status, diff stats, file totals, and a bounded patch review.
 - Added project agent instructions and ChatGPT Connector troubleshooting docs.
 - Added GitHub Actions CI for repeatable check, smoke, and VSIX package verification.
 

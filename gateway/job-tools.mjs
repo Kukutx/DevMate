@@ -14,9 +14,18 @@ import {
   retryJob,
   startDrain
 } from './job-queue.mjs';
-import { jobRuntimeStatus, jobTarget, jobTargetCatalog, jobTargetEligible, refreshLocalRunner } from './job-runtime.mjs';
+import {
+  jobRuntimeStatus,
+  jobTarget,
+  jobTargetCatalog,
+  jobTargetEligible,
+  refreshLocalRunner
+} from './job-runtime.mjs';
 
-const jobStatusSchema = z.enum(['queued', 'running', 'waiting_approval', 'blocked_lease', 'succeeded', 'failed', 'cancelled']);
+const jobStatusSchema = z.enum([
+  'queued', 'running', 'waiting_approval', 'blocked_lease',
+  'succeeded', 'failed', 'cancelled'
+]);
 
 function targetAuthorization(target, args, principal) {
   const config = normalizeDeploymentConfig(readConfig());
@@ -37,13 +46,23 @@ function targetAuthorization(target, args, principal) {
 }
 
 function ensureVisible(job, principal) {
-  if (principal.workspaceIds?.length && job.workspaceId && !principal.workspaceIds.includes(job.workspaceId)) throw new Error(`Principal ${principal.id} is not allowed to access job workspace ${job.workspaceId}`);
-  if (!['owner', 'maintainer'].includes(principal.role) && job.requestedBy.id !== principal.id) throw new Error(`Job ${job.id} belongs to ${job.requestedBy.name || job.requestedBy.id}`);
+  if (
+    principal.workspaceIds?.length &&
+    job.workspaceId &&
+    !principal.workspaceIds.includes(job.workspaceId)
+  ) {
+    throw new Error(`Principal ${principal.id} is not allowed to access job workspace ${job.workspaceId}`);
+  }
+  if (!['owner', 'maintainer'].includes(principal.role) && job.requestedBy.id !== principal.id) {
+    throw new Error(`Job ${job.id} belongs to ${job.requestedBy.name || job.requestedBy.id}`);
+  }
   return job;
 }
 
 function assertMaintainer(principal, action) {
-  if (!['owner', 'maintainer'].includes(principal?.role)) throw new Error(`${action} requires maintainer or owner role`);
+  if (!['owner', 'maintainer'].includes(principal?.role)) {
+    throw new Error(`${action} requires maintainer or owner role`);
+  }
 }
 
 function withWorkspace(args, workspaceId) {
@@ -53,8 +72,12 @@ function withWorkspace(args, workspaceId) {
 
 function runtimePolicy(config = readConfig()) {
   return {
-    maxConcurrentJobs: Math.min(8, Math.max(1, Math.trunc(Number(config.runtime?.maxConcurrentJobs) || 2))),
-    allowJobGitSave: config.jobs?.allowJobGitSave !== false
+    maxConcurrentJobs: Math.min(
+      8,
+      Math.max(1, Math.trunc(Number(config.runtime?.maxConcurrentJobs) || 2))
+    ),
+    allowJobGitSave: config.jobs?.allowJobGitSave !== false,
+    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false
   };
 }
 
@@ -63,14 +86,19 @@ export function registerJobTools(register, annotations) {
 
   register('job_target_catalog', {
     title: 'DevMate job target catalog',
-    description: 'List reviewed tools that may be executed by the durable embedded job runner.',
+    description: 'List reviewed tools that may be executed by embedded or external durable-job Runners.',
     inputSchema: { workspaceId: z.string().optional() },
     annotations: ro
-  }, async () => toolText({ policy: runtimePolicy(), targets: jobTargetCatalog().filter(item => jobTargetEligible(item.name, readConfig()?.jobs || {})) }));
+  }, async () => toolText({
+    policy: runtimePolicy(),
+    targets: jobTargetCatalog().filter(item =>
+      jobTargetEligible(item.name, readConfig()?.jobs || {})
+    )
+  }));
 
   register('job_runtime_configure', {
     title: 'Configure DevMate job runtime',
-    description: 'Configure embedded runner concurrency and whether safe non-pushing git_save may be queued. Requires maintainer or owner.',
+    description: 'Configure embedded Runner concurrency and whether safe non-pushing git_save may be queued. Requires maintainer or owner.',
     inputSchema: {
       maxConcurrentJobs: z.number().int().min(1).max(8).optional(),
       allowJobGitSave: z.boolean().optional()
@@ -82,11 +110,19 @@ export function registerJobTools(register, annotations) {
     const config = readConfig();
     config.runtime ||= {};
     config.jobs ||= {};
-    if (patch.maxConcurrentJobs !== undefined) config.runtime.maxConcurrentJobs = patch.maxConcurrentJobs;
-    if (patch.allowJobGitSave !== undefined) config.jobs.allowJobGitSave = patch.allowJobGitSave;
+    if (patch.maxConcurrentJobs !== undefined) {
+      config.runtime.maxConcurrentJobs = patch.maxConcurrentJobs;
+    }
+    if (patch.allowJobGitSave !== undefined) {
+      config.jobs.allowJobGitSave = patch.allowJobGitSave;
+    }
     writeConfig(config);
     const runner = refreshLocalRunner();
-    await audit('job_runtime_configure', { principalId: principal.id, keys: Object.keys(patch), maxConcurrentJobs: runner.maxConcurrent });
+    await audit('job_runtime_configure', {
+      principalId: principal.id,
+      keys: Object.keys(patch),
+      maxConcurrentJobs: runner.maxConcurrent
+    });
     return toolText({ configured: true, policy: runtimePolicy(config), runner });
   });
 
@@ -105,15 +141,36 @@ export function registerJobTools(register, annotations) {
       artifactPaths: z.array(z.string().min(1).max(2000)).max(100).optional()
     },
     annotations: rw
-  }, async ({ workspaceId, tool, arguments: rawArgs = {}, title = '', priority = 50, maxAttempts = 2, timeoutMs = 900000, requiredCapabilities = [], artifactPaths = [] }) => {
-    if (!jobTargetEligible(tool, readConfig()?.jobs || {})) throw new Error(`Tool is not allowed by the durable job policy: ${tool}`);
+  }, async ({
+    workspaceId,
+    tool,
+    arguments: rawArgs = {},
+    title = '',
+    priority = 50,
+    maxAttempts = 2,
+    timeoutMs = 900000,
+    requiredCapabilities = [],
+    artifactPaths = []
+  }) => {
+    if (!jobTargetEligible(tool, readConfig()?.jobs || {})) {
+      throw new Error(`Tool is not allowed by the durable job policy: ${tool}`);
+    }
     const target = jobTarget(tool);
-    if (!target) throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
+    if (!target) {
+      throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
+    }
     const args = withWorkspace(rawArgs, workspaceId);
-    if (tool === 'git_save' && args.push) throw new Error('Durable git_save jobs cannot push. Review and publish synchronously through the approval flow.');
+    if (tool === 'git_save' && args.push) {
+      throw new Error('Durable git_save jobs cannot push. Review and publish synchronously through the approval flow.');
+    }
     const principal = principalNow();
     const authorized = targetAuthorization(target, args, principal);
-    const capabilities = [...new Set([...target.requiredCapabilities, ...requiredCapabilities.map(value => String(value).trim().toLowerCase()).filter(Boolean)])];
+    const capabilities = [...new Set([
+      ...target.requiredCapabilities,
+      ...requiredCapabilities
+        .map(value => String(value).trim().toLowerCase())
+        .filter(Boolean)
+    ])];
     const job = createJob({
       principal,
       tool,
@@ -126,30 +183,51 @@ export function registerJobTools(register, annotations) {
       requiredCapabilities: capabilities,
       artifactPaths
     });
-    await audit('job_submit', { principalId: principal.id, jobId: job.id, tool, workspace: authorized.workspaceId, priority, maxAttempts });
+    await audit('job_submit', {
+      principalId: principal.id,
+      jobId: job.id,
+      tool,
+      workspace: authorized.workspaceId,
+      priority,
+      maxAttempts,
+      requiredCapabilities: capabilities
+    });
     return toolText({ job });
   });
 
   register('job_list', {
     title: 'List DevMate jobs',
     description: 'List durable jobs visible to the current principal.',
-    inputSchema: { status: jobStatusSchema.optional(), workspaceId: z.string().optional(), limit: z.number().int().min(1).max(500).optional() },
+    inputSchema: {
+      status: jobStatusSchema.optional(),
+      workspaceId: z.string().optional(),
+      limit: z.number().int().min(1).max(500).optional()
+    },
     annotations: ro
-  }, async ({ status, workspaceId, limit = 100 }) => toolText({ jobs: listJobs({ principal: principalNow(), status, workspaceId, limit }) }));
+  }, async ({ status, workspaceId, limit = 100 }) => toolText({
+    jobs: listJobs({ principal: principalNow(), status, workspaceId, limit })
+  }));
 
   register('job_status', {
     title: 'DevMate job status',
     description: 'Read one durable job, including bounded events and indexed artifacts.',
-    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional(), includeArguments: z.boolean().optional(), includeResult: z.boolean().optional() },
+    inputSchema: {
+      id: z.string().min(1),
+      workspaceId: z.string().optional(),
+      includeArguments: z.boolean().optional(),
+      includeResult: z.boolean().optional()
+    },
     annotations: ro
   }, async ({ id, includeArguments = false, includeResult = true }) => {
     const principal = principalNow();
-    return toolText({ job: ensureVisible(getJob(id, { includeArguments, includeResult }), principal) });
+    return toolText({
+      job: ensureVisible(getJob(id, { includeArguments, includeResult }), principal)
+    });
   });
 
   register('job_artifacts', {
     title: 'DevMate job artifacts',
-    description: 'List indexed files produced by a completed durable job.',
+    description: 'List indexed local or remote files produced by a completed durable job.',
     inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: ro
   }, async ({ id }) => {
@@ -160,13 +238,22 @@ export function registerJobTools(register, annotations) {
 
   register('job_cancel', {
     title: 'Cancel DevMate job',
-    description: 'Cancel a queued/deferred job immediately or request cooperative cancellation of a running job.',
-    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional(), force: z.boolean().optional() },
+    description: 'Cancel a queued/deferred job immediately or request cooperative cancellation of a running embedded or external job.',
+    inputSchema: {
+      id: z.string().min(1),
+      workspaceId: z.string().optional(),
+      force: z.boolean().optional()
+    },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, force = false }) => {
     const principal = principalNow();
     const result = cancelJob({ id, principal, force });
-    await audit('job_cancel', { principalId: principal.id, jobId: id, force, cancelled: result.cancelled });
+    await audit('job_cancel', {
+      principalId: principal.id,
+      jobId: id,
+      force,
+      cancelled: result.cancelled
+    });
     return toolText(result);
   });
 
@@ -179,19 +266,34 @@ export function registerJobTools(register, annotations) {
     const principal = principalNow();
     const existing = ensureVisible(getJob(id, { includeArguments: true }), principal);
     const target = jobTarget(existing.tool);
-    if (!target) throw new Error(`Job target is not currently available: ${existing.tool}`);
+    if (!target) {
+      throw new Error(`Job target is not currently available: ${existing.tool}`);
+    }
     targetAuthorization(target, existing.arguments || {}, principal);
     const job = retryJob({ id, principal });
-    await audit('job_retry', { principalId: principal.id, jobId: id, tool: job.tool, workspace: job.workspaceId });
+    await audit('job_retry', {
+      principalId: principal.id,
+      jobId: id,
+      tool: job.tool,
+      workspace: job.workspaceId
+    });
     return toolText({ job });
   });
 
   register('runner_status', {
     title: 'DevMate runner status',
-    description: 'Show embedded runner capabilities, availability, concurrency, and current runtime state.',
+    description: 'Show embedded and external Runner capabilities, topology, availability, concurrency, and current runtime state. Requires maintainer or owner.',
     inputSchema: { workspaceId: z.string().optional() },
     annotations: ro
-  }, async () => toolText({ policy: runtimePolicy(), runners: listRunners(), runtime: jobRuntimeStatus() }));
+  }, async () => {
+    const principal = principalNow();
+    assertMaintainer(principal, 'Viewing Runner topology');
+    return toolText({
+      policy: runtimePolicy(),
+      runners: listRunners(),
+      runtime: jobRuntimeStatus()
+    });
+  });
 
   register('deployment_drain_status', {
     title: 'DevMate drain status',
@@ -202,7 +304,7 @@ export function registerJobTools(register, annotations) {
 
   register('deployment_drain_start', {
     title: 'Start DevMate drain',
-    description: 'Stop accepting new team mutations and stop claiming queued jobs while allowing current jobs to finish. Requires maintainer or owner.',
+    description: 'Stop accepting new team mutations and stop embedded/external Runners from receiving queued jobs while allowing current jobs to finish. Requires maintainer or owner.',
     inputSchema: { reason: z.string().max(1000).optional() },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ reason = '' }) => {
@@ -215,16 +317,25 @@ export function registerJobTools(register, annotations) {
 
   register('deployment_drain_cancel', {
     title: 'Cancel DevMate drain',
-    description: 'Resume team mutations and durable job claiming after maintenance. Requires maintainer or owner.',
+    description: 'Resume team mutations and durable job delivery after maintenance. Requires maintainer or owner.',
     inputSchema: {},
     annotations: { ...rw, idempotentHint: true }
   }, async () => {
     const principal = principalNow();
     assertMaintainer(principal, 'Cancelling deployment drain');
     const result = cancelDrain({ principal });
-    await audit('deployment_drain_cancel', { principalId: principal.id, cancelled: result.cancelled });
+    await audit('deployment_drain_cancel', {
+      principalId: principal.id,
+      cancelled: result.cancelled
+    });
     return toolText(result);
   });
 }
 
-export const __test = { assertMaintainer, ensureVisible, runtimePolicy, targetAuthorization, withWorkspace };
+export const __test = {
+  assertMaintainer,
+  ensureVisible,
+  runtimePolicy,
+  targetAuthorization,
+  withWorkspace
+};
