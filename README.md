@@ -5,8 +5,8 @@ DevMate is a local-first MCP development gateway that lets ChatGPT inspect, modi
 ## Deployment profiles
 
 - **Personal:** the existing single-owner workflow, optimized for one developer.
-- **Team:** per-member tokens, roles, workspace scopes, exclusive leases, and complex work sessions.
-- **Production:** stable HTTPS ingress, Host restrictions, request/rate/concurrency limits, extended diagnostics, and team audit metadata.
+- **Team:** per-member tokens, roles, workspace scopes, exclusive leases, durable work sessions, and optional approvals.
+- **Production:** stable HTTPS ingress, Host restrictions, request/rate/concurrency limits, persistent coordination state, dual-control approval, metrics, and team audit metadata.
 
 Run `DevMate: Configure Deployment` to select a profile and tunnel provider. Supported providers are ngrok, Cloudflare Quick Tunnel for development, Cloudflare managed tunnels, and an existing external HTTPS ingress.
 
@@ -26,9 +26,29 @@ Run `DevMate: Configure Deployment` to select a profile and tunnel provider. Sup
 4. Create scoped principals through `team_member_create`.
 5. Give each person or automation its own URL/token.
 6. Use `team_work_session_start` or `workspace_lease_acquire` before shared mutations.
-7. Run `deployment_readiness` and `team_activity_status` for operations.
+7. Review protected production operations through the `team_approval_*` tools.
+8. Run `deployment_readiness`, `deployment_runtime_state`, and `deployment_metrics` for operations.
 
-Core team protections include salted token hashes, role capabilities, workspace scopes, token expiry/rotation/revocation, high-risk command blocking, request IDs, authentication throttling, bounded concurrency, workspace leases, and team-aware audit entries.
+Core team protections include salted token hashes, role capabilities, workspace scopes, token expiry/rotation/revocation, high-risk command blocking, request IDs, authentication throttling, bounded concurrency, durable workspace leases, persistent work sessions, separation-of-duties approvals, and team-aware audit entries.
+
+## Durable coordination and approvals
+
+DevMate persists leases, complex work sessions, and approval requests under the config directory. Atomic state writes and a per-state-directory instance lock prevent accidental concurrent gateways from diverging coordination state.
+
+Production mode enables approval for `publish` and `admin` capabilities by default. The requester makes the protected call once, a different maintainer or owner approves it, and the requester retries the identical call. The approval is tied to the requester, tool, workspace, and argument digest, then consumed once.
+
+Operational tools:
+
+```text
+team_approval_policy_status
+team_approval_configure
+team_approval_list
+team_approval_status
+team_approval_decide
+team_approval_cancel
+deployment_runtime_state
+deployment_metrics
+```
 
 ## Core development capabilities
 
@@ -57,7 +77,21 @@ npx devmate member-create --config .devmate-server/config.json --name Alice --ro
 npx devmate serve --config .devmate-server/config.json
 ```
 
-The CLI uses the same MCP gateway, team authorization, plugins, leases, and request guard as the extension.
+The CLI uses the same MCP gateway, team authorization, plugins, leases, durable state, approvals, and request guard as the extension.
+
+## Metrics and deployment templates
+
+Prometheus-compatible metrics are available on loopback only:
+
+```text
+http://127.0.0.1:8787/control/metrics
+```
+
+Reference deployment assets are included for:
+
+- systemd: `deploy/systemd/devmate.service.example`
+- Docker: `deploy/docker/Dockerfile` and `deploy/docker/compose.example.yml`
+- Caddy: `deploy/caddy/Caddyfile.example`
 
 ## Safety model
 
@@ -66,6 +100,7 @@ The CLI uses the same MCP gateway, team authorization, plugins, leases, and requ
 - File operations remain contained by real paths and block secrets, keys, databases, logs, and real `.env` files.
 - Team roles never grant OS isolation: permitted commands run as the host account.
 - Team tokens cannot invoke the highest-risk shell or Git recovery operations.
+- Production approvals provide dual control but do not replace OS or container isolation.
 - Published previews have independent scoped tokens, short TTLs, optional browser-session limits, and explicit revocation.
 - Optional plugins validate dependencies, service contracts, executables, settings, and workspace paths.
 
@@ -83,6 +118,7 @@ npm run package:vsix
 
 Documentation:
 
+- `docs/OPERATIONS.md`
 - `docs/TEAM_DEPLOYMENT.md`
 - `docs/TUNNELS.md`
 - `docs/STANDALONE.md`
