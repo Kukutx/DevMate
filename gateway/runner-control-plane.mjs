@@ -158,7 +158,7 @@ function sanitizeResult(value) {
   return { truncated: true, preview: redactSensitiveString(serialized.slice(0, 120000)) };
 }
 
-function sanitizeArtifacts(values, runnerId) {
+function sanitizeArtifacts(values, runnerId, workspaceId) {
   const output = [];
   for (const item of Array.isArray(values) ? values.slice(0, 100) : []) {
     const relative = String(item?.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -166,7 +166,7 @@ function sanitizeArtifacts(values, runnerId) {
     const bytes = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(Number(item?.bytes) || 0)));
     const sha256 = /^[a-f0-9]{64}$/i.test(String(item?.sha256 || '')) ? String(item.sha256).toLowerCase() : null;
     output.push({
-      workspaceId: item?.workspaceId ? String(item.workspaceId).slice(0, 300) : null,
+      workspaceId: workspaceId || null,
       path: relative.slice(0, 2000),
       bytes,
       modifiedAt: Number.isFinite(Date.parse(item?.modifiedAt || '')) ? new Date(item.modifiedAt).toISOString() : null,
@@ -223,11 +223,12 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     return json(res, 200, { renewed: true, cancelRequested: !!job.cancelRequestedAt, leaseExpiresAt: job.leaseExpiresAt }, requestId);
   }
   if (action === 'complete') {
+    const running = getJob(id);
     const job = completeJob({
       id,
       runnerId: principal.id,
       result: sanitizeResult(body.result),
-      artifacts: sanitizeArtifacts(body.artifacts, principal.id)
+      artifacts: sanitizeArtifacts(body.artifacts, principal.id, running.workspaceId)
     });
     return json(res, 200, { job }, requestId);
   }
@@ -257,15 +258,12 @@ export function runnerControlListener(listener) {
         return json(res, 426, { error: `Runner protocol ${RUNNER_PROTOCOL_VERSION} is required`, code: 'protocol_version_required' }, requestId);
       }
       if (!hostAllowed(req, config)) return json(res, 421, { error: 'Request host is not allowed', code: 'host_not_allowed' }, requestId);
-      const token = bearerToken(req);
-      const principal = verifyRunnerToken(token, config);
-      if (!principal) {
-        const preauthKey = `preauth:${remoteAddress(req) || 'unknown'}`;
-        if (!consumeRate(preauthKey, Math.max(120, config.runnerControl.requestsPerMinute))) {
-          return json(res, 429, { error: 'Runner authentication rate limit exceeded', code: 'rate_limited' }, requestId);
-        }
-        return json(res, 401, { error: 'Invalid runner credential', code: 'unauthorized' }, requestId);
+      const preauthKey = `preauth:${remoteAddress(req) || 'unknown'}`;
+      if (!consumeRate(preauthKey, Math.max(120, config.runnerControl.requestsPerMinute * 2))) {
+        return json(res, 429, { error: 'Runner authentication rate limit exceeded', code: 'rate_limited' }, requestId);
       }
+      const principal = verifyRunnerToken(bearerToken(req), config);
+      if (!principal) return json(res, 401, { error: 'Invalid runner credential', code: 'unauthorized' }, requestId);
       if (!consumeRate(principal.id, config.runnerControl.requestsPerMinute)) {
         return json(res, 429, { error: 'Runner request rate limit exceeded', code: 'rate_limited' }, requestId);
       }
