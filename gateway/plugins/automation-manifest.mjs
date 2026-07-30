@@ -38,7 +38,7 @@ export async function loadAutomationManifest(context, { workspaceId, manifestPat
   const manifest = validateTopLevel(parsed);
   return {
     workspace: { id: workspace.id, name: workspace.name },
-    manifestPath: path.relative(workspace.root, file).replace(/\/g, '/'),
+    manifestPath: path.relative(workspace.root, file).replace(/\\/g, '/'),
     exists: true,
     manifest
   };
