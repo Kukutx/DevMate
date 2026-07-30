@@ -1,10 +1,10 @@
 import { z } from 'zod';
+import { registerServerInitializer } from './server-extension-host.mjs';
 import { registerRunnerTools } from './runner-tools.mjs';
 
-const INSTALLED = Symbol.for('devmate.runnerCapabilitiesInstalled');
 const REGISTERED = Symbol.for('devmate.runnerToolsRegistered');
 
-function registerTools(server) {
+export function registerRunnerCapabilityTools(server) {
   if (server[REGISTERED]) return;
   server[REGISTERED] = true;
   const register = (name, config, handler) => server.registerTool(name, {
@@ -18,13 +18,11 @@ function registerTools(server) {
 }
 
 export function installRunnerCapabilities(McpServerClass) {
-  if (McpServerClass.prototype[INSTALLED]) return;
-  const originalConnect = McpServerClass.prototype.connect;
-  Object.defineProperty(McpServerClass.prototype, INSTALLED, { value: true });
-  McpServerClass.prototype.connect = async function runnerCapabilitiesConnect(...args) {
-    registerTools(this);
-    return originalConnect.apply(this, args);
-  };
+  registerServerInitializer(McpServerClass, {
+    id: 'devmate.runner-tools',
+    order: 20,
+    initialize: registerRunnerCapabilityTools
+  });
 }
 
-export const __test = { registerTools };
+export const __test = { registerRunnerCapabilityTools };
