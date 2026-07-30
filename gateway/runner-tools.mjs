@@ -17,32 +17,38 @@ function ownerNow() {
   return principal;
 }
 
+function publicRuntime(config) {
+  return {
+    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false,
+    externalControlEnabled: config.runnerControl.enabled,
+    path: config.runnerControl.path,
+    maxRequestBytes: config.runnerControl.maxRequestBytes,
+    requestsPerMinute: config.runnerControl.requestsPerMinute,
+    maxCredentials: config.runnerControl.maxCredentials,
+    credentialCount: config.runnerControl.credentials.length,
+    activeCredentials: config.runnerControl.credentials.filter(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())).length
+  };
+}
+
 export function registerRunnerTools(register, annotations) {
   const { ro, rw } = annotations;
 
   register('runner_control_status', {
     title: 'External runner control status',
-    description: 'Show the external Runner API state, credential count, limits, and currently known runners.',
+    description: 'Show embedded/external Runner state, credential count, limits, and currently known runners.',
     inputSchema: {},
     annotations: ro
   }, async () => {
     const config = normalizeRunnerControlConfig(readConfig());
-    return toolText({
-      enabled: config.runnerControl.enabled,
-      path: config.runnerControl.path,
-      maxRequestBytes: config.runnerControl.maxRequestBytes,
-      requestsPerMinute: config.runnerControl.requestsPerMinute,
-      credentialCount: config.runnerControl.credentials.length,
-      activeCredentials: config.runnerControl.credentials.filter(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())).length,
-      runners: listRunners()
-    });
+    return toolText({ ...publicRuntime(config), runners: listRunners() });
   });
 
   register('runner_control_configure', {
-    title: 'Configure external runner control',
-    description: 'Enable or disable the Runner API and change bounded request limits. Requires owner.',
+    title: 'Configure Runner control',
+    description: 'Enable or disable the external Runner API, enable or disable the embedded Runner, and change bounded request limits. Requires owner.',
     inputSchema: {
       enabled: z.boolean().optional(),
+      embeddedRunnerEnabled: z.boolean().optional(),
       maxRequestBytes: z.number().int().min(65536).max(16777216).optional(),
       requestsPerMinute: z.number().int().min(30).max(10000).optional(),
       maxCredentials: z.number().int().min(1).max(500).optional()
@@ -51,19 +57,22 @@ export function registerRunnerTools(register, annotations) {
   }, async patch => {
     const principal = ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
+    config.jobs ||= {};
     for (const key of ['enabled', 'maxRequestBytes', 'requestsPerMinute', 'maxCredentials']) {
       if (patch[key] !== undefined) config.runnerControl[key] = patch[key];
     }
+    if (patch.embeddedRunnerEnabled !== undefined) config.jobs.embeddedRunnerEnabled = patch.embeddedRunnerEnabled;
     normalizeRunnerControlConfig(config);
     writeConfig(config);
     await audit('runner_control_configure', { principalId: principal.id, ...patch });
-    return toolText({ configured: true, runnerControl: {
-      enabled: config.runnerControl.enabled,
-      path: config.runnerControl.path,
-      maxRequestBytes: config.runnerControl.maxRequestBytes,
-      requestsPerMinute: config.runnerControl.requestsPerMinute,
-      maxCredentials: config.runnerControl.maxCredentials
-    } });
+    return toolText({
+      configured: true,
+      runnerControl: publicRuntime(config),
+      restartRequired: patch.embeddedRunnerEnabled !== undefined,
+      note: patch.embeddedRunnerEnabled !== undefined
+        ? 'Restart the Gateway to apply the embedded Runner lifecycle change.'
+        : 'External Runner API limit changes apply immediately.'
+    });
   });
 
   register('runner_credential_list', {
@@ -79,12 +88,12 @@ export function registerRunnerTools(register, annotations) {
 
   register('runner_credential_create', {
     title: 'Create external runner credential',
-    description: 'Create a scoped Runner identity and return its token once. Requires owner.',
+    description: 'Create an explicitly workspace-scoped Runner identity and return its token once. Requires owner.',
     inputSchema: {
       id: z.string().max(120).optional(),
       name: z.string().min(1).max(200),
       capabilities: z.array(z.string().min(1).max(100)).max(50).optional(),
-      workspaceIds: z.array(z.string().min(1).max(300)).max(200).optional(),
+      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(200),
       maxConcurrent: z.number().int().min(1).max(16).optional(),
       expiresAt: z.string().datetime().optional()
     },
@@ -94,7 +103,7 @@ export function registerRunnerTools(register, annotations) {
     const config = normalizeRunnerControlConfig(readConfig());
     const result = createRunnerCredential(config, {
       ...input,
-      workspaceIds: workspaceIds(config, input.workspaceIds || [])
+      workspaceIds: workspaceIds(config, input.workspaceIds)
     });
     writeConfig(config);
     await audit('runner_credential_create', {
@@ -111,12 +120,12 @@ export function registerRunnerTools(register, annotations) {
 
   register('runner_credential_update', {
     title: 'Update external runner credential',
-    description: 'Update Runner name, capabilities, workspace scopes, concurrency, expiry, or enabled state. Requires owner.',
+    description: 'Update Runner name, capabilities, explicit workspace scopes, concurrency, expiry, or enabled state. Requires owner.',
     inputSchema: {
       id: z.string().min(1),
       name: z.string().max(200).optional(),
       capabilities: z.array(z.string().min(1).max(100)).max(50).optional(),
-      workspaceIds: z.array(z.string().min(1).max(300)).max(200).optional(),
+      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(200).optional(),
       maxConcurrent: z.number().int().min(1).max(16).optional(),
       expiresAt: z.string().datetime().nullable().optional(),
       disabled: z.boolean().optional()
@@ -151,7 +160,7 @@ export function registerRunnerTools(register, annotations) {
 
   register('runner_credential_revoke', {
     title: 'Revoke external runner credential',
-    description: 'Disable a Runner identity immediately. Already-running jobs retain their current lease until it expires or they report completion. Requires owner.',
+    description: 'Disable a Runner identity immediately. New Runner API requests are rejected; currently owned jobs recover through lease expiry if the Runner can no longer report completion. Requires owner.',
     inputSchema: { id: z.string().min(1) },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id }) => {
@@ -163,3 +172,5 @@ export function registerRunnerTools(register, annotations) {
     return toolText({ credential });
   });
 }
+
+export const __test = { publicRuntime };
