@@ -41,7 +41,7 @@ export const chromium = { launch: async()=>({
   const result = await runBrowserScenario({
     workspaceRoot: root,
     url: 'http://127.0.0.1:4173/',
-    settings: { playwrightModulePath: modulePath },
+    settings: { playwrightModulePath: 'fake-playwright.mjs' },
     actions: [
       { type: 'expect_text', selector: 'body', text: 'Fake' },
       { type: 'expect_state', statePath: 'boss.phase', operator: 'eq', value: 2 },
