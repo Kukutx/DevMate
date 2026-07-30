@@ -91,6 +91,13 @@ function filterResult(name, result, principal) {
   if (['list_workspaces', 'gateway_status'].includes(name)) {
     data.workspaces = filterArray(data.workspaces, allowed, 'id');
     if (data.activeWorkspace && !allowed.has(data.activeWorkspace.id)) data.activeWorkspace = null;
+    if (data.activeWorkspaceId && !allowed.has(data.activeWorkspaceId)) data.activeWorkspaceId = null;
+  }
+  if (['connection_diagnostics', 'devmate_status_panel'].includes(name) && data.workspace) {
+    if (data.workspace.active && !allowed.has(data.workspace.active.id)) data.workspace.active = null;
+    data.workspace.count = allowed.size;
+    data.workspace.references = 0;
+    if (name === 'devmate_status_panel' && result._meta?.diagnostics) result._meta.diagnostics = data;
   }
   if (name === 'list_processes') {
     data.processes = filterArray(data.processes, allowed);
