@@ -1,16 +1,27 @@
 import crypto from 'node:crypto';
+import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
 import { acquireWorkspaceLease, releaseWorkspaceLease, workspaceLease } from './workspace-leases.mjs';
 
-const sessions = new Map();
+const NAMESPACE = 'team-work-sessions';
+const restored = readDurableNamespace(NAMESPACE, []);
+const sessions = new Map((Array.isArray(restored) ? restored : [])
+  .filter(item => item?.id && item?.principalId && item?.workspaceId)
+  .map(item => [item.id, item]));
 
 function key(principalId, workspaceId) { return `${principalId}:${workspaceId}`; }
 function nowIso() { return new Date().toISOString(); }
+function persist() { writeDurableNamespace(NAMESPACE, [...sessions.values()]); }
 
 function prune() {
   const now = Date.now();
+  let changed = false;
   for (const [id, session] of sessions) {
-    if (Date.parse(session.expiresAt) <= now) sessions.delete(id);
+    if (Date.parse(session.expiresAt) <= now) {
+      sessions.delete(id);
+      changed = true;
+    }
   }
+  if (changed) persist();
 }
 
 export function startWorkSession({ principal, workspaceId, title = '', purpose = '', ttlSeconds = 3600, force = false }) {
@@ -36,6 +47,7 @@ export function startWorkSession({ principal, workspaceId, title = '', purpose =
     failures: 0
   };
   sessions.set(session.id, session);
+  persist();
   return { ...session, lease };
 }
 
@@ -50,6 +62,7 @@ export function touchWorkSession(principalId, workspaceId, { failed = false } = 
   session.lastActivityAt = nowIso();
   session.toolCalls += 1;
   if (failed) session.failures += 1;
+  persist();
   return { ...session };
 }
 
@@ -71,11 +84,15 @@ export function finishWorkSession({ id, principal, force = false, releaseLease =
   const canForce = principal?.role === 'owner' || principal?.role === 'maintainer';
   if (session.principalId !== principal?.id && !(force && canForce)) throw new Error(`Work session ${id} belongs to ${session.principalName || session.principalId}`);
   sessions.delete(id);
+  persist();
   let lease = null;
   if (releaseLease) lease = releaseWorkspaceLease({ workspaceId: session.workspaceId, principal, force: force && canForce });
   return { finished: true, session: { ...session, finishedAt: nowIso() }, lease };
 }
 
-export function clearWorkSessions() { sessions.clear(); }
+export function clearWorkSessions() {
+  sessions.clear();
+  persist();
+}
 
-export const __test = { key, prune, sessions };
+export const __test = { key, persist, prune, sessions };
