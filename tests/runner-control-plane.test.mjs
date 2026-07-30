@@ -16,13 +16,24 @@ const baseConfig = {
   auth: { required: true, token: 'owner-token-long-enough' },
   permissions: { profile: 'fullAccess' },
   deployment: { mode: 'team', publicUrl: 'https://devmate.example.com' },
-  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: false, approvals: { enabled: false } },
+  team: {
+    enabled: true,
+    members: [],
+    requireWorkspaceLeaseForWrites: false,
+    approvals: { enabled: false }
+  },
   production: { allowedHosts: [] },
   runnerControl: { enabled: true, credentials: [] },
   runtime: { maxConcurrentJobs: 1 },
   jobs: {},
   activeWorkspaceId: 'app',
-  workspaces: [{ id: 'app', name: 'app', root: temp, mode: 'workspace-write', reference: false }],
+  workspaces: [{
+    id: 'app',
+    name: 'app',
+    root: temp,
+    mode: 'workspace-write',
+    reference: false
+  }],
   plugins: { enabled: [], settings: {} },
   maintenance: { auditRetentionDays: 30 }
 };
@@ -37,9 +48,18 @@ const created = runnerAccess.createRunnerCredential(baseConfig, {
 await fsp.writeFile(configPath, JSON.stringify(baseConfig, null, 2), 'utf8');
 
 const { resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
-const { clearJobsForTests, createJob, getJob } = await import('../gateway/job-queue.mjs');
+const {
+  clearJobsForTests,
+  createJob,
+  getJob,
+  listRunners
+} = await import('../gateway/job-queue.mjs');
 const { registerJobTarget } = await import('../gateway/job-runtime.mjs');
-const { runnerControlListener, resetRunnerControlState } = await import('../gateway/runner-control-plane.mjs');
+const {
+  __test,
+  runnerControlListener,
+  resetRunnerControlState
+} = await import('../gateway/runner-control-plane.mjs');
 
 resetDurableStateForTests();
 clearJobsForTests();
@@ -84,11 +104,23 @@ async function request(relative, token = created.token, body = {}, protocol = '1
   return { response, json: await response.json() };
 }
 
-test('rejects invalid credentials and protocol versions', async () => {
+test('rejects invalid credentials, protocol versions, and non-overlapping workspaces', async () => {
   const wrongProtocol = await request('/heartbeat', created.token, {}, '2');
   assert.equal(wrongProtocol.response.status, 426);
-  const invalid = await request('/heartbeat', 'dmr_missing_invalid-token-value-long-enough', {});
+  const invalid = await request(
+    '/heartbeat',
+    'dmr_missing_invalid-token-value-long-enough',
+    {}
+  );
   assert.equal(invalid.response.status, 401);
+  const wrongWorkspace = await request('/heartbeat', created.token, {
+    runner: {
+      capabilities: ['core', 'external'],
+      workspaceIds: ['other']
+    }
+  });
+  assert.equal(wrongWorkspace.response.status, 400);
+  assert.match(wrongWorkspace.json.error, /at least one local workspaceId/);
 });
 
 test('registers, claims, renews, and completes a scoped remote job', async () => {
@@ -98,37 +130,77 @@ test('registers, claims, renews, and completes a scoped remote job', async () =>
     maxConcurrent: 8,
     version: '2.3.0',
     platform: 'linux',
-    arch: 'x64'
+    arch: 'x64',
+    labels: { hostname: 'runner-one' }
   };
   const heartbeat = await request('/heartbeat', created.token, { runner });
   assert.equal(heartbeat.response.status, 200);
   assert.deepEqual(heartbeat.json.runner.capabilities, ['core', 'external']);
   assert.deepEqual(heartbeat.json.runner.workspaceIds, ['app']);
   assert.equal(heartbeat.json.runner.maxConcurrent, 2);
+  assert.equal(heartbeat.json.runner.version, '2.3.0');
 
-  const claimed = await request('/jobs/claim', created.token, { runner, leaseSeconds: 60 });
+  const claimed = await request('/jobs/claim', created.token, {
+    runner,
+    leaseSeconds: 60
+  });
   assert.equal(claimed.response.status, 200);
   assert.equal(claimed.json.job.id, queued.id);
   assert.deepEqual(claimed.json.job.arguments, { workspaceId: 'app' });
   assert.deepEqual(claimed.json.job.artifactPaths, ['artifacts/report.json']);
 
-  const renewed = await request(`/jobs/${queued.id}/renew`, created.token, { leaseSeconds: 60 });
+  const renewed = await request(
+    `/jobs/${queued.id}/renew`,
+    created.token,
+    { leaseSeconds: 60 }
+  );
   assert.equal(renewed.response.status, 200);
   assert.equal(renewed.json.renewed, true);
   assert.equal(renewed.json.cancelRequested, false);
+  const runnerAfterRenew = listRunners().find(item => item.id === created.credential.id);
+  assert.equal(runnerAfterRenew.version, '2.3.0');
+  assert.equal(runnerAfterRenew.platform, 'linux');
+  assert.equal(runnerAfterRenew.labels.hostname, 'runner-one');
 
-  const completed = await request(`/jobs/${queued.id}/complete`, created.token, {
-    result: { ok: true, token: 'must-not-persist', text: 'Bearer abcdefghijklmnopqrstuvwxyz' },
-    artifacts: [{ workspaceId: 'other', path: 'artifacts/report.json', bytes: 12, sha256: 'a'.repeat(64), modifiedAt: new Date().toISOString() }]
-  });
+  const completed = await request(
+    `/jobs/${queued.id}/complete`,
+    created.token,
+    {
+      result: {
+        ok: true,
+        token: 'must-not-persist',
+        text: 'Bearer abcdefghijklmnopqrstuvwxyz'
+      },
+      artifacts: [
+        {
+          workspaceId: 'other',
+          path: 'artifacts/report.json',
+          bytes: 12,
+          sha256: 'a'.repeat(64),
+          modifiedAt: new Date().toISOString()
+        },
+        { path: '.env', bytes: 1 },
+        { path: 'secrets/key.pem', bytes: 1 },
+        { path: 'C:/absolute/file.txt', bytes: 1 },
+        { path: 'artifacts/report.json', bytes: 12 }
+      ]
+    }
+  );
   assert.equal(completed.response.status, 200);
   const job = getJob(queued.id, { includeResult: true });
   assert.equal(job.status, 'succeeded');
   assert.equal(job.result.token, 'redacted');
   assert.match(job.result.text, /redacted/);
+  assert.equal(job.artifacts.length, 1);
   assert.equal(job.artifacts[0].workspaceId, 'app');
   assert.equal(job.artifacts[0].runnerId, created.credential.id);
   assert.equal(job.artifacts[0].remote, true);
+});
+
+test('sanitizes empty results safely', () => {
+  assert.equal(__test.sanitizeResult(undefined), null);
+  assert.equal(__test.artifactPathAllowed('artifacts/report.json'), true);
+  assert.equal(__test.artifactPathAllowed('secrets/private.key'), false);
 });
 
 test.after(async () => {
