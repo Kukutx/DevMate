@@ -52,7 +52,12 @@ function runnerSummary(config) {
   normalizeRunnerControlConfig(config);
   const credentials = config.runnerControl.credentials || [];
   const activeCredentials = credentials.filter(item =>
-    !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+    !item.disabled &&
+    !!item.salt &&
+    !!item.tokenHash &&
+    Array.isArray(item.workspaceIds) &&
+    item.workspaceIds.length > 0 &&
+    (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
   );
   const runners = listRunners();
   const external = runners.filter(item =>
