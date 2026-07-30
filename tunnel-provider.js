@@ -1,6 +1,5 @@
 'use strict';
 
-const http = require('http');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
@@ -68,23 +67,20 @@ function cloudflareLaunch(provider, port, settings, secrets) {
       readyPattern: null
     };
   }
-  if (provider === 'cloudflare-managed') {
-    const token = String(secrets.cloudflareTunnelToken || '').trim();
-    if (!token) throw new Error('Cloudflare managed tunnel token is not configured in VS Code Secret Storage');
-    const publicUrl = normalizePublicUrl(settings.publicUrl);
-    if (!publicUrl) throw new Error('Cloudflare managed tunnel requires devMate.publicUrl');
-    return {
-      command,
-      args: ['tunnel', 'run'],
-      options: {
-        windowsHide: true,
-        env: { ...process.env, TUNNEL_TOKEN: token }
-      },
-      publicUrl,
-      readyPattern: /registered tunnel connection|connection .* registered/i
-    };
+  if (provider !== 'cloudflare-managed') {
+    throw new Error(`Unsupported Cloudflare provider: ${provider}`);
   }
-  throw new Error(`Unsupported Cloudflare provider: ${provider}`);
+  const token = String(secrets.cloudflareTunnelToken || '').trim();
+  if (!token) throw new Error('Cloudflare managed tunnel token is not configured in VS Code Secret Storage');
+  const publicUrl = normalizePublicUrl(settings.publicUrl);
+  if (!publicUrl) throw new Error('Cloudflare managed tunnel requires devMate.publicUrl');
+  return {
+    command,
+    args: ['tunnel', 'run'],
+    options: { windowsHide: true, env: { ...process.env, TUNNEL_TOKEN: token } },
+    publicUrl,
+    readyPattern: /registered tunnel connection|connection .* registered/i
+  };
 }
 
 function virtualChild(label = 'external tunnel') {
@@ -115,7 +111,6 @@ class ManagedTunnelProcess extends EventEmitter {
     this.child = null;
     this.killed = false;
     this.restartCount = 0;
-    this.startedAt = Date.now();
     this.start();
   }
 
@@ -133,21 +128,20 @@ class ManagedTunnelProcess extends EventEmitter {
       queueMicrotask(() => this.emit('exit', 1, null));
       return;
     }
-    const options = { ...(launch.options || {}) };
-    this.child = this.originalSpawn(launch.command, launch.args, options);
+    this.child = this.originalSpawn(launch.command, launch.args, { ...(launch.options || {}) });
     this.manager.publicUrl = launch.publicUrl && !launch.readyPattern ? launch.publicUrl : '';
-    const onData = chunk => {
+    const inspect = chunk => {
       const text = String(chunk);
       const quickUrl = parseTryCloudflareUrl(text);
       if (quickUrl) this.manager.publicUrl = quickUrl;
       if (launch.publicUrl && launch.readyPattern?.test(text)) this.manager.publicUrl = launch.publicUrl;
     };
     this.child.stdout?.on('data', chunk => {
-      onData(chunk);
+      inspect(chunk);
       this.stdout.write(chunk);
     });
     this.child.stderr?.on('data', chunk => {
-      onData(chunk);
+      inspect(chunk);
       this.stderr.write(chunk);
     });
     this.child.on('error', error => {
@@ -163,9 +157,8 @@ class ManagedTunnelProcess extends EventEmitter {
       this.emit('exit', code, signal);
       return;
     }
-    const autoRestart = this.settings.autoRestart !== false;
     const maxRestarts = Math.min(50, Math.max(0, Number(this.settings.maxRestarts) || 10));
-    if (!autoRestart || this.restartCount >= maxRestarts) {
+    if (this.settings.autoRestart === false || this.restartCount >= maxRestarts) {
       this.emit('exit', code, signal);
       return;
     }
@@ -236,7 +229,6 @@ class TunnelCompatibilityManager {
     this.secretsGetter = secrets;
     this.apiPort = apiPort;
     this.log = log;
-    this.server = null;
     this.current = null;
     this.publicUrl = '';
     this.localPort = null;
@@ -253,42 +245,6 @@ class TunnelCompatibilityManager {
       autoRestart: raw.autoRestart,
       maxRestarts: raw.maxRestarts
     };
-  }
-
-  ensureApiServer() {
-    if (this.server) return;
-    this.server = http.createServer((req, res) => {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      if (req.method === 'GET' && url.pathname === '/api/tunnels') {
-        const tunnels = this.publicUrl ? [{
-          name: this.name,
-          public_url: this.publicUrl,
-          proto: 'https',
-          config: { addr: `http://127.0.0.1:${this.localPort}` }
-        }] : [];
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ tunnels }));
-        return;
-      }
-      if (req.method === 'DELETE' && url.pathname.startsWith('/api/tunnels/')) {
-        this.stop();
-        res.writeHead(204);
-        res.end();
-        return;
-      }
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'not found' }));
-    });
-    this.server.on('error', error => {
-      this.log(`Tunnel compatibility API failed on 127.0.0.1:${this.apiPort}: ${error.message || error}`);
-      this.current?.stderr?.write(
-        `DevMate could not open tunnel compatibility API port ${this.apiPort}: ${error.message || error}\n`
-      );
-      try {
-        this.current?.kill?.();
-      } catch {}
-    });
-    this.server.listen(this.apiPort, '127.0.0.1');
   }
 
   wrapSpawn(originalSpawn) {
@@ -311,19 +267,19 @@ class TunnelCompatibilityManager {
         this.current = virtualChild('External tunnel');
         return this.current;
       }
-      const proxy = new ManagedTunnelProcess(
+      this.current = new ManagedTunnelProcess(
         this,
         () => cloudflareLaunch(settings.provider, port, settings, this.secretsGetter() || {}),
         originalSpawn,
         settings
       );
-      this.current = proxy;
-      return proxy;
+      return this.current;
     };
   }
 
   wrapHttpRequest(originalRequest) {
     return (input, options, callback) => {
+      if (this.settings().provider === 'ngrok') return originalRequest(input, options, callback);
       let effectiveOptions = options;
       let effectiveCallback = callback;
       if (typeof options === 'function') {
@@ -337,7 +293,6 @@ class TunnelCompatibilityManager {
         String(target.port || '80') === String(this.apiPort) &&
         target.pathname.startsWith('/api/tunnels');
       if (!isCompatibilityRequest) return originalRequest(input, options, callback);
-
       if (method === 'GET' && target.pathname === '/api/tunnels') {
         const tunnels = this.publicUrl ? [{
           name: this.name,
@@ -388,19 +343,11 @@ class TunnelCompatibilityManager {
     };
   }
 
-  stop(closeServer = true) {
-    try {
-      this.current?.kill?.();
-    } catch {}
+  stop() {
+    try { this.current?.kill?.(); } catch {}
     this.current = null;
     this.publicUrl = '';
     this.localPort = null;
-    if (closeServer && this.server) {
-      try {
-        this.server.close();
-      } catch {}
-      this.server = null;
-    }
   }
 
   diagnostics() {
