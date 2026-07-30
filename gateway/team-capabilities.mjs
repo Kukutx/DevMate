@@ -140,11 +140,13 @@ function installAuthorizationWrapper(McpServerClass) {
         principal: principalNow()
       });
 
-      assertDrainAllows({
-        principal: authorized.principal,
-        capability: authorized.capability,
-        tool: name
-      });
+      if (name !== 'job_cancel') {
+        assertDrainAllows({
+          principal: authorized.principal,
+          capability: authorized.capability,
+          tool: name
+        });
+      }
 
       if (!name.startsWith('workspace_lease_')) {
         assertWorkspaceLease({
