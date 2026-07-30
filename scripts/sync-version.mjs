@@ -48,6 +48,14 @@ replaceRequired('gateway/server.mjs', [
   }
 ]);
 
+replaceRequired('scripts/devmate-command.mjs', [
+  {
+    pattern: /config\.appVersion = '[^']+';/,
+    replacement: `config.appVersion = '${version}';`,
+    label: 'bootstrap config version'
+  }
+]);
+
 replaceRequired('tests/smoke-gateway.mjs', [
   {
     pattern: /appVersion: '[^']+',/,
