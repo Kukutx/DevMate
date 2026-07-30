@@ -3,22 +3,25 @@ import http from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { installLocalCapabilities, shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { installPluginHost, shutdownPluginServices } from './plugins/plugin-host.mjs';
-import { installHttpObservability } from './http-observability.mjs';
 import { installGatewayRequestGuard, resetRequestGuardState } from './request-guard.mjs';
-import { installTeamCapabilities, shutdownTeamServices } from './team-capabilities.mjs';
+import { installHttpObservability } from './http-observability.mjs';
 import { acquireGatewayInstanceLock, releaseGatewayInstanceLock } from './durable-state.mjs';
+import { installTeamCapabilities, shutdownTeamServices } from './team-capabilities.mjs';
+import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
 
-const instanceLock = acquireGatewayInstanceLock();
+acquireGatewayInstanceLock();
 installHttpObservability(http);
 installGatewayRequestGuard(http);
 installTeamCapabilities(McpServer);
 installLocalCapabilities(McpServer);
 installPluginHost(McpServer);
+startJobRuntime();
 
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  try { await shutdownJobRuntime(); } catch {}
   try { await shutdownPluginServices(); } catch {}
   try { await shutdownTeamServices(); } catch {}
   try { await shutdownPersistentProcesses(); } catch {}
@@ -31,5 +34,4 @@ process.once('SIGINT', () => { void shutdown('SIGINT'); });
 process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 process.once('exit', () => { try { releaseGatewayInstanceLock(); } catch {} });
 
-console.log(`DevMate instance lock acquired for ${instanceLock.instanceId || 'unknown'} (pid=${process.pid}).`);
 await import('./server.mjs');
