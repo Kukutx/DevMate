@@ -8,10 +8,11 @@ import { startPreview, shutdownPreviews } from '../gateway/plugins/preview-manag
 import {
   clearPreviewShares,
   createPreviewShare,
-  handlePublishedPreview
+  handlePublishedPreview,
+  listPreviewShares
 } from '../gateway/published-previews.mjs';
 
-test('publishes a time-limited preview through a scoped cookie', async t => {
+test('publishes a time-limited preview through an exchanged browser session', async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-published-preview-'));
   t.after(async () => {
     clearPreviewShares();
@@ -38,12 +39,20 @@ test('publishes a time-limited preview through a scoped cookie', async t => {
     previewId: preview.id,
     principal: { id: 'owner', name: 'Owner' },
     publicUrl: origin,
-    ttlSeconds: 300
+    ttlSeconds: 300,
+    maxUses: 1
   });
   const first = await fetch(shared.url, { redirect: 'manual' });
   assert.equal(first.status, 302);
+  assert.equal(first.headers.get('referrer-policy'), 'no-referrer');
   const cookie = first.headers.get('set-cookie');
-  assert.match(cookie, /devmate_preview_share=/);
+  assert.match(cookie, /devmate_preview_session=/);
+  assert.equal(cookie.includes(shared.token), false);
+  assert.equal(listPreviewShares({ previewId: preview.id })[0].uses, 1);
+
+  const exhausted = await fetch(shared.url, { redirect: 'manual' });
+  assert.equal(exhausted.status, 401);
+
   const page = await fetch(new URL(first.headers.get('location'), origin), { headers: { cookie } });
   assert.equal(page.status, 200);
   assert.match(await page.text(), /canvas/);
