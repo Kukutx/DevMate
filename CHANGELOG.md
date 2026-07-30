@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.0
+
+- Added a persistent job queue for reviewed build, validation, Browser QA, Godot acceptance, reporting, and non-pushing Git-save workflows.
+- Added an embedded capability-aware runner with bounded concurrency, heartbeats, runner leases, crash recovery, retry backoff, approval/lease deferral, and durable event history.
+- Added credential-shaped argument rejection and a fixed target allowlist so arbitrary shell commands, direct push, secrets, and administrative operations cannot enter the queue.
+- Added workspace-contained artifact indexing with bounded directory traversal, sensitive-path blocking, file metadata, and SHA-256 digests.
+- Added cooperative cancellation, manual retry, runner/runtime diagnostics, and configurable job concurrency and Git-save policy.
+- Added deployment drain mode so upgrades can reject new team mutations, stop claiming queued jobs, and allow in-flight work to settle.
+- Added queue, runner, artifact, drain, permission-classification, and end-to-end embedded execution regression coverage.
+
 ## 2.1.0
 
 - Persisted workspace leases, complex team work sessions, and approval requests with atomic runtime-state replacement and restrictive permissions.
