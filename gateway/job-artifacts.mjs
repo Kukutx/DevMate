@@ -64,7 +64,7 @@ async function fileRecord(workspace, workspaceReal, file) {
   let real;
   try { real = fs.realpathSync.native(file); } catch { return null; }
   if (!isInside(workspaceReal, real)) return null;
-  const relative = normalizeSlash(path.relative(workspace.root, real));
+  const relative = normalizeSlash(path.relative(workspaceReal, real));
   if (!relative || blocked(relative)) return null;
   const stat = await fsp.stat(real);
   if (!stat.isFile()) return null;
@@ -86,7 +86,7 @@ async function artifactRecords(workspace, candidate, maxRecords = 100) {
   let real;
   try { real = fs.realpathSync.native(full); } catch { return []; }
   if (!isInside(workspaceReal, real)) return [];
-  const relative = normalizeSlash(path.relative(workspace.root, real));
+  const relative = normalizeSlash(path.relative(workspaceReal, real));
   if (relative && blocked(relative)) return [];
   const stat = await fsp.stat(real);
   if (stat.isFile()) {
@@ -104,7 +104,7 @@ async function artifactRecords(workspace, candidate, maxRecords = 100) {
     for (const entry of entries) {
       if (records.length >= maxRecords) break;
       const child = path.join(directory, entry.name);
-      const childRelative = normalizeSlash(path.relative(workspace.root, child));
+      const childRelative = normalizeSlash(path.relative(workspaceReal, child));
       if (blocked(childRelative)) continue;
       if (entry.isDirectory()) {
         await walk(child, depth + 1);
