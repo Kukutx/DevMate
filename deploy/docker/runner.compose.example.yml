@@ -1,0 +1,38 @@
+services:
+  devmate-runner:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    command:
+      - node
+      - scripts/devmate-runner.mjs
+      - --config
+      - /var/lib/devmate-runner/config.json
+      - --control-url
+      - https://devmate.example.com
+      - --capabilities
+      - linux-x64
+      - --concurrency
+      - "2"
+    environment:
+      DEVMATE_RUNNER_TOKEN_FILE: /run/secrets/devmate_runner_token
+    secrets:
+      - devmate_runner_token
+    volumes:
+      - ./runner-state:/var/lib/devmate-runner
+      - /srv/devmate-workspaces:/srv/devmate-workspaces
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+secrets:
+  devmate_runner_token:
+    file: ./secrets/devmate-runner-token
+
+# The minimal DevMate image does not include Godot, browsers, mobile SDKs, or
+# compilers. Build a derived Runner image with only the required toolchain.
