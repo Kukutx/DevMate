@@ -53,10 +53,10 @@ function resultSummary(result) {
       ? result.content.filter(item => item?.type === 'text').slice(0, 20).map(item => ({ type: 'text', text: redactSensitiveString(item.text || '').slice(0, 20000) }))
       : []
   };
-  let payload = JSON.stringify(summary);
+  const payload = JSON.stringify(summary);
   if (Buffer.byteLength(payload, 'utf8') <= 256 * 1024) return summary;
   summary.content = [];
-  summary.structuredContent = { truncated: true, preview: payload.slice(0, 120000) };
+  summary.structuredContent = { truncated: true, preview: redactSensitiveString(payload.slice(0, 120000)) };
   return summary;
 }
 
@@ -64,6 +64,31 @@ function capabilityForTarget(name) {
   if (name.startsWith('godot_')) return ['core', 'godot'];
   if (name.startsWith('browser_') || name.startsWith('web_preview_')) return ['core', 'browser-qa'];
   return ['core'];
+}
+
+function resultError(result) {
+  if (result?.isError !== true) return null;
+  const text = Array.isArray(result.content)
+    ? result.content.filter(item => item?.type === 'text').map(item => item.text).join('\n')
+    : '';
+  const error = new Error(redactSensitiveString(text || 'MCP tool returned an error result').slice(0, 8000));
+  error.code = 'tool_error_result';
+  return error;
+}
+
+async function withTimeout(promise, timeoutMs) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Job timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref?.();
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function jobTargetEligible(name, config = {}) {
@@ -154,10 +179,12 @@ async function executeClaimedJob(job) {
       deploymentMode: readConfig()?.deployment?.mode || 'personal',
       jobId: job.id
     };
-    const result = await Promise.race([
+    const result = await withTimeout(
       runWithRequestContext(context, () => target.handler(job.arguments || {})),
-      new Promise((_, reject) => setTimeout(() => reject(new Error(`Job timed out after ${job.timeoutMs}ms`)), job.timeoutMs))
-    ]);
+      job.timeoutMs
+    );
+    const returnedError = resultError(result);
+    if (returnedError) throw returnedError;
     const artifacts = await indexJobArtifacts(job, result);
     completeJob({ id: job.id, runnerId: localRunnerId(), result: resultSummary(result), artifacts });
     incrementCounter('devmate_jobs_total', { status: 'succeeded', tool: job.tool }, 1);
@@ -232,4 +259,4 @@ export function jobRuntimeStatus() {
   };
 }
 
-export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, resultSummary, safeValue, targets };
+export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, resultError, resultSummary, safeValue, targets, withTimeout };
