@@ -2,6 +2,7 @@
 import http from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { installLocalCapabilities, shutdownPersistentProcesses } from './local-capabilities.mjs';
+import { readConfig } from './local-shared.mjs';
 import { installPluginHost, shutdownPluginServices } from './plugins/plugin-host.mjs';
 import { installGatewayRequestGuard, resetRequestGuardState } from './request-guard.mjs';
 import { installHttpObservability } from './http-observability.mjs';
@@ -19,7 +20,7 @@ installTeamCapabilities(McpServer);
 installRunnerCapabilities(McpServer);
 installLocalCapabilities(McpServer);
 installPluginHost(McpServer);
-startJobRuntime();
+if (readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
 
 let shuttingDown = false;
 async function shutdown(signal) {
