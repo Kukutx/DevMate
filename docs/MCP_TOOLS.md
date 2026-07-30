@@ -9,6 +9,8 @@ Always available:
 - `deployment_status`
 - `deployment_readiness`
 - `deployment_policy_template`
+- `deployment_metrics`
+- `deployment_runtime_state`
 - `team_status`
 - `team_configure`
 - `team_member_list`
@@ -28,6 +30,21 @@ Always available:
 - `published_preview_revoke`
 
 Member-management and deployment configuration require the owner role. Publishing, cross-team activity, and administrative operations require maintainer or owner capability. Workspace-scoped results are filtered for restricted principals.
+
+## Approval workflow
+
+Production mode requires dual-control approval for `publish` and `admin` capabilities by default:
+
+- `team_approval_policy_status`
+- `team_approval_configure`
+- `team_approval_list`
+- `team_approval_status`
+- `team_approval_decide`
+- `team_approval_cancel`
+
+A protected tool call creates a pending approval and fails without executing. A different maintainer or owner approves it, then the original requester retries the identical call. DevMate verifies the requester, tool, workspace, and canonical argument digest and consumes the approval once.
+
+`team_approval_configure` can change required capabilities, explicitly protected tools, approval TTL, separation of duties, and owner bypass. Disabling separation of duties is not recommended for production.
 
 ## Workspace context
 
@@ -87,11 +104,15 @@ Reviewers can run bounded validation tools. General project scripts, configured 
 - `git_add`, `git_stage`, `git_commit`, `git_save`
 - `git_push`, `git_pull`, `git_branch`, `git_checkout`, `git_stash`, `git_raw`
 
-Publishing requires maintainer capability. High-risk recovery/force operations are blocked for team tokens and reserved for the local owner credential.
+Publishing requires maintainer capability and, in production, normally requires a second-person approval. High-risk recovery/force operations are blocked for team tokens and reserved for the local owner credential.
 
-## Reporting
+## Reporting and metrics
 
 - `show_changes`
 - `task_report`
+- `deployment_metrics`
+- `deployment_runtime_state`
 
-See `TEAM_DEPLOYMENT.md` for role and lease behavior, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
+Prometheus-compatible metrics are also available from loopback only at `/control/metrics`.
+
+See `TEAM_DEPLOYMENT.md` for role and lease behavior, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
