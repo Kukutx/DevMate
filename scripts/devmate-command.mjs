@@ -92,6 +92,20 @@ function activeWorkspaceIds(config) {
 
 function bootstrap(options) {
   const preset = presetOptions(options);
+  const memberName = String(options['member-name'] || '').trim();
+  if (memberName && !['team', 'control-plane'].includes(preset.preset)) {
+    throw new Error('--member-name requires the team or control-plane preset');
+  }
+  if (options['member-role'] && !memberName) {
+    throw new Error('--member-role requires --member-name');
+  }
+  if (options['runner-concurrency'] !== undefined) {
+    const concurrency = Number(options['runner-concurrency']);
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+      throw new Error('--runner-concurrency must be an integer from 1 to 16');
+    }
+  }
+
   const init = legacy.initConfig({
     ...options,
     mode: preset.mode,
@@ -111,9 +125,7 @@ function bootstrap(options) {
   }
 
   let member = null;
-  const memberName = String(options['member-name'] || '').trim();
   if (memberName) {
-    if (!config.team.enabled) throw new Error('--member-name requires the team or control-plane preset');
     member = createTeamMember(config, {
       name: memberName,
       role: String(options['member-role'] || 'developer'),
