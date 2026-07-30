@@ -1,0 +1,25 @@
+[Unit]
+Description=DevMate MCP Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devmate
+Group=devmate
+WorkingDirectory=/opt/devmate
+ExecStart=/usr/bin/node /opt/devmate/scripts/devmate-cli.mjs serve --config /var/lib/devmate/config.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/devmate /srv/devmate-workspaces
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
