@@ -111,7 +111,6 @@ class ManagedTunnelProcess extends EventEmitter {
     this.child = null;
     this.killed = false;
     this.restartCount = 0;
-    this.start();
   }
 
   get pid() {
@@ -119,7 +118,7 @@ class ManagedTunnelProcess extends EventEmitter {
   }
 
   start() {
-    if (this.killed) return;
+    if (this.killed || this.manager.current !== this) return;
     let launch;
     try {
       launch = this.launchFactory();
@@ -131,6 +130,7 @@ class ManagedTunnelProcess extends EventEmitter {
     this.child = this.originalSpawn(launch.command, launch.args, { ...(launch.options || {}) });
     this.manager.publicUrl = launch.publicUrl && !launch.readyPattern ? launch.publicUrl : '';
     const inspect = chunk => {
+      if (this.manager.current !== this) return;
       const text = String(chunk);
       const quickUrl = parseTryCloudflareUrl(text);
       if (quickUrl) this.manager.publicUrl = quickUrl;
@@ -152,8 +152,8 @@ class ManagedTunnelProcess extends EventEmitter {
 
   onChildExit(code, signal) {
     this.child = null;
-    this.manager.publicUrl = '';
-    if (this.killed) {
+    if (this.manager.current === this) this.manager.publicUrl = '';
+    if (this.killed || this.manager.current !== this) {
       this.emit('exit', code, signal);
       return;
     }
@@ -173,7 +173,7 @@ class ManagedTunnelProcess extends EventEmitter {
   kill(signal = 'SIGTERM') {
     if (this.killed) return true;
     this.killed = true;
-    this.manager.publicUrl = '';
+    if (this.manager.current === this) this.manager.publicUrl = '';
     try {
       return this.child?.kill(signal) ?? true;
     } catch {
@@ -259,7 +259,8 @@ class TunnelCompatibilityManager {
       const port = parsePort(args);
       if (!port) throw new Error('DevMate could not determine the local gateway port for the selected tunnel provider');
       this.localPort = port;
-      this.stop(false);
+      this.stop();
+      this.localPort = port;
       if (settings.provider === 'external') {
         const publicUrl = normalizePublicUrl(settings.publicUrl);
         if (!publicUrl) throw new Error('External tunnel provider requires devMate.publicUrl');
@@ -267,13 +268,15 @@ class TunnelCompatibilityManager {
         this.current = virtualChild('External tunnel');
         return this.current;
       }
-      this.current = new ManagedTunnelProcess(
+      const proxy = new ManagedTunnelProcess(
         this,
         () => cloudflareLaunch(settings.provider, port, settings, this.secretsGetter() || {}),
         originalSpawn,
         settings
       );
-      return this.current;
+      this.current = proxy;
+      proxy.start();
+      return proxy;
     };
   }
 
@@ -308,7 +311,7 @@ class TunnelCompatibilityManager {
         });
       }
       if (method === 'DELETE' && target.pathname.startsWith('/api/tunnels/')) {
-        this.stop(false);
+        this.stop();
         return virtualHttpRequest({ statusCode: 204, onResponse: effectiveCallback });
       }
       return virtualHttpRequest({
@@ -344,10 +347,11 @@ class TunnelCompatibilityManager {
   }
 
   stop() {
-    try { this.current?.kill?.(); } catch {}
+    const current = this.current;
     this.current = null;
     this.publicUrl = '';
     this.localPort = null;
+    try { current?.kill?.(); } catch {}
   }
 
   diagnostics() {
