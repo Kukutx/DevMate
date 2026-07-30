@@ -2,6 +2,8 @@ import { readConfig } from './local-shared.mjs';
 import { requestContext, requestPrincipal } from './request-context.mjs';
 import { activitySnapshot } from './request-guard.mjs';
 import { fallbackLocalPrincipal, normalizeDeploymentConfig } from './team-access.mjs';
+import { approvalPolicy } from './approvals.mjs';
+import { durableStateStatus } from './durable-state.mjs';
 import { listWorkspaceLeases } from './workspace-leases.mjs';
 
 export function principalNow() {
@@ -52,6 +54,7 @@ export function publicDeployment(config = readConfig()) {
     publicUrl: config.deployment.publicUrl || null,
     teamEnabled: config.team.enabled,
     requireWorkspaceLeaseForWrites: config.team.requireWorkspaceLeaseForWrites,
+    approvalPolicy: approvalPolicy(config),
     memberCount: config.team.members.length,
     production: {
       maxRequestBytes: config.production.maxRequestBytes,
@@ -78,6 +81,8 @@ export function readiness(config = readConfig()) {
   const activeMembers = config.team.members.filter(member =>
     !member.disabled && (!member.expiresAt || Date.parse(member.expiresAt) > Date.now())
   );
+  const approvals = approvalPolicy(config);
+  const durable = durableStateStatus();
 
   add('owner-token', !!config.auth?.token || config.auth?.required === false,
     config.auth?.token ? 'configured' : 'missing');
@@ -95,6 +100,10 @@ export function readiness(config = readConfig()) {
     config.auth?.required === false ? 'disabled' : 'required');
   add('lease-policy', !config.team.enabled || config.team.requireWorkspaceLeaseForWrites,
     config.team.requireWorkspaceLeaseForWrites ? 'enabled' : 'disabled');
+  add('approval-policy', config.deployment.mode !== 'production' || approvals.enabled,
+    approvals.enabled ? `enabled for ${approvals.requiredCapabilities.join(', ') || approvals.requiredTools.length + ' tool(s)'}` : 'disabled');
+  add('durable-state', config.deployment.mode === 'personal' || durable.enabled,
+    durable.path || 'in-memory only');
   add('audit-retention', Number(config.maintenance?.auditRetentionDays || 0) >= 30,
     `${config.maintenance?.auditRetentionDays || 0} day(s)`);
 
@@ -153,6 +162,8 @@ export function teamStatus(config = readConfig()) {
     activeMembers: activeMembers.length,
     totalMembers: config.team.members.length,
     requireWorkspaceLeaseForWrites: config.team.requireWorkspaceLeaseForWrites,
+    approvalPolicy: approvalPolicy(config),
+    durableState: durableStateStatus(),
     activeLeases: leases,
     recentSessions: activitySnapshot({ activeWithinMinutes: 60 }).length,
     readiness: readiness(config)
