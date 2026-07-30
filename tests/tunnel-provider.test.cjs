@@ -59,3 +59,14 @@ test('provides a virtual ngrok compatibility API for alternate tunnel providers'
   assert.equal(result.status, 200);
   assert.match(result.text, /devmate\.example\.com/);
 });
+
+test('passes native ngrok API requests through unchanged', () => {
+  const { TunnelCompatibilityManager } = require('../tunnel-provider');
+  const sentinel = { native: true };
+  const manager = new TunnelCompatibilityManager({ settings: () => ({ provider: 'ngrok' }) });
+  const wrapped = manager.wrapHttpRequest(() => sentinel);
+  assert.equal(
+    wrapped(new URL('http://127.0.0.1:4040/api/tunnels'), { method: 'GET' }),
+    sentinel
+  );
+});
