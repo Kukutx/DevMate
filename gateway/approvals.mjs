@@ -69,9 +69,12 @@ function summarize(value, depth = 0) {
 
 export function approvalPolicy(config) {
   const raw = config?.team?.approvals || {};
+  const production = config?.deployment?.mode === 'production';
   return {
-    enabled: raw.enabled === true,
-    requiredCapabilities: Array.isArray(raw.requiredCapabilities) ? [...new Set(raw.requiredCapabilities)] : [],
+    enabled: raw.enabled ?? production,
+    requiredCapabilities: Array.isArray(raw.requiredCapabilities)
+      ? [...new Set(raw.requiredCapabilities)]
+      : (production ? ['publish', 'admin'] : []),
     requiredTools: Array.isArray(raw.requiredTools) ? [...new Set(raw.requiredTools)] : [],
     ttlSeconds: Math.min(86400, Math.max(300, Math.trunc(Number(raw.ttlSeconds) || 3600))),
     separationOfDuties: raw.separationOfDuties !== false,
@@ -81,6 +84,7 @@ export function approvalPolicy(config) {
 
 export function toolNeedsApproval({ config, principal, tool, capability }) {
   const policy = approvalPolicy(config);
+  if (String(tool || '').startsWith('team_approval_')) return false;
   if (!config?.team?.enabled || !policy.enabled) return false;
   if (!principal || principal.source !== 'team-token') return false;
   if (principal.role === 'owner' && policy.ownerBypass) return false;
