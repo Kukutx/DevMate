@@ -20,7 +20,7 @@ installTeamCapabilities(McpServer);
 installRunnerCapabilities(McpServer);
 installLocalCapabilities(McpServer);
 installPluginHost(McpServer);
-if (readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
+if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
 
 let shuttingDown = false;
 async function shutdown(signal) {
