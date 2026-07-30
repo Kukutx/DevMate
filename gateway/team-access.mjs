@@ -15,10 +15,12 @@ const ADMIN_TOOLS = new Set([
   'read_audit_log', 'list_backups', 'task_status', 'task_report', 'start_task', 'finish_task', 'rollback_task', 'local_capabilities_status', 'list_trusted_roots',
   'plugin_enable', 'plugin_disable', 'plugin_configure', 'configure_local_capabilities', 'published_preview_list',
   'add_trusted_root', 'remove_trusted_root',
-  'job_runtime_configure', 'deployment_drain_start', 'deployment_drain_cancel'
+  'job_runtime_configure', 'deployment_drain_start', 'deployment_drain_cancel',
+  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
 ]);
 const OWNER_ONLY_TOOLS = new Set([
-  'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke'
+  'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
+  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
 ]);
 const PUBLISH_TOOLS = new Set(['git_push', 'git_pull', 'deployment_publish', 'deployment_rotate_credentials', 'published_preview_share', 'published_preview_revoke']);
 const VALIDATE_TOOLS = new Set([
@@ -42,7 +44,8 @@ const NON_WORKSPACE_TOOLS = new Set([
   'team_activity_status', 'team_configure', 'deployment_status', 'deployment_readiness', 'deployment_policy_template',
   'workspace_lease_status', 'published_preview_share', 'published_preview_list', 'published_preview_revoke',
   'job_target_catalog', 'job_runtime_configure', 'job_submit', 'job_list', 'job_status', 'job_artifacts', 'job_cancel', 'job_retry', 'runner_status',
-  'deployment_drain_status', 'deployment_drain_start', 'deployment_drain_cancel'
+  'deployment_drain_status', 'deployment_drain_start', 'deployment_drain_cancel',
+  'runner_control_status', 'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
 ]);
 
 function base64url(bytes) {
@@ -87,6 +90,7 @@ export function normalizeDeploymentConfig(config) {
   config.runtime.maxConcurrentJobs = clampInt(config.runtime.maxConcurrentJobs, 2, 1, 8);
   config.jobs ||= {};
   config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
+  config.jobs.embeddedRunnerEnabled = config.jobs.embeddedRunnerEnabled !== false;
 
   config.production ||= {};
   config.production.maxRequestBytes = clampInt(config.production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024);
@@ -276,7 +280,7 @@ export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
 }
 
 export function toolWorkspaceId(name, args, config) {
-  if (NON_WORKSPACE_TOOLS.has(name) || name.startsWith('team_') || name.startsWith('deployment_')) return null;
+  if (NON_WORKSPACE_TOOLS.has(name) || name.startsWith('team_') || name.startsWith('deployment_') || name.startsWith('runner_')) return null;
   const explicit = String(args?.workspaceId || '').trim();
   if (explicit) return config.workspaces?.find(item => item.id === explicit || item.name === explicit)?.id || explicit;
   return config.activeWorkspaceId || null;
