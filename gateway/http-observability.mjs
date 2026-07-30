@@ -18,6 +18,7 @@ function routeLabel(path) {
   if (path === '/health') return 'health';
   if (path === '/control/health') return 'control_health';
   if (path === '/control/metrics') return 'control_metrics';
+  if (path.startsWith('/runner/v1/')) return 'runner_control';
   if (path.startsWith('/devmate/previews/')) return 'published_preview';
   return 'other';
 }
