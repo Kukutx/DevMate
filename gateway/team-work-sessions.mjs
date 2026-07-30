@@ -1,0 +1,78 @@
+import crypto from 'node:crypto';
+import { acquireWorkspaceLease, releaseWorkspaceLease, workspaceLease } from './workspace-leases.mjs';
+
+const sessions = new Map();
+
+function key(principalId, workspaceId) { return `${principalId}:${workspaceId}`; }
+function nowIso() { return new Date().toISOString(); }
+
+function prune() {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (Date.parse(session.expiresAt) <= now) sessions.delete(id);
+  }
+}
+
+export function startWorkSession({ principal, workspaceId, title = '', purpose = '', ttlSeconds = 3600, force = false }) {
+  prune();
+  if (!principal?.id) throw new Error('Authenticated principal is required');
+  const ttl = Math.min(86400, Math.max(300, Math.trunc(Number(ttlSeconds) || 3600)));
+  const lease = acquireWorkspaceLease({ workspaceId, principal, ttlSeconds: ttl, purpose: purpose || title, force });
+  const existing = [...sessions.values()].find(item => item.principalId === principal.id && item.workspaceId === workspaceId);
+  if (existing) sessions.delete(existing.id);
+  const session = {
+    id: `work-${crypto.randomBytes(8).toString('hex')}`,
+    principalId: principal.id,
+    principalName: principal.name || principal.id,
+    principalRole: principal.role,
+    workspaceId,
+    title: String(title || '').trim().slice(0, 500),
+    purpose: String(purpose || '').trim().slice(0, 1000),
+    startedAt: nowIso(),
+    lastActivityAt: nowIso(),
+    expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
+    leaseId: lease.id,
+    toolCalls: 0,
+    failures: 0
+  };
+  sessions.set(session.id, session);
+  return { ...session, lease };
+}
+
+export function activeWorkSession(principalId, workspaceId) {
+  prune();
+  return [...sessions.values()].find(item => item.principalId === principalId && (!workspaceId || item.workspaceId === workspaceId)) || null;
+}
+
+export function touchWorkSession(principalId, workspaceId, { failed = false } = {}) {
+  const session = activeWorkSession(principalId, workspaceId);
+  if (!session) return null;
+  session.lastActivityAt = nowIso();
+  session.toolCalls += 1;
+  if (failed) session.failures += 1;
+  return { ...session };
+}
+
+export function listWorkSessions({ principalId, workspaceId } = {}) {
+  prune();
+  return [...sessions.values()]
+    .filter(item => (!principalId || item.principalId === principalId) && (!workspaceId || item.workspaceId === workspaceId))
+    .map(item => ({ ...item, lease: workspaceLease(item.workspaceId) }))
+    .sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)));
+}
+
+export function finishWorkSession({ id, principal, force = false, releaseLease = true }) {
+  prune();
+  const session = sessions.get(id);
+  if (!session) return { finished: false, id, reason: 'not found or expired' };
+  const canForce = principal?.role === 'owner' || principal?.role === 'maintainer';
+  if (session.principalId !== principal?.id && !(force && canForce)) throw new Error(`Work session ${id} belongs to ${session.principalName || session.principalId}`);
+  sessions.delete(id);
+  let lease = null;
+  if (releaseLease) lease = releaseWorkspaceLease({ workspaceId: session.workspaceId, principal, force: force && canForce });
+  return { finished: true, session: { ...session, finishedAt: nowIso() }, lease };
+}
+
+export function clearWorkSessions() { sessions.clear(); }
+
+export const __test = { key, prune, sessions };
