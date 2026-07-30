@@ -1,6 +1,16 @@
 import { assertFullAccess, readConfig, writeConfig } from '../local-shared.mjs';
 import { builtinPlugins } from './builtins.mjs';
 
+function dependencyClosure(plugin, map, seen = new Set()) {
+  for (const id of plugin.manifest.dependencies) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const dependency = map.get(id);
+    if (dependency) dependencyClosure(dependency, map, seen);
+  }
+  return seen;
+}
+
 export function pluginMap(plugins = builtinPlugins) {
   const map = new Map();
   for (const plugin of plugins) {
@@ -11,6 +21,23 @@ export function pluginMap(plugins = builtinPlugins) {
   for (const plugin of plugins) {
     for (const dependency of plugin.manifest.dependencies) {
       if (!map.has(dependency)) throw new Error(`Plugin ${plugin.manifest.id} depends on missing plugin ${dependency}`);
+    }
+  }
+  const providers = new Map();
+  for (const plugin of plugins) {
+    for (const service of plugin.manifest.provides) {
+      if (providers.has(service)) throw new Error(`Duplicate DevMate service provider for ${service}: ${providers.get(service)} and ${plugin.manifest.id}`);
+      providers.set(service, plugin.manifest.id);
+    }
+  }
+  for (const plugin of plugins) {
+    const dependencies = dependencyClosure(plugin, map);
+    for (const service of plugin.manifest.consumes) {
+      const provider = providers.get(service);
+      if (!provider) throw new Error(`Plugin ${plugin.manifest.id} consumes missing service ${service}`);
+      if (provider !== plugin.manifest.id && !dependencies.has(provider)) {
+        throw new Error(`Plugin ${plugin.manifest.id} consumes ${service} from ${provider} without declaring it as a dependency`);
+      }
     }
   }
   return map;
@@ -99,6 +126,7 @@ export function catalog(config, plugins, states = new Map()) {
       explicitlyEnabled: configured.enabled.includes(plugin.manifest.id),
       active: state.active === true,
       activationError: state.error || null,
+      servicesActive: state.services || [],
       settings,
       settingsError
     };
@@ -165,3 +193,5 @@ export function configurePlugin(id, patch, replace, plugins = builtinPlugins) {
   writeConfig(config);
   return { configured: id, settings: publicSettings(plugin, config), appliesOnNextRequest: true };
 }
+
+export const __test = { dependencyClosure };

@@ -2,19 +2,12 @@ import { z } from 'zod';
 import { definePlugin } from './plugin-sdk.mjs';
 import { browserQaStatus, runBrowserScenario } from './browser-runner.mjs';
 import { getPreview, listPreviews, startPreview, stopPreview, stopWorkspacePreviews } from './preview-manager.mjs';
+import { loadAutomationManifest, pluginAutomationConfig, scenarioById } from './automation-manifest.mjs';
 
-const actionSchema = z.object({
-  type: z.enum(['wait', 'press', 'key_down', 'key_up', 'click', 'move', 'type', 'focus', 'expect_visible', 'expect_text', 'screenshot']),
-  ms: z.number().int().min(0).max(30000).optional(),
-  key: z.string().max(100).optional(),
-  selector: z.string().max(2000).optional(),
-  text: z.string().max(20000).optional(),
-  x: z.number().min(-10000).max(10000).optional(),
-  y: z.number().min(-10000).max(10000).optional(),
-  button: z.enum(['left', 'right', 'middle']).optional(),
-  path: z.string().max(1000).optional(),
-  fullPage: z.boolean().optional(),
-  timeoutMs: z.number().int().min(100).max(30000).optional()
+import { browserActionSchema, browserScenarioSchema, browserViewportSchema } from './browser-schemas.mjs';
+
+const automationConfigSchema = z.object({
+  scenarios: z.array(browserScenarioSchema).max(100).default([])
 }).strict();
 
 const settingsSchema = z.object({
@@ -23,16 +16,47 @@ const settingsSchema = z.object({
   allowRemoteUrls: z.boolean().optional()
 }).strict();
 
+async function savedScenario(context, { workspaceId, manifestPath, scenarioId }) {
+  const loaded = await loadAutomationManifest(context, { workspaceId, manifestPath });
+  const config = automationConfigSchema.parse(pluginAutomationConfig(loaded.manifest, 'devmate.browser-qa'));
+  const scenario = browserScenarioSchema.parse(scenarioById(config.scenarios, scenarioId));
+  const workspace = context.workspace.get(workspaceId, { writable: true });
+  let preview = null;
+  if (scenario.preview) {
+    const root = context.workspace.resolve(workspace, scenario.preview.rootSubpath, { mustExist: true, directory: true });
+    preview = await startPreview({
+      workspaceId: workspace.id,
+      root,
+      entryPath: scenario.preview.entryPath,
+      port: scenario.preview.port || 0,
+      crossOriginIsolation: !!scenario.preview.crossOriginIsolation,
+      spaFallback: !!scenario.preview.spaFallback
+    });
+  }
+  const result = await runBrowserScenario({
+    workspaceRoot: workspace.root,
+    url: scenario.url || preview.url,
+    settings: context.settings,
+    actions: scenario.actions || [],
+    screenshotPath: scenario.screenshotPath || `artifacts/browser-qa/${scenario.id}.png`,
+    reportPath: scenario.reportPath || `artifacts/browser-qa/${scenario.id}.json`,
+    timeoutMs: scenario.timeoutMs || 60000,
+    viewport: scenario.viewport || {}
+  });
+  return { workspace: { id: workspace.id, name: workspace.name }, manifestPath: loaded.manifestPath, scenario, preview, result };
+}
+
 export const browserQaPlugin = definePlugin({
   manifest: {
     id: 'devmate.browser-qa',
     name: 'Browser QA',
-    version: '0.1.0',
+    version: '0.2.0',
     apiVersion: '1',
     description: 'Local static previews and Playwright-based browser acceptance testing for web applications and game exports.',
     defaultEnabled: false,
     toolPrefixes: ['browser_', 'web_preview_'],
-    capabilities: ['tools', 'local-http', 'browser-automation', 'screenshots'],
+    capabilities: ['tools', 'local-http', 'browser-automation', 'screenshots', 'automation-manifest', 'structured-state'],
+    provides: ['devmate.browser-qa'],
     permissions: { executablePatterns: [] }
   },
   settingsSchema,
@@ -47,6 +71,17 @@ export const browserQaPlugin = definePlugin({
   },
   activate(context) {
     const { server } = context;
+    const service = Object.freeze({
+      status: workspaceRoot => browserQaStatus(workspaceRoot, context.settings),
+      runScenario: args => runBrowserScenario({ ...args, settings: { ...context.settings, ...(args.settings || {}) } }),
+      startPreview,
+      getPreview,
+      listPreviews,
+      stopPreview,
+      stopWorkspacePreviews
+    });
+    context.services.provide('devmate.browser-qa', service);
+
     server.registerTool('web_preview_start', {
       title: 'Start local web preview',
       description: 'Use this when a built web app or Godot Web export should be served from a safe local HTTP URL for user preview or browser QA.',
@@ -97,26 +132,51 @@ export const browserQaPlugin = definePlugin({
       return context.toolText({ workspace: { id: workspace.id, name: workspace.name }, status: browserQaStatus(workspace.root, context.settings) });
     });
 
+    server.registerTool('browser_qa_manifest', {
+      title: 'Browser QA saved scenarios',
+      description: 'Read and validate version-controlled Browser QA scenarios from .devmate/automation.json.',
+      inputSchema: { workspaceId: z.string().optional(), manifestPath: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, async ({ workspaceId, manifestPath }) => {
+      const loaded = await loadAutomationManifest(context, { workspaceId, manifestPath, required: false });
+      if (!loaded.exists) return context.toolText({ ...loaded, scenarios: [] });
+      const config = automationConfigSchema.parse(pluginAutomationConfig(loaded.manifest, 'devmate.browser-qa'));
+      return context.toolText({ ...loaded, manifest: undefined, scenarios: config.scenarios });
+    });
+
+    server.registerTool('browser_qa_run_saved', {
+      title: 'Run saved browser scenario',
+      description: 'Run one version-controlled Browser QA scenario from .devmate/automation.json.',
+      inputSchema: { workspaceId: z.string().optional(), manifestPath: z.string().optional(), scenarioId: z.string().min(1) },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+    }, async args => {
+      context.assertCanMutate('Running saved browser acceptance tests');
+      const report = await savedScenario(context, args);
+      await context.audit('browser_qa_run_saved', { workspace: report.workspace.id, scenarioId: report.scenario.id, ok: report.result.ok, screenshotPath: report.result.screenshotPath, reportPath: report.result.reportPath });
+      return context.toolText(report);
+    });
+
     server.registerTool('browser_qa_run', {
       title: 'Run browser acceptance scenario',
-      description: 'Use this to open a local preview, perform bounded keyboard/mouse/DOM actions, capture screenshots, and report console, page, and network failures.',
+      description: 'Use this to open a local preview, perform bounded keyboard/mouse/DOM/state actions, capture screenshots, and report console, page, network, and assertion failures.',
       inputSchema: {
         workspaceId: z.string().optional(),
         url: z.string().url(),
-        actions: z.array(actionSchema).max(100).optional(),
+        actions: z.array(browserActionSchema).max(100).optional(),
         screenshotPath: z.string().max(1000).optional(),
+        reportPath: z.string().max(1000).optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional(),
-        viewport: z.object({ width: z.number().int().min(320).max(3840).optional(), height: z.number().int().min(240).max(2160).optional() }).strict().optional()
+        viewport: browserViewportSchema.optional()
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
-    }, async ({ workspaceId, url, actions = [], screenshotPath = 'artifacts/browser-qa/latest.png', timeoutMs = 60000, viewport = {} }) => {
+    }, async ({ workspaceId, url, actions = [], screenshotPath = 'artifacts/browser-qa/latest.png', reportPath = 'artifacts/browser-qa/latest.json', timeoutMs = 60000, viewport = {} }) => {
       context.assertCanMutate('Running browser acceptance tests');
       const workspace = context.workspace.get(workspaceId, { writable: true });
-      const result = await runBrowserScenario({ workspaceRoot: workspace.root, url, settings: context.settings, actions, screenshotPath, timeoutMs, viewport });
-      await context.audit('browser_qa_run', { workspace: workspace.id, url, actionCount: actions.length, ok: result.ok, screenshotPath: result.screenshotPath });
+      const result = await runBrowserScenario({ workspaceRoot: workspace.root, url, settings: context.settings, actions, screenshotPath, reportPath, timeoutMs, viewport });
+      await context.audit('browser_qa_run', { workspace: workspace.id, url, actionCount: actions.length, ok: result.ok, screenshotPath: result.screenshotPath, reportPath: result.reportPath });
       return context.toolText({ workspace: { id: workspace.id, name: workspace.name }, result });
     });
   }
 });
 
-export const __test = { actionSchema, settingsSchema };
+export const __test = { automationConfigSchema, browserActionSchema, browserScenarioSchema, settingsSchema };

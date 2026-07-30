@@ -29,18 +29,20 @@ class MockServer {
 
 installPluginHost(MockServer);
 
-test('registers management tools while optional plugins remain disabled', async () => {
+test('registers management and automation tools while optional plugins remain disabled', async () => {
   const server = new MockServer();
   await server.connect();
   assert.equal(server.tools.has('plugin_catalog'), true);
   assert.equal(server.tools.has('devmate_plugins_panel'), true);
+  assert.equal(server.tools.has('automation_manifest_status'), true);
+  assert.equal(server.tools.has('automation_manifest_template'), true);
   assert.equal(server.tools.has('godot_status'), false);
   assert.equal(server.tools.get('plugin_catalog').config._meta['openai/widgetAccessible'], true);
   assert.equal(server.tools.get('plugin_enable').config._meta['openai/widgetAccessible'], true);
   assert.equal(server.tools.get('plugin_disable').config._meta['openai/widgetAccessible'], true);
 });
 
-test('enabling Godot also enables Browser QA on the next server instance', async () => {
+test('enabling Godot also enables Browser QA and its shared service on the next server instance', async () => {
   const server = new MockServer();
   await server.connect();
   await server.tools.get('plugin_enable').handler({ id: 'devmate.godot' });
@@ -49,8 +51,9 @@ test('enabling Godot also enables Browser QA on the next server instance', async
   assert.equal(next.tools.has('godot_status'), true);
   assert.equal(next.tools.has('browser_qa_status'), true);
   assert.equal(next.tools.has('web_preview_start'), true);
+  const catalog = await next.tools.get('plugin_catalog').handler({});
+  assert.deepEqual(catalog.structuredContent.activeServices, [{ name: 'devmate.browser-qa', pluginId: 'devmate.browser-qa' }]);
 });
-
 
 test('rejects multi-plugin dependency cycles', () => {
   const map = new Map([

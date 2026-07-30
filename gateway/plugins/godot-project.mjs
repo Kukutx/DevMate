@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { startPreview } from './preview-manager.mjs';
 
 function unquote(value) {
   const text = String(value ?? '').trim();
@@ -146,13 +145,17 @@ export function resolveProject(context, workspaceId, projectSubpath, { writable 
   return { workspace, root, subpath, projectFile };
 }
 
+async function readPresets(projectRoot) {
+  const presetFile = path.join(projectRoot, 'export_presets.cfg');
+  return fs.statSync(presetFile, { throwIfNoEntry: false })?.isFile()
+    ? parseExportPresets(await fsp.readFile(presetFile, 'utf8'))
+    : [];
+}
+
 export async function inspectProject(context, workspaceId, projectSubpath) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: false });
   const text = await fsp.readFile(project.projectFile, 'utf8');
-  const presetFile = path.join(project.root, 'export_presets.cfg');
-  const presets = fs.statSync(presetFile, { throwIfNoEntry: false })?.isFile()
-    ? parseExportPresets(await fsp.readFile(presetFile, 'utf8'))
-    : [];
+  const presets = await readPresets(project.root);
   const scan = await scanProject(project.root);
   return {
     workspace: { id: project.workspace.id, name: project.workspace.name },
@@ -189,10 +192,14 @@ export async function validateProject(context, { workspaceId, projectSubpath, ti
   };
 }
 
-export async function exportWeb(context, { workspaceId, projectSubpath, preset, outputPath, mode, timeoutMs, startLocalPreview, crossOriginIsolation }) {
+export async function exportWeb(context, { workspaceId, projectSubpath, preset, outputPath, mode, timeoutMs, startLocalPreview, crossOriginIsolation }, browserService) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: true });
   const executable = resolveGodotExecutable(context);
   const selectedPreset = preset || context.settings.defaultWebPreset || 'Web';
+  const presets = await readPresets(project.root);
+  const presetInfo = presets.find(item => item.name === selectedPreset) || null;
+  if (presets.length > 0 && !presetInfo) throw new Error(`Godot export preset not found: ${selectedPreset}`);
+  if (presetInfo && !/web/i.test(presetInfo.platform)) throw new Error(`Godot preset ${selectedPreset} is not a Web preset (${presetInfo.platform})`);
   const relativeOutput = outputPath || context.settings.defaultWebOutput || 'build/web/index.html';
   if (path.extname(relativeOutput).toLowerCase() !== '.html') throw new Error('Godot Web outputPath must end with .html');
   const output = context.workspace.resolve(project.workspace, path.join(project.subpath, relativeOutput));
@@ -207,7 +214,8 @@ export async function exportWeb(context, { workspaceId, projectSubpath, preset, 
   const outputExists = !!fs.statSync(output, { throwIfNoEntry: false })?.isFile();
   let preview = null;
   if (result.exitCode === 0 && outputExists && startLocalPreview !== false) {
-    preview = await startPreview({
+    if (!browserService?.startPreview) throw new Error('Browser QA preview service is unavailable');
+    preview = await browserService.startPreview({
       workspaceId: project.workspace.id,
       root: path.dirname(output),
       entryPath: path.basename(output),
@@ -219,6 +227,7 @@ export async function exportWeb(context, { workspaceId, projectSubpath, preset, 
     projectSubpath: project.subpath,
     executable,
     preset: selectedPreset,
+    presetInfo,
     mode,
     outputPath: path.relative(project.workspace.root, output).replace(/\\/g, '/'),
     outputExists,
