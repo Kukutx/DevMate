@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { audit, readConfig, toolText } from './local-shared.mjs';
+import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { authorizeToolCall, normalizeDeploymentConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
@@ -14,7 +14,7 @@ import {
   retryJob,
   startDrain
 } from './job-queue.mjs';
-import { jobRuntimeStatus, jobTarget, jobTargetCatalog } from './job-runtime.mjs';
+import { jobRuntimeStatus, jobTarget, jobTargetCatalog, jobTargetEligible, refreshLocalRunner } from './job-runtime.mjs';
 
 const jobStatusSchema = z.enum(['queued', 'running', 'waiting_approval', 'blocked_lease', 'succeeded', 'failed', 'cancelled']);
 
@@ -51,6 +51,13 @@ function withWorkspace(args, workspaceId) {
   return { ...args, workspaceId };
 }
 
+function runtimePolicy(config = readConfig()) {
+  return {
+    maxConcurrentJobs: Math.min(8, Math.max(1, Math.trunc(Number(config.runtime?.maxConcurrentJobs) || 2))),
+    allowJobGitSave: config.jobs?.allowJobGitSave !== false
+  };
+}
+
 export function registerJobTools(register, annotations) {
   const { ro, rw } = annotations;
 
@@ -59,7 +66,29 @@ export function registerJobTools(register, annotations) {
     description: 'List reviewed tools that may be executed by the durable embedded job runner.',
     inputSchema: { workspaceId: z.string().optional() },
     annotations: ro
-  }, async () => toolText({ targets: jobTargetCatalog() }));
+  }, async () => toolText({ policy: runtimePolicy(), targets: jobTargetCatalog().filter(item => jobTargetEligible(item.name, readConfig()?.jobs || {})) }));
+
+  register('job_runtime_configure', {
+    title: 'Configure DevMate job runtime',
+    description: 'Configure embedded runner concurrency and whether safe non-pushing git_save may be queued. Requires maintainer or owner.',
+    inputSchema: {
+      maxConcurrentJobs: z.number().int().min(1).max(8).optional(),
+      allowJobGitSave: z.boolean().optional()
+    },
+    annotations: { ...rw, idempotentHint: true }
+  }, async patch => {
+    const principal = principalNow();
+    assertMaintainer(principal, 'Configuring the durable job runtime');
+    const config = readConfig();
+    config.runtime ||= {};
+    config.jobs ||= {};
+    if (patch.maxConcurrentJobs !== undefined) config.runtime.maxConcurrentJobs = patch.maxConcurrentJobs;
+    if (patch.allowJobGitSave !== undefined) config.jobs.allowJobGitSave = patch.allowJobGitSave;
+    writeConfig(config);
+    const runner = refreshLocalRunner();
+    await audit('job_runtime_configure', { principalId: principal.id, keys: Object.keys(patch), maxConcurrentJobs: runner.maxConcurrent });
+    return toolText({ configured: true, policy: runtimePolicy(config), runner });
+  });
 
   register('job_submit', {
     title: 'Submit durable DevMate job',
@@ -77,6 +106,7 @@ export function registerJobTools(register, annotations) {
     },
     annotations: rw
   }, async ({ workspaceId, tool, arguments: rawArgs = {}, title = '', priority = 50, maxAttempts = 2, timeoutMs = 900000, requiredCapabilities = [], artifactPaths = [] }) => {
+    if (!jobTargetEligible(tool, readConfig()?.jobs || {})) throw new Error(`Tool is not allowed by the durable job policy: ${tool}`);
     const target = jobTarget(tool);
     if (!target) throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
     const args = withWorkspace(rawArgs, workspaceId);
@@ -161,7 +191,7 @@ export function registerJobTools(register, annotations) {
     description: 'Show embedded runner capabilities, availability, concurrency, and current runtime state.',
     inputSchema: { workspaceId: z.string().optional() },
     annotations: ro
-  }, async () => toolText({ runners: listRunners(), runtime: jobRuntimeStatus() }));
+  }, async () => toolText({ policy: runtimePolicy(), runners: listRunners(), runtime: jobRuntimeStatus() }));
 
   register('deployment_drain_status', {
     title: 'DevMate drain status',
@@ -197,4 +227,4 @@ export function registerJobTools(register, annotations) {
   });
 }
 
-export const __test = { assertMaintainer, ensureVisible, targetAuthorization, withWorkspace };
+export const __test = { assertMaintainer, ensureVisible, runtimePolicy, targetAuthorization, withWorkspace };
