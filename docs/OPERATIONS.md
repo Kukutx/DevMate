@@ -1,6 +1,6 @@
 # DevMate operations
 
-DevMate 2.1 adds the operational controls needed for a long-running team or production gateway: durable coordination state, a single-instance lock, separation-of-duties approvals, local metrics, and deployment templates.
+DevMate 2.2 provides the controls needed for a long-running team or production gateway: durable coordination state, a single-instance lock, separation-of-duties approvals, queued jobs, an embedded runner, drain mode, local metrics, and deployment templates.
 
 ## Durable runtime state
 
@@ -15,9 +15,12 @@ The runtime state file uses atomic replacement and restrictive file permissions 
 
 - workspace leases;
 - complex team work sessions;
-- approval requests and decisions.
+- approval requests and decisions;
+- durable jobs and bounded event history;
+- runner registration and heartbeat state;
+- deployment drain state.
 
-The file does not contain plaintext team tokens. Team tokens remain salted `scrypt` hashes in `config.json`.
+The file does not contain plaintext team tokens. Team tokens remain salted `scrypt` hashes in `config.json`. Job arguments are rejected when they contain credential-shaped fields or values, but the state file still contains operational inputs and result summaries and must be treated as sensitive.
 
 Use:
 
@@ -31,7 +34,68 @@ to inspect namespaces, file size, recovery information, and the active instance 
 
 On startup DevMate acquires `gateway.lock`. If another live process owns the same state directory, startup fails instead of allowing two gateways to mutate the same coordination state. A lock whose PID is no longer alive is quarantined and replaced.
 
+A runner owns a running job through a short renewable lease. When the gateway disappears, expired running jobs are requeued until their attempt budget is exhausted. This recovers queue ownership; it cannot undo external side effects already produced by the interrupted tool. Job targets should therefore be idempotent or write to isolated, reproducible output paths.
+
 Do not run multiple DevMate processes against the same config directory. For horizontal scaling, isolate each workspace or runner behind a separate DevMate instance until an external distributed state provider is implemented.
+
+## Durable jobs
+
+Use `job_submit` for long builds, validation, Browser QA, Godot acceptance, and reporting. The reviewed target allowlist excludes arbitrary shell commands, direct push, force operations, credential rotation, and team administration.
+
+Operational tools:
+
+```text
+job_target_catalog
+job_runtime_configure
+job_submit
+job_list
+job_status
+job_artifacts
+job_cancel
+job_retry
+runner_status
+```
+
+The embedded runner reports its workspace and capability coverage. Keep concurrency low when jobs run Chromium, Godot exports, compilers, or memory-intensive test suites. Configure it through `job_runtime_configure`.
+
+Queued jobs can wait in:
+
+- `waiting_approval`, until a different maintainer or owner approves the exact target call;
+- `blocked_lease`, until the requester owns the workspace lease again.
+
+Artifact indexing is metadata-only. Files remain in their workspace and are not uploaded or copied into the state directory. Indexed directories are traversed with bounded depth/file counts and sensitive paths are excluded.
+
+Running cancellation is cooperative. DevMate records the cancellation request and marks the job cancelled when the in-process target settles. It does not forcibly abort arbitrary JavaScript handlers. Long-lived services should use the supervised persistent-process tools instead.
+
+## Drain and maintenance
+
+Drain mode provides a controlled maintenance window:
+
+```text
+deployment_drain_status
+deployment_drain_start
+deployment_drain_cancel
+```
+
+While draining:
+
+- new team mutations and new team job submissions are rejected;
+- the embedded runner stops claiming queued work;
+- existing running jobs continue;
+- principals may continue reading state and cancelling visible jobs;
+- owner/local recovery credentials remain available.
+
+A safe upgrade flow is:
+
+1. Call `deployment_drain_start` and record the reason.
+2. Inspect `deployment_drain_status` and `runner_status` until no jobs are in flight.
+3. Back up config and state.
+4. Stop the gateway.
+5. Install the new version.
+6. Start the gateway and run readiness, metrics, and smoke checks.
+7. Call `deployment_drain_cancel` only after validation.
+
+If the gateway must be stopped before an in-flight job settles, the new process recovers it after the runner lease expires. Verify whether the interrupted target created partial external side effects before allowing the retry.
 
 ## Dual-control approvals
 
@@ -85,7 +149,9 @@ It includes bounded metrics for:
 - HTTP request duration and in-flight requests;
 - MCP tool calls by tool, capability, role, source, and outcome;
 - tool duration aggregates;
-- approval requests and consumption.
+- approval requests and consumption;
+- durable job outcomes and duration;
+- embedded runner in-flight jobs.
 
 The endpoint is intentionally local-only. Collect it with a node-local Prometheus agent, OpenTelemetry Collector, or reverse-proxy sidecar rather than exposing it through the public tunnel.
 
@@ -123,7 +189,7 @@ node scripts/devmate-cli.mjs init \
 
 Mount `/var/lib/devmate` persistently. Mount only approved workspace roots. The container example drops Linux capabilities, uses a read-only root filesystem, and binds DevMate to loopback on the host.
 
-Godot, Chromium, cloudflared, ngrok, compilers, and other platform runtimes are not bundled into the minimal image. Build a derived image or attach dedicated runners when those capabilities are required.
+Godot, Chromium, cloudflared, ngrok, compilers, and other platform runtimes are not bundled into the minimal image. Build a derived image or use isolated DevMate instances when those capabilities are required.
 
 ## Reverse proxy
 
@@ -138,7 +204,7 @@ Keep DevMate bearer authentication enabled even behind SSO, Cloudflare Access, V
 
 ## Backup scope
 
-Back up the complete config directory while DevMate is stopped or from a filesystem snapshot:
+Back up the complete config directory while DevMate is drained and stopped, or from a filesystem snapshot:
 
 ```text
 config.json
@@ -147,16 +213,20 @@ state/audit.jsonl
 state/backups/
 ```
 
+Artifact files are not copied into the state directory. Back up the corresponding workspaces separately when generated outputs must be retained.
+
 These backups are sensitive because `config.json` includes the owner bearer token. Encrypt backups, restrict access, and rotate credentials after an untrusted restore or disclosure.
 
-## Upgrade procedure
+## Upgrade verification
 
-1. Stop the gateway.
-2. Back up the config and state directory.
-3. Install the new DevMate version.
-4. Run `npm run check` and `npm run test:unit` for source deployments.
-5. Start the gateway.
-6. Run `deployment_readiness`, `deployment_runtime_state`, and `deployment_metrics`.
-7. Verify the public MCP preflight and one non-destructive team call.
+After restart:
 
-Personal mode can continue using the existing VS Code Start flow without managing durable state or approvals directly.
+1. Run `deployment_readiness`.
+2. Run `deployment_runtime_state` and confirm the expected namespaces, including `jobs`.
+3. Run `runner_status` and confirm the embedded runner is online with the expected workspaces and plugin capabilities.
+4. Run `deployment_metrics`.
+5. Verify the public MCP preflight and one non-destructive team call.
+6. Submit a small validation job and confirm it reaches `succeeded`.
+7. Cancel drain mode.
+
+Personal mode can continue using the existing VS Code Start flow without managing jobs, durable state, approvals, or drain mode directly.

@@ -14,14 +14,15 @@ const ADMIN_TOOLS = new Set([
   'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke', 'team_activity_status',
   'read_audit_log', 'list_backups', 'task_status', 'task_report', 'start_task', 'finish_task', 'rollback_task', 'local_capabilities_status', 'list_trusted_roots',
   'plugin_enable', 'plugin_disable', 'plugin_configure', 'configure_local_capabilities', 'published_preview_list',
-  'add_trusted_root', 'remove_trusted_root'
+  'add_trusted_root', 'remove_trusted_root',
+  'job_runtime_configure', 'deployment_drain_start', 'deployment_drain_cancel'
 ]);
 const OWNER_ONLY_TOOLS = new Set([
   'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke'
 ]);
 const PUBLISH_TOOLS = new Set(['git_push', 'git_pull', 'deployment_publish', 'deployment_rotate_credentials', 'published_preview_share', 'published_preview_revoke']);
 const VALIDATE_TOOLS = new Set([
-  'run_smart_checks',
+  'run_smart_checks', 'job_submit', 'job_retry',
   'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
   'godot_doctor', 'godot_validate', 'godot_export_web', 'godot_acceptance_test',
   'godot_acceptance_run_saved', 'godot_acceptance_suite'
@@ -31,7 +32,7 @@ const EXECUTE_TOOLS = new Set([
 ]);
 const WRITE_TOOLS = new Set([
   'write_file', 'create_file', 'apply_patch',
-  'delete_file', 'move_file', 'restore_backup', 'godot_qa_bridge_install'
+  'delete_file', 'move_file', 'restore_backup', 'godot_qa_bridge_install', 'job_cancel'
 ]);
 
 const NON_WORKSPACE_TOOLS = new Set([
@@ -39,7 +40,9 @@ const NON_WORKSPACE_TOOLS = new Set([
   'plugin_catalog', 'plugin_diagnostics', 'plugin_enable', 'plugin_disable', 'plugin_configure', 'devmate_plugins_panel',
   'team_status', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
   'team_activity_status', 'team_configure', 'deployment_status', 'deployment_readiness', 'deployment_policy_template',
-  'workspace_lease_status', 'published_preview_share', 'published_preview_list', 'published_preview_revoke'
+  'workspace_lease_status', 'published_preview_share', 'published_preview_list', 'published_preview_revoke',
+  'job_target_catalog', 'job_runtime_configure', 'job_submit', 'job_list', 'job_status', 'job_artifacts', 'job_cancel', 'job_retry', 'runner_status',
+  'deployment_drain_status', 'deployment_drain_start', 'deployment_drain_cancel'
 ]);
 
 function base64url(bytes) {
@@ -79,6 +82,11 @@ export function normalizeDeploymentConfig(config) {
   config.team.maxMembers = Number.isFinite(Number(config.team.maxMembers))
     ? Math.min(500, Math.max(1, Math.trunc(Number(config.team.maxMembers))))
     : 100;
+
+  config.runtime ||= {};
+  config.runtime.maxConcurrentJobs = clampInt(config.runtime.maxConcurrentJobs, 2, 1, 8);
+  config.jobs ||= {};
+  config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
 
   config.production ||= {};
   config.production.maxRequestBytes = clampInt(config.production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024);

@@ -31,6 +31,29 @@ Always available:
 
 Member-management and deployment configuration require the owner role. Publishing, cross-team activity, and administrative operations require maintainer or owner capability. Workspace-scoped results are filtered for restricted principals.
 
+## Durable jobs and runners
+
+The persistent queue and embedded capability-aware runner expose:
+
+- `job_target_catalog`
+- `job_runtime_configure`
+- `job_submit`
+- `job_list`
+- `job_status`
+- `job_artifacts`
+- `job_cancel`
+- `job_retry`
+- `runner_status`
+- `deployment_drain_status`
+- `deployment_drain_start`
+- `deployment_drain_cancel`
+
+`job_submit` accepts only reviewed target tools. It re-evaluates the target tool's RBAC, workspace scope, lease, and approval requirements before creating the job. Credential-shaped arguments and arbitrary shell commands are rejected. Durable `git_save` may commit but cannot push.
+
+Jobs persist across gateway restarts and may enter `waiting_approval` or `blocked_lease`. The embedded runner renews ownership leases, retries abandoned work within the configured attempt budget, and indexes bounded workspace-contained artifacts. Use drain mode before upgrades so the runner stops claiming queued work while current jobs settle.
+
+See `JOBS.md` for target eligibility, states, retries, cooperative cancellation, artifacts, and drain behavior.
+
 ## Approval workflow
 
 Production mode requires dual-control approval for `publish` and `admin` capabilities by default:
@@ -113,6 +136,6 @@ Publishing requires maintainer capability and, in production, normally requires 
 - `deployment_metrics`
 - `deployment_runtime_state`
 
-Prometheus-compatible metrics are also available from loopback only at `/control/metrics`.
+Prometheus-compatible metrics are also available from loopback only at `/control/metrics`. Job counters, durations, and in-flight gauges are included.
 
-See `TEAM_DEPLOYMENT.md` for role and lease behavior, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
+See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.

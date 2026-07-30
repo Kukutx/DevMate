@@ -9,6 +9,9 @@ import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { clearPreviewShares } from './published-previews.mjs';
 import { ensureToolApproval } from './approvals.mjs';
 import { registerApprovalTools } from './approval-tools.mjs';
+import { assertDrainAllows } from './job-queue.mjs';
+import { registerJobTarget } from './job-runtime.mjs';
+import { registerJobTools } from './job-tools.mjs';
 import { incrementCounter, observeDuration } from './observability.mjs';
 import { registerTeamManagementTools } from './team-management-tools.mjs';
 import { registerTeamCollaborationTools } from './team-collaboration-tools.mjs';
@@ -48,6 +51,7 @@ function registerTeamTools(server) {
   registerTeamManagementTools(register, annotations);
   registerTeamCollaborationTools(register, annotations);
   registerApprovalTools(register, annotations);
+  registerJobTools(register, annotations);
 }
 
 function inferredWorkspace(name, args = {}) {
@@ -122,7 +126,7 @@ function installAuthorizationWrapper(McpServerClass) {
   Object.defineProperty(McpServerClass.prototype, AUTH_WRAPPED, { value: true });
 
   McpServerClass.prototype.registerTool = function authorizedRegisterTool(name, config, handler) {
-    return originalRegisterTool.call(this, name, config, async (args = {}, ...rest) => {
+    const wrappedHandler = async (args = {}, ...rest) => {
       const current = normalizeDeploymentConfig(readConfig());
       const inferred = inferredWorkspace(name, args);
       const authorizationArgs = inferred && !args.workspaceId
@@ -135,6 +139,14 @@ function installAuthorizationWrapper(McpServerClass) {
         config: current,
         principal: principalNow()
       });
+
+      if (name !== 'job_cancel') {
+        assertDrainAllows({
+          principal: authorized.principal,
+          capability: authorized.capability,
+          tool: name
+        });
+      }
 
       if (!name.startsWith('workspace_lease_')) {
         assertWorkspaceLease({
@@ -208,7 +220,9 @@ function installAuthorizationWrapper(McpServerClass) {
         });
         throw error;
       }
-    });
+    };
+    registerJobTarget(name, config, wrappedHandler);
+    return originalRegisterTool.call(this, name, config, wrappedHandler);
   };
 }
 
