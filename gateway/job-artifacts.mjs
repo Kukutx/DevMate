@@ -49,14 +49,10 @@ async function sha256File(file) {
   return hash.digest('hex');
 }
 
-async function artifactRecord(workspace, candidate) {
-  const text = String(candidate || '').trim();
-  if (!text || /^(?:https?:|data:|blob:)/i.test(text)) return null;
-  const full = path.isAbsolute(text) ? path.resolve(text) : path.resolve(workspace.root, text);
-  if (!isInside(workspace.root, full)) return null;
+async function fileRecord(workspace, workspaceReal, file) {
   let real;
-  try { real = fs.realpathSync.native(full); } catch { return null; }
-  if (!isInside(fs.realpathSync.native(workspace.root), real)) return null;
+  try { real = fs.realpathSync.native(file); } catch { return null; }
+  if (!isInside(workspaceReal, real)) return null;
   const relative = normalizeSlash(path.relative(workspace.root, real));
   if (!relative || blocked(relative)) return null;
   const stat = await fsp.stat(real);
@@ -70,6 +66,47 @@ async function artifactRecord(workspace, candidate) {
   };
 }
 
+async function artifactRecords(workspace, candidate, maxRecords = 100) {
+  const text = String(candidate || '').trim();
+  if (!text || /^(?:https?:|data:|blob:)/i.test(text)) return [];
+  const full = path.isAbsolute(text) ? path.resolve(text) : path.resolve(workspace.root, text);
+  if (!isInside(workspace.root, full)) return [];
+  const workspaceReal = fs.realpathSync.native(workspace.root);
+  let real;
+  try { real = fs.realpathSync.native(full); } catch { return []; }
+  if (!isInside(workspaceReal, real)) return [];
+  const relative = normalizeSlash(path.relative(workspace.root, real));
+  if (relative && blocked(relative)) return [];
+  const stat = await fsp.stat(real);
+  if (stat.isFile()) {
+    const record = await fileRecord(workspace, workspaceReal, real);
+    return record ? [record] : [];
+  }
+  if (!stat.isDirectory()) return [];
+
+  const records = [];
+  async function walk(directory, depth) {
+    if (records.length >= maxRecords || depth > 8) return;
+    let entries;
+    try { entries = await fsp.readdir(directory, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (records.length >= maxRecords) break;
+      const child = path.join(directory, entry.name);
+      const childRelative = normalizeSlash(path.relative(workspace.root, child));
+      if (blocked(childRelative)) continue;
+      if (entry.isDirectory()) {
+        await walk(child, depth + 1);
+      } else if (entry.isFile()) {
+        const record = await fileRecord(workspace, workspaceReal, child);
+        if (record && !records.some(item => item.path === record.path)) records.push(record);
+      }
+    }
+  }
+  await walk(real, 0);
+  return records;
+}
+
 export async function indexJobArtifacts(job, result) {
   if (!job.workspaceId) return [];
   const workspace = workspaceFor(job);
@@ -81,12 +118,15 @@ export async function indexJobArtifacts(job, result) {
   const records = [];
   for (const candidate of unique) {
     try {
-      const record = await artifactRecord(workspace, candidate);
-      if (record && !records.some(item => item.path === record.path)) records.push(record);
+      const found = await artifactRecords(workspace, candidate, 100 - records.length);
+      for (const record of found) {
+        if (!records.some(item => item.path === record.path)) records.push(record);
+        if (records.length >= 100) break;
+      }
     } catch {}
     if (records.length >= 100) break;
   }
   return records;
 }
 
-export const __test = { blocked, collectCandidateValues, isInside };
+export const __test = { artifactRecords, blocked, collectCandidateValues, isInside };
