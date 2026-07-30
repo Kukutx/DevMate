@@ -4,6 +4,8 @@ import {
   authorizeToolCall,
   createTeamMember,
   normalizeDeploymentConfig,
+  requiredCapabilityForTool,
+  toolWorkspaceId,
   verifyAccessToken
 } from '../gateway/team-access.mjs';
 
@@ -119,4 +121,15 @@ test('resolves workspace names to scoped workspace ids', () => {
     config: current,
     principal: developer
   }).workspaceId, 'app');
+});
+
+test('classifies queue tools without assigning the active workspace implicitly', () => {
+  const current = config();
+  current.workspaces = [{ id: 'app', name: 'Application' }];
+  normalizeDeploymentConfig(current);
+  assert.equal(requiredCapabilityForTool('job_submit', { destructiveHint: true }, {}), 'validate');
+  assert.equal(requiredCapabilityForTool('job_cancel', { destructiveHint: true }, {}), 'write');
+  assert.equal(requiredCapabilityForTool('job_runtime_configure', { destructiveHint: true }, {}), 'admin');
+  assert.equal(toolWorkspaceId('job_submit', { workspaceId: 'app' }, current), null);
+  assert.equal(toolWorkspaceId('deployment_drain_start', {}, current), null);
 });
