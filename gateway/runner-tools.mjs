@@ -11,6 +11,14 @@ import {
 } from './runner-access.mjs';
 import { principalNow, workspaceIds } from './team-tool-data.mjs';
 
+function maintainerNow() {
+  const principal = principalNow();
+  if (!['owner', 'maintainer'].includes(principal.role)) {
+    throw new Error('Runner topology status requires maintainer or owner role');
+  }
+  return principal;
+}
+
 function ownerNow() {
   const principal = principalNow();
   if (principal.role !== 'owner') throw new Error('External Runner credential administration requires the owner role');
@@ -26,7 +34,9 @@ function publicRuntime(config) {
     requestsPerMinute: config.runnerControl.requestsPerMinute,
     maxCredentials: config.runnerControl.maxCredentials,
     credentialCount: config.runnerControl.credentials.length,
-    activeCredentials: config.runnerControl.credentials.filter(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())).length
+    activeCredentials: config.runnerControl.credentials.filter(item =>
+      !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+    ).length
   };
 }
 
@@ -35,10 +45,11 @@ export function registerRunnerTools(register, annotations) {
 
   register('runner_control_status', {
     title: 'External runner control status',
-    description: 'Show embedded/external Runner state, credential count, limits, and currently known runners.',
+    description: 'Show embedded/external Runner state, credential count, limits, and currently known runners. Requires maintainer or owner.',
     inputSchema: {},
     annotations: ro
   }, async () => {
+    maintainerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     return toolText({ ...publicRuntime(config), runners: listRunners() });
   });
@@ -137,7 +148,11 @@ export function registerRunnerTools(register, annotations) {
     if (patch.workspaceIds !== undefined) patch.workspaceIds = workspaceIds(config, patch.workspaceIds);
     const credential = updateRunnerCredential(config, id, patch);
     writeConfig(config);
-    await audit('runner_credential_update', { principalId: principal.id, runnerId: id, keys: Object.keys(patch) });
+    await audit('runner_credential_update', {
+      principalId: principal.id,
+      runnerId: id,
+      keys: Object.keys(patch)
+    });
     return toolText({ credential });
   });
 
@@ -173,4 +188,4 @@ export function registerRunnerTools(register, annotations) {
   });
 }
 
-export const __test = { publicRuntime };
+export const __test = { maintainerNow, ownerNow, publicRuntime };
