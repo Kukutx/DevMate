@@ -82,7 +82,11 @@ async function withTimeout(promise, timeoutMs) {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Job timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer = setTimeout(() => {
+          const error = new Error(`Job timed out after ${timeoutMs}ms`);
+          error.code = 'job_timeout';
+          reject(error);
+        }, timeoutMs);
         timer.unref?.();
       })
     ]);
@@ -118,12 +122,15 @@ export function registerJobTarget(name, config, handler) {
 
 export function jobTarget(name) {
   const target = targets.get(name) || null;
-  return target && jobTargetEnabled(name) ? target : null;
+  const config = readConfig();
+  return target && jobTargetEnabled(name, config) && jobTargetEligible(name, config.jobs || {}) ? target : null;
 }
 
 export function jobTargetCatalog() {
   const config = readConfig();
-  return [...targets.values()].filter(target => jobTargetEnabled(target.name, config)).map(target => ({
+  return [...targets.values()].filter(target =>
+    jobTargetEnabled(target.name, config) && jobTargetEligible(target.name, config.jobs || {})
+  ).map(target => ({
     name: target.name,
     title: target.config?.title || target.name,
     description: target.config?.description || '',
@@ -170,7 +177,7 @@ export function refreshLocalRunner() {
 async function executeClaimedJob(job) {
   const target = jobTarget(job.tool);
   if (!target) {
-    failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently enabled or registered: ${job.tool}`, retryable: true });
+    failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently enabled, allowed, or registered: ${job.tool}`, retryable: true });
     return;
   }
   const started = Date.now();
@@ -207,8 +214,9 @@ async function executeClaimedJob(job) {
       deferJob({ id: job.id, runnerId: localRunnerId(), status: 'blocked_lease', error: message, delayMs: 5000 });
       incrementCounter('devmate_jobs_total', { status: 'blocked_lease', tool: job.tool }, 1);
     } else {
-      failJob({ id: job.id, runnerId: localRunnerId(), error: message, retryable: !/not allowed|requires the owner role|cannot use/i.test(message) });
-      incrementCounter('devmate_jobs_total', { status: 'failed_attempt', tool: job.tool }, 1);
+      const retryable = error?.code !== 'job_timeout' && !/not allowed|requires the owner role|cannot use/i.test(message);
+      failJob({ id: job.id, runnerId: localRunnerId(), error: message, retryable });
+      incrementCounter('devmate_jobs_total', { status: error?.code === 'job_timeout' ? 'timed_out' : 'failed_attempt', tool: job.tool }, 1);
     }
     observeDuration('devmate_job_duration_ms', { tool: job.tool }, Date.now() - started);
   } finally {
