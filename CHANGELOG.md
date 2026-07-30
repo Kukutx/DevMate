@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.0
+
+- Persisted workspace leases, complex team work sessions, and approval requests with atomic runtime-state replacement and restrictive permissions.
+- Added a per-state-directory gateway instance lock with stale-process recovery to prevent concurrent gateways from diverging coordination state.
+- Added production dual-control approval for publish and administrative capabilities, exact argument-digest binding, redacted request summaries, separation of duties, one-time consumption, and policy tools.
+- Added loopback-only Prometheus metrics, bounded request/tool metrics, and maintainer operational status tools.
+- Added systemd, Docker Compose, and Caddy deployment templates plus operations, backup, recovery, monitoring, and upgrade guidance.
+- Added regression coverage for durable recovery, instance locking, approval replay, redaction, wrapper enforcement, and metrics rendering.
+
 ## 2.0.0
 
 - Expanded DevMate from a personal VS Code bridge into a local-first MCP development gateway with personal, team, and production deployment profiles.

@@ -43,7 +43,7 @@ jobs:
         run: npm run test:unit
 
       - name: Production gateway policy tests
-        run: node --test tests/request-guard-stream.test.mjs
+        run: node --test tests/request-guard-stream.test.mjs tests/team-approval-integration.test.mjs tests/http-observability.test.mjs
 
       - name: Smoke test gateway
         run: npm run smoke:gateway

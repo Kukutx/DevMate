@@ -1,14 +1,25 @@
 import crypto from 'node:crypto';
+import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
 
-const leases = new Map();
+const NAMESPACE = 'workspace-leases';
+const restored = readDurableNamespace(NAMESPACE, []);
+const leases = new Map((Array.isArray(restored) ? restored : [])
+  .filter(item => item?.workspaceId)
+  .map(item => [item.workspaceId, item]));
 
 function nowIso() { return new Date().toISOString(); }
 function roleCanForce(role) { return role === 'owner' || role === 'maintainer'; }
+function persist() { writeDurableNamespace(NAMESPACE, [...leases.values()]); }
 
 export function pruneWorkspaceLeases(now = Date.now()) {
+  let changed = false;
   for (const [workspaceId, lease] of leases) {
-    if (Date.parse(lease.expiresAt) <= now) leases.delete(workspaceId);
+    if (Date.parse(lease.expiresAt) <= now) {
+      leases.delete(workspaceId);
+      changed = true;
+    }
   }
+  if (changed) persist();
 }
 
 export function listWorkspaceLeases() {
@@ -45,6 +56,7 @@ export function acquireWorkspaceLease({ workspaceId, principal, ttlSeconds = 180
     expiresAt: new Date(now + ttl * 1000).toISOString()
   };
   leases.set(id, lease);
+  persist();
   return { ...lease };
 }
 
@@ -58,6 +70,7 @@ export function releaseWorkspaceLease({ workspaceId, principal, force = false })
     throw new Error(`Workspace ${id} is leased by ${current.principalName || current.principalId}`);
   }
   leases.delete(id);
+  persist();
   return { released: true, lease: current };
 }
 
@@ -76,6 +89,7 @@ export function assertWorkspaceLease({ workspaceId, principal, capability, confi
 
 export function clearWorkspaceLeases() {
   leases.clear();
+  persist();
 }
 
-export const __test = { leases, roleCanForce };
+export const __test = { leases, persist, roleCanForce };
