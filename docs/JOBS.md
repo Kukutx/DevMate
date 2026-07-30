@@ -1,6 +1,6 @@
-# Durable jobs and embedded runners
+# Durable jobs and runners
 
-DevMate 2.2 adds a persistent queue for long-running build, validation, Browser QA, and Godot acceptance work. Jobs survive MCP request completion and gateway restarts, while the embedded runner executes only reviewed tool targets.
+DevMate provides a persistent queue for long-running build, validation, Browser QA, and Godot acceptance work. Jobs survive MCP request completion and central Gateway restarts, while embedded or external Runners execute only reviewed tool targets.
 
 ## Why jobs exist
 
@@ -8,6 +8,7 @@ Normal MCP tool calls remain the right choice for short, interactive operations.
 
 - a build or acceptance suite may take several minutes;
 - the ChatGPT connection may be refreshed or interrupted;
+- execution must be routed to a platform-specific or high-capacity host;
 - the result should retain bounded events and artifact metadata;
 - a task may need to wait for another maintainer's approval;
 - a shared workspace lease may temporarily be unavailable;
@@ -39,6 +40,12 @@ Run `job_target_catalog` before submission. The built-in allowlist includes:
   "priority": 70,
   "maxAttempts": 2,
   "timeoutMs": 900000,
+  "requiredCapabilities": [
+    "external",
+    "linux-x64",
+    "godot",
+    "browser-qa"
+  ],
   "artifactPaths": [
     "artifacts/godot-qa"
   ]
@@ -49,30 +56,48 @@ Call this payload through `job_submit`.
 
 The queue rejects arguments containing credential-shaped field names or values. Do not use durable jobs for operations whose inputs require passwords, bearer tokens, API keys, or other transient secrets.
 
+`requiredCapabilities` routes work. The embedded Runner normally advertises `core` plus locally enabled platform plugins. An external Runner always advertises `external`, plus operating-system, architecture, hardware, SDK, or plugin capabilities permitted by its credential.
+
 ## Job states
 
-- `queued`: waiting for a compatible runner.
-- `running`: currently owned by a runner lease.
+- `queued`: waiting for a compatible Runner.
+- `running`: currently owned by a Runner lease.
 - `waiting_approval`: the target tool requires dual-control approval.
 - `blocked_lease`: the requester no longer owns the required workspace lease.
 - `succeeded`: completed and result/artifact metadata were recorded.
 - `failed`: retries were exhausted or the failure is not retryable.
 - `cancelled`: cancelled before execution or after cooperative completion.
 
-Runner leases recover abandoned `running` jobs after a process crash. A job is requeued until `maxAttempts` is reached.
+Runner leases recover abandoned `running` jobs after a process or network failure. A job is requeued until `maxAttempts` is reached.
+
+## Central preflight
+
+Every target is authorized when it is submitted. It is also re-evaluated immediately before a Runner receives it.
+
+The central Gateway checks:
+
+- target allowlist and current plugin state;
+- the original requester's current role;
+- the original requester's current workspace scope;
+- the current workspace lease;
+- the current approval policy.
+
+A Runner never decides whether a user is allowed to execute a job. It only executes work released by the central control plane.
 
 ## Approval and lease recovery
 
 When a job enters `waiting_approval`:
 
-1. Read the approval request with `approval_list`.
+1. Read the approval request with `team_approval_list`.
 2. A different maintainer or owner approves it.
-3. The runner retries the same target and consumes the approval once.
+3. a compatible Runner retries the same target and consumes the approval once.
+
+Approval is consumed before the task is delivered. If a remote Runner disappears after claim, a later attempt may require a new approval.
 
 When a job enters `blocked_lease`:
 
 1. Acquire or renew the workspace lease as the original requester.
-2. The embedded runner retries automatically.
+2. A compatible Runner retries automatically.
 3. Use `job_retry` for an immediate retry after correcting the prerequisite.
 
 ## Results and artifacts
@@ -84,24 +109,26 @@ When a job enters `blocked_lease`:
 
 Artifact paths must remain inside the job workspace. Hidden paths, credential directories, databases, keys, and logs are excluded. Files up to 128 MiB receive a SHA-256 digest.
 
+Embedded Runner artifacts refer to files on the central host. External Runner artifacts contain metadata for files on the remote host and are marked with `remote: true` and the Runner ID. DevMate does not transfer artifact bytes through the control-plane API.
+
 ## Cancellation
 
-Queued and deferred jobs cancel immediately. Running jobs use cooperative cancellation: DevMate marks the request, lets the bounded tool invocation settle, and records the final state as cancelled. It does not forcibly terminate arbitrary in-process JavaScript handlers.
+Queued and deferred jobs cancel immediately. Running jobs use cooperative cancellation: DevMate marks the request, reports cancellation during lease renewal, and the Runner aborts the local MCP request.
+
+The underlying tool or process may continue if it cannot be interrupted. DevMate does not forcefully terminate arbitrary in-process JavaScript handlers.
 
 Tools that start supervised persistent processes should be managed through the existing process tools rather than the durable queue.
 
-## Runner model
+## Embedded Runner
 
-The first runner is embedded in the gateway. It registers:
+The embedded Runner runs inside the central Gateway process. It registers:
 
 - operating system and architecture;
 - writable workspace IDs;
 - currently available capabilities such as `core`, `browser-qa`, and `godot`;
 - configurable concurrency.
 
-Use `runner_status` to inspect the registry. The durable runner schema is designed so later releases can add authenticated pull workers without changing the job document format.
-
-Configure the embedded runner with `job_runtime_configure`:
+Configure it with `job_runtime_configure`:
 
 ```json
 {
@@ -110,7 +137,30 @@ Configure the embedded runner with `job_runtime_configure`:
 }
 ```
 
-The maximum embedded concurrency is eight. Keep it lower for Godot exports, browser tests, or memory-constrained build hosts.
+The maximum embedded concurrency is eight. Keep it lower for Godot exports, browser tests, or memory-constrained hosts.
+
+## External Runners
+
+External Runners connect to the central Gateway using a dedicated `dmr_` token and `/runner/v1`. They are suitable for:
+
+- Windows, macOS, or Linux-specific builds;
+- Godot and browser test hosts;
+- Android or iOS toolchains;
+- GPU or high-memory machines;
+- isolated signing or release environments;
+- geographically separate development infrastructure.
+
+A Runner credential has explicit workspace scopes, capabilities, expiry, and concurrency. The process heartbeat is intersected with those limits, so a Runner cannot self-authorize broader access.
+
+Use `runner_control_configure` to disable the central embedded Runner and operate a control-plane-only Gateway. See `EXTERNAL_RUNNERS.md` for Agent setup and protocol details.
+
+## Runner ownership and delivery semantics
+
+A Runner claim creates a short renewable lease. The Runner renews while executing. If renewals stop, the central queue eventually reclaims the job.
+
+The execution model is at-least-once. A Runner may finish locally after losing the ability to report, and the job may later run again. Use idempotent target tools or application-level transaction and deduplication controls where duplicate execution would matter.
+
+Timeout failures are not automatically retried because an underlying local handler may still be finishing.
 
 ## Drain mode
 
@@ -118,7 +168,7 @@ Before maintenance or upgrade:
 
 1. Call `deployment_drain_start` with a reason.
 2. New team mutations and job submissions are rejected.
-3. The runner stops claiming queued jobs.
+3. Embedded and external Runners stop receiving queued jobs.
 4. Existing jobs are allowed to finish.
 5. Inspect `deployment_drain_status` until no jobs are in flight.
 6. Restart or upgrade the gateway.
@@ -128,10 +178,12 @@ Owner/local recovery credentials remain usable during drain. Team members may st
 
 ## Durability boundary
 
-Jobs, runner registration, events, results, drain state, approvals, leases, and team work sessions use the same atomic single-host runtime state file:
+Jobs, Runner registration, events, results, drain state, approvals, leases, and team work sessions use the same atomic single-host runtime state file on the central Gateway:
 
 ```text
 <config-directory>/state/runtime-state.json
 ```
 
-This is not a distributed broker. Do not share one state directory between multiple gateway processes or hosts. Use separate DevMate instances per runner host until an external control-plane backend is introduced.
+External Runner hosts have independent local DevMate state directories. They never mount or share the central state file.
+
+The central queue is not a distributed broker or highly available consensus system. Do not share one state directory between multiple central Gateway processes or hosts. Deploy independent central instances for separate trust domains until an external transactional state backend and leader election are implemented.
