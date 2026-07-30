@@ -116,7 +116,7 @@ export function findExecutable(candidates = []) {
       if (stat?.isFile()) return fs.realpathSync.native(raw);
       continue;
     }
-    const names = path.extname(raw) || process.platform !== 'win32' ? [raw] : extensions.map(ext => `${raw}${ext}`);
+    const names = (path.extname(raw) || process.platform !== 'win32') ? [raw] : extensions.map(ext => `${raw}${ext}`);
     for (const directory of pathEntries) {
       for (const name of names) {
         const candidate = path.join(directory, name);
@@ -128,7 +128,34 @@ export function findExecutable(candidates = []) {
   return null;
 }
 
-export function createPluginRuntime(plugin, server) {
+export function createPluginServiceRegistry() {
+  const entries = new Map();
+  return {
+    provide(plugin, name, value) {
+      const id = String(name || '').trim();
+      if (!plugin.manifest.provides.includes(id)) throw new Error(`Plugin ${plugin.manifest.id} did not declare provided service: ${id}`);
+      if (value == null || (typeof value !== 'object' && typeof value !== 'function')) throw new Error(`Plugin service ${id} must be an object or function`);
+      if (entries.has(id)) throw new Error(`Duplicate DevMate plugin service: ${id}`);
+      entries.set(id, { pluginId: plugin.manifest.id, value });
+      return value;
+    },
+    get(plugin, name, optional = false) {
+      const id = String(name || '').trim();
+      if (!plugin.manifest.consumes.includes(id)) throw new Error(`Plugin ${plugin.manifest.id} did not declare consumed service: ${id}`);
+      const entry = entries.get(id);
+      if (!entry && !optional) throw new Error(`Required DevMate plugin service is unavailable: ${id}`);
+      return entry?.value || null;
+    },
+    removeByPlugin(pluginId) {
+      for (const [name, entry] of entries) if (entry.pluginId === pluginId) entries.delete(name);
+    },
+    list() {
+      return [...entries.entries()].map(([name, entry]) => ({ name, pluginId: entry.pluginId }));
+    }
+  };
+}
+
+export function createPluginRuntime(plugin, server, serviceRegistry = createPluginServiceRegistry()) {
   const manifest = plugin.manifest;
   const readPluginSettings = () => {
     const config = readConfig();
@@ -154,6 +181,12 @@ export function createPluginRuntime(plugin, server) {
     assertCanMutate: action => assertCanMutate(readConfig(), action),
     toolText,
     audit: (action, payload = {}) => audit(`${manifest.id}:${action}`, payload),
+    services: {
+      provide: (name, value) => serviceRegistry.provide(plugin, name, value),
+      get: name => serviceRegistry.get(plugin, name, false),
+      optional: name => serviceRegistry.get(plugin, name, true),
+      list: () => serviceRegistry.list()
+    },
     workspace: {
       get: getWorkspace,
       resolve: resolveWorkspacePath,

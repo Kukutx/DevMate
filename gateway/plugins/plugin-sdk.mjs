@@ -2,6 +2,7 @@ export const PLUGIN_API_VERSION = '1';
 
 const PLUGIN_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 const TOOL_PREFIX_PATTERN = /^[a-z][a-z0-9_]*_?$/;
+const SERVICE_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 
 function asStringArray(value, field) {
   if (value == null) return [];
@@ -9,6 +10,14 @@ function asStringArray(value, field) {
     throw new Error(`${field} must be an array of non-empty strings`);
   }
   return [...new Set(value.map(item => item.trim()))];
+}
+
+function asServiceArray(value, field) {
+  const services = asStringArray(value, field);
+  for (const service of services) {
+    if (!SERVICE_ID_PATTERN.test(service)) throw new Error(`${field} contains invalid service id: ${service}`);
+  }
+  return services;
 }
 
 export function validatePluginManifest(input) {
@@ -33,6 +42,13 @@ export function validatePluginManifest(input) {
   }
   if (!input.core && toolPrefixes.length === 0) throw new Error(`Optional plugin ${id} must declare at least one tool prefix`);
   const capabilities = asStringArray(input.capabilities, `${id}.capabilities`);
+  const provides = asServiceArray(input.provides, `${id}.provides`);
+  const consumes = asServiceArray(input.consumes, `${id}.consumes`);
+  for (const service of provides) {
+    if (service !== id && !service.startsWith(`${id}.`)) {
+      throw new Error(`Plugin ${id} may only provide its own service namespace: ${service}`);
+    }
+  }
   const permissions = input.permissions && typeof input.permissions === 'object' && !Array.isArray(input.permissions)
     ? { ...input.permissions }
     : {};
@@ -51,6 +67,8 @@ export function validatePluginManifest(input) {
     dependencies,
     toolPrefixes,
     capabilities,
+    provides,
+    consumes,
     permissions: Object.freeze({ ...permissions, executablePatterns })
   });
 }
@@ -78,4 +96,4 @@ export function toolNameAllowed(manifest, name) {
   return manifest.core || manifest.toolPrefixes.some(prefix => value.startsWith(prefix));
 }
 
-export const __test = { PLUGIN_ID_PATTERN, TOOL_PREFIX_PATTERN };
+export const __test = { PLUGIN_ID_PATTERN, TOOL_PREFIX_PATTERN, SERVICE_ID_PATTERN };
