@@ -18,7 +18,7 @@ function normalizeInputActions(actions = [], knownActions = []) {
   for (const item of actions) {
     const action = String(item.action || '').trim();
     if (!action) throw new Error('Godot native input action requires action');
-    if (known.size && !known.has(action)) throw new Error(`Godot input action is not defined in project.godot: ${action}`);
+    if (!known.has(action)) throw new Error(`Godot input action is not defined in project.godot: ${action}`);
     const atMs = Math.min(300000, Math.max(0, Math.trunc(Number(item.atMs) || 0)));
     const strength = Math.min(1, Math.max(0, Number(item.strength ?? 1)));
     if (item.type === 'tap') {
