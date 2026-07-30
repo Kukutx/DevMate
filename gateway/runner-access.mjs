@@ -86,6 +86,8 @@ export function createRunnerCredential(config, input = {}) {
   if (config.runnerControl.credentials.length >= config.runnerControl.maxCredentials) {
     throw new Error(`Runner credential limit reached (${config.runnerControl.maxCredentials})`);
   }
+  const workspaceIds = normalizeStrings(input.workspaceIds || [], 200);
+  if (!workspaceIds.length) throw new Error('External Runner credentials require at least one explicit workspaceId');
   const id = uniqueCredentialId(config, input.id || input.name);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
@@ -93,8 +95,8 @@ export function createRunnerCredential(config, input = {}) {
   const credential = {
     id,
     name: String(input.name || id).trim().slice(0, 200) || id,
-    capabilities: normalizeStrings(input.capabilities || ['core'], 50).map(value => value.toLowerCase()),
-    workspaceIds: normalizeStrings(input.workspaceIds || [], 200),
+    capabilities: normalizeStrings(input.capabilities || ['core', 'external'], 50).map(value => value.toLowerCase()),
+    workspaceIds,
     maxConcurrent: clampInt(input.maxConcurrent, 1, 1, 16),
     salt,
     tokenHash: hashSecret(secret, salt),
@@ -106,6 +108,7 @@ export function createRunnerCredential(config, input = {}) {
     lastUsedAt: null
   };
   if (!credential.capabilities.includes('core')) credential.capabilities.unshift('core');
+  if (!credential.capabilities.includes('external')) credential.capabilities.push('external');
   config.runnerControl.credentials.push(credential);
   config.runnerControl.enabled = true;
   return { credential: runnerCredentialPublic(credential), token: `dmr_${id}_${secret}` };
@@ -119,8 +122,13 @@ export function updateRunnerCredential(config, id, patch = {}) {
   if (patch.capabilities !== undefined) {
     credential.capabilities = normalizeStrings(patch.capabilities, 50).map(value => value.toLowerCase());
     if (!credential.capabilities.includes('core')) credential.capabilities.unshift('core');
+    if (!credential.capabilities.includes('external')) credential.capabilities.push('external');
   }
-  if (patch.workspaceIds !== undefined) credential.workspaceIds = normalizeStrings(patch.workspaceIds, 200);
+  if (patch.workspaceIds !== undefined) {
+    const workspaceIds = normalizeStrings(patch.workspaceIds, 200);
+    if (!workspaceIds.length) throw new Error('External Runner credentials require at least one explicit workspaceId');
+    credential.workspaceIds = workspaceIds;
+  }
   if (patch.maxConcurrent !== undefined) credential.maxConcurrent = clampInt(patch.maxConcurrent, credential.maxConcurrent || 1, 1, 16);
   if (patch.expiresAt !== undefined) credential.expiresAt = parseExpiry(patch.expiresAt);
   if (patch.disabled !== undefined) credential.disabled = !!patch.disabled;
@@ -166,11 +174,13 @@ export function verifyRunnerToken(token, config) {
   if (credential.expiresAt && Date.parse(credential.expiresAt) <= Date.now()) return null;
   const candidate = hashSecret(parsed.secret, credential.salt);
   if (!timingSafeEqualText(candidate, credential.tokenHash)) return null;
+  const workspaceIds = Array.isArray(credential.workspaceIds) ? [...credential.workspaceIds] : [];
+  if (!workspaceIds.length) return null;
   return {
     id: credential.id,
     name: credential.name || credential.id,
-    capabilities: Array.isArray(credential.capabilities) ? [...credential.capabilities] : ['core'],
-    workspaceIds: Array.isArray(credential.workspaceIds) ? [...credential.workspaceIds] : [],
+    capabilities: Array.isArray(credential.capabilities) ? [...credential.capabilities] : ['core', 'external'],
+    workspaceIds,
     maxConcurrent: clampInt(credential.maxConcurrent, 1, 1, 16),
     source: 'runner-token',
     tokenVersion: credential.tokenVersion || 1
