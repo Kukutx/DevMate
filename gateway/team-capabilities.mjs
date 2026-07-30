@@ -4,16 +4,12 @@ import { requestContext } from './request-context.mjs';
 import { authorizeToolCall, normalizeDeploymentConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
-import {
-  activeWorkSession,
-  clearWorkSessions,
-  touchWorkSession
-} from './team-work-sessions.mjs';
-import {
-  assertWorkspaceLease,
-  clearWorkspaceLeases
-} from './workspace-leases.mjs';
+import { activeWorkSession, touchWorkSession } from './team-work-sessions.mjs';
+import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { clearPreviewShares } from './published-previews.mjs';
+import { ensureToolApproval } from './approvals.mjs';
+import { registerApprovalTools } from './approval-tools.mjs';
+import { incrementCounter, observeDuration } from './observability.mjs';
 import { registerTeamManagementTools } from './team-management-tools.mjs';
 import { registerTeamCollaborationTools } from './team-collaboration-tools.mjs';
 import {
@@ -51,6 +47,7 @@ function registerTeamTools(server) {
   };
   registerTeamManagementTools(register, annotations);
   registerTeamCollaborationTools(register, annotations);
+  registerApprovalTools(register, annotations);
 }
 
 function inferredWorkspace(name, args = {}) {
@@ -149,14 +146,32 @@ function installAuthorizationWrapper(McpServerClass) {
       }
 
       const started = Date.now();
+      const labels = {
+        tool: name,
+        capability: authorized.capability,
+        role: authorized.principal.role,
+        source: authorized.principal.source
+      };
       const active = authorized.workspaceId
         ? activeWorkSession(authorized.principal.id, authorized.workspaceId)
         : null;
       try {
+        const approval = ensureToolApproval({
+          config: current,
+          principal: authorized.principal,
+          tool: name,
+          capability: authorized.capability,
+          workspaceId: authorized.workspaceId,
+          args: authorizationArgs
+        });
+        if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
+
         const result = filterResult(name, await handler(args, ...rest), authorized.principal);
         const session = authorized.workspaceId
           ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
           : null;
+        incrementCounter('devmate_tool_calls_total', { ...labels, status: 'success' }, 1);
+        observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
         await audit('team_tool_call', {
           requestId: requestContext()?.requestId || null,
           principalId: authorized.principal.id,
@@ -165,6 +180,7 @@ function installAuthorizationWrapper(McpServerClass) {
           capability: authorized.capability,
           workspace: authorized.workspaceId,
           workSessionId: session?.id || active?.id || null,
+          approvalId: approval?.request?.id || null,
           ok: true,
           durationMs: Date.now() - started
         });
@@ -173,6 +189,10 @@ function installAuthorizationWrapper(McpServerClass) {
         const session = authorized.workspaceId
           ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
           : null;
+        const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
+        incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
+        observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
+        if (error?.code === 'approval_required') incrementCounter('devmate_approvals_total', { status: 'pending', tool: name }, 1);
         await audit('team_tool_call', {
           requestId: requestContext()?.requestId || null,
           principalId: authorized.principal.id,
@@ -181,6 +201,7 @@ function installAuthorizationWrapper(McpServerClass) {
           capability: authorized.capability,
           workspace: authorized.workspaceId,
           workSessionId: session?.id || active?.id || null,
+          approvalId: error?.approvalRequest?.id || null,
           ok: false,
           durationMs: Date.now() - started,
           error: String(error?.message || error).slice(0, 1000)
@@ -204,8 +225,6 @@ export function installTeamCapabilities(McpServerClass) {
 
 export async function shutdownTeamServices() {
   clearPreviewShares();
-  clearWorkSessions();
-  clearWorkspaceLeases();
 }
 
 export const __test = {
