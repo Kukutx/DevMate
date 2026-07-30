@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-runner-tools-'));
+const configPath = path.join(temp, 'config.json');
+process.env.DEVMATE_CONFIG = configPath;
+await fsp.writeFile(configPath, JSON.stringify({
+  appVersion: '2.3.0',
+  auth: { required: true, token: 'owner-token-long-enough' },
+  deployment: { mode: 'team' },
+  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: false },
+  production: {},
+  jobs: { embeddedRunnerEnabled: true },
+  runnerControl: { enabled: false, credentials: [] },
+  activeWorkspaceId: 'app',
+  workspaces: [{ id: 'app', name: 'Application', root: temp, mode: 'workspace-write', reference: false }]
+}, null, 2), 'utf8');
+
+const { registerRunnerTools } = await import('../gateway/runner-tools.mjs');
+const { runWithRequestContext } = await import('../gateway/request-context.mjs');
+
+function principal(role) {
+  return {
+    id: role,
+    name: role,
+    role,
+    source: 'team-token',
+    workspaceIds: ['app']
+  };
+}
+
+const tools = new Map();
+registerRunnerTools(
+  (name, config, handler) => tools.set(name, { config, handler }),
+  {
+    ro: { readOnlyHint: true, destructiveHint: false },
+    rw: { readOnlyHint: false, destructiveHint: true }
+  }
+);
+
+test('Runner topology status requires maintainer or owner', async () => {
+  await assert.rejects(
+    runWithRequestContext({ principal: principal('reviewer') }, () =>
+      tools.get('runner_control_status').handler({})
+    ),
+    /maintainer or owner/
+  );
+  const status = await runWithRequestContext({ principal: principal('maintainer') }, () =>
+    tools.get('runner_control_status').handler({})
+  );
+  assert.equal(status.structuredContent.embeddedRunnerEnabled, true);
+  assert.equal(status.structuredContent.externalControlEnabled, false);
+});
+
+test('Runner control changes and credentials require owner', async () => {
+  await assert.rejects(
+    runWithRequestContext({ principal: principal('maintainer') }, () =>
+      tools.get('runner_control_configure').handler({ enabled: true })
+    ),
+    /owner role/
+  );
+  const configured = await runWithRequestContext({ principal: principal('owner') }, () =>
+    tools.get('runner_control_configure').handler({ enabled: true, embeddedRunnerEnabled: false })
+  );
+  assert.equal(configured.structuredContent.runnerControl.externalControlEnabled, true);
+  assert.equal(configured.structuredContent.runnerControl.embeddedRunnerEnabled, false);
+  assert.equal(configured.structuredContent.restartRequired, true);
+
+  await assert.rejects(
+    runWithRequestContext({ principal: principal('maintainer') }, () =>
+      tools.get('runner_credential_create').handler({
+        name: 'Runner',
+        workspaceIds: ['app']
+      })
+    ),
+    /owner role/
+  );
+  const created = await runWithRequestContext({ principal: principal('owner') }, () =>
+    tools.get('runner_credential_create').handler({
+      name: 'Runner',
+      workspaceIds: ['Application'],
+      capabilities: ['linux-x64'],
+      maxConcurrent: 2
+    })
+  );
+  assert.match(created.structuredContent.token, /^dmr_/);
+  assert.deepEqual(created.structuredContent.credential.workspaceIds, ['app']);
+  assert.equal(created.structuredContent.credential.capabilities.includes('external'), true);
+});
+
+test.after(async () => {
+  delete process.env.DEVMATE_CONFIG;
+  await fsp.rm(temp, { recursive: true, force: true });
+});
