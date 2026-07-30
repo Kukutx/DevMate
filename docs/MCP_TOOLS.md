@@ -1,6 +1,6 @@
 # MCP Tools
 
-DevMate exposes a common development tool surface in personal, team, and production modes. Team authorization is applied to both core and plugin tools.
+DevMate exposes a common development tool surface in personal, team, and production modes. Team authorization is applied to core, plugin, job, and Runner-administration tools.
 
 ## Deployment and team operations
 
@@ -29,11 +29,11 @@ Always available:
 - `published_preview_list`
 - `published_preview_revoke`
 
-Member-management and deployment configuration require the owner role. Publishing, cross-team activity, and administrative operations require maintainer or owner capability. Workspace-scoped results are filtered for restricted principals.
+Member management and deployment configuration require the Owner role. Publishing, cross-team activity, and administrative operations require Maintainer or Owner capability. Workspace-scoped results are filtered for restricted principals.
 
 ## Durable jobs and runners
 
-The persistent queue and embedded capability-aware runner expose:
+The persistent queue and capability-aware runners expose:
 
 - `job_target_catalog`
 - `job_runtime_configure`
@@ -50,9 +50,38 @@ The persistent queue and embedded capability-aware runner expose:
 
 `job_submit` accepts only reviewed target tools. It re-evaluates the target tool's RBAC, workspace scope, lease, and approval requirements before creating the job. Credential-shaped arguments and arbitrary shell commands are rejected. Durable `git_save` may commit but cannot push.
 
-Jobs persist across gateway restarts and may enter `waiting_approval` or `blocked_lease`. The embedded runner renews ownership leases, retries abandoned work within the configured attempt budget, and indexes bounded workspace-contained artifacts. Use drain mode before upgrades so the runner stops claiming queued work while current jobs settle.
+Jobs persist across central Gateway restarts and may enter `waiting_approval` or `blocked_lease`. Embedded and external Runners renew ownership leases, recover abandoned work within the configured attempt budget, and return bounded result and artifact metadata. Use drain mode before upgrades so all Runners stop receiving queued work while current jobs settle.
 
-See `JOBS.md` for target eligibility, states, retries, cooperative cancellation, artifacts, and drain behavior.
+See `JOBS.md` for target eligibility, states, retries, cooperative cancellation, artifacts, routing, and drain behavior.
+
+## External Runner control plane
+
+Owner-managed Runner control tools:
+
+- `runner_control_status`
+- `runner_control_configure`
+- `runner_credential_list`
+- `runner_credential_create`
+- `runner_credential_update`
+- `runner_credential_rotate`
+- `runner_credential_revoke`
+
+`runner_control_status` reports whether the embedded Runner and external control API are enabled, bounded API limits, credential counts, and the durable Runner registry.
+
+`runner_control_configure` can:
+
+- enable or disable `/runner/v1`;
+- enable or disable the central embedded Runner;
+- change external Runner request-size and rate limits;
+- change the maximum credential count.
+
+Changing the embedded Runner lifecycle requires a Gateway restart. External API limit changes apply immediately.
+
+Every `dmr_` credential has explicit workspace scopes, capabilities, concurrency, expiry, rotation, disable, and revocation. Credential lifecycle and control configuration require Owner and are administrative operations under the production approval policy.
+
+The external protocol is not MCP. It uses authenticated JSON POST requests under `/runner/v1` for heartbeat, claim, lease renewal, completion, failure, and cancellation acknowledgement. Runner tokens cannot call MCP tools.
+
+See `EXTERNAL_RUNNERS.md` for the Agent, protocol, central preflight, routing, security boundary, and deployment templates.
 
 ## Approval workflow
 
@@ -65,9 +94,9 @@ Production mode requires dual-control approval for `publish` and `admin` capabil
 - `team_approval_decide`
 - `team_approval_cancel`
 
-A protected tool call creates a pending approval and fails without executing. A different maintainer or owner approves it, then the original requester retries the identical call. DevMate verifies the requester, tool, workspace, and canonical argument digest and consumes the approval once.
+A protected tool call creates a pending approval and fails without executing. A different Maintainer or Owner approves it, then the original requester retries the identical call. DevMate verifies the requester, tool, workspace, and canonical argument digest and consumes the approval once.
 
-`team_approval_configure` can change required capabilities, explicitly protected tools, approval TTL, separation of duties, and owner bypass. Disabling separation of duties is not recommended for production.
+`team_approval_configure` can change required capabilities, explicitly protected tools, approval TTL, separation of duties, and Owner bypass. Disabling separation of duties is not recommended for production.
 
 ## Workspace context
 
@@ -119,7 +148,7 @@ Process and preview identifiers are resolved back to their workspace before team
 - `list_configured_commands`, `run_configured_command`, `run_command`
 - `detect_validation`, `run_smart_checks`
 
-Reviewers can run bounded validation tools. General project scripts, configured commands, arbitrary commands, and persistent processes require developer-level write/execute capability.
+Reviewers can run bounded validation tools. General project scripts, configured commands, arbitrary commands, and persistent processes require Developer-level write/execute capability.
 
 ## Git
 
@@ -127,7 +156,7 @@ Reviewers can run bounded validation tools. General project scripts, configured 
 - `git_add`, `git_stage`, `git_commit`, `git_save`
 - `git_push`, `git_pull`, `git_branch`, `git_checkout`, `git_stash`, `git_raw`
 
-Publishing requires maintainer capability and, in production, normally requires a second-person approval. High-risk recovery/force operations are blocked for team tokens and reserved for the local owner credential.
+Publishing requires Maintainer capability and, in production, normally requires a second-person approval. High-risk recovery/force operations are blocked for team tokens and reserved for the local Owner credential.
 
 ## Reporting and metrics
 
@@ -136,6 +165,6 @@ Publishing requires maintainer capability and, in production, normally requires 
 - `deployment_metrics`
 - `deployment_runtime_state`
 
-Prometheus-compatible metrics are also available from loopback only at `/control/metrics`. Job counters, durations, and in-flight gauges are included.
+Prometheus-compatible metrics are also available from loopback only at `/control/metrics`. HTTP, job, approval, embedded Runner, and external Runner-control metrics are included.
 
-See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
+See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `EXTERNAL_RUNNERS.md` for remote execution, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
