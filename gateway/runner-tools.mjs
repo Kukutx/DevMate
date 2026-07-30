@@ -11,6 +11,12 @@ import {
 } from './runner-access.mjs';
 import { principalNow, workspaceIds } from './team-tool-data.mjs';
 
+function ownerNow() {
+  const principal = principalNow();
+  if (principal.role !== 'owner') throw new Error('External Runner credential administration requires the owner role');
+  return principal;
+}
+
 export function registerRunnerTools(register, annotations) {
   const { ro, rw } = annotations;
 
@@ -43,13 +49,14 @@ export function registerRunnerTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async patch => {
+    const principal = ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     for (const key of ['enabled', 'maxRequestBytes', 'requestsPerMinute', 'maxCredentials']) {
       if (patch[key] !== undefined) config.runnerControl[key] = patch[key];
     }
     normalizeRunnerControlConfig(config);
     writeConfig(config);
-    await audit('runner_control_configure', { principalId: principalNow().id, ...patch });
+    await audit('runner_control_configure', { principalId: principal.id, ...patch });
     return toolText({ configured: true, runnerControl: {
       enabled: config.runnerControl.enabled,
       path: config.runnerControl.path,
@@ -65,6 +72,7 @@ export function registerRunnerTools(register, annotations) {
     inputSchema: {},
     annotations: ro
   }, async () => {
+    ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     return toolText({ credentials: config.runnerControl.credentials.map(runnerCredentialPublic) });
   });
@@ -82,6 +90,7 @@ export function registerRunnerTools(register, annotations) {
     },
     annotations: rw
   }, async input => {
+    const principal = ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     const result = createRunnerCredential(config, {
       ...input,
@@ -89,7 +98,7 @@ export function registerRunnerTools(register, annotations) {
     });
     writeConfig(config);
     await audit('runner_credential_create', {
-      principalId: principalNow().id,
+      principalId: principal.id,
       runnerId: result.credential.id,
       capabilities: result.credential.capabilities,
       workspaceIds: result.credential.workspaceIds
@@ -114,11 +123,12 @@ export function registerRunnerTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, ...patch }) => {
+    const principal = ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     if (patch.workspaceIds !== undefined) patch.workspaceIds = workspaceIds(config, patch.workspaceIds);
     const credential = updateRunnerCredential(config, id, patch);
     writeConfig(config);
-    await audit('runner_credential_update', { principalId: principalNow().id, runnerId: id, keys: Object.keys(patch) });
+    await audit('runner_credential_update', { principalId: principal.id, runnerId: id, keys: Object.keys(patch) });
     return toolText({ credential });
   });
 
@@ -128,10 +138,11 @@ export function registerRunnerTools(register, annotations) {
     inputSchema: { id: z.string().min(1) },
     annotations: rw
   }, async ({ id }) => {
+    const principal = ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     const result = rotateRunnerCredentialToken(config, id);
     writeConfig(config);
-    await audit('runner_credential_rotate', { principalId: principalNow().id, runnerId: id });
+    await audit('runner_credential_rotate', { principalId: principal.id, runnerId: id });
     return toolText({
       ...result,
       warning: 'The replacement token is shown once. Update the Runner secret before restarting it and remove old copies.'
@@ -144,10 +155,11 @@ export function registerRunnerTools(register, annotations) {
     inputSchema: { id: z.string().min(1) },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id }) => {
+    const principal = ownerNow();
     const config = normalizeRunnerControlConfig(readConfig());
     const credential = revokeRunnerCredential(config, id);
     writeConfig(config);
-    await audit('runner_credential_revoke', { principalId: principalNow().id, runnerId: id });
+    await audit('runner_credential_revoke', { principalId: principal.id, runnerId: id });
     return toolText({ credential });
   });
 }
