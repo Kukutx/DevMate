@@ -126,7 +126,7 @@ export async function runNativeQa(context, {
   const args = [];
   if (headless) args.push('--headless');
   if (capturePlan) {
-    args.push('--write-movie', capturePlan.file, '--fixed-fps', String(capturePlan.fps));
+    args.push('--write-movie', capturePlan.file, '--fixed-fps', String(capturePlan.fps), '--quit-after', String(capturePlan.frames + 2));
     if (capturePlan.disableVsync) args.push('--disable-vsync');
   }
   args.push('--path', project.root);
@@ -134,18 +134,22 @@ export async function runNativeQa(context, {
   const boundedRunForMs = Math.min(300000, Math.max(250, Math.trunc(Number(runForMs) || 3000)));
   const environment = {
     DEVMATE_QA_REPORT: reportFile,
-    DEVMATE_QA_AUTO_FINISH_MS: String(boundedRunForMs),
+    DEVMATE_QA_AUTO_FINISH_MS: capturePlan ? '0' : String(boundedRunForMs),
     DEVMATE_QA_AUTO_FINISH_FRAMES: capturePlan ? String(capturePlan.frames) : '0',
     DEVMATE_QA_QUIT_ON_CHECKPOINT: String(quitOnCheckpoint || '')
   };
   if (planRequired) environment.DEVMATE_QA_PLAN = planFile;
 
+  const captureExpectedMs = capturePlan ? Math.ceil(capturePlan.frames / capturePlan.fps * 1000) : 0;
+  const defaultTimeoutMs = capturePlan
+    ? Math.min(900000, Math.max(120000, captureExpectedMs * 10 + 60000))
+    : Math.min(900000, Math.max(30000, boundedRunForMs + 60000));
   let result;
   try {
     result = await context.executables.run(executable, args, {
       cwd: project.root,
       environment,
-      timeoutMs: timeoutMs || Math.min(900000, Math.max(30000, boundedRunForMs + 60000)),
+      timeoutMs: timeoutMs || defaultTimeoutMs,
       maxOutputChars: 500000
     });
   } finally {
