@@ -126,7 +126,7 @@ export function parseJunitXml(text = '') {
     for (const key of Object.keys(totals)) totals[key] += Number(suite[key] || 0);
     return suite;
   });
-  return { valid: /<testsuites?\b/.test(source), ...totals, suites: suites.slice(0, 200) };
+  return { valid: /<testsuites?\b/.test(source) && suites.length > 0, ...totals, suites: suites.slice(0, 200) };
 }
 
 function selectFramework(requested, status) {
@@ -205,8 +205,15 @@ export async function runGodotTests(context, {
     try { junit = parseJunitXml(await fsp.readFile(junitFile, 'utf8')); }
     catch (error) { junitError = error.message; }
   }
+  const checks = {
+    processSucceeded: result.exitCode === 0 && !result.timedOut,
+    noDiagnosticErrors: diagnostics.every(item => item.severity !== 'error'),
+    junitExists: !!stat?.isFile(),
+    junitValid: junit?.valid === true,
+    testsPassed: junit?.failures === 0 && junit?.errors === 0
+  };
   return {
-    ok: result.exitCode === 0 && !result.timedOut && diagnostics.every(item => item.severity !== 'error') && (!junit || (junit.failures === 0 && junit.errors === 0)),
+    ok: Object.values(checks).every(Boolean),
     workspace: { id: project.workspace.id, name: project.workspace.name },
     projectSubpath: project.subpath,
     framework: selected,
@@ -219,7 +226,30 @@ export async function runGodotTests(context, {
     junit,
     junitError,
     reportPath: artifactPaths[0],
-    artifactPaths
+    artifactPaths,
+    checks
+  };
+}
+
+export function compactGodotTestResult(result) {
+  return {
+    ok: result.ok,
+    workspace: result.workspace,
+    projectSubpath: result.projectSubpath,
+    framework: result.framework,
+    junitPath: result.junitPath,
+    junit: result.junit,
+    junitError: result.junitError,
+    reportPath: result.reportPath,
+    artifactPaths: result.artifactPaths,
+    diagnostics: result.diagnostics,
+    checks: result.checks,
+    process: {
+      exitCode: result.result?.exitCode ?? null,
+      timedOut: result.result?.timedOut === true,
+      stdoutTruncated: result.result?.stdoutTruncated === true,
+      stderrTruncated: result.result?.stderrTruncated === true
+    }
   };
 }
 
