@@ -114,11 +114,12 @@ export async function runPerformanceTest(context, {
   });
   const summary = summarizePerformance(native.report, { warmupMs });
   const budget = evaluatePerformanceBudgets(summary, budgets);
+  const samplesAvailable = summary.evaluatedSamples > 0;
   return {
     ...native,
-    ok: native.ok && budget.ok,
+    ok: native.ok && samplesAvailable && budget.ok,
     performance: { summary, budget },
-    checks: { ...native.checks, performanceSamples: summary.evaluatedSamples > 0, performanceBudgets: budget.ok }
+    checks: { ...native.checks, performanceSamples: samplesAvailable, performanceBudgets: budget.ok }
   };
 }
 
@@ -142,7 +143,7 @@ export async function runMovieCapture(context, {
   if (!performance) return native;
   const summary = summarizePerformance(native.report, { warmupMs: 500 });
   const budget = evaluatePerformanceBudgets(summary, performanceBudgets);
-  return { ...native, ok: native.ok && budget.ok, performance: { summary, budget } };
+  return { ...native, ok: native.ok && summary.evaluatedSamples > 0 && budget.ok, performance: { summary, budget } };
 }
 
 export const __test = { BUDGET_FIELDS, METRICS, finiteValues, summarizeMetric };
