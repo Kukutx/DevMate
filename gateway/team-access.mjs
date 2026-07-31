@@ -27,7 +27,8 @@ const VALIDATE_TOOLS = new Set([
   'run_smart_checks', 'job_submit', 'job_retry',
   'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
   'godot_doctor', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web', 'godot_native_test', 'godot_acceptance_test',
-  'godot_acceptance_run_saved', 'godot_acceptance_suite'
+  'godot_acceptance_run_saved', 'godot_acceptance_suite', 'godot_performance_test', 'godot_movie_capture', 'godot_test_run',
+  'godot_advanced_run_saved', 'godot_advanced_suite'
 ]);
 const EXECUTE_TOOLS = new Set([
   'run_command', 'start_process', 'send_process_input', 'stop_process', 'godot_run'

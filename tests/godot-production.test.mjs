@@ -72,6 +72,7 @@ test('installs, upgrades, and removes QA Bridge with backups', async t => {
   assert.equal(installed.changed, true);
   const status = await inspectQaBridge(current.project);
   assert.equal(status.current, true);
+  assert.equal(status.version, 3);
   const repeated = await installQaBridge(current.context, { workspaceId: 'app', projectSubpath: 'game' });
   assert.equal(repeated.changed, false);
   const removed = await removeQaBridge(current.context, { workspaceId: 'app', projectSubpath: 'game' });
@@ -88,7 +89,7 @@ test('runs native Godot QA with deterministic input plan and state assertions', 
     if (options.environment.DEVMATE_QA_PLAN) plan = JSON.parse(await fsp.readFile(options.environment.DEVMATE_QA_PLAN, 'utf8'));
     await fsp.mkdir(path.dirname(options.environment.DEVMATE_QA_REPORT), { recursive: true });
     await fsp.writeFile(options.environment.DEVMATE_QA_REPORT, JSON.stringify({
-      runtime: { bridge_ready: true, bridge_version: 2, completed: true, ok: true },
+      runtime: { bridge_ready: true, bridge_version: 3, completed: true, ok: true },
       player: { health: 5 },
       checkpoints: [{ name: 'ready' }]
     }), 'utf8');

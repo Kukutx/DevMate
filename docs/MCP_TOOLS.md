@@ -68,18 +68,9 @@ Owner-managed Runner control tools:
 
 `runner_control_status` reports whether the embedded Runner and external control API are enabled, bounded API limits, credential counts, and the durable Runner registry.
 
-`runner_control_configure` can:
+`runner_control_configure` can enable or disable `/runner/v1`, control the embedded Runner lifecycle, and change bounded API limits. Changing the embedded Runner lifecycle requires a Gateway restart.
 
-- enable or disable `/runner/v1`;
-- enable or disable the central embedded Runner;
-- change external Runner request-size and rate limits;
-- change the maximum credential count.
-
-Changing the embedded Runner lifecycle requires a Gateway restart. External API limit changes apply immediately.
-
-Every `dmr_` credential has explicit workspace scopes, capabilities, concurrency, expiry, rotation, disable, and revocation. Credential lifecycle and control configuration require Owner and are administrative operations under the production approval policy.
-
-The external protocol is not MCP. It uses authenticated JSON POST requests under `/runner/v1` for heartbeat, claim, lease renewal, completion, failure, and cancellation acknowledgement. Runner tokens cannot call MCP tools.
+Every `dmr_` credential has explicit workspace scopes, capabilities, concurrency, expiry, rotation, disable, and revocation. Runner tokens cannot call MCP tools.
 
 See `EXTERNAL_RUNNERS.md` for the Agent, protocol, central preflight, routing, security boundary, and deployment templates.
 
@@ -94,9 +85,7 @@ Production mode requires dual-control approval for `publish` and `admin` capabil
 - `team_approval_decide`
 - `team_approval_cancel`
 
-A protected tool call creates a pending approval and fails without executing. A different Maintainer or Owner approves it, then the original requester retries the identical call. DevMate verifies the requester, tool, workspace, and canonical argument digest and consumes the approval once.
-
-`team_approval_configure` can change required capabilities, explicitly protected tools, approval TTL, separation of duties, and Owner bypass. Disabling separation of duties is not recommended for production.
+A protected tool call creates a pending approval and fails without executing. A different Maintainer or Owner approves it, then the original requester retries the identical call.
 
 ## Workspace context
 
@@ -107,7 +96,7 @@ A protected tool call creates a pending approval and fails without executing. A 
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
 
-In team mode, use team work sessions rather than the legacy singleton task session. Global task/audit administration is restricted.
+In team mode, use team work sessions rather than the legacy singleton task session.
 
 ## Capability plugins and automation
 
@@ -157,7 +146,7 @@ Exports:
 - `godot_export_matrix`
 - `godot_export_web`
 
-Acceptance:
+Native and Web acceptance:
 
 - `godot_native_test`
 - `godot_acceptance_test`
@@ -165,9 +154,25 @@ Acceptance:
 - `godot_acceptance_run_saved`
 - `godot_acceptance_suite`
 
-Runtime status, dependency graph, and automation planning are read-only. `godot_project_audit` is also read-only. Validation, export, native QA, and Web acceptance are `validate` operations. QA Bridge lifecycle, quick setup, and quality report generation write workspace/config data and require write permission plus a lease where configured.
+Performance and deterministic evidence:
 
-Approved Godot audit, export, acceptance, and quality-report tools can run as durable jobs on a Runner with the `godot` capability. `godot_automation_plan` provides suggested additional capability labels before submission.
+- `godot_performance_test`
+- `godot_movie_capture`
+
+Framework tests:
+
+- `godot_test_status`
+- `godot_test_run`
+
+Version-controlled advanced workflows:
+
+- `godot_advanced_manifest`
+- `godot_advanced_run_saved`
+- `godot_advanced_suite`
+
+Runtime status, dependency graph, automation planning, project audit, test-framework discovery, and manifest reads are read-only. Validation, export, native/Web acceptance, performance, capture, framework execution, and advanced suites are `validate` operations. QA Bridge lifecycle, quick setup, and quality-report generation require write permission plus a lease where configured.
+
+Approved durable Godot targets include audit, export, acceptance, quality report, performance, movie capture, framework tests, and saved advanced scenarios/suites. All require a Runner with `core` and `godot`; Web acceptance additionally needs Browser QA. Movie capture requires a usable display server on the selected Runner.
 
 ## Trusted local capabilities
 
@@ -188,7 +193,7 @@ Process and preview identifiers are resolved back to their workspace before team
 - `list_configured_commands`, `run_configured_command`, `run_command`
 - `detect_validation`, `run_smart_checks`
 
-Reviewers can run bounded validation tools. General project scripts, configured commands, arbitrary commands, and persistent processes require Developer-level write/execute capability.
+Reviewers can run bounded validation tools. General scripts, arbitrary commands, and persistent processes require Developer-level write/execute capability.
 
 ## Git
 
@@ -196,7 +201,7 @@ Reviewers can run bounded validation tools. General project scripts, configured 
 - `git_add`, `git_stage`, `git_commit`, `git_save`
 - `git_push`, `git_pull`, `git_branch`, `git_checkout`, `git_stash`, `git_raw`
 
-Publishing requires Maintainer capability and, in production, normally requires a second-person approval. High-risk recovery/force operations are blocked for team tokens and reserved for the local Owner credential.
+Publishing requires Maintainer capability and, in production, normally requires a second-person approval.
 
 ## Reporting and metrics
 
@@ -206,6 +211,6 @@ Publishing requires Maintainer capability and, in production, normally requires 
 - `deployment_metrics`
 - `deployment_runtime_state`
 
-Prometheus-compatible metrics are also available from loopback only at `/control/metrics`. HTTP, job, approval, embedded Runner, and external Runner-control metrics are included.
+Prometheus-compatible metrics are available from loopback only at `/control/metrics`.
 
-See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `EXTERNAL_RUNNERS.md` for remote execution, `GODOT_AUTOMATION.md` for Godot audit/export/QA workflows, `GODOT_RUNTIME_QUALITY.md` for runtime/dependency/planning/report workflows, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
+See `TEAM_DEPLOYMENT.md`, `JOBS.md`, `EXTERNAL_RUNNERS.md`, `GODOT_AUTOMATION.md`, `GODOT_RUNTIME_QUALITY.md`, `GODOT_TEST_PERFORMANCE.md`, `OPERATIONS.md`, `TUNNELS.md`, and `SECURITY.md` for detailed behavior and trust boundaries.

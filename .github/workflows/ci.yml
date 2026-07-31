@@ -39,6 +39,9 @@ jobs:
       - name: Check syntax
         run: npm run check
 
+      - name: Check advanced Godot automation syntax
+        run: node --check gateway/plugins/godot-advanced-automation.mjs
+
       - name: Unit tests
         run: npm run test:unit
 
@@ -60,7 +63,7 @@ jobs:
   godot-real:
     name: Real Godot 4.7.1
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GODOT_VERSION: 4.7.1
       GODOT_STATUS: stable
@@ -77,6 +80,11 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Install virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb
 
       - name: Cache Godot editor
         uses: actions/cache@v4
@@ -114,5 +122,8 @@ jobs:
       - name: Show Godot version
         run: "$GODOT_REAL_BIN --version"
 
-      - name: Run real Godot validation and native QA
+      - name: Run real Godot validation, native QA, and performance sampling
         run: node --test tests/godot-real-runtime.test.mjs
+
+      - name: Run real Godot deterministic movie capture
+        run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs

@@ -5,7 +5,7 @@ import { resolveProject } from './godot-project.mjs';
 
 export const QA_BRIDGE_SCRIPT_PATH = 'addons/devmate_qa/devmate_qa.gd';
 export const QA_BRIDGE_AUTOLOAD_NAME = 'DevMateQA';
-export const QA_BRIDGE_VERSION = 2;
+export const QA_BRIDGE_VERSION = 3;
 
 const QA_BRIDGE_SCRIPT = `extends Node
 
@@ -15,6 +15,7 @@ const PUBLISH_INTERVAL_MS := 100
 const REPORT_ENV := "DEVMATE_QA_REPORT"
 const PLAN_ENV := "DEVMATE_QA_PLAN"
 const AUTO_FINISH_ENV := "DEVMATE_QA_AUTO_FINISH_MS"
+const AUTO_FINISH_FRAMES_ENV := "DEVMATE_QA_AUTO_FINISH_FRAMES"
 const QUIT_CHECKPOINT_ENV := "DEVMATE_QA_QUIT_ON_CHECKPOINT"
 
 var _state: Dictionary = {}
@@ -23,18 +24,28 @@ var _input_actions: Array = []
 var _input_index := 0
 var _last_publish_ms := 0
 var _started_ms := 0
+var _started_frame := 0
 var _report_path := ""
 var _plan_path := ""
 var _auto_finish_ms := 0
+var _auto_finish_frames := 0
 var _quit_checkpoint := ""
 var _finished := false
+var _performance_enabled := false
+var _performance_interval_ms := 250
+var _performance_max_samples := 600
+var _performance_last_ms := 0
+var _performance_last_frame := -1
+var _performance_samples: Array[Dictionary] = []
 
 func _ready() -> void:
     process_mode = Node.PROCESS_MODE_ALWAYS
     _started_ms = Time.get_ticks_msec()
+    _started_frame = Engine.get_process_frames()
     _report_path = OS.get_environment(REPORT_ENV)
     _plan_path = OS.get_environment(PLAN_ENV)
     _auto_finish_ms = int(OS.get_environment(AUTO_FINISH_ENV))
+    _auto_finish_frames = int(OS.get_environment(AUTO_FINISH_FRAMES_ENV))
     _quit_checkpoint = OS.get_environment(QUIT_CHECKPOINT_ENV)
     set_value("runtime.bridge_ready", true)
     set_value("runtime.bridge_version", BRIDGE_VERSION)
@@ -42,6 +53,7 @@ func _ready() -> void:
     set_value("runtime.native_report", not _report_path.is_empty())
     set_value("runtime.executed_actions", 0)
     _load_plan()
+    _sample_performance(_started_ms, true)
     _publish_now()
 
 func set_value(state_path: String, value: Variant) -> void:
@@ -87,6 +99,7 @@ func finish(success: bool = true, message: String = "", data: Dictionary = {}) -
         "elapsed_ms": Time.get_ticks_msec() - _started_ms,
         "data": {"ok": success, "message": message}
     })
+    _sample_performance(Time.get_ticks_msec(), true)
     _publish_now()
     call_deferred("_quit", 0 if success else 1)
 
@@ -96,6 +109,8 @@ func fail(message: String, data: Dictionary = {}) -> void:
 func clear() -> void:
     _state.clear()
     _checkpoints.clear()
+    _performance_samples.clear()
+    _performance_last_frame = -1
     set_value("runtime.bridge_ready", true)
     set_value("runtime.bridge_version", BRIDGE_VERSION)
 
@@ -106,13 +121,25 @@ func snapshot() -> Dictionary:
     output["runtime"]["fps"] = Engine.get_frames_per_second()
     output["runtime"]["time_ms"] = Time.get_ticks_msec()
     output["runtime"]["elapsed_ms"] = Time.get_ticks_msec() - _started_ms
+    output["runtime"]["elapsed_frames"] = Engine.get_process_frames() - _started_frame
     output["runtime"]["finished"] = _finished
     output["checkpoints"] = _checkpoints.duplicate(true)
+    output["performance"] = {
+        "enabled": _performance_enabled,
+        "sample_interval_ms": _performance_interval_ms,
+        "max_samples": _performance_max_samples,
+        "sample_count": _performance_samples.size(),
+        "samples": _performance_samples.duplicate(true)
+    }
     return output
 
 func _process(_delta: float) -> void:
     var now := Time.get_ticks_msec()
     _run_input_actions(now - _started_ms)
+    _sample_performance(now)
+    if not _finished and _auto_finish_frames > 0 and Engine.get_process_frames() - _started_frame >= _auto_finish_frames:
+        finish(true, "auto_finish_frames")
+        return
     if not _finished and _auto_finish_ms > 0 and now - _started_ms >= _auto_finish_ms:
         finish(true, "auto_finish")
         return
@@ -125,9 +152,17 @@ func _load_plan() -> void:
     if _plan_path.is_empty() or not FileAccess.file_exists(_plan_path):
         return
     var parsed = JSON.parse_string(FileAccess.get_file_as_string(_plan_path))
-    if typeof(parsed) == TYPE_DICTIONARY and typeof(parsed.get("actions", [])) == TYPE_ARRAY:
+    if typeof(parsed) != TYPE_DICTIONARY:
+        return
+    if typeof(parsed.get("actions", [])) == TYPE_ARRAY:
         _input_actions = parsed.get("actions", [])
         set_value("runtime.planned_actions", _input_actions.size())
+    var performance = parsed.get("performance", {})
+    if typeof(performance) == TYPE_DICTIONARY:
+        _performance_enabled = bool(performance.get("enabled", false))
+        _performance_interval_ms = clampi(int(performance.get("sample_interval_ms", 250)), 50, 5000)
+        _performance_max_samples = clampi(int(performance.get("max_samples", 600)), 1, 5000)
+        set_value("runtime.performance_enabled", _performance_enabled)
 
 func _run_input_actions(elapsed_ms: int) -> void:
     while _input_index < _input_actions.size():
@@ -147,6 +182,41 @@ func _run_input_actions(elapsed_ms: int) -> void:
                 Input.action_press(action, strength)
         _input_index += 1
         set_value("runtime.executed_actions", _input_index)
+
+func _sample_performance(now_ms: int, force: bool = false) -> void:
+    if not _performance_enabled:
+        return
+    if _performance_samples.size() >= _performance_max_samples:
+        return
+    var current_frame := Engine.get_process_frames() - _started_frame
+    if _auto_finish_frames > 0:
+        var frame_interval := maxi(1, int(ceil(float(_auto_finish_frames) / float(_performance_max_samples))))
+        if not force and _performance_last_frame >= 0 and current_frame - _performance_last_frame < frame_interval:
+            return
+        _performance_last_frame = current_frame
+    else:
+        if not force and now_ms - _performance_last_ms < _performance_interval_ms:
+            return
+        _performance_last_ms = now_ms
+    _performance_samples.append({
+        "elapsed_ms": now_ms - _started_ms,
+        "frame": current_frame,
+        "fps": Performance.get_monitor(Performance.TIME_FPS),
+        "process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+        "physics_ms": Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+        "memory_static_bytes": Performance.get_monitor(Performance.MEMORY_STATIC),
+        "object_count": Performance.get_monitor(Performance.OBJECT_COUNT),
+        "resource_count": Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT),
+        "node_count": Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
+        "orphan_node_count": Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT),
+        "draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+        "video_memory_bytes": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED),
+        "physics_2d_active": Performance.get_monitor(Performance.PHYSICS_2D_ACTIVE_OBJECTS),
+        "physics_2d_pairs": Performance.get_monitor(Performance.PHYSICS_2D_COLLISION_PAIRS),
+        "physics_3d_active": Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS),
+        "physics_3d_pairs": Performance.get_monitor(Performance.PHYSICS_3D_COLLISION_PAIRS)
+    })
+    set_value("runtime.performance_samples", _performance_samples.size())
 
 func _publish_now() -> void:
     var state_json := JSON.stringify(snapshot())
@@ -237,8 +307,9 @@ export function qaBridgeTemplate() {
       'DevMateQA.finish(true, "scenario_complete")',
       'DevMateQA.fail("player_died")'
     ],
-    nativeAutomation: 'When launched by godot_native_test, the bridge writes a JSON report, replays bounded Input actions, and exits on auto-finish, finish/fail, or a selected checkpoint.',
-    productionSafety: 'Browser state is published only for debug Web exports unless devmate_qa/allow_release is explicitly enabled. Native reporting activates only when DevMate injects a report path.'
+    nativeAutomation: 'When launched by DevMate, the bridge writes a JSON report, replays bounded Input actions, samples bounded performance monitors, and exits on time, frame count, finish/fail, or a selected checkpoint.',
+    performance: 'QA Bridge v3 samples fixed Godot Performance monitors only when a DevMate run plan explicitly enables performance collection. Frame-bound captures use process-frame sampling rather than wall-clock intervals.',
+    productionSafety: 'Browser state is published only for debug Web exports unless devmate_qa/allow_release is explicitly enabled. Native reporting and performance sampling activate only when DevMate injects a report plan.'
   };
 }
 

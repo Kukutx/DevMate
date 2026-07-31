@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runPerformanceTest } from '../gateway/plugins/godot-performance.mjs';
 import { installQaBridge } from '../gateway/plugins/godot-qa-bridge.mjs';
 import { runNativeQa } from '../gateway/plugins/godot-native-qa.mjs';
 import { validateProject } from '../gateway/plugins/godot-project.mjs';
@@ -41,13 +42,14 @@ function contextFor(root) {
   };
 }
 
-test('validates generated QA Bridge and runs native acceptance in real Godot', { skip: !godotExecutable }, async t => {
+test('validates QA Bridge v3, native acceptance, and performance sampling in real Godot', { skip: !godotExecutable }, async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-real-godot-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
   await fsp.cp(fixtureRoot, root, { recursive: true });
   const context = contextFor(root);
   const installed = await installQaBridge(context, {});
   assert.equal(installed.after.current, true);
+  assert.equal(installed.after.version, 3);
 
   const runtime = await inspectGodotRuntime(context, { timeoutMs: 30000 });
   assert.equal(runtime.ok, true, runtime.versionResult.stderr || runtime.versionResult.stdout);
@@ -71,5 +73,20 @@ test('validates generated QA Bridge and runs native acceptance in real Godot', {
   });
   assert.equal(native.ok, true, JSON.stringify({ diagnostics: native.diagnostics, checks: native.checks, reportError: native.reportError, stderr: native.result.stderr }));
   assert.equal(native.report.fixture.value, 42);
-  assert.equal(native.report.runtime.bridge_version, 2);
+  assert.equal(native.report.runtime.bridge_version, 3);
+
+  const performance = await runPerformanceTest(context, {
+    scene: 'res://capture.tscn',
+    headless: true,
+    runForMs: 2500,
+    warmupMs: 250,
+    sampleIntervalMs: 100,
+    maxSamples: 100,
+    budgets: { minSamples: 5, maxNodeCount: 1000, maxOrphanNodeCount: 10 },
+    reportPath: 'artifacts/godot-performance/real-runtime.json',
+    timeoutMs: 120000
+  });
+  assert.equal(performance.ok, true, JSON.stringify({ diagnostics: performance.diagnostics, checks: performance.checks, performance: performance.performance, stderr: performance.result.stderr }));
+  assert.equal(performance.performance.summary.evaluatedSamples >= 5, true);
+  assert.equal(performance.report.runtime.bridge_version, 3);
 });
