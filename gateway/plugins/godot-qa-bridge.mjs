@@ -35,6 +35,7 @@ var _performance_enabled := false
 var _performance_interval_ms := 250
 var _performance_max_samples := 600
 var _performance_last_ms := 0
+var _performance_last_frame := -1
 var _performance_samples: Array[Dictionary] = []
 
 func _ready() -> void:
@@ -109,6 +110,7 @@ func clear() -> void:
     _state.clear()
     _checkpoints.clear()
     _performance_samples.clear()
+    _performance_last_frame = -1
     set_value("runtime.bridge_ready", true)
     set_value("runtime.bridge_version", BRIDGE_VERSION)
 
@@ -186,12 +188,19 @@ func _sample_performance(now_ms: int, force: bool = false) -> void:
         return
     if _performance_samples.size() >= _performance_max_samples:
         return
-    if not force and now_ms - _performance_last_ms < _performance_interval_ms:
-        return
-    _performance_last_ms = now_ms
+    var current_frame := Engine.get_process_frames() - _started_frame
+    if _auto_finish_frames > 0:
+        var frame_interval := maxi(1, int(ceil(float(_auto_finish_frames) / float(_performance_max_samples))))
+        if not force and _performance_last_frame >= 0 and current_frame - _performance_last_frame < frame_interval:
+            return
+        _performance_last_frame = current_frame
+    else:
+        if not force and now_ms - _performance_last_ms < _performance_interval_ms:
+            return
+        _performance_last_ms = now_ms
     _performance_samples.append({
         "elapsed_ms": now_ms - _started_ms,
-        "frame": Engine.get_process_frames() - _started_frame,
+        "frame": current_frame,
         "fps": Performance.get_monitor(Performance.TIME_FPS),
         "process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
         "physics_ms": Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
@@ -299,7 +308,7 @@ export function qaBridgeTemplate() {
       'DevMateQA.fail("player_died")'
     ],
     nativeAutomation: 'When launched by DevMate, the bridge writes a JSON report, replays bounded Input actions, samples bounded performance monitors, and exits on time, frame count, finish/fail, or a selected checkpoint.',
-    performance: 'QA Bridge v3 samples fixed Godot Performance monitors only when a DevMate run plan explicitly enables performance collection.',
+    performance: 'QA Bridge v3 samples fixed Godot Performance monitors only when a DevMate run plan explicitly enables performance collection. Frame-bound captures use process-frame sampling rather than wall-clock intervals.',
     productionSafety: 'Browser state is published only for debug Web exports unless devmate_qa/allow_release is explicitly enabled. Native reporting and performance sampling activate only when DevMate injects a report plan.'
   };
 }
