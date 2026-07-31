@@ -155,7 +155,12 @@ export const enhancedGodotPlugin = definePlugin({
     }, async args => {
       context.assertCanMutate('Configuring Godot integration');
       const configured = configureGodot(context, args);
-      const bridge = configured.installBridge ? await installQaBridge(configured.project.root) : null;
+      const bridge = configured.installBridge
+        ? await installQaBridge(context, {
+          workspaceId: configured.project.workspace.id,
+          projectSubpath: configured.project.subpath
+        })
+        : null;
       await context.audit('quick_setup', {
         workspace: configured.project.workspace.id,
         projectSubpath: configured.project.subpath,
