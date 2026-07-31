@@ -144,7 +144,7 @@ export async function runMovieCapture(context, {
     performance: performance ? { enabled: true, sampleIntervalMs: 250, maxSamples: 600 } : undefined
   });
   if (!performance) return native;
-  const summary = summarizePerformance(native.report, { warmupMs: 500 });
+  const summary = summarizePerformance(native.report, { warmupMs: 0 });
   const budget = evaluatePerformanceBudgets(summary, performanceBudgets);
   return { ...native, ok: native.ok && summary.evaluatedSamples > 0 && budget.ok, performance: { summary, budget } };
 }
