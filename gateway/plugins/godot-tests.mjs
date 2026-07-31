@@ -52,6 +52,27 @@ async function scanTestFiles(root, maxFiles = 2000) {
   return files;
 }
 
+async function findNewestNamedFile(root, filename, { maxFiles = 500, maxDepth = 5 } = {}) {
+  const candidates = [];
+  let visited = 0;
+  async function walk(directory, depth) {
+    if (visited >= maxFiles || depth > maxDepth) return;
+    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (visited >= maxFiles) break;
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) { await walk(full, depth + 1); continue; }
+      if (!entry.isFile()) continue;
+      visited += 1;
+      if (entry.name !== filename) continue;
+      const stat = await fsp.stat(full).catch(() => null);
+      if (stat) candidates.push({ file: full, mtimeMs: stat.mtimeMs });
+    }
+  }
+  await walk(root, 0);
+  return candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.file || null;
+}
+
 export async function inspectGodotTests(context, { workspaceId, projectSubpath, maxFiles = 2000 } = {}) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: false });
   const gutScript = path.join(project.root, FRAMEWORKS.gut.script);
@@ -156,7 +177,8 @@ export async function runGodotTests(context, {
   const status = await inspectGodotTests(context, { workspaceId: project.workspace.id, projectSubpath: project.subpath });
   const selected = selectFramework(framework, status);
   const executable = resolveGodotExecutable(context);
-  let junitFile;
+  let junitFile = null;
+  let reportDirectory = null;
   let artifactPaths;
   let args;
   if (selected === 'gut') {
@@ -168,17 +190,17 @@ export async function runGodotTests(context, {
     artifactPaths = [path.relative(project.workspace.root, junitFile).replace(/\\/g, '/')];
   } else {
     const relative = safeRelative(reportPath, FRAMEWORKS.gdunit4.reportDefault);
-    const reportDirectory = context.workspace.resolve(project.workspace, path.join(project.subpath, relative));
+    reportDirectory = context.workspace.resolve(project.workspace, path.join(project.subpath, relative));
     await fsp.mkdir(reportDirectory, { recursive: true });
     args = buildGdUnitArgs(project, { directories, ignore, continueAfterFailure, reportDirectory: path.relative(project.root, reportDirectory).replace(/\\/g, '/') });
-    junitFile = path.join(reportDirectory, 'results.xml');
     artifactPaths = [path.relative(project.workspace.root, reportDirectory).replace(/\\/g, '/')];
   }
   const result = await context.executables.run(executable, args, { cwd: project.root, timeoutMs, maxOutputChars: 500000 });
   const diagnostics = parseGodotDiagnostics(result.stdout, result.stderr);
+  if (selected === 'gdunit4') junitFile = await findNewestNamedFile(reportDirectory, 'results.xml');
   let junit = null;
   let junitError = null;
-  const stat = fs.statSync(junitFile, { throwIfNoEntry: false });
+  const stat = junitFile ? fs.statSync(junitFile, { throwIfNoEntry: false }) : null;
   if (stat?.isFile() && stat.size <= 16 * 1024 * 1024) {
     try { junit = parseJunitXml(await fsp.readFile(junitFile, 'utf8')); }
     catch (error) { junitError = error.message; }
@@ -201,4 +223,4 @@ export async function runGodotTests(context, {
   };
 }
 
-export const __test = { FRAMEWORKS, buildGdUnitArgs, buildGutArgs, decodeXml, safeRelative, scanTestFiles, selectFramework, toResourcePath };
+export const __test = { FRAMEWORKS, buildGdUnitArgs, buildGutArgs, decodeXml, findNewestNamedFile, safeRelative, scanTestFiles, selectFramework, toResourcePath };
