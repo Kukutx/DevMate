@@ -3,7 +3,7 @@ import { definePlugin } from './plugin-sdk.mjs';
 import { enhancedGodotPlugin } from './godot-enhanced.mjs';
 import { loadAdvancedAutomation, runAdvancedScenario, runAdvancedSuite } from './godot-advanced-automation.mjs';
 import { compactPerformanceResult, runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
-import { inspectGodotTests, runGodotTests } from './godot-tests.mjs';
+import { compactGodotTestResult, inspectGodotTests, runGodotTests } from './godot-tests.mjs';
 
 const inputActionSchema = z.object({
   atMs: z.number().int().min(0).max(300000),
@@ -156,7 +156,7 @@ export const advancedGodotPlugin = definePlugin({
         failures: result.junit?.failures ?? null,
         reportPath: result.reportPath
       });
-      return context.toolText(result);
+      return context.toolText(compactGodotTestResult(result));
     });
 
     server.registerTool('godot_advanced_manifest', {
