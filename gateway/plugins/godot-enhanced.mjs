@@ -122,7 +122,18 @@ export const enhancedGodotPlugin = definePlugin({
       const result = await writeGodotQualityReport(context, args);
       await context.audit('quality_report', { workspace: result.workspace.id, projectSubpath: result.projectSubpath, ok: result.ok, ...result.report });
       return context.toolText({
-        ...result,
+        ok: result.ok,
+        workspace: result.workspace,
+        projectSubpath: result.projectSubpath,
+        generatedAt: result.generatedAt,
+        summary: {
+          runtimeReady: result.runtime.readiness.validate,
+          exportTemplatesAvailable: result.runtime.exportTemplates.available,
+          audit: result.audit.summary,
+          graph: result.graph.summary,
+          automation: result.plan.summary
+        },
+        report: result.report,
         reportPath: result.report.jsonPath,
         artifactPaths: [result.report.htmlPath, result.report.jsonPath]
       });
