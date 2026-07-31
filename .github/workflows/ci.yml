@@ -39,6 +39,9 @@ jobs:
       - name: Check syntax
         run: npm run check
 
+      - name: Check advanced Godot automation syntax
+        run: node --check gateway/plugins/godot-advanced-automation.mjs
+
       - name: Unit tests
         run: npm run test:unit
 
