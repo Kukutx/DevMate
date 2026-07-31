@@ -45,8 +45,9 @@ test('validates generated QA Bridge and runs native acceptance in real Godot', {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-real-godot-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
   await fsp.cp(fixtureRoot, root, { recursive: true });
-  await installQaBridge(root);
   const context = contextFor(root);
+  const installed = await installQaBridge(context, {});
+  assert.equal(installed.after.current, true);
 
   const runtime = await inspectGodotRuntime(context, { timeoutMs: 30000 });
   assert.equal(runtime.ok, true, runtime.versionResult.stderr || runtime.versionResult.stdout);
