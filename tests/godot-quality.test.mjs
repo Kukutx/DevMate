@@ -152,7 +152,7 @@ test('escapes report HTML and renders actionable status', () => {
     generatedAt: '2026-01-01T00:00:00.000Z',
     ok: false,
     runtime: { version: { raw: '4.7.1' }, executableName: 'godot', readiness: { validate: true }, csharp: { ready: true }, exportTemplates: { available: false }, host: { capabilities: ['core', 'godot'] } },
-    audit: { project: { name: '<Game>' }, summary: { errors: 1, warnings: 0 }, issues: { errors: [{ level: 'error', code: 'broken', message: '<bad>' }], warnings: [], info: [] } },
+    audit: { metadata: { name: '<Game>' }, summary: { errors: 1, warnings: 0 }, findings: [{ severity: 'error', code: 'broken', message: '<bad>' }] },
     graph: { summary: { nodes: 1, edges: 0, missing: 0 }, entries: ['res://main.tscn'], missing: [], cycles: [] },
     plan: { summary: { ready: 0, items: 1 }, items: [{ id: 'scenario:test', tool: 'godot_native_test', blockers: [{ level: 'error', code: 'blocked', message: 'No' }], warnings: [], requiredCapabilities: ['godot'] }] }
   });
