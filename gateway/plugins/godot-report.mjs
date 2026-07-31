@@ -22,7 +22,10 @@ function list(items, render) {
 }
 
 function renderIssues(issues = []) {
-  return list(issues, item => `<li class="${escapeHtml(item.level || 'info')}"><strong>${escapeHtml(item.code || item.level || 'issue')}</strong> ${escapeHtml(item.message || '')}</li>`);
+  return list(issues, item => {
+    const level = item.level || item.severity || 'info';
+    return `<li class="${escapeHtml(level)}"><strong>${escapeHtml(item.code || level || 'issue')}</strong> ${escapeHtml(item.message || '')}</li>`;
+  });
 }
 
 function renderPlanItems(items = []) {
@@ -31,7 +34,7 @@ function renderPlanItems(items = []) {
 
 function renderReport(data) {
   const { generatedAt, runtime, audit, graph, plan } = data;
-  const auditIssues = [...(audit.issues?.errors || []), ...(audit.issues?.warnings || []), ...(audit.issues?.info || [])];
+  const auditIssues = Array.isArray(audit.findings) ? audit.findings : [];
   const graphProblems = [
     ...graph.missing.map(resource => ({ level: 'error', code: 'missing_dependency', message: resource })),
     ...graph.cycles.map(cycle => ({ level: 'warning', code: 'dependency_cycle', message: cycle.join(' → ') }))
@@ -46,7 +49,7 @@ function renderReport(data) {
 :root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}body{margin:0;background:Canvas;color:CanvasText}.wrap{max-width:1120px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:18px 0}.card,.section{border:1px solid color-mix(in srgb,CanvasText 16%,transparent);border-radius:12px;padding:15px;background:color-mix(in srgb,Canvas 96%,CanvasText 4%)}.section{margin-top:14px}.label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.7}.value{font-size:21px;font-weight:700;margin-top:4px}.row{display:flex;justify-content:space-between;gap:12px}.pill{border-radius:999px;padding:2px 8px;font-size:11px;border:1px solid currentColor}.pill.ok,.info{color:#2f9e44}.pill.bad,.error{color:#e03131}.warning{color:#f08c00}.muted,.empty{opacity:.68;font-size:12px}h1{margin:0;font-size:24px}h2{font-size:17px;margin:0 0 10px}ul{margin:0;padding-left:20px}li{margin:7px 0;overflow-wrap:anywhere}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}</style>
 </head>
 <body><main class="wrap">
-<div class="top"><div><h1>DevMate Godot Quality Report</h1><div class="muted">${escapeHtml(audit.project?.name || 'Godot project')} · generated ${escapeHtml(generatedAt)}</div></div><span class="pill ${statusClass(data.ok)}">${data.ok ? 'READY' : 'ATTENTION'}</span></div>
+<div class="top"><div><h1>DevMate Godot Quality Report</h1><div class="muted">${escapeHtml(audit.metadata?.name || 'Godot project')} · generated ${escapeHtml(generatedAt)}</div></div><span class="pill ${statusClass(data.ok)}">${data.ok ? 'READY' : 'ATTENTION'}</span></div>
 <div class="grid">
 <div class="card"><div class="label">Godot</div><div class="value">${escapeHtml(runtime.version?.raw || 'Unavailable')}</div><div class="muted">${escapeHtml(runtime.executableName || '')}</div></div>
 <div class="card"><div class="label">Audit</div><div class="value">${audit.summary.errors || 0} / ${audit.summary.warnings || 0}</div><div class="muted">errors / warnings</div></div>
