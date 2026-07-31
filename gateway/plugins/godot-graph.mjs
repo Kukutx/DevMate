@@ -10,7 +10,7 @@ const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 
 function normalizeResourcePath(value = '') {
   const raw = String(value || '').trim().replace(/\\/g, '/');
-  if (!raw) return null;
+  if (!raw || (raw.includes('://') && !raw.startsWith('res://'))) return null;
   if (raw.startsWith('res://')) {
     const relative = raw.slice(6).replace(/^\/+/, '');
     if (!relative || relative.split('/').includes('..')) return null;
@@ -22,8 +22,12 @@ function normalizeResourcePath(value = '') {
 
 export function extractGodotReferences(text = '') {
   const references = new Set();
-  const pattern = /res:\/\/[^\s"'\])},;]+/g;
-  for (const match of String(text || '').matchAll(pattern)) {
+  const source = String(text || '');
+  for (const match of source.matchAll(/["'](res:\/\/[^"']+)["']/g)) {
+    const normalized = normalizeResourcePath(match[1]);
+    if (normalized) references.add(normalized);
+  }
+  for (const match of source.matchAll(/res:\/\/[A-Za-z0-9_@%+.,~()\[\]{}\-\/]+/g)) {
     const normalized = normalizeResourcePath(match[0].replace(/[.:]+$/, ''));
     if (normalized) references.add(normalized);
   }
@@ -133,11 +137,17 @@ export async function buildGodotDependencyGraph(context, {
     const normalized = normalizeResourcePath(value);
     if (normalized) entries.push(normalized);
   }
-  if (!entries.length && metadata.mainScene) entries.push(normalizeResourcePath(metadata.mainScene));
-  if (includeAllScenes || !entries.length) {
-    for (const scene of scan.samples.scenes) entries.push(normalizeResourcePath(scene));
+  if (!entries.length && metadata.mainScene) {
+    const normalizedMain = normalizeResourcePath(metadata.mainScene);
+    if (normalizedMain) entries.push(normalizedMain);
   }
-  const queue = [...new Set(entries.filter(Boolean))].map(resourcePath => ({ resourcePath, depth: 0 }));
+  if (includeAllScenes || !entries.length) {
+    for (const scene of scan.samples.scenes) {
+      const normalized = normalizeResourcePath(scene);
+      if (normalized) entries.push(normalized);
+    }
+  }
+  const queue = [...new Set(entries)].map(resourcePath => ({ resourcePath, depth: 0 }));
   const nodes = new Map();
   let truncated = false;
   while (queue.length) {
@@ -180,21 +190,22 @@ export async function buildGodotDependencyGraph(context, {
     }
   }
   const missing = [...nodes.values()].filter(item => !item.exists).map(item => item.path);
+  const cycles = findCycles(nodes);
   const normalizedReverseTarget = normalizeResourcePath(reverseTarget);
   return {
     workspace: { id: project.workspace.id, name: project.workspace.name },
     projectSubpath: project.subpath,
-    entries: [...new Set(entries.filter(Boolean))],
+    entries: [...new Set(entries)],
     summary: {
       nodes: nodes.size,
       edges: [...nodes.values()].reduce((sum, item) => sum + item.references.length, 0),
       missing: missing.length,
-      cycles: findCycles(nodes).length,
+      cycles: cycles.length,
       scenes: [...nodes.values()].filter(item => item.type === 'scene').length,
       truncated
     },
     missing,
-    cycles: findCycles(nodes),
+    cycles,
     reverseTarget: normalizedReverseTarget ? {
       path: normalizedReverseTarget,
       referencedBy: (reverse.get(normalizedReverseTarget) || []).sort()
