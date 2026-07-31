@@ -56,3 +56,61 @@ jobs:
         with:
           name: devmate-vsix
           path: "*.vsix"
+
+  godot-real:
+    name: Real Godot 4.7.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GODOT_VERSION: 4.7.1
+      GODOT_STATUS: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Cache Godot editor
+        uses: actions/cache@v4
+        with:
+          path: .godot-ci
+          key: godot-${{ runner.os }}-${{ runner.arch }}-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
+      - name: Download and verify official Godot editor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .godot-ci
+          archive="Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
+          executable="Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64"
+          if [ ! -x ".godot-ci/${executable}" ]; then
+            api="https://api.github.com/repos/godotengine/godot-builds/releases/tags/${GODOT_VERSION}-${GODOT_STATUS}"
+            curl --fail --silent --show-error --location "$api" --output .godot-ci/release.json
+            archive_url=$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
+            sums_url=$(jq -r '.assets[] | select(.name == "SHA512-SUMS.txt") | .browser_download_url' .godot-ci/release.json)
+            test -n "$archive_url" && test "$archive_url" != "null"
+            test -n "$sums_url" && test "$sums_url" != "null"
+            curl --fail --silent --show-error --location "$archive_url" --output ".godot-ci/${archive}"
+            curl --fail --silent --show-error --location "$sums_url" --output .godot-ci/SHA512-SUMS.txt
+            (
+              cd .godot-ci
+              grep -F " ${archive}" SHA512-SUMS.txt | sha512sum --check --strict -
+              unzip -q -o "$archive"
+              chmod +x "$executable"
+            )
+          fi
+          echo "GODOT_REAL_BIN=$PWD/.godot-ci/${executable}" >> "$GITHUB_ENV"
+
+      - name: Show Godot version
+        run: "$GODOT_REAL_BIN --version"
+
+      - name: Run real Godot validation and native QA
+        run: node --test tests/godot-real-runtime.test.mjs
