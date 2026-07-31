@@ -117,7 +117,7 @@ job_retry
 runner_status
 ```
 
-The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot project audits, native/Web acceptance, single/matrix exports, reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
+The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot project audits, native/Web acceptance, single/matrix exports, quality reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
 
 External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Capabilities and workspace IDs reported by a Runner are intersected with its credential scope. Results are bounded and redacted; artifact files remain on the Runner host and only metadata is returned.
 
@@ -128,7 +128,7 @@ See [`docs/JOBS.md`](docs/JOBS.md) and [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNA
 Optional plugins are disabled until enabled:
 
 - `devmate.browser-qa`: local previews, Playwright scenarios, screenshots, reports, and structured application-state assertions.
-- `devmate.godot`: deep project audit, QA Bridge installation, supervised project/scene execution, native/headless state tests, Web acceptance, and multi-platform export matrices.
+- `devmate.godot`: runtime verification, dependency graphs, deep audit, QA Bridge installation, supervised project/scene execution, native/headless state tests, Web acceptance, execution planning, quality reports, and multi-platform export matrices.
 
 Repeatable scenarios and export targets are stored in `.devmate/automation.json` and can be reviewed in Git.
 
@@ -137,25 +137,34 @@ Repeatable scenarios and export targets are stored in `.devmate/automation.json`
 DevMate can run a production-oriented Godot workflow:
 
 ```text
-godot_project_audit
-→ godot_doctor
-→ godot_qa_bridge_install
+godot_quick_setup
+→ godot_runtime_status
+→ godot_project_audit
+→ godot_dependency_graph
+→ godot_automation_plan
 → godot_validate
 → godot_native_test and/or godot_acceptance_test
+→ godot_quality_report
 → godot_export_matrix
 ```
 
 Key capabilities:
 
+- verify the actual Godot version, Standard/Mono build, export templates, .NET readiness, and host capability labels;
 - verify main scene, Autoload, icon, InputMap, C# setup, addons, export presets, and missing `res://` references;
+- build bounded scene/resource/script dependency graphs with cycles and reverse dependencies;
+- preflight saved exports and Web/native tests before assigning them to Runners;
 - install or upgrade QA Bridge v2 with project-local backups;
 - replay declared Godot Input actions and assert native runtime state/checkpoints;
 - preserve browser-driven Web acceptance with screenshots and network/console checks;
 - export desktop, mobile, Web, dedicated-server, or custom presets;
 - route platform-specific exports to matching external Runners;
+- generate consolidated HTML/JSON quality reports;
 - save mixed Web/native scenarios and export targets in `.devmate/automation.json`.
 
-Godot, matching export templates, platform SDKs, and signing configuration must exist on the selected Runner. See [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md).
+The repository also runs a separate real Godot 4.7.1 Linux CI job. It verifies the official editor archive with SHA-512, validates the generated QA Bridge in the real editor, and runs real native QA. Export templates and platform SDKs remain requirements of the selected Runner.
+
+See [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md) and [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md).
 
 ## Operations
 
@@ -209,5 +218,6 @@ npm run package:vsix
 - [`docs/PLUGINS.md`](docs/PLUGINS.md)
 - [`docs/AUTOMATION_MANIFEST.md`](docs/AUTOMATION_MANIFEST.md)
 - [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md)
+- [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md)
 - [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md)
 - [`SECURITY.md`](SECURITY.md)
