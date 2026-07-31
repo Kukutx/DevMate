@@ -88,6 +88,26 @@ export function automationManifestTemplate() {
             ]
           }
         ]
+      },
+      'devmate.godot-advanced': {
+        projectSubpath: '.',
+        scenarios: [
+          {
+            id: 'performance-smoke',
+            kind: 'performance',
+            scene: 'res://main.tscn',
+            runForMs: 5000,
+            warmupMs: 1000,
+            sampleIntervalMs: 250,
+            budgets: {
+              minSamples: 8,
+              minFpsP05: 30,
+              maxProcessMsP95: 25,
+              maxOrphanNodeCount: 0
+            },
+            reportPath: 'artifacts/godot-performance/performance-smoke.json'
+          }
+        ]
       }
     }
   };
