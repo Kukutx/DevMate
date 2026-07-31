@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.6.0
+
+- Added `godot_runtime_status` for real engine version/channel parsing, Standard/Mono and .NET readiness, export-template discovery, host architecture, and Runner capability labels.
+- Added `godot_dependency_graph` for bounded scene/resource/script/Shader graphs with missing references, cycles, reverse dependencies, and scene-node summaries.
+- Added `godot_automation_plan` to preflight saved exports and Web/native scenarios and return blockers, warnings, normalized calls, and suggested Runner capabilities before execution.
+- Added `godot_quality_report` for consolidated, workspace-contained HTML and JSON reports covering runtime, project audit, dependencies, and automation readiness; report generation is also a durable Job target.
+- Added `godot_quick_setup` to configure Godot project defaults and optionally install QA Bridge v2 in one workspace-scoped operation.
+- Added a separate Linux CI job pinned to the official Godot 4.7.1-stable editor, with official SHA-512 verification, real headless editor validation, and real native QA report assertions.
+- Hardened dependency parsing for quoted paths, UID schemes, cycles, and large bounded graphs while keeping MCP report responses compact.
+- Added runtime, graph, planning, report-rendering, cross-platform path, and actual Godot editor regression coverage without replacing the existing 2.5 Godot implementation.
+
 ## 2.5.0
 
 - Added a deep Godot project audit for main scene, Autoloads, InputMap actions, icons, addons, C# setup, Web renderer risk, export presets, and missing `res://` references.

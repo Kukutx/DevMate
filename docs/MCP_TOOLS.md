@@ -125,11 +125,22 @@ Enable `devmate.browser-qa`:
 
 Enable `devmate.godot`.
 
-Project and runtime inspection:
+Setup and runtime:
 
+- `godot_quick_setup`
 - `godot_status`
-- `godot_project_audit`
+- `godot_runtime_status`
 - `godot_doctor`
+
+Project understanding:
+
+- `godot_project_audit`
+- `godot_dependency_graph`
+- `godot_automation_plan`
+- `godot_quality_report`
+
+Validation and execution:
+
 - `godot_validate`
 - `godot_run`
 
@@ -154,7 +165,9 @@ Acceptance:
 - `godot_acceptance_run_saved`
 - `godot_acceptance_suite`
 
-`godot_project_audit` is read-only. Validation, export, native QA, and Web acceptance are `validate` operations. QA Bridge installation/removal are workspace mutations. All approved Godot audit, export, and acceptance tools can run as durable jobs on a Runner with the `godot` capability.
+Runtime status, dependency graph, and automation planning are read-only. `godot_project_audit` is also read-only. Validation, export, native QA, and Web acceptance are `validate` operations. QA Bridge lifecycle, quick setup, and quality report generation write workspace/config data and require write permission plus a lease where configured.
+
+Approved Godot audit, export, acceptance, and quality-report tools can run as durable jobs on a Runner with the `godot` capability. `godot_automation_plan` provides suggested additional capability labels before submission.
 
 ## Trusted local capabilities
 
@@ -189,9 +202,10 @@ Publishing requires Maintainer capability and, in production, normally requires 
 
 - `show_changes`
 - `task_report`
+- `godot_quality_report`
 - `deployment_metrics`
 - `deployment_runtime_state`
 
 Prometheus-compatible metrics are also available from loopback only at `/control/metrics`. HTTP, job, approval, embedded Runner, and external Runner-control metrics are included.
 
-See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `EXTERNAL_RUNNERS.md` for remote execution, `GODOT_AUTOMATION.md` for Godot audit/export/QA workflows, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
+See `TEAM_DEPLOYMENT.md` for role and lease behavior, `JOBS.md` for durable execution, `EXTERNAL_RUNNERS.md` for remote execution, `GODOT_AUTOMATION.md` for Godot audit/export/QA workflows, `GODOT_RUNTIME_QUALITY.md` for runtime/dependency/planning/report workflows, `OPERATIONS.md` for durable state and monitoring, `TUNNELS.md` for ingress, and `SECURITY.md` for trust boundaries.
