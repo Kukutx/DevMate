@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.7.0
+
+- Upgraded the reviewed Godot QA Bridge to v3 with opt-in bounded sampling of fixed Godot Performance monitors and frame-count completion for deterministic capture.
+- Added `godot_performance_test` with warmup filtering, p01/p05/p50/p95/p99 summaries, required sample evidence, and explicit FPS, frame-time, memory, node, orphan-node, draw-call, and physics-pair budgets.
+- Added `godot_movie_capture` using Godot Movie Maker mode, fixed FPS, bounded frame count, workspace-contained AVI output, QA assertions, checkpoints, and optional performance budgets.
+- Added `godot_test_status` and `godot_test_run` adapters for project-local GUT and GdUnit4 installations with bounded command shapes, nested report discovery, and mandatory valid JUnit evidence.
+- Added the separate `devmate.godot-advanced` automation namespace plus `godot_advanced_manifest`, `godot_advanced_run_saved`, and `godot_advanced_suite` for version-controlled performance, capture, and framework-test scenarios.
+- Added durable Job and external Runner support for performance tests, movie capture, framework tests, and saved advanced suites while retaining team RBAC, workspace scopes, leases, and audit behavior.
+- Kept large raw performance samples and process output in workspace artifacts while returning compact MCP summaries, budget outcomes, diagnostics, JUnit totals, and artifact paths.
+- Extended the official Godot 4.7.1 Linux CI gate with real Performance monitor sampling and Xvfb-backed deterministic AVI recording in addition to native QA and editor validation.
+
 ## 2.6.0
 
 - Added `godot_runtime_status` for real engine version/channel parsing, Standard/Mono and .NET readiness, export-template discovery, host architecture, and Runner capability labels.
