@@ -104,7 +104,9 @@ test('parses Godot runtime versions and host capabilities', () => {
   assert.equal(parsed.channel, 'stable');
   assert.equal(parsed.official, true);
   assert.deepEqual(runtimeHostCapabilities('linux', 'x64'), ['core', 'godot', 'linux-x64']);
-  assert.deepEqual(exportTemplateRoots({ platform: 'linux', env: { XDG_DATA_HOME: '/tmp/data' }, home: '/home/test' }), ['/tmp/data/godot/export_templates']);
+  const roots = exportTemplateRoots({ platform: 'linux', env: { XDG_DATA_HOME: '/tmp/data' }, home: '/home/test' });
+  assert.equal(roots.length, 1);
+  assert.equal(roots[0].endsWith(path.join('tmp', 'data', 'godot', 'export_templates')), true);
 });
 
 test('extracts references and scene nodes', () => {
