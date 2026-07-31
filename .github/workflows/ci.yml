@@ -102,7 +102,9 @@ jobs:
             curl --fail --silent --show-error --location "$sums_url" --output .godot-ci/SHA512-SUMS.txt
             (
               cd .godot-ci
-              grep -F " ${archive}" SHA512-SUMS.txt | sha512sum --check --strict -
+              checksum_line=$(awk -v file="$archive" '$NF == file { print; exit }' SHA512-SUMS.txt)
+              test -n "$checksum_line"
+              printf '%s\n' "$checksum_line" | sha512sum --check --strict -
               unzip -q -o "$archive"
               chmod +x "$executable"
             )
