@@ -138,7 +138,7 @@ test('plans exports and mixed automation with bridge and capability requirements
   let plan = await planGodotAutomation(context, {});
   assert.equal(plan.ok, false);
   assert.equal(plan.blockers.some(item => item.code === 'qa_bridge_required'), true);
-  await installQaBridge(root);
+  await installQaBridge(context, {});
   plan = await planGodotAutomation(context, {});
   assert.equal(plan.ok, true);
   assert.equal(plan.items.find(item => item.id === 'scenario:web-smoke').requiredCapabilities.includes('browser-qa'), true);
