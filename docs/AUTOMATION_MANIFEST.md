@@ -1,6 +1,6 @@
 # DevMate automation manifest
 
-Repeatable acceptance tests and export matrices belong in the project rather than only in a chat transcript. DevMate reads `.devmate/automation.json`, validates its schema and plugin namespaces, and lets ChatGPT rerun named scenarios after every implementation change.
+Repeatable validation, acceptance, performance, capture, framework-test, and export workflows belong in the project rather than only in a chat transcript. DevMate reads `.devmate/automation.json`, validates the common envelope, and delegates each plugin namespace to its own strict schema.
 
 ## Format
 
@@ -20,12 +20,16 @@ Repeatable acceptance tests and export matrices belong in the project rather tha
       "exportOutputRoot": "build/exports",
       "exports": [],
       "scenarios": []
+    },
+    "devmate.godot-advanced": {
+      "projectSubpath": ".",
+      "scenarios": []
     }
   }
 }
 ```
 
-Use `automation_manifest_template` to obtain the current starter. The host validates the common envelope; each enabled plugin validates its own namespaced configuration.
+Use `automation_manifest_template` to obtain the current starter.
 
 ## Browser QA scenario
 
@@ -49,17 +53,11 @@ Use `automation_manifest_template` to obtain the current starter. The host valid
 }
 ```
 
-A Browser QA scenario can use either a pre-existing `url` or a local `preview` definition. Remote URLs remain blocked unless `allowRemoteUrls` is explicitly enabled.
-
-Run it with:
-
-```text
-browser_qa_run_saved({"scenarioId":"menu-smoke"})
-```
+A Browser QA scenario can use either a pre-existing `url` or a local `preview` definition. Remote URLs remain blocked unless explicitly enabled in Browser QA settings.
 
 ## Godot Web scenario
 
-Godot scenarios default to `kind: "web"` for compatibility.
+Godot scenarios under `devmate.godot` default to `kind: "web"` for compatibility.
 
 ```json
 {
@@ -75,33 +73,21 @@ Godot scenarios default to `kind: "web"` for compatibility.
       "operator": "gte",
       "value": 2,
       "timeoutMs": 10000
-    },
-    { "type": "capture_state", "statePath": "player.health" }
+    }
   ],
   "screenshotPath": "artifacts/godot-qa/combat-web.png",
   "reportPath": "artifacts/godot-qa/combat-web.json"
 }
 ```
 
-Web scenario overrides:
-
-- `projectSubpath`
-- `preset`
-- `outputPath`
-- `mode`
-- `viewport`
-- `crossOriginIsolation`
-- `timeoutMs`
-
 ## Godot native scenario
 
-A native scenario launches the real Godot runtime with QA Bridge v2. It can replay project InputMap actions and assert the final JSON state without Web export or Playwright.
+A native scenario launches the real Godot runtime with QA Bridge v3. It can replay declared InputMap actions and assert final state without Web export or Playwright.
 
 ```json
 {
   "id": "combat-native",
   "kind": "native",
-  "description": "The native combat scene completes after deterministic input.",
   "scene": "res://levels/combat.tscn",
   "headless": true,
   "runForMs": 10000,
@@ -121,23 +107,15 @@ A native scenario launches the real Godot runtime with QA Bridge v2. It can repl
 }
 ```
 
-Native `inputActions` support:
+Native `inputActions` support `press`, `release`, and `tap`. Every action must exist in the Godot project `[input]` section.
 
-- `press`
-- `release`
-- `tap`, expanded into a bounded press/release pair
-
-Every action name must exist in the Godot project `[input]` section.
-
-## Run saved Godot scenarios
-
-Run one Web or native scenario:
+Run one legacy Web/native scenario:
 
 ```text
 godot_acceptance_run_saved({"scenarioId":"combat-native"})
 ```
 
-Run all or selected scenarios, including mixed Web/native suites:
+Run a mixed Web/native suite:
 
 ```text
 godot_acceptance_suite({"scenarioIds":["combat-web","combat-native"],"stopOnFailure":true})
@@ -145,7 +123,7 @@ godot_acceptance_suite({"scenarioIds":["combat-web","combat-native"],"stopOnFail
 
 ## Godot export matrix
 
-Store reviewed platform targets in `exports`:
+Store reviewed platform targets in `devmate.godot.exports`:
 
 ```json
 {
@@ -159,19 +137,124 @@ Store reviewed platform targets in `exports`:
 }
 ```
 
-Run the saved matrix by supplying the manifest path without explicit targets:
+Preset names must exist in `export_presets.cfg`. Platform SDKs, templates, signing credentials, and provisioning remain properties of the selected Runner host.
 
-```text
-godot_export_matrix({"manifestPath":".devmate/automation.json","reportPath":"artifacts/godot-export/matrix.json"})
+## Advanced performance scenario
+
+Advanced scenarios use the separate `devmate.godot-advanced` namespace so the existing Web/native schema remains stable.
+
+```json
+{
+  "id": "combat-performance",
+  "kind": "performance",
+  "scene": "res://levels/combat.tscn",
+  "runForMs": 10000,
+  "warmupMs": 2000,
+  "sampleIntervalMs": 250,
+  "maxSamples": 100,
+  "assertions": [
+    { "statePath": "player.ready", "operator": "truthy" }
+  ],
+  "requiredCheckpoints": ["combat_ready"],
+  "budgets": {
+    "minSamples": 20,
+    "minFpsP05": 55,
+    "maxProcessMsP95": 18,
+    "maxPhysicsMsP95": 8,
+    "maxMemoryBytes": 536870912,
+    "maxNodeCount": 5000,
+    "maxOrphanNodeCount": 0,
+    "maxDrawCallsP95": 1000
+  },
+  "reportPath": "artifacts/godot-performance/combat.json"
+}
 ```
 
-Preset names must exist in `export_presets.cfg`. Platform SDKs, templates, signing credentials, and provisioning remain properties of the selected Runner host.
+A performance scenario cannot pass without valid sampled evidence.
+
+## Advanced deterministic capture scenario
+
+```json
+{
+  "id": "combat-capture",
+  "kind": "capture",
+  "scene": "res://levels/combat.tscn",
+  "moviePath": "artifacts/godot-capture/combat.avi",
+  "fps": 30,
+  "frames": 300,
+  "disableVsync": true,
+  "inputActions": [
+    { "atMs": 500, "type": "tap", "action": "attack" }
+  ],
+  "assertions": [
+    { "statePath": "player.health", "operator": "gt", "value": 0 }
+  ],
+  "requiredCheckpoints": ["combat_started"],
+  "performance": true,
+  "performanceBudgets": {
+    "minSamples": 5,
+    "maxNodeCount": 5000
+  },
+  "reportPath": "artifacts/godot-capture/combat.json"
+}
+```
+
+Capture terminates by process-frame count, not wall-clock time. The selected Runner must provide a usable display server.
+
+## Advanced framework-test scenario
+
+GUT:
+
+```json
+{
+  "id": "unit-tests",
+  "kind": "tests",
+  "framework": "gut",
+  "directories": ["tests/unit"],
+  "includeSubdirectories": true,
+  "reportPath": "artifacts/godot-tests/gut.xml",
+  "timeoutMs": 600000
+}
+```
+
+GdUnit4:
+
+```json
+{
+  "id": "gdunit-tests",
+  "kind": "tests",
+  "framework": "gdunit4",
+  "directories": ["tests"],
+  "ignore": ["res://tests/slow"],
+  "continueAfterFailure": true,
+  "reportPath": "artifacts/godot-tests/gdunit4",
+  "timeoutMs": 600000
+}
+```
+
+Framework runs require a valid JUnit report. Exit code zero without JUnit evidence is treated as failure.
+
+Read the advanced namespace:
+
+```text
+godot_advanced_manifest
+```
+
+Run one advanced scenario:
+
+```text
+godot_advanced_run_saved({"scenarioId":"combat-performance"})
+```
+
+Run all or selected advanced scenarios:
+
+```text
+godot_advanced_suite({"scenarioIds":["unit-tests","combat-performance","combat-capture"],"stopOnFailure":true})
+```
 
 ## Structured state assertions
 
-Web Browser QA and native Godot QA use the same dotted-path comparison semantics.
-
-Supported operators:
+Browser QA, native QA, performance, and capture use the same dotted-path comparison semantics:
 
 - `eq`, `neq`
 - `gt`, `gte`, `lt`, `lte`
@@ -180,51 +263,34 @@ Supported operators:
 
 Unsafe path components such as `__proto__`, `prototype`, and `constructor` are rejected.
 
-For Web scenarios, Browser QA reads:
-
-```text
-globalThis.__DEVMATE_QA_STATE__
-```
-
-For native scenarios, the QA Bridge writes the same JSON-compatible snapshot to the scenario report file.
-
 ## Artifacts
 
 Paths must stay inside the active writable workspace.
 
-Web reports include:
+Generated evidence includes:
 
-- HTTP navigation status
-- completed actions and assertion failures
-- page and console errors
-- failed network requests
-- Canvas dimensions and visibility
-- final QA state
-- screenshot path
-
-Native reports include:
-
-- Bridge/runtime metadata
-- current scene and elapsed time
-- structured game state
-- checkpoints
-- explicit success/failure result
-- executed Input action count
-
-Export matrix reports include per-preset diagnostics, output path, artifact type, bytes, and file count.
+- Browser screenshots and reports;
+- native QA state/checkpoint JSON;
+- raw bounded performance samples and budget summaries;
+- frame-bound AVI captures;
+- GUT or GdUnit4 JUnit reports;
+- export-matrix diagnostics and artifact metadata.
 
 Generated artifacts are auditable build/test outputs. They are not automatically restored by task rollback.
 
 ## Recommended repository policy
 
-Commit `.devmate/automation.json` so acceptance and export criteria are reviewed with code. Usually ignore generated outputs:
+Commit `.devmate/automation.json` so validation criteria are reviewed with code. Usually ignore generated outputs:
 
 ```gitignore
 artifacts/browser-qa/
 artifacts/godot-qa/
+artifacts/godot-performance/
+artifacts/godot-capture/
+artifacts/godot-tests/
 artifacts/godot-export/
 build/web/
 build/exports/
 ```
 
-Keep scenarios small and deterministic. Prefer focused native and Web smoke cases over one long scenario that is difficult to diagnose.
+Keep scenarios focused and deterministic. Separate gameplay acceptance, performance, capture, and unit-test concerns rather than combining every assertion into one long workflow.
