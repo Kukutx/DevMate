@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { definePlugin } from './plugin-sdk.mjs';
 import { enhancedGodotPlugin } from './godot-enhanced.mjs';
 import { loadAdvancedAutomation, runAdvancedScenario, runAdvancedSuite } from './godot-advanced-automation.mjs';
-import { runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
+import { compactPerformanceResult, runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
 import { inspectGodotTests, runGodotTests } from './godot-tests.mjs';
 
 const inputActionSchema = z.object({
@@ -21,6 +21,7 @@ const assertionSchema = z.object({
 
 const budgetSchema = z.object({
   minSamples: z.number().int().min(1).max(5000).optional(),
+  minFpsP05: z.number().min(0).max(1000).optional(),
   minFpsP50: z.number().min(0).max(1000).optional(),
   minFpsP95: z.number().min(0).max(1000).optional(),
   maxProcessMsP95: z.number().min(0).max(10000).optional(),
@@ -86,7 +87,7 @@ export const advancedGodotPlugin = definePlugin({
         failedBudgets: result.performance.budget.failed,
         reportPath: result.reportPath
       });
-      return context.toolText(result);
+      return context.toolText(compactPerformanceResult(result));
     });
 
     server.registerTool('godot_movie_capture', {
@@ -112,7 +113,7 @@ export const advancedGodotPlugin = definePlugin({
         moviePath: result.capture?.path,
         bytes: result.capture?.bytes || 0
       });
-      return context.toolText(result);
+      return context.toolText(compactPerformanceResult(result));
     });
 
     server.registerTool('godot_test_status', {
