@@ -36,12 +36,14 @@ export function percentile(values = [], fraction = 0.95) {
 }
 
 function summarizeMetric(values) {
-  if (!values.length) return { samples: 0, min: null, max: null, avg: null, p50: null, p95: null, p99: null };
+  if (!values.length) return { samples: 0, min: null, max: null, avg: null, p01: null, p05: null, p50: null, p95: null, p99: null };
   return {
     samples: values.length,
     min: Math.min(...values),
     max: Math.max(...values),
     avg: values.reduce((sum, value) => sum + value, 0) / values.length,
+    p01: percentile(values, 0.01),
+    p05: percentile(values, 0.05),
     p50: percentile(values, 0.5),
     p95: percentile(values, 0.95),
     p99: percentile(values, 0.99)
@@ -65,6 +67,7 @@ export function summarizePerformance(report, { warmupMs = 1000 } = {}) {
 
 const BUDGET_FIELDS = Object.freeze({
   minSamples: { metric: null, statistic: null, direction: 'min' },
+  minFpsP05: { metric: 'fps', statistic: 'p05', direction: 'min' },
   minFpsP50: { metric: 'fps', statistic: 'p50', direction: 'min' },
   minFpsP95: { metric: 'fps', statistic: 'p95', direction: 'min' },
   maxProcessMsP95: { metric: 'process_ms', statistic: 'p95', direction: 'max' },
@@ -144,6 +147,30 @@ export async function runMovieCapture(context, {
   const summary = summarizePerformance(native.report, { warmupMs: 500 });
   const budget = evaluatePerformanceBudgets(summary, performanceBudgets);
   return { ...native, ok: native.ok && summary.evaluatedSamples > 0 && budget.ok, performance: { summary, budget } };
+}
+
+export function compactPerformanceResult(result) {
+  return {
+    ok: result.ok,
+    workspace: result.workspace,
+    projectSubpath: result.projectSubpath,
+    scene: result.scene,
+    headless: result.headless,
+    reportPath: result.reportPath,
+    artifactPaths: result.artifactPaths,
+    capture: result.capture || null,
+    performance: result.performance || null,
+    assertionResults: result.assertionResults,
+    missingCheckpoints: result.missingCheckpoints,
+    diagnostics: result.diagnostics,
+    checks: result.checks,
+    process: {
+      exitCode: result.result?.exitCode ?? null,
+      timedOut: result.result?.timedOut === true,
+      stdoutTruncated: result.result?.stdoutTruncated === true,
+      stderrTruncated: result.result?.stderrTruncated === true
+    }
+  };
 }
 
 export const __test = { BUDGET_FIELDS, METRICS, finiteValues, summarizeMetric };
