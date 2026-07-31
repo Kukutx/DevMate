@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { definePlugin } from './plugin-sdk.mjs';
 import { enhancedGodotPlugin } from './godot-enhanced.mjs';
+import { loadAdvancedAutomation, runAdvancedScenario, runAdvancedSuite } from './godot-advanced-automation.mjs';
 import { runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
 import { inspectGodotTests, runGodotTests } from './godot-tests.mjs';
 
@@ -50,10 +51,10 @@ export const advancedGodotPlugin = definePlugin({
   manifest: {
     ...enhancedGodotPlugin.manifest,
     version: '0.5.0',
-    description: 'Godot development with runtime verification, native/Web acceptance, performance budgets, deterministic movie capture, framework tests, quality reports, and multi-platform exports.',
+    description: 'Godot development with runtime verification, native/Web acceptance, performance budgets, deterministic movie capture, framework tests, version-controlled advanced suites, quality reports, and multi-platform exports.',
     capabilities: [...new Set([
       ...enhancedGodotPlugin.manifest.capabilities,
-      'performance-budgets', 'movie-capture', 'test-frameworks', 'junit'
+      'performance-budgets', 'movie-capture', 'test-frameworks', 'junit', 'advanced-automation'
     ])]
   },
   settingsSchema: enhancedGodotPlugin.settingsSchema,
@@ -155,6 +156,43 @@ export const advancedGodotPlugin = definePlugin({
         reportPath: result.reportPath
       });
       return context.toolText(result);
+    });
+
+    server.registerTool('godot_advanced_manifest', {
+      title: 'Godot advanced automation manifest',
+      description: 'Read and validate version-controlled performance, movie capture, and framework-test scenarios from the devmate.godot-advanced automation namespace.',
+      inputSchema: { workspaceId: z.string().optional(), manifestPath: z.string().max(1000).optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, async args => {
+      const loaded = await loadAdvancedAutomation(context, { ...args, required: false });
+      return context.toolText({ workspace: loaded.workspace, manifestPath: loaded.manifestPath, exists: loaded.exists, config: loaded.config });
+    });
+
+    server.registerTool('godot_advanced_run_saved', {
+      title: 'Run saved advanced Godot scenario',
+      description: 'Run one version-controlled performance, deterministic capture, GUT, or GdUnit4 scenario.',
+      inputSchema: { workspaceId: z.string().optional(), manifestPath: z.string().max(1000).optional(), scenarioId: z.string().min(1).max(100) },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+    }, async args => {
+      const executed = await runAdvancedScenario(context, args);
+      await context.audit('advanced_run_saved', { workspace: args.workspaceId || null, scenarioId: args.scenarioId, kind: executed.scenario.kind, ok: executed.result.ok });
+      return context.toolText(executed);
+    });
+
+    server.registerTool('godot_advanced_suite', {
+      title: 'Run saved advanced Godot suite',
+      description: 'Run selected or all version-controlled performance, capture, and framework-test scenarios with aggregate pass/fail results.',
+      inputSchema: {
+        workspaceId: z.string().optional(),
+        manifestPath: z.string().max(1000).optional(),
+        scenarioIds: z.array(z.string().min(1).max(100)).max(100).optional(),
+        stopOnFailure: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+    }, async args => {
+      const suite = await runAdvancedSuite(context, args);
+      await context.audit('advanced_suite', { workspace: args.workspaceId || null, requested: suite.requested, completed: suite.completed, passed: suite.passed, ok: suite.ok });
+      return context.toolText(suite);
     });
   }
 });
