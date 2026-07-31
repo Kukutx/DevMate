@@ -1,7 +1,7 @@
 import { browserQaPlugin } from './browser-qa.mjs';
-import { godotPlugin } from './godot.mjs';
+import { enhancedGodotPlugin } from './godot-enhanced.mjs';
 
 export const builtinPlugins = Object.freeze([
   browserQaPlugin,
-  godotPlugin
+  enhancedGodotPlugin
 ]);
