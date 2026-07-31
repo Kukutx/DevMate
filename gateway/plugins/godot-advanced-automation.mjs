@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { loadAutomationManifest, pluginAutomationConfig, scenarioById } from './automation-manifest.mjs';
-import { runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
+import { compactPerformanceResult, runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
 import { runGodotTests } from './godot-tests.mjs';
 
 const assertionSchema = z.object({
@@ -19,6 +19,7 @@ const inputActionSchema = z.object({
 
 const budgetSchema = z.object({
   minSamples: z.number().int().min(1).max(5000).optional(),
+  minFpsP05: z.number().min(0).max(1000).optional(),
   minFpsP50: z.number().min(0).max(1000).optional(),
   minFpsP95: z.number().min(0).max(1000).optional(),
   maxProcessMsP95: z.number().min(0).max(10000).optional(),
@@ -107,15 +108,37 @@ function scenarioArguments(config, scenario) {
   return { projectSubpath: scenario.projectSubpath || config.projectSubpath, ...args };
 }
 
+function compactTestResult(result) {
+  return {
+    ok: result.ok,
+    workspace: result.workspace,
+    projectSubpath: result.projectSubpath,
+    framework: result.framework,
+    junitPath: result.junitPath,
+    junit: result.junit,
+    junitError: result.junitError,
+    reportPath: result.reportPath,
+    artifactPaths: result.artifactPaths,
+    diagnostics: result.diagnostics,
+    process: {
+      exitCode: result.result?.exitCode ?? null,
+      timedOut: result.result?.timedOut === true,
+      stdoutTruncated: result.result?.stdoutTruncated === true,
+      stderrTruncated: result.result?.stderrTruncated === true
+    }
+  };
+}
+
 export async function runAdvancedScenario(context, { workspaceId, manifestPath, scenarioId } = {}) {
   const loaded = await loadAdvancedAutomation(context, { workspaceId, manifestPath });
   const scenario = advancedScenarioSchema.parse(scenarioById(loaded.config.scenarios, scenarioId));
   const args = { workspaceId, ...scenarioArguments(loaded.config, scenario) };
-  const result = scenario.kind === 'performance'
+  const raw = scenario.kind === 'performance'
     ? await runPerformanceTest(context, args)
     : scenario.kind === 'capture'
       ? await runMovieCapture(context, args)
       : await runGodotTests(context, args);
+  const result = scenario.kind === 'tests' ? compactTestResult(raw) : compactPerformanceResult(raw);
   return { manifestPath: loaded.manifestPath, scenario, result };
 }
 
@@ -149,4 +172,4 @@ export async function runAdvancedSuite(context, {
   };
 }
 
-export const __test = { configSchema, scenarioArguments };
+export const __test = { compactTestResult, configSchema, scenarioArguments };
