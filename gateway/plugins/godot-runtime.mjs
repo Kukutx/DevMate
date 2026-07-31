@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveGodotExecutable, resolveProject } from './godot-project.mjs';
+import { runExecutable } from './plugin-runtime.mjs';
 
 function cleanVersionChannel(value = '') {
   const channel = String(value || '').toLowerCase();
@@ -101,7 +102,7 @@ async function hasCSharpProject(projectRoot) {
 export async function inspectGodotRuntime(context, { workspaceId, projectSubpath, timeoutMs = 15000 } = {}) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: false });
   const executable = resolveGodotExecutable(context);
-  const versionResult = await context.executables.run(executable, ['--version'], {
+  const versionResult = await runExecutable(executable, ['--version'], {
     cwd: project.root,
     timeoutMs: Math.min(60000, Math.max(1000, Number(timeoutMs) || 15000)),
     maxOutputChars: 20000
