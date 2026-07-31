@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { loadAdvancedAutomation, runAdvancedSuite } from '../gateway/plugins/godot-advanced-automation.mjs';
 import { evaluatePerformanceBudgets, percentile, runMovieCapture, runPerformanceTest, summarizePerformance } from '../gateway/plugins/godot-performance.mjs';
 import { inspectGodotTests, parseJunitXml, runGodotTests, __test as testAdapterTest } from '../gateway/plugins/godot-tests.mjs';
 import { installQaBridge, inspectQaBridge, __test as bridgeTest } from '../gateway/plugins/godot-qa-bridge.mjs';
@@ -57,7 +58,8 @@ test('summarizes performance percentiles and evaluates budgets', () => {
   const summary = summarizePerformance(performanceReport(), { warmupMs: 1000 });
   assert.equal(summary.evaluatedSamples, 3);
   assert.equal(summary.metrics.fps.min, 58);
-  const budget = evaluatePerformanceBudgets(summary, { minSamples: 3, minFpsP50: 58, maxProcessMsP95: 7, maxNodeCount: 5, maxOrphanNodeCount: 0 });
+  assert.equal(summary.metrics.fps.p05 >= 58, true);
+  const budget = evaluatePerformanceBudgets(summary, { minSamples: 3, minFpsP05: 58, maxProcessMsP95: 7, maxNodeCount: 5, maxOrphanNodeCount: 0 });
   assert.equal(budget.configured, 5);
   assert.equal(budget.failed, 1);
   assert.equal(budget.results.find(item => item.field === 'maxOrphanNodeCount').passed, false);
@@ -94,6 +96,9 @@ test('detects GUT and builds constrained command arguments', async t => {
   assert.equal(result.junit.tests, 2);
   assert.equal(result.args.includes('-gexit'), true);
   assert.throws(() => testAdapterTest.toResourcePath('../outside'), /inside/);
+  const gdunitArgs = testAdapterTest.buildGdUnitArgs({ root }, { directories: ['tests'], ignore: [], continueAfterFailure: true, reportDirectory: 'artifacts/gdunit' });
+  assert.equal(gdunitArgs.includes('res://addons/gdUnit4/bin/GdUnitCmdTool.gd'), true);
+  assert.equal(gdunitArgs.includes('-rd'), true);
 });
 
 test('runs performance and movie capture through native QA contracts', async t => {
@@ -122,4 +127,37 @@ test('runs performance and movie capture through native QA contracts', async t =
   assert.equal(capture.capture.exists, true);
   assert.equal(capture.capture.bytes, 1024);
   assert.equal(capture.args.includes('--fixed-fps'), true);
+});
+
+test('loads and executes version-controlled advanced Godot suites', async t => {
+  const root = await createProject();
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  await fsp.mkdir(path.join(root, '.devmate'), { recursive: true });
+  await fsp.writeFile(path.join(root, '.devmate', 'automation.json'), JSON.stringify({
+    schemaVersion: 1,
+    plugins: {
+      'devmate.godot-advanced': {
+        projectSubpath: '.',
+        scenarios: [{
+          id: 'performance-smoke',
+          kind: 'performance',
+          runForMs: 2000,
+          warmupMs: 1000,
+          budgets: { minSamples: 3, minFpsP05: 58, maxNodeCount: 5 }
+        }]
+      }
+    }
+  }, null, 2), 'utf8');
+  const context = contextFor(root, async (_executable, _args, options = {}) => {
+    await fsp.mkdir(path.dirname(options.environment.DEVMATE_QA_REPORT), { recursive: true });
+    await fsp.writeFile(options.environment.DEVMATE_QA_REPORT, JSON.stringify(performanceReport()), 'utf8');
+    return { exitCode: 0, timedOut: false, stdout: '', stderr: '' };
+  });
+  await installQaBridge(context, {});
+  const manifest = await loadAdvancedAutomation(context, {});
+  assert.equal(manifest.config.scenarios[0].kind, 'performance');
+  const suite = await runAdvancedSuite(context, {});
+  assert.equal(suite.ok, true);
+  assert.equal(suite.results[0].result.performance.summary.evaluatedSamples, 3);
+  assert.equal(Object.hasOwn(suite.results[0].result, 'report'), false);
 });
