@@ -6,17 +6,29 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function run(script, args = []) {
-  const result = spawnSync(process.execPath, [path.join(root, script), ...args], {
+function runAbsolute(file, args = []) {
+  const result = spawnSync(process.execPath, [file, ...args], {
     cwd: root,
     encoding: 'utf8',
     stdio: 'inherit'
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${script} failed with exit code ${result.status}`);
+  if (result.status !== 0) throw new Error(`${path.relative(root, file)} failed with exit code ${result.status}`);
 }
 
-run('scripts/apply-final-hardening.mjs');
+function run(script, args = []) {
+  runAbsolute(path.join(root, script), args);
+}
+
+const migrationSource = path.join(root, 'scripts', 'apply-final-hardening.mjs');
+const migrationCopy = path.join(root, 'scripts', '.apply-final-hardening.generated.mjs');
+const rawMigration = fs.readFileSync(migrationSource, 'utf8');
+fs.writeFileSync(migrationCopy, rawMigration.replace(/\$\{/g, '\\${'), 'utf8');
+try {
+  runAbsolute(migrationCopy);
+} finally {
+  fs.rmSync(migrationCopy, { force: true });
+}
 
 const changelogPath = path.join(root, 'CHANGELOG.md');
 const current = fs.readFileSync(changelogPath, 'utf8');
