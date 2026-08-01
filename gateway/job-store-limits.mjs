@@ -108,15 +108,17 @@ export function compactJobStore(store, {
   if (store.jobs.length > limits.maxRetainedJobs) {
     const excess = store.jobs.length - limits.maxRetainedJobs;
     const ids = new Set(oldestFinalJobs(store).slice(0, excess).map(job => job.id));
-    removed.pressureJobs += removeJobIds(store, ids);
-    removed.jobs += removed.pressureJobs;
+    const count = removeJobIds(store, ids);
+    removed.pressureJobs += count;
+    removed.jobs += count;
   }
 
   if (store.runners.length > limits.maxRunners) {
     const excess = store.runners.length - limits.maxRunners;
     const ids = new Set(removableRunners(store).slice(0, excess).map(runner => runner.id));
-    removed.pressureRunners += removeRunnerIds(store, ids);
-    removed.runners += removed.pressureRunners;
+    const count = removeRunnerIds(store, ids);
+    removed.pressureRunners += count;
+    removed.runners += count;
   }
 
   let bytes = jobStoreBytes(store);
