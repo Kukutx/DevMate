@@ -1,6 +1,17 @@
 import crypto from 'node:crypto';
 import { now, redactSensitiveString } from './local-shared.mjs';
 import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
+import {
+  MAX_ACTIVE_JOBS,
+  MAX_JOB_STORE_BYTES,
+  MAX_RETAINED_JOBS,
+  MAX_RUNNERS,
+  activeJobCount,
+  assertCanActivateJob,
+  assertJobStoreCapacity,
+  compactJobStore,
+  jobStoreBytes
+} from './job-store-limits.mjs';
 
 const NAMESPACE = 'jobs';
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'blocked_lease']);
@@ -28,6 +39,7 @@ function readStore() {
 }
 
 function writeStore(store) {
+  assertJobStoreCapacity(store, { enforceActive: false });
   return writeDurableNamespace(NAMESPACE, store);
 }
 
@@ -171,12 +183,8 @@ function recover(store, at = Date.now()) {
       changed = true;
     }
   }
-  const cutoff = at - 30 * 24 * 60 * 60 * 1000;
-  const nextJobs = store.jobs.filter(job => !FINAL_STATUSES.has(job.status) || Date.parse(job.finishedAt || job.updatedAt || 0) >= cutoff);
-  if (nextJobs.length !== store.jobs.length) {
-    store.jobs = nextJobs;
-    changed = true;
-  }
+  const compacted = compactJobStore(store, { at });
+  if (compacted.changed) changed = true;
   if (changed) writeStore(store);
   return store;
 }
@@ -187,6 +195,7 @@ export function createJob({ principal, tool, args = {}, workspaceId = null, titl
   if (bytes > 256 * 1024) throw new Error(`Job arguments exceed the 256 KiB limit (${bytes} bytes)`);
   const store = recover(readStore());
   if (store.drain.active && principal?.source === 'team-token') throw new Error(`DevMate is draining: ${store.drain.reason || 'maintenance in progress'}`);
+  assertCanActivateJob(store);
   const job = {
     id: `job-${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`,
     title: cleanString(title || tool, 300) || tool,
@@ -261,6 +270,7 @@ export function retryJob({ id, principal }) {
   const elevated = ['owner', 'maintainer'].includes(principal?.role);
   if (job.requestedBy.id !== principal?.id && !elevated) throw new Error(`Job ${id} belongs to ${job.requestedBy.name || job.requestedBy.id}`);
   if (!['failed', 'cancelled', 'waiting_approval', 'blocked_lease'].includes(job.status)) throw new Error(`Job ${id} cannot be retried from status ${job.status}`);
+  if (FINAL_STATUSES.has(job.status)) assertCanActivateJob(store);
   job.status = 'queued';
   job.runnerId = null;
   job.error = null;
@@ -443,6 +453,22 @@ export function cancelDrain({ principal }) {
   return { cancelled: previous.active, previous, cancelledBy: principal?.id || 'unknown' };
 }
 
+export function jobQueueCapacityStatus() {
+  const store = recover(readStore());
+  return {
+    activeJobs: activeJobCount(store),
+    retainedJobs: store.jobs.length,
+    runners: store.runners.length,
+    bytes: jobStoreBytes(store),
+    limits: {
+      maxActiveJobs: MAX_ACTIVE_JOBS,
+      maxRetainedJobs: MAX_RETAINED_JOBS,
+      maxRunners: MAX_RUNNERS,
+      maxBytes: MAX_JOB_STORE_BYTES
+    }
+  };
+}
+
 export function assertDrainAllows({ principal, capability, tool }) {
   const drain = drainStatus();
   if (!drain.active) return;
@@ -452,7 +478,16 @@ export function assertDrainAllows({ principal, capability, tool }) {
 }
 
 export function clearJobsForTests() {
-  writeStore(emptyStore());
+  writeDurableNamespace(NAMESPACE, emptyStore());
 }
 
-export const __test = { ACTIVE_STATUSES, FINAL_STATUSES, assertSafeArguments, emptyStore, publicJob, recover, runnerMatches };
+export const __test = {
+  ACTIVE_STATUSES,
+  FINAL_STATUSES,
+  assertSafeArguments,
+  emptyStore,
+  publicJob,
+  recover,
+  runnerMatches,
+  writeStore
+};
