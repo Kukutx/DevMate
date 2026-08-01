@@ -39,7 +39,7 @@ test('preserves Gateway-owned config while applying VS Code-owned fields', () =>
     team: { enabled: false, requireWorkspaceLeaseForWrites: false, members: [] },
     vscodeContext: { capturedAt: 'now' },
     activeWorkspaceId: 'new-app',
-    workspaces: [{ id: 'new-app' }]
+    workspaces: [{ id: 'new-app' }, { id: 'stale-trusted', trusted: true, role: 'trusted' }]
   };
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.instanceId, 'stable-instance');
@@ -56,6 +56,37 @@ test('preserves Gateway-owned config while applying VS Code-owned fields', () =>
   assert.deepEqual(merged.task, current.task);
   assert.deepEqual(merged.trustedWritableRoots, current.trustedWritableRoots);
   assert.deepEqual(merged.workspaces.map(item => item.id), ['new-app', 'trusted-a']);
+});
+
+test('does not resurrect Gateway-owned fields removed after a stale extension read', () => {
+  const current = {
+    instanceId: 'stable',
+    auth: { required: true, token: '' },
+    runtime: { maxConcurrentJobs: 2 },
+    team: { enabled: true, members: [] },
+    workspaces: [{ id: 'app' }]
+  };
+  const staleCandidate = {
+    instanceId: 'stale',
+    auth: { required: true, token: 'old-token' },
+    runtime: { maxConcurrentJobs: 8, defaultCommandTimeoutMs: 5000 },
+    team: { enabled: true, members: [{ id: 'removed-member' }] },
+    task: { currentTaskId: 'finished-task' },
+    plugins: { enabled: ['removed-plugin'] },
+    jobs: { embeddedRunnerEnabled: false },
+    trustedWritableRoots: [{ id: 'removed-root' }],
+    workspaces: [{ id: 'app' }, { id: 'removed-root', trusted: true, role: 'trusted' }]
+  };
+  const merged = mergeExtensionConfig(current, staleCandidate);
+  assert.equal(merged.auth.token, '');
+  assert.equal(merged.runtime.maxConcurrentJobs, 2);
+  assert.equal(merged.runtime.defaultCommandTimeoutMs, 5000);
+  assert.deepEqual(merged.team.members, []);
+  assert.equal(merged.task, undefined);
+  assert.equal(merged.plugins, undefined);
+  assert.equal(merged.jobs, undefined);
+  assert.equal(merged.trustedWritableRoots, undefined);
+  assert.deepEqual(merged.workspaces.map(item => item.id), ['app']);
 });
 
 test('intercepts only the DevMate config path and writes it atomically', async t => {
