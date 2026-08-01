@@ -91,9 +91,92 @@ export function definePlugin({ manifest, settingsSchema = null, defaultSettings 
   });
 }
 
+function mergeList(base, patch) {
+  return [...new Set([...(base || []), ...(patch || [])])];
+}
+
+export function extendPlugin(base, extension = {}) {
+  if (!base?.manifest || typeof base.activate !== 'function') {
+    throw new TypeError('extendPlugin requires a valid base plugin');
+  }
+  const manifestPatch = extension.manifest && typeof extension.manifest === 'object' && !Array.isArray(extension.manifest)
+    ? extension.manifest
+    : {};
+  if (manifestPatch.id && manifestPatch.id !== base.manifest.id) {
+    throw new Error(`Plugin extension cannot change id ${base.manifest.id} to ${manifestPatch.id}`);
+  }
+  if (manifestPatch.apiVersion && manifestPatch.apiVersion !== base.manifest.apiVersion) {
+    throw new Error(`Plugin extension cannot change API version for ${base.manifest.id}`);
+  }
+  const version = String(extension.version || manifestPatch.version || '').trim();
+  if (!version) throw new Error(`Plugin extension ${base.manifest.id} requires version`);
+  const permissions = {
+    ...(base.manifest.permissions || {}),
+    ...(manifestPatch.permissions || {})
+  };
+  permissions.executablePatterns = mergeList(
+    base.manifest.permissions?.executablePatterns,
+    manifestPatch.permissions?.executablePatterns
+  );
+  const manifest = {
+    ...base.manifest,
+    ...manifestPatch,
+    id: base.manifest.id,
+    apiVersion: base.manifest.apiVersion,
+    version,
+    description: String(extension.description ?? manifestPatch.description ?? base.manifest.description),
+    dependencies: mergeList(base.manifest.dependencies, manifestPatch.dependencies),
+    toolPrefixes: mergeList(base.manifest.toolPrefixes, manifestPatch.toolPrefixes),
+    capabilities: mergeList(base.manifest.capabilities, [
+      ...(manifestPatch.capabilities || []),
+      ...(extension.capabilities || [])
+    ]),
+    provides: mergeList(base.manifest.provides, manifestPatch.provides),
+    consumes: mergeList(base.manifest.consumes, manifestPatch.consumes),
+    permissions
+  };
+  const extensionActivate = extension.activate;
+  const extensionDiagnose = extension.diagnose;
+  const extensionDeactivate = extension.deactivate;
+  if (extensionActivate != null && typeof extensionActivate !== 'function') throw new TypeError(`Plugin extension ${base.manifest.id} activate must be a function`);
+  if (extensionDiagnose != null && typeof extensionDiagnose !== 'function') throw new TypeError(`Plugin extension ${base.manifest.id} diagnose must be a function`);
+  if (extensionDeactivate != null && typeof extensionDeactivate !== 'function') throw new TypeError(`Plugin extension ${base.manifest.id} deactivate must be a function`);
+  const diagnose = base.diagnose || extensionDiagnose
+    ? async context => {
+      const baseResult = base.diagnose ? await base.diagnose(context) : null;
+      return extensionDiagnose ? extensionDiagnose(context, baseResult) : baseResult;
+    }
+    : null;
+  const deactivate = base.deactivate || extensionDeactivate
+    ? async context => {
+      if (extensionDeactivate) await extensionDeactivate(context);
+      if (base.deactivate) await base.deactivate(context);
+    }
+    : null;
+  return definePlugin({
+    manifest,
+    settingsSchema: extension.settingsSchema ?? base.settingsSchema,
+    defaultSettings: {
+      ...base.defaultSettings,
+      ...(extension.defaultSettings || {})
+    },
+    async activate(context) {
+      await base.activate(context);
+      if (extensionActivate) await extensionActivate(context);
+    },
+    diagnose,
+    deactivate
+  });
+}
+
 export function toolNameAllowed(manifest, name) {
   const value = String(name || '');
   return manifest.core || manifest.toolPrefixes.some(prefix => value.startsWith(prefix));
 }
 
-export const __test = { PLUGIN_ID_PATTERN, TOOL_PREFIX_PATTERN, SERVICE_ID_PATTERN };
+export const __test = {
+  PLUGIN_ID_PATTERN,
+  SERVICE_ID_PATTERN,
+  TOOL_PREFIX_PATTERN,
+  mergeList
+};
