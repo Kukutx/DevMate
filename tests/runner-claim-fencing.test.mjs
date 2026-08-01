@@ -38,6 +38,7 @@ test('stores only a hash and accepts the active claim proof', () => {
   const stored = durable.readDurableNamespace('runner-claims', null);
   assert.equal(stored.claims['job-1'].token, undefined);
   assert.notEqual(stored.claims['job-1'].tokenHash, issued.token);
+  assert.equal(stored.generations['job-1'].generation, 1);
 });
 
 test('rejects a stale proof after the same job is reissued', () => {
@@ -98,6 +99,31 @@ test('allows legacy proof omission only for the first claim generation', () => {
   }), /stale/);
 });
 
+test('retains the generation watermark after a claim is consumed', () => {
+  const first = claims.issueRunnerClaim({
+    jobId: 'job-consumed',
+    runnerId: 'runner-a',
+    leaseExpiresAt: new Date(Date.now() + 60000).toISOString()
+  });
+  claims.consumeRunnerClaim({
+    jobId: 'job-consumed',
+    runnerId: 'runner-a',
+    generation: first.generation,
+    token: first.token
+  });
+  const second = claims.issueRunnerClaim({
+    jobId: 'job-consumed',
+    runnerId: 'runner-a',
+    leaseExpiresAt: new Date(Date.now() + 60000).toISOString()
+  });
+  assert.equal(second.generation, 2);
+  assert.throws(() => claims.validateRunnerClaim({
+    jobId: 'job-consumed',
+    runnerId: 'runner-a',
+    allowLegacyFirst: true
+  }), /stale/);
+});
+
 test('renews and consumes a claim without exposing its token in status', () => {
   const issued = claims.issueRunnerClaim({
     jobId: 'job-renew',
@@ -122,6 +148,7 @@ test('renews and consumes a claim without exposing its token in status', () => {
     token: issued.token
   });
   assert.equal(claims.runnerClaimStatus().active.length, 0);
+  assert.equal(claims.runnerClaimStatus().retainedGenerations, 1);
 });
 
 test.after(async () => fsp.rm(root, { recursive: true, force: true }));
