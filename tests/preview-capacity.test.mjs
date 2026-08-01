@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,7 +22,7 @@ test('enforces per-workspace preview capacity without leaking servers', async ()
   for (let index = 0; index < MAX_WORKSPACE_PREVIEWS; index += 1) {
     await startPreview({ workspaceId: 'app', root });
   }
-  assert.throws(() => startPreview({ workspaceId: 'app', root }), /Workspace preview limit/);
+  await assert.rejects(startPreview({ workspaceId: 'app', root }), /Workspace preview limit/);
   assert.equal(previewCapacityStatus().active, MAX_WORKSPACE_PREVIEWS);
   await shutdownPreviews();
   assert.equal(previewCapacityStatus().active, 0);
