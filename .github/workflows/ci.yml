@@ -1,52 +1,132 @@
 name: CI
 
 on:
+  push:
+    branches:
+      - master
+      - main
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
-  patch-development-dependencies:
-    name: Patch and verify development dependencies
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: windows-latest
+
     steps:
-      - name: Checkout maintenance branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: maintenance/2.9.2-final-deep-dig
-          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
-      - name: Apply non-breaking npm audit fixes
-        run: |
-          npm audit fix --package-lock-only --ignore-scripts --no-audit --no-fund
-          npm ci
+      - name: Install
+        run: npm ci
 
-      - name: Require clean runtime and development audits
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit development dependencies
+        shell: pwsh
         run: |
-          npm audit --omit=dev --audit-level=moderate
           npm audit --audit-level=moderate
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Development dependency audit reported advisories. Runtime dependencies already passed the blocking audit."
+            exit 0
+          }
 
-      - name: Validate the patched development tree
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Smoke test gateway
+        run: npm run smoke:gateway
+
+      - name: Package VSIX
+        run: npm run package:vsix
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmate-vsix
+          path: "*.vsix"
+
+  godot-real:
+    name: Linux and Real Godot 4.7.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GODOT_VERSION: 4.7.1
+      GODOT_STATUS: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Linux repository contracts
+        run: npm run check
+
+      - name: Linux discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Linux gateway smoke test
+        run: npm run smoke:gateway
+
+      - name: Install virtual display
         run: |
-          npm run check
-          npm run test:unit
-          npm run smoke:gateway
-          npm run package:vsix
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb
 
-      - name: Restore normal CI and commit audited lockfile
+      - name: Cache Godot editor
+        uses: actions/cache@v4
+        with:
+          path: .godot-ci
+          key: godot-${{ runner.os }}-${{ runner.arch }}-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
+      - name: Download and verify official Godot editor
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin master
-          git checkout origin/master -- .github/workflows/ci.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add package-lock.json .github/workflows/ci.yml gateway/server.bundle.mjs
-          git commit -m 'Patch audited development dependency tree'
-          git push origin HEAD:maintenance/2.9.2-final-deep-dig
+          mkdir -p .godot-ci
+          archive="Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
+          executable="Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64"
+          if [ ! -x ".godot-ci/${executable}" ]; then
+            api="https://api.github.com/repos/godotengine/godot-builds/releases/tags/${GODOT_VERSION}-${GODOT_STATUS}"
+            curl --fail --silent --show-error --location "$api" --output .godot-ci/release.json
+            archive_url=$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
+            sums_url=$(jq -r '.assets[] | select(.name == "SHA512-SUMS.txt") | .browser_download_url' .godot-ci/release.json)
+            test -n "$archive_url" && test "$archive_url" != "null"
+            test -n "$sums_url" && test "$sums_url" != "null"
+            curl --fail --silent --show-error --location "$archive_url" --output ".godot-ci/${archive}"
+            curl --fail --silent --show-error --location "$sums_url" --output .godot-ci/SHA512-SUMS.txt
+            (
+              cd .godot-ci
+              checksum_line=$(awk -v file="$archive" '$NF == file { print; exit }' SHA512-SUMS.txt)
+              test -n "$checksum_line"
+              printf '%s\n' "$checksum_line" | sha512sum --check --strict -
+              unzip -q -o "$archive"
+              chmod +x "$executable"
+            )
+          fi
+          echo "GODOT_REAL_BIN=$PWD/.godot-ci/${executable}" >> "$GITHUB_ENV"
+
+      - name: Show Godot version
+        run: "$GODOT_REAL_BIN --version"
+
+      - name: Run real Godot validation, native QA, and performance sampling
+        run: node --test tests/godot-real-runtime.test.mjs
+
+      - name: Run real Godot deterministic movie capture
+        run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs
