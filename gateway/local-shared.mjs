@@ -8,6 +8,7 @@ const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
 const AUDIT_LOG = CONFIG_DIR ? path.join(CONFIG_DIR, 'state', 'audit.jsonl') : '';
 const CONFIG_SOURCE = Symbol.for('devmate.configSource');
 const SENSITIVE_KEY = /token|secret|password|authorization|api[_-]?key|credential|private[_-]?key/i;
+export const MAX_AUDIT_ENTRY_BYTES = 64 * 1024;
 export const DEFAULT_MAX_PROCESSES = 8;
 export const MAX_MAX_PROCESSES = 32;
 export const DEFAULT_OUTPUT_BYTES = 1024 * 1024;
@@ -22,6 +23,19 @@ export function normalizeSlash(value) { return String(value || '').replace(/\\/g
 
 function fingerprint(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function fsyncDirectory(directory) {
+  let fd = null;
+  try {
+    fd = fs.openSync(directory, 'r');
+    fs.fsyncSync(fd);
+  } catch {
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
 }
 
 function attachConfigSource(config, source) {
@@ -67,6 +81,7 @@ export function recoverConfigReplacement() {
   if (!candidate) return null;
   fs.renameSync(candidate.file, CONFIG_PATH);
   try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
+  fsyncDirectory(CONFIG_DIR);
   for (const stale of candidates.slice(1)) {
     try { fs.rmSync(stale.file, { force: true }); } catch {}
   }
@@ -140,6 +155,7 @@ export function writeConfig(config, { force = false } = {}) {
       }
     }
     try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
+    fsyncDirectory(CONFIG_DIR);
     attachConfigSource(config, { exists: true, hash: fingerprint(payload) });
     return config;
   } finally {
@@ -231,16 +247,44 @@ export function redactSensitiveValue(value, key = '', depth = 0, seen = new Weak
   );
 }
 
+function boundedAuditLine(entry) {
+  let serialized = JSON.stringify(entry);
+  const originalBytes = Buffer.byteLength(serialized, 'utf8');
+  if (originalBytes <= MAX_AUDIT_ENTRY_BYTES) return serialized;
+  const base = {
+    time: entry.time,
+    action: entry.action,
+    taskId: entry.taskId,
+    permissionProfile: entry.permissionProfile,
+    truncated: true,
+    originalBytes
+  };
+  let previewLength = Math.min(serialized.length, 48 * 1024);
+  let truncated = { ...base, preview: serialized.slice(0, previewLength) };
+  serialized = JSON.stringify(truncated);
+  while (Buffer.byteLength(serialized, 'utf8') > MAX_AUDIT_ENTRY_BYTES && previewLength > 1024) {
+    previewLength = Math.floor(previewLength * 0.75);
+    truncated = { ...base, preview: truncated.preview.slice(0, previewLength) };
+    serialized = JSON.stringify(truncated);
+  }
+  return serialized;
+}
+
 export async function audit(action, payload = {}) {
   if (!AUDIT_LOG) return;
   try {
-    await fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true });
+    await fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true, mode: 0o700 });
     const config = readConfig();
     const safe = redactSensitiveValue(payload);
-    await fsp.appendFile(AUDIT_LOG, `${JSON.stringify({
-      time: now(), action, taskId: config.task?.currentTaskId || null,
-      permissionProfile: permissionProfile(config), ...safe
-    })}\n`, 'utf8');
+    const system = {
+      time: now(),
+      action: redactSensitiveString(action).slice(0, 200),
+      taskId: config.task?.currentTaskId || null,
+      permissionProfile: permissionProfile(config)
+    };
+    const line = boundedAuditLine({ ...(safe && typeof safe === 'object' && !Array.isArray(safe) ? safe : { detail: safe }), ...system });
+    await fsp.appendFile(AUDIT_LOG, `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+    try { await fsp.chmod(AUDIT_LOG, 0o600); } catch {}
   } catch {}
 }
 export function toolText(payload) {
@@ -336,4 +380,12 @@ export function processLimits(config) {
   };
 }
 
-export const __test = { CONFIG_SOURCE, attachConfigSource, configConflict, fingerprint, replacementCandidates };
+export const __test = {
+  CONFIG_SOURCE,
+  attachConfigSource,
+  boundedAuditLine,
+  configConflict,
+  fingerprint,
+  fsyncDirectory,
+  replacementCandidates
+};
