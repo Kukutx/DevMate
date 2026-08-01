@@ -42,6 +42,16 @@ test('isolates Runner control secrets from the local Gateway child', () => {
   }
 });
 
+test('forwards claim proof only from the in-memory claimed job', () => {
+  const job = { id: 'job-1', claim: { generation: 4, token: 'claim-secret' } };
+  assert.deepEqual(__test.claimBody(job, { leaseSeconds: 60 }), {
+    leaseSeconds: 60,
+    claimGeneration: 4,
+    claimToken: 'claim-secret'
+  });
+  assert.deepEqual(__test.claimBody({ id: 'legacy' }, { leaseSeconds: 60 }), { leaseSeconds: 60 });
+});
+
 test('detects local MCP error results', () => {
   const error = __test.toolError({ isError: true, content: [{ type: 'text', text: 'validation failed' }] });
   assert.match(error.message, /validation failed/);
