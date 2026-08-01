@@ -5,6 +5,30 @@ function compareExtension(a, b) {
   return (a.order - b.order) || a.id.localeCompare(b.id);
 }
 
+function instanceStateFor(server) {
+  if (!server[INSTANCE_STATE]) {
+    Object.defineProperty(server, INSTANCE_STATE, {
+      value: {
+        initialized: new Set(),
+        pending: new Map(),
+        registeredTools: new Map()
+      }
+    });
+  }
+  return server[INSTANCE_STATE];
+}
+
+function publicToolRegistration(name, config = {}) {
+  return {
+    name,
+    title: String(config.title || ''),
+    description: String(config.description || ''),
+    annotations: { ...(config.annotations || {}) },
+    hasInputSchema: Object.hasOwn(config, 'inputSchema'),
+    hasOutputSchema: Object.hasOwn(config, 'outputSchema')
+  };
+}
+
 function stateFor(McpServerClass) {
   const prototype = McpServerClass?.prototype;
   if (!prototype) throw new TypeError('McpServer class with a prototype is required');
@@ -31,21 +55,25 @@ function stateFor(McpServerClass) {
     if (typeof registration.handler !== 'function') {
       throw new TypeError(`Tool ${name} does not have a callable handler after DevMate decoration`);
     }
-    return state.originalRegisterTool.call(
+    const instance = instanceStateFor(this);
+    if (instance.registeredTools.has(registration.name)) {
+      throw new Error(`Duplicate MCP tool registration: ${registration.name}`);
+    }
+    const result = state.originalRegisterTool.call(
       this,
       registration.name,
       registration.config,
       registration.handler
     );
+    instance.registeredTools.set(
+      registration.name,
+      publicToolRegistration(registration.name, registration.config)
+    );
+    return result;
   };
 
   prototype.connect = async function devmateConnect(...args) {
-    if (!this[INSTANCE_STATE]) {
-      Object.defineProperty(this, INSTANCE_STATE, {
-        value: { initialized: new Set(), pending: new Map() }
-      });
-    }
-    const instance = this[INSTANCE_STATE];
+    const instance = instanceStateFor(this);
     for (const extension of [...state.initializers.values()].sort(compareExtension)) {
       if (instance.initialized.has(extension.id)) continue;
       let pending = instance.pending.get(extension.id);
@@ -101,4 +129,21 @@ export function serverExtensionHostStatus(McpServerClass) {
   };
 }
 
-export const __test = { HOST_STATE, INSTANCE_STATE, compareExtension, stateFor };
+export function serverExtensionInstanceStatus(server) {
+  const instance = server?.[INSTANCE_STATE];
+  if (!instance) return { initialized: [], pending: [], tools: [] };
+  return {
+    initialized: [...instance.initialized].sort(),
+    pending: [...instance.pending.keys()].sort(),
+    tools: [...instance.registeredTools.values()].sort((a, b) => a.name.localeCompare(b.name))
+  };
+}
+
+export const __test = {
+  HOST_STATE,
+  INSTANCE_STATE,
+  compareExtension,
+  instanceStateFor,
+  publicToolRegistration,
+  stateFor
+};
