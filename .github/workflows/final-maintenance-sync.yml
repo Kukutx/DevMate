@@ -1,5 +1,6 @@
 name: Final maintenance branch sync
 
+# Temporary workflow: removed immediately after the maintenance branch is synchronized.
 on:
   push:
     branches:
