@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const Module = require('module');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -184,30 +185,63 @@ function atomicWriteJson(fsModule, file, value, originalWriteFileSync = fsModule
   }
 }
 
-function installConfigWriteInterceptor(fsModule, file) {
-  const target = path.resolve(file);
+function writeMergedExtensionConfig(fsModule, file, candidateValue) {
+  const candidate = object(candidateValue);
+  const current = readCurrent(fsModule, file);
+  const merged = mergeExtensionConfig(current, candidate);
+  atomicWriteJson(fsModule, file, merged);
+  return merged;
+}
+
+function createConfigFsProxy(fsModule, file) {
+  const targetPath = path.resolve(file);
   const originalWriteFileSync = fsModule.writeFileSync.bind(fsModule);
-  let active = true;
-  fsModule.writeFileSync = function devmateConfigWrite(candidatePath, data, options) {
-    if (!active || typeof candidatePath !== 'string' || path.resolve(candidatePath) !== target) {
+  const interceptedWrite = function devmateScopedConfigWrite(candidatePath, data, options) {
+    if (typeof candidatePath !== 'string' || path.resolve(candidatePath) !== targetPath) {
       return originalWriteFileSync(candidatePath, data, options);
     }
     const candidate = parseJsonValue(data);
-    const current = readCurrent(fsModule, target);
-    atomicWriteJson(fsModule, target, mergeExtensionConfig(current, candidate), originalWriteFileSync);
+    const current = readCurrent(fsModule, targetPath);
+    atomicWriteJson(fsModule, targetPath, mergeExtensionConfig(current, candidate), originalWriteFileSync);
   };
-  return () => {
-    if (!active) return;
-    active = false;
-    if (fsModule.writeFileSync.name === 'devmateConfigWrite') fsModule.writeFileSync = originalWriteFileSync;
+  return new Proxy(fsModule, {
+    get(target, property, receiver) {
+      if (property === 'writeFileSync') return interceptedWrite;
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+    set(target, property, value) {
+      return Reflect.set(target, property, value);
+    }
+  });
+}
+
+function loadWithConfigWriteInterceptor(modulePath, file) {
+  const entry = require.resolve(modulePath);
+  const moduleRoot = path.dirname(entry);
+  const allowedNames = new Set(['extension-entry.js', 'extension-entry-win32.js', 'extension.js']);
+  const configFs = createConfigFsProxy(fs, file);
+  const originalLoad = Module._load;
+  Module._load = function devmateScopedModuleLoad(request, parent, isMain) {
+    const parentFile = parent?.filename ? path.resolve(parent.filename) : '';
+    const parentAllowed = parentFile && path.dirname(parentFile) === moduleRoot && allowedNames.has(path.basename(parentFile));
+    if (request === 'fs' && parentAllowed) return configFs;
+    return originalLoad.call(this, request, parent, isMain);
   };
+  try {
+    return require(entry);
+  } finally {
+    Module._load = originalLoad;
+  }
 }
 
 module.exports = {
   atomicWriteJson,
-  installConfigWriteInterceptor,
+  createConfigFsProxy,
+  loadWithConfigWriteInterceptor,
   mergeExtensionConfig,
   parseJsonValue,
   recoverReplacement,
-  replacementCandidates
+  replacementCandidates,
+  writeMergedExtensionConfig
 };
