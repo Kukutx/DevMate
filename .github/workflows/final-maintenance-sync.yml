@@ -27,10 +27,15 @@ jobs:
       - name: Apply final maintenance migration
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           git fetch origin master
-          node scripts/apply-final-hardening.mjs
-          python - <<'PY'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm -f SYNC_FAILURE.txt sync-output.log
+          (
+            set -euo pipefail
+            node scripts/apply-final-hardening.mjs
+            python - <<'PY'
           from pathlib import Path
           p = Path('CHANGELOG.md')
           text = p.read_text(encoding='utf-8')
@@ -56,11 +61,21 @@ jobs:
               assert text.startswith('# Changelog\n')
               p.write_text(header + text[len('# Changelog\n\n'):], encoding='utf-8')
           PY
-          node scripts/sync-version.mjs
-          git checkout origin/master -- .github/workflows/ci.yml
-          git rm -f .github/workflows/release-metadata-sync.yml scripts/apply-final-hardening.mjs
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            node scripts/sync-version.mjs
+            git checkout origin/master -- .github/workflows/ci.yml
+            git rm -f .github/workflows/release-metadata-sync.yml scripts/apply-final-hardening.mjs
+          ) >sync-output.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            output=$(cat sync-output.log)
+            git reset --hard HEAD
+            printf '# Final maintenance synchronization failed\n\n```text\n%s\n```\n' "$output" > SYNC_FAILURE.txt
+            git add SYNC_FAILURE.txt
+            git commit -m "Report final maintenance synchronization failure"
+            git push origin HEAD:maintenance/2.9.2-final-deep-dig
+            exit "$status"
+          fi
+          rm -f sync-output.log SYNC_FAILURE.txt
           git add -A
           git commit -m "Apply DevMate 2.9.2 final maintenance closure"
           git push origin HEAD:maintenance/2.9.2-final-deep-dig
