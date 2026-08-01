@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { readConfig, writeConfig } from './local-shared.mjs';
+import { mutateConfig, readConfig } from './local-shared.mjs';
+import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
 import { extractRequestToken, fallbackLocalPrincipal, normalizeDeploymentConfig, verifyAccessToken } from './team-access.mjs';
@@ -62,6 +63,21 @@ function touchTeamMember(config, principal) {
   return true;
 }
 
+function touchTeamMemberBestEffort(principal) {
+  if (principal?.source !== 'team-token') return false;
+  try {
+    let changed = false;
+    mutateConfig(config => {
+      normalizeDeploymentConfig(config);
+      changed = touchTeamMember(config, principal);
+      return config;
+    }, { retries: 4 });
+    return changed;
+  } catch {
+    return false;
+  }
+}
+
 export function authenticateGatewayRequest(req, url, config) {
   normalizeDeploymentConfig(config);
   const token = extractRequestToken(req, url);
@@ -72,16 +88,7 @@ export function authenticateGatewayRequest(req, url, config) {
 }
 
 function consumeRateLimit(principalId, limit, store = rateWindows) {
-  const now = Date.now();
-  const minute = Math.floor(now / 60000);
-  const current = store.get(principalId);
-  if (!current || current.minute !== minute) {
-    store.set(principalId, { minute, count: 1 });
-    return { allowed: true, remaining: Math.max(0, limit - 1), resetAt: (minute + 1) * 60000 };
-  }
-  if (current.count >= limit) return { allowed: false, remaining: 0, resetAt: (minute + 1) * 60000 };
-  current.count += 1;
-  return { allowed: true, remaining: Math.max(0, limit - current.count), resetAt: (minute + 1) * 60000 };
+  return consumeFixedWindow(store, principalId, limit, { maxEntries: 10_000 });
 }
 
 function enterConcurrency(principalId, config) {
@@ -149,10 +156,10 @@ export function guardListener(listener) {
   if (typeof listener !== 'function') throw new TypeError('HTTP listener must be a function');
   return async function devmateGuardedListener(req, res) {
     const url = requestUrl(req);
-    const path = url?.pathname || requestPath(req);
+    const pathName = url?.pathname || requestPath(req);
     if (req.method === 'OPTIONS') return listener(req, res);
-    const publishedPreview = isPublishedPreviewPath(path);
-    if (!publishedPreview && path !== '/mcp') return listener(req, res);
+    const publishedPreview = isPublishedPreviewPath(pathName);
+    if (!publishedPreview && pathName !== '/mcp') return listener(req, res);
 
     const requestId = `req-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     let config;
@@ -208,9 +215,7 @@ export function guardListener(listener) {
       return;
     }
 
-    if (touchTeamMember(config, principal)) {
-      try { writeConfig(config); } catch {}
-    }
+    touchTeamMemberBestEffort(principal);
     recordActivity(req, principal, requestId);
 
     if (principal.source === 'team-token' && config.auth?.required !== false) {
@@ -280,5 +285,6 @@ export const __test = {
   hostAllowed,
   preAuthRateWindows,
   principalInflight,
-  rateWindows
+  rateWindows,
+  touchTeamMemberBestEffort
 };
