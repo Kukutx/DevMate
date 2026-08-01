@@ -188,6 +188,16 @@ function localMcpClient(config) {
   };
 }
 
+function claimBody(job, body = {}) {
+  const claim = job?.claim && typeof job.claim === 'object' ? job.claim : null;
+  if (!claim) return body;
+  return {
+    ...body,
+    claimGeneration: claim.generation,
+    claimToken: claim.token
+  };
+}
+
 function controlClient(origin, token, metadata) {
   async function request(relative, body = {}, signal) {
     return fetchJson(`${origin}/runner/v1${relative}`, {
@@ -205,10 +215,10 @@ function controlClient(origin, token, metadata) {
   return {
     heartbeat: () => request('/heartbeat', { runner: metadata }),
     claim: leaseSeconds => request('/jobs/claim', { runner: metadata, leaseSeconds }),
-    renew: (id, leaseSeconds) => request(`/jobs/${encodeURIComponent(id)}/renew`, { leaseSeconds }),
-    complete: (id, result, artifacts) => request(`/jobs/${encodeURIComponent(id)}/complete`, { result, artifacts }),
-    fail: (id, error, retryable) => request(`/jobs/${encodeURIComponent(id)}/fail`, { error, retryable }),
-    cancelled: (id, error) => request(`/jobs/${encodeURIComponent(id)}/cancelled`, { error })
+    renew: (job, leaseSeconds) => request(`/jobs/${encodeURIComponent(job.id)}/renew`, claimBody(job, { leaseSeconds })),
+    complete: (job, result, artifacts) => request(`/jobs/${encodeURIComponent(job.id)}/complete`, claimBody(job, { result, artifacts })),
+    fail: (job, error, retryable) => request(`/jobs/${encodeURIComponent(job.id)}/fail`, claimBody(job, { error, retryable })),
+    cancelled: (job, error) => request(`/jobs/${encodeURIComponent(job.id)}/cancelled`, claimBody(job, { error }))
   };
 }
 
@@ -269,7 +279,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
     const renewEvery = Math.min(30000, Math.max(5000, Math.floor(leaseSeconds * 1000 / 3)));
     const renewTimer = setInterval(async () => {
       try {
-        const response = await control.renew(job.id, leaseSeconds);
+        const response = await control.renew(job, leaseSeconds);
         if (response.cancelRequested) {
           cancelRequested = true;
           abort.abort(new Error('Cancellation requested by control plane'));
@@ -285,16 +295,16 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
       const returned = toolError(result);
       if (returned) throw returned;
       const artifacts = await indexJobArtifacts(job, result);
-      await control.complete(job.id, result, artifacts);
+      await control.complete(job, result, artifacts);
       publicLog('Job succeeded', `${job.id} artifacts=${artifacts.length}`);
     } catch (error) {
       const message = String(error?.message || error).slice(0, 4000);
       if (cancelRequested || abort.signal.aborted) {
-        try { await control.cancelled(job.id, message); } catch {}
+        try { await control.cancelled(job, message); } catch {}
         publicLog('Job cancellation acknowledged', job.id);
       } else {
         const retryable = error?.name === 'TypeError' || /ECONN|network|fetch failed|Gateway exited/i.test(message);
-        try { await control.fail(job.id, message, retryable); } catch (reportError) {
+        try { await control.fail(job, message, retryable); } catch (reportError) {
           publicLog('Job failure report failed', `${job.id}: ${reportError.message}`);
         }
         publicLog('Job failed', `${job.id}: ${message}`);
@@ -350,6 +360,7 @@ if (import.meta.url === invokedPath) {
 }
 
 export const __test = {
+  claimBody,
   clearRunnerSecretsFromProcess,
   customCapabilities,
   gatewayEnvironment,
