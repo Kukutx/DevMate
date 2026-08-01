@@ -73,6 +73,10 @@ test('retains monotonically increasing generations across retries', () => {
   queue.registerRunner({ id: 'runner-a', capabilities: ['core'], workspaceIds: ['app'] });
   const first = claimExternalJob({ runnerId: 'runner-a' });
   queue.failJob({ id: submitted.id, runnerId: 'runner-a', error: 'retry', retryable: true });
+  durable.mutateDurableDocument(document => {
+    const job = document.namespaces.jobs.jobs.find(item => item.id === submitted.id);
+    job.nextRunAt = new Date(0).toISOString();
+  });
   const second = claimExternalJob({ runnerId: 'runner-a' });
   assert.equal(first.claim.generation, 1);
   assert.equal(second.claim.generation, 2);
