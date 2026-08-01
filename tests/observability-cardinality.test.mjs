@@ -35,18 +35,21 @@ test('bounds labels and collapses series after the hard cap', () => {
     setGauge('devmate_test_gauge', { identity: `identity-${index}` }, index);
   }
   const snapshot = metricsSnapshot();
-  assert.ok(snapshot.capacity.counterSeries <= MAX_METRIC_SERIES + 1);
-  assert.ok(snapshot.capacity.gaugeSeries <= MAX_METRIC_SERIES + 1);
+  assert.ok(snapshot.capacity.counterSeries <= MAX_METRIC_SERIES);
+  assert.ok(snapshot.capacity.gaugeSeries <= MAX_METRIC_SERIES);
   assert.ok(snapshot.capacity.droppedCounterSeries > 0);
   assert.ok(snapshot.capacity.droppedGaugeSeries > 0);
   assert.ok(snapshot.counters.some(item => item.labels.overflow === 'true'));
   assert.ok(snapshot.gauges.some(item => item.labels.overflow === 'true'));
 });
 
-test('renders escaped bounded Prometheus labels', () => {
-  incrementCounter('unsafe metric', { 'bad-key': 'line\n"quoted"' });
+test('renders escaped bounded Prometheus labels without internal delimiter injection', () => {
+  incrementCounter('unsafe metric', { 'bad-key': 'left|right\n"quoted"' });
+  const snapshot = metricsSnapshot();
+  assert.equal(snapshot.counters.length, 1);
+  assert.equal(snapshot.counters[0].labels.bad_key.includes('|'), false);
   const output = renderPrometheusMetrics();
-  assert.match(output, /unsafe_metric\{bad_key="line \\"quoted\\""\} 1/);
+  assert.match(output, /unsafe_metric\{bad_key="left right \\"quoted\\""\} 1/);
   assert.match(output, /devmate_metric_series_dropped_total/);
   assert.equal(__test.sanitizeLabelValue('x'.repeat(500)).length, 200);
 });
