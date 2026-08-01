@@ -6,9 +6,10 @@ const NAMESPACE = 'runner-claims';
 const VERSION = 1;
 const TOKEN_BYTES = 32;
 const MAX_CLAIMS = 5000;
+const GENERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function emptyStore() {
-  return { version: VERSION, claims: {} };
+  return { version: VERSION, claims: {}, generations: {} };
 }
 
 function normalizeStore(value) {
@@ -17,6 +18,9 @@ function normalizeStore(value) {
     version: VERSION,
     claims: value.claims && typeof value.claims === 'object' && !Array.isArray(value.claims)
       ? { ...value.claims }
+      : {},
+    generations: value.generations && typeof value.generations === 'object' && !Array.isArray(value.generations)
+      ? { ...value.generations }
       : {}
   };
 }
@@ -47,23 +51,42 @@ function claimError(message, code = 'claim_fence_invalid') {
 }
 
 function prune(store, at = Date.now()) {
-  const entries = Object.entries(store.claims);
-  for (const [jobId, claim] of entries) {
+  for (const [jobId, claim] of Object.entries(store.claims)) {
     const expires = Date.parse(claim?.leaseExpiresAt || 0);
     if (!Number.isFinite(expires) || expires < at - 5 * 60 * 1000) delete store.claims[jobId];
   }
-  const remaining = Object.entries(store.claims);
-  if (remaining.length > MAX_CLAIMS) {
-    remaining
+  for (const [jobId, generation] of Object.entries(store.generations)) {
+    const updated = Date.parse(generation?.updatedAt || 0);
+    if (!store.claims[jobId] && (!Number.isFinite(updated) || updated < at - GENERATION_RETENTION_MS)) {
+      delete store.generations[jobId];
+    }
+  }
+  const claims = Object.entries(store.claims);
+  if (claims.length > MAX_CLAIMS) {
+    claims
       .sort((a, b) => Date.parse(a[1]?.issuedAt || 0) - Date.parse(b[1]?.issuedAt || 0))
-      .slice(0, remaining.length - MAX_CLAIMS)
+      .slice(0, claims.length - MAX_CLAIMS)
       .forEach(([jobId]) => delete store.claims[jobId]);
+  }
+  const generations = Object.entries(store.generations);
+  if (generations.length > MAX_CLAIMS) {
+    generations
+      .filter(([jobId]) => !store.claims[jobId])
+      .sort((a, b) => Date.parse(a[1]?.updatedAt || 0) - Date.parse(b[1]?.updatedAt || 0))
+      .slice(0, Math.max(0, generations.length - MAX_CLAIMS))
+      .forEach(([jobId]) => delete store.generations[jobId]);
   }
   return store;
 }
 
 function claimRecord(store, jobId) {
   return store.claims[String(jobId || '').trim()] || null;
+}
+
+function generationValue(store, jobId) {
+  const active = Number(claimRecord(store, jobId)?.generation) || 0;
+  const retained = Number(store.generations?.[jobId]?.generation) || 0;
+  return Math.max(active, retained);
 }
 
 function validateRecord(record, {
@@ -92,17 +115,18 @@ export function issueRunnerClaim({ jobId, runnerId, leaseExpiresAt }) {
   const owner = String(runnerId || '').trim();
   if (!id || !owner) throw new Error('Runner claim requires jobId and runnerId');
   const store = prune(readStore());
-  const previous = claimRecord(store, id);
-  const generation = Math.max(0, Math.trunc(Number(previous?.generation) || 0)) + 1;
+  const generation = generationValue(store, id) + 1;
   const token = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
+  const issuedAt = now();
   store.claims[id] = {
     jobId: id,
     runnerId: owner,
     generation,
     tokenHash: hashToken(token),
-    issuedAt: now(),
+    issuedAt,
     leaseExpiresAt: new Date(leaseExpiresAt).toISOString()
   };
+  store.generations[id] = { generation, updatedAt: issuedAt };
   writeStore(store);
   return { generation, token };
 }
@@ -117,6 +141,7 @@ export function renewRunnerClaim(input) {
   const store = prune(readStore());
   const record = validateRecord(claimRecord(store, input.jobId), input);
   record.leaseExpiresAt = new Date(input.leaseExpiresAt).toISOString();
+  store.generations[input.jobId] = { generation: record.generation, updatedAt: now() };
   writeStore(store);
   return { generation: record.generation, leaseExpiresAt: record.leaseExpiresAt };
 }
@@ -125,6 +150,7 @@ export function consumeRunnerClaim(input) {
   const store = prune(readStore());
   const record = validateRecord(claimRecord(store, input.jobId), { ...input, allowExpired: true });
   delete store.claims[input.jobId];
+  store.generations[input.jobId] = { generation: record.generation, updatedAt: now() };
   writeStore(store);
   return { generation: record.generation, runnerId: record.runnerId };
 }
@@ -133,8 +159,10 @@ export function revokeRunnerClaim(jobId) {
   const id = String(jobId || '').trim();
   if (!id) return false;
   const store = readStore();
-  if (!Object.hasOwn(store.claims, id)) return false;
+  const record = store.claims[id];
+  if (!record) return false;
   delete store.claims[id];
+  store.generations[id] = { generation: Number(record.generation) || generationValue(store, id), updatedAt: now() };
   writeStore(store);
   return true;
 }
@@ -150,7 +178,8 @@ export function runnerClaimStatus() {
       generation: claim.generation,
       issuedAt: claim.issuedAt,
       leaseExpiresAt: claim.leaseExpiresAt
-    }))
+    })),
+    retainedGenerations: Object.keys(store.generations).length
   };
 }
 
@@ -158,4 +187,15 @@ export function clearRunnerClaimsForTests() {
   writeStore(emptyStore());
 }
 
-export const __test = { MAX_CLAIMS, TOKEN_BYTES, emptyStore, hashToken, normalizeStore, prune, timingSafeEqualText, validateRecord };
+export const __test = {
+  GENERATION_RETENTION_MS,
+  MAX_CLAIMS,
+  TOKEN_BYTES,
+  emptyStore,
+  generationValue,
+  hashToken,
+  normalizeStore,
+  prune,
+  timingSafeEqualText,
+  validateRecord
+};
