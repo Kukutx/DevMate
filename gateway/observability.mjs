@@ -23,7 +23,7 @@ function normalizeHighCardinalityValue(value) {
 
 function sanitizeLabelValue(value) {
   return normalizeHighCardinalityValue(value)
-    .replace(/[\r\n\0]/g, ' ')
+    .replace(/[\r\n\0|]/g, ' ')
     .slice(0, MAX_METRIC_LABEL_VALUE_CHARS);
 }
 
