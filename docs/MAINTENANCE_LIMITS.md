@@ -8,6 +8,14 @@ DevMate keeps its local-first control plane bounded and deterministic. These lim
 
 CI must never silently modify source or release metadata before validating it.
 
+## Runtime dependency contract
+
+Runtime dependencies must pass `npm audit --omit=dev --audit-level=moderate` as a blocking gate. A transitive override is allowed only when the direct package cannot yet express the patched range and the exact override passes the full unit, Gateway smoke, and platform CI suites.
+
+DevMate 2.9.2 uses the official MCP TypeScript SDK 1.30.x and pins its Hono Node adapter to the audited 2.0.10 patch. Removing or changing this override requires a clean runtime audit and the same behavioral regression gates.
+
+Development-tool advisories remain reported separately so packaging tools cannot silently weaken the runtime dependency gate.
+
 ## Configuration and durable state
 
 Gateway and VS Code configuration writers share the same local file lock while reading, merging, comparing, and atomically replacing `config.json`. Replacement backups are validated before cleanup or recovery.
