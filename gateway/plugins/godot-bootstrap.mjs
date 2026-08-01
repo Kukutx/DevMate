@@ -132,6 +132,7 @@ export async function bootstrapGodotAutomation(context, {
   const relative = safeRelative(manifestPath);
   const file = context.workspace.resolve(project.workspace, path.join(project.subpath, relative));
   const existing = await readExisting(file);
+  const original = existing ? JSON.stringify(existing) : null;
   if (existing && !merge) throw new Error(`Automation manifest already exists: ${relative}; use merge=true to preserve existing scenarios`);
   const projectText = await fsp.readFile(project.projectFile, 'utf8');
   const metadata = projectMetadata(projectText);
@@ -160,9 +161,10 @@ export async function bootstrapGodotAutomation(context, {
   }
   current.plugins['devmate.godot'].scenarios = uniqueById(current.plugins['devmate.godot'].scenarios);
   if (current.plugins['devmate.godot-advanced']) current.plugins['devmate.godot-advanced'].scenarios = uniqueById(current.plugins['devmate.godot-advanced'].scenarios);
+  const changed = original == null || original !== JSON.stringify(current);
   const output = `${JSON.stringify(current, null, 2)}\n`;
   let backupPath = null;
-  if (!dryRun) {
+  if (!dryRun && changed) {
     await fsp.mkdir(path.dirname(file), { recursive: true });
     if (existing) {
       const backup = `${file}.${Date.now()}.bak`;
@@ -174,7 +176,7 @@ export async function bootstrapGodotAutomation(context, {
     await fsp.rename(temporary, file);
   }
   return {
-    changed: !existing || JSON.stringify(existing) !== JSON.stringify(current),
+    changed,
     dryRun,
     workspace: { id: project.workspace.id, name: project.workspace.name },
     projectSubpath: project.subpath,
