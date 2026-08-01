@@ -68,7 +68,8 @@ ChatGPT / team members
         │ MCP + owner/dmt_ token
         ▼
 DevMate Gateway
-  ├─ RBAC and workspace scopes
+  ├─ Capability Host and tool contracts
+  ├─ centralized RBAC/workspace/Job policy
   ├─ leases and dual-control approvals
   ├─ durable job queue
   ├─ audit, metrics, backups, and previews
@@ -79,7 +80,9 @@ External Runner hosts
   └─ loopback DevMate Gateway + local toolchain
 ```
 
-DevMate uses one deterministic Capability Host for tool authorization and capability initialization. Team, Runner, local-process, and plugin registration do not depend on a chain of separately patched `McpServer.connect()` implementations.
+DevMate uses one deterministic Capability Host for registration and initialization. `gateway/tool-policy.mjs` is the shared source of truth for team capability, workspace scope and durable Runner requirements. Plugins extend through a validated composition API rather than manually calling another plugin lifecycle.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md).
 
 ## Team controls
 
@@ -117,9 +120,9 @@ job_retry
 runner_status
 ```
 
-The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot project audits, native/Web acceptance, performance budgets, deterministic capture, GUT/GdUnit4 test runs, single/matrix exports, quality reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
+The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot project audits, native/Web acceptance, performance budgets and regressions, deterministic capture, GUT/GdUnit4 test runs, single/matrix exports, quality/release reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
 
-External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Capabilities and workspace IDs reported by a Runner are intersected with its credential scope. Results are bounded and redacted; artifact files remain on the Runner host and only metadata is returned.
+External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Capabilities and workspace IDs reported by a Runner are intersected with its credential scope. Results are bounded and redacted; artifact files remain on the Runner host and only metadata is returned. Base requirements come from the central policy—for example, browser-driven Godot jobs require `browser-qa` in addition to `godot`.
 
 See [`docs/JOBS.md`](docs/JOBS.md) and [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md).
 
@@ -128,7 +131,7 @@ See [`docs/JOBS.md`](docs/JOBS.md) and [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNA
 Optional plugins are disabled until enabled:
 
 - `devmate.browser-qa`: local previews, Playwright scenarios, screenshots, reports, and structured application-state assertions.
-- `devmate.godot`: runtime verification, dependency graphs, deep audit, QA Bridge installation, native/headless state and performance tests, deterministic Movie Maker capture, GUT/GdUnit4 JUnit workflows, Web acceptance, execution planning, quality reports, and multi-platform export matrices.
+- `devmate.godot`: runtime verification, dependency graphs, deep audit, QA Bridge installation, native/headless state and performance tests, deterministic Movie Maker capture, GUT/GdUnit4 JUnit workflows, Web acceptance, execution planning, quality reports, performance baselines/regressions, release evidence gates, and multi-platform export matrices.
 
 Repeatable scenarios, performance budgets, capture plans, framework tests, and export targets are stored in `.devmate/automation.json` and can be reviewed in Git.
 
@@ -138,17 +141,21 @@ DevMate can run a production-oriented Godot workflow:
 
 ```text
 godot_quick_setup
+→ godot_automation_bootstrap
 → godot_runtime_status
 → godot_project_audit
 → godot_dependency_graph
 → godot_automation_plan
 → godot_validate
 → godot_native_test and/or godot_acceptance_test
-→ godot_performance_test
 → godot_test_run
+→ godot_performance_test
+→ godot_performance_baseline_update (deliberate)
+→ godot_performance_regression
 → godot_movie_capture
 → godot_quality_report
 → godot_export_matrix
+→ godot_release_gate
 ```
 
 Key capabilities:
@@ -160,17 +167,18 @@ Key capabilities:
 - install or upgrade QA Bridge v3 with project-local backups;
 - replay declared Godot Input actions and assert native runtime state/checkpoints;
 - sample bounded Godot Performance monitors and enforce percentile/memory/node/draw-call budgets;
+- preserve reviewed performance baselines and identify directional regressions;
 - capture frame-bound AVI evidence through Godot Movie Maker mode;
 - detect and run project-local GUT or GdUnit4 tests with required JUnit evidence;
 - preserve browser-driven Web acceptance with screenshots and network/console checks;
 - export desktop, mobile, Web, dedicated-server, or custom presets;
 - route platform-specific exports to matching external Runners;
-- generate consolidated HTML/JSON quality reports;
+- generate consolidated HTML/JSON quality reports and policy-driven release decisions;
 - save mixed Web/native, performance, capture, test-framework, and export workflows in `.devmate/automation.json`.
 
 The repository runs a separate real Godot 4.7.1 Linux CI job. It verifies the official editor archive with SHA-512, parses QA Bridge v3 in the real editor, runs real native QA and performance sampling, and records a real frame-bound AVI under Xvfb. Export templates and platform SDKs remain requirements of the selected Runner.
 
-See [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md), [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md), and [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md).
+See [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md), [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md), [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md), and [`docs/GODOT_RELEASE_MATURITY.md`](docs/GODOT_RELEASE_MATURITY.md).
 
 ## Operations
 
@@ -199,6 +207,7 @@ Use drain mode before upgrades so new mutations and job claims stop while in-fli
 - Godot QA inputs are limited to declared InputMap actions; report, movie, and export paths remain workspace-contained.
 - Performance sampling is off by default and uses a fixed reviewed monitor set.
 - Test adapters accept bounded framework paths and filters, not arbitrary Godot command-line arguments.
+- Config and durable coordination state use restrictive atomic replacement; unknown future state versions are not overwritten by older binaries.
 - DevMate is intended for trusted organizational collaboration, not hostile multi-tenancy.
 - Use separate OS accounts, containers, VMs, machines, or DevMate instances for unrelated trust domains.
 - The central durable state is single-host. External Runners do not make the control plane horizontally replicated.
@@ -207,14 +216,16 @@ Use drain mode before upgrades so new mutations and job claims stop while in-fli
 
 ```bash
 npm install
-npm run check
-npm run test:unit
+npm run check       # discovers all JavaScript source
+npm run test:unit   # discovers all normal tests
 npm run smoke:gateway
 npm run package:vsix
 ```
 
 ## Documentation
 
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md)
 - [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)
 - [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md)
 - [`docs/JOBS.md`](docs/JOBS.md)
@@ -228,5 +239,6 @@ npm run package:vsix
 - [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md)
 - [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md)
 - [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md)
+- [`docs/GODOT_RELEASE_MATURITY.md`](docs/GODOT_RELEASE_MATURITY.md)
 - [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md)
 - [`SECURITY.md`](SECURITY.md)
