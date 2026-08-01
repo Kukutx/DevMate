@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
 import { readDurableNamespace } from './durable-state.mjs';
+import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { preflightQueuedJob } from './job-preflight.mjs';
 import {
   claimJob,
@@ -17,6 +18,7 @@ import {
   consumeRunnerClaim,
   issueRunnerClaim,
   renewRunnerClaim,
+  revokeRunnerClaim,
   validateRunnerClaim
 } from './runner-claim-fencing.mjs';
 import { incrementCounter, observeDuration } from './observability.mjs';
@@ -67,15 +69,7 @@ function bearerToken(req) {
 }
 
 function consumeRate(id, limit) {
-  const minute = Math.floor(Date.now() / 60000);
-  const current = rateWindows.get(id);
-  if (!current || current.minute !== minute) {
-    rateWindows.set(id, { minute, count: 1 });
-    return true;
-  }
-  if (current.count >= limit) return false;
-  current.count += 1;
-  return true;
+  return consumeFixedWindow(rateWindows, id, limit, { maxEntries: 10_000 }).allowed;
 }
 
 function json(res, status, payload, requestId) {
@@ -262,12 +256,26 @@ function classifyPreflight(error) {
 
 function touchCredentialBestEffort(runnerId) {
   try {
+    const preview = normalizeRunnerControlConfig(readConfig());
+    if (!touchRunnerCredential(preview, runnerId)) return false;
     mutateConfig(current => {
       normalizeRunnerControlConfig(current);
       touchRunnerCredential(current, runnerId);
       return current;
     }, { retries: 4 });
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function consumeClaimBestEffort(proof) {
+  try {
+    consumeRunnerClaim(proof);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function routeRequest(req, res, url, config, principal, body, requestId) {
@@ -347,6 +355,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
       leaseSeconds: body.leaseSeconds
     });
     if (!renewed) {
+      revokeRunnerClaim(id);
       return json(res, 409, {
         error: 'Runner no longer owns this running job',
         code: 'job_not_owned'
@@ -369,7 +378,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
       result: sanitizeResult(body.result),
       artifacts: sanitizeArtifacts(body.artifacts, principal.id, running.workspaceId)
     });
-    consumeRunnerClaim(proof);
+    consumeClaimBestEffort(proof);
     return json(res, 200, { job }, requestId);
   }
 
@@ -383,7 +392,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     )).slice(0, 4000),
     retryable: action === 'fail' && body.retryable !== false
   });
-  consumeRunnerClaim(proof);
+  consumeClaimBestEffort(proof);
   return json(res, 200, { job }, requestId);
 }
 
@@ -497,9 +506,12 @@ export const __test = {
   artifactPathAllowed,
   bearerToken,
   claimProof,
+  consumeClaimBestEffort,
+  consumeRate,
   executionEnvelope,
   hostAllowed,
   intersect,
+  rateWindows,
   runnerRegistration,
   sanitizeArtifacts,
   sanitizeResult,
