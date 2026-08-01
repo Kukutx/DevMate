@@ -75,6 +75,18 @@ test('recovers an interrupted Windows-style replacement backup', async t => {
   assert.deepEqual(await fsp.readdir(directory), ['config.json']);
 });
 
+test('restores a valid replacement before quarantining a corrupt main config', async t => {
+  const { directory, configPath, shared } = await withConfig(t, 'devmate-config-corrupt-recovery-', { version: 1 });
+  await fsp.writeFile(configPath, '{"broken":', 'utf8');
+  const backup = `${configPath}.replace-123-789`;
+  await fsp.writeFile(backup, '{"version":9,"restored":true}\n', 'utf8');
+  assert.deepEqual(shared.readConfig(), { version: 9, restored: true });
+  assert.equal(fs.existsSync(backup), false);
+  const entries = await fsp.readdir(directory);
+  assert.equal(entries.some(name => name.startsWith('config.json.corrupt-')), true);
+  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: 9, restored: true });
+});
+
 test('redacts nested credentials, raw DevMate tokens, and circular audit values', async t => {
   const { shared } = await withConfig(t, 'devmate-config-redaction-');
   const secret = `${'a'.repeat(20)}_${'b'.repeat(22)}`;
