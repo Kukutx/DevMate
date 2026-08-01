@@ -4,8 +4,8 @@ import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-
 import { readDurableNamespace } from './durable-state.mjs';
 import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { preflightQueuedJob } from './job-preflight.mjs';
+import { claimExternalJob } from './external-job-claim.mjs';
 import {
-  claimJob,
   completeJob,
   deferJob,
   failJob,
@@ -16,7 +16,6 @@ import {
 } from './job-queue.mjs';
 import {
   consumeRunnerClaim,
-  issueRunnerClaim,
   renewRunnerClaim,
   revokeRunnerClaim,
   validateRunnerClaim
@@ -293,17 +292,14 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
   }
 
   if (pathName === `${PREFIX}/jobs/claim`) {
-    const job = claimJob({ runnerId: principal.id, leaseSeconds: body.leaseSeconds });
+    const claimed = claimExternalJob({ runnerId: principal.id, leaseSeconds: body.leaseSeconds });
+    const job = claimed?.job || null;
     if (!job) return json(res, 200, { runner, job: null }, requestId);
     try {
       preflightQueuedJob(job);
-      const claim = issueRunnerClaim({
-        jobId: job.id,
-        runnerId: principal.id,
-        leaseExpiresAt: job.leaseExpiresAt
-      });
-      return json(res, 200, { runner, job: executionEnvelope(job, claim) }, requestId);
+      return json(res, 200, { runner, job: executionEnvelope(job, claimed.claim) }, requestId);
     } catch (error) {
+      try { revokeRunnerClaim(job.id); } catch {}
       const classification = classifyPreflight(error);
       if (classification.status) {
         deferJob({

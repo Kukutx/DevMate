@@ -12,7 +12,7 @@ function emptyStore() {
   return { version: VERSION, claims: {}, generations: {} };
 }
 
-function normalizeStore(value) {
+export function normalizeRunnerClaimStore(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyStore();
   return {
     version: VERSION,
@@ -26,11 +26,11 @@ function normalizeStore(value) {
 }
 
 function readStore() {
-  return normalizeStore(readDurableNamespace(NAMESPACE, emptyStore()));
+  return normalizeRunnerClaimStore(readDurableNamespace(NAMESPACE, emptyStore()));
 }
 
 function writeStore(store) {
-  return writeDurableNamespace(NAMESPACE, normalizeStore(store));
+  return writeDurableNamespace(NAMESPACE, normalizeRunnerClaimStore(store));
 }
 
 function hashToken(token) {
@@ -110,11 +110,11 @@ function validateRecord(record, {
   return record;
 }
 
-export function issueRunnerClaim({ jobId, runnerId, leaseExpiresAt }) {
+export function issueRunnerClaimInStore(storeValue, { jobId, runnerId, leaseExpiresAt }) {
   const id = String(jobId || '').trim();
   const owner = String(runnerId || '').trim();
   if (!id || !owner) throw new Error('Runner claim requires jobId and runnerId');
-  const store = prune(readStore());
+  const store = prune(normalizeRunnerClaimStore(storeValue));
   const generation = generationValue(store, id) + 1;
   const token = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
   const issuedAt = now();
@@ -127,8 +127,15 @@ export function issueRunnerClaim({ jobId, runnerId, leaseExpiresAt }) {
     leaseExpiresAt: new Date(leaseExpiresAt).toISOString()
   };
   store.generations[id] = { generation, updatedAt: issuedAt };
-  writeStore(store);
+  Object.assign(storeValue, store);
   return { generation, token };
+}
+
+export function issueRunnerClaim(input) {
+  const store = readStore();
+  const claim = issueRunnerClaimInStore(store, input);
+  writeStore(store);
+  return claim;
 }
 
 export function validateRunnerClaim(input) {
@@ -194,7 +201,7 @@ export const __test = {
   emptyStore,
   generationValue,
   hashToken,
-  normalizeStore,
+  normalizeRunnerClaimStore,
   prune,
   timingSafeEqualText,
   validateRecord
