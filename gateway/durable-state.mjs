@@ -6,8 +6,8 @@ import { CONFIG_PATH, now, readConfig } from './local-shared.mjs';
 export const STATE_ROOT = CONFIG_PATH ? path.join(path.dirname(CONFIG_PATH), 'state') : '';
 export const RUNTIME_STATE_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'runtime-state.json') : '';
 export const INSTANCE_LOCK_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'gateway.lock') : '';
+export const DOCUMENT_VERSION = 1;
 
-const DOCUMENT_VERSION = 1;
 let cache = null;
 let heldLock = null;
 
@@ -20,8 +20,19 @@ function emptyDocument() {
   return { version: DOCUMENT_VERSION, updatedAt: null, namespaces: {} };
 }
 
+function unsupportedVersion(version) {
+  const error = new Error(`DevMate durable state version ${version} is newer than supported version ${DOCUMENT_VERSION}; start a compatible DevMate version instead of overwriting it`);
+  error.code = 'unsupported_state_version';
+  error.stateVersion = version;
+  return error;
+}
+
 function normalizeDocument(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyDocument();
+  const sourceVersion = Number(value.version ?? 0);
+  if (Number.isFinite(sourceVersion) && sourceVersion > DOCUMENT_VERSION) {
+    throw unsupportedVersion(sourceVersion);
+  }
   const namespaces = value.namespaces && typeof value.namespaces === 'object' && !Array.isArray(value.namespaces)
     ? value.namespaces
     : {};
@@ -49,6 +60,7 @@ function readDocument() {
     cache = normalizeDocument(JSON.parse(fs.readFileSync(RUNTIME_STATE_PATH, 'utf8').replace(/^\uFEFF/, '')));
     return cache;
   } catch (error) {
+    if (error?.code === 'unsupported_state_version') throw error;
     const quarantine = `${RUNTIME_STATE_PATH}.corrupt-${Date.now()}`;
     try { fs.renameSync(RUNTIME_STATE_PATH, quarantine); } catch {}
     cache = emptyDocument();
@@ -58,34 +70,49 @@ function readDocument() {
 }
 
 function atomicWrite(document) {
+  const normalized = normalizeDocument(document);
   if (!ensureStateRoot()) {
-    cache = normalizeDocument(document);
+    cache = normalized;
     return;
   }
-  const normalized = normalizeDocument(document);
   normalized.updatedAt = now();
   const temporary = `${RUNTIME_STATE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   const payload = `${JSON.stringify(normalized, null, 2)}\n`;
-  const fd = fs.openSync(temporary, 'wx', 0o600);
+  let fd = null;
   try {
+    fd = fs.openSync(temporary, 'wx', 0o600);
     fs.writeFileSync(fd, payload, 'utf8');
     try { fs.fsyncSync(fd); } catch {}
-  } finally {
     fs.closeSync(fd);
-  }
-  try {
-    fs.renameSync(temporary, RUNTIME_STATE_PATH);
-  } catch (error) {
-    if (process.platform === 'win32' && fs.existsSync(RUNTIME_STATE_PATH)) {
-      fs.rmSync(RUNTIME_STATE_PATH, { force: true });
+    fd = null;
+    try {
       fs.renameSync(temporary, RUNTIME_STATE_PATH);
-    } else {
-      try { fs.rmSync(temporary, { force: true }); } catch {}
-      throw error;
+    } catch (error) {
+      if (process.platform !== 'win32') throw error;
+      const previous = `${RUNTIME_STATE_PATH}.replace-${process.pid}-${Date.now()}`;
+      let movedPrevious = false;
+      try {
+        if (fs.existsSync(RUNTIME_STATE_PATH)) {
+          fs.renameSync(RUNTIME_STATE_PATH, previous);
+          movedPrevious = true;
+        }
+        fs.renameSync(temporary, RUNTIME_STATE_PATH);
+        if (movedPrevious) fs.rmSync(previous, { force: true });
+      } catch (replacementError) {
+        if (!fs.existsSync(RUNTIME_STATE_PATH) && movedPrevious && fs.existsSync(previous)) {
+          try { fs.renameSync(previous, RUNTIME_STATE_PATH); } catch {}
+        }
+        throw replacementError;
+      }
     }
+    try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
+    cache = normalized;
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.rmSync(temporary, { force: true }); } catch {}
   }
-  try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
-  cache = normalized;
 }
 
 export function readDurableNamespace(name, fallback) {
@@ -131,6 +158,7 @@ export function durableStateStatus() {
     enabled: !!RUNTIME_STATE_PATH,
     path: RUNTIME_STATE_PATH || null,
     version: document.version,
+    supportedVersion: DOCUMENT_VERSION,
     updatedAt: document.updatedAt,
     namespaces: Object.keys(document.namespaces).sort(),
     bytes,
@@ -211,4 +239,10 @@ export function resetDurableStateForTests() {
   heldLock = null;
 }
 
-export const __test = { atomicWrite, emptyDocument, normalizeDocument, processAlive };
+export const __test = {
+  atomicWrite,
+  emptyDocument,
+  normalizeDocument,
+  processAlive,
+  unsupportedVersion
+};

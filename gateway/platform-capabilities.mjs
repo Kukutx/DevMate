@@ -1,11 +1,25 @@
 import { installLocalCapabilities } from './local-capabilities.mjs';
 import { installRunnerCapabilities } from './runner-capabilities.mjs';
-import { registerServerInitializer, serverExtensionHostStatus } from './server-extension-host.mjs';
+import {
+  registerServerInitializer,
+  registerToolDecorator,
+  serverExtensionHostStatus
+} from './server-extension-host.mjs';
 import { installTeamCapabilities } from './team-capabilities.mjs';
+import { validateToolRegistration } from './tool-policy.mjs';
 import { builtinPlugins } from './plugins/builtins.mjs';
 import { registerPluginHost } from './plugins/plugin-host.mjs';
 
 export function installPlatformCapabilities(McpServerClass, plugins = builtinPlugins) {
+  registerToolDecorator(McpServerClass, {
+    id: 'devmate.tool-contract',
+    order: 0,
+    decorate({ name, config, handler }) {
+      const contract = validateToolRegistration(name, config);
+      if (!contract.ok) throw new Error(contract.errors.join('; '));
+      return { handler };
+    }
+  });
   installTeamCapabilities(McpServerClass);
   installRunnerCapabilities(McpServerClass);
   installLocalCapabilities(McpServerClass);
@@ -17,4 +31,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
   return serverExtensionHostStatus(McpServerClass);
 }
 
-export { serverExtensionHostStatus } from './server-extension-host.mjs';
+export {
+  serverExtensionHostStatus,
+  serverExtensionInstanceStatus
+} from './server-extension-host.mjs';

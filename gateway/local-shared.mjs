@@ -19,10 +19,59 @@ export function pathKey(value) {
 export function normalizeSlash(value) { return String(value || '').replace(/\\/g, '/'); }
 export function readConfig() {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
-  return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, ''));
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, ''));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('configuration root must be a JSON object');
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`Could not read DevMate config ${CONFIG_PATH}: ${error.message || error}`);
+  }
 }
 export function writeConfig(config) {
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new TypeError('DevMate config must be a JSON object');
+  }
+  const payload = `${JSON.stringify(config, null, 2)}\n`;
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(CONFIG_DIR, 0o700); } catch {}
+  const temporary = `${CONFIG_PATH}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  let fd = null;
+  try {
+    fd = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(fd, payload, 'utf8');
+    try { fs.fsyncSync(fd); } catch {}
+    fs.closeSync(fd);
+    fd = null;
+    try {
+      fs.renameSync(temporary, CONFIG_PATH);
+    } catch (error) {
+      if (process.platform !== 'win32') throw error;
+      const previous = `${CONFIG_PATH}.replace-${process.pid}-${Date.now()}`;
+      let movedPrevious = false;
+      try {
+        if (fs.existsSync(CONFIG_PATH)) {
+          fs.renameSync(CONFIG_PATH, previous);
+          movedPrevious = true;
+        }
+        fs.renameSync(temporary, CONFIG_PATH);
+        if (movedPrevious) fs.rmSync(previous, { force: true });
+      } catch (replacementError) {
+        if (!fs.existsSync(CONFIG_PATH) && movedPrevious && fs.existsSync(previous)) {
+          try { fs.renameSync(previous, CONFIG_PATH); } catch {}
+        }
+        throw replacementError;
+      }
+    }
+    try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+  }
 }
 export function clampInt(value, fallback, min, max) {
   const number = Number(value);

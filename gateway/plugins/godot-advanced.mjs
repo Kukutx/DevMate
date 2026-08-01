@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { definePlugin } from './plugin-sdk.mjs';
+import { extendPlugin } from './plugin-sdk.mjs';
 import { enhancedGodotPlugin } from './godot-enhanced.mjs';
 import { loadAdvancedAutomation, runAdvancedScenario, runAdvancedSuite } from './godot-advanced-automation.mjs';
 import { compactPerformanceResult, runMovieCapture, runPerformanceTest } from './godot-performance.mjs';
@@ -48,21 +48,11 @@ const nativeBaseSchema = {
   timeoutMs: z.number().int().min(1000).max(900000).optional()
 };
 
-export const advancedGodotPlugin = definePlugin({
-  manifest: {
-    ...enhancedGodotPlugin.manifest,
-    version: '0.5.0',
-    description: 'Godot development with runtime verification, native/Web acceptance, performance budgets, deterministic movie capture, framework tests, version-controlled advanced suites, quality reports, and multi-platform exports.',
-    capabilities: [...new Set([
-      ...enhancedGodotPlugin.manifest.capabilities,
-      'performance-budgets', 'movie-capture', 'test-frameworks', 'junit', 'advanced-automation'
-    ])]
-  },
-  settingsSchema: enhancedGodotPlugin.settingsSchema,
-  defaultSettings: enhancedGodotPlugin.defaultSettings,
-  diagnose: enhancedGodotPlugin.diagnose,
+export const advancedGodotPlugin = extendPlugin(enhancedGodotPlugin, {
+  version: '0.5.0',
+  description: 'Godot development with runtime verification, native/Web acceptance, performance budgets, deterministic movie capture, framework tests, version-controlled advanced suites, quality reports, and multi-platform exports.',
+  capabilities: ['performance-budgets', 'movie-capture', 'test-frameworks', 'junit', 'advanced-automation'],
   async activate(context) {
-    await enhancedGodotPlugin.activate(context);
     const { server } = context;
 
     server.registerTool('godot_performance_test', {

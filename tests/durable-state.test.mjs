@@ -18,6 +18,8 @@ test('persists namespaced runtime state atomically', () => {
   assert.deepEqual(durable.readDurableNamespace('example', null), { count: 3, values: ['a', 'b'] });
   const status = durable.durableStateStatus();
   assert.equal(status.enabled, true);
+  assert.equal(status.version, durable.DOCUMENT_VERSION);
+  assert.equal(status.supportedVersion, durable.DOCUMENT_VERSION);
   assert.ok(status.namespaces.includes('example'));
   assert.ok(status.bytes > 0);
 });
@@ -32,6 +34,25 @@ test('acquires, releases, and recovers a stale instance lock', () => {
   const recovered = durable.acquireGatewayInstanceLock();
   assert.equal(recovered.instanceId, 'durable-test');
   assert.equal(durable.releaseGatewayInstanceLock(), true);
+});
+
+test('refuses to quarantine or overwrite state from a newer DevMate version', () => {
+  const future = {
+    version: durable.DOCUMENT_VERSION + 1,
+    updatedAt: new Date().toISOString(),
+    namespaces: { future: { protected: true } }
+  };
+  fs.mkdirSync(path.dirname(durable.RUNTIME_STATE_PATH), { recursive: true });
+  fs.writeFileSync(durable.RUNTIME_STATE_PATH, `${JSON.stringify(future, null, 2)}\n`, 'utf8');
+  durable.resetDurableStateForTests();
+  assert.throws(() => durable.readDurableNamespace('future', null), error => {
+    assert.equal(error.code, 'unsupported_state_version');
+    assert.match(error.message, /newer than supported/);
+    return true;
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8')), future);
+  const entries = fs.readdirSync(path.dirname(durable.RUNTIME_STATE_PATH));
+  assert.equal(entries.some(name => name.includes('.corrupt-')), false);
 });
 
 test.after(async () => {

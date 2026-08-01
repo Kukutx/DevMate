@@ -12,17 +12,9 @@ import {
   renewJobLease
 } from './job-queue.mjs';
 import { incrementCounter, observeDuration, setGauge } from './observability.mjs';
-
-const ELIGIBLE_TARGETS = new Set([
-  'project_snapshot', 'show_changes', 'task_report',
-  'run_smart_checks', 'run_project_script', 'run_configured_command',
-  'browser_qa_run', 'browser_qa_run_saved',
-  'godot_project_audit', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web',
-  'godot_native_test', 'godot_acceptance_test', 'godot_acceptance_run_saved', 'godot_acceptance_suite',
-  'godot_quality_report', 'godot_performance_test', 'godot_performance_regression', 'godot_movie_capture', 'godot_test_run',
-  'godot_advanced_run_saved', 'godot_advanced_suite', 'godot_release_gate',
-  'git_save'
-]);
+import { builtinPlugins } from './plugins/builtins.mjs';
+import { enabledSet, expandDependencies, pluginMap } from './plugins/plugin-config.mjs';
+import { jobTargetNames, jobTargetPolicy } from './tool-policy.mjs';
 
 const targets = new Map();
 const inflight = new Map();
@@ -62,12 +54,6 @@ function resultSummary(result) {
   return summary;
 }
 
-function capabilityForTarget(name) {
-  if (name.startsWith('godot_')) return ['core', 'godot'];
-  if (name.startsWith('browser_') || name.startsWith('web_preview_')) return ['core', 'browser-qa'];
-  return ['core'];
-}
-
 function resultError(result) {
   if (result?.isError !== true) return null;
   const text = Array.isArray(result.content)
@@ -98,25 +84,34 @@ async function withTimeout(promise, timeoutMs) {
 }
 
 export function jobTargetEligible(name, config = {}) {
-  if (!ELIGIBLE_TARGETS.has(name)) return false;
-  if (name === 'git_save' && config?.allowJobGitSave === false) return false;
-  return true;
+  return !!jobTargetPolicy(name, config);
 }
 
 export function jobTargetEnabled(name, config = readConfig()) {
-  const enabled = new Set(config.plugins?.enabled || []);
-  if (name.startsWith('godot_')) return enabled.has('devmate.godot');
-  if (name.startsWith('browser_') || name.startsWith('web_preview_')) return enabled.has('devmate.browser-qa');
-  return true;
+  const policy = jobTargetPolicy(name, config.jobs || {});
+  if (!policy) return false;
+  if (!policy.pluginId) return true;
+  try {
+    const map = pluginMap(builtinPlugins);
+    const enabled = expandDependencies(
+      new Set([...enabledSet(config, builtinPlugins)].filter(id => map.has(id))),
+      map
+    );
+    return enabled.has(policy.pluginId);
+  } catch {
+    return false;
+  }
 }
 
 export function registerJobTarget(name, config, handler) {
-  if (!jobTargetEligible(name, readConfig()?.jobs || {})) return false;
+  const policy = jobTargetPolicy(name, readConfig()?.jobs || {});
+  if (!policy) return false;
   targets.set(name, {
     name,
     config: clone(config || {}),
     handler,
-    requiredCapabilities: capabilityForTarget(name),
+    requiredCapabilities: [...policy.requiredCapabilities],
+    pluginId: policy.pluginId,
     registeredAt: new Date().toISOString()
   });
   return true;
@@ -138,6 +133,7 @@ export function jobTargetCatalog() {
     description: target.config?.description || '',
     annotations: clone(target.config?.annotations || {}),
     requiredCapabilities: [...target.requiredCapabilities],
+    pluginId: target.pluginId || null,
     registeredAt: target.registeredAt
   })).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -290,4 +286,11 @@ export function jobRuntimeStatus() {
   };
 }
 
-export const __test = { ELIGIBLE_TARGETS, capabilityForTarget, jobTargetEnabled, resultError, resultSummary, safeValue, targets, withTimeout };
+export const __test = {
+  jobTargetNames,
+  resultError,
+  resultSummary,
+  safeValue,
+  targets,
+  withTimeout
+};

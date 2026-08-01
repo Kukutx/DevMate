@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.9.0
+
+- Centralized team capability, Owner-only, workspace-scope, durable Job, plugin ownership, Runner capability, and tool-registration policy in `gateway/tool-policy.mjs`.
+- Removed duplicated authorization sets from `team-access.mjs` and hardcoded durable target/capability inference from `job-runtime.mjs`.
+- Added accurate `browser-qa` scheduling requirements for browser-driven Godot Job targets while preserving native Godot routing.
+- Added Capability Host registration contracts, global duplicate tool-name rejection, and per-server registered-tool metadata.
+- Added the validated `extendPlugin()` composition API and migrated the Godot base/enhanced/advanced/final layers away from manually spread manifests and manually invoked base lifecycles.
+- Made Gateway configuration writes atomic, fsynced, restrictive, and interruption-safe on Windows and POSIX systems.
+- Added explicit durable-state version compatibility: malformed JSON is quarantined, while syntactically valid future-version state is rejected without overwrite or quarantine.
+- Replaced manually maintained JavaScript and test filename lists with automatic repository/test discovery and folded production policy tests into the normal discovered suite.
+- Rewrote `ARCHITECTURE.md`, added `MAINTAINABILITY.md`, and documented tool, plugin, Job, state, testing, and release extension contracts.
+- Added regression coverage for centralized policy, plugin lifecycle composition, duplicate tool registration, atomic config persistence, automatic discovery, and future state-version protection.
+
 ## 2.8.0
 
 - Added reviewed project-local Godot performance baselines with atomic writes, deliberate force replacement, backups, stable percentile metric points, and sample-count evidence.
@@ -147,7 +160,7 @@
 ## 1.12.0
 
 - Added `Copy Context` for ChatGPT model surfaces that cannot call MCP tools.
-- Included project instructions, Git status, diff stat, package scripts, a bounded file tree, VS Code context, and reference summaries in the copied bundle.
+- Included project instructions, Git status, diff stat, package scripts, a bounded file tree, VS Code context, reference summaries.
 - Kept context bundle output token-free and blocked from hidden, secret, binary, and heavy generated paths.
 
 ## 1.11.0

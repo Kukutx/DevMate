@@ -1,4 +1,11 @@
 import crypto from 'node:crypto';
+import {
+  ownerOnlyTool,
+  requiredCapabilityForTool,
+  toolWorkspaceId
+} from './tool-policy.mjs';
+
+export { requiredCapabilityForTool, toolWorkspaceId } from './tool-policy.mjs';
 
 export const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
 
@@ -9,45 +16,6 @@ const ROLE_CAPABILITIES = Object.freeze({
   maintainer: new Set(['read', 'validate', 'write', 'execute', 'git', 'publish', 'admin']),
   owner: new Set(['*'])
 });
-
-const ADMIN_TOOLS = new Set([
-  'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke', 'team_activity_status',
-  'read_audit_log', 'list_backups', 'task_status', 'task_report', 'start_task', 'finish_task', 'rollback_task', 'local_capabilities_status', 'list_trusted_roots',
-  'plugin_enable', 'plugin_disable', 'plugin_configure', 'configure_local_capabilities', 'published_preview_list',
-  'add_trusted_root', 'remove_trusted_root',
-  'job_runtime_configure', 'deployment_drain_start', 'deployment_drain_cancel',
-  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
-]);
-const OWNER_ONLY_TOOLS = new Set([
-  'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
-  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
-]);
-const PUBLISH_TOOLS = new Set(['git_push', 'git_pull', 'deployment_publish', 'deployment_rotate_credentials', 'published_preview_share', 'published_preview_revoke']);
-const VALIDATE_TOOLS = new Set([
-  'run_smart_checks', 'job_submit', 'job_retry',
-  'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
-  'godot_doctor', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web', 'godot_native_test', 'godot_acceptance_test',
-  'godot_acceptance_run_saved', 'godot_acceptance_suite', 'godot_performance_test', 'godot_movie_capture', 'godot_test_run',
-  'godot_advanced_run_saved', 'godot_advanced_suite'
-]);
-const EXECUTE_TOOLS = new Set([
-  'run_command', 'start_process', 'send_process_input', 'stop_process', 'godot_run'
-]);
-const WRITE_TOOLS = new Set([
-  'write_file', 'create_file', 'apply_patch',
-  'delete_file', 'move_file', 'restore_backup', 'godot_qa_bridge_install', 'godot_qa_bridge_remove', 'job_cancel'
-]);
-
-const NON_WORKSPACE_TOOLS = new Set([
-  'gateway_status', 'gateway_self_test', 'maintenance_status', 'connection_diagnostics', 'devmate_status_panel', 'devmate_team_panel', 'list_workspaces',
-  'plugin_catalog', 'plugin_diagnostics', 'plugin_enable', 'plugin_disable', 'plugin_configure', 'devmate_plugins_panel',
-  'team_status', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
-  'team_activity_status', 'team_configure', 'deployment_status', 'deployment_readiness', 'deployment_policy_template',
-  'workspace_lease_status', 'published_preview_share', 'published_preview_list', 'published_preview_revoke',
-  'job_target_catalog', 'job_runtime_configure', 'job_submit', 'job_list', 'job_status', 'job_artifacts', 'job_cancel', 'job_retry', 'runner_status',
-  'deployment_drain_status', 'deployment_drain_start', 'deployment_drain_cancel',
-  'runner_control_status', 'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
-]);
 
 function base64url(bytes) {
   return Buffer.from(bytes).toString('base64url');
@@ -263,30 +231,6 @@ export function fallbackLocalPrincipal() {
   return { id: 'local-owner', name: 'Local owner', role: 'owner', workspaceIds: [], source: 'local' };
 }
 
-export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
-  if (OWNER_ONLY_TOOLS.has(name) || ADMIN_TOOLS.has(name)) return 'admin';
-  if (name === 'git_save' && args?.push) return 'publish';
-  if (name === 'git_raw') {
-    const first = String(args?.args?.[0] || '').toLowerCase();
-    return ['push', 'pull', 'fetch', 'remote'].includes(first) ? 'publish' : 'git';
-  }
-  if (PUBLISH_TOOLS.has(name)) return 'publish';
-  if (name.startsWith('git_')) return 'git';
-  if (VALIDATE_TOOLS.has(name) || name.startsWith('automation_')) return 'validate';
-  if (EXECUTE_TOOLS.has(name)) return 'execute';
-  if (WRITE_TOOLS.has(name)) return 'write';
-  if (annotations?.readOnlyHint === true) return 'read';
-  if (annotations?.destructiveHint === true) return 'write';
-  return 'read';
-}
-
-export function toolWorkspaceId(name, args, config) {
-  if (NON_WORKSPACE_TOOLS.has(name) || name.startsWith('team_') || name.startsWith('deployment_') || name.startsWith('runner_')) return null;
-  const explicit = String(args?.workspaceId || '').trim();
-  if (explicit) return config.workspaces?.find(item => item.id === explicit || item.name === explicit)?.id || explicit;
-  return config.activeWorkspaceId || null;
-}
-
 function dangerousCommand(command) {
   const value = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(value) ||
@@ -323,7 +267,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
   const effectivePrincipal = principal || fallbackLocalPrincipal();
   const capability = requiredCapabilityForTool(name, annotations, args);
   assertTeamOperationSafety(name, args, effectivePrincipal);
-  if (OWNER_ONLY_TOOLS.has(name) && effectivePrincipal.role !== 'owner') {
+  if (ownerOnlyTool(name) && effectivePrincipal.role !== 'owner') {
     throw new Error(`Tool ${name} requires the owner role`);
   }
   if (!roleAllows(effectivePrincipal.role, capability)) {

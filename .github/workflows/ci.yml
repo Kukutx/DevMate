@@ -36,17 +36,11 @@ jobs:
             exit 0
           }
 
-      - name: Check syntax
+      - name: Repository contracts
         run: npm run check
 
-      - name: Check advanced Godot automation syntax
-        run: node --check gateway/plugins/godot-advanced-automation.mjs
-
-      - name: Unit tests
+      - name: Discovered unit and policy tests
         run: npm run test:unit
-
-      - name: Production gateway policy tests
-        run: node --test tests/request-guard-stream.test.mjs tests/team-approval-integration.test.mjs tests/http-observability.test.mjs
 
       - name: Smoke test gateway
         run: npm run smoke:gateway
