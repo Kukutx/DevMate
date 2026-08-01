@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 export const CONFIG_PATH = process.env.DEVMATE_CONFIG || process.env.AIWG_CONFIG;
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
 const AUDIT_LOG = CONFIG_DIR ? path.join(CONFIG_DIR, 'state', 'audit.jsonl') : '';
+const CONFIG_SOURCE = Symbol.for('devmate.configSource');
+const SENSITIVE_KEY = /token|secret|password|authorization|api[_-]?key|credential|private[_-]?key/i;
 export const DEFAULT_MAX_PROCESSES = 8;
 export const MAX_MAX_PROCESSES = 32;
 export const DEFAULT_OUTPUT_BYTES = 1024 * 1024;
@@ -17,26 +19,98 @@ export function pathKey(value) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 export function normalizeSlash(value) { return String(value || '').replace(/\\/g, '/'); }
+
+function fingerprint(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function attachConfigSource(config, source) {
+  Object.defineProperty(config, CONFIG_SOURCE, {
+    value: Object.freeze({ ...source }),
+    configurable: true,
+    enumerable: false,
+    writable: true
+  });
+  return config;
+}
+
+function configConflict(message) {
+  const error = new Error(message);
+  error.code = 'config_conflict';
+  return error;
+}
+
+function replacementCandidates() {
+  if (!CONFIG_PATH || !CONFIG_DIR) return [];
+  const prefix = `${path.basename(CONFIG_PATH)}.replace-`;
+  return fs.readdirSync(CONFIG_DIR, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
+    .map(entry => {
+      const file = path.join(CONFIG_DIR, entry.name);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      return stat ? { file, mtimeMs: stat.mtimeMs } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+export function recoverConfigReplacement() {
+  if (!CONFIG_PATH || !CONFIG_DIR || !fs.existsSync(CONFIG_DIR)) return null;
+  const candidates = replacementCandidates();
+  if (fs.existsSync(CONFIG_PATH)) {
+    for (const candidate of candidates) {
+      try { fs.rmSync(candidate.file, { force: true }); } catch {}
+    }
+    return null;
+  }
+  const candidate = candidates[0];
+  if (!candidate) return null;
+  fs.renameSync(candidate.file, CONFIG_PATH);
+  try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
+  for (const stale of candidates.slice(1)) {
+    try { fs.rmSync(stale.file, { force: true }); } catch {}
+  }
+  return candidate.file;
+}
+
 export function readConfig() {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
   try {
-    const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, ''));
+    recoverConfigReplacement();
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('configuration root must be a JSON object');
     }
-    return parsed;
+    return attachConfigSource(parsed, { exists: true, hash: fingerprint(raw) });
   } catch (error) {
     throw new Error(`Could not read DevMate config ${CONFIG_PATH}: ${error.message || error}`);
   }
 }
-export function writeConfig(config) {
+
+export function writeConfig(config, { force = false } = {}) {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new TypeError('DevMate config must be a JSON object');
   }
-  const payload = `${JSON.stringify(config, null, 2)}\n`;
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(CONFIG_DIR, 0o700); } catch {}
+  recoverConfigReplacement();
+  const source = config[CONFIG_SOURCE] || null;
+  if (!force && source) {
+    const exists = fs.existsSync(CONFIG_PATH);
+    if (exists !== source.exists) {
+      throw configConflict(`DevMate config changed while it was being edited: ${CONFIG_PATH}`);
+    }
+    if (exists) {
+      const current = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
+      if (fingerprint(current) !== source.hash) {
+        throw configConflict(`DevMate config changed while it was being edited: ${CONFIG_PATH}`);
+      }
+    }
+  }
+
+  const payload = `${JSON.stringify(config, null, 2)}\n`;
   const temporary = `${CONFIG_PATH}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   let fd = null;
   try {
@@ -66,6 +140,8 @@ export function writeConfig(config) {
       }
     }
     try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
+    attachConfigSource(config, { exists: true, hash: fingerprint(payload) });
+    return config;
   } finally {
     if (fd != null) {
       try { fs.closeSync(fd); } catch {}
@@ -73,6 +149,26 @@ export function writeConfig(config) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
   }
 }
+
+export function mutateConfig(mutator, { retries = 3 } = {}) {
+  if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
+  const attempts = Math.min(10, Math.max(1, Math.trunc(Number(retries) || 3)));
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const current = readConfig();
+    const changed = mutator(current);
+    if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
+    const next = changed === undefined ? current : changed;
+    try {
+      return writeConfig(next);
+    } catch (error) {
+      if (error?.code !== 'config_conflict' || attempt === attempts - 1) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError || configConflict('DevMate config could not be updated because it kept changing');
+}
+
 export function clampInt(value, fallback, min, max) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -114,17 +210,33 @@ export function redactSensitiveString(value) {
     .replace(/(\b(?:token|secret|password|authorization|api[_-]?key|authToken)\s*[:=]\s*)[^\s&"'`]+/gi, '$1redacted')
     .replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
     .replace(/(\b(?:--password|--token|--api-key|--secret)\s+)[^\s]+/gi, '$1redacted')
+    .replace(/\b(?:dmt|dmr)_[a-z0-9_-]{1,120}_[A-Za-z0-9_-]{43}\b/gi, 'devmate-token-redacted')
     .replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, 'sk-redacted');
 }
+
+export function redactSensitiveValue(value, key = '', depth = 0, seen = new WeakSet()) {
+  if (SENSITIVE_KEY.test(String(key || ''))) return 'redacted';
+  if (depth > 12) return '[truncated]';
+  if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'string') return redactSensitiveString(value);
+  if (typeof value !== 'object') return redactSensitiveString(String(value));
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.slice(0, 500).map((item, index) => redactSensitiveValue(item, String(index), depth + 1, seen));
+  }
+  return Object.fromEntries(
+    Object.entries(value).slice(0, 500)
+      .map(([childKey, child]) => [childKey, redactSensitiveValue(child, childKey, depth + 1, seen)])
+  );
+}
+
 export async function audit(action, payload = {}) {
   if (!AUDIT_LOG) return;
   try {
     await fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true });
     const config = readConfig();
-    const safe = {};
-    for (const [key, value] of Object.entries(payload)) {
-      safe[key] = typeof value === 'string' ? redactSensitiveString(value) : value;
-    }
+    const safe = redactSensitiveValue(payload);
     await fsp.appendFile(AUDIT_LOG, `${JSON.stringify({
       time: now(), action, taskId: config.task?.currentTaskId || null,
       permissionProfile: permissionProfile(config), ...safe
@@ -223,3 +335,5 @@ export function processLimits(config) {
     outputBytes: clampInt(config.runtime?.persistentProcessOutputBytes, DEFAULT_OUTPUT_BYTES, 65536, MAX_OUTPUT_BYTES)
   };
 }
+
+export const __test = { CONFIG_SOURCE, attachConfigSource, configConflict, fingerprint, replacementCandidates };
