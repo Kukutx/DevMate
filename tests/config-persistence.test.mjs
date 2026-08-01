@@ -93,6 +93,36 @@ test('redacts nested credentials, raw DevMate tokens, and circular audit values'
   assert.equal(redacted.self, '[circular]');
 });
 
+test('bounds each audit event and preserves trusted system fields', async t => {
+  const { directory, shared } = await withConfig(t, 'devmate-config-audit-', {
+    version: 1,
+    permissions: { profile: 'fullAccess' },
+    task: { currentTaskId: 'task-real' }
+  });
+  const secret = `${'a'.repeat(20)}_${'b'.repeat(22)}`;
+  await shared.audit('large_event', {
+    time: 'forged',
+    action: 'forged',
+    taskId: 'forged',
+    permissionProfile: 'forged',
+    nested: { token: `dmt_member_${secret}` },
+    huge: 'x'.repeat(200000)
+  });
+  const auditPath = path.join(directory, 'state', 'audit.jsonl');
+  const line = (await fsp.readFile(auditPath, 'utf8')).trim();
+  assert.ok(Buffer.byteLength(line, 'utf8') <= shared.MAX_AUDIT_ENTRY_BYTES);
+  const entry = JSON.parse(line);
+  assert.equal(entry.action, 'large_event');
+  assert.equal(entry.taskId, 'task-real');
+  assert.equal(entry.permissionProfile, 'fullAccess');
+  assert.equal(entry.truncated, true);
+  assert.ok(entry.originalBytes > shared.MAX_AUDIT_ENTRY_BYTES);
+  assert.equal(line.includes('dmt_member_'), false);
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(auditPath).mode & 0o777, 0o600);
+  }
+});
+
 test('rejects malformed configuration roots with the config path in the error', async t => {
   const { configPath, shared } = await withConfig(t, 'devmate-config-invalid-');
   await fsp.writeFile(configPath, '[]\n', 'utf8');
