@@ -5,82 +5,376 @@
   "version": "2.9.2",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
-  "engines": { "vscode": "^1.90.0", "node": ">=18" },
-  "categories": ["Machine Learning", "Other"],
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:devMate.start", "onCommand:devMate.open", "onCommand:devMate.stop", "onCommand:devMate.restart", "onCommand:devMate.copyUrl",
-    "onCommand:devMate.addReference", "onCommand:devMate.clearReferences", "onCommand:devMate.doctor", "onCommand:devMate.logs",
-    "onCommand:devMate.exportSource", "onCommand:devMate.setup", "onCommand:devMate.copyPrompt", "onCommand:devMate.copyContextBundle", "onCommand:devMate.openSettings",
-    "onCommand:devMate.ngrokSetup", "onCommand:devMate.ngrokSwitchAccount", "onCommand:devMate.ngrokClearAccount", "onCommand:devMate.openNgrokDashboard",
-    "onCommand:devMate.deploymentSetup", "onCommand:devMate.tunnelSetup", "onCommand:devMate.tunnelDoctor", "onCommand:devMate.cloudflareSetToken", "onCommand:devMate.cloudflareClearToken", "onCommand:devMate.openTunnelDocs"
+    "onCommand:devMate.start",
+    "onCommand:devMate.open",
+    "onCommand:devMate.stop",
+    "onCommand:devMate.restart",
+    "onCommand:devMate.copyUrl",
+    "onCommand:devMate.addReference",
+    "onCommand:devMate.clearReferences",
+    "onCommand:devMate.doctor",
+    "onCommand:devMate.logs",
+    "onCommand:devMate.exportSource",
+    "onCommand:devMate.setup",
+    "onCommand:devMate.copyPrompt",
+    "onCommand:devMate.copyContextBundle",
+    "onCommand:devMate.openSettings",
+    "onCommand:devMate.ngrokSetup",
+    "onCommand:devMate.ngrokSwitchAccount",
+    "onCommand:devMate.ngrokClearAccount",
+    "onCommand:devMate.openNgrokDashboard",
+    "onCommand:devMate.deploymentSetup",
+    "onCommand:devMate.tunnelSetup",
+    "onCommand:devMate.tunnelDoctor",
+    "onCommand:devMate.cloudflareSetToken",
+    "onCommand:devMate.cloudflareClearToken",
+    "onCommand:devMate.openTunnelDocs"
   ],
   "main": "./extension-entry-platform.js",
   "contributes": {
     "commands": [
-      { "command": "devMate.start", "title": "DevMate: Start" },
-      { "command": "devMate.open", "title": "DevMate: Open" },
-      { "command": "devMate.stop", "title": "DevMate: Stop" },
-      { "command": "devMate.restart", "title": "DevMate: Restart" },
-      { "command": "devMate.copyUrl", "title": "DevMate: Copy URL" },
-      { "command": "devMate.addReference", "title": "DevMate: Add Reference" },
-      { "command": "devMate.clearReferences", "title": "DevMate: Clear References" },
-      { "command": "devMate.doctor", "title": "DevMate: Doctor" },
-      { "command": "devMate.logs", "title": "DevMate: Logs" },
-      { "command": "devMate.exportSource", "title": "DevMate: Export Source" },
-      { "command": "devMate.setup", "title": "DevMate: Setup" },
-      { "command": "devMate.copyPrompt", "title": "DevMate: Copy Prompt" },
-      { "command": "devMate.copyContextBundle", "title": "DevMate: Copy Context Bundle" },
-      { "command": "devMate.openSettings", "title": "DevMate: Open Settings" },
-      { "command": "devMate.ngrokSetup", "title": "DevMate: ngrok Setup" },
-      { "command": "devMate.ngrokSwitchAccount", "title": "DevMate: Switch ngrok Account" },
-      { "command": "devMate.ngrokClearAccount", "title": "DevMate: Clear ngrok Account" },
-      { "command": "devMate.openNgrokDashboard", "title": "DevMate: Open ngrok Dashboard" },
-      { "command": "devMate.deploymentSetup", "title": "DevMate: Deployment Setup" },
-      { "command": "devMate.tunnelSetup", "title": "DevMate: Tunnel Setup" },
-      { "command": "devMate.tunnelDoctor", "title": "DevMate: Tunnel Doctor" },
-      { "command": "devMate.cloudflareSetToken", "title": "DevMate: Set Cloudflare Tunnel Token" },
-      { "command": "devMate.cloudflareClearToken", "title": "DevMate: Clear Cloudflare Tunnel Token" },
-      { "command": "devMate.openTunnelDocs", "title": "DevMate: Open Tunnel Documentation" }
+      {
+        "command": "devMate.start",
+        "title": "DevMate: Start"
+      },
+      {
+        "command": "devMate.open",
+        "title": "DevMate: Open"
+      },
+      {
+        "command": "devMate.stop",
+        "title": "DevMate: Stop"
+      },
+      {
+        "command": "devMate.restart",
+        "title": "DevMate: Restart"
+      },
+      {
+        "command": "devMate.copyUrl",
+        "title": "DevMate: Copy URL"
+      },
+      {
+        "command": "devMate.addReference",
+        "title": "DevMate: Add Reference"
+      },
+      {
+        "command": "devMate.clearReferences",
+        "title": "DevMate: Clear References"
+      },
+      {
+        "command": "devMate.doctor",
+        "title": "DevMate: Doctor"
+      },
+      {
+        "command": "devMate.logs",
+        "title": "DevMate: Logs"
+      },
+      {
+        "command": "devMate.exportSource",
+        "title": "DevMate: Export Source"
+      },
+      {
+        "command": "devMate.setup",
+        "title": "DevMate: Setup"
+      },
+      {
+        "command": "devMate.copyPrompt",
+        "title": "DevMate: Copy Prompt"
+      },
+      {
+        "command": "devMate.copyContextBundle",
+        "title": "DevMate: Copy Context Bundle"
+      },
+      {
+        "command": "devMate.openSettings",
+        "title": "DevMate: Open Settings"
+      },
+      {
+        "command": "devMate.ngrokSetup",
+        "title": "DevMate: ngrok Setup"
+      },
+      {
+        "command": "devMate.ngrokSwitchAccount",
+        "title": "DevMate: Switch ngrok Account"
+      },
+      {
+        "command": "devMate.ngrokClearAccount",
+        "title": "DevMate: Clear ngrok Account"
+      },
+      {
+        "command": "devMate.openNgrokDashboard",
+        "title": "DevMate: Open ngrok Dashboard"
+      },
+      {
+        "command": "devMate.deploymentSetup",
+        "title": "DevMate: Deployment Setup"
+      },
+      {
+        "command": "devMate.tunnelSetup",
+        "title": "DevMate: Tunnel Setup"
+      },
+      {
+        "command": "devMate.tunnelDoctor",
+        "title": "DevMate: Tunnel Doctor"
+      },
+      {
+        "command": "devMate.cloudflareSetToken",
+        "title": "DevMate: Set Cloudflare Tunnel Token"
+      },
+      {
+        "command": "devMate.cloudflareClearToken",
+        "title": "DevMate: Clear Cloudflare Tunnel Token"
+      },
+      {
+        "command": "devMate.openTunnelDocs",
+        "title": "DevMate: Open Tunnel Documentation"
+      }
     ],
     "configuration": {
       "title": "DevMate",
       "type": "object",
       "properties": {
-        "devMate.port": { "type": "number", "default": 8787, "description": "Preferred local DevMate port." },
-        "devMate.ngrokCommandPath": { "type": "string", "default": "", "scope": "machine", "description": "Optional ngrok executable path." },
-        "devMate.ngrokUseManagedAccount": { "type": "boolean", "default": true, "scope": "machine", "description": "Use the ngrok account saved in VS Code Secret Storage." },
-        "devMate.ngrokUrl": { "type": "string", "default": "", "scope": "machine", "description": "Optional stable ngrok URL." },
-        "devMate.ngrokPoolingEnabled": { "type": "boolean", "default": false, "scope": "machine", "description": "Allow ngrok endpoint pooling. Not recommended for DevMate." },
-        "devMate.ngrokTrafficPolicyFile": { "type": "string", "default": "", "scope": "machine", "description": "Optional ngrok Traffic Policy file." },
-        "devMate.cloudflareCommandPath": { "type": "string", "default": "", "scope": "machine", "description": "Optional cloudflared executable path." },
-        "devMate.tunnelProvider": { "type": "string", "default": "ngrok", "enum": ["ngrok", "cloudflare-quick", "cloudflare-managed", "external"], "scope": "machine", "description": "Public tunnel or reverse-proxy provider." },
-        "devMate.publicUrl": { "type": "string", "default": "", "scope": "machine", "description": "Stable public HTTPS origin for managed or external production ingress." },
-        "devMate.tunnelAutoRestart": { "type": "boolean", "default": true, "scope": "machine", "description": "Restart managed tunnel processes after unexpected exit." },
-        "devMate.tunnelMaxRestarts": { "type": "number", "default": 10, "minimum": 0, "maximum": 100, "scope": "machine", "description": "Maximum managed tunnel restarts before stopping." },
-        "devMate.deploymentMode": { "type": "string", "default": "personal", "enum": ["personal", "team", "production"], "scope": "machine", "description": "DevMate deployment profile." },
-        "devMate.teamRequireWorkspaceLeaseForWrites": { "type": "boolean", "default": true, "scope": "machine", "description": "Require exclusive workspace leases for team write/execute/Git/publish operations." },
-        "devMate.productionMaxRequestBytes": { "type": "number", "default": 2097152, "minimum": 65536, "maximum": 16777216, "scope": "machine", "description": "Maximum MCP request body size in team/production deployments." },
-        "devMate.productionRequestsPerMinute": { "type": "number", "default": 120, "minimum": 10, "maximum": 10000, "scope": "machine", "description": "Per-member request rate limit." },
-        "devMate.productionMaxConcurrentRequests": { "type": "number", "default": 24, "minimum": 1, "maximum": 256, "scope": "machine", "description": "Maximum total concurrent MCP requests." },
-        "devMate.productionMaxConcurrentPerPrincipal": { "type": "number", "default": 4, "minimum": 1, "maximum": 64, "scope": "machine", "description": "Maximum concurrent MCP requests per member." },
-        "devMate.productionRequestTimeoutMs": { "type": "number", "default": 900000, "minimum": 10000, "maximum": 3600000, "scope": "machine", "description": "HTTP request timeout for team/production deployments." },
-        "devMate.allowedPublicHosts": { "type": "array", "items": { "type": "string" }, "default": [], "scope": "machine", "description": "Allowed public Host headers in team/production deployments." },
-        "devMate.autoCopyUrl": { "type": "boolean", "default": true, "description": "Copy the verified MCP URL after start." },
-        "devMate.autoUseCurrentWorkspace": { "type": "boolean", "default": true, "description": "Use the current VS Code folder as the active writable workspace." },
-        "devMate.requireAuthToken": { "type": "boolean", "default": true, "description": "Require an owner token for local MCP requests." },
-        "devMate.permissionProfile": { "type": "string", "default": "fullAccess", "enum": ["readOnly", "balanced", "fullAccess"], "description": "Local permission profile." },
-        "devMate.blockDangerousOperations": { "type": "boolean", "default": true, "description": "Block destructive command patterns outside fullAccess." },
-        "devMate.confirmBeforePush": { "type": "boolean", "default": false, "description": "Require confirmation before Git push." },
-        "devMate.allowDirectoryMutations": { "type": "boolean", "default": false, "description": "Allow directory move/delete operations." },
-        "devMate.defaultCommandTimeoutMs": { "type": "number", "default": 180000, "minimum": 1000, "maximum": 1800000, "description": "Default command timeout." },
-        "devMate.maxOutputChars": { "type": "number", "default": 120000, "minimum": 1000, "maximum": 500000, "description": "Maximum returned command output." },
-        "devMate.backupRetentionDays": { "type": "number", "default": 30, "minimum": 1, "maximum": 3650, "description": "Backup retention period." },
-        "devMate.auditRetentionDays": { "type": "number", "default": 30, "minimum": 1, "maximum": 3650, "description": "Audit retention period." },
-        "devMate.maxBackupBytes": { "type": "number", "default": 268435456, "minimum": 1048576, "maximum": 10737418240, "description": "Maximum retained backup bytes." },
-        "devMate.maxAuditBytes": { "type": "number", "default": 5242880, "minimum": 65536, "maximum": 1073741824, "description": "Maximum audit log bytes." },
-        "devMate.defaultStartCommand": { "type": "string", "default": "", "description": "Optional command started with DevMate." },
-        "devMate.publicHealthDetails": { "type": "boolean", "default": false, "description": "Expose detailed public health information." }
+        "devMate.port": {
+          "type": "number",
+          "default": 8787,
+          "description": "Preferred local DevMate port."
+        },
+        "devMate.ngrokCommandPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional ngrok executable path."
+        },
+        "devMate.ngrokUseManagedAccount": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Use the ngrok account saved in VS Code Secret Storage."
+        },
+        "devMate.ngrokUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional stable ngrok URL."
+        },
+        "devMate.ngrokPoolingEnabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Allow ngrok endpoint pooling. Not recommended for DevMate."
+        },
+        "devMate.ngrokTrafficPolicyFile": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional ngrok Traffic Policy file."
+        },
+        "devMate.cloudflareCommandPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional cloudflared executable path."
+        },
+        "devMate.tunnelProvider": {
+          "type": "string",
+          "default": "ngrok",
+          "enum": [
+            "ngrok",
+            "cloudflare-quick",
+            "cloudflare-managed",
+            "external"
+          ],
+          "scope": "machine",
+          "description": "Public tunnel or reverse-proxy provider."
+        },
+        "devMate.publicUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Stable public HTTPS origin for managed or external production ingress."
+        },
+        "devMate.tunnelAutoRestart": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Restart managed tunnel processes after unexpected exit."
+        },
+        "devMate.tunnelMaxRestarts": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "maximum": 100,
+          "scope": "machine",
+          "description": "Maximum managed tunnel restarts before stopping."
+        },
+        "devMate.deploymentMode": {
+          "type": "string",
+          "default": "personal",
+          "enum": [
+            "personal",
+            "team",
+            "production"
+          ],
+          "scope": "machine",
+          "description": "DevMate deployment profile."
+        },
+        "devMate.teamRequireWorkspaceLeaseForWrites": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Require exclusive workspace leases for team write/execute/Git/publish operations."
+        },
+        "devMate.productionMaxRequestBytes": {
+          "type": "number",
+          "default": 2097152,
+          "minimum": 65536,
+          "maximum": 16777216,
+          "scope": "machine",
+          "description": "Maximum MCP request body size in team/production deployments."
+        },
+        "devMate.productionRequestsPerMinute": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 10000,
+          "scope": "machine",
+          "description": "Per-member request rate limit."
+        },
+        "devMate.productionMaxConcurrentRequests": {
+          "type": "number",
+          "default": 24,
+          "minimum": 1,
+          "maximum": 256,
+          "scope": "machine",
+          "description": "Maximum total concurrent MCP requests."
+        },
+        "devMate.productionMaxConcurrentPerPrincipal": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 64,
+          "scope": "machine",
+          "description": "Maximum concurrent MCP requests per member."
+        },
+        "devMate.productionRequestTimeoutMs": {
+          "type": "number",
+          "default": 900000,
+          "minimum": 10000,
+          "maximum": 3600000,
+          "scope": "machine",
+          "description": "HTTP request timeout for team/production deployments."
+        },
+        "devMate.allowedPublicHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "description": "Allowed public Host headers in team/production deployments."
+        },
+        "devMate.autoCopyUrl": {
+          "type": "boolean",
+          "default": true,
+          "description": "Copy the verified MCP URL after start."
+        },
+        "devMate.autoUseCurrentWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the current VS Code folder as the active writable workspace."
+        },
+        "devMate.requireAuthToken": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require an owner token for local MCP requests."
+        },
+        "devMate.permissionProfile": {
+          "type": "string",
+          "default": "fullAccess",
+          "enum": [
+            "readOnly",
+            "balanced",
+            "fullAccess"
+          ],
+          "description": "Local permission profile."
+        },
+        "devMate.blockDangerousOperations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Block destructive command patterns outside fullAccess."
+        },
+        "devMate.confirmBeforePush": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require confirmation before Git push."
+        },
+        "devMate.allowDirectoryMutations": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow directory move/delete operations."
+        },
+        "devMate.defaultCommandTimeoutMs": {
+          "type": "number",
+          "default": 180000,
+          "minimum": 1000,
+          "maximum": 1800000,
+          "description": "Default command timeout."
+        },
+        "devMate.maxOutputChars": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "maximum": 500000,
+          "description": "Maximum returned command output."
+        },
+        "devMate.backupRetentionDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 3650,
+          "description": "Backup retention period."
+        },
+        "devMate.auditRetentionDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 3650,
+          "description": "Audit retention period."
+        },
+        "devMate.maxBackupBytes": {
+          "type": "number",
+          "default": 268435456,
+          "minimum": 1048576,
+          "maximum": 10737418240,
+          "description": "Maximum retained backup bytes."
+        },
+        "devMate.maxAuditBytes": {
+          "type": "number",
+          "default": 5242880,
+          "minimum": 65536,
+          "maximum": 1073741824,
+          "description": "Maximum audit log bytes."
+        },
+        "devMate.defaultStartCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional command started with DevMate."
+        },
+        "devMate.publicHealthDetails": {
+          "type": "boolean",
+          "default": false,
+          "description": "Expose detailed public health information."
+        }
       }
     }
   },
@@ -103,12 +397,15 @@
     "devmate-runner": "./scripts/devmate-runner.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "@hono/node-server": "2.0.10"
+  }
 }
