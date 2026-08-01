@@ -2,9 +2,21 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { getPreview } from './plugins/preview-manager.mjs';
 
+export const MAX_PREVIEW_SHARES = 1000;
+export const MAX_PREVIEW_SESSIONS = 10000;
+export const MAX_SESSIONS_PER_SHARE = 100;
+export const PREVIEW_PROXY_TIMEOUT_MS = 30000;
+
 const shares = new Map();
 const sessions = new Map();
 const PREFIX = '/devmate/previews/';
+
+function capacityError(message) {
+  const error = new Error(message);
+  error.code = 'preview_capacity';
+  error.status = 503;
+  return error;
+}
 
 function tokenHash(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('base64url');
@@ -12,29 +24,41 @@ function tokenHash(token) {
 
 function parseCookies(req) {
   const output = {};
-  for (const item of String(req.headers?.cookie || '').split(';')) {
+  for (const item of String(req.headers?.cookie || '').slice(0, 32768).split(';')) {
     const index = item.indexOf('=');
     if (index < 1) continue;
-    const key = item.slice(0, index).trim();
-    const value = item.slice(index + 1).trim();
-    if (key) output[key] = decodeURIComponent(value);
+    const key = item.slice(0, index).trim().slice(0, 200);
+    const raw = item.slice(index + 1).trim().slice(0, 4096);
+    if (!key) continue;
+    try { output[key] = decodeURIComponent(raw); }
+    catch { output[key] = ''; }
   }
   return output;
 }
 
+function sessionsForShare(shareId) {
+  let count = 0;
+  for (const session of sessions.values()) if (session.shareId === shareId) count += 1;
+  return count;
+}
+
 function pruneShares() {
-  const now = Date.now();
+  const timestamp = Date.now();
+  const activeShareIds = new Set();
   for (const [hash, share] of shares) {
-    if (Date.parse(share.expiresAt) <= now) shares.delete(hash);
+    if (Date.parse(share.expiresAt) <= timestamp || share.revoked) shares.delete(hash);
+    else activeShareIds.add(share.id);
   }
   for (const [hash, session] of sessions) {
-    if (Date.parse(session.expiresAt) <= now || ![...shares.values()].some(share => share.id === session.shareId)) {
-      sessions.delete(hash);
-    }
+    if (Date.parse(session.expiresAt) <= timestamp || !activeShareIds.has(session.shareId)) sessions.delete(hash);
   }
 }
 
 export function createPreviewShare({ previewId, principal, publicUrl, ttlSeconds = 3600, maxUses = 0 }) {
+  pruneShares();
+  if (shares.size >= MAX_PREVIEW_SHARES) {
+    throw capacityError(`Published preview share limit reached (${MAX_PREVIEW_SHARES})`);
+  }
   const preview = getPreview(previewId);
   const origin = String(publicUrl || '').replace(/\/$/, '');
   if (!origin) throw new Error('A stable deployment publicUrl is required to publish previews');
@@ -50,7 +74,7 @@ export function createPreviewShare({ previewId, principal, publicUrl, ttlSeconds
     createdByName: principal?.name || principal?.id || 'unknown',
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
-    maxUses: Math.min(100000, Math.max(0, Math.trunc(Number(maxUses) || 0))),
+    maxUses: Math.min(100000, Math.max(0, Math.trunc(Number(maxUses) || 0)), MAX_SESSIONS_PER_SHARE),
     uses: 0,
     activeSessions: 0,
     revoked: false
@@ -65,10 +89,7 @@ export function listPreviewShares({ workspaceId, previewId } = {}) {
   pruneShares();
   return [...shares.values()]
     .filter(share => (!workspaceId || share.workspaceId === workspaceId) && (!previewId || share.previewId === previewId))
-    .map(share => ({
-      ...share,
-      activeSessions: [...sessions.values()].filter(session => session.shareId === share.id).length
-    }));
+    .map(share => ({ ...share, activeSessions: sessionsForShare(share.id) }));
 }
 
 export function revokePreviewShare(id) {
@@ -94,6 +115,13 @@ function verifyShare(token, previewId) {
 }
 
 function createBrowserSession(share) {
+  pruneShares();
+  if (sessions.size >= MAX_PREVIEW_SESSIONS) {
+    throw capacityError(`Published preview browser-session limit reached (${MAX_PREVIEW_SESSIONS})`);
+  }
+  if (sessionsForShare(share.id) >= MAX_SESSIONS_PER_SHARE) {
+    throw capacityError(`Published preview session limit reached for share ${share.id} (${MAX_SESSIONS_PER_SHARE})`);
+  }
   const secret = crypto.randomBytes(32).toString('base64url');
   const token = `dmpr_${share.id}_${secret}`;
   const session = {
@@ -115,15 +143,15 @@ function verifyBrowserSession(token, previewId) {
   return session;
 }
 
-function writeError(res, status, message) {
-  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+function writeError(res, status, message, headers = {}) {
+  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...headers });
   res.end(message);
 }
 
 function safeProxyHeaders(headers) {
   const output = {};
   for (const key of ['range', 'if-none-match', 'if-modified-since', 'accept', 'accept-encoding', 'user-agent']) {
-    if (headers?.[key] !== undefined) output[key] = headers[key];
+    if (headers?.[key] !== undefined) output[key] = String(headers[key]).slice(0, 8192);
   }
   return output;
 }
@@ -148,13 +176,25 @@ function proxyPreview(req, res, preview, relativePath) {
     method: req.method,
     headers: safeProxyHeaders(req.headers)
   };
+  let settled = false;
   const upstream = http.request(options, upstreamResponse => {
+    if (settled) { upstreamResponse.destroy(); return; }
     copyResponseHeaders(upstreamResponse, res);
     res.writeHead(upstreamResponse.statusCode || 502);
     upstreamResponse.pipe(res);
   });
-  upstream.on('error', error => writeError(res, 502, `Preview proxy failed: ${error.message}`));
+  const fail = message => {
+    if (settled) return;
+    settled = true;
+    if (!res.headersSent) writeError(res, 502, message);
+    else res.destroy();
+  };
+  upstream.setTimeout(PREVIEW_PROXY_TIMEOUT_MS, () => {
+    upstream.destroy(new Error('Preview proxy timed out'));
+  });
+  upstream.on('error', error => fail(`Preview proxy failed: ${error.message}`));
   req.on('aborted', () => upstream.destroy());
+  res.on('close', () => { settled = true; upstream.destroy(); });
   upstream.end();
 }
 
@@ -171,10 +211,17 @@ export function isPublishedPreviewPath(pathname) {
 
 export function handlePublishedPreview(req, res, url) {
   if (!isPublishedPreviewPath(url.pathname)) return false;
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD'].includes(method)) {
+    writeError(res, 405, 'Method Not Allowed', { allow: 'GET, HEAD' });
+    return true;
+  }
   const remainder = url.pathname.slice(PREFIX.length);
   const slash = remainder.indexOf('/');
   const encodedId = slash < 0 ? remainder : remainder.slice(0, slash);
-  const previewId = decodeURIComponent(encodedId || '');
+  let previewId;
+  try { previewId = decodeURIComponent(encodedId || ''); }
+  catch { writeError(res, 400, 'Preview identifier is not valid URL encoding'); return true; }
   const relativePath = slash < 0 ? '/' : remainder.slice(slash) || '/';
   let preview;
   try { preview = getPreview(previewId); }
@@ -184,7 +231,9 @@ export function handlePublishedPreview(req, res, url) {
   if (queryToken) {
     const share = verifyShare(queryToken, previewId);
     if (!share) { writeError(res, 401, 'Preview share token is invalid, expired, or exhausted'); return true; }
-    const browserSession = createBrowserSession(share);
+    let browserSession;
+    try { browserSession = createBrowserSession(share); }
+    catch (error) { writeError(res, error.status || 503, error.message); return true; }
     const cookiePath = `${PREFIX}${encodeURIComponent(previewId)}/`;
     res.setHeader(
       'set-cookie',
@@ -210,6 +259,19 @@ export function handlePublishedPreview(req, res, url) {
   return true;
 }
 
+export function previewShareCapacityStatus() {
+  pruneShares();
+  return {
+    shares: shares.size,
+    sessions: sessions.size,
+    limits: {
+      maxShares: MAX_PREVIEW_SHARES,
+      maxSessions: MAX_PREVIEW_SESSIONS,
+      maxSessionsPerShare: MAX_SESSIONS_PER_SHARE
+    }
+  };
+}
+
 export function clearPreviewShares() {
   shares.clear();
   sessions.clear();
@@ -217,9 +279,12 @@ export function clearPreviewShares() {
 
 export const __test = {
   PREFIX,
+  capacityError,
   createBrowserSession,
   parseCookies,
+  pruneShares,
   sessions,
+  sessionsForShare,
   shares,
   tokenHash,
   verifyBrowserSession,
