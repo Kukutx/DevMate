@@ -14,7 +14,7 @@ Runtime dependencies must pass `npm audit --omit=dev --audit-level=moderate` as 
 
 DevMate 2.9.2 uses the official MCP TypeScript SDK 1.30.x and pins its Hono Node adapter to the audited 2.0.10 patch. Removing or changing this override requires a clean runtime audit and the same behavioral regression gates.
 
-Development-tool advisories remain reported separately so packaging tools cannot silently weaken the runtime dependency gate.
+The complete dependency tree, including development and packaging tools, must also pass `npm audit --audit-level=moderate` as a blocking gate on Windows and Linux. Packaging-tool advisories cannot be downgraded to warnings because those tools process repository-controlled manifests, Markdown, YAML, links, and extension assets.
 
 ## Configuration and durable state
 
