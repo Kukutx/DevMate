@@ -10,7 +10,10 @@ const {
   normalizeProvider,
   normalizePublicUrl
 } = require('./tunnel-provider');
-const { installConfigWriteInterceptor } = require('./extension-config-io');
+const {
+  loadWithConfigWriteInterceptor,
+  writeMergedExtensionConfig
+} = require('./extension-config-io');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -23,7 +26,6 @@ let cloudflareTunnelToken = '';
 let originalSpawn = null;
 let originalSpawnSync = null;
 let originalHttpRequest = null;
-let restoreConfigWriter = null;
 let manager = null;
 
 function cfg() {
@@ -47,8 +49,7 @@ function readJson(file) {
 }
 
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  writeMergedExtensionConfig(fs, file, value);
 }
 
 function setting(name, fallback) {
@@ -335,7 +336,6 @@ async function activate(context) {
   output = vscode.window.createOutputChannel('DevMate Deployment');
   context.subscriptions.push(output);
   cloudflareTunnelToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
-  restoreConfigWriter = installConfigWriteInterceptor(fs, configPath(context));
   installProcessWrappers();
 
   register(context, 'devMate.deploymentSetup', () => configureDeployment(context));
@@ -358,7 +358,7 @@ async function activate(context) {
   }
 
   const entry = process.platform === 'win32' ? './extension-entry-win32' : './extension-entry';
-  innerExtension = require(entry);
+  innerExtension = loadWithConfigWriteInterceptor(require.resolve(entry), configPath(context));
   await innerExtension.activate(context);
   syncDeploymentConfig(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
@@ -378,8 +378,6 @@ async function deactivate() {
   } finally {
     manager?.stop();
     restoreProcessWrappers();
-    restoreConfigWriter?.();
-    restoreConfigWriter = null;
     innerExtension = null;
     manager = null;
     globalContext = null;
