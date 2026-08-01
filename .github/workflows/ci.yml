@@ -23,8 +23,9 @@ jobs:
       - name: Generate final source files
         run: node scripts/generate-final-files.mjs
 
-      - name: Install and validate generated tree
+      - name: Refresh lockfile and validate generated tree
         run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci
           npm run check
           npm run test:unit
