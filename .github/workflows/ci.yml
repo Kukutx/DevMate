@@ -55,9 +55,9 @@ jobs:
           path: "*.vsix"
 
   godot-real:
-    name: Real Godot 4.7.1
+    name: Linux and Real Godot 4.7.1
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       GODOT_VERSION: 4.7.1
       GODOT_STATUS: stable
@@ -74,6 +74,15 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Linux repository contracts
+        run: npm run check
+
+      - name: Linux discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Linux gateway smoke test
+        run: npm run smoke:gateway
 
       - name: Install virtual display
         run: |
