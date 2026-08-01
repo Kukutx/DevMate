@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { definePlugin } from './plugin-sdk.mjs';
+import { extendPlugin } from './plugin-sdk.mjs';
 import { godotPlugin } from './godot.mjs';
 import { buildGodotDependencyGraph } from './godot-graph.mjs';
 import { installQaBridge } from './godot-qa-bridge.mjs';
@@ -42,27 +42,17 @@ function configureGodot(context, {
   return { project, settings, installBridge };
 }
 
-export const enhancedGodotPlugin = definePlugin({
-  manifest: {
-    ...godotPlugin.manifest,
-    version: '0.4.0',
-    description: 'Godot project development, runtime verification, dependency analysis, native/Web acceptance, execution planning, quality reports, and multi-platform export orchestration.',
-    capabilities: [...new Set([
-      ...godotPlugin.manifest.capabilities,
-      'runtime-inspection', 'dependency-graph', 'execution-planning', 'quality-report'
-    ])]
-  },
-  settingsSchema: godotPlugin.settingsSchema,
-  defaultSettings: godotPlugin.defaultSettings,
-  async diagnose(context) {
-    const base = godotPlugin.diagnose ? await godotPlugin.diagnose(context) : null;
+export const enhancedGodotPlugin = extendPlugin(godotPlugin, {
+  version: '0.4.0',
+  description: 'Godot project development, runtime verification, dependency analysis, native/Web acceptance, execution planning, quality reports, and multi-platform export orchestration.',
+  capabilities: ['runtime-inspection', 'dependency-graph', 'execution-planning', 'quality-report'],
+  async diagnose(context, base) {
     let runtime = null;
     try { runtime = await inspectGodotRuntime(context); }
     catch (error) { runtime = { ok: false, error: error.message || String(error) }; }
-    return { ...base, runtime };
+    return { ...(base || {}), runtime };
   },
   async activate(context) {
-    await godotPlugin.activate(context);
     const { server } = context;
 
     server.registerTool('godot_runtime_status', {
