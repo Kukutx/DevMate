@@ -8,6 +8,10 @@ function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function has(objectValue, key) {
+  return Object.hasOwn(objectValue, key);
+}
+
 function parseJsonValue(value) {
   const text = Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '');
   const parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
@@ -18,7 +22,9 @@ function parseJsonValue(value) {
 }
 
 function mergeWorkspaces(candidate, current) {
-  const requested = Array.isArray(candidate) ? candidate : [];
+  const requested = (Array.isArray(candidate) ? candidate : []).filter(item =>
+    item?.trusted !== true && item?.role !== 'trusted'
+  );
   const protectedCurrent = (Array.isArray(current) ? current : []).filter(item =>
     item?.trusted === true || item?.role === 'trusted'
   );
@@ -35,41 +41,47 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   const candidate = object(candidateValue);
   if (!Object.keys(current).length) return candidate;
 
+  const merged = { ...current };
+  const extensionOwned = [
+    'version', 'appVersion', 'server', 'permissions', 'maintenance', 'commands',
+    'connection', 'vscodeContext', 'activeWorkspaceId', 'deployment', 'production'
+  ];
+  for (const key of extensionOwned) {
+    if (has(candidate, key)) merged[key] = candidate[key];
+  }
+  merged.instanceId = has(current, 'instanceId') ? current.instanceId : candidate.instanceId;
+
   const currentAuth = object(current.auth);
   const candidateAuth = object(candidate.auth);
+  merged.auth = { ...currentAuth };
+  if (!Object.keys(currentAuth).length) Object.assign(merged.auth, candidateAuth);
+  if (has(candidateAuth, 'required')) merged.auth.required = candidateAuth.required;
+  if (has(currentAuth, 'token')) merged.auth.token = currentAuth.token;
+  else if (has(candidateAuth, 'token')) merged.auth.token = candidateAuth.token;
+
   const currentRuntime = object(current.runtime);
   const candidateRuntime = object(candidate.runtime);
+  merged.runtime = Object.keys(currentRuntime).length ? { ...currentRuntime } : { ...candidateRuntime };
+  for (const key of ['defaultCommandTimeoutMs', 'maxOutputChars']) {
+    if (has(candidateRuntime, key)) merged.runtime[key] = candidateRuntime[key];
+  }
+
   const currentTeam = object(current.team);
   const candidateTeam = object(candidate.team);
+  merged.team = Object.keys(currentTeam).length ? { ...currentTeam } : { ...candidateTeam };
+  for (const key of ['enabled', 'requireWorkspaceLeaseForWrites']) {
+    if (has(candidateTeam, key)) merged.team[key] = candidateTeam[key];
+  }
+  if (has(currentTeam, 'members')) merged.team.members = currentTeam.members;
+  else if (has(candidateTeam, 'members')) merged.team.members = candidateTeam.members;
 
-  const merged = {
-    ...current,
-    ...candidate,
-    instanceId: current.instanceId || candidate.instanceId,
-    auth: {
-      ...candidateAuth,
-      ...currentAuth,
-      required: candidateAuth.required ?? currentAuth.required,
-      token: currentAuth.token || candidateAuth.token
-    },
-    runtime: {
-      ...candidateRuntime,
-      ...currentRuntime,
-      defaultCommandTimeoutMs: candidateRuntime.defaultCommandTimeoutMs ?? currentRuntime.defaultCommandTimeoutMs,
-      maxOutputChars: candidateRuntime.maxOutputChars ?? currentRuntime.maxOutputChars
-    },
-    team: {
-      ...candidateTeam,
-      ...currentTeam,
-      enabled: candidateTeam.enabled ?? currentTeam.enabled,
-      requireWorkspaceLeaseForWrites: candidateTeam.requireWorkspaceLeaseForWrites ?? currentTeam.requireWorkspaceLeaseForWrites,
-      members: Array.isArray(currentTeam.members) ? currentTeam.members : candidateTeam.members
-    },
-    workspaces: mergeWorkspaces(candidate.workspaces, current.workspaces)
-  };
+  if (has(candidate, 'workspaces') || has(current, 'workspaces')) {
+    merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
+  }
 
   for (const key of ['plugins', 'jobs', 'runnerControl', 'task', 'trustedWritableRoots']) {
-    if (current[key] !== undefined) merged[key] = current[key];
+    if (has(current, key)) merged[key] = current[key];
+    else delete merged[key];
   }
   return merged;
 }
@@ -164,7 +176,6 @@ function atomicWriteJson(fsModule, file, value, originalWriteFileSync = fsModule
     }
     try { fsModule.chmodSync(file, 0o600); } catch {}
     fsyncDirectory(fsModule, directory);
-    return value;
   } finally {
     if (fd != null) {
       try { fsModule.closeSync(fd); } catch {}
@@ -183,7 +194,7 @@ function installConfigWriteInterceptor(fsModule, file) {
     }
     const candidate = parseJsonValue(data);
     const current = readCurrent(fsModule, target);
-    return atomicWriteJson(fsModule, target, mergeExtensionConfig(current, candidate), originalWriteFileSync);
+    atomicWriteJson(fsModule, target, mergeExtensionConfig(current, candidate), originalWriteFileSync);
   };
   return () => {
     if (!active) return;
