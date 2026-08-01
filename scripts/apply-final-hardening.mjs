@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// One-time branch migration. Removed before merge after its generated commit is verified.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -403,6 +404,7 @@ patch('gateway/runner-claim-fencing.mjs', [
     leaseExpiresAt: new Date(leaseExpiresAt).toISOString()
   };
   store.generations[id] = { generation, updatedAt: issuedAt };
+  Object.assign(storeValue, store);
   return { generation, token };
 }
 
