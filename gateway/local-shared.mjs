@@ -54,6 +54,15 @@ function configConflict(message) {
   return error;
 }
 
+function validConfigFile(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
 function replacementCandidates() {
   if (!CONFIG_PATH || !CONFIG_DIR) return [];
   const prefix = `${path.basename(CONFIG_PATH)}.replace-`;
@@ -68,23 +77,31 @@ function replacementCandidates() {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+function cleanupReplacementCandidates(candidates, except = '') {
+  for (const candidate of candidates) {
+    if (candidate.file === except) continue;
+    try { fs.rmSync(candidate.file, { force: true }); } catch {}
+  }
+}
+
 export function recoverConfigReplacement() {
   if (!CONFIG_PATH || !CONFIG_DIR || !fs.existsSync(CONFIG_DIR)) return null;
   const candidates = replacementCandidates();
-  if (fs.existsSync(CONFIG_PATH)) {
-    for (const candidate of candidates) {
-      try { fs.rmSync(candidate.file, { force: true }); } catch {}
-    }
+  if (fs.existsSync(CONFIG_PATH) && validConfigFile(CONFIG_PATH)) {
+    cleanupReplacementCandidates(candidates);
     return null;
   }
-  const candidate = candidates[0];
+  const candidate = candidates.find(item => validConfigFile(item.file));
   if (!candidate) return null;
+  if (fs.existsSync(CONFIG_PATH)) {
+    const corrupt = `${CONFIG_PATH}.corrupt-${Date.now()}`;
+    try { fs.renameSync(CONFIG_PATH, corrupt); }
+    catch { try { fs.rmSync(CONFIG_PATH, { force: true }); } catch {} }
+  }
   fs.renameSync(candidate.file, CONFIG_PATH);
   try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
   fsyncDirectory(CONFIG_DIR);
-  for (const stale of candidates.slice(1)) {
-    try { fs.rmSync(stale.file, { force: true }); } catch {}
-  }
+  cleanupReplacementCandidates(candidates, candidate.file);
   return candidate.file;
 }
 
@@ -384,8 +401,10 @@ export const __test = {
   CONFIG_SOURCE,
   attachConfigSource,
   boundedAuditLine,
+  cleanupReplacementCandidates,
   configConflict,
   fingerprint,
   fsyncDirectory,
-  replacementCandidates
+  replacementCandidates,
+  validConfigFile
 };
