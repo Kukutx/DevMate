@@ -14,8 +14,15 @@ function sanitizeLabelKey(value) {
   return String(value || '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 100) || 'label';
 }
 
-function sanitizeLabelValue(value) {
+function normalizeHighCardinalityValue(value) {
   return String(value ?? '')
+    .replace(/^\/runner\/v1\/jobs\/[^/]+\/(renew|complete|fail|cancelled)$/i, '/runner/v1/jobs/:id/$1')
+    .replace(/\bjob-[a-z0-9-]{12,}\b/gi, 'job-:id')
+    .replace(/\b(?:req|runner)-[a-z0-9-]{12,}\b/gi, '$&'.split('-')[0] + '-:id');
+}
+
+function sanitizeLabelValue(value) {
+  return normalizeHighCardinalityValue(value)
     .replace(/[\r\n\0]/g, ' ')
     .slice(0, MAX_METRIC_LABEL_VALUE_CHARS);
 }
@@ -145,6 +152,7 @@ export const __test = {
   gauges,
   labelKey,
   metricKey,
+  normalizeHighCardinalityValue,
   normalizeLabels,
   parseMetricKey,
   renderLabels,
