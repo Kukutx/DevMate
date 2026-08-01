@@ -2,9 +2,9 @@ name: Final maintenance branch sync
 
 # Temporary workflow: removed immediately after the maintenance branch is synchronized.
 on:
-  push:
-    branches:
-      - master
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -28,19 +28,23 @@ jobs:
         shell: bash
         run: |
           set -u
+          if [ ! -f scripts/apply-final-hardening.mjs ]; then
+            echo 'Maintenance branch is already synchronized.'
+            exit 0
+          fi
           git fetch origin master
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           rm -f SYNC_FAILURE.txt sync-output.log
-          (
+          if ! {
             set -euo pipefail
             node scripts/apply-final-hardening.mjs
-            python - <<'PY'
-          from pathlib import Path
-          p = Path('CHANGELOG.md')
-          text = p.read_text(encoding='utf-8')
-          if '\n## 2.9.2\n' not in text:
-              header = '''# Changelog
+            node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'CHANGELOG.md';
+          const current = fs.readFileSync(file, 'utf8');
+          if (!current.includes('\n## 2.9.2\n')) {
+            const header = `# Changelog
 
 ## 2.9.2
 
@@ -57,25 +61,28 @@ jobs:
 - Added configuration conflict detection, retryable mutations, atomic replacement recovery, recursive audit redaction, fixed-window rate-map bounds, external Runner claim fencing, and Job-store capacity limits.
 - Added Windows and Linux full repository/test/Gateway verification while preserving existing public MCP and Godot workflows.
 
-'''
-              assert text.startswith('# Changelog\n')
-              p.write_text(header + text[len('# Changelog\n\n'):], encoding='utf-8')
-          PY
+`;
+            if (!current.startsWith('# Changelog\n')) throw new Error('Unexpected CHANGELOG header');
+            fs.writeFileSync(file, header + current.slice('# Changelog\n\n'.length));
+          }
+          NODE
             node scripts/sync-version.mjs
             git checkout origin/master -- .github/workflows/ci.yml
             git rm -f .github/workflows/release-metadata-sync.yml scripts/apply-final-hardening.mjs
-          ) >sync-output.log 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
+          } >sync-output.log 2>&1; then
             output=$(cat sync-output.log)
             git reset --hard HEAD
             printf '# Final maintenance synchronization failed\n\n```text\n%s\n```\n' "$output" > SYNC_FAILURE.txt
             git add SYNC_FAILURE.txt
-            git commit -m "Report final maintenance synchronization failure"
+            git commit -m 'Report final maintenance synchronization failure'
             git push origin HEAD:maintenance/2.9.2-final-deep-dig
-            exit "$status"
+            exit 1
           fi
           rm -f sync-output.log SYNC_FAILURE.txt
           git add -A
-          git commit -m "Apply DevMate 2.9.2 final maintenance closure"
+          if git diff --cached --quiet; then
+            echo 'No synchronization changes were required.'
+            exit 0
+          fi
+          git commit -m 'Apply DevMate 2.9.2 final maintenance closure'
           git push origin HEAD:maintenance/2.9.2-final-deep-dig
