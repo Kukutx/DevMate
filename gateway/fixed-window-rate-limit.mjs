@@ -12,7 +12,7 @@ export function pruneFixedWindowStore(store, {
   maxEntries = DEFAULT_MAX_ENTRIES
 } = {}) {
   if (!(store instanceof Map)) throw new TypeError('Rate-limit store must be a Map');
-  const cap = cleanLimit(maxEntries, DEFAULT_MAX_ENTRIES, 100, 100_000);
+  const cap = cleanLimit(maxEntries, DEFAULT_MAX_ENTRIES, 10, 100_000);
   const activeWindow = Number.isFinite(Number(currentWindow)) ? Number(currentWindow) : null;
   if (activeWindow != null) {
     for (const [key, value] of store) {
@@ -35,9 +35,10 @@ export function consumeFixedWindow(store, key, limit, {
   if (!(store instanceof Map)) throw new TypeError('Rate-limit store must be a Map');
   const boundedLimit = cleanLimit(limit, 1, 1, 1_000_000);
   const boundedWindowMs = cleanLimit(windowMs, DEFAULT_WINDOW_MS, 1_000, 24 * 60 * 60 * 1000);
+  const cap = cleanLimit(maxEntries, DEFAULT_MAX_ENTRIES, 10, 100_000);
   const window = Math.floor(Number(now) / boundedWindowMs);
-  if (!store.has(key) && store.size >= maxEntries) {
-    pruneFixedWindowStore(store, { currentWindow: window, maxEntries: Math.max(100, maxEntries - 1) });
+  if (!store.has(key) && store.size >= cap) {
+    pruneFixedWindowStore(store, { currentWindow: window, maxEntries: Math.max(10, cap - 1) });
   }
   const current = store.get(key);
   if (!current || current.window !== window) {
