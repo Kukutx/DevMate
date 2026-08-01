@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.0
+
+- Added reviewed project-local Godot performance baselines with atomic writes, deliberate force replacement, backups, stable percentile metric points, and sample-count evidence.
+- Added `godot_performance_regression` to run a fresh native performance test and evaluate directional metric regressions against a selected baseline with global or per-metric tolerances.
+- Added `godot_automation_bootstrap` to safely create or merge native, Web, export, performance, and detected GUT/GdUnit4 starter workflows without replacing existing scenario IDs.
+- Added `godot_release_gate` to consume fresh quality, non-empty JUnit, performance, export, and optional capture evidence and write a final policy-based JSON decision without publishing anything.
+- Added durable Job and external Runner support for performance regression and release-gate evaluation while keeping baseline and manifest changes explicit interactive mutations.
+- Added bounded evidence age, path, file-size, sample, export, capture, dependency, audit, and automation checks plus backups and atomic report writes.
+- Added regression coverage for directional baselines, workspace-contained baseline persistence, non-destructive manifest merging, and passing/failing release evidence.
+- Added `GODOT_RELEASE_MATURITY.md` and documented DevMate 2.8 as the point where further Godot feature growth should be driven by concrete project requirements.
+
 ## 2.7.0
 
 - Upgraded the reviewed Godot QA Bridge to v3 with opt-in bounded sampling of fixed Godot Performance monitors and frame-count completion for deterministic capture.

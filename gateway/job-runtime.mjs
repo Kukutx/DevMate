@@ -19,8 +19,8 @@ const ELIGIBLE_TARGETS = new Set([
   'browser_qa_run', 'browser_qa_run_saved',
   'godot_project_audit', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web',
   'godot_native_test', 'godot_acceptance_test', 'godot_acceptance_run_saved', 'godot_acceptance_suite',
-  'godot_quality_report', 'godot_performance_test', 'godot_movie_capture', 'godot_test_run',
-  'godot_advanced_run_saved', 'godot_advanced_suite',
+  'godot_quality_report', 'godot_performance_test', 'godot_performance_regression', 'godot_movie_capture', 'godot_test_run',
+  'godot_advanced_run_saved', 'godot_advanced_suite', 'godot_release_gate',
   'git_save'
 ]);
 
