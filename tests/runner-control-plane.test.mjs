@@ -11,7 +11,7 @@ process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const baseConfig = {
-  appVersion: '2.3.0',
+  appVersion: '2.9.1',
   instanceId: 'runner-control-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
   permissions: { profile: 'fullAccess' },
@@ -47,7 +47,7 @@ const created = runnerAccess.createRunnerCredential(baseConfig, {
 });
 await fsp.writeFile(configPath, JSON.stringify(baseConfig, null, 2), 'utf8');
 
-const { resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
+const durable = await import('../gateway/durable-state.mjs');
 const {
   clearJobsForTests,
   createJob,
@@ -61,7 +61,14 @@ const {
   resetRunnerControlState
 } = await import('../gateway/runner-control-plane.mjs');
 
-resetDurableStateForTests();
+function proof(job) {
+  return {
+    claimGeneration: job.claim.generation,
+    claimToken: job.claim.token
+  };
+}
+
+durable.resetDurableStateForTests();
 clearJobsForTests();
 registerJobTarget('project_snapshot', {
   title: 'Project snapshot',
@@ -104,6 +111,16 @@ async function request(relative, token = created.token, body = {}, protocol = '1
   return { response, json: await response.json() };
 }
 
+const runner = {
+  capabilities: ['core', 'external', 'unapproved-capability'],
+  workspaceIds: ['app', 'other'],
+  maxConcurrent: 8,
+  version: '2.9.1',
+  platform: 'linux',
+  arch: 'x64',
+  labels: { hostname: 'runner-one' }
+};
+
 test('rejects invalid credentials, protocol versions, and non-overlapping workspaces', async () => {
   const wrongProtocol = await request('/heartbeat', created.token, {}, '2');
   assert.equal(wrongProtocol.response.status, 426);
@@ -124,21 +141,12 @@ test('rejects invalid credentials, protocol versions, and non-overlapping worksp
 });
 
 test('registers, claims, renews, and completes a scoped remote job', async () => {
-  const runner = {
-    capabilities: ['core', 'external', 'unapproved-capability'],
-    workspaceIds: ['app', 'other'],
-    maxConcurrent: 8,
-    version: '2.3.0',
-    platform: 'linux',
-    arch: 'x64',
-    labels: { hostname: 'runner-one' }
-  };
   const heartbeat = await request('/heartbeat', created.token, { runner });
   assert.equal(heartbeat.response.status, 200);
   assert.deepEqual(heartbeat.json.runner.capabilities, ['core', 'external']);
   assert.deepEqual(heartbeat.json.runner.workspaceIds, ['app']);
   assert.equal(heartbeat.json.runner.maxConcurrent, 2);
-  assert.equal(heartbeat.json.runner.version, '2.3.0');
+  assert.equal(heartbeat.json.runner.version, '2.9.1');
 
   const claimed = await request('/jobs/claim', created.token, {
     runner,
@@ -148,17 +156,19 @@ test('registers, claims, renews, and completes a scoped remote job', async () =>
   assert.equal(claimed.json.job.id, queued.id);
   assert.deepEqual(claimed.json.job.arguments, { workspaceId: 'app' });
   assert.deepEqual(claimed.json.job.artifactPaths, ['artifacts/report.json']);
+  assert.equal(claimed.json.job.claim.generation, 1);
+  assert.match(claimed.json.job.claim.token, /^[A-Za-z0-9_-]{43}$/);
 
   const renewed = await request(
     `/jobs/${queued.id}/renew`,
     created.token,
-    { leaseSeconds: 60 }
+    { leaseSeconds: 60, ...proof(claimed.json.job) }
   );
   assert.equal(renewed.response.status, 200);
   assert.equal(renewed.json.renewed, true);
   assert.equal(renewed.json.cancelRequested, false);
   const runnerAfterRenew = listRunners().find(item => item.id === created.credential.id);
-  assert.equal(runnerAfterRenew.version, '2.3.0');
+  assert.equal(runnerAfterRenew.version, '2.9.1');
   assert.equal(runnerAfterRenew.platform, 'linux');
   assert.equal(runnerAfterRenew.labels.hostname, 'runner-one');
 
@@ -166,6 +176,7 @@ test('registers, claims, renews, and completes a scoped remote job', async () =>
     `/jobs/${queued.id}/complete`,
     created.token,
     {
+      ...proof(claimed.json.job),
       result: {
         ok: true,
         token: 'must-not-persist',
@@ -195,6 +206,43 @@ test('registers, claims, renews, and completes a scoped remote job', async () =>
   assert.equal(job.artifacts[0].workspaceId, 'app');
   assert.equal(job.artifacts[0].runnerId, created.credential.id);
   assert.equal(job.artifacts[0].remote, true);
+});
+
+test('rejects stale completion after a lease expires and the same Runner reclaims the job', async () => {
+  const job = createJob({
+    principal,
+    tool: 'project_snapshot',
+    args: { workspaceId: 'app' },
+    workspaceId: 'app',
+    requiredCapabilities: ['core', 'external'],
+    maxAttempts: 2
+  });
+  await request('/heartbeat', created.token, { runner });
+  const first = await request('/jobs/claim', created.token, { runner, leaseSeconds: 60 });
+  assert.equal(first.json.job.id, job.id);
+  const store = durable.readDurableNamespace('jobs', null);
+  const internal = store.jobs.find(item => item.id === job.id);
+  internal.leaseExpiresAt = new Date(Date.now() - 1000).toISOString();
+  durable.writeDurableNamespace('jobs', store);
+
+  const second = await request('/jobs/claim', created.token, { runner, leaseSeconds: 60 });
+  assert.equal(second.json.job.id, job.id);
+  assert.equal(second.json.job.claim.generation, 2);
+
+  const stale = await request(`/jobs/${job.id}/complete`, created.token, {
+    ...proof(first.json.job),
+    result: { ok: true, stale: true }
+  });
+  assert.equal(stale.response.status, 409);
+  assert.equal(stale.json.code, 'claim_fence_invalid');
+  assert.equal(getJob(job.id).status, 'running');
+
+  const current = await request(`/jobs/${job.id}/complete`, created.token, {
+    ...proof(second.json.job),
+    result: { ok: true, stale: false }
+  });
+  assert.equal(current.response.status, 200);
+  assert.equal(getJob(job.id, { includeResult: true }).result.stale, false);
 });
 
 test('sanitizes empty results safely', () => {
