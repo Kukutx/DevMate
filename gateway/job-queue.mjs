@@ -38,8 +38,9 @@ function readStore() {
   };
 }
 
-function writeStore(store) {
-  assertJobStoreCapacity(store, { enforceActive: false });
+function writeStore(store, { strict = false } = {}) {
+  if (strict) assertJobStoreCapacity(store);
+  else compactJobStore(store);
   return writeDurableNamespace(NAMESPACE, store);
 }
 
@@ -225,7 +226,7 @@ export function createJob({ principal, tool, args = {}, workspaceId = null, titl
   };
   appendEvent(job, 'submitted', { argumentBytes: bytes });
   store.jobs.push(job);
-  writeStore(store);
+  writeStore(store, { strict: true });
   return publicJob(job);
 }
 
@@ -270,7 +271,8 @@ export function retryJob({ id, principal }) {
   const elevated = ['owner', 'maintainer'].includes(principal?.role);
   if (job.requestedBy.id !== principal?.id && !elevated) throw new Error(`Job ${id} belongs to ${job.requestedBy.name || job.requestedBy.id}`);
   if (!['failed', 'cancelled', 'waiting_approval', 'blocked_lease'].includes(job.status)) throw new Error(`Job ${id} cannot be retried from status ${job.status}`);
-  if (FINAL_STATUSES.has(job.status)) assertCanActivateJob(store);
+  const strict = FINAL_STATUSES.has(job.status);
+  if (strict) assertCanActivateJob(store);
   job.status = 'queued';
   job.runnerId = null;
   job.error = null;
@@ -281,7 +283,7 @@ export function retryJob({ id, principal }) {
   job.nextRunAt = now();
   job.updatedAt = now();
   appendEvent(job, 'retried', { by: principal?.id || 'unknown' });
-  writeStore(store);
+  writeStore(store, { strict });
   return publicJob(job);
 }
 
@@ -290,6 +292,7 @@ export function registerRunner({ id, name = '', capabilities = [], workspaceIds 
   if (!runnerId) throw new Error('runner id is required');
   const store = recover(readStore());
   let runner = store.runners.find(item => item.id === runnerId);
+  const isNew = !runner;
   const timestamp = now();
   if (!runner) {
     runner = { id: runnerId, registeredAt: timestamp, runningJobs: 0 };
@@ -308,7 +311,7 @@ export function registerRunner({ id, name = '', capabilities = [], workspaceIds 
     lastHeartbeatAt: timestamp
   });
   runner.runningJobs = store.jobs.filter(job => job.runnerId === runner.id && job.status === 'running').length;
-  writeStore(store);
+  writeStore(store, { strict: isNew });
   return publicRunner(runner);
 }
 
