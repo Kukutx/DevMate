@@ -66,13 +66,14 @@ function touchTeamMember(config, principal) {
 function touchTeamMemberBestEffort(principal) {
   if (principal?.source !== 'team-token') return false;
   try {
-    let changed = false;
+    const preview = normalizeDeploymentConfig(readConfig());
+    if (!touchTeamMember(preview, principal)) return false;
     mutateConfig(config => {
       normalizeDeploymentConfig(config);
-      changed = touchTeamMember(config, principal);
+      touchTeamMember(config, principal);
       return config;
     }, { retries: 4 });
-    return changed;
+    return true;
   } catch {
     return false;
   }
@@ -150,6 +151,38 @@ export function activitySnapshot({ activeWithinMinutes = 60 } = {}) {
     .filter(item => Date.parse(item.lastSeenAt || 0) >= cutoff)
     .sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)))
     .map(item => ({ ...item }));
+}
+
+function installRequestBodyLimit(req, res, maxBytes, requestId) {
+  const state = { bytes: 0, overflowed: false };
+  if (req.method !== 'POST' || typeof req.push !== 'function') return state;
+  const originalPush = req.push;
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    if (req.push === limitedPush) req.push = originalPush;
+    req.off?.('close', restore);
+  };
+  function limitedPush(chunk, encoding) {
+    if (chunk != null && !state.overflowed) {
+      state.bytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding);
+      if (state.bytes > maxBytes) {
+        state.overflowed = true;
+        jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: maxBytes });
+        const error = new Error(`MCP request body exceeds ${maxBytes} bytes`);
+        error.code = 'request_too_large';
+        queueMicrotask(() => req.destroy?.(error));
+        return false;
+      }
+    }
+    const result = originalPush.call(this, chunk, encoding);
+    if (chunk == null) restore();
+    return result;
+  }
+  req.push = limitedPush;
+  req.once?.('close', restore);
+  return state;
 }
 
 export function guardListener(listener) {
@@ -237,6 +270,7 @@ export function guardListener(listener) {
     res.once('finish', release);
     res.once('close', release);
 
+    const bodyLimit = installRequestBodyLimit(req, res, config.production.maxRequestBytes, requestId);
     const context = {
       requestId,
       principal,
@@ -249,8 +283,13 @@ export function guardListener(listener) {
       await runWithRequestContext(context, () => listener(req, res));
     } catch (error) {
       release();
-      if (!res.headersSent) jsonError(res, 500, 'DevMate request failed', 'request_failed', requestId);
-      else res.destroy?.(error);
+      if (bodyLimit.overflowed) {
+        if (!res.headersSent) jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: config.production.maxRequestBytes });
+      } else if (!res.headersSent) {
+        jsonError(res, 500, 'DevMate request failed', 'request_failed', requestId);
+      } else {
+        res.destroy?.(error);
+      }
     }
   };
 }
@@ -283,6 +322,7 @@ export const __test = {
   enterConcurrency,
   globalInflight: () => globalInflight,
   hostAllowed,
+  installRequestBodyLimit,
   preAuthRateWindows,
   principalInflight,
   rateWindows,
