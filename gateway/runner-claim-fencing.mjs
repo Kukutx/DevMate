@@ -66,11 +66,21 @@ function claimRecord(store, jobId) {
   return store.claims[String(jobId || '').trim()] || null;
 }
 
-function validateRecord(record, { jobId, runnerId, generation, token, allowExpired = false }) {
+function validateRecord(record, {
+  jobId,
+  runnerId,
+  generation,
+  token,
+  allowExpired = false,
+  allowLegacyFirst = false
+}) {
   if (!record) throw claimError(`No active Runner claim exists for job ${jobId}`);
   if (record.runnerId !== runnerId) throw claimError(`Runner ${runnerId} does not own claim for job ${jobId}`);
-  if (Number(record.generation) !== Number(generation)) throw claimError(`Runner claim generation is stale for job ${jobId}`);
-  if (!timingSafeEqualText(record.tokenHash, hashToken(token))) throw claimError(`Runner claim token is invalid for job ${jobId}`);
+  const missingProof = generation == null && !String(token || '');
+  if (!(allowLegacyFirst && missingProof && Number(record.generation) === 1)) {
+    if (Number(record.generation) !== Number(generation)) throw claimError(`Runner claim generation is stale for job ${jobId}`);
+    if (!timingSafeEqualText(record.tokenHash, hashToken(token))) throw claimError(`Runner claim token is invalid for job ${jobId}`);
+  }
   if (!allowExpired && Date.parse(record.leaseExpiresAt || 0) <= Date.now()) {
     throw claimError(`Runner claim has expired for job ${jobId}`, 'claim_fence_expired');
   }
@@ -148,4 +158,4 @@ export function clearRunnerClaimsForTests() {
   writeStore(emptyStore());
 }
 
-export const __test = { MAX_CLAIMS, TOKEN_BYTES, emptyStore, hashToken, normalizeStore, prune, timingSafeEqualText };
+export const __test = { MAX_CLAIMS, TOKEN_BYTES, emptyStore, hashToken, normalizeStore, prune, timingSafeEqualText, validateRecord };
