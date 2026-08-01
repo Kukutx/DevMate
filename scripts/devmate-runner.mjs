@@ -198,6 +198,14 @@ function claimBody(job, body = {}) {
   };
 }
 
+function ownershipLostError(error) {
+  return Number(error?.status) === 409 || [
+    'claim_fence_invalid',
+    'claim_fence_expired',
+    'job_not_owned'
+  ].includes(String(error?.code || ''));
+}
+
 function controlClient(origin, token, metadata) {
   async function request(relative, body = {}, signal) {
     return fetchJson(`${origin}/runner/v1${relative}`, {
@@ -276,22 +284,38 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
   async function execute(job) {
     const abort = new AbortController();
     let cancelRequested = false;
+    let ownershipLost = false;
+    let renewalInFlight = null;
     const renewEvery = Math.min(30000, Math.max(5000, Math.floor(leaseSeconds * 1000 / 3)));
-    const renewTimer = setInterval(async () => {
-      try {
-        const response = await control.renew(job, leaseSeconds);
-        if (response.cancelRequested) {
-          cancelRequested = true;
-          abort.abort(new Error('Cancellation requested by control plane'));
+    const renew = async () => {
+      if (renewalInFlight) return renewalInFlight;
+      renewalInFlight = (async () => {
+        try {
+          const response = await control.renew(job, leaseSeconds);
+          if (response.cancelRequested) {
+            cancelRequested = true;
+            abort.abort(new Error('Cancellation requested by control plane'));
+          }
+        } catch (error) {
+          if (ownershipLostError(error)) {
+            ownershipLost = true;
+            abort.abort(new Error('Job ownership was lost to another claim'));
+            publicLog('Job ownership lost', `${job.id}: ${error.message}`);
+          } else {
+            publicLog('Job lease renewal failed', `${job.id}: ${error.message}`);
+          }
         }
-      } catch (error) {
-        publicLog('Job lease renewal failed', `${job.id}: ${error.message}`);
-      }
-    }, renewEvery);
+      })();
+      try { await renewalInFlight; }
+      finally { renewalInFlight = null; }
+    };
+    const renewTimer = setInterval(() => { void renew(); }, renewEvery);
     renewTimer.unref?.();
     try {
       publicLog('Job started', `${job.id} ${job.tool}`);
       const result = await local.callTool(job.tool, job.arguments || {}, abort.signal, job.timeoutMs);
+      if (renewalInFlight) await renewalInFlight;
+      if (ownershipLost) throw Object.assign(new Error('Job ownership was lost before completion'), { code: 'job_ownership_lost' });
       const returned = toolError(result);
       if (returned) throw returned;
       const artifacts = await indexJobArtifacts(job, result);
@@ -299,7 +323,9 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
       publicLog('Job succeeded', `${job.id} artifacts=${artifacts.length}`);
     } catch (error) {
       const message = String(error?.message || error).slice(0, 4000);
-      if (cancelRequested || abort.signal.aborted) {
+      if (ownershipLost || error?.code === 'job_ownership_lost') {
+        publicLog('Stale Job result discarded', job.id);
+      } else if (cancelRequested || abort.signal.aborted) {
         try { await control.cancelled(job, message); } catch {}
         publicLog('Job cancellation acknowledged', job.id);
       } else {
@@ -311,6 +337,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
       }
     } finally {
       clearInterval(renewTimer);
+      if (renewalInFlight) await renewalInFlight.catch(() => {});
       inflight.delete(job.id);
     }
   }
@@ -366,6 +393,7 @@ export const __test = {
   gatewayEnvironment,
   localMcpClient,
   normalizeControlUrl,
+  ownershipLostError,
   parseArgs,
   runnerCapabilities,
   runnerMetadata,
