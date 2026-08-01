@@ -74,15 +74,14 @@ export function createPreviewShare({ previewId, principal, publicUrl, ttlSeconds
     createdByName: principal?.name || principal?.id || 'unknown',
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
-    maxUses: Math.min(100000, Math.max(0, Math.trunc(Number(maxUses) || 0)), MAX_SESSIONS_PER_SHARE),
+    maxUses: Math.min(100000, Math.max(0, Math.trunc(Number(maxUses) || 0))),
     uses: 0,
-    activeSessions: 0,
     revoked: false
   };
   shares.set(tokenHash(token), share);
   const url = new URL(`${origin}${PREFIX}${encodeURIComponent(previewId)}/`);
   url.searchParams.set('share', token);
-  return { share: { ...share }, url: url.toString(), token };
+  return { share: { ...share, activeSessions: 0 }, url: url.toString(), token };
 }
 
 export function listPreviewShares({ workspaceId, previewId } = {}) {
@@ -189,9 +188,7 @@ function proxyPreview(req, res, preview, relativePath) {
     if (!res.headersSent) writeError(res, 502, message);
     else res.destroy();
   };
-  upstream.setTimeout(PREVIEW_PROXY_TIMEOUT_MS, () => {
-    upstream.destroy(new Error('Preview proxy timed out'));
-  });
+  upstream.setTimeout(PREVIEW_PROXY_TIMEOUT_MS, () => upstream.destroy(new Error('Preview proxy timed out')));
   upstream.on('error', error => fail(`Preview proxy failed: ${error.message}`));
   req.on('aborted', () => upstream.destroy());
   res.on('close', () => { settled = true; upstream.destroy(); });
