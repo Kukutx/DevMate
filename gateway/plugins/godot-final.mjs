@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { definePlugin } from './plugin-sdk.mjs';
+import { extendPlugin } from './plugin-sdk.mjs';
 import { advancedGodotPlugin } from './godot-advanced.mjs';
 import { bootstrapGodotAutomation } from './godot-bootstrap.mjs';
 import { comparePerformanceBaseline, readPerformanceBaseline, writePerformanceBaseline } from './godot-baseline.mjs';
@@ -66,21 +66,11 @@ async function writeRegressionReport(context, result, relativePath) {
   return path.relative(workspace.root, file).replace(/\\/g, '/');
 }
 
-export const finalGodotPlugin = definePlugin({
-  manifest: {
-    ...advancedGodotPlugin.manifest,
-    version: '0.6.0',
-    description: 'Mature Godot development gateway with runtime verification, audits, deterministic QA, tests, performance baselines and regressions, release evidence gates, capture, exports, and durable Runner workflows.',
-    capabilities: [...new Set([
-      ...advancedGodotPlugin.manifest.capabilities,
-      'performance-baselines', 'performance-regression', 'automation-bootstrap', 'release-gate'
-    ])]
-  },
-  settingsSchema: advancedGodotPlugin.settingsSchema,
-  defaultSettings: advancedGodotPlugin.defaultSettings,
-  diagnose: advancedGodotPlugin.diagnose,
+export const finalGodotPlugin = extendPlugin(advancedGodotPlugin, {
+  version: '0.6.0',
+  description: 'Mature Godot development gateway with runtime verification, audits, deterministic QA, tests, performance baselines and regressions, release evidence gates, capture, exports, and durable Runner workflows.',
+  capabilities: ['performance-baselines', 'performance-regression', 'automation-bootstrap', 'release-gate'],
   async activate(context) {
-    await advancedGodotPlugin.activate(context);
     const { server } = context;
 
     server.registerTool('godot_performance_baseline_update', {
