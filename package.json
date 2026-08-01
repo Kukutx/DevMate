@@ -5,6 +5,10 @@
   "version": "2.9.2",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kukutx/DevMate.git"
+  },
   "engines": {
     "vscode": "^1.90.0",
     "node": ">=18"
