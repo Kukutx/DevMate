@@ -92,10 +92,7 @@ function generatedCoreConfig({ projectSubpath, metadata, presets, bridge }) {
     exportOutputRoot: 'build/exports',
     exports: exportTargets(presets),
     scenarios,
-    bootstrap: {
-      generatedBy: 'DevMate',
-      qaBridgeCurrent: bridge.current === true
-    }
+    bootstrap: { generatedBy: 'DevMate', qaBridgeCurrent: bridge.current === true }
   };
 }
 
@@ -188,7 +185,7 @@ export async function bootstrapGodotAutomation(context, {
       coreScenarios: current.plugins['devmate.godot'].scenarios?.length || 0,
       advancedScenarios: current.plugins['devmate.godot-advanced']?.scenarios?.length || 0,
       qaBridgeCurrent: bridge.current === true,
-      testFramework: tests.selectedFramework || null
+      testFramework: tests.preferred || null
     },
     manifest: current
   };
