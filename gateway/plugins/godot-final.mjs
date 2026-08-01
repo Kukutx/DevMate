@@ -58,7 +58,7 @@ async function writeRegressionReport(context, result, relativePath) {
   const workspace = context.workspace.get(result.workspace.id, { writable: true });
   const relative = String(relativePath || 'artifacts/godot-performance/regression.json').trim().replace(/\\/g, '/');
   if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error('Godot performance regression report must stay inside the workspace');
-  const file = context.workspace.resolve(workspace, relative);
+  const file = context.workspace.resolve(workspace, path.join(result.projectSubpath || '.', relative));
   await fsp.mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   await fsp.writeFile(temporary, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
