@@ -82,6 +82,48 @@ test('rejects invalid tokens', async () => {
   assert.equal(response.status, 401);
 });
 
+test('rejects oversized chunked MCP bodies without trusting Content-Length', async () => {
+  guard.resetRequestGuardState();
+  let bodyCompleted = false;
+  const streamServer = http.createServer(guard.guardListener(async (req, res) => {
+    try {
+      for await (const _chunk of req) {}
+      bodyCompleted = true;
+    } catch {}
+    if (!res.headersSent) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    }
+  }));
+  await new Promise(resolve => streamServer.listen(0, '127.0.0.1', resolve));
+  const port = streamServer.address().port;
+  const result = await new Promise((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${created.token}`,
+        'content-type': 'application/json',
+        'transfer-encoding': 'chunked'
+      }
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    request.on('error', reject);
+    request.write('{"payload":"');
+    request.write('x'.repeat(120000));
+    request.end('"}');
+  });
+  await new Promise(resolve => streamServer.close(resolve));
+  assert.equal(result.status, 413);
+  assert.equal(JSON.parse(result.body).code, 'request_too_large');
+  assert.equal(bodyCompleted, false);
+});
+
 test('enforces per-principal rate limits', () => {
   guard.resetRequestGuardState();
   for (let index = 0; index < 10; index++) {

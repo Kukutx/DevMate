@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { readConfig, writeConfig } from './local-shared.mjs';
+import { mutateConfig, readConfig } from './local-shared.mjs';
+import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
 import { extractRequestToken, fallbackLocalPrincipal, normalizeDeploymentConfig, verifyAccessToken } from './team-access.mjs';
@@ -62,6 +63,22 @@ function touchTeamMember(config, principal) {
   return true;
 }
 
+function touchTeamMemberBestEffort(principal) {
+  if (principal?.source !== 'team-token') return false;
+  try {
+    const preview = normalizeDeploymentConfig(readConfig());
+    if (!touchTeamMember(preview, principal)) return false;
+    mutateConfig(config => {
+      normalizeDeploymentConfig(config);
+      touchTeamMember(config, principal);
+      return config;
+    }, { retries: 4 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function authenticateGatewayRequest(req, url, config) {
   normalizeDeploymentConfig(config);
   const token = extractRequestToken(req, url);
@@ -72,16 +89,7 @@ export function authenticateGatewayRequest(req, url, config) {
 }
 
 function consumeRateLimit(principalId, limit, store = rateWindows) {
-  const now = Date.now();
-  const minute = Math.floor(now / 60000);
-  const current = store.get(principalId);
-  if (!current || current.minute !== minute) {
-    store.set(principalId, { minute, count: 1 });
-    return { allowed: true, remaining: Math.max(0, limit - 1), resetAt: (minute + 1) * 60000 };
-  }
-  if (current.count >= limit) return { allowed: false, remaining: 0, resetAt: (minute + 1) * 60000 };
-  current.count += 1;
-  return { allowed: true, remaining: Math.max(0, limit - current.count), resetAt: (minute + 1) * 60000 };
+  return consumeFixedWindow(store, principalId, limit, { maxEntries: 10_000 });
 }
 
 function enterConcurrency(principalId, config) {
@@ -145,14 +153,46 @@ export function activitySnapshot({ activeWithinMinutes = 60 } = {}) {
     .map(item => ({ ...item }));
 }
 
+function installRequestBodyLimit(req, res, maxBytes, requestId) {
+  const state = { bytes: 0, overflowed: false };
+  if (req.method !== 'POST' || typeof req.push !== 'function') return state;
+  const originalPush = req.push;
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    if (req.push === limitedPush) req.push = originalPush;
+    req.off?.('close', restore);
+  };
+  function limitedPush(chunk, encoding) {
+    if (chunk != null && !state.overflowed) {
+      state.bytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding);
+      if (state.bytes > maxBytes) {
+        state.overflowed = true;
+        jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: maxBytes });
+        const error = new Error(`MCP request body exceeds ${maxBytes} bytes`);
+        error.code = 'request_too_large';
+        queueMicrotask(() => req.destroy?.(error));
+        return false;
+      }
+    }
+    const result = originalPush.call(this, chunk, encoding);
+    if (chunk == null) restore();
+    return result;
+  }
+  req.push = limitedPush;
+  req.once?.('close', restore);
+  return state;
+}
+
 export function guardListener(listener) {
   if (typeof listener !== 'function') throw new TypeError('HTTP listener must be a function');
   return async function devmateGuardedListener(req, res) {
     const url = requestUrl(req);
-    const path = url?.pathname || requestPath(req);
+    const pathName = url?.pathname || requestPath(req);
     if (req.method === 'OPTIONS') return listener(req, res);
-    const publishedPreview = isPublishedPreviewPath(path);
-    if (!publishedPreview && path !== '/mcp') return listener(req, res);
+    const publishedPreview = isPublishedPreviewPath(pathName);
+    if (!publishedPreview && pathName !== '/mcp') return listener(req, res);
 
     const requestId = `req-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     let config;
@@ -208,9 +248,7 @@ export function guardListener(listener) {
       return;
     }
 
-    if (touchTeamMember(config, principal)) {
-      try { writeConfig(config); } catch {}
-    }
+    touchTeamMemberBestEffort(principal);
     recordActivity(req, principal, requestId);
 
     if (principal.source === 'team-token' && config.auth?.required !== false) {
@@ -232,6 +270,7 @@ export function guardListener(listener) {
     res.once('finish', release);
     res.once('close', release);
 
+    const bodyLimit = installRequestBodyLimit(req, res, config.production.maxRequestBytes, requestId);
     const context = {
       requestId,
       principal,
@@ -244,8 +283,13 @@ export function guardListener(listener) {
       await runWithRequestContext(context, () => listener(req, res));
     } catch (error) {
       release();
-      if (!res.headersSent) jsonError(res, 500, 'DevMate request failed', 'request_failed', requestId);
-      else res.destroy?.(error);
+      if (bodyLimit.overflowed) {
+        if (!res.headersSent) jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: config.production.maxRequestBytes });
+      } else if (!res.headersSent) {
+        jsonError(res, 500, 'DevMate request failed', 'request_failed', requestId);
+      } else {
+        res.destroy?.(error);
+      }
     }
   };
 }
@@ -278,7 +322,9 @@ export const __test = {
   enterConcurrency,
   globalInflight: () => globalInflight,
   hostAllowed,
+  installRequestBodyLimit,
   preAuthRateWindows,
   principalInflight,
-  rateWindows
+  rateWindows,
+  touchTeamMemberBestEffort
 };

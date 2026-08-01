@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { audit, readConfig, redactSensitiveString, writeConfig } from './local-shared.mjs';
+import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
 import { readDurableNamespace } from './durable-state.mjs';
+import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { preflightQueuedJob } from './job-preflight.mjs';
 import {
   claimJob,
@@ -13,6 +14,13 @@ import {
   registerRunner,
   renewJobLease
 } from './job-queue.mjs';
+import {
+  consumeRunnerClaim,
+  issueRunnerClaim,
+  renewRunnerClaim,
+  revokeRunnerClaim,
+  validateRunnerClaim
+} from './runner-claim-fencing.mjs';
 import { incrementCounter, observeDuration } from './observability.mjs';
 import {
   RUNNER_PROTOCOL_VERSION,
@@ -61,15 +69,7 @@ function bearerToken(req) {
 }
 
 function consumeRate(id, limit) {
-  const minute = Math.floor(Date.now() / 60000);
-  const current = rateWindows.get(id);
-  if (!current || current.minute !== minute) {
-    rateWindows.set(id, { minute, count: 1 });
-    return true;
-  }
-  if (current.count >= limit) return false;
-  current.count += 1;
-  return true;
+  return consumeFixedWindow(rateWindows, id, limit, { maxEntries: 10_000 }).allowed;
 }
 
 function json(res, status, payload, requestId) {
@@ -159,17 +159,29 @@ function runnerRegistration(principal, body = {}) {
   };
 }
 
-function executionEnvelope(job) {
+function executionEnvelope(job, claim = null) {
   try {
     const store = readDurableNamespace('jobs', { jobs: [] });
     const internal = Array.isArray(store?.jobs) ? store.jobs.find(item => item.id === job.id) : null;
     return {
       ...job,
+      ...(claim ? { claim } : {}),
       artifactPaths: Array.isArray(internal?.artifactPaths) ? [...internal.artifactPaths] : []
     };
   } catch {
-    return { ...job, artifactPaths: [] };
+    return { ...job, ...(claim ? { claim } : {}), artifactPaths: [] };
   }
+}
+
+function claimProof(body, jobId, runnerId) {
+  const claim = body?.claim && typeof body.claim === 'object' ? body.claim : {};
+  return {
+    jobId,
+    runnerId,
+    generation: body?.claimGeneration ?? claim.generation,
+    token: body?.claimToken ?? claim.token,
+    allowLegacyFirst: true
+  };
 }
 
 function sanitize(value, key = '', depth = 0) {
@@ -242,6 +254,30 @@ function classifyPreflight(error) {
   return { status: null, retryable: false };
 }
 
+function touchCredentialBestEffort(runnerId) {
+  try {
+    const preview = normalizeRunnerControlConfig(readConfig());
+    if (!touchRunnerCredential(preview, runnerId)) return false;
+    mutateConfig(current => {
+      normalizeRunnerControlConfig(current);
+      touchRunnerCredential(current, runnerId);
+      return current;
+    }, { retries: 4 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function consumeClaimBestEffort(proof) {
+  try {
+    consumeRunnerClaim(proof);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function routeRequest(req, res, url, config, principal, body, requestId) {
   const pathName = url.pathname;
   let runner = null;
@@ -261,7 +297,12 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     if (!job) return json(res, 200, { runner, job: null }, requestId);
     try {
       preflightQueuedJob(job);
-      return json(res, 200, { runner, job: executionEnvelope(job) }, requestId);
+      const claim = issueRunnerClaim({
+        jobId: job.id,
+        runnerId: principal.id,
+        leaseExpiresAt: job.leaseExpiresAt
+      });
+      return json(res, 200, { runner, job: executionEnvelope(job, claim) }, requestId);
     } catch (error) {
       const classification = classifyPreflight(error);
       if (classification.status) {
@@ -304,6 +345,8 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     throw error;
   }
   const action = match[2];
+  const proof = claimProof(body, id, principal.id);
+  validateRunnerClaim(proof);
 
   if (action === 'renew') {
     const renewed = renewJobLease({
@@ -312,12 +355,14 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
       leaseSeconds: body.leaseSeconds
     });
     if (!renewed) {
+      revokeRunnerClaim(id);
       return json(res, 409, {
         error: 'Runner no longer owns this running job',
         code: 'job_not_owned'
       }, requestId);
     }
     const job = getJob(id);
+    renewRunnerClaim({ ...proof, leaseExpiresAt: job.leaseExpiresAt });
     return json(res, 200, {
       renewed: true,
       cancelRequested: !!job.cancelRequestedAt,
@@ -333,6 +378,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
       result: sanitizeResult(body.result),
       artifacts: sanitizeArtifacts(body.artifacts, principal.id, running.workspaceId)
     });
+    consumeClaimBestEffort(proof);
     return json(res, 200, { job }, requestId);
   }
 
@@ -346,6 +392,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     )).slice(0, 4000),
     retryable: action === 'fail' && body.retryable !== false
   });
+  consumeClaimBestEffort(proof);
   return json(res, 200, { job }, requestId);
 }
 
@@ -404,8 +451,7 @@ export function runnerControlListener(listener) {
         }, requestId);
       }
       const body = await readJsonBody(req, config.runnerControl.maxRequestBytes);
-      const latestConfig = normalizeRunnerControlConfig(readConfig());
-      if (touchRunnerCredential(latestConfig, principal.id)) writeConfig(latestConfig);
+      touchCredentialBestEffort(principal.id);
       await routeRequest(req, res, url, config, principal, body, requestId);
       incrementCounter('devmate_runner_control_requests_total', {
         runner: principal.id,
@@ -423,12 +469,12 @@ export function runnerControlListener(listener) {
         durationMs: Date.now() - started
       });
     } catch (error) {
-      const ownershipConflict = /does not own running job|not found|no longer owns/i.test(String(error?.message || ''));
+      const ownershipConflict = /does not own running job|not found|no longer owns|claim/i.test(String(error?.message || ''));
       const status = Number(error?.status) || (ownershipConflict ? 409 : 500);
       if (!res.headersSent) {
         json(res, status, {
           error: redactSensitiveString(error?.message || error),
-          code: status >= 500 ? 'runner_control_error' : 'bad_request'
+          code: error?.code || (status >= 500 ? 'runner_control_error' : 'bad_request')
         }, requestId);
       } else {
         res.destroy?.(error);
@@ -459,10 +505,15 @@ export function resetRunnerControlState() {
 export const __test = {
   artifactPathAllowed,
   bearerToken,
+  claimProof,
+  consumeClaimBestEffort,
+  consumeRate,
   executionEnvelope,
   hostAllowed,
   intersect,
+  rateWindows,
   runnerRegistration,
   sanitizeArtifacts,
-  sanitizeResult
+  sanitizeResult,
+  touchCredentialBestEffort
 };

@@ -36,6 +36,22 @@ test('acquires, releases, and recovers a stale instance lock', () => {
   assert.equal(durable.releaseGatewayInstanceLock(), true);
 });
 
+test('recovers a previous durable document after an interrupted Windows-style replacement', () => {
+  const replacement = `${durable.RUNTIME_STATE_PATH}.replace-123-456`;
+  const document = {
+    version: durable.DOCUMENT_VERSION,
+    updatedAt: new Date().toISOString(),
+    namespaces: { restored: { ok: true } }
+  };
+  fs.mkdirSync(path.dirname(durable.RUNTIME_STATE_PATH), { recursive: true });
+  fs.rmSync(durable.RUNTIME_STATE_PATH, { force: true });
+  fs.writeFileSync(replacement, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+  durable.resetDurableStateForTests();
+  assert.deepEqual(durable.readDurableNamespace('restored', null), { ok: true });
+  assert.equal(fs.existsSync(durable.RUNTIME_STATE_PATH), true);
+  assert.equal(fs.existsSync(replacement), false);
+});
+
 test('refuses to quarantine or overwrite state from a newer DevMate version', () => {
   const future = {
     version: durable.DOCUMENT_VERSION + 1,

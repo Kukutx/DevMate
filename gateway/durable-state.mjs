@@ -50,8 +50,56 @@ function ensureStateRoot() {
   return true;
 }
 
+function fsyncDirectory(directory) {
+  let fd = null;
+  try {
+    fd = fs.openSync(directory, 'r');
+    fs.fsyncSync(fd);
+  } catch {
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function replacementCandidates() {
+  if (!RUNTIME_STATE_PATH || !STATE_ROOT || !fs.existsSync(STATE_ROOT)) return [];
+  const prefix = `${path.basename(RUNTIME_STATE_PATH)}.replace-`;
+  return fs.readdirSync(STATE_ROOT, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
+    .map(entry => {
+      const file = path.join(STATE_ROOT, entry.name);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      return stat ? { file, mtimeMs: stat.mtimeMs } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+export function recoverDurableStateReplacement() {
+  if (!RUNTIME_STATE_PATH || !STATE_ROOT || !fs.existsSync(STATE_ROOT)) return null;
+  const candidates = replacementCandidates();
+  if (fs.existsSync(RUNTIME_STATE_PATH)) {
+    for (const candidate of candidates) {
+      try { fs.rmSync(candidate.file, { force: true }); } catch {}
+    }
+    return null;
+  }
+  const candidate = candidates[0];
+  if (!candidate) return null;
+  fs.renameSync(candidate.file, RUNTIME_STATE_PATH);
+  try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
+  fsyncDirectory(STATE_ROOT);
+  for (const stale of candidates.slice(1)) {
+    try { fs.rmSync(stale.file, { force: true }); } catch {}
+  }
+  return candidate.file;
+}
+
 function readDocument() {
   if (cache) return cache;
+  recoverDurableStateReplacement();
   if (!RUNTIME_STATE_PATH || !fs.existsSync(RUNTIME_STATE_PATH)) {
     cache = emptyDocument();
     return cache;
@@ -75,6 +123,7 @@ function atomicWrite(document) {
     cache = normalized;
     return;
   }
+  recoverDurableStateReplacement();
   normalized.updatedAt = now();
   const temporary = `${RUNTIME_STATE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   const payload = `${JSON.stringify(normalized, null, 2)}\n`;
@@ -106,6 +155,7 @@ function atomicWrite(document) {
       }
     }
     try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
+    fsyncDirectory(STATE_ROOT);
     cache = normalized;
   } finally {
     if (fd != null) {
@@ -242,7 +292,9 @@ export function resetDurableStateForTests() {
 export const __test = {
   atomicWrite,
   emptyDocument,
+  fsyncDirectory,
   normalizeDocument,
   processAlive,
+  replacementCandidates,
   unsupportedVersion
 };
