@@ -18,7 +18,7 @@ function normalizeHighCardinalityValue(value) {
   return String(value ?? '')
     .replace(/^\/runner\/v1\/jobs\/[^/]+\/(renew|complete|fail|cancelled)$/i, '/runner/v1/jobs/:id/$1')
     .replace(/\bjob-[a-z0-9-]{12,}\b/gi, 'job-:id')
-    .replace(/\b(?:req|runner)-[a-z0-9-]{12,}\b/gi, '$&'.split('-')[0] + '-:id');
+    .replace(/\b(req|runner)-[a-z0-9-]{12,}\b/gi, (_, prefix) => `${prefix.toLowerCase()}-:id`);
 }
 
 function sanitizeLabelValue(value) {
@@ -52,9 +52,12 @@ function overflowKey(name) {
 
 function boundedKey(map, kind, name, labels) {
   const key = metricKey(name, labels);
-  if (map.has(key) || map.size < MAX_METRIC_SERIES) return key;
+  if (map.has(key)) return key;
+  const overflow = overflowKey(name);
+  const reserved = map.has(overflow) ? 0 : 1;
+  if (map.size < MAX_METRIC_SERIES - reserved) return key;
   dropped[kind] += 1;
-  return overflowKey(name);
+  return overflow;
 }
 
 function parseMetricKey(key) {
