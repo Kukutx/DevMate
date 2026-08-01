@@ -7,13 +7,72 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  sync-final:
+    name: One-time final branch synchronization
+    if: github.event_name == 'pull_request' && github.head_ref == 'maintenance/2.9.2-final-deep-dig'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maintenance/2.9.2-final-deep-dig
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply hardening and release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-final-hardening.mjs
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('CHANGELOG.md')
+          text = p.read_text(encoding='utf-8')
+          if '\n## 2.9.2\n' not in text:
+              header = '''# Changelog
+
+## 2.9.2
+
+- Added a read-only release-version contract so CI fails instead of silently rewriting package, lockfile, extension, Gateway, CLI, smoke-test, and changelog versions.
+- Added shared cross-process configuration locking, 16 MiB config bounds, 128 MiB durable-state bounds, and validated replacement recovery before cleanup or quarantine.
+- Made external Job selection and Runner Claim fencing one durable-document transaction, eliminating the crash window between Job ownership and proof issuance.
+- Bounded in-memory metric cardinality, normalized per-Job Runner routes, and exposed dropped-series counters.
+- Bounded local and published preview servers/sessions, restricted static proxies to GET/HEAD, added upstream timeouts, and made malformed cookie/path encoding non-fatal.
+- Added deterministic preview shutdown, connection limits, and per-workspace/global capacity controls without changing public tool inputs.
+- Added regression coverage for version drift, config locks and size limits, atomic external claims, metric series pressure, preview capacity, malformed cookies, and resource cleanup.
+
+## 2.9.1
+
+- Added configuration conflict detection, retryable mutations, atomic replacement recovery, recursive audit redaction, fixed-window rate-map bounds, external Runner claim fencing, and Job-store capacity limits.
+- Added Windows and Linux full repository/test/Gateway verification while preserving existing public MCP and Godot workflows.
+
+'''
+              assert text.startswith('# Changelog\n')
+              p.write_text(header + text[len('# Changelog\n\n'):], encoding='utf-8')
+          PY
+          node scripts/sync-version.mjs
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply DevMate 2.9.2 final maintenance hardening [skip ci]"
+            git push origin HEAD:maintenance/2.9.2-final-deep-dig
+          fi
+
   verify:
+    needs: sync-final
+    if: always() && (needs.sync-final.result == 'success' || needs.sync-final.result == 'skipped')
     runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -55,6 +114,8 @@ jobs:
           path: "*.vsix"
 
   godot-real:
+    needs: sync-final
+    if: always() && (needs.sync-final.result == 'success' || needs.sync-final.result == 'skipped')
     name: Linux and Real Godot 4.7.1
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -65,6 +126,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
