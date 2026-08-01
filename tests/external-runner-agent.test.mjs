@@ -52,6 +52,13 @@ test('forwards claim proof only from the in-memory claimed job', () => {
   assert.deepEqual(__test.claimBody({ id: 'legacy' }, { leaseSeconds: 60 }), { leaseSeconds: 60 });
 });
 
+test('classifies claim and ownership conflicts as terminal local ownership loss', () => {
+  assert.equal(__test.ownershipLostError({ status: 409, code: 'http_error' }), true);
+  assert.equal(__test.ownershipLostError({ status: 400, code: 'claim_fence_expired' }), true);
+  assert.equal(__test.ownershipLostError({ status: 400, code: 'job_not_owned' }), true);
+  assert.equal(__test.ownershipLostError({ status: 503, code: 'http_error' }), false);
+});
+
 test('detects local MCP error results', () => {
   const error = __test.toolError({ isError: true, content: [{ type: 'text', text: 'validation failed' }] });
   assert.match(error.message, /validation failed/);
