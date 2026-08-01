@@ -2,18 +2,20 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - master
-      - main
+
+permissions:
+  contents: write
 
 jobs:
   generate-final-source:
-    name: Generate final maintenance source
+    name: Generate and commit final maintenance source
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout maintenance branch
         uses: actions/checkout@v4
+        with:
+          ref: maintenance/2.9.2-final-deep-dig
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -31,25 +33,23 @@ jobs:
           npm run test:unit
           npm run smoke:gateway
 
-      - name: Pack generated source files
+      - name: Replace temporary generation files with the normal CI tree
         shell: bash
         run: |
-          tar -czf devmate-generated-files.tar.gz \
-            package-lock.json \
-            CHANGELOG.md \
-            extension.js \
-            extension-config-io.js \
-            gateway/server.mjs \
-            gateway/local-shared.mjs \
-            gateway/durable-state.mjs \
-            gateway/runner-claim-fencing.mjs \
-            gateway/runner-control-plane.mjs \
-            scripts/devmate-command.mjs \
-            tests/smoke-gateway.mjs \
-            tests/smoke-local-capabilities.mjs
+          set -euo pipefail
+          git fetch origin master
+          git checkout origin/master -- .github/workflows/ci.yml
+          git rm -f --ignore-unmatch \
+            .github/workflows/release-metadata-sync.yml \
+            scripts/apply-final-hardening.mjs \
+            scripts/generate-final-files.mjs
 
-      - name: Upload generated source
-        uses: actions/upload-artifact@v4
-        with:
-          name: devmate-generated-source
-          path: devmate-generated-files.tar.gz
+      - name: Commit generated maintenance source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Apply DevMate 2.9.2 verified maintenance source"
+          git push origin HEAD:maintenance/2.9.2-final-deep-dig
