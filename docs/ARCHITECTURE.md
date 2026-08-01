@@ -1,57 +1,222 @@
-# Architecture
+# DevMate architecture
 
-DevMate contains four runtime layers inside one VS Code extension:
+DevMate is a local-first development control plane. The same codebase supports a personal VS Code workflow, a shared team Gateway, a production control plane, and external execution Runners.
 
-- `extension-entry.js`: bootstrap layer for ngrok account isolation, guided setup, Secret Storage, endpoint URL policy, and actionable ngrok diagnostics.
-- `extension.js`: primary VS Code UX, status bar, workspace config, gateway process, ngrok lifecycle, and public preflight.
-- `gateway/server-entry.mjs`: enhanced gateway bootstrap that installs trusted-root and persistent-process capabilities before loading the core server.
-- `gateway/server.mjs`: core MCP server powered by the official MCP TypeScript SDK.
+## Runtime topology
 
-`extension-entry.js` loads before `extension.js` and decorates only `ngrok http` child processes. It can inject a DevMate-managed Authtoken through `NGROK_AUTHTOKEN`, append an explicitly configured `--url`, and detect common ngrok failures without changing other child processes.
+```text
+VS Code / standalone CLI / ChatGPT
+              │ MCP + owner or dmt_ identity
+              ▼
+        DevMate Gateway
+  ┌───────────────────────────────────────┐
+  │ HTTP request guard and observability  │
+  │ Capability Host                      │
+  │ Tool policy and team authorization   │
+  │ Core, local and plugin tools          │
+  │ Durable Job queue and approvals       │
+  │ Preview, audit and maintenance        │
+  └───────────────────────────────────────┘
+              │ /runner/v1 + dmr_ identity
+              ▼
+       External Runner Agents
+              │ loopback MCP
+              ▼
+       Local toolchains/workspaces
+```
 
-The packaged gateway bundle is built from `gateway/server-entry.mjs`. It patches the MCP server connection hook before dynamically importing the core server. This preserves the existing core tool implementation while adding local capabilities to every stateless MCP server instance.
+The central Gateway remains a single active control-plane process per state directory. External Runners distribute execution; they do not make the central state horizontally replicated.
 
-Local capability modules:
+## Entry points
 
-- `gateway/local-shared.mjs`: config, permission, trusted-root, containment, audit, and limit helpers.
-- `gateway/persistent-processes.mjs`: process registry, bounded output, stdin, lifecycle, and process-tree termination.
-- `gateway/local-capabilities.mjs`: MCP tool registration and connection-hook installation.
+- `extension-entry-platform.js` selects the platform-compatible VS Code bootstrap.
+- `extension.js` owns VS Code commands, status, workspace discovery, Secret Storage, Gateway lifecycle and public preflight.
+- `scripts/devmate-command.mjs` provides `devmate bootstrap`, `status` and compatibility CLI forwarding.
+- `scripts/devmate-runner.mjs` is the external Runner Agent.
+- `gateway/server-entry.mjs` acquires the instance lock, installs platform capabilities, starts HTTP/control-plane services and imports the core MCP server.
+- `gateway/server.mjs` contains the original core file, command, Git, context and reporting tools built with the official MCP SDK.
 
-State is stored under VS Code global storage:
+## Capability Host
 
-- `config.json`
-- `state/backups/`
-- `state/audit.jsonl`
-- `references/github/`
+`gateway/server-extension-host.mjs` is the only MCP server interception layer. It installs once on the MCP server class and provides two ordered extension mechanisms:
 
-The optional ngrok Authtoken is stored separately in VS Code Secret Storage under `devMate.ngrokAuthtoken`. It is never persisted in `config.json`, workspace settings, logs, or diagnostic output. Managed mode refuses to start without a stored token rather than silently using an unrelated global ngrok account.
+1. **Tool decorators** apply policy, authorization, audit and Job target capture to every registration.
+2. **Server initializers** register team, Runner, local and plugin capabilities before the MCP transport connects.
 
-The current VS Code folder is the active writable workspace by default. Explicit readonly references remain in `config.json`. Trusted writable roots are persisted separately under `trustedWritableRoots` and are rehydrated into the runtime `workspaces` collection before each MCP connection. This allows the existing file, command, validation, and Git tools to address trusted roots without changing their core implementations. VS Code workspace refreshes may rebuild `workspaces`; the separate trusted-root collection remains authoritative and restores them on the next MCP request.
+The host guarantees:
 
-GitHub reference URLs are cloned or fast-forward updated under `references/github/`; removing a reference from DevMate only removes it from `config.json` and does not delete local source folders. Removing a trusted root likewise revokes access without deleting the directory.
+- deterministic ordering;
+- idempotent extension installation;
+- one initializer execution per server instance;
+- safe concurrent `connect()` calls;
+- retry after initializer failure;
+- global duplicate tool-name rejection;
+- per-instance registered-tool metadata for contract diagnostics.
 
-Persistent processes live in the gateway process, not in individual MCP request objects. The gateway creates a fresh MCP server for each stateless HTTP request, while the module-level process registry survives across those requests. Output is retained as bounded sequence events. Gateway shutdown handlers stop all remaining process trees before exit.
+`gateway/platform-capabilities.mjs` installs the current order:
 
-VS Code editor context is captured by `extension.js` into `config.json` as a lightweight snapshot. The gateway reads that snapshot through MCP tools; it does not call VS Code APIs directly.
+```text
+0   tool registration contract
+10  team authorization decorator
+20  team tools and Job target capture
+30  Runner tools
+35  trusted local roots and persistent processes
+40  optional plugin host
+```
 
-Successful and failed public MCP preflight checks are recorded as a redacted connection snapshot in `config.json`. The snapshot stores host, tool count, timestamps, and errors, but not the full token URL.
+No capability should patch `McpServer.prototype` independently.
 
-`devmate_status_panel` uses an inline MCP Apps HTML resource (`ui://devmate/status.html`) to render connection diagnostics inside ChatGPT. The panel has no external assets and uses MCP tool calls for refresh when the host supports widget tool access.
+## Tool policy
 
-Security model:
+`gateway/tool-policy.mjs` is the source of truth for:
 
-- The HTTP server listens on `127.0.0.1` only.
-- Public `/mcp` access goes through ngrok and requires the generated DevMate token by default.
-- The ngrok account Authtoken is kept in VS Code Secret Storage and supplied through the child-process environment.
-- `devMate.ngrokPoolingEnabled` defaults to false because pooled endpoints may route requests to another machine.
-- `/control/health` is local-only; public `/health` is minimal unless explicitly configured.
-- File tools block hidden, secret, binary, log, database, and private key paths by default.
-- Trusted roots require `fullAccess`, reject filesystem roots, use real-path deduplication, and retain the same file protection and containment checks as the active workspace.
-- Persistent process commands follow the permission profile and dangerous-command guard. Their count and output retention are bounded.
-- Process termination targets the child process tree: `taskkill /T` on Windows and process groups on POSIX systems.
-- Directory delete/move requires `devMate.allowDirectoryMutations`, refuses protected descendants, and rejects recursive paths whose real path leaves the workspace.
-- Audit logs are stored locally and redact common token, password, authorization, and API key patterns.
-- The gateway prunes old backups and audit entries on startup using the configured retention days and size caps.
-- ChatGPT Apps UI resources are diagnostic-only and do not expose the full MCP token URL.
-- `fullAccess` is the default for single-user local development; `balanced` blocks obvious destructive commands and Git operations; `readOnly` blocks mutation tools.
-- Task sessions add task IDs to audit entries and can roll back file changes using backups. Command side effects and persistent-process side effects are audited but not automatically reversible.
+- required team capability: `read`, `validate`, `write`, `execute`, `git`, `publish`, or `admin`;
+- Owner-only operations;
+- global versus workspace-scoped tools;
+- reviewed durable Job targets;
+- base Runner capabilities and owning plugin;
+- minimum tool registration metadata.
+
+`gateway/team-access.mjs` applies the policy to authenticated principals. `gateway/job-runtime.mjs` consumes the same Job policy, so permission classification and durable execution cannot drift into separate hand-maintained lists.
+
+Every registered tool must provide:
+
+- a stable snake-case name;
+- title and description;
+- input schema;
+- all four MCP annotations: read-only, destructive, idempotent and open-world.
+
+The Capability Host rejects invalid or duplicate registrations before the transport connects.
+
+## Team authorization
+
+Team roles are cumulative:
+
+```text
+observer → reviewer → developer → maintainer → owner
+```
+
+- Observer: read.
+- Reviewer: read and bounded validation.
+- Developer: write, execute and normal Git operations.
+- Maintainer: publish and administration.
+- Owner: all capabilities and identity/Runner credential administration.
+
+A tool call is authorized against the central policy, resolved to a workspace ID, checked against the principal scope, and—when required—checked against an exclusive workspace lease. Production publish/admin operations may require a second-person approval bound to the exact canonical arguments.
+
+High-risk shell and force-Git operations remain unavailable to team tokens even when the role otherwise has broad capability.
+
+## Plugins
+
+Optional capabilities use `gateway/plugins/plugin-sdk.mjs`.
+
+A plugin declares:
+
+- stable ID and semantic version;
+- API version;
+- dependencies;
+- tool prefixes;
+- capabilities and services;
+- executable allowlist patterns;
+- settings schema and defaults;
+- lifecycle functions.
+
+`extendPlugin(base, extension)` is the supported way to layer one plugin version over another. It preserves plugin identity/API, merges manifest collections and settings, runs base activation before extension activation, composes diagnostics, and deactivates in reverse order.
+
+The Godot capability is intentionally split into maintainable layers:
+
+```text
+godot.mjs
+  → godot-enhanced.mjs
+  → godot-advanced.mjs
+  → godot-final.mjs
+```
+
+Each layer registers only its own tools. The built-in catalog exports only the final composed plugin, so the base lifecycle runs exactly once.
+
+## Durable Jobs
+
+The durable queue stores reviewed tool calls, requester identity snapshots, attempts, timeouts, required capabilities, state transitions and artifact metadata.
+
+Only targets declared in `tool-policy.mjs` can be queued. The submission path:
+
+1. resolves the registered target;
+2. reuses normal RBAC and workspace authorization;
+3. verifies the lease and approval prerequisites;
+4. rejects credential-shaped arguments;
+5. combines policy-required and caller-requested Runner capabilities;
+6. persists the immutable job request.
+
+Before an embedded or external Runner receives work, the Gateway rechecks current role, workspace scope, lease, approval, plugin state and target policy.
+
+Runner scheduling is capability-aware. Web Godot acceptance targets, for example, require `core`, `godot` and `browser-qa`; native Godot targets require `core` and `godot`. Platform-specific requirements may be added by the reviewed automation plan or caller.
+
+Execution is at-least-once after Runner loss. Side-effecting targets must be idempotent or implement their own operation IDs.
+
+## External Runners
+
+External Runners authenticate only to `/runner/v1` with scoped `dmr_` credentials. They cannot call team MCP tools.
+
+The control plane owns the original arguments, principal, attempt and lease. A Runner can heartbeat, claim, renew and return a bounded result, but cannot widen its credential workspaces/capabilities or alter job identity.
+
+The Runner Agent starts a loopback-only local Gateway and invokes the same registered MCP tool implementation. This keeps file containment, executable allowlists, plugin behavior and artifact rules consistent between embedded and remote execution.
+
+## State and configuration
+
+### Configuration
+
+`config.json` contains deployment settings, workspaces, hashed team/Runner credentials, plugin settings and lightweight VS Code context. Gateway writes use a restrictive atomic replacement:
+
+```text
+serialize → create 0600 temporary file → fsync → rename → chmod 0600
+```
+
+This prevents partially written JSON after process or machine interruption. Secret values such as the managed ngrok token remain in VS Code Secret Storage rather than config.
+
+### Durable coordination state
+
+`gateway/durable-state.mjs` stores runtime namespaces in:
+
+```text
+state/runtime-state.json
+```
+
+It is used by leases, approvals, jobs, Runners and drain state. Writes are atomic and the state directory is protected by `gateway.lock` so only one control-plane process uses it.
+
+The document has an explicit version. Older compatible documents normalize forward; a newer document is rejected without quarantine or overwrite. Malformed JSON is quarantined for recovery.
+
+### Other state
+
+- `state/audit.jsonl`: bounded redacted audit events.
+- `state/backups/`: automatic file backups.
+- `references/github/`: readonly cloned references.
+- plugin/project artifacts remain inside their workspace.
+
+## Workspaces and filesystem boundary
+
+The active VS Code folder is normally writable. Additional references are readonly. Trusted writable roots are explicit, deduplicated by real path and cannot be filesystem roots.
+
+All file, artifact, report and project paths are resolved against a workspace real path. Symlink/reparse escapes and sensitive paths are rejected. Removing a workspace or reference revokes access; it does not delete the underlying directory.
+
+## Processes and previews
+
+Persistent processes, preview servers and the embedded Job worker are process-level registries, not request-local objects. They survive stateless MCP HTTP request objects but stop when the Gateway exits. Output retention, process count, request bodies and timeouts are bounded.
+
+Published previews use separate scoped tokens and never reuse MCP or Runner credentials.
+
+## Godot boundary
+
+The final Godot plugin covers static audit, dependency graphs, runtime validation, QA Bridge instrumentation, native/Web acceptance, GUT/GdUnit4, performance budgets and baselines, deterministic capture, exports, quality reports and release evidence gates.
+
+The integration invokes a normal allowlisted Godot executable. Platform SDKs, signing identities, store credentials and export templates remain external Runner prerequisites. A release gate evaluates evidence; it does not sign, upload or publish builds.
+
+## Verification
+
+Repository verification is discovery-based:
+
+- `scripts/check-repository.mjs` syntax-checks every JavaScript module except generated/dependency directories.
+- `scripts/run-tests.mjs` discovers all normal test files; real Godot tests remain in the dedicated Linux job.
+- Windows CI validates dependencies, repository contracts, all discovered tests, Gateway smoke behavior and VSIX packaging.
+- Linux CI verifies the official Godot archive checksum, real editor parsing, QA Bridge, native telemetry and deterministic capture.
+
+See `MAINTAINABILITY.md` for extension rules and review checklists.
