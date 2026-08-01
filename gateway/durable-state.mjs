@@ -7,6 +7,7 @@ export const STATE_ROOT = CONFIG_PATH ? path.join(path.dirname(CONFIG_PATH), 'st
 export const RUNTIME_STATE_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'runtime-state.json') : '';
 export const INSTANCE_LOCK_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'gateway.lock') : '';
 export const DOCUMENT_VERSION = 1;
+export const MAX_DURABLE_STATE_BYTES = 128 * 1024 * 1024;
 
 let cache = null;
 let heldLock = null;
@@ -77,17 +78,32 @@ function replacementCandidates() {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+function validDurableFile(file) {
+  try {
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size > MAX_DURABLE_STATE_BYTES) return false;
+    normalizeDocument(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')));
+    return true;
+  } catch (error) {
+    return error?.code === 'unsupported_state_version';
+  }
+}
+
 export function recoverDurableStateReplacement() {
   if (!RUNTIME_STATE_PATH || !STATE_ROOT || !fs.existsSync(STATE_ROOT)) return null;
   const candidates = replacementCandidates();
-  if (fs.existsSync(RUNTIME_STATE_PATH)) {
+  if (fs.existsSync(RUNTIME_STATE_PATH) && validDurableFile(RUNTIME_STATE_PATH)) {
     for (const candidate of candidates) {
       try { fs.rmSync(candidate.file, { force: true }); } catch {}
     }
     return null;
   }
-  const candidate = candidates[0];
+  const candidate = candidates.find(item => validDurableFile(item.file));
   if (!candidate) return null;
+  if (fs.existsSync(RUNTIME_STATE_PATH)) {
+    try { fs.renameSync(RUNTIME_STATE_PATH, `${RUNTIME_STATE_PATH}.corrupt-${Date.now()}`); }
+    catch { try { fs.rmSync(RUNTIME_STATE_PATH, { force: true }); } catch {} }
+  }
   fs.renameSync(candidate.file, RUNTIME_STATE_PATH);
   try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
   fsyncDirectory(STATE_ROOT);
@@ -105,10 +121,16 @@ function readDocument() {
     return cache;
   }
   try {
+    const stat = fs.statSync(RUNTIME_STATE_PATH, { throwIfNoEntry: false });
+    if (stat?.size > MAX_DURABLE_STATE_BYTES) {
+      const error = new Error(`DevMate durable state exceeds the ${MAX_DURABLE_STATE_BYTES} byte limit (${stat.size} bytes)`);
+      error.code = 'durable_state_too_large';
+      throw error;
+    }
     cache = normalizeDocument(JSON.parse(fs.readFileSync(RUNTIME_STATE_PATH, 'utf8').replace(/^\uFEFF/, '')));
     return cache;
   } catch (error) {
-    if (error?.code === 'unsupported_state_version') throw error;
+    if (['unsupported_state_version', 'durable_state_too_large'].includes(error?.code)) throw error;
     const quarantine = `${RUNTIME_STATE_PATH}.corrupt-${Date.now()}`;
     try { fs.renameSync(RUNTIME_STATE_PATH, quarantine); } catch {}
     cache = emptyDocument();
@@ -127,6 +149,12 @@ function atomicWrite(document) {
   normalized.updatedAt = now();
   const temporary = `${RUNTIME_STATE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   const payload = `${JSON.stringify(normalized, null, 2)}\n`;
+  const payloadBytes = Buffer.byteLength(payload, 'utf8');
+  if (payloadBytes > MAX_DURABLE_STATE_BYTES) {
+    const error = new Error(`DevMate durable state exceeds the ${MAX_DURABLE_STATE_BYTES} byte limit (${payloadBytes} bytes)`);
+    error.code = 'durable_state_too_large';
+    throw error;
+  }
   let fd = null;
   try {
     fd = fs.openSync(temporary, 'wx', 0o600);
@@ -163,6 +191,15 @@ function atomicWrite(document) {
     }
     try { fs.rmSync(temporary, { force: true }); } catch {}
   }
+}
+
+export function mutateDurableDocument(mutator) {
+  if (typeof mutator !== 'function') throw new TypeError('Durable document mutator must be a function');
+  const document = clone(readDocument());
+  const result = mutator(document);
+  if (result && typeof result.then === 'function') throw new TypeError('Durable document mutator must be synchronous');
+  atomicWrite(document);
+  return clone(result);
 }
 
 export function readDurableNamespace(name, fallback) {
@@ -292,6 +329,7 @@ export function resetDurableStateForTests() {
 export const __test = {
   atomicWrite,
   emptyDocument,
+  validDurableFile,
   fsyncDirectory,
   normalizeDocument,
   processAlive,

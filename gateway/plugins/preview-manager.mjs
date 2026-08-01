@@ -4,6 +4,10 @@ import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+export const MAX_ACTIVE_PREVIEWS = 32;
+export const MAX_WORKSPACE_PREVIEWS = 8;
+export const PREVIEW_REQUEST_TIMEOUT_MS = 30000;
+
 const previews = new Map();
 const BLOCKED_SEGMENTS = new Set(['.git', '.env', 'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys', 'service-account', 'service_accounts']);
 const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3', '.log']);
@@ -33,6 +37,12 @@ function publicPreview(record) {
     requests: record.requests,
     lastRequestAt: record.lastRequestAt || null
   };
+}
+
+function capacityError(message) {
+  const error = new Error(message);
+  error.code = 'preview_capacity';
+  return error;
 }
 
 function isInside(root, candidate) {
@@ -107,7 +117,15 @@ function writeHeaders(res, record, file, stat, range = null) {
   }
 }
 
+function workspacePreviewCount(workspaceId) {
+  return [...previews.values()].filter(item => item.workspaceId === workspaceId).length;
+}
+
 export async function startPreview({ workspaceId, root, entryPath = 'index.html', port = 0, crossOriginIsolation = false, spaFallback = false }) {
+  if (previews.size >= MAX_ACTIVE_PREVIEWS) throw capacityError(`Active preview limit reached (${MAX_ACTIVE_PREVIEWS})`);
+  if (workspacePreviewCount(workspaceId) >= MAX_WORKSPACE_PREVIEWS) {
+    throw capacityError(`Workspace preview limit reached (${MAX_WORKSPACE_PREVIEWS}) for ${workspaceId}`);
+  }
   const realRoot = fs.realpathSync.native(root);
   const entry = String(entryPath || 'index.html').replace(/^[/\\]+/, '').replace(/\\/g, '/');
   const entryFull = path.resolve(realRoot, entry);
@@ -150,12 +168,23 @@ export async function startPreview({ workspaceId, root, entryPath = 'index.html'
       if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end(`Preview read failed: ${error.message}`);
     });
+    res.on('close', () => stream.destroy());
     stream.pipe(res);
   });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(Number(port) || 0, record.host, () => resolve());
-  });
+  server.requestTimeout = PREVIEW_REQUEST_TIMEOUT_MS;
+  server.headersTimeout = Math.min(PREVIEW_REQUEST_TIMEOUT_MS, 15000);
+  server.keepAliveTimeout = 5000;
+  server.maxRequestsPerSocket = 1000;
+  server.maxConnections = 128;
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(Number(port) || 0, record.host, () => resolve());
+    });
+  } catch (error) {
+    try { server.close(); } catch {}
+    throw error;
+  }
   record.server = server;
   record.port = server.address().port;
   record.url = `http://${record.host}:${record.port}/${entry}`;
@@ -176,10 +205,22 @@ export function getPreview(id) {
 export async function stopPreview(id) {
   const record = previews.get(id);
   if (!record) return { stopped: false, reason: 'not found', id };
+  let forceTimer = null;
   await new Promise(resolve => {
-    record.server.close(() => resolve());
+    let resolved = false;
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
+      if (forceTimer) clearTimeout(forceTimer);
+      resolve();
+    };
+    record.server.close(done);
     record.server.closeIdleConnections?.();
-    setTimeout(() => { record.server.closeAllConnections?.(); resolve(); }, 1500).unref?.();
+    forceTimer = setTimeout(() => {
+      record.server.closeAllConnections?.();
+      done();
+    }, 1500);
+    forceTimer.unref?.();
   });
   previews.delete(id);
   return { stopped: true, preview: publicPreview(record) };
@@ -194,10 +235,30 @@ export async function shutdownPreviews() {
   await Promise.allSettled([...previews.keys()].map(stopPreview));
 }
 
+export function previewCapacityStatus() {
+  return {
+    active: previews.size,
+    byWorkspace: Object.fromEntries([...new Set([...previews.values()].map(item => item.workspaceId))]
+      .map(workspaceId => [workspaceId, workspacePreviewCount(workspaceId)])),
+    limits: { maxActive: MAX_ACTIVE_PREVIEWS, maxPerWorkspace: MAX_WORKSPACE_PREVIEWS }
+  };
+}
+
 export async function writePreviewManifest(root, payload) {
   const target = path.join(root, '.devmate-preview.json');
   await fsp.writeFile(target, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   return target;
 }
 
-export const __test = { BLOCKED_EXTENSIONS, BLOCKED_SEGMENTS, MIME_TYPES, containedExistingPath, isInside, parseRange, safeFile };
+export const __test = {
+  BLOCKED_EXTENSIONS,
+  BLOCKED_SEGMENTS,
+  MIME_TYPES,
+  capacityError,
+  containedExistingPath,
+  isInside,
+  parseRange,
+  previews,
+  safeFile,
+  workspacePreviewCount
+};

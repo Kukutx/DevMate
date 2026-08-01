@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.9.2
+
+- Added a read-only release-version contract so CI fails instead of silently rewriting package, lockfile, extension, Gateway, CLI, smoke-test, and changelog versions.
+- Added shared cross-process configuration locking, 16 MiB config bounds, 128 MiB durable-state bounds, and validated replacement recovery before cleanup or quarantine.
+- Made external Job selection and Runner Claim fencing one durable-document transaction, eliminating the crash window between Job ownership and proof issuance.
+- Bounded in-memory metric cardinality, normalized per-Job Runner routes, and exposed dropped-series counters.
+- Bounded local and published preview servers/sessions, restricted static proxies to GET/HEAD, added upstream timeouts, and made malformed cookie/path encoding non-fatal.
+- Added deterministic preview shutdown, connection limits, and per-workspace/global capacity controls without changing public tool inputs.
+- Added regression coverage for version drift, config locks and size limits, atomic external claims, metric series pressure, preview capacity, malformed cookies, and resource cleanup.
+
+## 2.9.1
+
+- Added configuration conflict detection, retryable mutations, atomic replacement recovery, recursive audit redaction, fixed-window rate-map bounds, external Runner claim fencing, and Job-store capacity limits.
+- Added Windows and Linux full repository/test/Gateway verification while preserving existing public MCP and Godot workflows.
+
 ## 2.9.0
 
 - Centralized team capability, Owner-only, workspace-scope, durable Job, plugin ownership, Runner capability, and tool-registration policy in `gateway/tool-policy.mjs`.

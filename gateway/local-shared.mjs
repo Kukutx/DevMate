@@ -2,6 +2,10 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { withFileLockSync } = require('../config-file-lock.cjs');
 
 export const CONFIG_PATH = process.env.DEVMATE_CONFIG || process.env.AIWG_CONFIG;
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
@@ -9,6 +13,7 @@ const AUDIT_LOG = CONFIG_DIR ? path.join(CONFIG_DIR, 'state', 'audit.jsonl') : '
 const CONFIG_SOURCE = Symbol.for('devmate.configSource');
 const SENSITIVE_KEY = /token|secret|password|authorization|api[_-]?key|credential|private[_-]?key/i;
 export const MAX_AUDIT_ENTRY_BYTES = 64 * 1024;
+export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 export const DEFAULT_MAX_PROCESSES = 8;
 export const MAX_MAX_PROCESSES = 32;
 export const DEFAULT_OUTPUT_BYTES = 1024 * 1024;
@@ -56,6 +61,8 @@ function configConflict(message) {
 
 function validConfigFile(file) {
   try {
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size > MAX_CONFIG_BYTES) return false;
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
     return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
   } catch {
@@ -109,6 +116,13 @@ export function readConfig() {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
   try {
     recoverConfigReplacement();
+    const stat = fs.statSync(CONFIG_PATH, { throwIfNoEntry: false });
+    if (!stat?.isFile()) throw new Error('configuration file does not exist');
+    if (stat.size > MAX_CONFIG_BYTES) {
+      const error = new Error(`configuration exceeds the ${MAX_CONFIG_BYTES} byte limit`);
+      error.code = 'config_too_large';
+      throw error;
+    }
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -116,11 +130,13 @@ export function readConfig() {
     }
     return attachConfigSource(parsed, { exists: true, hash: fingerprint(raw) });
   } catch (error) {
-    throw new Error(`Could not read DevMate config ${CONFIG_PATH}: ${error.message || error}`);
+    const wrapped = new Error(`Could not read DevMate config ${CONFIG_PATH}: ${error.message || error}`);
+    if (error?.code) wrapped.code = error.code;
+    throw wrapped;
   }
 }
 
-export function writeConfig(config, { force = false } = {}) {
+function writeConfigUnlocked(config, { force = false } = {}) {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new TypeError('DevMate config must be a JSON object');
@@ -143,6 +159,12 @@ export function writeConfig(config, { force = false } = {}) {
   }
 
   const payload = `${JSON.stringify(config, null, 2)}\n`;
+  const payloadBytes = Buffer.byteLength(payload, 'utf8');
+  if (payloadBytes > MAX_CONFIG_BYTES) {
+    const error = new Error(`DevMate config exceeds the ${MAX_CONFIG_BYTES} byte limit (${payloadBytes} bytes)`);
+    error.code = 'config_too_large';
+    throw error;
+  }
   const temporary = `${CONFIG_PATH}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   let fd = null;
   try {
@@ -183,23 +205,31 @@ export function writeConfig(config, { force = false } = {}) {
   }
 }
 
+export function writeConfig(config, options = {}) {
+  if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
+  return withFileLockSync(CONFIG_PATH, () => writeConfigUnlocked(config, options));
+}
+
 export function mutateConfig(mutator, { retries = 3 } = {}) {
   if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
-  const attempts = Math.min(10, Math.max(1, Math.trunc(Number(retries) || 3)));
-  let lastError = null;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const current = readConfig();
-    const changed = mutator(current);
-    if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
-    const next = changed === undefined ? current : changed;
-    try {
-      return writeConfig(next);
-    } catch (error) {
-      if (error?.code !== 'config_conflict' || attempt === attempts - 1) throw error;
-      lastError = error;
+  return withFileLockSync(CONFIG_PATH, () => {
+    const attempts = Math.min(10, Math.max(1, Math.trunc(Number(retries) || 3)));
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const current = readConfig();
+      const changed = mutator(current);
+      if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
+      if (changed === false) return current;
+      const next = changed === undefined ? current : changed;
+      try {
+        return writeConfigUnlocked(next);
+      } catch (error) {
+        if (error?.code !== 'config_conflict' || attempt === attempts - 1) throw error;
+        lastError = error;
+      }
     }
-  }
-  throw lastError || configConflict('DevMate config could not be updated because it kept changing');
+    throw lastError || configConflict('DevMate config could not be updated because it kept changing');
+  });
 }
 
 export function clampInt(value, fallback, min, max) {

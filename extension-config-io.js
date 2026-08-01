@@ -4,6 +4,9 @@ const fs = require('fs');
 const Module = require('module');
 const path = require('path');
 const crypto = require('crypto');
+const { withFileLockSync } = require('./config-file-lock.cjs');
+
+const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -14,6 +17,12 @@ function has(objectValue, key) {
 }
 
 function parseJsonValue(value) {
+  const bytes = Buffer.isBuffer(value) ? value.length : Buffer.byteLength(String(value || ''), 'utf8');
+  if (bytes > MAX_CONFIG_BYTES) {
+    const error = new Error(`DevMate config exceeds the ${MAX_CONFIG_BYTES} byte limit (${bytes} bytes)`);
+    error.code = 'config_too_large';
+    throw error;
+  }
   const text = Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '');
   const parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -115,16 +124,29 @@ function replacementCandidates(fsModule, file) {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+function validConfigFile(fsModule, file) {
+  try {
+    const stat = fsModule.statSync(file, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size > MAX_CONFIG_BYTES) return false;
+    parseJsonValue(fsModule.readFileSync(file, 'utf8'));
+    return true;
+  } catch { return false; }
+}
+
 function recoverReplacement(fsModule, file) {
   const candidates = replacementCandidates(fsModule, file);
-  if (fsModule.existsSync(file)) {
+  if (fsModule.existsSync(file) && validConfigFile(fsModule, file)) {
     for (const candidate of candidates) {
       try { fsModule.rmSync(candidate.file, { force: true }); } catch {}
     }
     return null;
   }
-  const candidate = candidates[0];
+  const candidate = candidates.find(item => validConfigFile(fsModule, item.file));
   if (!candidate) return null;
+  if (fsModule.existsSync(file)) {
+    try { fsModule.renameSync(file, `${file}.corrupt-${Date.now()}`); }
+    catch { try { fsModule.rmSync(file, { force: true }); } catch {} }
+  }
   fsModule.renameSync(candidate.file, file);
   try { fsModule.chmodSync(file, 0o600); } catch {}
   fsyncDirectory(fsModule, path.dirname(file));
@@ -146,6 +168,12 @@ function atomicWriteJson(fsModule, file, value, originalWriteFileSync = fsModule
   try { fsModule.chmodSync(directory, 0o700); } catch {}
   recoverReplacement(fsModule, file);
   const payload = `${JSON.stringify(value, null, 2)}\n`;
+  const payloadBytes = Buffer.byteLength(payload, 'utf8');
+  if (payloadBytes > MAX_CONFIG_BYTES) {
+    const error = new Error(`DevMate config exceeds the ${MAX_CONFIG_BYTES} byte limit (${payloadBytes} bytes)`);
+    error.code = 'config_too_large';
+    throw error;
+  }
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   let fd = null;
   try {
@@ -186,11 +214,13 @@ function atomicWriteJson(fsModule, file, value, originalWriteFileSync = fsModule
 }
 
 function writeMergedExtensionConfig(fsModule, file, candidateValue) {
-  const candidate = object(candidateValue);
-  const current = readCurrent(fsModule, file);
-  const merged = mergeExtensionConfig(current, candidate);
-  atomicWriteJson(fsModule, file, merged);
-  return merged;
+  return withFileLockSync(file, () => {
+    const candidate = object(candidateValue);
+    const current = readCurrent(fsModule, file);
+    const merged = mergeExtensionConfig(current, candidate);
+    atomicWriteJson(fsModule, file, merged);
+    return merged;
+  });
 }
 
 function createConfigFsProxy(fsModule, file) {
@@ -201,8 +231,10 @@ function createConfigFsProxy(fsModule, file) {
       return originalWriteFileSync(candidatePath, data, options);
     }
     const candidate = parseJsonValue(data);
-    const current = readCurrent(fsModule, targetPath);
-    atomicWriteJson(fsModule, targetPath, mergeExtensionConfig(current, candidate), originalWriteFileSync);
+    withFileLockSync(targetPath, () => {
+      const current = readCurrent(fsModule, targetPath);
+      atomicWriteJson(fsModule, targetPath, mergeExtensionConfig(current, candidate), originalWriteFileSync);
+    });
   };
   return new Proxy(fsModule, {
     get(target, property, receiver) {
@@ -236,6 +268,7 @@ function loadWithConfigWriteInterceptor(modulePath, file) {
 }
 
 module.exports = {
+  MAX_CONFIG_BYTES,
   atomicWriteJson,
   createConfigFsProxy,
   loadWithConfigWriteInterceptor,
