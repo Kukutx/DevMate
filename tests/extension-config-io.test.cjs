@@ -7,7 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const {
-  installConfigWriteInterceptor,
+  createConfigFsProxy,
+  loadWithConfigWriteInterceptor,
   mergeExtensionConfig,
   recoverReplacement
 } = require('../extension-config-io');
@@ -89,8 +90,8 @@ test('does not resurrect Gateway-owned fields removed after a stale extension re
   assert.deepEqual(merged.workspaces.map(item => item.id), ['app']);
 });
 
-test('intercepts only the DevMate config path and writes it atomically', async t => {
-  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-extension-config-'));
+test('uses a scoped fs proxy without mutating the Extension Host fs module', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-extension-proxy-'));
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   const configPath = path.join(directory, 'config.json');
   const otherPath = path.join(directory, 'other.json');
@@ -99,15 +100,16 @@ test('intercepts only the DevMate config path and writes it atomically', async t
     team: { members: [{ id: 'member' }] },
     plugins: { enabled: ['devmate.godot'] }
   }));
-  const restore = installConfigWriteInterceptor(fs, configPath);
-  t.after(restore);
-  fs.writeFileSync(configPath, `${JSON.stringify({
+  const originalWrite = fs.writeFileSync;
+  const scoped = createConfigFsProxy(fs, configPath);
+  scoped.writeFileSync(configPath, `${JSON.stringify({
     instanceId: 'stale',
     appVersion: '2.9.1',
     team: { members: [] },
     vscodeContext: { capturedAt: 'now' }
   })}\n`, 'utf8');
-  fs.writeFileSync(otherPath, '{"ordinary":true}\n', 'utf8');
+  scoped.writeFileSync(otherPath, '{"ordinary":true}\n', 'utf8');
+  assert.equal(fs.writeFileSync, originalWrite);
   const saved = JSON.parse(await fsp.readFile(configPath, 'utf8'));
   assert.equal(saved.instanceId, 'stable');
   assert.deepEqual(saved.team.members, [{ id: 'member' }]);
@@ -116,6 +118,28 @@ test('intercepts only the DevMate config path and writes it atomically', async t
   assert.deepEqual(JSON.parse(await fsp.readFile(otherPath, 'utf8')), { ordinary: true });
   assert.deepEqual((await fsp.readdir(directory)).sort(), ['config.json', 'other.json']);
   if (process.platform !== 'win32') assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+});
+
+test('injects scoped config I/O only while DevMate modules are loading', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-extension-loader-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const configPath = path.join(directory, 'config.json');
+  const otherPath = path.join(directory, 'other.json');
+  const fixture = path.join(directory, 'extension.js');
+  await fsp.writeFile(configPath, JSON.stringify({ instanceId: 'stable', team: { members: [{ id: 'member' }] } }));
+  await fsp.writeFile(fixture, `
+    const fs = require('fs');
+    module.exports = { write(file, value) { fs.writeFileSync(file, JSON.stringify(value)); } };
+  `, 'utf8');
+  const loaded = loadWithConfigWriteInterceptor(fixture, configPath);
+  loaded.write(configPath, { instanceId: 'stale', team: { members: [] }, vscodeContext: { ok: true } });
+  loaded.write(otherPath, { ordinary: true });
+  const saved = JSON.parse(await fsp.readFile(configPath, 'utf8'));
+  assert.equal(saved.instanceId, 'stable');
+  assert.deepEqual(saved.team.members, [{ id: 'member' }]);
+  assert.equal(saved.vscodeContext.ok, true);
+  assert.deepEqual(JSON.parse(await fsp.readFile(otherPath, 'utf8')), { ordinary: true });
+  assert.equal(require('fs'), fs);
 });
 
 test('recovers an interrupted extension replacement backup', async t => {
