@@ -49,12 +49,13 @@ function inspectQuality(data, policy) {
 
 function inspectTest(data) {
   const junit = data?.junit || data?.result?.junit || null;
-  const ok = data?.ok === true || (junit && Number(junit.failures || 0) === 0 && Number(junit.errors || 0) === 0 && Number(junit.tests || 0) > 0);
-  const blockers = ok ? [] : [finding('error', 'tests_failed', 'Godot framework test evidence is missing, invalid, or contains failures.')];
+  const valid = junit && junit.valid !== false && Number(junit.tests || 0) > 0;
+  const ok = valid && data?.ok === true && Number(junit.failures || 0) === 0 && Number(junit.errors || 0) === 0;
+  const blockers = ok ? [] : [finding('error', 'tests_failed', 'Godot framework test evidence must contain valid non-empty JUnit results with no failures or errors.')];
   return {
     blockers,
     warnings: [],
-    summary: junit ? { tests: Number(junit.tests || 0), failures: Number(junit.failures || 0), errors: Number(junit.errors || 0), skipped: Number(junit.skipped || 0) } : { ok: data?.ok === true }
+    summary: junit ? { valid: junit.valid !== false, tests: Number(junit.tests || 0), failures: Number(junit.failures || 0), errors: Number(junit.errors || 0), skipped: Number(junit.skipped || 0) } : { valid: false, tests: 0, failures: null, errors: null, skipped: null }
   };
 }
 
