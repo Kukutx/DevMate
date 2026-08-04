@@ -18,6 +18,7 @@ test('requires the release tag to exactly match package semantic version', () =>
 test('release workflow verifies, packages, checksums, attests, and publishes assets', () => {
   const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
   for (const required of [
+    'git merge-base --is-ancestor',
     'node scripts/check-release-tag.mjs',
     'npm run test:unit',
     'npm run smoke:gateway',
