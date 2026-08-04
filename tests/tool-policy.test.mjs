@@ -40,6 +40,8 @@ test('classifies mature Godot tools by actual side effect', () => {
   assert.equal(requiredCapabilityForTool('godot_quick_setup', { destructiveHint: true }), 'write');
   assert.equal(requiredCapabilityForTool('godot_performance_baseline_update', { destructiveHint: true }), 'write');
   assert.equal(requiredCapabilityForTool('godot_automation_bootstrap', { destructiveHint: true }), 'write');
+  assert.equal(requiredCapabilityForTool('obsidian_properties_batch_preview', { destructiveHint: false }), 'validate');
+  assert.equal(requiredCapabilityForTool('obsidian_properties_batch_apply', { destructiveHint: true }), 'write');
 });
 
 test('routes Web Godot jobs to Browser QA capable runners', () => {

@@ -35,7 +35,7 @@ await build({
   logLevel: 'info'
 });
 
-for (const file of ['manifest.json', 'styles.css']) {
+for (const file of ['manifest.json', 'styles.css', 'versions.json']) {
   fs.copyFileSync(path.join(directory, file), path.join(output, file));
 }
 
