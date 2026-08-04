@@ -16,18 +16,32 @@ function normalizeQuery(value) {
   return query;
 }
 
+function phraseTerm(query) {
+  let phrase = normalizeQuery(query);
+  const first = phrase[0];
+  const last = phrase[phrase.length - 1];
+  if (phrase.length >= 2 && ((first === '"' && last === '"') || (first === "'" && last === "'"))) {
+    phrase = phrase.slice(1, -1).trim();
+  }
+  if (!phrase) throw new Error('Search query does not contain a searchable phrase');
+  return phrase;
+}
+
 function tokenizeQuery(query, mode = 'all') {
   const normalized = normalizeQuery(query);
-  if (normalizeMode(mode) === 'phrase') return [normalized];
+  if (normalizeMode(mode) === 'phrase') return [phraseTerm(normalized)];
   const output = [];
   const seen = new Set();
   const pattern = /"([^"]+)"|'([^']+)'|(\S+)/g;
   let match;
-  while ((match = pattern.exec(normalized)) && output.length < MAX_SEARCH_TERMS) {
+  while ((match = pattern.exec(normalized))) {
     const term = String(match[1] || match[2] || match[3] || '').trim();
     if (!term) continue;
     const key = term.toLowerCase();
     if (seen.has(key)) continue;
+    if (output.length >= MAX_SEARCH_TERMS) {
+      throw new Error(`Search query exceeds ${MAX_SEARCH_TERMS} unique terms`);
+    }
     seen.add(key);
     output.push(term);
   }
@@ -127,6 +141,7 @@ module.exports = {
   metadataScore,
   normalizeMode,
   normalizeQuery,
+  phraseTerm,
   searchDocument,
   tokenizeQuery
 };
