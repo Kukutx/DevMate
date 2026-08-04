@@ -277,7 +277,6 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async reconfigureRuntime({ startBridge = this.app.workspace.layoutReady, capture = this.app.workspace.layoutReady } = {}) {
     await this.bridge?.stop();
     this.bridge = null;
-    await this.controller?.dispose({ stopOwned: false });
     const pluginDirectory = this.pluginDirectory();
     const legacyDirectory = path.join(pluginDirectory, 'state');
     const stateDirectory = resolveStateDirectory({
@@ -287,15 +286,21 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       shared: this.settings.sharedRuntime
     });
     if (this.settings.sharedRuntime) migrateLegacyState({ legacyDirectory, stateDirectory });
-    this.controller = new RuntimeController({
-      workspaceRoot: this.vaultRoot,
-      stateDirectory,
-      gatewayEntry: path.join(pluginDirectory, 'gateway', 'server.mjs'),
-      preferredPort: this.settings.preferredPort,
-      appVersion: this.manifest.version,
-      hostId: HOST_ID,
-      logger: message => console.log(`[DevMate] ${message}`)
-    });
+    const sameState = this.controller && path.resolve(this.controller.stateDirectory) === path.resolve(stateDirectory);
+    if (!sameState) {
+      await this.controller?.dispose({ stopOwned: true });
+      this.controller = new RuntimeController({
+        workspaceRoot: this.vaultRoot,
+        stateDirectory,
+        gatewayEntry: path.join(pluginDirectory, 'gateway', 'server.mjs'),
+        preferredPort: this.settings.preferredPort,
+        appVersion: this.manifest.version,
+        hostId: HOST_ID,
+        logger: message => console.log(`[DevMate] ${message}`)
+      });
+    } else {
+      this.controller.preferredPort = this.settings.preferredPort;
+    }
     this.controller.ensureConfig();
     if (startBridge && this.settings.enabled && this.settings.startupMode !== 'disabled') {
       this.bridge = new ObsidianHostBridge(this, this.controller);
