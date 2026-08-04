@@ -86,6 +86,23 @@ VS Code mirrors its existing editor context into `hostContexts.vscode`. Obsidian
 
 The active note body is not copied into config. MCP file tools can read it from the workspace when required.
 
+## Obsidian mutation bridge
+
+The desktop plugin publishes a short-lived authenticated bridge on `127.0.0.1`. Its random credential is stored only in the restrictive shared DevMate config so the Gateway can call Obsidian public APIs without exposing the bridge to MCP clients.
+
+Available tools:
+
+- `obsidian_status`
+- `obsidian_vault_audit`
+- `obsidian_note_create`
+- `obsidian_properties_update`
+- `obsidian_note_move`
+- `obsidian_note_trash`
+- `obsidian_operation_list`
+- `obsidian_operation_rollback`
+
+Mutations are vault-relative and block `.obsidian`. Properties use `FileManager.processFrontMatter`, moves use `FileManager.renameFile`, and deletion uses `FileManager.trashFile`. Each mutation records an operation ID, before/after content hashes, and bounded backup content under the shared state directory. Rollback rejects subsequent conflicting edits unless `force=true` is deliberate.
+
 ## Obsidian data boundary
 
 DevMate treats the vault as ordinary files and uses Obsidian public APIs for context collection. Future document-management tools should follow these rules:
