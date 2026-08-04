@@ -450,9 +450,10 @@ class RuntimeController {
     let config = this.ensureConfig();
     const existing = await healthAt(Number(config.server.port));
     if (healthMatches(existing, config)) {
-      this.owned = false;
-      this.logger(`Attached to existing DevMate Gateway on port ${config.server.port}.`);
-      return { started: false, attached: true, port: Number(config.server.port), health: existing.json };
+      const owned = !!this.child && !this.child.killed && this.child.exitCode == null && this.owned;
+      this.owned = owned;
+      this.logger(`${owned ? 'Reused owned' : 'Attached to existing'} DevMate Gateway on port ${config.server.port}.`);
+      return { started: false, attached: !owned, owned, port: Number(config.server.port), health: existing.json };
     }
 
     const choice = await choosePort(config, this.preferredPort);
@@ -473,7 +474,7 @@ class RuntimeController {
       this.child = null;
     }
 
-    this.child = this.spawnImpl(this.nodeExecutable, [this.gatewayEntry], {
+    const child = this.spawnImpl(this.nodeExecutable, [this.gatewayEntry], {
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
@@ -483,14 +484,17 @@ class RuntimeController {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    this.child = child;
     this.owned = true;
-    this.child.stdout?.on('data', chunk => this.logger(`[gateway] ${String(chunk).trimEnd()}`));
-    this.child.stderr?.on('data', chunk => this.logger(`[gateway:error] ${String(chunk).trimEnd()}`));
-    this.child.on('error', error => this.logger(`Gateway process error: ${error.message}`));
-    this.child.on('exit', (code, signal) => {
+    child.stdout?.on('data', chunk => this.logger(`[gateway] ${String(chunk).trimEnd()}`));
+    child.stderr?.on('data', chunk => this.logger(`[gateway:error] ${String(chunk).trimEnd()}`));
+    child.on('error', error => this.logger(`Gateway process error: ${error.message}`));
+    child.on('exit', (code, signal) => {
       this.logger(`Gateway exited code=${code} signal=${signal}`);
-      this.child = null;
-      this.owned = false;
+      if (this.child === child) {
+        this.child = null;
+        this.owned = false;
+      }
     });
 
     const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || DEFAULT_START_TIMEOUT_MS);
@@ -500,10 +504,10 @@ class RuntimeController {
       if (healthMatches(health, config)) {
         return { started: true, attached: false, port: choice.port, health: health.json };
       }
-      if (this.child?.exitCode != null) break;
+      if (child.exitCode != null) break;
     }
-    try { this.child?.kill(); } catch {}
-    this.child = null;
+    try { child.kill(); } catch {}
+    if (this.child === child) this.child = null;
     this.owned = false;
     throw new Error('DevMate Gateway did not become ready');
   }
@@ -518,10 +522,21 @@ class RuntimeController {
       };
     }
     const child = this.child;
-    this.child = null;
-    this.owned = false;
+    const exited = new Promise(resolve => {
+      if (child.exitCode != null) resolve(true);
+      else child.once('exit', () => resolve(true));
+    });
     try { child.kill(); }
     catch (error) { return { stopped: false, reason: error.message }; }
+    const completed = await Promise.race([
+      exited,
+      new Promise(resolve => setTimeout(() => resolve(false), 5000))
+    ]);
+    if (!completed && child.exitCode == null) {
+      return { stopped: false, reason: 'process-exit-timeout' };
+    }
+    if (this.child === child) this.child = null;
+    this.owned = false;
     return { stopped: true };
   }
 
@@ -543,9 +558,13 @@ class RuntimeController {
   }
 
   async dispose({ stopOwned = false } = {}) {
-    if (stopOwned) await this.stop();
+    if (stopOwned) {
+      const result = await this.stop();
+      if (!result.stopped && result.reason === 'process-exit-timeout') return result;
+    }
     this.child = null;
     this.owned = false;
+    return { disposed: true };
   }
 }
 
