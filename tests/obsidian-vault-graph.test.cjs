@@ -42,12 +42,21 @@ test('supports inbound traversal and missing roots', () => {
   assert.deepEqual(graph.nodes.map(node => node.path), ['D.md', 'B.md', 'C.md', 'A.md']);
 });
 
-test('enforces node and edge bounds and optionally includes properties', () => {
+test('enforces node and edge bounds without returning disconnected nodes', () => {
   const graph = buildVaultGraph(records, links, {
-    paths: ['A.md'], direction: 'outbound', depth: 3, maxNodes: 2, maxEdges: 1, includeProperties: true
+    paths: ['A.md'], direction: 'outbound', depth: 3, maxNodes: 3, maxEdges: 1, includeProperties: true
   });
-  assert.equal(graph.nodes.length, 2);
-  assert.equal(graph.edges.length, 1);
-  assert.equal(graph.truncated.nodes, true);
+  assert.deepEqual(graph.nodes.map(node => node.path), ['A.md', 'B.md']);
+  assert.deepEqual(graph.edges, [{ source: 'A.md', target: 'B.md', count: 2 }]);
+  assert.equal(graph.truncated.edges, true);
   assert.equal(graph.nodes[0].properties.status, 'active');
+  const nodePaths = new Set(graph.nodes.map(node => node.path));
+  assert.equal(graph.edges.every(edge => nodePaths.has(edge.source) && nodePaths.has(edge.target)), true);
+});
+
+test('reports valid roots omitted by a smaller node bound', () => {
+  const graph = buildVaultGraph(records, links, { paths: ['A.md', 'B.md'], maxNodes: 1 });
+  assert.deepEqual(graph.roots, ['A.md']);
+  assert.deepEqual(graph.omittedRoots, ['B.md']);
+  assert.equal(graph.truncated.nodes, true);
 });
