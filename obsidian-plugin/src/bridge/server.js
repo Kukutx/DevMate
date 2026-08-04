@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const { updateConfig } = require('../../../host/runtime-controller.js');
+const { BridgeMetrics } = require('./bridge-metrics.js');
 const {
   BRIDGE_CAPABILITIES,
   BRIDGE_PROTOCOL_VERSION,
@@ -74,25 +75,24 @@ class ObsidianHostBridge {
     this.index = new VaultIndex(plugin);
     this.operationStore = new OperationStore(controller);
     this.planStore = new PlanStore(controller);
+    this.metrics = new BridgeMetrics();
   }
 
   async action(action, args) {
     switch (action) {
       case 'status':
-        this.index.ensureFresh();
         return {
           available: true,
           protocolVersion: BRIDGE_PROTOCOL_VERSION,
           capabilities: BRIDGE_CAPABILITIES,
           vault: this.plugin.app.vault.getName(),
           root: this.plugin.vaultRoot,
-          index: {
-            files: this.index.records.size,
-            generation: this.index.generation,
-            refreshedAt: this.index.refreshedAt
-          }
+          index: this.index.diagnostics(),
+          requests: this.metrics.snapshot()
         };
       case 'query_notes': return this.index.query(args);
+      case 'search_content': return this.index.searchContent(args);
+      case 'graph_notes': return this.index.graph(args);
       case 'schema_audit': return this.index.schema(args);
       case 'audit_vault': return this.index.audit(args);
       case 'create_note': return createNote(this.plugin, this.operationStore, args);
@@ -127,13 +127,19 @@ class ObsidianHostBridge {
       jsonResponse(response, 415, { ok: false, error: 'application_json_required' });
       return;
     }
+    let metricToken = null;
     try {
       const body = await requestJson(request);
       const action = String(body.action || '');
+      metricToken = this.metrics.begin(action || 'invalid_request');
       if (!BRIDGE_CAPABILITIES.includes(action)) throw new Error(`Unsupported Obsidian action: ${action}`);
       const result = await this.action(action, body.args || {});
+      this.metrics.finish(metricToken);
+      metricToken = null;
       jsonResponse(response, 200, { ok: true, result });
     } catch (error) {
+      if (!metricToken) metricToken = this.metrics.begin('invalid_request');
+      this.metrics.finish(metricToken, error);
       jsonResponse(response, 400, { ok: false, error: error.message || String(error) });
     }
   }

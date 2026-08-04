@@ -2,7 +2,9 @@
 
 const { getAllTags, TFile } = require('obsidian');
 const { MAX_RESPONSE_ITEMS } = require('./constants.js');
-const { cleanFolderPath, propertyKey } = require('./path-policy.js');
+const { metadataScore, normalizeMode, searchDocument, tokenizeQuery } = require('./content-search-core.js');
+const { cleanFolderPath, cleanVaultPath, propertyKey } = require('./path-policy.js');
+const { buildVaultGraph } = require('./vault-graph-core.js');
 const {
   normalizeSelector,
   publicRecord,
@@ -13,6 +15,29 @@ const {
   uniqueStrings
 } = require('./vault-index-core.js');
 
+const MAX_CONTENT_CANDIDATES = 2000;
+const MAX_CONTENT_RESULTS = 200;
+const MAX_CONTENT_FILE_BYTES = 5 * 1024 * 1024;
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.trunc(parsed)));
+}
+
+async function runBounded(items, concurrency, mapper) {
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      await mapper(items[index], index);
+    }
+  }
+  const count = Math.min(items.length, Math.max(1, concurrency));
+  await Promise.all(Array.from({ length: count }, () => worker()));
+}
+
 class VaultIndex {
   constructor(plugin) {
     this.plugin = plugin;
@@ -21,6 +46,8 @@ class VaultIndex {
     this.started = false;
     this.graphDirty = true;
     this.refreshedAt = null;
+    this.lastGraphRebuildAt = null;
+    this.lastContentSearch = null;
     this.generation = 0;
   }
 
@@ -66,9 +93,12 @@ class VaultIndex {
 
   refreshAll() {
     this.records.clear();
-    for (const file of this.plugin.app.vault.getMarkdownFiles()) this.upsert(file);
+    for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+      this.records.set(file.path, this.metadataRecord(file));
+    }
     this.graphDirty = true;
     this.refreshedAt = new Date().toISOString();
+    this.generation += 1;
   }
 
   addEvent(emitter, ref) {
@@ -119,21 +149,39 @@ class VaultIndex {
         .reduce((total, count) => total + Math.max(1, Number(count) || 1), 0);
     }
     this.graphDirty = false;
+    this.lastGraphRebuildAt = new Date().toISOString();
+  }
+
+  ensureRecords() {
+    if (!this.started && !this.records.size) this.refreshAll();
   }
 
   ensureFresh() {
-    if (!this.started && !this.records.size) this.refreshAll();
+    this.ensureRecords();
     if (this.graphDirty) this.rebuildLinkMetrics();
   }
 
-  selectedRecords(args = {}) {
-    this.ensureFresh();
+  diagnostics() {
+    this.ensureRecords();
+    return {
+      files: this.records.size,
+      generation: this.generation,
+      refreshedAt: this.refreshedAt,
+      graphDirty: this.graphDirty,
+      lastGraphRebuildAt: this.lastGraphRebuildAt,
+      lastContentSearch: this.lastContentSearch
+    };
+  }
+
+  selectedRecords(args = {}, { withLinks = false } = {}) {
+    if (withLinks) this.ensureFresh();
+    else this.ensureRecords();
     const selector = normalizeSelector(args);
     return [...this.records.values()].filter(record => recordMatchesSelector(record, selector));
   }
 
   query(args = {}) {
-    const records = sortRecords(this.selectedRecords(args), args.sort, args.order);
+    const records = sortRecords(this.selectedRecords(args, { withLinks: true }), args.sort, args.order);
     const offset = Math.max(0, Number(args.offset) || 0);
     const limit = Math.max(1, Math.min(MAX_RESPONSE_ITEMS, Number(args.limit) || 100));
     const page = records.slice(offset, offset + limit);
@@ -148,6 +196,111 @@ class VaultIndex {
     };
   }
 
+  async searchContent(args = {}) {
+    const startedAt = Date.now();
+    const query = String(args.query || '').trim();
+    const mode = normalizeMode(args.mode);
+    const caseSensitive = args.caseSensitive === true;
+    const terms = tokenizeQuery(query, mode);
+    const maxCandidates = boundedInteger(args.maxCandidates, 1000, 1, MAX_CONTENT_CANDIDATES);
+    const limit = boundedInteger(args.limit, 50, 1, MAX_CONTENT_RESULTS);
+    const snippetChars = boundedInteger(args.snippetChars, 280, 80, 1000);
+    const maxFileBytes = boundedInteger(args.maxFileBytes, 1024 * 1024, 4096, MAX_CONTENT_FILE_BYTES);
+    const concurrency = boundedInteger(args.concurrency, 8, 1, 16);
+    const selected = sortRecords(this.selectedRecords(args), 'modified', 'desc');
+    const candidates = selected.slice(0, maxCandidates);
+    const matches = [];
+    let filesRead = 0;
+    let skippedLarge = 0;
+    let skippedMissing = 0;
+    let readErrors = 0;
+
+    await runBounded(candidates, concurrency, async record => {
+      if (record.size > maxFileBytes) {
+        skippedLarge += 1;
+        return;
+      }
+      const file = this.plugin.app.vault.getAbstractFileByPath(record.path);
+      if (!(file instanceof TFile)) {
+        skippedMissing += 1;
+        return;
+      }
+      try {
+        const content = await this.plugin.app.vault.cachedRead(file);
+        filesRead += 1;
+        const match = searchDocument(content, { query, mode, caseSensitive, snippetChars });
+        if (!match.matched) return;
+        matches.push({
+          path: record.path,
+          name: record.name,
+          folder: record.folder,
+          modifiedAt: record.modifiedAt,
+          modifiedAtMs: record.modifiedAtMs,
+          size: record.size,
+          tags: record.tags,
+          score: match.score + metadataScore(record, terms, caseSensitive),
+          matchedTerms: match.matchedTerms,
+          totalOccurrences: match.totalOccurrences,
+          line: match.line,
+          snippet: match.snippet
+        });
+      } catch {
+        readErrors += 1;
+      }
+    });
+
+    matches.sort((left, right) =>
+      right.score - left.score || right.modifiedAtMs - left.modifiedAtMs || left.path.localeCompare(right.path)
+    );
+    const durationMs = Date.now() - startedAt;
+    const items = matches.slice(0, limit).map(({ modifiedAtMs, ...item }) => item);
+    this.lastContentSearch = {
+      at: new Date().toISOString(),
+      durationMs,
+      selected: selected.length,
+      candidates: candidates.length,
+      filesRead,
+      matches: matches.length,
+      skippedLarge,
+      skippedMissing,
+      readErrors
+    };
+    return {
+      generation: this.generation,
+      refreshedAt: this.refreshedAt,
+      query,
+      mode,
+      caseSensitive,
+      total: matches.length,
+      limit,
+      items,
+      stats: {
+        durationMs,
+        selected: selected.length,
+        candidates: candidates.length,
+        filesRead,
+        skippedLarge,
+        skippedMissing,
+        readErrors
+      },
+      truncated: {
+        candidates: selected.length > candidates.length,
+        results: matches.length > items.length
+      }
+    };
+  }
+
+  graph(args = {}) {
+    this.ensureRecords();
+    const paths = uniqueStrings(args.paths, item => cleanVaultPath(item, { markdown: true }), 50);
+    return {
+      generation: this.generation,
+      refreshedAt: this.refreshedAt,
+      generatedAt: new Date().toISOString(),
+      ...buildVaultGraph(this.records, this.plugin.app.metadataCache.resolvedLinks || {}, { ...args, paths })
+    };
+  }
+
   schema(args = {}) {
     return {
       selector: args,
@@ -156,7 +309,7 @@ class VaultIndex {
   }
 
   audit(args = {}) {
-    const records = this.selectedRecords(args);
+    const records = this.selectedRecords(args, { withLinks: true });
     const requiredProperties = uniqueStrings(args.requiredProperties, propertyKey, 50);
     const missingProperties = [];
     const duplicateBasenames = new Map();
@@ -194,4 +347,4 @@ class VaultIndex {
   }
 }
 
-module.exports = { VaultIndex };
+module.exports = { VaultIndex, __test: { boundedInteger, runBounded } };

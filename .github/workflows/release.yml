@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify tagged commit is merged to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master || {
+            echo "Tagged commit $GITHUB_SHA is not contained in master" >&2
+            exit 1
+          }
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag and repository contracts
+        run: |
+          node scripts/check-release-tag.mjs
+          npm run check
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit complete dependency tree
+        run: npm audit --audit-level=moderate
+
+      - name: Run discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Run Gateway smoke tests
+        run: npm run smoke:gateway
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          mkdir -p release
+          npx vsce package --out "release/devmate-${version}.vsix"
+          npm run build:obsidian
+          (
+            cd obsidian-plugin/dist
+            zip -q -9 "$GITHUB_WORKSPACE/release/devmate-obsidian-${version}.zip" \
+              main.js manifest.json versions.json styles.css gateway/server.mjs
+          )
+          (
+            cd release
+            sha256sum *.vsix *.zip > SHA256SUMS
+          )
+          ls -lh release
+          cat release/SHA256SUMS
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: 'release/devmate-*'
+
+      - name: Upload release workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmate-release-${{ github.ref_name }}
+          path: release/*
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --verify-tag \
+              --title "DevMate ${version}" \
+              --generate-notes
+          fi
