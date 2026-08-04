@@ -10,6 +10,7 @@ const {
   PluginSettingTab,
   Setting
 } = require('obsidian');
+const { ObsidianHostBridge } = require('./host-bridge.js');
 const {
   RuntimeController,
   migrateLegacyState,
@@ -125,6 +126,8 @@ class DevMateSettingTab extends PluginSettingTab {
         .onChange(async value => {
           this.plugin.settings.enabled = value;
           await this.plugin.saveSettings();
+          if (value) await this.plugin.reconfigureRuntime();
+          else await this.plugin.bridge?.stop();
           await this.plugin.refreshStatus();
         }));
 
@@ -139,6 +142,7 @@ class DevMateSettingTab extends PluginSettingTab {
         .onChange(async value => {
           this.plugin.settings.startupMode = value;
           await this.plugin.saveSettings();
+          await this.plugin.reconfigureRuntime();
         }));
 
     new Setting(containerEl)
@@ -217,6 +221,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.statusBar.setText('DevMate: loading');
     this.contextTimer = null;
     this.controller = null;
+    this.bridge = null;
     this.vaultRoot = '';
 
     if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
@@ -256,6 +261,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async onunload() {
     if (this.contextTimer) window.clearTimeout(this.contextTimer);
     this.contextTimer = null;
+    await this.bridge?.stop();
+    this.bridge = null;
     await this.controller?.dispose({ stopOwned: this.settings.stopWhenObsidianCloses });
   }
 
@@ -269,6 +276,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async reconfigureRuntime() {
+    await this.bridge?.stop();
+    this.bridge = null;
     await this.controller?.dispose({ stopOwned: false });
     const pluginDirectory = this.pluginDirectory();
     const legacyDirectory = path.join(pluginDirectory, 'state');
@@ -289,6 +298,15 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       logger: message => console.log(`[DevMate] ${message}`)
     });
     this.controller.ensureConfig();
+    if (this.settings.enabled && this.settings.startupMode !== 'disabled') {
+      this.bridge = new ObsidianHostBridge(this, this.controller);
+      try { await this.bridge.start(); }
+      catch (error) {
+        this.bridge = null;
+        console.error('[DevMate] Obsidian host bridge failed', error);
+        new Notice(`DevMate host bridge failed: ${error.message || error}`);
+      }
+    }
     await this.captureContext();
     await this.refreshStatus();
   }
