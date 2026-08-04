@@ -132,7 +132,7 @@ const selectorSchema = {
 const definitions = [
   {
     name: 'obsidian_status', action: 'status', title: 'Obsidian host status',
-    description: 'Show the authenticated loopback Obsidian host bridge, protocol, capabilities, vault, and index status.',
+    description: 'Show the authenticated loopback Obsidian host bridge, protocol, capabilities, vault, index freshness, and local request timing summaries.',
     inputSchema: { workspaceId: z.string().optional() }, annotations: readOnly
   },
   {
@@ -144,6 +144,34 @@ const definitions = [
       order: z.enum(['asc', 'desc']).optional(),
       offset: z.number().int().min(0).optional(),
       limit: z.number().int().min(1).max(500).optional(),
+      includeProperties: z.boolean().optional()
+    }, annotations: readOnly
+  },
+  {
+    name: 'obsidian_content_search', action: 'search_content', title: 'Search Obsidian note content',
+    description: 'Search Markdown note bodies with bounded concurrent Vault.cachedRead calls, deterministic scoring, line numbers, snippets, and metadata selectors.',
+    inputSchema: {
+      workspaceId: z.string().optional(), ...selectorSchema,
+      query: z.string().min(1).max(500),
+      mode: z.enum(['phrase', 'all', 'any']).optional(),
+      caseSensitive: z.boolean().optional(),
+      maxCandidates: z.number().int().min(1).max(2000).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      snippetChars: z.number().int().min(80).max(1000).optional(),
+      maxFileBytes: z.number().int().min(4096).max(5 * 1024 * 1024).optional(),
+      concurrency: z.number().int().min(1).max(16).optional()
+    }, annotations: readOnly, timeoutMs: 120000
+  },
+  {
+    name: 'obsidian_note_graph', action: 'graph_notes', title: 'Explore Obsidian note graph',
+    description: 'Explore deterministic inbound, outbound, or bidirectional note-link neighborhoods from one or more root notes with bounded depth, nodes, and edges.',
+    inputSchema: {
+      workspaceId: z.string().optional(),
+      paths: z.array(z.string()).min(1).max(50),
+      direction: z.enum(['inbound', 'outbound', 'both']).optional(),
+      depth: z.number().int().min(1).max(3).optional(),
+      maxNodes: z.number().int().min(1).max(500).optional(),
+      maxEdges: z.number().int().min(1).max(2000).optional(),
       includeProperties: z.boolean().optional()
     }, annotations: readOnly
   },
