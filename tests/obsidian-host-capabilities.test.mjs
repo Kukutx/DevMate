@@ -15,7 +15,7 @@ function config(overrides = {}) {
         updatedAt: 'now',
         workspaceId: 'vault',
         workspaceRoot: root,
-        protocolVersion: 2,
+        protocolVersion: 3,
         capabilities: ['status']
       }
     },
@@ -27,22 +27,25 @@ test('Obsidian bridge configuration accepts only authenticated matching loopback
   const accepted = __test.bridgeConfig(config());
   assert.deepEqual(accepted, {
     url: 'http://127.0.0.1:4567', token: 'secret', updatedAt: 'now',
-    workspaceId: 'vault', workspaceRoot: path.resolve('/vault'), protocolVersion: 2,
+    workspaceId: 'vault', workspaceRoot: path.resolve('/vault'), protocolVersion: 3,
     capabilities: ['status']
   });
   assert.equal(__test.bridgeConfig(config({ hostBridges: { obsidian: { url: 'https://example.com', token: 'secret' } } })), null);
   assert.equal(__test.bridgeConfig(config({ hostBridges: { obsidian: { url: 'http://127.0.0.1:4567?token=x', token: 'secret' } } })), null);
   assert.throws(() => __test.bridgeConfig(config({
-    hostBridges: { obsidian: { url: 'http://127.0.0.1:4567', token: 'secret', workspaceId: 'other', protocolVersion: 2 } }
+    hostBridges: { obsidian: { url: 'http://127.0.0.1:4567', token: 'secret', workspaceId: 'other', protocolVersion: 3 } }
   })), /attached to workspace other/);
 });
 
-test('declares bounded query and transactional batch tools', () => {
+test('declares bounded search, graph, query, and transactional batch tools', () => {
   const names = __test.definitions.map(item => item.name);
   for (const name of [
-    'obsidian_note_query', 'obsidian_schema_audit', 'obsidian_properties_batch_preview',
-    'obsidian_properties_batch_apply', 'obsidian_properties_batch_rollback'
+    'obsidian_note_query', 'obsidian_content_search', 'obsidian_note_graph', 'obsidian_schema_audit',
+    'obsidian_properties_batch_preview', 'obsidian_properties_batch_apply', 'obsidian_properties_batch_rollback'
   ]) assert.equal(names.includes(name), true, name);
-  const query = __test.definitions.find(item => item.name === 'obsidian_note_query');
-  assert.equal(query.annotations.readOnlyHint, true);
+  const contentSearch = __test.definitions.find(item => item.name === 'obsidian_content_search');
+  const graph = __test.definitions.find(item => item.name === 'obsidian_note_graph');
+  assert.equal(contentSearch.annotations.readOnlyHint, true);
+  assert.equal(contentSearch.timeoutMs, 120000);
+  assert.equal(graph.annotations.readOnlyHint, true);
 });
