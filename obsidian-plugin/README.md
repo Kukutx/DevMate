@@ -9,7 +9,10 @@ DevMate is a desktop-only Obsidian host for the same local-first MCP Gateway use
 - publish bounded active-note, selection, Property, link, heading, tag, and vault context;
 - incrementally index note metadata instead of rescanning the vault for each request;
 - query notes by folder, path, tags, Properties, metadata search, and modification dates;
+- search Markdown bodies with bounded candidate, file-size, concurrency, result, and snippet limits;
+- explore deterministic inbound and outbound note-link neighborhoods;
 - audit Property coverage/types, orphan notes, unresolved links, duplicate names, and required fields;
+- inspect local index freshness and request latency summaries without transmitting analytics;
 - create, rename, move, trash, and update notes through public Obsidian APIs;
 - preview, apply, and roll back hash-bound batch Property plans;
 - retain bounded atomic operation evidence with conflict-aware rollback;
@@ -47,6 +50,8 @@ host_context
 host_context_list
 obsidian_status
 obsidian_note_query
+obsidian_content_search
+obsidian_note_graph
 obsidian_schema_audit
 obsidian_vault_audit
 obsidian_note_create
@@ -61,8 +66,8 @@ obsidian_operation_list
 obsidian_operation_rollback
 ```
 
-See `docs/OBSIDIAN_DATA_WORKFLOWS.md` and `docs/HOST_INTEGRATION.md` in the main repository.
+See `docs/OBSIDIAN_SEARCH_AND_GRAPH.md`, `docs/OBSIDIAN_DATA_WORKFLOWS.md`, and `docs/HOST_INTEGRATION.md` in the main repository.
 
 ## Safety
 
-The Host Bridge binds only to loopback and uses a random Bearer token. Workspace identity and root must match. Paths are vault-relative, `.obsidian` is blocked, note mutations use public Obsidian APIs, and all batch mutations require a separate preview plan before application.
+The Host Bridge binds only to loopback and uses a random Bearer token. Workspace identity and root must match. Paths are vault-relative, `.obsidian` is blocked, note mutations use public Obsidian APIs, and all batch mutations require a separate preview plan before application. Content search is read-only, bounded, and uses Obsidian's Vault API; local diagnostics store action-level aggregates rather than note content or query text.
