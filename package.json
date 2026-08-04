@@ -44,7 +44,7 @@
     "onCommand:devMate.cloudflareClearToken",
     "onCommand:devMate.openTunnelDocs"
   ],
-  "main": "./extension-entry-platform.js",
+  "main": "./extension-entry-host.js",
   "contributes": {
     "commands": [
       {
@@ -148,6 +148,38 @@
       "title": "DevMate",
       "type": "object",
       "properties": {
+        "devMate.vscodeHostEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the DevMate VS Code host. Reload the window after changing this setting."
+        },
+        "devMate.vscodeStartupMode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "manual",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Start DevMate automatically after VS Code finishes starting.",
+            "Keep DevMate commands available but require a manual start.",
+            "Disable the VS Code host until this setting is changed."
+          ],
+          "description": "VS Code host startup behavior."
+        },
+        "devMate.sharedRuntimeEnabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Share one workspace-derived DevMate state directory with other hosts such as Obsidian."
+        },
+        "devMate.sharedStateDirectory": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional shared DevMate state directory override. Leave empty to use ~/.devmate/hosts/<workspace-id>."
+        },
         "devMate.port": {
           "type": "number",
           "default": 8787,
@@ -386,12 +418,14 @@
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check",
     "build": "npm run version:check && esbuild gateway/server-entry.mjs --bundle --platform=node --format=esm --target=node18 --outfile=gateway/server.bundle.mjs --packages=external --external:vscode",
+    "build:obsidian": "node obsidian-plugin/esbuild.config.mjs",
     "compile": "npm run build",
     "vscode:prepublish": "npm run build",
     "check": "npm run version:check && node scripts/check-repository.mjs",
     "test:unit": "node scripts/run-tests.mjs",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package",
+    "package:obsidian": "npm run build:obsidian",
     "publish:vsix": "npm run build && vsce publish",
     "devmate": "node scripts/devmate-command.mjs",
     "runner": "node scripts/devmate-runner.mjs"

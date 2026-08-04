@@ -1,0 +1,48 @@
+.devmate-obsidian-panel {
+  padding: var(--size-4-3);
+}
+
+.devmate-status-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-3);
+  margin-bottom: var(--size-4-3);
+  background: var(--background-secondary);
+}
+
+.devmate-muted {
+  color: var(--text-muted);
+  margin-top: var(--size-4-1);
+}
+
+.devmate-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-4);
+}
+
+.devmate-actions button {
+  width: 100%;
+}
+
+.devmate-details {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) 1fr;
+  gap: var(--size-4-1) var(--size-4-3);
+  margin: 0 0 var(--size-4-4);
+}
+
+.devmate-details dt {
+  color: var(--text-muted);
+}
+
+.devmate-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.devmate-note-path {
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+}

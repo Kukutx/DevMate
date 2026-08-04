@@ -4,6 +4,7 @@
 .npmignore
 .vscode/**
 node_modules/**
+obsidian-plugin/**
 tmp/**
 tests/**
 scripts/**
