@@ -1,9 +1,9 @@
 name: Refactor source export
 
 on:
-  push:
+  pull_request:
     branches:
-      - refactor/host-platform-v2
+      - master
 
 permissions:
   contents: read
