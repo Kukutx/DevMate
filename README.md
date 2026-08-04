@@ -50,6 +50,12 @@ See [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) for all presets and options.
 4. Open a project and run `DevMate: Start`.
 5. Add the copied `/mcp?token=...` URL to ChatGPT.
 
+## Obsidian setup
+
+DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins. The host provides incremental note queries, Property schema audits, public-API note mutations, and preview/apply/rollback Property batches while sharing one Gateway with VS Code.
+
+See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md) and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
+
 ## Deployment shapes
 
 | Shape | Identity | Execution | Best for |

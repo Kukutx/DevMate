@@ -161,6 +161,12 @@ The control plane owns the original arguments, principal, attempt and lease. A R
 
 The Runner Agent starts a loopback-only local Gateway and invokes the same registered MCP tool implementation. This keeps file containment, executable allowlists, plugin behavior and artifact rules consistent between embedded and remote execution.
 
+## Desktop host platform
+
+VS Code and Obsidian share a workspace-derived state directory and one Gateway instance. The shared runtime separates state paths, locked config persistence, loopback discovery, and process ownership. Host adapters publish bounded context; Obsidian additionally exposes a workspace-bound authenticated loopback bridge for public-API note operations.
+
+The Obsidian host maintains an incremental read-oriented metadata index and separates queries from transaction-style mutation plans. Batch Property changes require preview, expiry, content-hash preflight, bounded operation records, and reverse rollback.
+
 ## State and configuration
 
 ### Configuration

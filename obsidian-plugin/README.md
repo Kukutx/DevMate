@@ -1,26 +1,29 @@
 # DevMate for Obsidian
 
-This desktop-only Obsidian host connects a vault to the same local-first DevMate Gateway used by VS Code and standalone deployments.
+DevMate is a desktop-only Obsidian host for the same local-first MCP Gateway used by VS Code and standalone deployments. A vault can be used for software projects, research, writing, operations, personal knowledge management, or any Property-based workflow.
 
-## Current capabilities
+## Core capabilities
 
-- use the vault as the active writable DevMate workspace;
-- auto start, manual start, stop, restart, and attach to an existing shared Gateway;
-- capture the active note, selection, properties, headings, links, tags, and bounded vault statistics;
-- expose host context through `host_context` and `host_context_list` MCP tools;
-- audit orphan notes, unresolved links, duplicate basenames, and missing Properties;
-- create notes, update Properties, move/rename notes, and use Obsidian trash through public APIs;
-- record every mutation with bounded backup evidence and conflict-aware rollback;
-- copy the authenticated MCP URL and a bounded active-note context bundle;
-- keep shared runtime state under `~/.devmate/hosts/<workspace-id>` by default.
+- share one workspace-derived Gateway and state directory with VS Code;
+- auto start, manual start, restart, or attach to an existing matching Gateway;
+- publish bounded active-note, selection, Property, link, heading, tag, and vault context;
+- incrementally index note metadata instead of rescanning the vault for each request;
+- query notes by folder, path, tags, Properties, metadata search, and modification dates;
+- audit Property coverage/types, orphan notes, unresolved links, duplicate names, and required fields;
+- create, rename, move, trash, and update notes through public Obsidian APIs;
+- preview, apply, and roll back hash-bound batch Property plans;
+- retain bounded atomic operation evidence with conflict-aware rollback;
+- copy the authenticated MCP URL and a bounded context bundle.
 
 ## Build
 
+From the repository root:
+
 ```powershell
-cd obsidian-plugin
 npm install
 npm run check
-npm run build
+npm run test:unit
+npm run build:obsidian
 ```
 
 Copy the contents of `obsidian-plugin/dist` into:
@@ -29,29 +32,37 @@ Copy the contents of `obsidian-plugin/dist` into:
 <Vault>/.obsidian/plugins/devmate/
 ```
 
-Then enable **DevMate** in Obsidian Community Plugins.
+Then enable **DevMate** under Community Plugins.
 
-The plugin bundle contains its own DevMate Gateway. It does not require the VS Code extension to be installed.
+The bundle contains its own DevMate Gateway and does not require the VS Code extension.
 
-## Runtime ownership
+## Shared runtime
 
-When VS Code and Obsidian point at the same workspace root, both hosts resolve the same state directory. The first host starts the Gateway; the second verifies the same `instanceId` and attaches instead of starting another process. A host only stops a Gateway process it owns.
+When VS Code and Obsidian use the same workspace root, both resolve the same state directory under `~/.devmate/hosts/`. The first host starts the Gateway; later hosts verify the same `instanceId` and attach. A host never stops a process owned by another host.
 
-## Network ingress
-
-The Obsidian host starts the loopback Gateway. Public HTTPS ingress remains explicit: use the VS Code tunnel integration, a standalone managed tunnel, or an existing reverse proxy, then set **Public origin** in the Obsidian settings before copying the MCP URL.
-
-## Obsidian MCP tools
+## Main MCP tools
 
 ```text
+host_context
+host_context_list
 obsidian_status
+obsidian_note_query
+obsidian_schema_audit
 obsidian_vault_audit
 obsidian_note_create
 obsidian_properties_update
+obsidian_properties_batch_preview
+obsidian_properties_batch_apply
+obsidian_properties_batch_rollback
+obsidian_properties_batch_list
 obsidian_note_move
 obsidian_note_trash
 obsidian_operation_list
 obsidian_operation_rollback
 ```
 
-Mutation tools use an authenticated loopback bridge and do not expose its credential in MCP results. Paths are vault-relative, `.obsidian` is blocked, mutation records are stored in shared DevMate state, and rollback refuses conflicting later edits unless explicitly forced.
+See `docs/OBSIDIAN_DATA_WORKFLOWS.md` and `docs/HOST_INTEGRATION.md` in the main repository.
+
+## Safety
+
+The Host Bridge binds only to loopback and uses a random Bearer token. Workspace identity and root must match. Paths are vault-relative, `.obsidian` is blocked, note mutations use public Obsidian APIs, and all batch mutations require a separate preview plan before application.

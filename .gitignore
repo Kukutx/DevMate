@@ -1,6 +1,7 @@
 node_modules/
 tmp/
 obsidian-plugin/dist/
+gateway/server.bundle.mjs
 *.vsix
 *.tgz
 *.log

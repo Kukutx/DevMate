@@ -98,6 +98,38 @@ A protected tool call creates a pending approval and fails without executing. A 
 
 In team mode, use team work sessions rather than the legacy singleton task session.
 
+## Obsidian knowledge tools
+
+Generic host context:
+
+- `host_context_list`
+- `host_context`
+
+Indexed read and audit operations:
+
+- `obsidian_status`
+- `obsidian_note_query`
+- `obsidian_schema_audit`
+- `obsidian_vault_audit`
+- `obsidian_properties_batch_list`
+- `obsidian_operation_list`
+
+Public-API note mutations:
+
+- `obsidian_note_create`
+- `obsidian_properties_update`
+- `obsidian_note_move`
+- `obsidian_note_trash`
+- `obsidian_operation_rollback`
+
+Transaction-style Property batches:
+
+- `obsidian_properties_batch_preview`
+- `obsidian_properties_batch_apply`
+- `obsidian_properties_batch_rollback`
+
+Preview is a bounded validation operation; apply and rollback require write permission and remain workspace-scoped. See `OBSIDIAN_DATA_WORKFLOWS.md`.
+
 ## Capability plugins and automation
 
 - `plugin_catalog`, `plugin_diagnostics`, `plugin_enable`, `plugin_disable`, `plugin_configure`, `devmate_plugins_panel`

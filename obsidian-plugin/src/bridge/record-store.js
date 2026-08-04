@@ -1,0 +1,139 @@
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { cleanOperationId } = require('./path-policy.js');
+
+const DEFAULT_MAX_RECORD_BYTES = 12 * 1024 * 1024;
+
+function fsyncDirectory(directory) {
+  let fd = null;
+  try {
+    fd = fs.openSync(directory, 'r');
+    fs.fsyncSync(fd);
+  } catch {
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function atomicWriteRecord(target, record, maxBytes = DEFAULT_MAX_RECORD_BYTES) {
+  const directory = path.dirname(target);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(directory, 0o700); } catch {}
+  const payload = `${JSON.stringify(record, null, 2)}\n`;
+  const bytes = Buffer.byteLength(payload, 'utf8');
+  if (bytes > maxBytes) throw new Error(`Record exceeds the ${maxBytes} byte limit (${bytes} bytes)`);
+  const temporary = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  let previous = '';
+  let fd = null;
+  try {
+    fd = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(fd, payload, 'utf8');
+    try { fs.fsyncSync(fd); } catch {}
+    fs.closeSync(fd);
+    fd = null;
+    try {
+      fs.renameSync(temporary, target);
+    } catch (error) {
+      if (process.platform !== 'win32' || !fs.existsSync(target)) throw error;
+      previous = `${target}.replace-${process.pid}-${Date.now()}`;
+      fs.renameSync(target, previous);
+      try {
+        fs.renameSync(temporary, target);
+        fs.rmSync(previous, { force: true });
+        previous = '';
+      } catch (replacementError) {
+        if (!fs.existsSync(target) && fs.existsSync(previous)) {
+          try { fs.renameSync(previous, target); } catch {}
+        }
+        throw replacementError;
+      }
+    }
+    try { fs.chmodSync(target, 0o600); } catch {}
+    fsyncDirectory(directory);
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+    if (previous) {
+      try { fs.rmSync(previous, { force: true }); } catch {}
+    }
+  }
+}
+
+class JsonRecordStore {
+  constructor({ stateDirectory, relativeDirectory, idPrefix, maxRecords = 200, maxRecordBytes = DEFAULT_MAX_RECORD_BYTES }) {
+    this.directory = path.join(stateDirectory, relativeDirectory);
+    this.idPrefix = idPrefix;
+    this.maxRecords = maxRecords;
+    this.maxRecordBytes = maxRecordBytes;
+  }
+
+  createId() {
+    return `${this.idPrefix}_${Date.now().toString(36)}_${crypto.randomBytes(5).toString('hex')}`;
+  }
+
+  file(id) {
+    return path.join(this.directory, `${cleanOperationId(id, this.idPrefix)}.json`);
+  }
+
+  write(record) {
+    if (!record?.id) throw new Error('Record ID is required');
+    const target = this.file(record.id);
+    atomicWriteRecord(target, record, this.maxRecordBytes);
+    this.prune();
+    return record;
+  }
+
+  read(id) {
+    const parsed = JSON.parse(fs.readFileSync(this.file(id), 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid record');
+    return parsed;
+  }
+
+  list(limit = 50) {
+    if (!fs.existsSync(this.directory)) return [];
+    return fs.readdirSync(this.directory, { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      .map(entry => {
+        try { return this.read(entry.name.slice(0, -5)); }
+        catch { return null; }
+      })
+      .filter(Boolean)
+      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+      .slice(0, Math.max(1, Math.min(this.maxRecords, Number(limit) || 50)));
+  }
+
+  prune() {
+    if (!fs.existsSync(this.directory)) return;
+    const records = fs.readdirSync(this.directory, { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      .map(entry => {
+        const file = path.join(this.directory, entry.name);
+        const stat = fs.statSync(file, { throwIfNoEntry: false });
+        if (!stat) return null;
+        let createdAtMs = 0;
+        try { createdAtMs = Date.parse(JSON.parse(fs.readFileSync(file, 'utf8')).createdAt || 0) || 0; }
+        catch {}
+        return { file, mtimeMs: stat.mtimeMs, createdAtMs };
+      })
+      .filter(Boolean)
+      .sort((left, right) =>
+        right.createdAtMs - left.createdAtMs || right.mtimeMs - left.mtimeMs || right.file.localeCompare(left.file)
+      );
+    for (const stale of records.slice(this.maxRecords)) {
+      try { fs.rmSync(stale.file, { force: true }); } catch {}
+    }
+  }
+}
+
+module.exports = {
+  DEFAULT_MAX_RECORD_BYTES,
+  JsonRecordStore,
+  atomicWriteRecord
+};

@@ -21,7 +21,7 @@ const PUBLISH_TOOLS = new Set([
 ]);
 
 const VALIDATE_TOOLS = new Set([
-  'run_smart_checks', 'job_submit', 'job_retry',
+  'run_smart_checks', 'job_submit', 'job_retry', 'obsidian_properties_batch_preview',
   'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
   'godot_doctor', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web',
   'godot_native_test', 'godot_acceptance_test', 'godot_acceptance_run_saved', 'godot_acceptance_suite',
