@@ -23,3 +23,17 @@ jobs:
             !node_modules/**
           include-hidden-files: true
           retention-days: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pack dependencies
+        shell: bash
+        run: tar -czf node_modules-linux.tgz node_modules
+      - name: Upload dependency workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmate-refactor-node-modules
+          path: node_modules-linux.tgz
+          retention-days: 1
