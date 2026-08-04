@@ -1,0 +1,25 @@
+name: Refactor source export
+
+on:
+  push:
+    branches:
+      - refactor/host-platform-v2
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload source workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmate-refactor-source
+          path: |
+            .
+            !.git/**
+            !node_modules/**
+          include-hidden-files: true
+          retention-days: 1
