@@ -12,11 +12,18 @@ const {
 test('tokenizes quoted terms deterministically and removes duplicates', () => {
   assert.deepEqual(tokenizeQuery('forest "carbon stock" forest'), ['forest', 'carbon stock']);
   assert.deepEqual(tokenizeQuery('Exact Phrase', 'phrase'), ['Exact Phrase']);
+  assert.deepEqual(tokenizeQuery('"Exact Phrase"', 'phrase'), ['Exact Phrase']);
+});
+
+test('rejects unique term sets beyond the explicit search bound', () => {
+  const query = Array.from({ length: 21 }, (_, index) => `term${index}`).join(' ');
+  assert.throws(() => tokenizeQuery(query), /exceeds 20 unique terms/);
 });
 
 test('supports phrase, all, any, and case-sensitive search modes', () => {
   const content = 'Forest carbon\nCarbon stocks are changing.\nFOREST monitoring.';
   assert.equal(searchDocument(content, { query: 'forest carbon', mode: 'phrase' }).matched, true);
+  assert.equal(searchDocument(content, { query: '"forest carbon"', mode: 'phrase' }).matched, true);
   assert.equal(searchDocument(content, { query: 'forest changing', mode: 'all' }).matched, true);
   assert.equal(searchDocument(content, { query: 'missing changing', mode: 'any' }).matched, true);
   assert.equal(searchDocument(content, { query: 'forest', caseSensitive: true }).matched, false);
