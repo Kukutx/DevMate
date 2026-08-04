@@ -25,6 +25,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify tagged commit is merged to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master || {
+            echo "Tagged commit $GITHUB_SHA is not contained in master" >&2
+            exit 1
+          }
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
