@@ -7,11 +7,13 @@ const MAX_PLAN_RECORDS = 200;
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const MAX_BATCH_FILES = 200;
 const PLAN_TTL_MS = 30 * 60 * 1000;
-const BRIDGE_PROTOCOL_VERSION = 2;
+const BRIDGE_PROTOCOL_VERSION = 3;
 
 const BRIDGE_CAPABILITIES = Object.freeze([
   'status',
   'query_notes',
+  'search_content',
+  'graph_notes',
   'schema_audit',
   'audit_vault',
   'create_note',
