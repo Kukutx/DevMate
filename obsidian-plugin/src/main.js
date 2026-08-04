@@ -231,7 +231,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
 
     this.vaultRoot = this.app.vault.adapter.getBasePath();
-    await this.reconfigureRuntime();
+    await this.reconfigureRuntime({ startBridge: false, capture: false });
 
     this.registerView(VIEW_TYPE, leaf => new DevMateView(leaf, this));
     this.addRibbonIcon('bot', 'Open DevMate', () => this.openView());
@@ -244,15 +244,14 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });
     this.addCommand({ id: 'copy-context', name: 'Copy active vault context', callback: () => this.copyContextBundle() });
 
-    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.scheduleContextCapture()));
-    this.registerEvent(this.app.workspace.on('file-open', () => this.scheduleContextCapture()));
-    this.registerEvent(this.app.vault.on('rename', () => this.scheduleContextCapture()));
-    this.registerEvent(this.app.vault.on('delete', () => this.scheduleContextCapture()));
-    this.registerEvent(this.app.metadataCache.on('changed', () => this.scheduleContextCapture()));
-    this.registerInterval(window.setInterval(() => this.refreshStatus(), 5000));
-
     this.app.workspace.onLayoutReady(async () => {
-      await this.captureContext();
+      this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.scheduleContextCapture()));
+      this.registerEvent(this.app.workspace.on('file-open', () => this.scheduleContextCapture()));
+      this.registerEvent(this.app.vault.on('rename', () => this.scheduleContextCapture()));
+      this.registerEvent(this.app.vault.on('delete', () => this.scheduleContextCapture()));
+      this.registerEvent(this.app.metadataCache.on('changed', () => this.scheduleContextCapture()));
+      this.registerInterval(window.setInterval(() => this.refreshStatus(), 5000));
+      await this.reconfigureRuntime({ startBridge: true, capture: true });
       if (this.settings.enabled && this.settings.startupMode === 'auto') await this.startRuntime({ quiet: true });
       else await this.refreshStatus();
     });
@@ -275,7 +274,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     return path.join(this.vaultRoot, relative);
   }
 
-  async reconfigureRuntime() {
+  async reconfigureRuntime({ startBridge = this.app.workspace.layoutReady, capture = this.app.workspace.layoutReady } = {}) {
     await this.bridge?.stop();
     this.bridge = null;
     await this.controller?.dispose({ stopOwned: false });
@@ -298,7 +297,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       logger: message => console.log(`[DevMate] ${message}`)
     });
     this.controller.ensureConfig();
-    if (this.settings.enabled && this.settings.startupMode !== 'disabled') {
+    if (startBridge && this.settings.enabled && this.settings.startupMode !== 'disabled') {
       this.bridge = new ObsidianHostBridge(this, this.controller);
       try { await this.bridge.start(); }
       catch (error) {
@@ -307,7 +306,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         new Notice(`DevMate host bridge failed: ${error.message || error}`);
       }
     }
-    await this.captureContext();
+    if (capture) await this.captureContext();
     await this.refreshStatus();
   }
 
