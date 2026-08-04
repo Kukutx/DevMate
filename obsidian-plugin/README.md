@@ -8,6 +8,9 @@ This desktop-only Obsidian host connects a vault to the same local-first DevMate
 - auto start, manual start, stop, restart, and attach to an existing shared Gateway;
 - capture the active note, selection, properties, headings, links, tags, and bounded vault statistics;
 - expose host context through `host_context` and `host_context_list` MCP tools;
+- audit orphan notes, unresolved links, duplicate basenames, and missing Properties;
+- create notes, update Properties, move/rename notes, and use Obsidian trash through public APIs;
+- record every mutation with bounded backup evidence and conflict-aware rollback;
 - copy the authenticated MCP URL and a bounded active-note context bundle;
 - keep shared runtime state under `~/.devmate/hosts/<workspace-id>` by default.
 
@@ -37,3 +40,18 @@ When VS Code and Obsidian point at the same workspace root, both hosts resolve t
 ## Network ingress
 
 The Obsidian host starts the loopback Gateway. Public HTTPS ingress remains explicit: use the VS Code tunnel integration, a standalone managed tunnel, or an existing reverse proxy, then set **Public origin** in the Obsidian settings before copying the MCP URL.
+
+## Obsidian MCP tools
+
+```text
+obsidian_status
+obsidian_vault_audit
+obsidian_note_create
+obsidian_properties_update
+obsidian_note_move
+obsidian_note_trash
+obsidian_operation_list
+obsidian_operation_rollback
+```
+
+Mutation tools use an authenticated loopback bridge and do not expose its credential in MCP results. Paths are vault-relative, `.obsidian` is blocked, mutation records are stored in shared DevMate state, and rollback refuses conflicting later edits unless explicitly forced.
