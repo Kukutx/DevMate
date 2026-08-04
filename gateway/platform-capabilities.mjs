@@ -1,3 +1,4 @@
+import { installHostContextCapabilities } from './host-context-capabilities.mjs';
 import { installLocalCapabilities } from './local-capabilities.mjs';
 import { installRunnerCapabilities } from './runner-capabilities.mjs';
 import {
@@ -22,6 +23,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
   });
   installTeamCapabilities(McpServerClass);
   installRunnerCapabilities(McpServerClass);
+  installHostContextCapabilities(McpServerClass);
   installLocalCapabilities(McpServerClass);
   registerServerInitializer(McpServerClass, {
     id: 'devmate.plugin-host',
