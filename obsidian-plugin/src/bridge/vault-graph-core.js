@@ -50,10 +50,11 @@ function buildVaultGraph(records, resolvedLinks, options = {}) {
   const maxNodes = boundedInteger(options.maxNodes, 200, 1, 500);
   const maxEdges = boundedInteger(options.maxEdges, 1000, 1, 2000);
   const includeProperties = options.includeProperties === true;
-  const reverse = buildReverseLinks(resolvedLinks, recordMap);
+  const reverse = direction === 'outbound' ? new Map() : buildReverseLinks(resolvedLinks, recordMap);
   const nodeDepth = new Map();
   const queue = [];
   const missingRoots = [];
+  const omittedRoots = [];
   const truncated = { nodes: false, edges: false };
 
   for (const root of roots) {
@@ -64,6 +65,7 @@ function buildVaultGraph(records, resolvedLinks, options = {}) {
     if (!nodeDepth.has(root)) {
       if (nodeDepth.size >= maxNodes) {
         truncated.nodes = true;
+        omittedRoots.push(root);
         continue;
       }
       nodeDepth.set(root, 0);
@@ -85,6 +87,12 @@ function buildVaultGraph(records, resolvedLinks, options = {}) {
     });
 
     for (const edge of edges) {
+      const key = `${edge.source}\u0000${edge.target}`;
+      const isNewEdge = !edgeMap.has(key);
+      if (isNewEdge && edgeMap.size >= maxEdges) {
+        truncated.edges = true;
+        continue;
+      }
       const next = edge.source === current ? edge.target : edge.source;
       if (!nodeDepth.has(next)) {
         if (nodeDepth.size >= maxNodes) {
@@ -94,14 +102,7 @@ function buildVaultGraph(records, resolvedLinks, options = {}) {
         nodeDepth.set(next, currentDepth + 1);
         queue.push(next);
       }
-      const key = `${edge.source}\u0000${edge.target}`;
-      if (!edgeMap.has(key)) {
-        if (edgeMap.size >= maxEdges) {
-          truncated.edges = true;
-          continue;
-        }
-        edgeMap.set(key, edge);
-      }
+      if (isNewEdge) edgeMap.set(key, edge);
     }
   }
 
@@ -114,8 +115,9 @@ function buildVaultGraph(records, resolvedLinks, options = {}) {
   });
 
   return {
-    roots: roots.filter(path => recordMap.has(path)),
+    roots: roots.filter(path => nodeDepth.get(path) === 0),
     missingRoots,
+    omittedRoots,
     direction,
     depth: depthLimit,
     nodes,
