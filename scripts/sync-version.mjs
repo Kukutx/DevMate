@@ -38,9 +38,18 @@ function updateJson(relativePath, mutate, description) {
 
 updateText('extension.js', /const VERSION = '[^']+';/, `const VERSION = '${version}';`, 'extension runtime version');
 updateText('gateway/server.mjs', /const VERSION = '[^']+';/, `const VERSION = '${version}';`, 'Gateway runtime version');
+updateText('host/runtime-controller.js', /const DEFAULT_VERSION = '[^']+';/, `const DEFAULT_VERSION = '${version}';`, 'shared host runtime version');
 updateText('scripts/devmate-command.mjs', /config\.appVersion = '[^']+';/, `config.appVersion = '${version}';`, 'bootstrap config version');
 updateText('tests/smoke-gateway.mjs', /appVersion: '[^']+',/, `appVersion: '${version}',`, 'Gateway smoke version');
 updateText('tests/smoke-local-capabilities.mjs', /appVersion: '[^']+',/, `appVersion: '${version}',`, 'local smoke version');
+
+updateJson('obsidian-plugin/manifest.json', manifest => {
+  manifest.version = version;
+}, 'Obsidian manifest version');
+
+updateJson('obsidian-plugin/package.json', pluginPackage => {
+  pluginPackage.version = version;
+}, 'Obsidian package version');
 
 updateJson('package-lock.json', lock => {
   lock.version = version;
