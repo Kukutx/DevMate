@@ -83,15 +83,24 @@ function operationDirectory(controller) {
   return path.join(controller.stateDirectory, 'host-operations', 'obsidian');
 }
 
+function cleanOperationId(value) {
+  const id = String(value || '').trim();
+  if (!/^obs_[a-z0-9_]{8,100}$/i.test(id)) throw new Error('Invalid Obsidian operation ID');
+  return id;
+}
+
 function operationFile(controller, id) {
-  return path.join(operationDirectory(controller), `${id}.json`);
+  return path.join(operationDirectory(controller), `${cleanOperationId(id)}.json`);
 }
 
 function writeOperation(controller, record) {
   const directory = operationDirectory(controller);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(operationFile(controller, record.id), `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(operationFile(controller, record.id), 0o600); } catch {}
+  const target = operationFile(controller, record.id);
+  const temporary = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temporary, target);
+  try { fs.chmodSync(target, 0o600); } catch {}
   const records = fs.readdirSync(directory, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
     .map(entry => {
@@ -152,6 +161,14 @@ async function fileSnapshot(vault, file) {
   };
 }
 
+function propertyKey(value) {
+  const key = String(value || '').trim();
+  if (!key || key.length > 200 || ['__proto__', 'prototype', 'constructor'].includes(key)) {
+    throw new Error(`Invalid Obsidian property name: ${key || '(empty)'}`);
+  }
+  return key;
+}
+
 function requireMarkdownFile(vault, filePath) {
   const normalized = cleanVaultPath(filePath, { markdown: true });
   const file = vault.getAbstractFileByPath(normalized);
@@ -162,8 +179,7 @@ function requireMarkdownFile(vault, filePath) {
 async function auditVault(plugin, args = {}) {
   const folder = String(args.folder || '').trim();
   const requiredProperties = [...new Set((Array.isArray(args.requiredProperties) ? args.requiredProperties : [])
-    .map(value => String(value || '').trim())
-    .filter(Boolean))].slice(0, 50);
+    .map(propertyKey))].slice(0, 50);
   const files = plugin.app.vault.getMarkdownFiles().filter(file => withinFolder(file.path, folder));
   const inbound = new Map(files.map(file => [file.path, 0]));
   const resolved = plugin.app.metadataCache.resolvedLinks || {};
@@ -233,8 +249,9 @@ async function createNote(plugin, controller, args = {}) {
 async function updateProperties(plugin, controller, args = {}) {
   const file = requireMarkdownFile(plugin.app.vault, args.path);
   const before = await fileSnapshot(plugin.app.vault, file);
-  const set = args.set && typeof args.set === 'object' && !Array.isArray(args.set) ? args.set : {};
-  const remove = [...new Set((Array.isArray(args.remove) ? args.remove : []).map(value => String(value || '').trim()).filter(Boolean))];
+  const requestedSet = args.set && typeof args.set === 'object' && !Array.isArray(args.set) ? args.set : {};
+  const set = Object.fromEntries(Object.entries(requestedSet).map(([key, value]) => [propertyKey(key), value]));
+  const remove = [...new Set((Array.isArray(args.remove) ? args.remove : []).map(propertyKey))];
   if (!Object.keys(set).length && !remove.length) throw new Error('Provide at least one property to set or remove');
   await plugin.app.fileManager.processFrontMatter(file, frontmatter => {
     for (const [key, value] of Object.entries(set)) frontmatter[key] = value;
@@ -369,6 +386,10 @@ class ObsidianHostBridge {
       jsonResponse(response, 401, { ok: false, error: 'unauthorized' });
       return;
     }
+    if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+      jsonResponse(response, 415, { ok: false, error: 'application_json_required' });
+      return;
+    }
     try {
       const body = await requestJson(request);
       const result = await this.action(String(body.action || ''), body.args || {});
@@ -381,6 +402,7 @@ class ObsidianHostBridge {
   async start() {
     if (this.server) return { url: this.url };
     this.server = http.createServer((request, response) => this.handle(request, response));
+    this.server.maxConnections = 16;
     this.server.keepAliveTimeout = 5000;
     this.server.headersTimeout = 7000;
     await new Promise((resolve, reject) => {
@@ -422,8 +444,10 @@ class ObsidianHostBridge {
 module.exports = {
   ObsidianHostBridge,
   __test: {
+    cleanOperationId,
     cleanVaultPath,
     hash,
+    propertyKey,
     publicOperation,
     withinFolder
   }
