@@ -75,3 +75,41 @@ test('runtime controller publishes a bounded generic host context', () => {
   assert.equal(config.hostContexts.obsidian.activeDocument.path, 'Project.md');
   assert.equal(config.hostContexts.obsidian.workspaceRoot, root);
 });
+
+test('runtime controller reuses its owned Gateway and waits for clean stop', async () => {
+  const root = temporaryDirectory('devmate-owned-root-');
+  const state = temporaryDirectory('devmate-owned-state-');
+  const gateway = path.join(root, 'test-gateway.mjs');
+  fs.writeFileSync(gateway, `
+import fs from 'node:fs';
+import http from 'node:http';
+const config = JSON.parse(fs.readFileSync(process.env.DEVMATE_CONFIG, 'utf8'));
+const server = http.createServer((request, response) => {
+  if (request.url === '/control/health') {
+    response.writeHead(200, {'content-type':'application/json'});
+    response.end(JSON.stringify({name:'devmate', instanceId:config.instanceId}));
+    return;
+  }
+  response.writeHead(404); response.end();
+});
+server.listen(config.server.port, '127.0.0.1');
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+process.on('SIGINT', () => server.close(() => process.exit(0)));
+`, 'utf8');
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: 19870
+  });
+  const first = await controller.start({ timeoutMs: 5000 });
+  assert.equal(first.started, true);
+  assert.equal(controller.owned, true);
+  const second = await controller.start({ timeoutMs: 5000 });
+  assert.equal(second.started, false);
+  assert.equal(second.attached, false);
+  assert.equal(second.owned, true);
+  const stopped = await controller.stop();
+  assert.equal(stopped.stopped, true);
+  assert.equal((await controller.status()).state, 'stopped');
+});
