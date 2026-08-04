@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.0.0
+
+- Refactored the shared desktop host runtime into focused state-path, configuration, network, and process-controller modules while preserving the existing compatibility entry point.
+- Refactored the Obsidian plugin into lifecycle, settings, context, view, bridge server, index, operation, plan, path-policy, and note-action modules.
+- Added an incremental bounded vault index with note queries, tag/Property/date selectors, deterministic pagination, link metrics, and Property schema diagnostics.
+- Added transaction-style batch Property workflows with preview plans, per-note content hashes, expiry, all-note preflight, automatic failure rollback, explicit reverse rollback, and bounded operation history.
+- Added workspace-bound Host Bridge protocol and capability negotiation, timing-safe loopback authentication, stronger request lifecycle handling, and .obsidian mutation blocking.
+- Added Obsidian release metadata and bundle contracts, versions.json, deterministic required assets, expanded policy/unit coverage, and refreshed host integration documentation.
+
 ## 2.9.2
 
 - Added a read-only release-version contract so CI fails instead of silently rewriting package, lockfile, extension, Gateway, CLI, smoke-test, and changelog versions.
