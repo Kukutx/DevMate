@@ -42,11 +42,20 @@ jobs:
       - name: Package VSIX
         run: npm run package:vsix
 
+      - name: Build Obsidian plugin
+        run: npm run build:obsidian
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: devmate-vsix
           path: "*.vsix"
+
+      - name: Upload Obsidian plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmate-obsidian
+          path: obsidian-plugin/dist/**
 
   godot-real:
     name: Linux and Real Godot 4.7.1
@@ -83,6 +92,9 @@ jobs:
 
       - name: Linux gateway smoke test
         run: npm run smoke:gateway
+
+      - name: Linux Obsidian plugin build
+        run: npm run build:obsidian
 
       - name: Install virtual display
         run: |
