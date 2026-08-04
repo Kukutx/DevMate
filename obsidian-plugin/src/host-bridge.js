@@ -99,7 +99,26 @@ function writeOperation(controller, record) {
   const target = operationFile(controller, record.id);
   const temporary = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(temporary, target);
+  try {
+    fs.renameSync(temporary, target);
+  } catch (error) {
+    if (process.platform !== 'win32' || !fs.existsSync(target)) throw error;
+    const previous = `${target}.replace-${process.pid}-${Date.now()}`;
+    let moved = false;
+    try {
+      fs.renameSync(target, previous);
+      moved = true;
+      fs.renameSync(temporary, target);
+      fs.rmSync(previous, { force: true });
+    } catch (replacementError) {
+      if (!fs.existsSync(target) && moved && fs.existsSync(previous)) {
+        try { fs.renameSync(previous, target); } catch {}
+      }
+      throw replacementError;
+    }
+  } finally {
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+  }
   try { fs.chmodSync(target, 0o600); } catch {}
   const records = fs.readdirSync(directory, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
@@ -330,8 +349,8 @@ async function rollbackOperation(plugin, controller, args = {}) {
     const file = requireMarkdownFile(vault, record.path);
     const current = await fileSnapshot(vault, file);
     if (!force && current.hash !== record.after.hash) throw new Error('Note changed after the operation; pass force=true to restore the backup');
-    await vault.process(file, content => {
-      if (!force && hash(content) !== record.after.hash) throw new Error('Note changed during rollback');
+    await vault.process(file, current => {
+      if (!force && hash(current) !== record.after.hash) throw new Error('Note changed during rollback');
       return record.before.content;
     });
   } else if (record.action === 'move_note') {
