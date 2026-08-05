@@ -30,6 +30,7 @@ class VscodeHostLifecycle {
     this.startupTimer = null;
     this.active = false;
     this.activating = null;
+    this.platformActivationAttempted = false;
     this.platformActivated = false;
     this.workspaceRootAtActivation = '';
   }
@@ -80,6 +81,7 @@ class VscodeHostLifecycle {
     ));
 
     try {
+      this.platformActivationAttempted = true;
       await platformExtension.activate(this.runtimeContext);
       this.platformActivated = true;
       this.mirror = new VscodeContextMirror({
@@ -199,8 +201,9 @@ class VscodeHostLifecycle {
     this.mirror?.dispose();
     this.mirror = null;
     try {
-      if (this.platformActivated) await platformExtension.deactivate();
+      if (this.platformActivationAttempted) await platformExtension.deactivate();
     } finally {
+      this.platformActivationAttempted = false;
       this.platformActivated = false;
       this.router?.dispose({ forceRestore: true });
       this.router = null;
