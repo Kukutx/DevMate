@@ -2,10 +2,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { createRequire } from 'node:module';
+import lockModule from '../config-file-lock.cjs';
 
-const require = createRequire(import.meta.url);
-const { withFileLockSync } = require('../config-file-lock.cjs');
+const { withFileLockSync } = lockModule;
 
 export const CONFIG_PATH = process.env.DEVMATE_CONFIG || process.env.AIWG_CONFIG;
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';

@@ -12,6 +12,8 @@ const {
 const { ensurePersonalConfig, readJson, updateConfig } = require('./config-store.js');
 const { choosePort, healthAt, healthMatches } = require('./network.js');
 
+const MAX_LAUNCH_OUTPUT_CHARS = 32768;
+
 function now() {
   return new Date().toISOString();
 }
@@ -24,6 +26,24 @@ function boundedContext(value, maxChars = MAX_HOST_CONTEXT_CHARS) {
     originalChars: serialized.length,
     preview: serialized.slice(0, maxChars)
   };
+}
+
+function appendOutput(current, chunk, maxChars = MAX_LAUNCH_OUTPUT_CHARS) {
+  const next = `${current || ''}${String(chunk || '')}`;
+  return next.length <= maxChars ? next : next.slice(-maxChars);
+}
+
+function lastOutputLine(value) {
+  return String(value || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1) || '';
+}
+
+function startupFailureDetail(launch, child) {
+  const explicit = launch?.error || child?.lastError?.message;
+  if (explicit) return String(explicit);
+  const stderr = lastOutputLine(launch?.stderr);
+  if (stderr) return stderr;
+  if (launch?.exitCode != null) return `Gateway exited with code ${launch.exitCode}`;
+  return '';
 }
 
 class RuntimeController {
@@ -49,6 +69,7 @@ class RuntimeController {
     this.spawnImpl = spawnImpl;
     this.child = null;
     this.owned = false;
+    this.lastLaunch = null;
   }
 
   get configFile() {
@@ -66,6 +87,23 @@ class RuntimeController {
 
   readConfig() {
     return readJson(this.configFile, null);
+  }
+
+  diagnosticSnapshot() {
+    return {
+      appVersion: this.appVersion,
+      hostId: this.hostId,
+      platform: process.platform,
+      arch: process.arch,
+      nodeVersion: process.versions.node || null,
+      electronVersion: process.versions.electron || null,
+      workspaceRoot: this.workspaceRoot,
+      stateDirectory: this.stateDirectory,
+      gatewayEntry: this.gatewayEntry,
+      configFile: this.configFile,
+      owned: this.owned,
+      lastLaunch: this.lastLaunch ? { ...this.lastLaunch } : null
+    };
   }
 
   updateHostContext(context) {
@@ -126,22 +164,57 @@ class RuntimeController {
       this.child = null;
     }
 
-    const child = this.spawnImpl(this.nodeExecutable, [this.gatewayEntry], {
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-        DEVMATE_CONFIG: this.configFile,
-        DEVMATE_PUBLIC_HEALTH_DETAILS: '0'
-      },
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
+    const launch = {
+      startedAt: now(),
+      readyAt: null,
+      endedAt: null,
+      mode: 'unknown',
+      port: choice.port,
+      stdout: '',
+      stderr: '',
+      error: null,
+      exitCode: null,
+      signal: null
+    };
+    this.lastLaunch = launch;
+
+    let child;
+    try {
+      child = this.spawnImpl(this.nodeExecutable, [this.gatewayEntry], {
+        env: {
+          ...process.env,
+          ELECTRON_RUN_AS_NODE: '1',
+          DEVMATE_CONFIG: this.configFile,
+          DEVMATE_PUBLIC_HEALTH_DETAILS: '0'
+        },
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+    } catch (error) {
+      launch.endedAt = now();
+      launch.error = error.message || String(error);
+      throw new Error(`DevMate Gateway could not be launched: ${launch.error}`);
+    }
+
+    launch.mode = child.launchMode || 'child_process';
     this.child = child;
     this.owned = true;
-    child.stdout?.on('data', chunk => this.logger(`[gateway] ${String(chunk).trimEnd()}`));
-    child.stderr?.on('data', chunk => this.logger(`[gateway:error] ${String(chunk).trimEnd()}`));
-    child.on('error', error => this.logger(`Gateway process error: ${error.message}`));
+    child.stdout?.on('data', chunk => {
+      launch.stdout = appendOutput(launch.stdout, chunk);
+      this.logger(`[gateway] ${String(chunk).trimEnd()}`);
+    });
+    child.stderr?.on('data', chunk => {
+      launch.stderr = appendOutput(launch.stderr, chunk);
+      this.logger(`[gateway:error] ${String(chunk).trimEnd()}`);
+    });
+    child.on('error', error => {
+      launch.error = error.message || String(error);
+      this.logger(`Gateway process error: ${launch.error}`);
+    });
     child.on('exit', (code, signal) => {
+      launch.endedAt = now();
+      launch.exitCode = code;
+      launch.signal = signal || null;
       this.logger(`Gateway exited code=${code} signal=${signal}`);
       if (this.child === child) {
         this.child = null;
@@ -154,6 +227,7 @@ class RuntimeController {
       await new Promise(resolve => setTimeout(resolve, 250));
       const health = await healthAt(choice.port, 800);
       if (healthMatches(health, config)) {
+        launch.readyAt = now();
         return { started: true, attached: false, owned: true, port: choice.port, health: health.json };
       }
       if (child.exitCode != null) break;
@@ -161,7 +235,12 @@ class RuntimeController {
     try { child.kill(); } catch {}
     if (this.child === child) this.child = null;
     this.owned = false;
-    throw new Error('DevMate Gateway did not become ready');
+    launch.endedAt ||= now();
+    const detail = startupFailureDetail(launch, child);
+    const error = new Error(`DevMate Gateway did not become ready${detail ? `: ${detail}` : ''}`);
+    error.code = 'DEVMATE_GATEWAY_START_FAILED';
+    error.diagnostics = this.diagnosticSnapshot();
+    throw error;
   }
 
   async stop() {
@@ -222,6 +301,9 @@ class RuntimeController {
 
 module.exports = {
   RuntimeController,
+  appendOutput,
   boundedContext,
-  now
+  lastOutputLine,
+  now,
+  startupFailureDetail
 };

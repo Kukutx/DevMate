@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development gateway for ChatGPT with team RBAC, durable jobs, external runners, approvals, production tunnels, Git workflows, and optional platform plugins.",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {
