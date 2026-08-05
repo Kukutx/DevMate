@@ -110,7 +110,7 @@ test('recovers a previous durable document after an interrupted Windows-style re
   fs.rmSync(durable.RUNTIME_STATE_PATH, { force: true });
   fs.writeFileSync(replacement, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
   durable.resetDurableStateForTests();
-  assert.deepEqual(durable.readDurableNamespace('restored', null), { restored: undefined }?.restored ?? { ok: true });
+  assert.deepEqual(durable.readDurableNamespace('restored', null), { ok: true });
   assert.equal(fs.existsSync(durable.RUNTIME_STATE_PATH), true);
   assert.equal(fs.existsSync(replacement), false);
 });
