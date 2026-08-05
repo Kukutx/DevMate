@@ -1,0 +1,33 @@
+name: Prepare DevMate 3.2
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - scripts/prepare-v3-2.mjs
+      - .github/workflows/prepare-v3-2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+      - name: Synchronize release metadata
+        run: node scripts/prepare-v3-2.mjs
+      - name: Remove temporary release files
+        run: rm scripts/prepare-v3-2.mjs .github/workflows/prepare-v3-2.yml
+      - name: Commit DevMate 3.2 metadata
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Kukutx@users.noreply.github.com"
+          git add -A
+          git commit -m "Prepare DevMate 3.2.0"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
