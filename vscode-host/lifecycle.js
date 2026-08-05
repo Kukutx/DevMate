@@ -1,8 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
-const childProcess = require('node:child_process');
-const platformExtension = require('../extension-entry-platform.js');
+const defaultChildProcess = require('node:child_process');
 const { VscodeContextMirror } = require('./context-mirror.js');
 const { installGatewayWorkerRouter } = require('./gateway-spawn-router.js');
 const { VscodeRuntimeDiagnostics } = require('./runtime-diagnostics.js');
@@ -19,8 +18,10 @@ const RELOAD_SETTINGS = [
 ];
 
 class VscodeHostLifecycle {
-  constructor({ vscode }) {
+  constructor({ vscode, platformExtension = null, childProcessModule = defaultChildProcess }) {
     this.vscode = vscode;
+    this.platformExtension = platformExtension || require('../extension-entry-platform.js');
+    this.childProcessModule = childProcessModule;
     this.context = null;
     this.runtimeContext = null;
     this.output = null;
@@ -47,8 +48,14 @@ class VscodeHostLifecycle {
   async activate(context) {
     if (this.activating) return this.activating;
     this.activating = this.activateInternal(context);
-    try { return await this.activating; }
-    finally { this.activating = null; }
+    try {
+      return await this.activating;
+    } catch (error) {
+      try { await this.deactivate(); } catch {}
+      throw error;
+    } finally {
+      this.activating = null;
+    }
   }
 
   async activateInternal(context) {
@@ -68,7 +75,7 @@ class VscodeHostLifecycle {
     this.diagnostics.append(`Activating DevMate VS Code host ${context.extension?.packageJSON?.version || ''}.`);
 
     this.router = installGatewayWorkerRouter({
-      childProcess,
+      childProcess: this.childProcessModule,
       extensionPath: context.extensionPath,
       diagnostics: this.diagnostics
     });
@@ -82,7 +89,7 @@ class VscodeHostLifecycle {
 
     try {
       this.platformActivationAttempted = true;
-      await platformExtension.activate(this.runtimeContext);
+      await this.platformExtension.activate(this.runtimeContext);
       this.platformActivated = true;
       this.mirror = new VscodeContextMirror({
         vscode: this.vscode,
@@ -201,7 +208,7 @@ class VscodeHostLifecycle {
     this.mirror?.dispose();
     this.mirror = null;
     try {
-      if (this.platformActivationAttempted) await platformExtension.deactivate();
+      if (this.platformActivationAttempted) await this.platformExtension.deactivate();
     } finally {
       this.platformActivationAttempted = false;
       this.platformActivated = false;
