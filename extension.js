@@ -7,7 +7,7 @@ const net = require('net');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
-const { RuntimeController } = require('./host/runtime-controller.js');
+const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
 
 const VERSION = '3.1.0';
 const BASE_PORT = 8787;
@@ -188,7 +188,7 @@ function mcpUrlFor(baseUrl, ctx){
 function defaultConfig(ctx){
   const root = currentRoot();
   return {
-    version: 9,
+    version: SUPPORTED_CONFIG_VERSION,
     appVersion: VERSION,
     instanceId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
     server: { port: configuredPort(), mcpPath: MCP_PATH },
@@ -217,7 +217,7 @@ function defaultConfig(ctx){
 function ensureConfig(ctx, forceCurrent=false, portOverride=null){
   const p = configPath(ctx);
   let data = readJson(p) || defaultConfig(ctx);
-  data.version = 9;
+  data.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(data.version) || 0);
   data.appVersion = VERSION;
   data.instanceId ||= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
   data.server ||= {};
