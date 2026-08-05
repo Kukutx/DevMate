@@ -16,11 +16,18 @@ test('VS Code manifest exposes host diagnostics and self-check commands', () => 
   }
 });
 
-test('Gateway build is self-contained and does not externalize production packages', () => {
+test('Gateway build is self-contained and shared across host packages', () => {
   const buildScript = String(manifest.scripts?.build || '');
   assert.match(buildScript, /scripts\/build-gateway\.mjs/);
   assert.doesNotMatch(buildScript, /packages[=:]external|--packages=external/);
-  const builder = fs.readFileSync(path.join(root, 'scripts', 'build-gateway.mjs'), 'utf8');
+
+  const builder = fs.readFileSync(path.join(root, 'scripts', 'gateway-build.mjs'), 'utf8');
   assert.match(builder, /packages:\s*['"]bundle['"]/);
   assert.match(builder, /external:\s*\[['"]vscode['"]\]/);
+
+  const vscodeEntry = fs.readFileSync(path.join(root, 'scripts', 'build-gateway.mjs'), 'utf8');
+  const obsidianBuild = fs.readFileSync(path.join(root, 'obsidian-plugin', 'esbuild.config.mjs'), 'utf8');
+  assert.match(vscodeEntry, /buildGatewayBundle/);
+  assert.match(obsidianBuild, /buildGatewayBundle/);
+  assert.doesNotMatch(obsidianBuild, /packages:\s*['"]external['"]/);
 });
