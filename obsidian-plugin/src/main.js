@@ -4,8 +4,10 @@ const path = require('node:path');
 const { FileSystemAdapter, Notice, Plugin } = require('obsidian');
 const { ObsidianHostBridge } = require('./host-bridge.js');
 const { ObsidianContextProvider } = require('./context-provider.js');
+const { RuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const { DevMateSettingTab, normalizeSettings } = require('./settings.js');
 const { DevMateView, VIEW_TYPE } = require('./view.js');
+const { createWorkerSpawn } = require('./worker-spawn.js');
 const {
   RuntimeController,
   migrateLegacyState,
@@ -24,6 +26,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.controller = null;
     this.bridge = null;
     this.contextProvider = null;
+    this.runtimeDiagnostics = null;
     this.vaultRoot = '';
     this.layoutReady = false;
 
@@ -46,6 +49,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.addCommand({ id: 'open', name: 'Open panel', callback: () => this.openView() });
     this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });
     this.addCommand({ id: 'copy-context', name: 'Copy active vault context', callback: () => this.copyContextBundle() });
+    this.addCommand({ id: 'copy-diagnostics', name: 'Copy diagnostics', callback: () => this.copyDiagnostics() });
 
     await this.reconfigureRuntime({ startBridge: false, capture: false });
     this.app.workspace.onLayoutReady(() => this.initializeLayoutReady());
@@ -102,6 +106,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     return stateDirectory;
   }
 
+  logRuntime(message) {
+    console.log(`[DevMate] ${message}`);
+    this.runtimeDiagnostics?.append(message);
+  }
+
   async reconfigureRuntime({ startBridge = this.layoutReady, capture = this.layoutReady } = {}) {
     await this.bridge?.stop();
     this.bridge = null;
@@ -110,6 +119,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     const sameState = this.controller && path.resolve(this.controller.stateDirectory) === path.resolve(stateDirectory);
     if (!sameState) {
       await this.controller?.dispose({ stopOwned: true });
+      this.runtimeDiagnostics = new RuntimeDiagnostics({
+        stateDirectory,
+        pluginVersion: this.manifest.version,
+        vaultRoot: this.vaultRoot
+      });
       this.controller = new RuntimeController({
         workspaceRoot: this.vaultRoot,
         stateDirectory,
@@ -117,10 +131,13 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         preferredPort: this.settings.preferredPort,
         appVersion: this.manifest.version,
         hostId: HOST_ID,
-        logger: message => console.log(`[DevMate] ${message}`)
+        spawnImpl: createWorkerSpawn(),
+        logger: message => this.logRuntime(message)
       });
+      this.logRuntime(`Configured embedded Worker Gateway for ${this.vaultRoot}.`);
     } else {
       this.controller.preferredPort = this.settings.preferredPort;
+      this.runtimeDiagnostics?.setStateDirectory(stateDirectory);
     }
     this.controller.ensureConfig();
 
@@ -131,7 +148,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         this.bridge = bridge;
       } catch (error) {
         await bridge.stop().catch(() => {});
-        console.error('[DevMate] Obsidian host bridge failed', error);
+        this.logRuntime(`Obsidian host bridge failed: ${error.message || error}`);
         new Notice(`DevMate host bridge failed: ${error.message || error}`);
       }
     }
@@ -143,7 +160,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     if (this.reconfigureTimer) window.clearTimeout(this.reconfigureTimer);
     this.reconfigureTimer = window.setTimeout(() => {
       this.reconfigureTimer = null;
-      this.reconfigureRuntime().catch(error => console.warn('[DevMate] Runtime reconfiguration failed', error));
+      this.reconfigureRuntime().catch(error => this.logRuntime(`Runtime reconfiguration failed: ${error.message || error}`));
     }, 500);
   }
 
@@ -152,7 +169,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     if (this.contextTimer) window.clearTimeout(this.contextTimer);
     this.contextTimer = window.setTimeout(() => {
       this.contextTimer = null;
-      this.captureContext().catch(error => console.warn('[DevMate] Context capture failed', error));
+      this.captureContext().catch(error => this.logRuntime(`Context capture failed: ${error.message || error}`));
     }, 350);
   }
 
@@ -175,6 +192,14 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       }
       if (status.state === 'foreign') {
         return { label: 'Port conflict', detail: `Another DevMate instance is using port ${status.port}.`, ...status };
+      }
+      if (this.runtimeDiagnostics?.lastFailure) {
+        return {
+          ...status,
+          state: 'error',
+          label: 'DevMate failed to start',
+          detail: this.runtimeDiagnostics.lastFailure.message
+        };
       }
       return { label: 'DevMate stopped', detail: `Preferred port ${status.port}`, ...status };
     } catch (error) {
@@ -199,9 +224,15 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     try {
       if (!this.bridge && this.layoutReady) await this.reconfigureRuntime({ startBridge: true, capture: true });
       await this.captureContext();
+      this.logRuntime('Starting embedded DevMate Gateway.');
       const result = await this.controller.start();
+      this.runtimeDiagnostics?.clearFailure();
+      this.logRuntime(result.attached
+        ? `Attached to existing DevMate Gateway on port ${result.port}.`
+        : `Embedded DevMate Gateway started on port ${result.port}.`);
       if (!quiet) new Notice(result.attached ? 'Attached to the existing DevMate Gateway.' : 'DevMate Gateway started.');
     } catch (error) {
+      this.runtimeDiagnostics?.recordFailure(error);
       console.error('[DevMate] Start failed', error);
       if (!quiet) new Notice(`DevMate start failed: ${error.message || error}`);
     } finally {
@@ -212,9 +243,15 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async stopRuntime() {
     try {
       const result = await this.controller.stop();
-      if (result.stopped) new Notice('DevMate Gateway stopped.');
-      else if (result.reason === 'managed-by-another-host') new Notice('Gateway is managed by another host and was left running.');
-      else new Notice('DevMate Gateway is not running.');
+      if (result.stopped) {
+        this.runtimeDiagnostics?.clearFailure();
+        this.logRuntime('DevMate Gateway stopped by the user.');
+        new Notice('DevMate Gateway stopped.');
+      } else if (result.reason === 'managed-by-another-host') new Notice('Gateway is managed by another host and was left running.');
+      else {
+        this.runtimeDiagnostics?.clearFailure();
+        new Notice('DevMate Gateway is not running.');
+      }
     } catch (error) {
       new Notice(`DevMate stop failed: ${error.message || error}`);
     } finally {
@@ -224,10 +261,13 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   async restartRuntime() {
     try {
+      this.logRuntime('Restarting DevMate Gateway.');
       const result = await this.controller.restart();
+      this.runtimeDiagnostics?.clearFailure();
       if (result.attached) new Notice('Gateway is managed by another host; kept the shared instance attached.');
       else new Notice('DevMate Gateway restarted.');
     } catch (error) {
+      this.runtimeDiagnostics?.recordFailure(error);
       new Notice(`DevMate restart failed: ${error.message || error}`);
     } finally {
       await this.refreshStatus();
@@ -251,6 +291,17 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       new Notice(`Obsidian context copied (${payload.length} characters).`);
     } catch (error) {
       new Notice(`Could not copy context: ${error.message || error}`);
+    }
+  }
+
+  async copyDiagnostics() {
+    try {
+      const status = await this.runtimeStatus();
+      const payload = this.runtimeDiagnostics?.report({ plugin: this, controller: this.controller, status }) || 'DevMate diagnostics are unavailable.';
+      await navigator.clipboard.writeText(payload);
+      new Notice('DevMate diagnostics copied.');
+    } catch (error) {
+      new Notice(`Could not copy diagnostics: ${error.message || error}`);
     }
   }
 
