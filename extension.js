@@ -7,11 +7,14 @@ const net = require('net');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
+const { RuntimeController } = require('./host/runtime-controller.js');
 
 const VERSION = '3.1.0';
 const BASE_PORT = 8787;
 const MCP_PATH = '/mcp';
 let gatewayProcess = null;
+let gatewayController = null;
+let gatewayControllerKey = '';
 let ngrokProcess = null;
 let output = null;
 let statusBar = null;
@@ -392,14 +395,6 @@ async function isCurrentGatewayUp(ctx){
   const r = await healthAt(Number(data.server.port || selectedPort));
   return healthMatches(r, ctx);
 }
-function spawnNode(script, env){
-  const child = spawn(process.execPath,[script],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1',...env}, windowsHide:true});
-  child.stdout.on('data',d=>log(`[gateway] ${String(d).trimEnd()}`));
-  child.stderr.on('data',d=>log(`[gateway:err] ${String(d).trimEnd()}`));
-  child.on('error',e=>log(`Gateway process error: ${e.message}`));
-  child.on('exit',(code,signal)=>{log(`Gateway exited code=${code} signal=${signal}`); if(gatewayProcess === child) gatewayProcess=null; setStatus('DevMate: stopped'); refreshPanel();});
-  return child;
-}
 function waitForProcessExit(child, timeoutMs=8000){
   if(!child || child.exitCode != null) return Promise.resolve(true);
   return Promise.race([
@@ -407,21 +402,58 @@ function waitForProcessExit(child, timeoutMs=8000){
     new Promise(resolve=>setTimeout(()=>resolve(false), Math.max(250, Number(timeoutMs) || 8000)))
   ]);
 }
-async function stopGatewayProcess(){
-  const child = gatewayProcess;
-  if(!child) return {stopped:false,reason:'not-running'};
-  try{ if(child.exitCode == null && !child.killed && !child.terminating) child.kill(); }catch(e){ return {stopped:false,reason:e.message || String(e)}; }
-  let exited = await waitForProcessExit(child, 8000);
-  if(!exited && typeof child.forceTerminate === 'function'){
-    try{ child.forceTerminate(); }catch{}
-    exited = await waitForProcessExit(child, 2500);
+async function ensureGatewayController(ctx){
+  const root = currentRoot();
+  if(!root) throw new Error('Open a VS Code project folder first.');
+  const stateDirectory = path.resolve(ctx.globalStorageUri.fsPath);
+  const key = `${pathKey(root)}|${pathKey(stateDirectory)}`;
+  if(gatewayController && gatewayControllerKey === key){
+    gatewayController.preferredPort = configuredPort();
+    gatewayController.gatewayEntry = gatewayPath(ctx);
+    return gatewayController;
   }
-  if(exited && gatewayProcess === child) gatewayProcess = null;
-  return {stopped:exited,forced:!!child.forceTerminated,reason:exited ? '' : 'process-exit-timeout'};
+  if(gatewayController){
+    const disposed = await gatewayController.dispose({stopOwned:true});
+    if(disposed?.disposed === false) throw new Error(`Previous Gateway controller could not be disposed: ${disposed.reason || 'unknown error'}`);
+  }
+  gatewayController = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory,
+    gatewayEntry: gatewayPath(ctx),
+    preferredPort: configuredPort(),
+    appVersion: VERSION,
+    hostId: 'vscode',
+    nodeExecutable: process.execPath,
+    spawnImpl: spawn,
+    logger: message => log(message)
+  });
+  gatewayControllerKey = key;
+  return gatewayController;
 }
-function stopStartCommand(){
-  try{ if(startCommandProcess) startCommandProcess.kill(); }catch{}
-  startCommandProcess = null;
+function trackGatewayProcess(child){
+  if(!child || child.__devMateLegacyTracked) return;
+  child.__devMateLegacyTracked = true;
+  child.once('exit',(code,signal)=>{
+    if(gatewayProcess !== child) return;
+    gatewayProcess = null;
+    log(`Gateway exited code=${code} signal=${signal}`);
+    setStatus('DevMate: stopped');
+    refreshPanel();
+  });
+}
+async function stopGatewayProcess(){
+  if(!gatewayController) return {stopped:false,reason:'not-running'};
+  const result = await gatewayController.stop();
+  gatewayProcess = gatewayController.child;
+  return result;
+}
+async function stopStartCommand(){
+  const child = startCommandProcess;
+  if(!child) return {stopped:false,reason:'not-running'};
+  try{ if(child.exitCode == null && !child.killed) child.kill(); }catch(e){ return {stopped:false,reason:e.message || String(e)}; }
+  const exited = await waitForProcessExit(child, 4000);
+  if(exited && startCommandProcess === child) startCommandProcess = null;
+  return {stopped:exited,reason:exited ? '' : 'process-exit-timeout'};
 }
 function runDefaultStartCommand(){
   const command = String(cfg().get('defaultStartCommand') || '').trim();
@@ -433,41 +465,29 @@ function runDefaultStartCommand(){
   const cwd = currentRoot();
   if(!cwd) return;
   log(`Starting default command: ${command}`);
-  startCommandProcess = spawn(command, [], { cwd, shell: true, windowsHide: true });
-  startCommandProcess.stdout?.on('data',d=>log(`[start] ${String(d).trimEnd()}`));
-  startCommandProcess.stderr?.on('data',d=>log(`[start:err] ${String(d).trimEnd()}`));
-  startCommandProcess.on('error',e=>log(`Default start command error: ${e.message}`));
-  startCommandProcess.on('exit',(code,signal)=>{log(`Default start command exited code=${code} signal=${signal}`); startCommandProcess=null; refreshPanel();});
+  const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
+  startCommandProcess = child;
+  child.stdout?.on('data',d=>log(`[start] ${String(d).trimEnd()}`));
+  child.stderr?.on('data',d=>log(`[start:err] ${String(d).trimEnd()}`));
+  child.on('error',e=>log(`Default start command error: ${e.message}`));
+  child.on('exit',(code,signal)=>{
+    log(`Default start command exited code=${code} signal=${signal}`);
+    if(startCommandProcess === child) startCommandProcess=null;
+    refreshPanel();
+  });
 }
 async function startGateway(ctx){
-  if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
-  if(await isCurrentGatewayUp(ctx)){
-    const data = ensureConfig(ctx,false);
-    log('Current gateway already listening.');
-    setStatus('DevMate: on');
-    runDefaultStartCommand();
-    return {started:false,attached:!gatewayProcess,port:Number(data.server.port || selectedPort)};
-  }
-  const p = await choosePort(ctx);
-  ensureConfig(ctx,true,p);
-  if(gatewayProcess){
-    const previous = await stopGatewayProcess();
-    if(!previous.stopped && previous.reason !== 'not-running') throw new Error(`Previous Gateway did not stop: ${previous.reason}`);
-  }
-  gatewayProcess = spawnNode(gatewayPath(ctx), { DEVMATE_CONFIG: configPath(ctx), DEVMATE_PUBLIC_HEALTH_DETAILS: cfg().get('publicHealthDetails') ? '1' : '0' });
-  for(let i=0;i<60;i++){
-    await new Promise(r=>setTimeout(r,250));
-    const r = await healthAt(p);
-    if(healthMatches(r, ctx)){
-      setStatus(`DevMate: on :${p}`);
-      log(`Gateway ready on port ${p}.`);
-      runDefaultStartCommand();
-      return {started:true,attached:false,port:p,health:r.json};
-    }
-    if(gatewayProcess?.exitCode != null) break;
-  }
-  const stopped = await stopGatewayProcess();
-  throw new Error(`Gateway did not become ready.${stopped.reason ? ` Cleanup: ${stopped.reason}.` : ''} Open Show Logs for details.`);
+  const controller = await ensureGatewayController(ctx);
+  ensureConfig(ctx,true);
+  const result = await controller.start({timeoutMs:20000});
+  gatewayProcess = controller.child;
+  trackGatewayProcess(gatewayProcess);
+  setStatus(`DevMate: on :${result.port}`);
+  log(result.attached
+    ? `Attached to shared DevMate Gateway on port ${result.port}.`
+    : `Gateway ready on port ${result.port}.`);
+  runDefaultStartCommand();
+  return result;
 }
 async function getNgrokTunnels(){
   const r = await httpGet('http://127.0.0.1:4040/api/tunnels',900);
@@ -485,12 +505,20 @@ function tunnelPort(t){
   return m ? Number(m[1]) : null;
 }
 async function stopNgrokTunnels(tunnels=[]){
-  try{ if(ngrokProcess) ngrokProcess.kill(); }catch{}
-  ngrokProcess=null; lastPublicUrl='';
+  const child = ngrokProcess;
+  if(!child){
+    if(tunnels.length) log('Leaving existing tunnel running because this VS Code host does not own its process.');
+    return {stopped:false,reason:'managed-by-another-host'};
+  }
+  try{ if(child.exitCode == null && !child.killed) child.kill(); }catch{}
+  const exited = await waitForProcessExit(child, 5000);
+  if(ngrokProcess === child) ngrokProcess=null;
+  lastPublicUrl='';
   for(const t of tunnels){
     const ok = await deleteNgrokTunnel(t);
-    log(ok ? `Stopped ngrok tunnel ${t.public_url || t.name}.` : `Could not stop ngrok tunnel ${t.public_url || t.name}; it may be owned by another process.`);
+    log(ok ? `Stopped owned tunnel ${t.public_url || t.name}.` : `Could not stop owned tunnel ${t.public_url || t.name}.`);
   }
+  return {stopped:exited,reason:exited ? '' : 'process-exit-timeout'};
 }
 async function getNgrokPublicUrlForPort(port){
   const tunnels = await getNgrokTunnels();
@@ -502,10 +530,13 @@ async function startNgrok(ctx){
   const p = Number(data.server.port || selectedPort);
   let existing = await getNgrokPublicUrlForPort(p);
   if(existing){ lastPublicUrl = existing; log(`Using existing ngrok tunnel for port ${p}: ${existing}`); return existing; }
-  if(ngrokProcess && !ngrokProcess.killed){
-    try{ ngrokProcess.kill(); log('Stopped previous DevMate ngrok process before starting current port.'); }catch{}
-    ngrokProcess = null;
+  if(ngrokProcess && ngrokProcess.exitCode == null){
+    const previous = ngrokProcess;
+    try{ if(!previous.killed) previous.kill(); }catch{}
+    await waitForProcessExit(previous, 5000);
+    if(ngrokProcess === previous) ngrokProcess = null;
     lastPublicUrl = '';
+    log('Stopped previous owned tunnel process before starting the current port.');
   }
   const other = (await getNgrokTunnels()).find(x => x.public_url?.startsWith('https://'));
   if(other){
@@ -514,10 +545,15 @@ async function startNgrok(ctx){
   const exe = ngrokCommand();
   const check = spawnSync(exe,['version'],{encoding:'utf8',windowsHide:true});
   if(check.error) throw new Error(`ngrok not found. Install and authenticate ngrok first. Error: ${check.error.message}`);
-  ngrokProcess = spawn(exe,['http',String(p)],{windowsHide:true});
-  ngrokProcess.stdout.on('data',d=>log(`[ngrok] ${String(d).trimEnd()}`));
-  ngrokProcess.stderr.on('data',d=>log(`[ngrok:err] ${String(d).trimEnd()}`));
-  ngrokProcess.on('exit',(code,signal)=>{log(`ngrok exited code=${code} signal=${signal}`); ngrokProcess=null; lastPublicUrl=''; refreshPanel();});
+  const child = spawn(exe,['http',String(p)],{windowsHide:true});
+  ngrokProcess = child;
+  child.stdout.on('data',d=>log(`[ngrok] ${String(d).trimEnd()}`));
+  child.stderr.on('data',d=>log(`[ngrok:err] ${String(d).trimEnd()}`));
+  child.on('exit',(code,signal)=>{
+    log(`ngrok exited code=${code} signal=${signal}`);
+    if(ngrokProcess === child){ ngrokProcess=null; lastPublicUrl=''; }
+    refreshPanel();
+  });
   for(let i=0;i<60;i++){
     await new Promise(r=>setTimeout(r,300));
     const url=await getNgrokPublicUrlForPort(p);
@@ -577,13 +613,12 @@ async function stopAll(){
       const data = ensureConfig(globalContext,false);
       const port = Number(data.server.port || selectedPort);
       const tunnels = (await getNgrokTunnels()).filter(t => tunnelPort(t) === port);
-      if(tunnels.length) await stopNgrokTunnels(tunnels);
+      if(tunnels.length || ngrokProcess) await stopNgrokTunnels(tunnels);
     }catch(e){ log(`Could not stop ngrok tunnel cleanly: ${e.message || e}`); }
   }
   const gateway = await stopGatewayProcess();
-  try{ if(ngrokProcess) ngrokProcess.kill(); }catch{}
-  stopStartCommand();
-  ngrokProcess=null; lastPublicUrl=''; setStatus('DevMate: stopped'); refreshPanel();
+  await stopStartCommand();
+  lastPublicUrl=''; setStatus('DevMate: stopped'); refreshPanel();
   return {ok:gateway.stopped || gateway.reason === 'not-running',gateway};
 }
 async function copyUrl(){
@@ -1024,5 +1059,16 @@ function activate(context){
 
   log(`Activated DevMate ${VERSION}`);
 }
-function deactivate(){ if(contextWriteTimer) clearTimeout(contextWriteTimer); contextWriteTimer=null; return lifecycleOperations.run('deactivate',()=>stopAll()); }
+function deactivate(){
+  if(contextWriteTimer) clearTimeout(contextWriteTimer);
+  contextWriteTimer=null;
+  return lifecycleOperations.run('deactivate',async()=>{
+    const stopped = await stopAll();
+    await gatewayController?.dispose({stopOwned:true});
+    gatewayController = null;
+    gatewayControllerKey = '';
+    gatewayProcess = null;
+    return stopped;
+  });
+}
 module.exports = { activate, deactivate };

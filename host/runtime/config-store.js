@@ -109,7 +109,8 @@ function validateReplacement(file) {
 }
 
 function quarantineConfig(file, reason = 'corrupt') {
-  if (!fs.existsSync(file)) return null;
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return null;
   const quarantined = `${file}.${reason}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   try {
     fs.renameSync(file, quarantined);
@@ -158,6 +159,12 @@ function recoverConfigReplacement(file) {
     const recovered = parseJsonObjectFile(file).value;
     assertSupportedConfigVersion(recovered, file);
     return { recovered: true, source: replacement.file, quarantined, value: recovered };
+  }
+
+  if (!mainError && !main?.exists && candidates.length) {
+    const error = configError('DevMate config is missing and interrupted replacement files are not valid', 'config_recovery_failed', file);
+    error.replacementCandidates = candidates.map(candidate => candidate.file);
+    throw error;
   }
 
   cleanupReplacementCandidates(candidates);
@@ -297,6 +304,7 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       reference: false,
       role: 'active'
     }],
+    hostRuntime: { workspaceRoot: normalizedWorkspaceRoot(root) },
     hostContexts: {},
     activeHostId: null,
     vscodeContext: {
@@ -326,6 +334,15 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
     config.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(config.version) || 0);
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    config.hostRuntime ||= {};
+    const boundWorkspace = String(config.hostRuntime.workspaceRoot || '');
+    if (boundWorkspace && boundWorkspace !== rootKey) {
+      const error = configError('DevMate state directory is bound to a different workspace', 'config_workspace_mismatch', file);
+      error.boundWorkspaceRoot = boundWorkspace;
+      error.requestedWorkspaceRoot = rootKey;
+      throw error;
+    }
+    config.hostRuntime.workspaceRoot = rootKey;
     config.server ||= {};
     config.server.port = Number(config.server.port || preferredPort || DEFAULT_PORT);
     config.server.mcpPath ||= '/mcp';

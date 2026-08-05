@@ -192,6 +192,7 @@ class RuntimeController {
   }
 
   async status() {
+    if (this.disposed) return { state: 'disposed', phase: 'disposed', attached: false, owned: false };
     const config = this.ensureConfig();
     const port = Number(config.server?.port || this.preferredPort);
     const health = await healthAt(port);
@@ -421,6 +422,7 @@ class RuntimeController {
   }
 
   async stopInternal() {
+    if (this.disposed) return { stopped: false, reason: 'disposed' };
     const child = this.activeOwnedChild();
     if (!child) {
       const status = await this.status();
