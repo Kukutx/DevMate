@@ -7,9 +7,20 @@ const path = require('node:path');
 const DEFAULT_STARTUP_LEASE_MS = 10000;
 const DEFAULT_STARTUP_POLL_MS = 125;
 const MAX_STARTUP_LOCK_BYTES = 16 * 1024;
+const SAFE_LOCK_NAME = /^[a-zA-Z0-9_.-]+\.lock$/;
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeLockName(value = 'gateway.start.lock') {
+  const name = String(value || '').trim();
+  if (!SAFE_LOCK_NAME.test(name) || name.includes('..')) {
+    const error = new Error(`Invalid DevMate startup lease filename: ${name || '(empty)'}`);
+    error.code = 'DEVMATE_INVALID_STARTUP_LEASE_NAME';
+    throw error;
+  }
+  return name;
 }
 
 function readStartupLease(lockPath) {
@@ -46,12 +57,14 @@ class StartupLease {
   constructor({
     stateDirectory,
     hostId = 'host',
+    lockName = 'gateway.start.lock',
     leaseMs = DEFAULT_STARTUP_LEASE_MS,
     heartbeatMs = 0
   } = {}) {
     if (!stateDirectory) throw new Error('A state directory is required for the startup lease');
     this.stateDirectory = path.resolve(stateDirectory);
-    this.lockPath = path.join(this.stateDirectory, 'gateway.start.lock');
+    this.lockName = normalizeLockName(lockName);
+    this.lockPath = path.join(this.stateDirectory, this.lockName);
     this.hostId = String(hostId || 'host');
     this.leaseMs = Math.max(2000, Number(leaseMs) || DEFAULT_STARTUP_LEASE_MS);
     this.heartbeatMs = Math.max(250, Number(heartbeatMs) || Math.floor(this.leaseMs / 4));
@@ -69,6 +82,7 @@ class StartupLease {
       ownerId: this.ownerId,
       hostId: this.hostId,
       pid: process.pid,
+      lockName: this.lockName,
       acquiredAt: nowIso(),
       leaseMs: this.leaseMs
     };
@@ -155,6 +169,7 @@ class StartupLease {
   snapshot() {
     const current = readStartupLease(this.lockPath);
     return {
+      lockName: this.lockName,
       lockPath: this.lockPath,
       ownerId: this.ownerId,
       hostId: this.hostId,
@@ -194,7 +209,9 @@ module.exports = {
   DEFAULT_STARTUP_LEASE_MS,
   DEFAULT_STARTUP_POLL_MS,
   MAX_STARTUP_LOCK_BYTES,
+  SAFE_LOCK_NAME,
   StartupLease,
+  normalizeLockName,
   quarantineExpiredStartupLease,
   readStartupLease,
   startupLeaseExpired,
