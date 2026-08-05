@@ -42,7 +42,9 @@
     "onCommand:devMate.tunnelDoctor",
     "onCommand:devMate.cloudflareSetToken",
     "onCommand:devMate.cloudflareClearToken",
-    "onCommand:devMate.openTunnelDocs"
+    "onCommand:devMate.openTunnelDocs",
+    "onCommand:devMate.copyHostDiagnostics",
+    "onCommand:devMate.hostSelfCheck"
   ],
   "main": "./extension-entry-host.js",
   "contributes": {
@@ -142,6 +144,14 @@
       {
         "command": "devMate.openTunnelDocs",
         "title": "DevMate: Open Tunnel Documentation"
+      },
+      {
+        "command": "devMate.copyHostDiagnostics",
+        "title": "DevMate: Copy Host Diagnostics"
+      },
+      {
+        "command": "devMate.hostSelfCheck",
+        "title": "DevMate: Host Self-Check"
       }
     ],
     "configuration": {
@@ -417,7 +427,7 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check",
-    "build": "npm run version:check && esbuild gateway/server-entry.mjs --bundle --platform=node --format=esm --target=node18 --outfile=gateway/server.bundle.mjs --packages=external --external:vscode",
+    "build": "npm run version:check && node scripts/build-gateway.mjs",
     "build:obsidian": "npm run version:check && node obsidian-plugin/esbuild.config.mjs && node scripts/check-obsidian-release.mjs --dist",
     "compile": "npm run build",
     "vscode:prepublish": "npm run build",
