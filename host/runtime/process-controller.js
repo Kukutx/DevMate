@@ -11,6 +11,7 @@ const {
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
 const { ensurePersonalConfig, readJson, updateConfig } = require('./config-store.js');
+const { cleanupOwnedGatewayInstanceLock } = require('./instance-lock-cleanup.js');
 const { choosePort, healthAt, healthMatches } = require('./network.js');
 const { OperationCoordinator } = require('./operation-coordinator.js');
 const { StartupLease, waitForStartupLease } = require('./startup-lease.js');
@@ -356,6 +357,12 @@ class RuntimeController {
         launch.exitCode = code;
         launch.signal = signal || null;
         launch.forcedTermination = !!child.forceTerminated;
+        const cleanup = cleanupOwnedGatewayInstanceLock({
+          stateDirectory: this.stateDirectory,
+          runtimeOwnerId: launch.ownerId,
+          pid: launch.pid || child.pid || process.pid
+        });
+        if (cleanup.removed) this.logger(`Removed exited Gateway lock for ${launch.ownerId}.`);
         this.logger(`Gateway exited code=${code} signal=${signal}`);
         if (this.child === child) {
           this.child = null;

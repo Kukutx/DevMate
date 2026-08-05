@@ -6,6 +6,7 @@ const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 
 const VERSION = '3.1.0';
 const BASE_PORT = 8787;
@@ -20,6 +21,7 @@ let selectedPort = BASE_PORT;
 let globalContext = null;
 let startCommandProcess = null;
 let contextWriteTimer = null;
+const lifecycleOperations = new OperationCoordinator({ name: 'vscode-legacy-lifecycle' });
 
 function cfg(){ return vscode.workspace.getConfiguration('devMate'); }
 function configuredPort(){ return Number(cfg().get('port') || BASE_PORT); }
@@ -395,8 +397,27 @@ function spawnNode(script, env){
   child.stdout.on('data',d=>log(`[gateway] ${String(d).trimEnd()}`));
   child.stderr.on('data',d=>log(`[gateway:err] ${String(d).trimEnd()}`));
   child.on('error',e=>log(`Gateway process error: ${e.message}`));
-  child.on('exit',(code,signal)=>{log(`Gateway exited code=${code} signal=${signal}`); gatewayProcess=null; setStatus('DevMate: stopped'); refreshPanel();});
+  child.on('exit',(code,signal)=>{log(`Gateway exited code=${code} signal=${signal}`); if(gatewayProcess === child) gatewayProcess=null; setStatus('DevMate: stopped'); refreshPanel();});
   return child;
+}
+function waitForProcessExit(child, timeoutMs=8000){
+  if(!child || child.exitCode != null) return Promise.resolve(true);
+  return Promise.race([
+    new Promise(resolve=>child.once('exit',()=>resolve(true))),
+    new Promise(resolve=>setTimeout(()=>resolve(false), Math.max(250, Number(timeoutMs) || 8000)))
+  ]);
+}
+async function stopGatewayProcess(){
+  const child = gatewayProcess;
+  if(!child) return {stopped:false,reason:'not-running'};
+  try{ if(child.exitCode == null && !child.killed && !child.terminating) child.kill(); }catch(e){ return {stopped:false,reason:e.message || String(e)}; }
+  let exited = await waitForProcessExit(child, 8000);
+  if(!exited && typeof child.forceTerminate === 'function'){
+    try{ child.forceTerminate(); }catch{}
+    exited = await waitForProcessExit(child, 2500);
+  }
+  if(exited && gatewayProcess === child) gatewayProcess = null;
+  return {stopped:exited,forced:!!child.forceTerminated,reason:exited ? '' : 'process-exit-timeout'};
 }
 function stopStartCommand(){
   try{ if(startCommandProcess) startCommandProcess.kill(); }catch{}
@@ -420,20 +441,33 @@ function runDefaultStartCommand(){
 }
 async function startGateway(ctx){
   if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
-  // If our exact current gateway is already up, reuse it.
-  if(await isCurrentGatewayUp(ctx)){ log('Current gateway already listening.'); setStatus('DevMate: on'); runDefaultStartCommand(); return; }
+  if(await isCurrentGatewayUp(ctx)){
+    const data = ensureConfig(ctx,false);
+    log('Current gateway already listening.');
+    setStatus('DevMate: on');
+    runDefaultStartCommand();
+    return {started:false,attached:!gatewayProcess,port:Number(data.server.port || selectedPort)};
+  }
   const p = await choosePort(ctx);
   ensureConfig(ctx,true,p);
-  if(gatewayProcess){ try{ gatewayProcess.kill(); }catch{} gatewayProcess=null; }
+  if(gatewayProcess){
+    const previous = await stopGatewayProcess();
+    if(!previous.stopped && previous.reason !== 'not-running') throw new Error(`Previous Gateway did not stop: ${previous.reason}`);
+  }
   gatewayProcess = spawnNode(gatewayPath(ctx), { DEVMATE_CONFIG: configPath(ctx), DEVMATE_PUBLIC_HEALTH_DETAILS: cfg().get('publicHealthDetails') ? '1' : '0' });
-  for(let i=0;i<40;i++){
+  for(let i=0;i<60;i++){
     await new Promise(r=>setTimeout(r,250));
     const r = await healthAt(p);
-    if(healthMatches(r, ctx)){ setStatus(`DevMate: on :${p}`); log(`Gateway ready on port ${p}.`); runDefaultStartCommand(); return; }
+    if(healthMatches(r, ctx)){
+      setStatus(`DevMate: on :${p}`);
+      log(`Gateway ready on port ${p}.`);
+      runDefaultStartCommand();
+      return {started:true,attached:false,port:p,health:r.json};
+    }
+    if(gatewayProcess?.exitCode != null) break;
   }
-  try{ if(gatewayProcess) gatewayProcess.kill(); }catch{}
-  gatewayProcess = null;
-  throw new Error('Gateway did not become ready. Open Show Logs for details.');
+  const stopped = await stopGatewayProcess();
+  throw new Error(`Gateway did not become ready.${stopped.reason ? ` Cleanup: ${stopped.reason}.` : ''} Open Show Logs for details.`);
 }
 async function getNgrokTunnels(){
   const r = await httpGet('http://127.0.0.1:4040/api/tunnels',900);
@@ -508,7 +542,7 @@ async function quickStart(ctx){
   try{
     output.show(true);
     if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
-    await startGateway(ctx);
+    const gateway = await startGateway(ctx);
     const publicUrl = await startNgrok(ctx);
     log('Running public MCP preflight through ngrok before copying URL...');
     const test = await mcpHandshakeTest(publicUrl, ctx);
@@ -528,7 +562,14 @@ async function quickStart(ctx){
     log(`Public MCP preflight OK: ${redactUrl(test.mcp)}, tools=${test.toolCount}`);
     vscode.window.showInformationMessage(cfg().get('autoCopyUrl') ? `Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcp)}` : `Ready. Verified MCP URL: ${redactUrl(test.mcp)}`);
     refreshPanel();
-  }catch(e){ updateConnectionSnapshot(ctx,{lastError:String(e.message || e),lastErrorAt:new Date().toISOString()}); log(`ERROR: ${e.stack || e.message || e}`); vscode.window.showErrorMessage(`DevMate failed: ${e.message || e}`); }
+    return {ok:true,gateway,publicUrl,toolCount:test.toolCount,server:test.server};
+  }catch(e){
+    const message = String(e.message || e);
+    updateConnectionSnapshot(ctx,{lastError:message,lastErrorAt:new Date().toISOString()});
+    log(`ERROR: ${e.stack || e.message || e}`);
+    vscode.window.showErrorMessage(`DevMate failed: ${message}`);
+    return {ok:false,error:message,code:e.code || 'DEVMATE_START_FAILED'};
+  }
 }
 async function stopAll(){
   if(globalContext){
@@ -539,10 +580,11 @@ async function stopAll(){
       if(tunnels.length) await stopNgrokTunnels(tunnels);
     }catch(e){ log(`Could not stop ngrok tunnel cleanly: ${e.message || e}`); }
   }
-  try{ if(gatewayProcess) gatewayProcess.kill(); }catch{}
+  const gateway = await stopGatewayProcess();
   try{ if(ngrokProcess) ngrokProcess.kill(); }catch{}
   stopStartCommand();
-  gatewayProcess=null; ngrokProcess=null; lastPublicUrl=''; setStatus('DevMate: stopped'); refreshPanel();
+  ngrokProcess=null; lastPublicUrl=''; setStatus('DevMate: stopped'); refreshPanel();
+  return {ok:gateway.stopped || gateway.reason === 'not-running',gateway};
 }
 async function copyUrl(){
   const data = ensureConfig(globalContext,false);
@@ -912,9 +954,9 @@ function openPanel(ctx){
   panel = vscode.window.createWebviewPanel('devMate','DevMate',vscode.ViewColumn.One,{enableScripts:true});
   panel.onDidDispose(()=>panel=null);
   panel.webview.onDidReceiveMessage(async m=>{
-    if(m.cmd==='quickStart') await quickStart(ctx);
+    if(m.cmd==='quickStart') await lifecycleOperations.run('start',()=>quickStart(ctx));
     if(m.cmd==='copyUrl') await copyUrl();
-    if(m.cmd==='stop') await stopAll();
+    if(m.cmd==='stop') await lifecycleOperations.run('stop',()=>stopAll());
     if(m.cmd==='doctor') await doctor(ctx);
     if(m.cmd==='addReference') await addReference(ctx);
     if(m.cmd==='addReferenceInput') await addReferenceInput(ctx, m.value);
@@ -965,10 +1007,10 @@ function activate(context){
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(()=>scheduleContextRefresh(context)));
   // Primary simple commands shown in the command palette.
-  register(context,'devMate.start',()=>quickStart(context));
+  register(context,'devMate.start',()=>lifecycleOperations.run('start',()=>quickStart(context)));
   register(context,'devMate.open',()=>openPanel(context));
-  register(context,'devMate.stop',()=>stopAll());
-  register(context,'devMate.restart',async()=>{await stopAll(); await quickStart(context);});
+  register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
+  register(context,'devMate.restart',()=>lifecycleOperations.run('restart',async()=>{await stopAll(); return quickStart(context);}));
   register(context,'devMate.copyUrl',()=>copyUrl());
   register(context,'devMate.addReference',()=>addReference(context));
   register(context,'devMate.clearReferences',()=>clearReferences(context));
@@ -982,5 +1024,5 @@ function activate(context){
 
   log(`Activated DevMate ${VERSION}`);
 }
-function deactivate(){ if(contextWriteTimer) clearTimeout(contextWriteTimer); contextWriteTimer=null; return stopAll(); }
+function deactivate(){ if(contextWriteTimer) clearTimeout(contextWriteTimer); contextWriteTimer=null; return lifecycleOperations.run('deactivate',()=>stopAll()); }
 module.exports = { activate, deactivate };
