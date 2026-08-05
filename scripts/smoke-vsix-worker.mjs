@@ -64,6 +64,15 @@ async function waitForHealth(healthAt, healthMatches, port, config, child) {
   throw new Error(`Packaged VSIX Gateway did not become ready; exit=${child.exitCode}; error=${child.lastError?.message || ''}`);
 }
 
+async function stopWorker(child, label) {
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  assert.equal(child.kill(), true, `${label} should accept a shutdown request`);
+  await Promise.race([
+    exited,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} did not stop`)), 5000))
+  ]);
+}
+
 try {
   extractArchive();
   const extensionPath = path.join(extractRoot, 'extension');
@@ -106,7 +115,8 @@ try {
     appVersion: manifest.version
   });
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
-  const child = childProcessModule.spawn(process.execPath, [gatewayEntry], {
+  const instanceLock = path.join(stateDirectory, 'state', 'gateway.lock');
+  const launch = () => childProcessModule.spawn(process.execPath, [gatewayEntry], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
@@ -116,24 +126,30 @@ try {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  assert.equal(child.launchMode, 'worker_threads');
-  const health = await waitForHealth(healthAt, healthMatches, port, config, child);
-  assert.equal(health.json?.name, 'devmate');
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  assert.equal(child.kill(), true);
-  await Promise.race([
-    exited,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Packaged VSIX Worker did not stop')), 5000))
-  ]);
-  router.dispose();
+
+  const first = launch();
+  assert.equal(first.launchMode, 'worker_threads');
+  const firstHealth = await waitForHealth(healthAt, healthMatches, port, config, first);
+  assert.equal(firstHealth.json?.name, 'devmate');
+  await stopWorker(first, 'First packaged VSIX Worker');
+  assert.equal(fs.existsSync(instanceLock), false, 'First packaged Worker should release the Gateway instance lock');
+
+  const second = launch();
+  assert.equal(second.launchMode, 'worker_threads');
+  const secondHealth = await waitForHealth(healthAt, healthMatches, port, config, second);
+  assert.equal(secondHealth.json?.name, 'devmate');
+  await stopWorker(second, 'Restarted packaged VSIX Worker');
+  assert.equal(fs.existsSync(instanceLock), false, 'Restarted packaged Worker should release the Gateway instance lock');
+  router.dispose({ forceRestore: true });
 
   console.log(JSON.stringify({
     ok: true,
     vsix: path.basename(vsix),
     version: manifest.version,
-    launchMode: child.launchMode,
+    launchMode: first.launchMode,
     gateway: path.relative(extensionPath, gatewayEntry),
-    health: health.json?.status || 'ok'
+    health: secondHealth.json?.status || 'ok',
+    restartVerified: true
   }));
 } finally {
   fs.rmSync(extractRoot, { recursive: true, force: true });
