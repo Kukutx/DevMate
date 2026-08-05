@@ -1,0 +1,36 @@
+name: Fix Extension Config Quarantine
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - scripts/fix-extension-config-quarantine.mjs
+      - .github/workflows/fix-extension-config-quarantine.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+
+      - name: Apply asserted fix
+        run: node scripts/fix-extension-config-quarantine.mjs
+
+      - name: Remove temporary files
+        run: rm scripts/fix-extension-config-quarantine.mjs .github/workflows/fix-extension-config-quarantine.yml
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Kukutx@users.noreply.github.com"
+          git add extension-config-io.js scripts/fix-extension-config-quarantine.mjs .github/workflows/fix-extension-config-quarantine.yml
+          git commit -m "Fix config quarantine location"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
