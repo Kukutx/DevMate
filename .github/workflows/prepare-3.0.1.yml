@@ -1,0 +1,83 @@
+name: Prepare DevMate 3.0.1
+
+on:
+  push:
+    branches:
+      - fix/obsidian-worker-runtime
+    paths:
+      - .github/workflows/prepare-3.0.1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/obsidian-worker-runtime
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Apply patch release metadata and lifecycle fix
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          root = Path('.')
+          package_file = root / 'package.json'
+          package = json.loads(package_file.read_text(encoding='utf-8'))
+          package['version'] = '3.0.1'
+          package_file.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
+
+          changelog_file = root / 'CHANGELOG.md'
+          changelog = changelog_file.read_text(encoding='utf-8')
+          release = '''## 3.0.1
+
+          - Replaced the Obsidian host's external executable launch with a self-contained Node Worker so ordinary desktop users do not need VS Code, Node.js, or PowerShell.
+          - Added actionable startup errors, a bounded rotating runtime log, credential-redacted diagnostics, and a Copy diagnostics command.
+          - Added source and built-bundle Worker Gateway smoke tests on Windows and Linux.
+          - Ensured embedded Workers are terminated when the Obsidian plugin unloads, while Gateways owned by another host remain untouched.
+
+          '''
+          if '## 3.0.1\n' not in changelog:
+              changelog = changelog.replace('# Changelog\n\n', '# Changelog\n\n' + release, 1)
+              changelog_file.write_text(changelog, encoding='utf-8')
+
+          main_file = root / 'obsidian-plugin/src/main.js'
+          main = main_file.read_text(encoding='utf-8')
+          old = 'await this.controller?.dispose({ stopOwned: this.settings.stopWhenObsidianCloses });'
+          new = 'await this.controller?.dispose({ stopOwned: true });'
+          if old not in main:
+              raise SystemExit('Could not locate Obsidian unload lifecycle line')
+          main_file.write_text(main.replace(old, new, 1), encoding='utf-8')
+
+          readme_file = root / 'obsidian-plugin/README.md'
+          readme = readme_file.read_text(encoding='utf-8')
+          marker = '- auto start, manual start, restart, or attach to an existing matching Gateway;\n'
+          addition = '- run the bundled Gateway in an embedded Node Worker without requiring an external Node.js installation;\n'
+          if addition not in readme:
+              if marker not in readme:
+                  raise SystemExit('Could not locate Obsidian README capability list')
+              readme_file.write_text(readme.replace(marker, marker + addition, 1), encoding='utf-8')
+
+      - name: Synchronize all version contracts
+        run: npm run version:sync
+
+      - name: Commit prepared release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/prepare-3.0.1.yml
+          git add -A
+          git commit -m "Release DevMate 3.0.1 Obsidian runtime fix"
+          git push origin HEAD:fix/obsidian-worker-runtime
