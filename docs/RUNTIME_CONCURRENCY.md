@@ -39,7 +39,9 @@ The running Gateway records a separate instance lock containing:
 
 The Gateway refreshes this lock while alive. Worker and child-process exits stop the heartbeat. A stale lock can be recovered even when a dead Worker shared the still-running parent process PID. Host-side cleanup may remove a lock only when its runtime owner ID matches the exited Worker, preventing one host from deleting another host's active lock.
 
-## Configuration recovery
+The lock lease is request-aware: it is at least 20 minutes and expands beyond longer configured request timeouts. The normal heartbeat interval is 30 seconds rather than 5 seconds, reducing steady-state lock metadata writes by about 83% while short test leases still use a proportionally faster heartbeat.
+
+## Configuration recovery and write efficiency
 
 `config.json` is no longer treated as a blank first-run configuration when it is corrupt or too large.
 
@@ -47,9 +49,14 @@ The Gateway refreshes this lock while alive. Worker and child-process exits stop
 - Valid interrupted Windows replacement: restore the newest valid replacement.
 - Invalid JSON, invalid root, unreadable path, or over-limit config: quarantine and return an explicit error.
 - Future config version: refuse to overwrite or quarantine it.
-- All writes remain atomic, restrictive, and protected by the cross-process config lock.
+- All changed writes remain atomic, restrictive, and protected by the cross-process config lock.
+- A locked mutation that produces identical JSON returns without creating a temporary file, calling `fsync`, or replacing `config.json`.
 
-This preserves instance IDs, authentication tokens, workspaces, permissions, and host context instead of silently resetting them.
+The no-op write check is important for Obsidian's periodic status refresh and repeated health checks: an unchanged runtime no longer rewrites shared configuration every five seconds. This preserves instance IDs, authentication tokens, workspaces, permissions, and host context while reducing avoidable disk activity.
+
+## Activation-scoped VS Code process layers
+
+VS Code's managed ngrok and Windows credential-compatibility wrappers use ordered `SpawnLayer` instances. Layers install in a known order, reject out-of-order disposal, roll back after activation failure, and restore the exact lower spawn implementation during deactivation or reload. The Gateway Worker router remains below the platform and ngrok layers, so teardown proceeds in strict reverse order without leaving global process wrappers behind.
 
 ## Bounded local health probes
 
@@ -59,7 +66,7 @@ Host health probes cap response bytes and destroy oversized responses. A malform
 
 Runtime changes must pass on Windows and Linux:
 
-1. unit tests for operation ordering, startup lease expiry, config recovery, bounded health reads, Worker shutdown, and owner-matched lock cleanup;
+1. unit tests for operation ordering, startup lease expiry, config recovery, no-op config writes, bounded health reads, Worker shutdown, spawn-layer ordering, and owner-matched lock cleanup;
 2. two controllers starting concurrently against one state directory, with exactly one owned Gateway;
 3. real VSIX extraction and packaged Gateway start/health/stop/same-port restart;
 4. real Obsidian bundle start/health/stop/same-port restart;
