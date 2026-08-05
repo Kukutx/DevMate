@@ -1,0 +1,46 @@
+name: Commit Verified Spawn Layer Migration
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - .github/workflows/commit-spawn-layer-migration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+
+      - name: Reuse verified migration payload
+        shell: bash
+        run: |
+          git show cc1ab8a02f2edc56a54e4200927c199f0597fdeb:.github/workflows/apply-spawn-layer-final.yml > /tmp/verified-migration.yml
+          awk '/^[[:space:]]*python3 - <<'"'"'PY'"'"'$/ {capture=1; next} capture && /^[[:space:]]*PY$/ {exit} capture {sub(/^          /, ""); print}' /tmp/verified-migration.yml > /tmp/apply_spawn_layers.py
+          test -s /tmp/apply_spawn_layers.py
+          python3 /tmp/apply_spawn_layers.py
+
+      - name: Verify and commit atomically
+        shell: bash
+        run: |
+          node --check extension.js
+          node --check extension-entry.js
+          node --check extension-entry-win32.js
+          node --check vscode-host/spawn-layer.js
+          grep -q "SpawnLayer" extension-entry.js
+          grep -q "SpawnLayer" extension-entry-win32.js
+          grep -q "function spawn(...args)" extension.js
+          rm .github/workflows/commit-spawn-layer-migration.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Kukutx@users.noreply.github.com"
+          git add extension.js extension-entry.js extension-entry-win32.js vscode-host/spawn-layer.js .github/workflows/commit-spawn-layer-migration.yml
+          git commit -m "Make VS Code process wrappers activation-scoped"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
