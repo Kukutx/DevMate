@@ -2,6 +2,8 @@
 
 import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
+if (typeof globalThis.require !== 'function') {
+  globalThis.require = createRequire(import.meta.url);
+}
 
 await import('./server-runtime.mjs');
