@@ -232,9 +232,11 @@ function updateConfig(file, mutator) {
     const recovery = recoverConfigReplacement(file);
     const current = recovery.value || {};
     assertSupportedConfigVersion(current, file);
+    const before = JSON.stringify(current);
     const next = mutator(current) || current;
     assertSupportedConfigVersion(next, file);
-    atomicWriteJson(file, next);
+    const unchanged = recovery.value !== null && JSON.stringify(next) === before;
+    if (!unchanged) atomicWriteJson(file, next);
     return next;
   });
 }
