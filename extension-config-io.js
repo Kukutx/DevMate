@@ -176,7 +176,7 @@ function recoverReplacement(fsModule, file) {
   const candidate = candidates.find(item => validConfigFile(fsModule, item.file));
   if (!candidate) {
     if (mainError) {
-      const quarantined = `extension-config-io.js.corrupt-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      const quarantined = `${file}.corrupt-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
       try { fsModule.renameSync(file, quarantined); mainError.quarantinedPath = quarantined; } catch {}
       throw mainError;
     }
