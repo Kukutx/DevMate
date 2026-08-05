@@ -23,6 +23,21 @@ test('normalizes extension writes to the supported shared config version', () =>
   assert.equal(merged.auth.token, 'keep');
 });
 
+test('rejects future versions at the pure merge boundary', () => {
+  const future = { version: SUPPORTED_CONFIG_VERSION + 1, instanceId: 'future' };
+  assert.throws(() => mergeExtensionConfig(future, { version: SUPPORTED_CONFIG_VERSION }), error => {
+    assert.equal(error.code, 'unsupported_config_version');
+    return true;
+  });
+  assert.throws(() => mergeExtensionConfig(
+    { version: SUPPORTED_CONFIG_VERSION, instanceId: 'current' },
+    future
+  ), error => {
+    assert.equal(error.code, 'unsupported_config_version');
+    return true;
+  });
+});
+
 test('rejects future config versions without downgrading them', async t => {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-extension-future-config-'));
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
