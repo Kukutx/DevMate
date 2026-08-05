@@ -2,6 +2,7 @@
 
 const vscode = require('vscode');
 const childProcess = require('child_process');
+const { SpawnLayer } = require('./vscode-host/spawn-layer.js');
 const {
   buildNgrokArgs,
   buildNgrokSpawnOptions,
@@ -25,6 +26,9 @@ let setupOutput = null;
 let lastNoticeKey = '';
 let lastNoticeAt = 0;
 let globalContext = null;
+let managedSpawnLayer = null;
+let activationAttempted = false;
+let activated = false;
 
 function config() {
   return vscode.workspace.getConfiguration('devMate');
@@ -222,14 +226,25 @@ function createExtensionSpawn(originalSpawn) {
   };
 }
 
-function loadBaseExtensionWithNgrokWrapper() {
-  const originalSpawn = childProcess.spawn;
-  childProcess.spawn = createExtensionSpawn(originalSpawn);
-  try {
-    return require('./extension');
-  } finally {
-    childProcess.spawn = originalSpawn;
-  }
+function installManagedSpawnLayer() {
+  if (managedSpawnLayer?.active) return managedSpawnLayer;
+  managedSpawnLayer = new SpawnLayer({
+    childProcess,
+    name: 'devmate-managed-ngrok',
+    wrap: previousSpawn => createExtensionSpawn(previousSpawn)
+  });
+  return managedSpawnLayer.install();
+}
+
+function restoreManagedSpawnLayer() {
+  const layer = managedSpawnLayer;
+  managedSpawnLayer = null;
+  if (!layer) return { disposed: true, alreadyDisposed: true };
+  return layer.dispose();
+}
+
+function loadBaseExtension() {
+  return require('./extension');
 }
 
 async function saveManagedAuthtoken(context, value) {
@@ -494,6 +509,12 @@ async function maybePromptForNgrokSetup(context) {
 }
 
 async function activate(context) {
+  if (activationAttempted || activated) {
+    const error = new Error('DevMate ngrok integration is already active');
+    error.code = 'DEVMATE_NGROK_LAYER_ALREADY_ACTIVE';
+    throw error;
+  }
+  activationAttempted = true;
   globalContext = context;
   setupOutput = vscode.window.createOutputChannel('DevMate Setup');
   context.subscriptions.push(setupOutput);
@@ -505,14 +526,41 @@ async function activate(context) {
   register(context, 'devMate.ngrokDoctor', () => ngrokDoctor());
   register(context, 'devMate.openNgrokDashboard', () => openExternal(NGROK_SETUP_URL));
 
-  baseExtension = loadBaseExtensionWithNgrokWrapper();
-  await baseExtension.activate(context);
-  log(`ngrok integration ready. Account mode: ${usesManagedAccount() ? 'managed' : 'global'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
-  void maybePromptForNgrokSetup(context);
+  installManagedSpawnLayer();
+  try {
+    baseExtension = loadBaseExtension();
+    await baseExtension.activate(context);
+    activated = true;
+    log(`ngrok integration ready. Account mode: ${usesManagedAccount() ? 'managed' : 'global'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
+    void maybePromptForNgrokSetup(context);
+  } catch (error) {
+    try { if (baseExtension?.deactivate) await baseExtension.deactivate(); } catch {}
+    activationAttempted = false;
+    activated = false;
+    restoreManagedSpawnLayer();
+    globalContext = null;
+    throw error;
+  }
 }
 
 async function deactivate() {
-  if (baseExtension?.deactivate) await baseExtension.deactivate();
+  if (!activationAttempted && !activated && !managedSpawnLayer) return;
+  try {
+    if (activationAttempted && baseExtension?.deactivate) await baseExtension.deactivate();
+  } finally {
+    activationAttempted = false;
+    activated = false;
+    restoreManagedSpawnLayer();
+    globalContext = null;
+    setupOutput = null;
+  }
 }
 
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  deactivate,
+  createExtensionSpawn,
+  installManagedSpawnLayer,
+  loadBaseExtension,
+  restoreManagedSpawnLayer
+};

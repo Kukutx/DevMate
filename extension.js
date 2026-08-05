@@ -5,9 +5,12 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
-const { spawn, spawnSync } = require('child_process');
+const childProcess = require('child_process');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
+
+function spawn(...args){ return childProcess.spawn(...args); }
+function spawnSync(...args){ return childProcess.spawnSync(...args); }
 
 const VERSION = '3.1.0';
 const BASE_PORT = 8787;
