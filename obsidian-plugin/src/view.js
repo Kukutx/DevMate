@@ -43,6 +43,7 @@ class DevMateView extends ItemView {
     action('Restart', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
     action('Copy context', () => this.plugin.copyContextBundle());
+    action('Copy diagnostics', () => this.plugin.copyDiagnostics());
 
     const runtime = this.plugin.controller;
     container.createEl('h3', { text: 'Workspace' });
@@ -54,6 +55,18 @@ class DevMateView extends ItemView {
     detail('Vault', this.plugin.vaultRoot);
     detail('State', runtime?.stateDirectory);
     detail('Startup', this.plugin.settings.startupMode);
+    detail('Gateway runtime', runtime?.lastLaunch?.mode || 'embedded Worker');
+
+    const failure = this.plugin.runtimeDiagnostics?.lastFailure;
+    if (failure) {
+      container.createEl('h3', { text: 'Startup problem' });
+      const failureCard = container.createDiv({ cls: 'devmate-status-card' });
+      failureCard.createEl('strong', { text: failure.message });
+      failureCard.createEl('div', {
+        text: 'Use Copy diagnostics when reporting this problem. No note content or MCP token is included.',
+        cls: 'devmate-muted'
+      });
+    }
 
     const note = this.plugin.app.workspace.getActiveFile();
     container.createEl('h3', { text: 'Active note' });
