@@ -1,0 +1,33 @@
+name: Set Lock Heartbeat Interval
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - scripts/set-lock-heartbeat-interval.mjs
+      - .github/workflows/set-lock-heartbeat-interval.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+      - name: Apply asserted change
+        run: node scripts/set-lock-heartbeat-interval.mjs
+      - name: Remove temporary files
+        run: rm scripts/set-lock-heartbeat-interval.mjs .github/workflows/set-lock-heartbeat-interval.yml
+      - name: Commit change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Kukutx@users.noreply.github.com"
+          git add gateway/durable-state.mjs scripts/set-lock-heartbeat-interval.mjs .github/workflows/set-lock-heartbeat-interval.yml
+          git commit -m "Reduce Gateway lock heartbeat writes"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
