@@ -6,6 +6,7 @@ on:
       - refactor/runtime-concurrency-hardening
     paths:
       - .github/workflows/apply-spawn-layer-lifecycle-v2.yml
+      - vscode-host/spawn-layer.js
 
 permissions:
   contents: write
