@@ -8,7 +8,7 @@ const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
 test('health probing remains bounded and uses short candidate-port timeouts', () => {
   const network = read('host/runtime/network.js');
-  assert.match(network, /MAX_HTTP_RESPONSE_BYTES/);
+  assert.match(network, /MAX_HTTP_JSON_BYTES/);
   assert.match(network, /response\.destroy/);
   assert.match(network, /healthAt\(port, 600\)/);
 });
