@@ -80,7 +80,6 @@ class WorkerProcessHandle extends EventEmitter {
     try {
       this.worker.postMessage({ type: 'devmate:shutdown', signal: String(signal || 'SIGTERM') });
       this._terminationTimer = setTimeout(() => this.forceTerminate(), this.forceTerminateMs);
-      this._terminationTimer.unref?.();
     } catch (error) {
       this.lastError = error;
       this.forceTerminate();
