@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   StartupLease,
+  normalizeLockName,
   readStartupLease,
   startupLeaseExpired,
   waitForStartupLease
@@ -26,11 +27,41 @@ test('allows only one startup owner and verifies token ownership on release', ()
   const persisted = readStartupLease(first.lockPath);
   assert.equal(persisted.ownerId, first.ownerId);
   assert.equal(persisted.hostId, 'vscode');
+  assert.equal(persisted.lockName, 'gateway.start.lock');
   assert.equal(first.assertOwned(), true);
   assert.equal(second.release(), false);
   assert.equal(fs.existsSync(first.lockPath), true);
   assert.equal(first.release(), true);
   assert.equal(fs.existsSync(first.lockPath), false);
+});
+
+test('supports independent named startup leases without permitting path escape', () => {
+  const state = temporaryDirectory('devmate-startup-named-');
+  const gateway = new StartupLease({
+    stateDirectory: state,
+    hostId: 'vscode',
+    lockName: 'gateway.start.lock',
+    leaseMs: 2000
+  });
+  const tunnel = new StartupLease({
+    stateDirectory: state,
+    hostId: 'vscode',
+    lockName: 'tunnel.start.lock',
+    leaseMs: 2000
+  });
+
+  assert.equal(gateway.tryAcquire(), true);
+  assert.equal(tunnel.tryAcquire(), true);
+  assert.notEqual(gateway.lockPath, tunnel.lockPath);
+  assert.equal(readStartupLease(tunnel.lockPath).lockName, 'tunnel.start.lock');
+  assert.equal(normalizeLockName('custom-runtime.lock'), 'custom-runtime.lock');
+  assert.throws(() => normalizeLockName('../escape.lock'), error => {
+    assert.equal(error.code, 'DEVMATE_INVALID_STARTUP_LEASE_NAME');
+    return true;
+  });
+  assert.throws(() => normalizeLockName('nested/path.lock'), /Invalid DevMate startup lease filename/);
+  gateway.release();
+  tunnel.release();
 });
 
 test('recovers an expired startup lease even when the recorded process is still alive', () => {
