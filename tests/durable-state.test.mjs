@@ -27,6 +27,18 @@ test('persists namespaced runtime state atomically', () => {
   assert.ok(status.bytes > 0);
 });
 
+test('derives a request-aware instance lock lease while allowing explicit test leases', () => {
+  assert.equal(
+    durable.configuredGatewayInstanceLeaseMs({}),
+    durable.INSTANCE_LOCK_LEASE_MS
+  );
+  assert.equal(
+    durable.configuredGatewayInstanceLeaseMs({ production: { requestTimeoutMs: 60 * 60 * 1000 } }),
+    61 * 60 * 1000
+  );
+  assert.equal(durable.configuredGatewayInstanceLeaseMs({}, 5000), 5000);
+});
+
 test('acquires, heartbeats, and releases an owner-aware instance lock', () => {
   const first = durable.acquireGatewayInstanceLock({ timeoutMs: 1000, leaseMs: 5000 });
   assert.equal(first.instanceId, 'durable-test');
@@ -98,7 +110,7 @@ test('recovers a previous durable document after an interrupted Windows-style re
   fs.rmSync(durable.RUNTIME_STATE_PATH, { force: true });
   fs.writeFileSync(replacement, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
   durable.resetDurableStateForTests();
-  assert.deepEqual(durable.readDurableNamespace('restored', null), { ok: true });
+  assert.deepEqual(durable.readDurableNamespace('restored', null), { restored: undefined }?.restored ?? { ok: true });
   assert.equal(fs.existsSync(durable.RUNTIME_STATE_PATH), true);
   assert.equal(fs.existsSync(replacement), false);
 });
