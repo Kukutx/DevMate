@@ -69,6 +69,7 @@ try {
     'vscode-host/lifecycle.js',
     'vscode-host/gateway-spawn-router.js',
     'vscode-host/runtime-diagnostics.js',
+    'vscode-host/spawn-layer.js',
     'host/runtime-controller.js',
     'host/runtime/config-store.js',
     'host/runtime/diagnostics-store.js',
@@ -158,7 +159,8 @@ try {
     concurrentHostsVerified: true,
     singleWorkerVerified: true,
     samePortRestartVerified: true,
-    ownerLockVerified: true
+    ownerLockVerified: true,
+    spawnLayerPackaged: true
   }));
 } finally {
   await vscodeController?.dispose({ stopOwned: true }).catch(() => {});
