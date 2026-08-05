@@ -1,0 +1,36 @@
+name: Apply Request-Aware Lock Lease
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - scripts/apply-request-aware-lock-lease.mjs
+      - .github/workflows/apply-request-aware-lock-lease.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+
+      - name: Apply asserted migration
+        run: node scripts/apply-request-aware-lock-lease.mjs
+
+      - name: Remove temporary files
+        run: rm scripts/apply-request-aware-lock-lease.mjs .github/workflows/apply-request-aware-lock-lease.yml
+
+      - name: Commit migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Kukutx@users.noreply.github.com"
+          git add gateway/durable-state.mjs scripts/apply-request-aware-lock-lease.mjs .github/workflows/apply-request-aware-lock-lease.yml
+          git commit -m "Make Gateway lock leases request-aware"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
