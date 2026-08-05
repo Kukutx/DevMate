@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.2.0
+
+- Serialized VS Code, Obsidian, and shared RuntimeController lifecycle operations so concurrent Start, Stop, Restart, reconfigure, capture, reload, and unload requests cannot race.
+- Added a recoverable cross-host startup lease so simultaneous VS Code and Obsidian starts converge on one Gateway instead of spawning duplicates.
+- Replaced PID-only Gateway locking with owner-identified, request-aware renewable leases that recover dead Workers even when their Electron parent remains alive.
+- Made failed starts, stops, restarts, and host unloads wait for graceful Worker cleanup with bounded force termination and owner-matched residual-lock removal.
+- Hardened shared configuration recovery: restore valid interrupted replacements, quarantine malformed or oversized state, preserve identity and credentials, bind state to one workspace, and refuse future-version downgrade.
+- Unified VS Code compatibility writes with the shared atomic config store and added activation-scoped ordered process layers for ngrok and Windows credential handling.
+- Bounded loopback health responses and candidate-port probes to prevent unbounded host memory growth from a malformed local service.
+- Eliminated unchanged config rewrites during periodic status checks and reduced the normal Gateway-lock heartbeat frequency from five to thirty seconds, lowering steady-state metadata writes by about 83%.
+- Expanded Windows/Linux source, concurrency, recovery, installed-VSIX, Obsidian-bundle, and real Godot regression gates.
+
 ## 3.1.0
 
 - Rebuilt the VS Code host as isolated lifecycle, state-resolution, context-mirror, diagnostics, and trusted Gateway-launch modules while preserving existing commands and platform capabilities.
