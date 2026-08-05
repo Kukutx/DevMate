@@ -1,0 +1,231 @@
+name: Apply Shared Tunnel Integration V2
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - .github/workflows/apply-shared-tunnel-integration-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+
+      - name: Apply robust integration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          file = Path('extension.js')
+          text = file.read_text()
+
+          def replace_between(start_marker, end_marker, replacement, label):
+              global text
+              start = text.find(start_marker)
+              if start < 0:
+                  raise RuntimeError(f'{label}: start marker missing')
+              end = text.find(end_marker, start + len(start_marker))
+              if end < 0:
+                  raise RuntimeError(f'{label}: end marker missing')
+              text = text[:start] + replacement + text[end:]
+
+          if "TunnelRuntimeCoordinator" not in text:
+              marker = "const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');\n"
+              if marker not in text:
+                  raise RuntimeError('RuntimeController import marker missing')
+              text = text.replace(marker, marker + "const { TunnelRuntimeCoordinator } = require('./host/runtime/tunnel-coordinator.js');\n", 1)
+
+          if 'let tunnelController = null;' not in text:
+              marker = "let gatewayControllerKey = '';\n"
+              if marker not in text:
+                  raise RuntimeError('gateway controller state marker missing')
+              text = text.replace(marker, marker + "let tunnelController = null;\nlet tunnelControllerKey = '';\n", 1)
+
+          helpers = r'''function tunnelProviderName(){
+  return String(cfg().get('tunnelProvider') || 'ngrok').trim().toLowerCase() || 'ngrok';
+}
+function tunnelConfigurationKey(){
+  return JSON.stringify({
+    provider: tunnelProviderName(),
+    publicUrl: String(cfg().get('publicUrl') || ''),
+    ngrokUrl: String(cfg().get('ngrokUrl') || ''),
+    ngrokCommandPath: String(cfg().get('ngrokCommandPath') || ''),
+    ngrokTrafficPolicyFile: String(cfg().get('ngrokTrafficPolicyFile') || ''),
+    cloudflareCommandPath: String(cfg().get('cloudflareCommandPath') || ''),
+    poolingEnabled: cfg().get('ngrokPoolingEnabled') === true
+  });
+}
+async function ensureTunnelController(ctx){
+  const stateDirectory = path.resolve(ctx.globalStorageUri.fsPath);
+  const key = pathKey(stateDirectory);
+  if(tunnelController && tunnelControllerKey === key) return tunnelController;
+  if(tunnelController){
+    const disposed = await tunnelController.dispose({stopOwned:true});
+    if(disposed?.disposed === false) throw new Error(`Previous tunnel controller could not be disposed: ${disposed.reason || 'unknown error'}`);
+  }
+  tunnelController = new TunnelRuntimeCoordinator({
+    stateDirectory,
+    hostId: 'vscode',
+    logger: message => log(message)
+  });
+  tunnelControllerKey = key;
+  return tunnelController;
+}
+
+'''
+          if 'function tunnelProviderName(){' not in text:
+              marker = 'async function startNgrok(ctx){'
+              if marker not in text:
+                  raise RuntimeError('startNgrok marker missing')
+              text = text.replace(marker, helpers + marker, 1)
+
+          start_impl = r'''async function startNgrok(ctx){
+  const data=ensureConfig(ctx,false);
+  const p=Number(data.server.port||selectedPort);
+  const provider=tunnelProviderName();
+  const controller=await ensureTunnelController(ctx);
+  const result=await controller.start({
+    port:p,
+    provider,
+    configurationKey:tunnelConfigurationKey(),
+    timeoutMs:25000,
+    detectExisting:()=>getNgrokPublicUrlForPort(p),
+    launch:async()=>{
+      const exe=ngrokCommand();
+      const chk=spawnSync(exe,['version'],{encoding:'utf8',windowsHide:true});
+      if(chk.error || chk.status!==0) throw new Error(`Tunnel provider command is not available: ${chk.stderr||chk.stdout||chk.error?.message||''}`);
+      const child=spawn(exe,['http',String(p)],{windowsHide:true});
+      ngrokProcess=child;
+      child.stdout?.on('data',d=>log(`[tunnel] ${String(d).trimEnd()}`));
+      child.stderr?.on('data',d=>log(`[tunnel:err] ${String(d).trimEnd()}`));
+      child.on('exit',(code,signal)=>{
+        log(`tunnel process exited code=${code} signal=${signal}`);
+        if(ngrokProcess===child){ ngrokProcess=null; lastPublicUrl=''; }
+        refreshPanel();
+      });
+      return child;
+    },
+    waitReady:async({child})=>{
+      for(let i=0;i<100;i++){
+        await new Promise(r=>setTimeout(r,200));
+        const url=await getNgrokPublicUrlForPort(p);
+        if(url) return url;
+        if(child.exitCode!=null) break;
+      }
+      return '';
+    }
+  });
+  ngrokProcess=result.owned ? result.child : null;
+  lastPublicUrl=result.publicUrl;
+  log(result.attached
+    ? `Attached to shared ${provider} tunnel: ${result.publicUrl}`
+    : `Owned ${provider} tunnel ready: ${result.publicUrl}`);
+  refreshPanel();
+  return result.publicUrl;
+}
+'''
+          replace_between('async function startNgrok(ctx){', 'async function mcpHandshakeTest', start_impl, 'startNgrok')
+
+          stop_impl = r'''async function stopNgrokTunnels(tunnels=[]){
+  if(!tunnelController){
+    if(tunnels.length) log('Leaving existing tunnel running because this VS Code host does not own its process.');
+    return {stopped:false,reason:tunnels.length ? 'managed-by-another-host' : 'not-running'};
+  }
+  const result=await tunnelController.stop();
+  if(!result.stopped){
+    if(result.reason==='managed-by-another-host') log('Leaving shared tunnel running because another host owns it.');
+    return result;
+  }
+  ngrokProcess=null;
+  lastPublicUrl='';
+  for(const t of tunnels){
+    const ok=await deleteNgrokTunnel(t);
+    log(ok ? `Stopped owned tunnel ${t.public_url || t.name}.` : `Owned tunnel process stopped; compatibility API cleanup was unavailable for ${t.public_url || t.name}.`);
+  }
+  refreshPanel();
+  return result;
+}
+'''
+          replace_between('async function stopNgrokTunnels(tunnels=[]){', 'async function stopConflictingTunnels', stop_impl, 'stopNgrokTunnels')
+
+          text, count = re.subn(
+              r"if\(tunnels\.length \|\| ngrokProcess(?: \|\| tunnelController\?\.status\(\)\.record)?\) await stopNgrokTunnels\(tunnels\);",
+              "if(tunnels.length || ngrokProcess || tunnelController?.status().record) await stopNgrokTunnels(tunnels);",
+              text,
+              count=1
+          )
+          if count != 1:
+              raise RuntimeError('stopAll tunnel invocation marker missing')
+
+          copy_impl = r'''async function copyUrl(){
+  const data = ensureConfig(globalContext,false);
+  const sharedUrl = tunnelController?.status().record?.publicUrl || '';
+  const url = sharedUrl || await getNgrokPublicUrlForPort(Number(data.server.port || selectedPort));
+  if(!url) return vscode.window.showWarningMessage('No public tunnel URL for the current gateway. Run One-click Start first.');
+  try{
+    const test = await mcpHandshakeTest(url, globalContext);
+    const stamp = new Date().toISOString();
+    await vscode.env.clipboard.writeText(test.mcp);
+    updateConnectionSnapshot(globalContext, {
+      lastPreflightAt: stamp,
+      lastCopiedAt: stamp,
+      lastPublicHost: publicHost(url),
+      lastMcpPath: MCP_PATH,
+      lastToolCount: test.toolCount,
+      lastServerName: test.server?.name || 'devmate',
+      lastError: '',
+      lastErrorAt: null
+    });
+    vscode.window.showInformationMessage(`Copied verified MCP URL: ${redactUrl(test.mcp)}`);
+  }catch(e){ updateConnectionSnapshot(globalContext,{lastError:String(e.message || e),lastErrorAt:new Date().toISOString()}); log(`MCP URL verification failed: ${e.stack || e.message || e}`); vscode.window.showErrorMessage(`MCP URL is not healthy: ${e.message || e}`); }
+}
+'''
+          replace_between('async function copyUrl(){', 'async function copyStarterPrompt', copy_impl, 'copyUrl')
+
+          deactivate_impl = r'''function deactivate(){
+  if(contextWriteTimer) clearTimeout(contextWriteTimer);
+  contextWriteTimer=null;
+  return lifecycleOperations.run('deactivate',async()=>{
+    const stopped = await stopAll();
+    await tunnelController?.dispose({stopOwned:true});
+    tunnelController = null;
+    tunnelControllerKey = '';
+    ngrokProcess = null;
+    await gatewayController?.dispose({stopOwned:true});
+    gatewayController = null;
+    gatewayControllerKey = '';
+    gatewayProcess = null;
+    return stopped;
+  });
+}
+'''
+          replace_between('function deactivate(){', 'module.exports = { activate, deactivate };', deactivate_impl, 'deactivate')
+
+          file.write_text(text)
+          PY
+
+      - name: Verify and commit atomically
+        shell: bash
+        run: |
+          node --check extension.js
+          node --check host/runtime/tunnel-coordinator.js
+          grep -q "TunnelRuntimeCoordinator" extension.js
+          grep -q "tunnelController?.status().record" extension.js
+          grep -q "DEVMATE_TUNNEL_CONFIGURATION_CONFLICT" host/runtime/tunnel-coordinator.js
+          rm -f .github/workflows/apply-shared-tunnel-integration.yml .github/workflows/apply-shared-tunnel-integration-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Kukutx@users.noreply.github.com"
+          git add extension.js .github/workflows/apply-shared-tunnel-integration.yml .github/workflows/apply-shared-tunnel-integration-v2.yml
+          git commit -m "Coordinate shared public tunnels across VS Code hosts"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
