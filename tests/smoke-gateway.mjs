@@ -12,7 +12,7 @@ const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundl
 
 const config = {
   version: 9,
-  appVersion: '3.0.1',
+  appVersion: '3.1.0',
   instanceId: `smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
   runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },

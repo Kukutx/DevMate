@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.1.0
+
+- Rebuilt the VS Code host as isolated lifecycle, state-resolution, context-mirror, diagnostics, and trusted Gateway-launch modules while preserving existing commands and platform capabilities.
+- Replaced VS Code's executable-based Gateway launch with the shared embedded Worker runtime already used by Obsidian, without intercepting ordinary Git, shell, browser, or tunnel subprocesses.
+- Added graceful Worker shutdown with HTTP and service cleanup, Gateway lock release, bounded forced termination, and same-port restart verification.
+- Unified VS Code and Obsidian on one self-contained Gateway build configuration so installed packages no longer depend on repository node_modules.
+- Added redacted rotating VS Code host diagnostics, Host Self-Check and Copy Host Diagnostics commands, and safe reload prompts for workspace or shared-state changes.
+- Added Windows and Linux installed-artifact gates that extract the real VSIX and Obsidian bundle, start their packaged Gateways, health-check, stop, verify lock cleanup, and restart on the same port.
+
 ## 3.0.1
 
 - Replaced the Obsidian host's external executable launch with a self-contained Node Worker so ordinary desktop users do not need VS Code, Node.js, or PowerShell.
