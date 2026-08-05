@@ -1,5 +1,7 @@
 # VS Code host runtime
 
+This architecture is the default VS Code host runtime in DevMate 3.1.0 and later.
+
 DevMate's VS Code host is a thin lifecycle layer around the shared Gateway and platform capabilities. It is designed so that a normal user only installs the VSIX and opens a workspace. No external Node.js installation, terminal command, or manually managed Gateway process is required.
 
 ## Architecture
