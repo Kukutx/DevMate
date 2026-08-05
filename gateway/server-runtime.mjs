@@ -40,7 +40,6 @@ function closeHttpServer(server, timeoutMs = 3000) {
       try { server.closeAllConnections?.(); } catch {}
       finish();
     }, timeoutMs);
-    timer.unref?.();
     try {
       server.close(() => {
         clearTimeout(timer);
@@ -82,7 +81,11 @@ process.once('exit', () => { try { releaseGatewayInstanceLock(); } catch {} });
 
 if (!isMainThread && parentPort) {
   parentPort.on('message', message => {
-    if (message?.type === 'devmate:shutdown') shutdownAndExit(message.signal || 'worker-message');
+    if (message?.type !== 'devmate:shutdown') return;
+    const expectedOwner = String(process.env.DEVMATE_RUNTIME_OWNER_ID || '');
+    const requestedOwner = String(message.runtimeOwnerId || '');
+    if (requestedOwner && expectedOwner && requestedOwner !== expectedOwner) return;
+    shutdownAndExit(message.signal || 'worker-message');
   });
 }
 

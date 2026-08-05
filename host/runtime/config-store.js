@@ -137,6 +137,8 @@ function recoverConfigReplacement(file) {
     mainError = error;
   }
 
+  if (mainError?.code === 'unsupported_config_version') throw mainError;
+
   if (main?.exists && !mainError) {
     cleanupReplacementCandidates(candidates);
     return { recovered: false, source: null, quarantined: null, value: main.value };
