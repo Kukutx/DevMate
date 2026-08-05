@@ -49,6 +49,9 @@ jobs:
       - name: Build Obsidian plugin
         run: npm run build:obsidian
 
+      - name: Smoke test Obsidian Worker bundle
+        run: node scripts/smoke-obsidian-worker.mjs
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
@@ -99,6 +102,9 @@ jobs:
 
       - name: Linux Obsidian plugin build
         run: npm run build:obsidian
+
+      - name: Linux Obsidian Worker bundle smoke test
+        run: node scripts/smoke-obsidian-worker.mjs
 
       - name: Install virtual display
         run: |
