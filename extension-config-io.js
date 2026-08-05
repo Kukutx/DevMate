@@ -5,6 +5,7 @@ const Module = require('module');
 const path = require('path');
 const crypto = require('crypto');
 const { withFileLockSync } = require('./config-file-lock.cjs');
+const { SUPPORTED_CONFIG_VERSION } = require('./host/runtime/constants.js');
 
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 
@@ -31,6 +32,19 @@ function parseJsonValue(value) {
   return parsed;
 }
 
+function assertSupportedConfigVersion(value, file = 'DevMate config') {
+  const version = Number(value?.version || 0);
+  if (Number.isFinite(version) && version > SUPPORTED_CONFIG_VERSION) {
+    const error = new Error(`DevMate config version ${version} is newer than supported version ${SUPPORTED_CONFIG_VERSION}: ${file}`);
+    error.code = 'unsupported_config_version';
+    error.configVersion = version;
+    error.supportedVersion = SUPPORTED_CONFIG_VERSION;
+    error.configFile = file;
+    throw error;
+  }
+  return value;
+}
+
 function mergeWorkspaces(candidate, current) {
   const requested = (Array.isArray(candidate) ? candidate : []).filter(item =>
     item?.trusted !== true && item?.role !== 'trusted'
@@ -49,16 +63,25 @@ function mergeWorkspaces(candidate, current) {
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
-  if (!Object.keys(current).length) return candidate;
+  assertSupportedConfigVersion(current);
+  assertSupportedConfigVersion(candidate);
+  if (!Object.keys(current).length) {
+    return { ...candidate, version: Math.max(SUPPORTED_CONFIG_VERSION, Number(candidate.version) || 0) };
+  }
 
   const merged = { ...current };
   const extensionOwned = [
-    'version', 'appVersion', 'server', 'permissions', 'maintenance', 'commands',
+    'appVersion', 'server', 'permissions', 'maintenance', 'commands',
     'connection', 'vscodeContext', 'activeWorkspaceId', 'deployment', 'production'
   ];
   for (const key of extensionOwned) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
+  merged.version = Math.max(
+    SUPPORTED_CONFIG_VERSION,
+    Number(current.version) || 0,
+    Number(candidate.version) || 0
+  );
   merged.instanceId = has(current, 'instanceId') ? current.instanceId : candidate.instanceId;
 
   const currentAuth = object(current.auth);
@@ -128,21 +151,37 @@ function validConfigFile(fsModule, file) {
   try {
     const stat = fsModule.statSync(file, { throwIfNoEntry: false });
     if (!stat?.isFile() || stat.size > MAX_CONFIG_BYTES) return false;
-    parseJsonValue(fsModule.readFileSync(file, 'utf8'));
+    const parsed = parseJsonValue(fsModule.readFileSync(file, 'utf8'));
+    assertSupportedConfigVersion(parsed, file);
     return true;
   } catch { return false; }
 }
 
 function recoverReplacement(fsModule, file) {
   const candidates = replacementCandidates(fsModule, file);
-  if (fsModule.existsSync(file) && validConfigFile(fsModule, file)) {
-    for (const candidate of candidates) {
-      try { fsModule.rmSync(candidate.file, { force: true }); } catch {}
+  let mainError = null;
+  if (fsModule.existsSync(file)) {
+    try {
+      const current = parseJsonValue(fsModule.readFileSync(file, 'utf8'));
+      assertSupportedConfigVersion(current, file);
+      for (const candidate of candidates) {
+        try { fsModule.rmSync(candidate.file, { force: true }); } catch {}
+      }
+      return null;
+    } catch (error) {
+      if (error?.code === 'unsupported_config_version') throw error;
+      mainError = error;
+    }
+  }
+  const candidate = candidates.find(item => validConfigFile(fsModule, item.file));
+  if (!candidate) {
+    if (mainError) {
+      const quarantined = `extension-config-io.js.corrupt-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      try { fsModule.renameSync(file, quarantined); mainError.quarantinedPath = quarantined; } catch {}
+      throw mainError;
     }
     return null;
   }
-  const candidate = candidates.find(item => validConfigFile(fsModule, item.file));
-  if (!candidate) return null;
   if (fsModule.existsSync(file)) {
     try { fsModule.renameSync(file, `${file}.corrupt-${Date.now()}`); }
     catch { try { fsModule.rmSync(file, { force: true }); } catch {} }
@@ -269,6 +308,7 @@ function loadWithConfigWriteInterceptor(modulePath, file) {
 
 module.exports = {
   MAX_CONFIG_BYTES,
+  assertSupportedConfigVersion,
   atomicWriteJson,
   createConfigFsProxy,
   loadWithConfigWriteInterceptor,
