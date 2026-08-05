@@ -5,9 +5,9 @@ const { EventEmitter } = require('node:events');
 const { Worker } = require('node:worker_threads');
 
 function normalizeEntry(value) {
-  const entry = path.resolve(String(value || ''));
-  if (!entry) throw new Error('A bundled Gateway entry is required');
-  return entry;
+  const text = String(value || '').trim();
+  if (!text) throw new Error('A bundled Gateway entry is required');
+  return path.resolve(text);
 }
 
 class WorkerProcessHandle extends EventEmitter {
