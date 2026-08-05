@@ -9,7 +9,8 @@ export const RUNTIME_STATE_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'runtime-st
 export const INSTANCE_LOCK_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'gateway.lock') : '';
 export const DOCUMENT_VERSION = 1;
 export const MAX_DURABLE_STATE_BYTES = 128 * 1024 * 1024;
-export const INSTANCE_LOCK_LEASE_MS = 30000;
+export const INSTANCE_LOCK_LEASE_MS = 20 * 60 * 1000;
+export const INSTANCE_LOCK_LEASE_MARGIN_MS = 60 * 1000;
 export const INSTANCE_LOCK_HEARTBEAT_MS = 5000;
 export const INSTANCE_LOCK_ACQUIRE_TIMEOUT_MS = 10000;
 export const MAX_INSTANCE_LOCK_BYTES = 64 * 1024;
@@ -344,11 +345,27 @@ export function stopGatewayInstanceLockHeartbeat() {
   return true;
 }
 
+export function configuredGatewayInstanceLeaseMs(config, requestedLeaseMs = null) {
+  if (requestedLeaseMs != null) {
+    return Math.max(5000, Number(requestedLeaseMs) || INSTANCE_LOCK_LEASE_MS);
+  }
+  const configuredRequestMs = Math.max(
+    Number(config?.production?.requestTimeoutMs) || 0,
+    Number(config?.runtime?.defaultCommandTimeoutMs) || 0
+  );
+  return Math.max(
+    INSTANCE_LOCK_LEASE_MS,
+    configuredRequestMs > 0 ? configuredRequestMs + INSTANCE_LOCK_LEASE_MARGIN_MS : 0
+  );
+}
+
 export function acquireGatewayInstanceLock({
   timeoutMs = INSTANCE_LOCK_ACQUIRE_TIMEOUT_MS,
-  leaseMs = INSTANCE_LOCK_LEASE_MS
+  leaseMs = null
 } = {}) {
   const runtimeOwnerId = String(process.env.DEVMATE_RUNTIME_OWNER_ID || `process-${process.pid}`);
+  const config = readConfig();
+  const effectiveLeaseMs = configuredGatewayInstanceLeaseMs(config, leaseMs);
   if (!INSTANCE_LOCK_PATH || process.env.DEVMATE_DISABLE_INSTANCE_LOCK === '1') {
     heldLock = {
       disabled: true,
@@ -358,13 +375,12 @@ export function acquireGatewayInstanceLock({
       instanceId: readConfig()?.instanceId || null,
       acquiredAt: now(),
       heartbeatAt: now(),
-      leaseMs
+      leaseMs: effectiveLeaseMs
     };
     return { ...heldLock };
   }
   if (heldLock) return { ...heldLock };
   ensureStateRoot();
-  const config = readConfig();
   const acquiredAt = now();
   const payload = {
     version: 2,
@@ -378,7 +394,7 @@ export function acquireGatewayInstanceLock({
     configPath: CONFIG_PATH,
     acquiredAt,
     heartbeatAt: acquiredAt,
-    leaseMs: Math.max(5000, Number(leaseMs) || INSTANCE_LOCK_LEASE_MS)
+    leaseMs: effectiveLeaseMs
   };
   const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || INSTANCE_LOCK_ACQUIRE_TIMEOUT_MS);
 
