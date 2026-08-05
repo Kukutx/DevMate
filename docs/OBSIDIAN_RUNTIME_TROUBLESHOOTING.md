@@ -1,6 +1,6 @@
 # Obsidian runtime troubleshooting
 
-DevMate for Obsidian is self-contained. A normal desktop user does not need to install Node.js, VS Code, a terminal, or a separate Gateway service.
+DevMate for Obsidian is self-contained. A normal desktop user does not need to install Node.js, VS Code, a terminal, or a separate Gateway service. The distributed `gateway/server.mjs` includes its runtime locking dependency and is tested directly after packaging on Windows and Linux.
 
 ## Expected first start
 
@@ -34,7 +34,7 @@ The plugin keeps a rotating log at:
 <DevMate state directory>/logs/obsidian-runtime.log
 ```
 
-The log is bounded to 512 KiB, rotates once, and redacts URL and Bearer-token credentials.
+The log is bounded to 512 KiB, rotates once, and redacts URL, structured, and Bearer-token credentials.
 
 ## Safe recovery order
 
