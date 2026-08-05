@@ -1,0 +1,36 @@
+name: Apply Spawn Layer Lifecycle
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - scripts/apply-spawn-layer-lifecycle.mjs
+      - .github/workflows/apply-spawn-layer-lifecycle.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+          fetch-depth: 0
+
+      - name: Apply asserted patch
+        run: node scripts/apply-spawn-layer-lifecycle.mjs
+
+      - name: Remove temporary migration files
+        run: rm scripts/apply-spawn-layer-lifecycle.mjs .github/workflows/apply-spawn-layer-lifecycle.yml
+
+      - name: Commit migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extension.js extension-entry.js extension-entry-win32.js scripts/apply-spawn-layer-lifecycle.mjs .github/workflows/apply-spawn-layer-lifecycle.yml
+          git commit -m "Make VS Code spawn wrappers activation-scoped"
+          git push origin HEAD:refactor/runtime-concurrency-hardening
