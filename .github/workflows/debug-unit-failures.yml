@@ -1,0 +1,37 @@
+name: Debug Unit Failures
+
+on:
+  push:
+    branches:
+      - refactor/runtime-concurrency-hardening
+    paths:
+      - .github/workflows/debug-unit-failures.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-concurrency-hardening
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run and summarize failures
+        shell: bash
+        run: |
+          set +e
+          npm run test:unit > unit.log 2>&1
+          status=$?
+          echo "TEST_EXIT=$status"
+          echo "===== FAILURE SUMMARY ====="
+          grep -n -E "not ok|failureType:|error:|code: 'ERR_|AssertionError|location:" unit.log | tail -n 160 || true
+          echo "===== LOG TAIL ====="
+          tail -n 240 unit.log
+          exit 0
