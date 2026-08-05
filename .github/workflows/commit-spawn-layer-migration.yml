@@ -20,9 +20,11 @@ jobs:
           ref: refactor/runtime-concurrency-hardening
           fetch-depth: 0
 
-      - name: Reuse verified migration payload
+      - name: Restore module and reuse verified migration payload
         shell: bash
         run: |
+          mkdir -p vscode-host
+          git show 8c8c479be45c9f8564ddcce37706666f45b46574:vscode-host/spawn-layer.js > vscode-host/spawn-layer.js
           git show cc1ab8a02f2edc56a54e4200927c199f0597fdeb:.github/workflows/apply-spawn-layer-final.yml > /tmp/verified-migration.yml
           awk '/^[[:space:]]*python3 - <<'"'"'PY'"'"'$/ {capture=1; next} capture && /^[[:space:]]*PY$/ {exit} capture {sub(/^          /, ""); print}' /tmp/verified-migration.yml > /tmp/apply_spawn_layers.py
           test -s /tmp/apply_spawn_layers.py
