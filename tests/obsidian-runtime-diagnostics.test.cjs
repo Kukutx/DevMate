@@ -20,6 +20,7 @@ test('runtime diagnostics redact credentials and persist a bounded local log', (
   const diagnostics = new RuntimeDiagnostics({ stateDirectory: state, pluginVersion: '3.0.1', vaultRoot: state });
   diagnostics.append('Gateway URL http://127.0.0.1:8787/mcp?token=very-secret');
   diagnostics.append('Authorization: Bearer another-secret');
+  diagnostics.append('{"token":"structured-secret","state":"starting"}');
   diagnostics.recordFailure(Object.assign(new Error('startup failed'), { code: 'TEST_FAILURE' }));
 
   const report = diagnostics.report({
@@ -29,7 +30,7 @@ test('runtime diagnostics redact credentials and persist a bounded local log', (
   });
 
   assert.match(report, /\[redacted\]/);
-  assert.doesNotMatch(report, /very-secret|another-secret/);
+  assert.doesNotMatch(report, /very-secret|another-secret|structured-secret/);
   assert.match(report, /worker_threads/);
   assert.equal(fs.existsSync(diagnostics.logFile), true);
   assert.equal(diagnostics.lastFailure.code, 'TEST_FAILURE');
@@ -38,4 +39,5 @@ test('runtime diagnostics redact credentials and persist a bounded local log', (
 test('diagnostic normalization handles multiline messages', () => {
   assert.equal(normalizeLogMessage('one\r\ntwo'), 'one\ntwo');
   assert.equal(redactSecrets('x?token=secret&y=1'), 'x?token=[redacted]&y=1');
+  assert.equal(redactSecrets('{"token":"secret-json"}'), '{"token":"[redacted]"}');
 });
