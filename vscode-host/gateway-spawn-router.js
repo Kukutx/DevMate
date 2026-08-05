@@ -89,11 +89,11 @@ function installGatewayWorkerRouter({
         try { handle.kill(); } catch {}
       }
     },
-    dispose() {
+    dispose({ forceRestore = false } = {}) {
       if (!state.active) return;
       state.active = false;
       api.stopOwned();
-      if (childProcess.spawn === routedSpawn) childProcess.spawn = previousSpawn;
+      if (forceRestore || childProcess.spawn === routedSpawn) childProcess.spawn = previousSpawn;
       if (childProcess[ROUTER_STATE] === state) delete childProcess[ROUTER_STATE];
     }
   };
