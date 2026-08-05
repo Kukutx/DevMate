@@ -19,6 +19,9 @@ const vsix = candidates[0].file;
 const extractRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-smoke-'));
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-workspace-'));
 const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-state-'));
+let router = null;
+let vscodeController = null;
+let obsidianController = null;
 
 function extractArchive() {
   const tar = spawnSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', vsix, '-C', extractRoot], {
@@ -53,26 +56,6 @@ function freePort() {
   });
 }
 
-async function waitForHealth(healthAt, healthMatches, port, config, child) {
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline) {
-    const health = await healthAt(port, 1000);
-    if (healthMatches(health, config)) return health;
-    if (child.exitCode != null) break;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  throw new Error(`Packaged VSIX Gateway did not become ready; exit=${child.exitCode}; error=${child.lastError?.message || ''}`);
-}
-
-async function stopWorker(child, label) {
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  assert.equal(child.kill(), true, `${label} should accept a shutdown request`);
-  await Promise.race([
-    exited,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} did not stop`)), 5000))
-  ]);
-}
-
 try {
   extractArchive();
   const extensionPath = path.join(extractRoot, 'extension');
@@ -86,8 +69,15 @@ try {
     'vscode-host/lifecycle.js',
     'vscode-host/gateway-spawn-router.js',
     'vscode-host/runtime-diagnostics.js',
-    'host/runtime/worker-process.js',
+    'host/runtime-controller.js',
+    'host/runtime/config-store.js',
     'host/runtime/diagnostics-store.js',
+    'host/runtime/instance-lock-cleanup.js',
+    'host/runtime/network.js',
+    'host/runtime/operation-coordinator.js',
+    'host/runtime/process-controller.js',
+    'host/runtime/startup-lease.js',
+    'host/runtime/worker-process.js',
     'gateway/server.bundle.mjs'
   ];
   for (const relative of requiredFiles) {
@@ -97,61 +87,83 @@ try {
 
   const requireFromVsix = createRequire(packageFile);
   const { installGatewayWorkerRouter } = requireFromVsix('./vscode-host/gateway-spawn-router.js');
-  const { ensurePersonalConfig } = requireFromVsix('./host/runtime-controller.js');
-  const { healthAt, healthMatches } = requireFromVsix('./host/runtime/network.js');
+  const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
   const childProcessModule = { spawn() { throw new Error('Non-Gateway spawn should not be used in VSIX smoke test'); } };
-  const router = installGatewayWorkerRouter({
+  router = installGatewayWorkerRouter({
     childProcess: childProcessModule,
     extensionPath,
     diagnostics: { append() {}, recordFailure(error) { throw error; } }
   });
 
   const port = await freePort();
-  const configFile = path.join(stateDirectory, 'config.json');
-  const config = ensurePersonalConfig({
-    configFile,
-    workspaceRoot,
-    preferredPort: port,
-    appVersion: manifest.version
-  });
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
+  const controllerOptions = {
+    workspaceRoot,
+    stateDirectory,
+    gatewayEntry,
+    preferredPort: port,
+    appVersion: manifest.version,
+    nodeExecutable: process.execPath,
+    spawnImpl: childProcessModule.spawn
+  };
+  vscodeController = new RuntimeController({ ...controllerOptions, hostId: 'vscode-artifact' });
+  obsidianController = new RuntimeController({ ...controllerOptions, hostId: 'obsidian-artifact' });
+
+  const [vscodeStart, obsidianStart] = await Promise.all([
+    vscodeController.start({ timeoutMs: 20000 }),
+    obsidianController.start({ timeoutMs: 20000 })
+  ]);
+  const starts = [vscodeStart, obsidianStart];
+  assert.equal(starts.filter(result => result.started).length, 1, 'Exactly one packaged host must start the Gateway');
+  assert.equal(starts.filter(result => result.attached).length, 1, 'The second packaged host must attach');
+  assert.equal(router.snapshot().ownedCount, 1, 'Only one packaged Worker may exist for shared state');
+
+  const owner = vscodeStart.started ? vscodeController : obsidianController;
+  const follower = vscodeStart.started ? obsidianController : vscodeController;
   const instanceLock = path.join(stateDirectory, 'state', 'gateway.lock');
-  const launch = () => childProcessModule.spawn(process.execPath, [gatewayEntry], {
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      DEVMATE_CONFIG: configFile,
-      DEVMATE_PUBLIC_HEALTH_DETAILS: '0'
-    },
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
+  const startupLock = path.join(stateDirectory, 'gateway.start.lock');
+  const lock = JSON.parse(fs.readFileSync(instanceLock, 'utf8'));
+  assert.equal(lock.runtimeOwnerId, owner.lastLaunch.ownerId);
+  assert.equal(lock.launchMode, 'worker_threads');
+  assert.ok(Number(lock.threadId) > 0);
+  assert.equal(lock.pid, process.pid);
+  assert.equal(fs.existsSync(startupLock), false, 'Startup lease must be released after convergence');
 
-  const first = launch();
-  assert.equal(first.launchMode, 'worker_threads');
-  const firstHealth = await waitForHealth(healthAt, healthMatches, port, config, first);
-  assert.equal(firstHealth.json?.name, 'devmate');
-  await stopWorker(first, 'First packaged VSIX Worker');
-  assert.equal(fs.existsSync(instanceLock), false, 'First packaged Worker should release the Gateway instance lock');
+  const followerStop = await follower.stop();
+  assert.equal(followerStop.stopped, false);
+  assert.equal(followerStop.reason, 'managed-by-another-host');
+  assert.equal((await owner.stop()).stopped, true);
+  assert.equal(fs.existsSync(instanceLock), false, 'Owner stop must release the Gateway lock');
+  assert.equal(router.snapshot().ownedCount, 0);
 
-  const second = launch();
-  assert.equal(second.launchMode, 'worker_threads');
-  const secondHealth = await waitForHealth(healthAt, healthMatches, port, config, second);
-  assert.equal(secondHealth.json?.name, 'devmate');
-  await stopWorker(second, 'Restarted packaged VSIX Worker');
-  assert.equal(fs.existsSync(instanceLock), false, 'Restarted packaged Worker should release the Gateway instance lock');
-  router.dispose({ forceRestore: true });
+  const restarted = await owner.start({ timeoutMs: 20000 });
+  assert.equal(restarted.started, true);
+  assert.equal(router.snapshot().ownedCount, 1);
+  assert.equal((await owner.stop()).stopped, true);
+  assert.equal(fs.existsSync(instanceLock), false, 'Same-port restart must release the Gateway lock again');
+  assert.equal(fs.existsSync(startupLock), false, 'Restart must release the startup lease');
+
+  await follower.dispose();
+  await owner.dispose();
+  const routerResult = await router.dispose({ forceRestore: true });
+  assert.equal(routerResult.stopped.exited, 0);
+  router = null;
 
   console.log(JSON.stringify({
     ok: true,
     vsix: path.basename(vsix),
     version: manifest.version,
-    launchMode: first.launchMode,
+    launchMode: lock.launchMode,
     gateway: path.relative(extensionPath, gatewayEntry),
-    health: secondHealth.json?.status || 'ok',
-    restartVerified: true
+    concurrentHostsVerified: true,
+    singleWorkerVerified: true,
+    samePortRestartVerified: true,
+    ownerLockVerified: true
   }));
 } finally {
+  await vscodeController?.dispose({ stopOwned: true }).catch(() => {});
+  await obsidianController?.dispose({ stopOwned: true }).catch(() => {});
+  await router?.dispose({ forceRestore: true }).catch(() => {});
   fs.rmSync(extractRoot, { recursive: true, force: true });
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
   fs.rmSync(stateDirectory, { recursive: true, force: true });
