@@ -46,6 +46,9 @@ jobs:
       - name: Package VSIX
         run: npm run package:vsix
 
+      - name: Smoke test packaged VSIX Worker
+        run: node scripts/smoke-vsix-worker.mjs
+
       - name: Build Obsidian plugin
         run: npm run build:obsidian
 
@@ -99,6 +102,12 @@ jobs:
 
       - name: Linux gateway smoke test
         run: npm run smoke:gateway
+
+      - name: Linux package VSIX
+        run: npm run package:vsix
+
+      - name: Linux packaged VSIX Worker smoke test
+        run: node scripts/smoke-vsix-worker.mjs
 
       - name: Linux Obsidian plugin build
         run: npm run build:obsidian
