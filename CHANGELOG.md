@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.1
+
+- Replaced the Obsidian host's external executable launch with a self-contained Node Worker so ordinary desktop users do not need VS Code, Node.js, or PowerShell.
+- Added actionable startup errors, a bounded rotating runtime log, credential-redacted diagnostics, and a Copy diagnostics command.
+- Added source and built-bundle Worker Gateway smoke tests on Windows and Linux.
+- Ensured embedded Workers are terminated when the Obsidian plugin unloads, while Gateways owned by another host remain untouched.
+
 ## 3.0.0
 
 - Refactored the shared desktop host runtime into focused state-path, configuration, network, and process-controller modules while preserving the existing compatibility entry point.

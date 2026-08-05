@@ -6,6 +6,7 @@ DevMate is a desktop-only Obsidian host for the same local-first MCP Gateway use
 
 - share one workspace-derived Gateway and state directory with VS Code;
 - auto start, manual start, restart, or attach to an existing matching Gateway;
+- run the bundled Gateway in an embedded Node Worker without requiring an external Node.js installation;
 - publish bounded active-note, selection, Property, link, heading, tag, and vault context;
 - incrementally index note metadata instead of rescanning the vault for each request;
 - query notes by folder, path, tags, Properties, metadata search, and modification dates;

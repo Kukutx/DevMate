@@ -80,7 +80,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.reconfigureTimer = null;
     await this.bridge?.stop();
     this.bridge = null;
-    await this.controller?.dispose({ stopOwned: this.settings.stopWhenObsidianCloses });
+    await this.controller?.dispose({ stopOwned: true });
     this.controller = null;
   }
 

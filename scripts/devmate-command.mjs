@@ -114,7 +114,7 @@ function bootstrap(options) {
   });
   const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(init.config));
   config.version = Math.max(11, Number(config.version) || 0);
-  config.appVersion = '3.0.0';
+  config.appVersion = '3.0.1';
   config.jobs ||= {};
   config.jobs.embeddedRunnerEnabled = preset.embeddedRunnerEnabled;
   config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
