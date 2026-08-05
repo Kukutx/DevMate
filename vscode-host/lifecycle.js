@@ -30,6 +30,7 @@ class VscodeHostLifecycle {
     this.startupTimer = null;
     this.active = false;
     this.activating = null;
+    this.platformActivated = false;
     this.workspaceRootAtActivation = '';
   }
 
@@ -80,6 +81,7 @@ class VscodeHostLifecycle {
 
     try {
       await platformExtension.activate(this.runtimeContext);
+      this.platformActivated = true;
       this.mirror = new VscodeContextMirror({
         vscode: this.vscode,
         context: this.runtimeContext,
@@ -93,8 +95,6 @@ class VscodeHostLifecycle {
       else this.scheduleAutomaticStart();
     } catch (error) {
       this.diagnostics.recordFailure(error, { phase: 'host-activation' });
-      this.router?.dispose();
-      this.router = null;
       throw error;
     }
   }
@@ -199,9 +199,10 @@ class VscodeHostLifecycle {
     this.mirror?.dispose();
     this.mirror = null;
     try {
-      if (this.active || this.runtimeContext) await platformExtension.deactivate();
+      if (this.platformActivated) await platformExtension.deactivate();
     } finally {
-      this.router?.dispose();
+      this.platformActivated = false;
+      this.router?.dispose({ forceRestore: true });
       this.router = null;
       this.diagnostics?.append('DevMate VS Code host deactivated.');
       this.active = false;
