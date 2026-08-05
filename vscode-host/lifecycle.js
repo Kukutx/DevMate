@@ -2,12 +2,15 @@
 
 const fs = require('node:fs');
 const defaultChildProcess = require('node:child_process');
+const { readJson } = require('../host/runtime/config-store.js');
+const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { VscodeContextMirror } = require('./context-mirror.js');
 const { installGatewayWorkerRouter } = require('./gateway-spawn-router.js');
 const { VscodeRuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const {
   createRuntimeContext,
   currentWorkspaceRoot,
+  runtimeConfigPath,
   setting
 } = require('./runtime-context.js');
 
@@ -31,6 +34,7 @@ class VscodeHostLifecycle {
     this.startupTimer = null;
     this.active = false;
     this.activating = null;
+    this.deactivating = null;
     this.platformActivationAttempted = false;
     this.platformActivated = false;
     this.workspaceRootAtActivation = '';
@@ -158,15 +162,42 @@ class VscodeHostLifecycle {
     }, 0);
   }
 
+  async verifyGatewayReady(timeoutMs = 20000) {
+    if (!this.runtimeContext) throw new Error('VS Code runtime context is unavailable');
+    const configFile = runtimeConfigPath(this.runtimeContext);
+    const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 20000);
+    let lastHealth = null;
+    while (Date.now() <= deadline) {
+      const config = readJson(configFile, null);
+      const port = Number(config?.server?.port || 0);
+      if (port > 0) {
+        lastHealth = await healthAt(port, 1000);
+        if (healthMatches(lastHealth, config)) return { config, health: lastHealth.json, port };
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    const error = new Error(`DevMate Gateway did not pass the post-start health check${lastHealth?.error ? `: ${lastHealth.error}` : ''}`);
+    error.code = 'DEVMATE_VSCODE_POST_START_HEALTH_FAILED';
+    error.health = lastHealth;
+    throw error;
+  }
+
   async startAutomatically() {
     const check = this.runSelfCheck(false);
     if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before Gateway start'), {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
     this.diagnostics?.append('Starting DevMate Gateway automatically through the embedded Worker router.');
-    await this.vscode.commands.executeCommand('devMate.start');
+    const commandResult = await this.vscode.commands.executeCommand('devMate.start');
+    if (commandResult?.ok === false) {
+      const error = new Error(commandResult.error || 'DevMate start command reported failure');
+      error.code = commandResult.code || 'DEVMATE_VSCODE_START_COMMAND_FAILED';
+      throw error;
+    }
+    const ready = await this.verifyGatewayReady();
     this.diagnostics?.clearFailure();
-    this.diagnostics?.append('Automatic Gateway start completed.');
+    this.diagnostics?.append(`Automatic Gateway start verified on port ${ready.port}.`);
+    return ready;
   }
 
   async handleStartupFailure(error) {
@@ -203,24 +234,31 @@ class VscodeHostLifecycle {
   }
 
   async deactivate() {
-    if (this.startupTimer) clearTimeout(this.startupTimer);
-    this.startupTimer = null;
-    this.mirror?.dispose();
-    this.mirror = null;
-    try {
-      if (this.platformActivationAttempted) await this.platformExtension.deactivate();
-    } finally {
-      this.platformActivationAttempted = false;
-      this.platformActivated = false;
-      this.router?.dispose({ forceRestore: true });
-      this.router = null;
-      this.diagnostics?.append('DevMate VS Code host deactivated.');
-      this.active = false;
-      this.runtimeContext = null;
-      this.context = null;
-      this.output = null;
-      this.diagnostics = null;
-    }
+    if (this.deactivating) return this.deactivating;
+    this.deactivating = (async () => {
+      if (this.startupTimer) clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+      this.mirror?.dispose();
+      this.mirror = null;
+      try {
+        if (this.platformActivationAttempted) await this.platformExtension.deactivate();
+      } finally {
+        this.platformActivationAttempted = false;
+        this.platformActivated = false;
+        try { await this.router?.dispose({ forceRestore: true }); } catch (error) {
+          this.diagnostics?.recordFailure(error, { phase: 'router-dispose' });
+        }
+        this.router = null;
+        this.diagnostics?.append('DevMate VS Code host deactivated.');
+        this.active = false;
+        this.runtimeContext = null;
+        this.context = null;
+        this.output = null;
+        this.diagnostics = null;
+      }
+    })();
+    try { return await this.deactivating; }
+    finally { this.deactivating = null; }
   }
 }
 

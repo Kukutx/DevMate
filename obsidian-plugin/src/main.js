@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { FileSystemAdapter, Notice, Plugin } = require('obsidian');
+const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
 const { ObsidianHostBridge } = require('./host-bridge.js');
 const { ObsidianContextProvider } = require('./context-provider.js');
 const { RuntimeDiagnostics } = require('./runtime-diagnostics.js');
@@ -29,6 +30,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.runtimeDiagnostics = null;
     this.vaultRoot = '';
     this.layoutReady = false;
+    this.unloading = false;
+    this.hostOperations = new OperationCoordinator({ name: 'obsidian-host' });
 
     if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
       this.statusBar.setText('DevMate: desktop only');
@@ -74,14 +77,17 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async onunload() {
+    this.unloading = true;
     if (this.contextTimer) window.clearTimeout(this.contextTimer);
     if (this.reconfigureTimer) window.clearTimeout(this.reconfigureTimer);
     this.contextTimer = null;
     this.reconfigureTimer = null;
-    await this.bridge?.stop();
-    this.bridge = null;
-    await this.controller?.dispose({ stopOwned: true });
-    this.controller = null;
+    await this.hostOperations.run('unload', async () => {
+      await this.bridge?.stop();
+      this.bridge = null;
+      await this.controller?.dispose({ stopOwned: true });
+      this.controller = null;
+    });
   }
 
   async saveSettings() {
@@ -111,7 +117,12 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.runtimeDiagnostics?.append(message);
   }
 
-  async reconfigureRuntime({ startBridge = this.layoutReady, capture = this.layoutReady } = {}) {
+  reconfigureRuntime(options = {}) {
+    if (this.unloading) return Promise.resolve({ skipped: true, reason: 'unloading' });
+    return this.hostOperations.run('reconfigure', () => this.reconfigureRuntimeInternal(options));
+  }
+
+  async reconfigureRuntimeInternal({ startBridge = this.layoutReady, capture = this.layoutReady } = {}) {
     await this.bridge?.stop();
     this.bridge = null;
     const pluginDirectory = this.pluginDirectory();
@@ -152,11 +163,13 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         new Notice(`DevMate host bridge failed: ${error.message || error}`);
       }
     }
-    if (capture) await this.captureContext();
+    if (capture) await this.captureContextInternal();
     await this.refreshStatus();
+    return { configured: true, stateDirectory };
   }
 
   scheduleReconfigure() {
+    if (this.unloading) return;
     if (this.reconfigureTimer) window.clearTimeout(this.reconfigureTimer);
     this.reconfigureTimer = window.setTimeout(() => {
       this.reconfigureTimer = null;
@@ -165,7 +178,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   scheduleContextCapture() {
-    if (!this.controller || !this.settings.enabled) return;
+    if (this.unloading || !this.controller || !this.settings.enabled) return;
     if (this.contextTimer) window.clearTimeout(this.contextTimer);
     this.contextTimer = window.setTimeout(() => {
       this.contextTimer = null;
@@ -173,7 +186,13 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }, 350);
   }
 
-  async captureContext() {
+  captureContext() {
+    if (this.unloading) return Promise.resolve(null);
+    return this.hostOperations.run('capture', () => this.captureContextInternal());
+  }
+
+  async captureContextInternal() {
+    if (!this.controller) return null;
     return this.contextProvider?.capture(this.controller);
   }
 
@@ -216,14 +235,19 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
   }
 
-  async startRuntime({ quiet = false } = {}) {
+  startRuntime(options = {}) {
+    if (this.unloading) return Promise.resolve({ ok: false, reason: 'unloading' });
+    return this.hostOperations.run('start', () => this.startRuntimeInternal(options));
+  }
+
+  async startRuntimeInternal({ quiet = false } = {}) {
     if (!this.settings.enabled || this.settings.startupMode === 'disabled') {
       if (!quiet) new Notice('DevMate Obsidian host is disabled.');
       return;
     }
     try {
-      if (!this.bridge && this.layoutReady) await this.reconfigureRuntime({ startBridge: true, capture: true });
-      await this.captureContext();
+      if (!this.bridge && this.layoutReady) await this.reconfigureRuntimeInternal({ startBridge: true, capture: true });
+      await this.captureContextInternal();
       this.logRuntime('Starting embedded DevMate Gateway.');
       const result = await this.controller.start();
       this.runtimeDiagnostics?.clearFailure();
@@ -231,16 +255,23 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         ? `Attached to existing DevMate Gateway on port ${result.port}.`
         : `Embedded DevMate Gateway started on port ${result.port}.`);
       if (!quiet) new Notice(result.attached ? 'Attached to the existing DevMate Gateway.' : 'DevMate Gateway started.');
+      return { ok: true, ...result };
     } catch (error) {
       this.runtimeDiagnostics?.recordFailure(error);
       console.error('[DevMate] Start failed', error);
       if (!quiet) new Notice(`DevMate start failed: ${error.message || error}`);
+      return { ok: false, error: error.message || String(error), code: error.code || 'DEVMATE_OBSIDIAN_START_FAILED' };
     } finally {
       await this.refreshStatus();
     }
   }
 
-  async stopRuntime() {
+  stopRuntime() {
+    if (this.unloading) return Promise.resolve({ stopped: false, reason: 'unloading' });
+    return this.hostOperations.run('stop', () => this.stopRuntimeInternal());
+  }
+
+  async stopRuntimeInternal() {
     try {
       const result = await this.controller.stop();
       if (result.stopped) {
@@ -259,7 +290,12 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
   }
 
-  async restartRuntime() {
+  restartRuntime() {
+    if (this.unloading) return Promise.resolve({ restarted: false, reason: 'unloading' });
+    return this.hostOperations.run('restart', () => this.restartRuntimeInternal());
+  }
+
+  async restartRuntimeInternal() {
     try {
       this.logRuntime('Restarting DevMate Gateway.');
       const result = await this.controller.restart();

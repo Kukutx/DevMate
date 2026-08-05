@@ -4,17 +4,67 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../../config-file-lock.cjs');
-const { DEFAULT_PORT, DEFAULT_VERSION, MAX_CONFIG_BYTES } = require('./constants.js');
+const {
+  DEFAULT_PORT,
+  DEFAULT_VERSION,
+  MAX_CONFIG_BYTES,
+  SUPPORTED_CONFIG_VERSION
+} = require('./constants.js');
 const { normalizedWorkspaceRoot } = require('./state-paths.js');
 
-function readJson(file, fallback = null) {
+function configError(message, code, file, cause = null) {
+  const error = new Error(`${message}: ${file}`);
+  error.code = code;
+  error.configFile = file;
+  if (cause) error.cause = cause;
+  return error;
+}
+
+function parseJsonObjectFile(file) {
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat) return { exists: false, value: null, stat: null };
+  if (!stat.isFile()) throw configError('DevMate config path is not a file', 'config_not_file', file);
+  if (stat.size > MAX_CONFIG_BYTES) {
+    const error = configError(`DevMate config exceeds ${MAX_CONFIG_BYTES} bytes (${stat.size} bytes)`, 'config_too_large', file);
+    error.bytes = stat.size;
+    error.maxBytes = MAX_CONFIG_BYTES;
+    throw error;
+  }
+
+  let parsed;
   try {
-    const stat = fs.statSync(file, { throwIfNoEntry: false });
-    if (!stat?.isFile()) return fallback;
-    if (stat.size > MAX_CONFIG_BYTES) throw new Error(`Config exceeds ${MAX_CONFIG_BYTES} bytes`);
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
-  } catch {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (cause) {
+    throw configError('DevMate config contains invalid JSON', 'config_invalid_json', file, cause);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw configError('DevMate config root must be a JSON object', 'config_invalid_root', file);
+  }
+  return { exists: true, value: parsed, stat };
+}
+
+function assertSupportedConfigVersion(config, file) {
+  const version = Number(config?.version || 0);
+  if (Number.isFinite(version) && version > SUPPORTED_CONFIG_VERSION) {
+    const error = configError(
+      `DevMate config version ${version} is newer than supported version ${SUPPORTED_CONFIG_VERSION}`,
+      'unsupported_config_version',
+      file
+    );
+    error.configVersion = version;
+    error.supportedVersion = SUPPORTED_CONFIG_VERSION;
+    throw error;
+  }
+  return config;
+}
+
+function readJson(file, fallback = null, { strict = false, supportedVersion = false } = {}) {
+  try {
+    const result = parseJsonObjectFile(file);
+    if (!result.exists) return fallback;
+    return supportedVersion ? assertSupportedConfigVersion(result.value, file) : result.value;
+  } catch (error) {
+    if (strict) throw error;
     return fallback;
   }
 }
@@ -32,13 +82,110 @@ function fsyncDirectory(directory) {
   }
 }
 
+function replacementCandidates(file) {
+  const directory = path.dirname(file);
+  const prefix = `${path.basename(file)}.replace-`;
+  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
+    .map(entry => {
+      const candidate = path.join(directory, entry.name);
+      const stat = fs.statSync(candidate, { throwIfNoEntry: false });
+      return stat ? { file: candidate, mtimeMs: stat.mtimeMs } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+function validateReplacement(file) {
+  try {
+    const result = parseJsonObjectFile(file);
+    if (!result.exists) return false;
+    assertSupportedConfigVersion(result.value, file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function quarantineConfig(file, reason = 'corrupt') {
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return null;
+  const quarantined = `${file}.${reason}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    fs.renameSync(file, quarantined);
+    return quarantined;
+  } catch {
+    return null;
+  }
+}
+
+function cleanupReplacementCandidates(candidates, except = '') {
+  for (const candidate of candidates) {
+    if (candidate.file === except) continue;
+    try { fs.rmSync(candidate.file, { force: true }); } catch {}
+  }
+}
+
+function recoverConfigReplacement(file) {
+  const candidates = replacementCandidates(file);
+  let main = null;
+  let mainError = null;
+  try {
+    main = parseJsonObjectFile(file);
+    if (main.exists) assertSupportedConfigVersion(main.value, file);
+  } catch (error) {
+    mainError = error;
+  }
+
+  if (mainError?.code === 'unsupported_config_version') throw mainError;
+
+  if (main?.exists && !mainError) {
+    cleanupReplacementCandidates(candidates);
+    return { recovered: false, source: null, quarantined: null, value: main.value };
+  }
+
+  const replacement = candidates.find(candidate => validateReplacement(candidate.file));
+  if (replacement) {
+    const quarantined = mainError ? quarantineConfig(file, 'corrupt') : null;
+    if (fs.existsSync(file)) {
+      const moved = quarantineConfig(file, 'replaced');
+      if (!quarantined && moved) mainError ||= configError('Existing config was replaced during recovery', 'config_replaced', file);
+    }
+    fs.renameSync(replacement.file, file);
+    try { fs.chmodSync(file, 0o600); } catch {}
+    fsyncDirectory(path.dirname(file));
+    cleanupReplacementCandidates(candidates, replacement.file);
+    const recovered = parseJsonObjectFile(file).value;
+    assertSupportedConfigVersion(recovered, file);
+    return { recovered: true, source: replacement.file, quarantined, value: recovered };
+  }
+
+  if (!mainError && !main?.exists && candidates.length) {
+    const error = configError('DevMate config is missing and interrupted replacement files are not valid', 'config_recovery_failed', file);
+    error.replacementCandidates = candidates.map(candidate => candidate.file);
+    throw error;
+  }
+
+  cleanupReplacementCandidates(candidates);
+  if (mainError) {
+    const quarantined = quarantineConfig(file, 'corrupt');
+    mainError.quarantinedPath = quarantined;
+    throw mainError;
+  }
+  return { recovered: false, source: null, quarantined: null, value: null };
+}
+
 function atomicWriteJson(file, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw configError('DevMate config write requires a JSON object', 'config_invalid_write', file);
+  }
   const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(directory, 0o700); } catch {}
   const payload = `${JSON.stringify(value, null, 2)}\n`;
   if (Buffer.byteLength(payload, 'utf8') > MAX_CONFIG_BYTES) {
-    throw new Error(`Config exceeds ${MAX_CONFIG_BYTES} bytes`);
+    throw configError(`DevMate config exceeds ${MAX_CONFIG_BYTES} bytes`, 'config_too_large', file);
   }
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   let fd = null;
@@ -52,7 +199,7 @@ function atomicWriteJson(file, value) {
       fs.renameSync(temporary, file);
     } catch (error) {
       if (process.platform !== 'win32') throw error;
-      const previous = `${file}.replace-${process.pid}-${Date.now()}`;
+      const previous = `${file}.replace-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
       let moved = false;
       try {
         if (fs.existsSync(file)) {
@@ -79,11 +226,17 @@ function atomicWriteJson(file, value) {
 }
 
 function updateConfig(file, mutator) {
+  if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   return withFileLockSync(file, () => {
-    const current = readJson(file, {}) || {};
+    const recovery = recoverConfigReplacement(file);
+    const current = recovery.value || {};
+    assertSupportedConfigVersion(current, file);
+    const before = JSON.stringify(current);
     const next = mutator(current) || current;
-    atomicWriteJson(file, next);
+    assertSupportedConfigVersion(next, file);
+    const unchanged = recovery.value !== null && JSON.stringify(next) === before;
+    if (!unchanged) atomicWriteJson(file, next);
     return next;
   });
 }
@@ -103,7 +256,7 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
   const root = path.resolve(workspaceRoot);
   const id = workspaceId(root);
   return {
-    version: 11,
+    version: SUPPORTED_CONFIG_VERSION,
     appVersion,
     instanceId: `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
     server: { port, mcpPath: '/mcp' },
@@ -153,6 +306,7 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       reference: false,
       role: 'active'
     }],
+    hostRuntime: { workspaceRoot: normalizedWorkspaceRoot(root) },
     hostContexts: {},
     activeHostId: null,
     vscodeContext: {
@@ -179,9 +333,18 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   return updateConfig(file, current => {
     if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: preferredPort, appVersion });
     const config = current;
-    config.version = Math.max(11, Number(config.version) || 0);
+    config.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(config.version) || 0);
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    config.hostRuntime ||= {};
+    const boundWorkspace = String(config.hostRuntime.workspaceRoot || '');
+    if (boundWorkspace && boundWorkspace !== rootKey) {
+      const error = configError('DevMate state directory is bound to a different workspace', 'config_workspace_mismatch', file);
+      error.boundWorkspaceRoot = boundWorkspace;
+      error.requestedWorkspaceRoot = rootKey;
+      throw error;
+    }
+    config.hostRuntime.workspaceRoot = rootKey;
     config.server ||= {};
     config.server.port = Number(config.server.port || preferredPort || DEFAULT_PORT);
     config.server.mcpPath ||= '/mcp';
@@ -219,12 +382,20 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
 }
 
 module.exports = {
+  assertSupportedConfigVersion,
   atomicWriteJson,
+  cleanupReplacementCandidates,
+  configError,
   ensurePersonalConfig,
   fsyncDirectory,
   newPersonalConfig,
+  parseJsonObjectFile,
+  quarantineConfig,
   randomToken,
   readJson,
+  recoverConfigReplacement,
+  replacementCandidates,
   updateConfig,
+  validateReplacement,
   workspaceId
 };
