@@ -44,6 +44,12 @@ function waitForHandleExit(handle, timeoutMs = ROUTER_STOP_TIMEOUT_MS) {
   ]);
 }
 
+function routerDisposingError() {
+  const error = new Error('DevMate Gateway Worker router is disposing and cannot accept a new Gateway launch');
+  error.code = 'DEVMATE_GATEWAY_ROUTER_DISPOSING';
+  return error;
+}
+
 function installGatewayWorkerRouter({
   childProcess,
   extensionPath,
@@ -55,14 +61,17 @@ function installGatewayWorkerRouter({
   }
   const existing = childProcess[ROUTER_STATE];
   if (existing?.active) return existing.api;
+  if (existing) throw routerDisposingError();
 
   const previousSpawn = childProcess.spawn;
   const workerSpawn = createWorkerSpawn({ WorkerImpl, name: 'devmate-vscode-gateway' });
   const owned = new Map();
+  let state = null;
 
   function routedSpawn(command, args = [], options = {}) {
     const details = gatewayLaunchDetails(command, args, options, { extensionPath });
     if (!details) return previousSpawn.call(childProcess, command, args, options);
+    if (!state?.active) throw routerDisposingError();
 
     diagnostics?.append(`Launching embedded VS Code Gateway Worker: ${details.entry}`);
     let handle;
@@ -89,7 +98,7 @@ function installGatewayWorkerRouter({
     return handle;
   }
 
-  const state = {
+  state = {
     active: true,
     previousSpawn,
     routedSpawn,
@@ -107,6 +116,7 @@ function installGatewayWorkerRouter({
       return {
         mode: 'worker_threads',
         active: state.active,
+        disposing: !!state.disposing,
         ownedCount: owned.size,
         owned: [...owned.keys()].map(handle => typeof handle.snapshot === 'function'
           ? handle.snapshot()
@@ -137,9 +147,9 @@ function installGatewayWorkerRouter({
     },
     async dispose({ forceRestore = false } = {}) {
       if (state.disposing) return state.disposing;
+      if (!state.active) return { disposed: true, alreadyDisposed: true };
+      state.active = false;
       state.disposing = (async () => {
-        if (!state.active) return { disposed: true, alreadyDisposed: true };
-        state.active = false;
         const stopped = await api.stopOwned();
         if (forceRestore || childProcess.spawn === routedSpawn) childProcess.spawn = previousSpawn;
         if (childProcess[ROUTER_STATE] === state) delete childProcess[ROUTER_STATE];
@@ -164,5 +174,6 @@ module.exports = {
   installGatewayWorkerRouter,
   isInside,
   pathKey,
+  routerDisposingError,
   waitForHandleExit
 };
