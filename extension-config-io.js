@@ -1,13 +1,16 @@
 'use strict';
 
-const fs = require('fs');
-const Module = require('module');
-const path = require('path');
-const crypto = require('crypto');
-const { withFileLockSync } = require('./config-file-lock.cjs');
-const { SUPPORTED_CONFIG_VERSION } = require('./host/runtime/constants.js');
-
-const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
+const fs = require('node:fs');
+const Module = require('node:module');
+const path = require('node:path');
+const { MAX_CONFIG_BYTES, SUPPORTED_CONFIG_VERSION } = require('./host/runtime/constants.js');
+const {
+  assertSupportedConfigVersion,
+  atomicWriteJson: writeConfigJson,
+  recoverConfigReplacement,
+  replacementCandidates: sharedReplacementCandidates,
+  updateConfig
+} = require('./host/runtime/config-store.js');
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -27,22 +30,11 @@ function parseJsonValue(value) {
   const text = Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '');
   const parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('DevMate config root must be a JSON object');
-  }
-  return parsed;
-}
-
-function assertSupportedConfigVersion(value, file = 'DevMate config') {
-  const version = Number(value?.version || 0);
-  if (Number.isFinite(version) && version > SUPPORTED_CONFIG_VERSION) {
-    const error = new Error(`DevMate config version ${version} is newer than supported version ${SUPPORTED_CONFIG_VERSION}: ${file}`);
-    error.code = 'unsupported_config_version';
-    error.configVersion = version;
-    error.supportedVersion = SUPPORTED_CONFIG_VERSION;
-    error.configFile = file;
+    const error = new Error('DevMate config root must be a JSON object');
+    error.code = 'config_invalid_root';
     throw error;
   }
-  return value;
+  return parsed;
 }
 
 function mergeWorkspaces(candidate, current) {
@@ -63,10 +55,10 @@ function mergeWorkspaces(candidate, current) {
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
-  assertSupportedConfigVersion(current);
-  assertSupportedConfigVersion(candidate);
   if (!Object.keys(current).length) {
-    return { ...candidate, version: Math.max(SUPPORTED_CONFIG_VERSION, Number(candidate.version) || 0) };
+    const initial = { ...candidate };
+    initial.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(candidate.version) || 0);
+    return initial;
   }
 
   const merged = { ...current };
@@ -112,154 +104,35 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
   }
 
-  for (const key of ['plugins', 'jobs', 'runnerControl', 'task', 'trustedWritableRoots']) {
+  for (const key of ['hostRuntime', 'plugins', 'jobs', 'runnerControl', 'task', 'trustedWritableRoots']) {
     if (has(current, key)) merged[key] = current[key];
     else delete merged[key];
   }
+  if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
+    merged.hostContexts = { ...object(current.hostContexts), ...object(candidate.hostContexts) };
+  }
+  if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
   return merged;
 }
 
-function fsyncDirectory(fsModule, directory) {
-  let fd = null;
-  try {
-    fd = fsModule.openSync(directory, 'r');
-    fsModule.fsyncSync(fd);
-  } catch {
-  } finally {
-    if (fd != null) {
-      try { fsModule.closeSync(fd); } catch {}
-    }
-  }
+function replacementCandidates(_fsModule, file) {
+  return sharedReplacementCandidates(path.resolve(file));
 }
 
-function replacementCandidates(fsModule, file) {
-  const directory = path.dirname(file);
-  if (!fsModule.existsSync(directory)) return [];
-  const prefix = `${path.basename(file)}.replace-`;
-  return fsModule.readdirSync(directory, { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
-    .map(entry => {
-      const target = path.join(directory, entry.name);
-      const stat = fsModule.statSync(target, { throwIfNoEntry: false });
-      return stat ? { file: target, mtimeMs: stat.mtimeMs } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+function recoverReplacement(_fsModule, file) {
+  const result = recoverConfigReplacement(path.resolve(file));
+  return result.recovered ? result.source : null;
 }
 
-function validConfigFile(fsModule, file) {
-  try {
-    const stat = fsModule.statSync(file, { throwIfNoEntry: false });
-    if (!stat?.isFile() || stat.size > MAX_CONFIG_BYTES) return false;
-    const parsed = parseJsonValue(fsModule.readFileSync(file, 'utf8'));
-    assertSupportedConfigVersion(parsed, file);
-    return true;
-  } catch { return false; }
+function atomicWriteJson(_fsModule, file, value) {
+  assertSupportedConfigVersion(value, path.resolve(file));
+  return writeConfigJson(path.resolve(file), value);
 }
 
-function recoverReplacement(fsModule, file) {
-  const candidates = replacementCandidates(fsModule, file);
-  let mainError = null;
-  if (fsModule.existsSync(file)) {
-    try {
-      const current = parseJsonValue(fsModule.readFileSync(file, 'utf8'));
-      assertSupportedConfigVersion(current, file);
-      for (const candidate of candidates) {
-        try { fsModule.rmSync(candidate.file, { force: true }); } catch {}
-      }
-      return null;
-    } catch (error) {
-      if (error?.code === 'unsupported_config_version') throw error;
-      mainError = error;
-    }
-  }
-  const candidate = candidates.find(item => validConfigFile(fsModule, item.file));
-  if (!candidate) {
-    if (mainError) {
-      const quarantined = `${file}.corrupt-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-      try { fsModule.renameSync(file, quarantined); mainError.quarantinedPath = quarantined; } catch {}
-      throw mainError;
-    }
-    return null;
-  }
-  if (fsModule.existsSync(file)) {
-    try { fsModule.renameSync(file, `${file}.corrupt-${Date.now()}`); }
-    catch { try { fsModule.rmSync(file, { force: true }); } catch {} }
-  }
-  fsModule.renameSync(candidate.file, file);
-  try { fsModule.chmodSync(file, 0o600); } catch {}
-  fsyncDirectory(fsModule, path.dirname(file));
-  for (const stale of candidates.slice(1)) {
-    try { fsModule.rmSync(stale.file, { force: true }); } catch {}
-  }
-  return candidate.file;
-}
-
-function readCurrent(fsModule, file) {
-  recoverReplacement(fsModule, file);
-  if (!fsModule.existsSync(file)) return {};
-  return parseJsonValue(fsModule.readFileSync(file, 'utf8'));
-}
-
-function atomicWriteJson(fsModule, file, value, originalWriteFileSync = fsModule.writeFileSync.bind(fsModule)) {
-  const directory = path.dirname(file);
-  fsModule.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  try { fsModule.chmodSync(directory, 0o700); } catch {}
-  recoverReplacement(fsModule, file);
-  const payload = `${JSON.stringify(value, null, 2)}\n`;
-  const payloadBytes = Buffer.byteLength(payload, 'utf8');
-  if (payloadBytes > MAX_CONFIG_BYTES) {
-    const error = new Error(`DevMate config exceeds the ${MAX_CONFIG_BYTES} byte limit (${payloadBytes} bytes)`);
-    error.code = 'config_too_large';
-    throw error;
-  }
-  const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  let fd = null;
-  try {
-    fd = fsModule.openSync(temporary, 'wx', 0o600);
-    originalWriteFileSync(fd, payload, 'utf8');
-    try { fsModule.fsyncSync(fd); } catch {}
-    fsModule.closeSync(fd);
-    fd = null;
-    try {
-      fsModule.renameSync(temporary, file);
-    } catch (error) {
-      if (process.platform !== 'win32') throw error;
-      const previous = `${file}.replace-${process.pid}-${Date.now()}`;
-      let moved = false;
-      try {
-        if (fsModule.existsSync(file)) {
-          fsModule.renameSync(file, previous);
-          moved = true;
-        }
-        fsModule.renameSync(temporary, file);
-        fsyncDirectory(fsModule, directory);
-        if (moved) fsModule.rmSync(previous, { force: true });
-      } catch (replacementError) {
-        if (!fsModule.existsSync(file) && moved && fsModule.existsSync(previous)) {
-          try { fsModule.renameSync(previous, file); } catch {}
-        }
-        throw replacementError;
-      }
-    }
-    try { fsModule.chmodSync(file, 0o600); } catch {}
-    fsyncDirectory(fsModule, directory);
-  } finally {
-    if (fd != null) {
-      try { fsModule.closeSync(fd); } catch {}
-    }
-    try { fsModule.rmSync(temporary, { force: true }); } catch {}
-  }
-}
-
-function writeMergedExtensionConfig(fsModule, file, candidateValue) {
-  return withFileLockSync(file, () => {
-    const candidate = object(candidateValue);
-    const current = readCurrent(fsModule, file);
-    const merged = mergeExtensionConfig(current, candidate);
-    atomicWriteJson(fsModule, file, merged);
-    return merged;
-  });
+function writeMergedExtensionConfig(_fsModule, file, candidateValue) {
+  const targetPath = path.resolve(file);
+  const candidate = object(candidateValue);
+  return updateConfig(targetPath, current => mergeExtensionConfig(current, candidate));
 }
 
 function createConfigFsProxy(fsModule, file) {
@@ -270,10 +143,7 @@ function createConfigFsProxy(fsModule, file) {
       return originalWriteFileSync(candidatePath, data, options);
     }
     const candidate = parseJsonValue(data);
-    withFileLockSync(targetPath, () => {
-      const current = readCurrent(fsModule, targetPath);
-      atomicWriteJson(fsModule, targetPath, mergeExtensionConfig(current, candidate), originalWriteFileSync);
-    });
+    writeMergedExtensionConfig(fsModule, targetPath, candidate);
   };
   return new Proxy(fsModule, {
     get(target, property, receiver) {
@@ -296,7 +166,7 @@ function loadWithConfigWriteInterceptor(modulePath, file) {
   Module._load = function devmateScopedModuleLoad(request, parent, isMain) {
     const parentFile = parent?.filename ? path.resolve(parent.filename) : '';
     const parentAllowed = parentFile && path.dirname(parentFile) === moduleRoot && allowedNames.has(path.basename(parentFile));
-    if (request === 'fs' && parentAllowed) return configFs;
+    if ((request === 'fs' || request === 'node:fs') && parentAllowed) return configFs;
     return originalLoad.call(this, request, parent, isMain);
   };
   try {
