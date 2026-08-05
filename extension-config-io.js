@@ -55,6 +55,8 @@ function mergeWorkspaces(candidate, current) {
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
+  assertSupportedConfigVersion(current);
+  assertSupportedConfigVersion(candidate);
   if (!Object.keys(current).length) {
     const initial = { ...candidate };
     initial.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(candidate.version) || 0);
