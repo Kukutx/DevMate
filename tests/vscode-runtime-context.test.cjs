@@ -1,0 +1,70 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const {
+  createRuntimeContext,
+  currentWorkspaceRoot,
+  gatewayCandidates,
+  resolveVscodeStateDirectory,
+  runtimeConfigPath,
+  workspaceFolders
+} = require('../vscode-host/runtime-context.js');
+
+function temporaryDirectory(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function fakeVscode(root, settings = {}) {
+  return {
+    Uri: { file(fsPath) { return { fsPath }; } },
+    workspace: {
+      workspaceFolders: root ? [{ name: path.basename(root), index: 0, uri: { fsPath: root } }] : [],
+      getConfiguration() {
+        return { get(name) { return settings[name]; } };
+      }
+    }
+  };
+}
+
+test('resolves a shared VS Code state directory from the workspace root', () => {
+  const root = temporaryDirectory('devmate-vscode-root-');
+  const legacy = temporaryDirectory('devmate-vscode-legacy-');
+  const shared = temporaryDirectory('devmate-vscode-shared-');
+  const vscode = fakeVscode(root, {
+    sharedRuntimeEnabled: true,
+    sharedStateDirectory: shared
+  });
+  const context = {
+    globalStorageUri: { fsPath: legacy },
+    extensionPath: root,
+    marker() { return this; }
+  };
+  assert.equal(currentWorkspaceRoot(vscode), root);
+  assert.equal(resolveVscodeStateDirectory(vscode, context), shared);
+  const runtime = createRuntimeContext(vscode, context);
+  assert.equal(runtime.globalStorageUri.fsPath, shared);
+  assert.equal(runtime.marker(), context);
+  assert.equal(runtimeConfigPath(runtime), path.join(shared, 'config.json'));
+  assert.deepEqual(workspaceFolders(vscode), [{ name: path.basename(root), path: root, index: 0 }]);
+});
+
+test('falls back to extension storage without a workspace or when sharing is disabled', () => {
+  const legacy = temporaryDirectory('devmate-vscode-local-');
+  const context = { globalStorageUri: { fsPath: legacy }, extensionPath: legacy };
+  assert.equal(resolveVscodeStateDirectory(fakeVscode('', {}), context), legacy);
+  const root = temporaryDirectory('devmate-vscode-disabled-root-');
+  assert.equal(resolveVscodeStateDirectory(fakeVscode(root, { sharedRuntimeEnabled: false }), context), legacy);
+});
+
+test('orders packaged Gateway candidates with the bundle first', () => {
+  const extensionPath = temporaryDirectory('devmate-vscode-extension-');
+  const context = { extensionPath };
+  assert.deepEqual(gatewayCandidates(context), [
+    path.join(extensionPath, 'gateway', 'server.bundle.mjs'),
+    path.join(extensionPath, 'gateway', 'server.mjs')
+  ]);
+});

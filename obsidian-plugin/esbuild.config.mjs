@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { buildGatewayBundle } from '../scripts/gateway-build.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '..');
@@ -22,17 +23,9 @@ await build({
   logLevel: 'info'
 });
 
-await build({
-  entryPoints: [path.join(root, 'gateway', 'server-entry.mjs')],
-  outfile: path.join(output, 'gateway', 'server.mjs'),
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node18',
-  packages: 'bundle',
-  external: ['vscode'],
-  sourcemap: false,
-  logLevel: 'info'
+await buildGatewayBundle({
+  root,
+  outfile: path.join(output, 'gateway', 'server.mjs')
 });
 
 for (const file of ['manifest.json', 'styles.css', 'versions.json']) {

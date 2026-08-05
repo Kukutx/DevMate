@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { isMainThread, parentPort } from 'node:worker_threads';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { readConfig } from './local-shared.mjs';
@@ -18,22 +19,71 @@ installRunnerControlPlane(http);
 installPlatformCapabilities(McpServer);
 if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
 
-let shuttingDown = false;
-async function shutdown(signal) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  try { await shutdownJobRuntime(); } catch {}
-  try { await shutdownPluginServices(); } catch {}
-  try { await shutdownTeamServices(); } catch {}
-  try { await shutdownPersistentProcesses(); } catch {}
-  try { resetRunnerControlState(); } catch {}
-  try { resetRequestGuardState(); } catch {}
-  try { releaseGatewayInstanceLock(); } catch {}
-  if (signal) process.exit(0);
+const createdHttpServers = new Set();
+const createHttpServer = http.createServer.bind(http);
+http.createServer = (...args) => {
+  const server = createHttpServer(...args);
+  createdHttpServers.add(server);
+  server.once('close', () => createdHttpServers.delete(server));
+  return server;
+};
+
+function closeHttpServer(server, timeoutMs = 3000) {
+  return new Promise(resolve => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      try { server.closeAllConnections?.(); } catch {}
+      finish();
+    }, timeoutMs);
+    timer.unref?.();
+    try {
+      server.close(() => {
+        clearTimeout(timer);
+        finish();
+      });
+      try { server.closeIdleConnections?.(); } catch {}
+    } catch {
+      clearTimeout(timer);
+      finish();
+    }
+  });
 }
 
-process.once('SIGINT', () => { void shutdown('SIGINT'); });
-process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+let shutdownPromise = null;
+async function shutdown(reason = '') {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    try { await Promise.all([...createdHttpServers].map(server => closeHttpServer(server))); } catch {}
+    try { await shutdownJobRuntime(); } catch {}
+    try { await shutdownPluginServices(); } catch {}
+    try { await shutdownTeamServices(); } catch {}
+    try { await shutdownPersistentProcesses(); } catch {}
+    try { resetRunnerControlState(); } catch {}
+    try { resetRequestGuardState(); } catch {}
+    try { releaseGatewayInstanceLock(); } catch {}
+    try { parentPort?.postMessage({ type: 'devmate:shutdown-complete', reason }); } catch {}
+  })();
+  await shutdownPromise;
+  return shutdownPromise;
+}
+
+function shutdownAndExit(reason) {
+  void shutdown(reason).finally(() => process.exit(0));
+}
+
+process.once('SIGINT', () => shutdownAndExit('SIGINT'));
+process.once('SIGTERM', () => shutdownAndExit('SIGTERM'));
 process.once('exit', () => { try { releaseGatewayInstanceLock(); } catch {} });
+
+if (!isMainThread && parentPort) {
+  parentPort.on('message', message => {
+    if (message?.type === 'devmate:shutdown') shutdownAndExit(message.signal || 'worker-message');
+  });
+}
 
 await import('./server.mjs');
