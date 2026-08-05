@@ -10,7 +10,8 @@ const REPORT_LOG_LINES = 80;
 function redactSecrets(value) {
   return String(value || '')
     .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/(Bearer\s+)\S+/gi, '$1[redacted]');
+    .replace(/(Bearer\s+)\S+/gi, '$1[redacted]')
+    .replace(/((?:^|[\s,{])["']?(?:token|authorization|secret)["']?\s*[:=]\s*["']?)[^"',}\s]+/gim, '$1[redacted]');
 }
 
 function normalizeLogMessage(message) {
