@@ -26,4 +26,17 @@ test('VSIX smoke contract includes the shared tunnel entry and runtime', () => {
   const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-worker.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
   assert.match(smoke, /vscode-host\/shared-tunnel-runtime\.js/);
+
+  const packagedSmoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-shared-tunnel.mjs'), 'utf8');
+  assert.match(packagedSmoke, /requireFromVsix\('\.\/vscode-host\/shared-tunnel-runtime\.js'\)/);
+  assert.match(packagedSmoke, /singleProviderSpawnVerified/);
+  assert.match(packagedSmoke, /followerOwnershipVerified/);
+});
+
+test('Windows and Linux CI both execute the installed shared tunnel smoke', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const invocations = workflow.match(/node scripts\/smoke-vsix-shared-tunnel\.mjs/g) || [];
+  assert.equal(invocations.length, 2);
+  assert.match(workflow, /Smoke test packaged VSIX shared tunnel/);
+  assert.match(workflow, /Linux packaged VSIX shared tunnel smoke test/);
 });
