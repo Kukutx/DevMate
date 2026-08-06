@@ -8,7 +8,6 @@ on:
       - scripts/apply_architecture_refactor.py
       - scripts/finalize_architecture_refactor.py
       - scripts/finalize_architecture_cleanup.py
-      - scripts/finalize_test_contracts.py
       - .github/workflows/apply-architecture-refactor.yml
 
 permissions:
@@ -45,7 +44,6 @@ jobs:
           python3 scripts/apply_architecture_refactor.py
           python3 scripts/finalize_architecture_refactor.py
           python3 scripts/finalize_architecture_cleanup.py
-          python3 scripts/finalize_test_contracts.py
 
       - name: Repository contracts
         run: npm run check
