@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-architecture-refactor-v4
+  group: apply-architecture-refactor-final-audit
   cancel-in-progress: true
 
 jobs:
