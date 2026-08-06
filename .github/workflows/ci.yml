@@ -49,6 +49,9 @@ jobs:
       - name: Smoke test packaged VSIX Worker
         run: node scripts/smoke-vsix-worker.mjs
 
+      - name: Smoke test packaged VSIX shared tunnel
+        run: node scripts/smoke-vsix-shared-tunnel.mjs
+
       - name: Build Obsidian plugin
         run: npm run build:obsidian
 
@@ -108,6 +111,9 @@ jobs:
 
       - name: Linux packaged VSIX Worker smoke test
         run: node scripts/smoke-vsix-worker.mjs
+
+      - name: Linux packaged VSIX shared tunnel smoke test
+        run: node scripts/smoke-vsix-shared-tunnel.mjs
 
       - name: Linux Obsidian plugin build
         run: npm run build:obsidian
