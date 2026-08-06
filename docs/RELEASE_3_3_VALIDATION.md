@@ -2,6 +2,8 @@
 
 DevMate 3.3.0 may be merged only from a user-authored branch head after all checks below pass on that exact commit. A release-preparation commit produced by `GITHUB_TOKEN` is not sufficient because GitHub does not automatically execute the next pull-request workflow from its own bot-authored commit.
 
+A GitHub Actions infrastructure failure before checkout or repository execution, including action-download `503 Service Unavailable`, is not treated as product evidence. It requires a fresh run on a new user-authored head; it must not be reclassified as a passing code check or “fixed” by weakening the workflow.
+
 ## Repository and dependency gates
 
 Both Windows and Linux jobs must pass:
