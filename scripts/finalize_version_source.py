@@ -77,9 +77,12 @@ write('scripts/sync-version.mjs', sync)
 auth_cleanup = root / 'scripts' / 'finalize_auth_transport.py'
 if auth_cleanup.exists():
     runpy.run_path(str(auth_cleanup), run_name='__main__')
+smoke_cleanup = root / 'scripts' / 'finalize_smoke_auth.py'
+if smoke_cleanup.exists():
+    runpy.run_path(str(smoke_cleanup), run_name='__main__')
 url_cleanup = root / 'scripts' / 'finalize_url_sanitization.py'
 if url_cleanup.exists():
     runpy.run_path(str(url_cleanup), run_name='__main__')
 
 Path(__file__).unlink()
-print('Converged package metadata, header-only authentication, and URL sanitization.')
+print('Converged package metadata, header-only authentication, smoke clients, and URL sanitization.')
