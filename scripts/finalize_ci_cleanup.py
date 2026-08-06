@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+workflow = root / '.github' / 'workflows' / 'ci.yml'
+workflow.write_text("""name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit complete dependency tree
+        run: npm audit --audit-level=moderate
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Smoke test gateway
+        run: npm run smoke:gateway
+
+      - name: Package VSIX
+        run: npm run package:vsix
+
+      - name: Smoke test packaged VSIX Worker
+        run: node scripts/smoke-vsix-worker.mjs
+
+      - name: Smoke test packaged VSIX shared tunnel
+        run: node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Build Obsidian plugin
+        run: npm run build:obsidian
+
+      - name: Smoke test Obsidian Worker bundle
+        run: node scripts/smoke-obsidian-worker.mjs
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: devmate-vsix
+          path: "*.vsix"
+
+      - name: Upload Obsidian plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: devmate-obsidian
+          path: obsidian-plugin/dist/**
+
+  godot-real:
+    name: Linux and Real Godot 4.7.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GODOT_VERSION: 4.7.1
+      GODOT_STATUS: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Linux runtime dependency audit
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Linux complete dependency audit
+        run: npm audit --audit-level=moderate
+
+      - name: Linux repository contracts
+        run: npm run check
+
+      - name: Linux discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Linux gateway smoke test
+        run: npm run smoke:gateway
+
+      - name: Linux package VSIX
+        run: npm run package:vsix
+
+      - name: Linux packaged VSIX Worker smoke test
+        run: node scripts/smoke-vsix-worker.mjs
+
+      - name: Linux packaged VSIX shared tunnel smoke test
+        run: node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Linux Obsidian plugin build
+        run: npm run build:obsidian
+
+      - name: Linux Obsidian Worker bundle smoke test
+        run: node scripts/smoke-obsidian-worker.mjs
+
+      - name: Install virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb
+
+      - name: Cache Godot editor
+        uses: actions/cache@v6
+        with:
+          path: .godot-ci
+          key: godot-${{ runner.os }}-${{ runner.arch }}-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
+      - name: Download and verify official Godot editor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .godot-ci
+          archive="Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
+          executable="Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64"
+          if [ ! -x ".godot-ci/${executable}" ]; then
+            api="https://api.github.com/repos/godotengine/godot-builds/releases/tags/${GODOT_VERSION}-${GODOT_STATUS}"
+            curl --fail --silent --show-error --location "$api" --output .godot-ci/release.json
+            archive_url=$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
+            sums_url=$(jq -r '.assets[] | select(.name == "SHA512-SUMS.txt") | .browser_download_url' .godot-ci/release.json)
+            test -n "$archive_url" && test "$archive_url" != "null"
+            test -n "$sums_url" && test "$sums_url" != "null"
+            curl --fail --silent --show-error --location "$archive_url" --output ".godot-ci/${archive}"
+            curl --fail --silent --show-error --location "$sums_url" --output .godot-ci/SHA512-SUMS.txt
+            (
+              cd .godot-ci
+              checksum_line=$(awk -v file="$archive" '$NF == file { print; exit }' SHA512-SUMS.txt)
+              test -n "$checksum_line"
+              printf '%s\\n' "$checksum_line" | sha512sum --check --strict -
+              unzip -q -o "$archive"
+              chmod +x "$executable"
+            )
+          fi
+          echo "GODOT_REAL_BIN=$PWD/.godot-ci/${executable}" >> "$GITHUB_ENV"
+
+      - name: Show Godot version
+        run: "$GODOT_REAL_BIN --version"
+
+      - name: Run real Godot validation, native QA, and performance sampling
+        run: node --test tests/godot-real-runtime.test.mjs
+
+      - name: Run real Godot deterministic movie capture
+        run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs
+""", encoding='utf-8')
+Path(__file__).unlink()
+print('Restored final CI workflow.')
