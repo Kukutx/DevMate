@@ -173,5 +173,13 @@ jobs:
       - name: Run real Godot deterministic movie capture
         run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs
 """, encoding='utf-8')
+
+# The migration rewrites source references globally. Keep the deleted legacy
+# store in the removed-file contract without mistaking the new shared core for it.
+checker = root / 'scripts' / 'check-repository.mjs'
+checker_source = checker.read_text(encoding='utf-8')
+checker_source = checker_source.replace("'shared/config-store.cjs']", "'host/runtime/config-store.js']")
+checker.write_text(checker_source, encoding='utf-8')
+
 Path(__file__).unlink()
 print('Restored final CI workflow.')
