@@ -137,11 +137,10 @@ test('refuses a directory placed at the runtime record path before provider spaw
     readyTimeoutMs: 250
   }).install();
   try {
-    const proxy = childProcess.spawn('ngrok', ['http', String(state.port)], {});
-    let error = null;
-    proxy.once('error', value => { error = value; });
-    await waitFor(() => proxy.exitCode === 1);
-    assert.equal(error?.code, 'DEVMATE_TUNNEL_RECORD_PATH_INVALID');
+    assert.throws(
+      () => childProcess.spawn('ngrok', ['http', String(state.port)], {}),
+      error => error?.code === 'DEVMATE_TUNNEL_RECORD_PATH_INVALID' && error.recordFile === store.recordFile
+    );
     assert.equal(spawnCount, 0);
     assert.equal(fs.statSync(store.recordFile).isDirectory(), true);
   } finally {
