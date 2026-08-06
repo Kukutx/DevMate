@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   converge:
+    name: Generate and validate unified runtime
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
