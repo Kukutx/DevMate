@@ -71,6 +71,8 @@ try {
     'vscode-host/gateway-spawn-router.js',
     'vscode-host/runtime-diagnostics.js',
     'vscode-host/spawn-layer.js',
+    'vscode-host/shared-tunnel-record-store.js',
+    'vscode-host/shared-tunnel-process.js',
     'vscode-host/shared-tunnel-runtime.js',
     'host/runtime-controller.js',
     'host/runtime/config-store.js',
