@@ -13,7 +13,7 @@ const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-
 function spawn(...args){ return childProcess.spawn(...args); }
 function spawnSync(...args){ return childProcess.spawnSync(...args); }
 
-const VERSION = '3.2.0';
+const VERSION = '3.3.0';
 const BASE_PORT = 8787;
 const MCP_PATH = '/mcp';
 let gatewayProcess = null;
