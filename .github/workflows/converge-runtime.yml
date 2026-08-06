@@ -1,14 +1,11 @@
 name: Converge DevMate runtime
 
 on:
-  issue_comment:
-    types:
-      - created
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
-  pull-requests: read
-  issues: read
 
 concurrency:
   group: converge-devmate-runtime-pr-36
@@ -16,7 +13,6 @@ concurrency:
 
 jobs:
   converge:
-    if: ${{ github.event.issue.pull_request && github.event.issue.number == 36 && github.event.comment.body == '/converge-runtime' && github.actor == 'Kukutx' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -27,16 +23,29 @@ jobs:
           ref: refactor/shared-tunnel-runtime
           fetch-depth: 0
 
+      - name: Detect pending convergence
+        id: gate
+        shell: bash
+        run: |
+          if [ -f scripts/apply_architecture_refactor.py ] && [ -f scripts/finalize_architecture_cleanup.py ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node
+        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
 
       - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
         run: npm ci
 
       - name: Generate and clean unified architecture
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -45,20 +54,25 @@ jobs:
           python3 scripts/finalize_architecture_cleanup.py
 
       - name: Validate dependency audits
+        if: steps.gate.outputs.run == 'true'
         run: |
           npm audit --omit=dev --audit-level=moderate
           npm audit --audit-level=moderate
 
       - name: Validate repository contracts
+        if: steps.gate.outputs.run == 'true'
         run: npm run check
 
       - name: Validate unit and policy tests
+        if: steps.gate.outputs.run == 'true'
         run: npm run test:unit
 
       - name: Validate Gateway
+        if: steps.gate.outputs.run == 'true'
         run: npm run smoke:gateway
 
       - name: Validate VSIX package
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -67,6 +81,7 @@ jobs:
           node scripts/smoke-vsix-shared-tunnel.mjs
 
       - name: Validate Obsidian package
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -74,6 +89,7 @@ jobs:
           node scripts/smoke-obsidian-worker.mjs
 
       - name: Validate standalone Docker image
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -81,6 +97,7 @@ jobs:
           docker run --rm --entrypoint node devmate-converged /opt/devmate/scripts/devmate-cli.mjs help
 
       - name: Commit validated architecture
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
