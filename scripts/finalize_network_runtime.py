@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 import textwrap
 
 root = Path(__file__).resolve().parents[1]
@@ -69,5 +70,9 @@ write(
     )
 )
 
+runner_cleanup = root / 'scripts' / 'finalize_runner_runtime.py'
+if runner_cleanup.exists():
+    runpy.run_path(str(runner_cleanup), run_name='__main__')
+
 (root / 'scripts/finalize_network_runtime.py').unlink()
-print('Unified local and container Gateway binding.')
+print('Unified local, container, and external Runner networking.')
