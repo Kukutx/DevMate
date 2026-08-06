@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import runpy
 import textwrap
 
 root = Path(__file__).resolve().parents[1]
@@ -73,5 +74,9 @@ write('scripts/sync-version.mjs', sync)
     encoding='utf-8'
 )
 
+auth_cleanup = root / 'scripts' / 'finalize_auth_transport.py'
+if auth_cleanup.exists():
+    runpy.run_path(str(auth_cleanup), run_name='__main__')
+
 Path(__file__).unlink()
-print('Converged package metadata as the production runtime version source.')
+print('Converged package metadata and header-only authentication.')
