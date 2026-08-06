@@ -44,6 +44,20 @@ value = value.replace('Math.max(Number(candidate.version) || 0, 11)', 'Math.max(
 value = value.replace('Math.max(11, Number(current.version) || 0, Number(candidate.version) || 0)', 'Math.max(SUPPORTED_CONFIG_VERSION, Number(current.version) || 0, Number(candidate.version) || 0)')
 write('vscode-host/config-sync.js', value)
 
+# package.json is the sole host runtime version source. Constants import it directly,
+# so version synchronization must not search for a duplicated literal.
+sync = read('scripts/sync-version.mjs')
+sync, count = re.subn(
+    r"^updateText\('host/runtime/constants\.js',.*\);\n",
+    '',
+    sync,
+    count=1,
+    flags=re.M,
+)
+if count != 1:
+    raise RuntimeError('Could not remove duplicated host runtime version synchronization')
+write('scripts/sync-version.mjs', sync)
+
 # The Gateway imports permission and command policy from local-shared instead of keeping a second copy.
 shared = read('gateway/local-shared.mjs')
 shared = shared.replace('function dangerousGuardEnabled(config) {', 'export function dangerousGuardEnabled(config) {', 1)
