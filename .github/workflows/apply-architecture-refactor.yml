@@ -1,0 +1,72 @@
+name: Apply architecture refactor
+
+on:
+  push:
+    branches:
+      - refactor/shared-tunnel-runtime
+    paths:
+      - scripts/apply_architecture_refactor.py
+      - .github/workflows/apply-architecture-refactor.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-architecture-refactor
+  cancel-in-progress: false
+
+jobs:
+  refactor:
+    if: ${{ !contains(github.event.head_commit.message, '[architecture-refactor]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/shared-tunnel-runtime
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply architecture migration
+        run: python3 scripts/apply_architecture_refactor.py
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Unit and policy tests
+        run: npm run test:unit
+
+      - name: Gateway smoke tests
+        run: npm run smoke:gateway
+
+      - name: Package and validate VSIX
+        run: |
+          npm run package:vsix
+          node scripts/smoke-vsix-worker.mjs
+          node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Build and validate Obsidian package
+        run: |
+          npm run build:obsidian
+          node scripts/smoke-obsidian-worker.mjs
+
+      - name: Commit validated refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git commit -m "[architecture-refactor] Unify DevMate runtime core"
+          git push origin HEAD:refactor/shared-tunnel-runtime
