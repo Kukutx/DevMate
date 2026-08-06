@@ -97,12 +97,14 @@ jobs:
 
   verify:
     needs: architecture_convergence
-    if: ${{ needs.architecture_convergence.result == 'success' && needs.architecture_convergence.outputs.changed != 'true' }}
+    if: ${{ needs.architecture_convergence.result == 'success' }}
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout converged branch
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -158,7 +160,7 @@ jobs:
   godot-real:
     name: Linux and Real Godot 4.7.1
     needs: architecture_convergence
-    if: ${{ needs.architecture_convergence.result == 'success' && needs.architecture_convergence.outputs.changed != 'true' }}
+    if: ${{ needs.architecture_convergence.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -166,8 +168,10 @@ jobs:
       GODOT_STATUS: stable
 
     steps:
-      - name: Checkout
+      - name: Checkout converged branch
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
