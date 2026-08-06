@@ -74,5 +74,16 @@ runner_cleanup = root / 'scripts' / 'finalize_runner_runtime.py'
 if runner_cleanup.exists():
     runpy.run_path(str(runner_cleanup), run_name='__main__')
 
+# The permanent CI generator runs later in the wrapper. Inject the final
+# read-only supply-chain pass into that generator before it deletes itself.
+ci_cleanup = root / 'scripts' / 'finalize_ci_cleanup.py'
+if ci_cleanup.exists():
+    ci_source = ci_cleanup.read_text(encoding='utf-8')
+    marker = 'Path(__file__).unlink()'
+    replacement = "supply_cleanup = root / 'scripts' / 'finalize_supply_chain.py'\nif supply_cleanup.exists():\n    __import__('runpy').run_path(str(supply_cleanup), run_name='__main__')\n\nPath(__file__).unlink()"
+    if marker not in ci_source:
+        raise RuntimeError('Could not attach the permanent supply-chain cleanup')
+    ci_cleanup.write_text(ci_source.replace(marker, replacement, 1), encoding='utf-8')
+
 (root / 'scripts/finalize_network_runtime.py').unlink()
-print('Unified local, container, and external Runner networking.')
+print('Unified local, container, external Runner, and workflow networking.')
