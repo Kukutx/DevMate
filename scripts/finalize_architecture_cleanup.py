@@ -9,6 +9,7 @@ wrapper_source = wrapper.read_text(encoding='utf-8')
 first_pass = (root / 'scripts' / 'finalize_architecture_refactor.py').exists()
 core = root / 'scripts' / 'finalize_architecture_cleanup_core.py'
 integrity = root / 'scripts' / 'finalize_runtime_integrity.py'
+cli_cleanup = root / 'scripts' / 'finalize_cli_config.py'
 ci_cleanup = root / 'scripts' / 'finalize_ci_cleanup.py'
 workflows = root / '.github' / 'workflows'
 
@@ -24,6 +25,8 @@ if first_pass and not wrapper.exists():
 
 if integrity.exists():
     runpy.run_path(str(integrity), run_name='__main__')
+if cli_cleanup.exists():
+    runpy.run_path(str(cli_cleanup), run_name='__main__')
 if ci_cleanup.exists():
     runpy.run_path(str(ci_cleanup), run_name='__main__')
 
@@ -143,6 +146,7 @@ else:
         'scripts/finalize_architecture_cleanup.py',
         'scripts/finalize_architecture_cleanup_core.py',
         'scripts/finalize_runtime_integrity.py',
+        'scripts/finalize_cli_config.py',
         'scripts/finalize_ci_cleanup.py',
         'scripts/finalize_test_contracts.py',
         'scripts/finalize_architecture_refactor.py',
