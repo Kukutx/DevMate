@@ -15,7 +15,6 @@ def write(name, value):
     target.write_text(value.rstrip() + '\n', encoding='utf-8')
 
 
-# Gateway credentials are accepted only through request headers.
 server = read('gateway/server.mjs')
 old_request = "function requestToken(req,url){ const h=req.headers.authorization || ''; const bearer=String(h).match(/^Bearer\\s+(.+)$/i)?.[1]; return bearer || req.headers['x-devmate-token'] || url.searchParams.get('token') || ''; }"
 new_request = "function requestToken(req){ const h=req.headers.authorization || ''; const bearer=String(h).match(/^Bearer\\s+(.+)$/i)?.[1]; return bearer || req.headers['x-devmate-token'] || ''; }"
@@ -25,7 +24,6 @@ server = server.replace(old_request, new_request, 1)
 server = server.replace('timingSafeStringEqual(requestToken(req,url), expected)', 'timingSafeStringEqual(requestToken(req), expected)', 1)
 write('gateway/server.mjs', server)
 
-# Standalone CLI prints endpoint and owner token as separate fields.
 cli = read('scripts/devmate-cli.mjs')
 old_cli = """  const url = new URL(`${origin}${config.server?.mcpPath || '/mcp'}`);
   url.searchParams.set('token', config.auth.token);
@@ -41,7 +39,6 @@ cli = cli.replace(
 )
 write('scripts/devmate-cli.mjs', cli)
 
-# Shared host controller exposes endpoint and credential separately.
 controller = read('host/runtime/process-controller.js')
 old_controller = """    const url = new URL(`${origin}${config.server?.mcpPath || '/mcp'}`);
     if (config.auth?.required !== false && config.auth?.token) url.searchParams.set('token', config.auth.token);
@@ -51,13 +48,11 @@ new_controller = """    return new URL(`${origin}${config.server?.mcpPath || '/m
 
   ownerToken() {
     const config = this.ensureConfig();
-    return config.auth?.required === false ? '' : String(config.auth?.token || '');
-  }"""
+    return config.auth?.required === false ? '' : String(config.auth?.token || '');"""
 if old_controller not in controller:
     raise RuntimeError('Could not separate host URL and owner token')
 write('host/runtime/process-controller.js', controller.replace(old_controller, new_controller, 1))
 
-# VS Code verifies MCP with a Bearer header and exposes a separate token command.
 extension = read('extension.js')
 old_post = """async function postJson(url, payload, timeoutMs=5000){
   return httpRequestRaw(url, {
@@ -137,7 +132,6 @@ if not any(command.get('command') == 'devMate.copyToken' for command in commands
     })
 package_path.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
 
-# Obsidian provides separate URL and token commands.
 obsidian = read('obsidian-plugin/src/main.js')
 obsidian_command = "    this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });\n"
 if obsidian_command not in obsidian:
@@ -168,7 +162,6 @@ if obsidian_marker not in obsidian:
     raise RuntimeError('Could not add Obsidian token copy method')
 write('obsidian-plugin/src/main.js', obsidian.replace(obsidian_marker, obsidian_method, 1))
 
-# Update prior URL contract to assert credentials remain separate.
 standalone_test = read('tests/standalone-cli.test.mjs')
 old_test = "  assert.match(__test.ownerUrl({ config }), /^https:\\/\\/devmate\\.example\\.com\\/mcp\\?token=/);"
 new_test = "  assert.equal(__test.ownerUrl({ config }), 'https://devmate.example.com/mcp');\n  assert.match(result.token, /^[A-Za-z0-9_-]{40,}$/);"
