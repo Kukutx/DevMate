@@ -56,19 +56,45 @@ if 'Verify required CI checks passed for tagged commit' not in release:
     release = release.replace(ci_gate_marker, ci_gate_step + ci_gate_marker, 1)
 release_path.write_text(release, encoding='utf-8')
 
-# The CLI test is emitted by a prior generator. Replace the only multiline
-# regex with an equivalent direct source check to avoid Python/JS escape drift.
-cli_test_path = root / 'tests' / 'cli-config-store.test.mjs'
-cli_test = cli_test_path.read_text(encoding='utf-8')
-bad_cli_assertion = r"assert.doesNotMatch(source, /writeFileSync\([^\n]*config|function writeSecureJson[\s\S]*writeFileSync/);"
-if bad_cli_assertion not in cli_test:
-    raise RuntimeError('Could not normalize generated CLI persistence assertion')
-cli_test = cli_test.replace(
-    bad_cli_assertion,
-    "assert.equal(source.includes('fs.writeFileSync'), false);",
-    1
+# This is the sole final CLI persistence contract. It deliberately avoids
+# regular expressions spanning generated lines.
+(root / 'tests' / 'cli-config-store.test.mjs').write_text(
+    textwrap.dedent(
+        r"""
+        import assert from 'node:assert/strict';
+        import fs from 'node:fs';
+        import os from 'node:os';
+        import path from 'node:path';
+        import test from 'node:test';
+        import configStore from '../shared/config-store.cjs';
+        import packageJson from '../package.json' with { type: 'json' };
+        import { __test as cli } from '../scripts/devmate-cli.mjs';
+
+        test('standalone CLIs use only the shared configuration store', () => {
+          for (const relative of ['scripts/devmate-cli.mjs', 'scripts/devmate-command.mjs']) {
+            const source = fs.readFileSync(path.resolve(import.meta.dirname, '..', relative), 'utf8');
+            assert.match(source, /shared\/config-store\.cjs/);
+            assert.equal(source.includes('fs.writeFileSync'), false);
+            assert.equal(source.includes('function writeSecureJson'), false);
+          }
+        });
+
+        test('standalone initialization writes the supported package version atomically', () => {
+          const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-store-'));
+          const workspace = path.join(directory, 'workspace');
+          const config = path.join(directory, 'state', 'config.json');
+          fs.mkdirSync(workspace);
+          const result = cli.initConfig({ workspace, config, mode: 'personal', provider: 'external' });
+          const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
+          assert.equal(result.file, config);
+          assert.equal(persisted.version, configStore.SUPPORTED_CONFIG_VERSION);
+          assert.equal(persisted.appVersion, packageJson.version);
+          assert.equal(persisted.auth.token, result.token);
+        });
+        """
+    ).strip() + '\n',
+    encoding='utf-8'
 )
-cli_test_path.write_text(cli_test, encoding='utf-8')
 
 (root / 'tests' / 'workflow-permissions.test.cjs').write_text(
     textwrap.dedent(
@@ -118,4 +144,4 @@ cli_test_path.write_text(cli_test, encoding='utf-8')
 )
 
 Path(__file__).unlink()
-print('Converged permanent workflow permissions, release gate, and generated tests.')
+print('Converged permanent workflow permissions, release gate, and final generated tests.')
