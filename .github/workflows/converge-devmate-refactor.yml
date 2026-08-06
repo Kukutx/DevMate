@@ -1,21 +1,21 @@
 name: Converge DevMate refactor
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - .github/workflows/converge-devmate-refactor.yml
+  issues:
+    types:
+      - opened
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
-  group: converge-devmate-refactor
+  group: converge-devmate-refactor-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   converge:
+    if: ${{ github.event.issue.title == '[automation] Converge DevMate PR 29' }}
     name: Generate and validate unified runtime
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -42,7 +42,6 @@ jobs:
           set -euo pipefail
           python3 scripts/apply_architecture_refactor.py
           python3 scripts/finalize_architecture_refactor.py
-          python3 scripts/finalize_architecture_cleanup.py
 
       - name: Validate repository contracts
         run: npm run check
@@ -78,3 +77,10 @@ jobs:
           git diff --cached --stat
           git commit -m "[architecture-refactor] Unify DevMate runtime core"
           git push origin HEAD:refactor/shared-tunnel-runtime
+
+      - name: Close trigger issue
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+        run: gh issue close "$ISSUE_URL" --comment "DevMate architecture convergence workflow completed with status: ${{ job.status }}."
