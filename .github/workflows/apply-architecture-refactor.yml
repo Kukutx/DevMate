@@ -25,7 +25,7 @@ on:
       - .github/workflows/apply-architecture-refactor.yml
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: apply-architecture-refactor-final-audit
@@ -113,3 +113,15 @@ jobs:
           path: ${{ runner.temp }}/devmate-converged-source.tar.gz
           if-no-files-found: error
           retention-days: 1
+
+      - name: Commit validated non-workflow tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- .github/workflows
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git commit -m "[architecture-refactor] Apply validated runtime core"
+          git push origin HEAD:refactor/shared-tunnel-runtime
