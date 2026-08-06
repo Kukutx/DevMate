@@ -29,6 +29,7 @@ class SharedTunnelProcess extends EventEmitter {
     this.finished = false;
     this.recovering = false;
     this.recoveryCount = 0;
+    this.delegateTerminal = false;
     queueMicrotask(() => this.initialize());
   }
 
@@ -37,6 +38,7 @@ class SharedTunnelProcess extends EventEmitter {
   }
 
   reportStartFailure(error, prefix = 'DevMate shared tunnel start failed') {
+    if (this.finished) return;
     this.stderr.write(`${prefix}: ${error.message || error}\n`);
     if (this.listenerCount('error') > 0) this.emit('error', error);
     this.finish(1, null);
@@ -46,6 +48,7 @@ class SharedTunnelProcess extends EventEmitter {
     if (this.killed || this.finished) return this.finish(0, 'SIGTERM');
     try {
       await this.runtime.initializeProcess(this);
+      if (this.finished) return;
       this.started = true;
       if (this.killed && this.owned) this.delegate?.kill?.('SIGTERM');
       if (this.killed && this.attached) this.finish(0, 'SIGTERM');
@@ -54,10 +57,18 @@ class SharedTunnelProcess extends EventEmitter {
     }
   }
 
+  handleDelegateTerminal(code, signal) {
+    if (this.delegateTerminal || this.finished) return;
+    this.delegateTerminal = true;
+    this.runtime.ownerExited(this, code, signal);
+    this.finish(code, signal);
+  }
+
   attachOwner(child, record) {
     if (this.watcher) clearInterval(this.watcher);
     this.watcher = null;
     this.recovering = false;
+    this.delegateTerminal = false;
     this.delegate = child;
     this.owned = true;
     this.attached = false;
@@ -65,13 +76,12 @@ class SharedTunnelProcess extends EventEmitter {
     child.stdout?.on('data', chunk => this.stdout.write(chunk));
     child.stderr?.on('data', chunk => this.stderr.write(chunk));
     child.on?.('error', error => {
+      if (this.finished) return;
       this.stderr.write(`Tunnel process error: ${error.message || error}\n`);
       if (this.listenerCount('error') > 0) this.emit('error', error);
     });
-    child.once?.('exit', (code, signal) => {
-      this.runtime.ownerExited(this, code, signal);
-      this.finish(code, signal);
-    });
+    child.once?.('exit', (code, signal) => this.handleDelegateTerminal(code, signal));
+    child.once?.('close', (code, signal) => this.handleDelegateTerminal(code, signal));
     this.startReadinessTimer();
   }
 
@@ -123,6 +133,7 @@ class SharedTunnelProcess extends EventEmitter {
     this.watcher = null;
     this.stdout.write('Shared tunnel owner disappeared before readiness; retrying ownership once.\n');
     void this.runtime.initializeProcess(this).then(() => {
+      if (this.finished) return;
       this.recovering = false;
       this.started = true;
       if (this.killed && this.owned) this.delegate?.kill?.('SIGTERM');
@@ -135,7 +146,9 @@ class SharedTunnelProcess extends EventEmitter {
     this.readyTimer = setTimeout(() => {
       this.readyTimer = null;
       void this.runtime.expirePendingOwner(this).catch(error => {
-        this.stderr.write(`DevMate shared tunnel readiness cleanup failed: ${error.message || error}\n`);
+        if (!this.finished) {
+          this.stderr.write(`DevMate shared tunnel readiness cleanup failed: ${error.message || error}\n`);
+        }
       });
     }, this.runtime.readyTimeoutMs);
     this.readyTimer.unref?.();
