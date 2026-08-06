@@ -37,7 +37,6 @@ jobs:
           set -euo pipefail
           python3 scripts/apply_architecture_refactor.py
           python3 scripts/finalize_architecture_refactor.py
-          python3 scripts/finalize_architecture_cleanup.py
           rm -f .github/workflows/converge-runtime.yml
 
       - name: Validate repository contracts
