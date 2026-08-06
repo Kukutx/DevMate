@@ -51,7 +51,8 @@ new_controller = """    return new URL(`${origin}${config.server?.mcpPath || '/m
 
   ownerToken() {
     const config = this.ensureConfig();
-    return config.auth?.required === false ? '' : String(config.auth?.token || '');"""
+    return config.auth?.required === false ? '' : String(config.auth?.token || '');
+  }"""
 if old_controller not in controller:
     raise RuntimeError('Could not separate host URL and owner token')
 write('host/runtime/process-controller.js', controller.replace(old_controller, new_controller, 1))
