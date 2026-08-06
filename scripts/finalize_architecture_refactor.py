@@ -24,6 +24,14 @@ replace(
     'shared config contract exports'
 )
 
+# The public host runtime re-exports the shared store directly.
+replace(
+    'host/runtime-controller.js',
+    "  ...require('./runtime/config-store.js'),",
+    "  ...require('../shared/config-store.cjs'),",
+    'runtime controller config export'
+)
+
 # Configuration synchronization consumes the same exported version constant.
 replace(
     'vscode-host/config-sync.js',
