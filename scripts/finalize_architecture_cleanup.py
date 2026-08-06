@@ -33,16 +33,69 @@ for workflow in workflows.iterdir():
     if workflow.is_file() and workflow.suffix in {'.yml', '.yaml'} and workflow.name not in {'ci.yml', 'release.yml'}:
         workflow.unlink()
 
-# Node 22 is the single supported runtime baseline used by CI and release.
+# Node 24 Active LTS and VS Code 1.132 are the only supported host baselines.
 package_path = root / 'package.json'
 package = json.loads(package_path.read_text(encoding='utf-8'))
-package.setdefault('engines', {})['node'] = '>=22'
+package.setdefault('engines', {})['node'] = '>=24'
+package['engines']['vscode'] = '^1.132.0'
 package_path.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
 
 lock_path = root / 'package-lock.json'
 lock = json.loads(lock_path.read_text(encoding='utf-8'))
-lock.setdefault('packages', {}).setdefault('', {}).setdefault('engines', {})['node'] = '>=22'
+lock_engines = lock.setdefault('packages', {}).setdefault('', {}).setdefault('engines', {})
+lock_engines['node'] = '>=24'
+lock_engines['vscode'] = '^1.132.0'
 lock_path.write_text(json.dumps(lock, indent=2) + '\n', encoding='utf-8')
+
+# All permanent automation uses the same Active LTS runtime.
+for name in ['ci.yml', 'release.yml']:
+    file = workflows / name
+    source = file.read_text(encoding='utf-8').replace('node-version: 22', 'node-version: 24')
+    file.write_text(source, encoding='utf-8')
+
+# The standalone container contains no VS Code compatibility layer.
+dockerfile = root / 'deploy' / 'docker' / 'Dockerfile'
+dockerfile.write_text("""FROM node:24-bookworm-slim
+
+RUN apt-get update \\
+  && apt-get install -y --no-install-recommends git ca-certificates \\
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/devmate
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY config-file-lock.cjs ./
+COPY gateway ./gateway
+COPY shared ./shared
+COPY scripts ./scripts
+
+RUN mkdir -p /var/lib/devmate /srv/devmate-workspaces \\
+  && chown -R node:node /opt/devmate /var/lib/devmate /srv/devmate-workspaces
+
+USER node
+EXPOSE 8787
+VOLUME [\"/var/lib/devmate\", \"/srv/devmate-workspaces\"]
+ENTRYPOINT [\"node\", \"/opt/devmate/scripts/devmate-cli.mjs\"]
+CMD [\"serve\", \"--config\", \"/var/lib/devmate/config.json\"]
+""", encoding='utf-8')
+
+# Docker packaging is part of the Linux verification gate.
+ci_path = workflows / 'ci.yml'
+ci_source = ci_path.read_text(encoding='utf-8')
+docker_anchor = """      - name: Linux Obsidian Worker bundle smoke test
+        run: node scripts/smoke-obsidian-worker.mjs
+"""
+docker_step = docker_anchor + """
+      - name: Linux standalone Docker build and CLI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --file deploy/docker/Dockerfile --tag devmate-ci .
+          docker run --rm --entrypoint node devmate-ci /opt/devmate/scripts/devmate-cli.mjs help
+"""
+if docker_anchor not in ci_source:
+    raise RuntimeError('Could not insert Docker validation into final CI')
+ci_path.write_text(ci_source.replace(docker_anchor, docker_step, 1), encoding='utf-8')
 
 workflow_test = root / 'tests' / 'workflow-surface.test.cjs'
 workflow_test.write_text("""'use strict';
@@ -61,11 +114,25 @@ test('repository keeps only continuous CI and release workflows', () => {
   assert.deepEqual(files, ['ci.yml', 'release.yml']);
 });
 
-test('package and lock file require the verified Node 22 runtime', () => {
+test('package and lock file require current production host baselines', () => {
   const packageJson = require('../package.json');
   const packageLock = require('../package-lock.json');
-  assert.equal(packageJson.engines.node, '>=22');
-  assert.equal(packageLock.packages[''].engines.node, '>=22');
+  assert.equal(packageJson.engines.node, '>=24');
+  assert.equal(packageJson.engines.vscode, '^1.132.0');
+  assert.equal(packageLock.packages[''].engines.node, '>=24');
+  assert.equal(packageLock.packages[''].engines.vscode, '^1.132.0');
+});
+
+test('CI, release, and Docker use Node 24 without legacy extension files', () => {
+  const ci = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const release = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  const docker = fs.readFileSync(path.join(root, 'deploy', 'docker', 'Dockerfile'), 'utf8');
+  assert.doesNotMatch(ci, /node-version:\s*22/);
+  assert.doesNotMatch(release, /node-version:\s*22/);
+  assert.match(ci, /standalone Docker build and CLI smoke/);
+  assert.match(docker, /^FROM node:24-bookworm-slim/m);
+  assert.match(docker, /COPY shared \.\/shared/);
+  assert.doesNotMatch(docker, /extension-entry-win32|ngrok-launch-compat|extension-config-io/);
 });
 """, encoding='utf-8')
 
