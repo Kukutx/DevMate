@@ -1,0 +1,43 @@
+name: Apply Shared Tunnel Heartbeat Interval
+
+on:
+  push:
+    branches:
+      - refactor/shared-tunnel-runtime
+    paths:
+      - .github/workflows/apply-shared-tunnel-heartbeat.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/shared-tunnel-runtime
+          fetch-depth: 0
+      - name: Update and validate heartbeat interval
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'vscode-host/shared-tunnel-runtime.js';
+          let source = fs.readFileSync(file, 'utf8');
+          const oldValue = 'const DEFAULT_HEARTBEAT_MS = 15000;';
+          const newValue = 'const DEFAULT_HEARTBEAT_MS = 30000;';
+          const count = source.split(oldValue).length - 1;
+          if (count !== 1) throw new Error(`Expected one heartbeat constant, found ${count}`);
+          source = source.replace(oldValue, newValue);
+          fs.writeFileSync(file, source, 'utf8');
+          NODE
+          node --check vscode-host/shared-tunnel-runtime.js
+          node --test tests/shared-tunnel-runtime.test.cjs tests/shared-tunnel-failover.test.cjs
+          git rm .github/workflows/apply-shared-tunnel-heartbeat.yml
+          git add vscode-host/shared-tunnel-runtime.js
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git commit -m "Reduce shared tunnel heartbeat writes"
+          git push origin HEAD:refactor/shared-tunnel-runtime
