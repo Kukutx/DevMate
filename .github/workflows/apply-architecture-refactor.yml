@@ -45,7 +45,6 @@ jobs:
         run: |
           python3 scripts/apply_architecture_refactor.py
           python3 scripts/finalize_architecture_refactor.py
-          python3 scripts/finalize_architecture_cleanup.py
 
       - name: Repository contracts
         run: npm run check
