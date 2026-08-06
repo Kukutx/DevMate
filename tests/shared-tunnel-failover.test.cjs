@@ -126,7 +126,11 @@ test('a pending follower takes ownership once when the first owner exits', async
   try {
     const processA = cpA.spawn('ngrok', ['http', String(port)], {});
     const processB = cpB.spawn('ngrok', ['http', String(port)], {});
-    await waitFor(() => children.length === 1 && (processA.owned || processB.owned));
+    await waitFor(() =>
+      children.length === 1 &&
+      (processA.owned || processB.owned) &&
+      (processA.attached || processB.attached)
+    );
     const firstOwner = processA.owned ? processA : processB;
     const firstFollower = processA.owned ? processB : processA;
     const followerRuntime = processA.owned ? runtimeB : runtimeA;
