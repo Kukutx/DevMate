@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 import textwrap
 
 root = Path(__file__).resolve().parents[1]
@@ -56,7 +57,7 @@ write('scripts/devmate-runner.mjs', runner)
 write(
     'tests/external-runner-runtime-contract.test.mjs',
     textwrap.dedent(
-        """
+        r"""
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
         import path from 'node:path';
@@ -83,5 +84,9 @@ write(
     )
 )
 
+version_cleanup = root / 'scripts' / 'finalize_version_source.py'
+if version_cleanup.exists():
+    runpy.run_path(str(version_cleanup), run_name='__main__')
+
 (root / 'scripts/finalize_runner_runtime.py').unlink()
-print('Unified external Runner configuration and process ownership.')
+print('Unified external Runner configuration, process ownership, and version source.')
