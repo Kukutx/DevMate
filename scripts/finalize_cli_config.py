@@ -43,10 +43,6 @@ cli, count = re.subn(
         function readJson(file) {
           return readConfigJson(file, null, { strict: true, supportedVersion: true });
         }
-
-        function writeSecureJson(file, value) {
-          return updateConfig(file, () => value);
-        }
         """
     ).strip(),
     cli,
@@ -57,6 +53,9 @@ if count != 1:
     raise RuntimeError('Could not replace standalone CLI config access')
 cli = cli.replace('version: 10,', 'version: SUPPORTED_CONFIG_VERSION,', 1)
 cli = cli.replace("appVersion: 'standalone',", 'appVersion: DEFAULT_VERSION,', 1)
+if 'writeSecureJson(file, config);' not in cli:
+    raise RuntimeError('Could not replace standalone initialization write')
+cli = cli.replace('writeSecureJson(file, config);', 'updateConfig(file, () => config);', 1)
 
 cli, count = re.subn(
     r"function memberCreate\(options\) \{.*?\n\}\n\nfunction memberRotate",
@@ -148,6 +147,8 @@ cli, count = re.subn(
 )
 if count != 1:
     raise RuntimeError('Could not make member revocation transactional')
+if 'writeSecureJson' in cli or 'fs.writeFileSync' in cli:
+    raise RuntimeError('Standalone CLI still contains a direct configuration writer')
 write('scripts/devmate-cli.mjs', cli)
 
 # The higher-level bootstrap performs its complete mutation under the same lock.
@@ -269,6 +270,8 @@ bootstrap = textwrap.dedent(
     """
 ).strip()
 command = command[:start] + bootstrap + command[end:]
+if 'writeSecureJson' in command or 'fs.writeFileSync' in command:
+    raise RuntimeError('Bootstrap CLI still contains a direct configuration writer')
 write('scripts/devmate-command.mjs', command)
 
 # package.json is the only version source; no synchronizer rewrites CLI source.
@@ -287,7 +290,7 @@ write('scripts/sync-version.mjs', sync)
 write(
     'tests/cli-config-store.test.mjs',
     textwrap.dedent(
-        """
+        r"""
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
         import os from 'node:os';
@@ -301,7 +304,8 @@ write(
           for (const relative of ['scripts/devmate-cli.mjs', 'scripts/devmate-command.mjs']) {
             const source = fs.readFileSync(path.resolve(import.meta.dirname, '..', relative), 'utf8');
             assert.match(source, /shared\/config-store\.cjs/);
-            assert.doesNotMatch(source, /writeFileSync\([^\n]*config|function writeSecureJson[\s\S]*writeFileSync/);
+            assert.equal(source.includes('fs.writeFileSync'), false);
+            assert.equal(source.includes('function writeSecureJson'), false);
           }
         });
 
@@ -322,4 +326,4 @@ write(
 )
 
 (root / 'scripts/finalize_cli_config.py').unlink()
-print('Unified standalone CLI configuration persistence.')
+print('Unified standalone CLI configuration persistence without compatibility writers.')
