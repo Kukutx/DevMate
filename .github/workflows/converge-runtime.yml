@@ -3,9 +3,14 @@ name: Converge DevMate runtime
 on:
   schedule:
     - cron: '*/5 * * * *'
+  issue_comment:
+    types:
+      - created
 
 permissions:
   contents: write
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: converge-devmate-runtime-pr-36
@@ -13,6 +18,7 @@ concurrency:
 
 jobs:
   converge:
+    if: ${{ github.event_name == 'schedule' || (github.event.issue.pull_request && github.event.issue.number == 36 && github.event.comment.body == '/converge-runtime') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
