@@ -1,0 +1,243 @@
+name: Apply Shared Tunnel Safety Hardening
+
+on:
+  push:
+    branches:
+      - refactor/shared-tunnel-runtime
+    paths:
+      - .github/workflows/apply-shared-tunnel-safety.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/shared-tunnel-runtime
+          fetch-depth: 0
+      - name: Harden runtime records and pending readiness
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'vscode-host/shared-tunnel-runtime.js';
+          let source = fs.readFileSync(file, 'utf8');
+
+          function replaceOnce(needle, replacement, label) {
+            const count = source.split(needle).length - 1;
+            if (count !== 1) throw new Error(`${label}: expected one match, found ${count}`);
+            source = source.replace(needle, replacement);
+          }
+
+          replaceOnce(
+            "const DEFAULT_START_TIMEOUT_MS = 20000;\nconst DEFAULT_ATTACHED_POLL_MS = 1000;",
+            "const DEFAULT_START_TIMEOUT_MS = 20000;\nconst DEFAULT_READY_TIMEOUT_MS = 20000;\nconst DEFAULT_ATTACHED_POLL_MS = 1000;",
+            'ready timeout constant'
+          );
+
+          const validation = `function runtimeRecordError(message, code, recordFile) {
+            const error = new Error(message);
+            error.code = code;
+            error.recordFile = recordFile;
+            return error;
+          }
+
+          function normalizeRuntimeRecord(record) {
+            if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+            const ownerId = String(record.ownerId || '').trim();
+            const hostId = String(record.hostId || '').trim();
+            const hostPid = Number(record.hostPid);
+            const childPid = record.childPid == null ? null : Number(record.childPid);
+            const port = Number(record.port);
+            const rawProvider = String(record.provider || '').trim().toLowerCase();
+            const provider = normalizeProvider(rawProvider);
+            const key = String(record.configurationKey || '').trim().toLowerCase();
+            const status = String(record.status || '').trim().toLowerCase();
+            const publicUrl = safePublicUrl(record.publicUrl);
+            const acquiredAt = String(record.acquiredAt || '');
+            const heartbeatAt = String(record.heartbeatAt || '');
+            const readyAt = record.readyAt == null ? null : String(record.readyAt);
+            const leaseMs = Number(record.leaseMs);
+            const valid =
+              ownerId.length > 0 && ownerId.length <= 512 &&
+              hostId.length > 0 && hostId.length <= 256 &&
+              Number.isInteger(hostPid) && hostPid > 0 &&
+              (childPid == null || (Number.isInteger(childPid) && childPid > 0)) &&
+              Number.isInteger(port) && port > 0 && port <= 65535 &&
+              rawProvider === provider &&
+              /^[a-f0-9]{64}$/.test(key) &&
+              (status === 'pending' || status === 'ready') &&
+              (status === 'ready' ? !!publicUrl : !record.publicUrl) &&
+              Number.isFinite(Date.parse(acquiredAt)) &&
+              Number.isFinite(Date.parse(heartbeatAt)) &&
+              (readyAt == null || Number.isFinite(Date.parse(readyAt))) &&
+              Number.isFinite(leaseMs) && leaseMs >= 30000 && leaseMs <= 24 * 60 * 60 * 1000;
+            if (!valid) return null;
+            return {
+              ...record,
+              ownerId,
+              hostId,
+              hostPid,
+              childPid,
+              port,
+              provider,
+              configurationKey: key,
+              status,
+              publicUrl,
+              acquiredAt,
+              heartbeatAt,
+              readyAt,
+              leaseMs
+            };
+          }
+
+          `;
+          replaceOnce('function stableConfiguration(settings = {}, port = 0) {', `${validation}function stableConfiguration(settings = {}, port = 0) {`, 'record validation helpers');
+
+          const readStart = source.indexOf('  read({ includeStale = false } = {}) {');
+          const readEnd = source.indexOf('\n  write(ownerId, patch = {}) {', readStart);
+          if (readStart < 0 || readEnd < 0) throw new Error('record read method boundary not found');
+          const readMethod = `  read({ includeStale = false } = {}) {
+            const stat = fs.statSync(this.recordFile, { throwIfNoEntry: false });
+            if (!stat) return null;
+            if (!stat.isFile()) {
+              throw runtimeRecordError(
+                \`Shared tunnel runtime record path is not a file: \${this.recordFile}\`,
+                'DEVMATE_TUNNEL_RECORD_PATH_INVALID',
+                this.recordFile
+              );
+            }
+            if (stat.size > MAX_RUNTIME_RECORD_BYTES) {
+              const quarantined = quarantineRecord(this.recordFile, 'oversized');
+              this.logger(\`Quarantined oversized shared tunnel record\${quarantined ? \` at \${quarantined}\` : ''}.\`);
+              return null;
+            }
+            let record;
+            try {
+              record = JSON.parse(fs.readFileSync(this.recordFile, 'utf8').replace(/^\\uFEFF/, ''));
+            } catch {
+              const quarantined = quarantineRecord(this.recordFile, 'invalid-json');
+              this.logger(\`Quarantined malformed shared tunnel record\${quarantined ? \` at \${quarantined}\` : ''}.\`);
+              return null;
+            }
+            const version = Number(record?.version);
+            if (Number.isInteger(version) && version > RUNTIME_RECORD_VERSION) {
+              throw runtimeRecordError(
+                \`Shared tunnel runtime record version \${version} is newer than supported version \${RUNTIME_RECORD_VERSION}\`,
+                'DEVMATE_TUNNEL_RECORD_FUTURE_VERSION',
+                this.recordFile
+              );
+            }
+            const normalized = version === RUNTIME_RECORD_VERSION ? normalizeRuntimeRecord(record) : null;
+            if (!normalized) {
+              const quarantined = quarantineRecord(this.recordFile, 'invalid-record');
+              this.logger(\`Quarantined unsupported shared tunnel record\${quarantined ? \` at \${quarantined}\` : ''}.\`);
+              return null;
+            }
+            const value = { ...normalized, mtimeMs: stat.mtimeMs };
+            if (!includeStale && runtimeRecordStale(value, { leaseMs: this.leaseMs })) {
+              try { fs.rmSync(this.recordFile, { force: true }); } catch {}
+              return null;
+            }
+            return value;
+          }
+`;
+          source = `${source.slice(0, readStart)}${readMethod}${source.slice(readEnd)}`;
+
+          replaceOnce(
+            "    this.watcher = null;\n    this.started = false;",
+            "    this.watcher = null;\n    this.readyTimer = null;\n    this.started = false;",
+            'process readiness timer field'
+          );
+
+          replaceOnce(
+            "    child.once?.('exit', (code, signal) => {\n      this.runtime.ownerExited(this, code, signal);\n      this.finish(code, signal);\n    });\n  }",
+            "    child.once?.('exit', (code, signal) => {\n      this.runtime.ownerExited(this, code, signal);\n      this.finish(code, signal);\n    });\n    this.startReadinessTimer();\n  }",
+            'owner readiness timer start'
+          );
+
+          const readinessMethods = `  startReadinessTimer() {
+            if (this.readyTimer || !this.owned || this.finished) return;
+            this.readyTimer = setTimeout(() => {
+              this.readyTimer = null;
+              void this.runtime.expirePendingOwner(this).catch(error => {
+                this.stderr.write(\`DevMate shared tunnel readiness cleanup failed: \${error.message || error}\\n\`);
+              });
+            }, this.runtime.readyTimeoutMs);
+            this.readyTimer.unref?.();
+          }
+
+          clearReadinessTimer() {
+            if (!this.readyTimer) return false;
+            clearTimeout(this.readyTimer);
+            this.readyTimer = null;
+            return true;
+          }
+
+`;
+          replaceOnce('  finish(code = 0, signal = null) {', `${readinessMethods}  finish(code = 0, signal = null) {`, 'process readiness timer methods');
+          replaceOnce(
+            "    if (this.watcher) clearInterval(this.watcher);\n    this.watcher = null;",
+            "    if (this.watcher) clearInterval(this.watcher);\n    this.watcher = null;\n    this.clearReadinessTimer();",
+            'readiness timer finish cleanup'
+          );
+
+          replaceOnce(
+            "    startTimeoutMs = DEFAULT_START_TIMEOUT_MS,\n    attachedPollMs = DEFAULT_ATTACHED_POLL_MS",
+            "    startTimeoutMs = DEFAULT_START_TIMEOUT_MS,\n    readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,\n    attachedPollMs = DEFAULT_ATTACHED_POLL_MS",
+            'runtime ready timeout option'
+          );
+          replaceOnce(
+            "    this.startTimeoutMs = Math.max(5000, Number(startTimeoutMs) || DEFAULT_START_TIMEOUT_MS);\n    this.attachedPollMs",
+            "    this.startTimeoutMs = Math.max(5000, Number(startTimeoutMs) || DEFAULT_START_TIMEOUT_MS);\n    this.readyTimeoutMs = Math.max(250, Number(readyTimeoutMs) || DEFAULT_READY_TIMEOUT_MS);\n    this.attachedPollMs",
+            'runtime ready timeout property'
+          );
+
+          const expireMethod = `  async expirePendingOwner(processProxy) {
+            if (this.ownedProcess !== processProxy || processProxy.finished) return { expired: false, reason: 'not-owner' };
+            const record = this.store.read();
+            if (!record || record.ownerId !== processProxy.ownerId) return { expired: false, reason: 'ownership-changed' };
+            if (record.status === 'ready' && record.publicUrl) {
+              processProxy.clearReadinessTimer();
+              return { expired: false, reason: 'ready' };
+            }
+            processProxy.stderr.write(\`DevMate shared tunnel did not publish a valid HTTPS URL within \${this.readyTimeoutMs}ms; stopping it.\\n\`);
+            const result = await terminateChild(processProxy.delegate, { timeoutMs: 2000, forceTimeoutMs: 1000 });
+            if (this.ownedProcess === processProxy && !processProxy.finished) {
+              this.stopHeartbeat();
+              this.store.remove(processProxy.ownerId);
+              this.ownedProcess = null;
+              processProxy.finish(result.exited ? 0 : 1, processProxy.delegate?.signalCode || null);
+            }
+            return { expired: true, ...result };
+          }
+
+`;
+          replaceOnce('  startHeartbeat() {', `${expireMethod}  startHeartbeat() {`, 'pending owner expiration');
+          replaceOnce(
+            "    if (!normalized) return null;\n    const record = this.store.write(ownerId, {",
+            "    if (!normalized) return null;\n    owner.clearReadinessTimer();\n    const record = this.store.write(ownerId, {",
+            'ready timer success cleanup'
+          );
+
+          replaceOnce(
+            "  DEFAULT_RUNTIME_LEASE_MS,\n  DEFAULT_START_TIMEOUT_MS,",
+            "  DEFAULT_RUNTIME_LEASE_MS,\n  DEFAULT_READY_TIMEOUT_MS,\n  DEFAULT_START_TIMEOUT_MS,",
+            'ready timeout export'
+          );
+
+          fs.writeFileSync(file, source, 'utf8');
+          NODE
+          node --check vscode-host/shared-tunnel-runtime.js
+          node --check tests/shared-tunnel-safety.test.cjs
+          node --test tests/shared-tunnel-runtime.test.cjs tests/shared-tunnel-safety.test.cjs
+          git rm .github/workflows/apply-shared-tunnel-safety.yml
+          git add vscode-host/shared-tunnel-runtime.js tests/shared-tunnel-safety.test.cjs
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git commit -m "Harden shared tunnel records and readiness cleanup"
+          git push origin HEAD:refactor/shared-tunnel-runtime
