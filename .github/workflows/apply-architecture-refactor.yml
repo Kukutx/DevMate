@@ -6,6 +6,7 @@ on:
       - refactor/shared-tunnel-runtime
     paths:
       - scripts/apply_architecture_refactor.py
+      - scripts/finalize_architecture_refactor.py
       - .github/workflows/apply-architecture-refactor.yml
 
 permissions:
@@ -13,7 +14,7 @@ permissions:
 
 concurrency:
   group: apply-architecture-refactor
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   refactor:
@@ -38,7 +39,9 @@ jobs:
         run: npm ci
 
       - name: Apply architecture migration
-        run: python3 scripts/apply_architecture_refactor.py
+        run: |
+          python3 scripts/apply_architecture_refactor.py
+          python3 scripts/finalize_architecture_refactor.py
 
       - name: Repository contracts
         run: npm run check
