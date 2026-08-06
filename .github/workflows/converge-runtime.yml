@@ -1,20 +1,22 @@
 name: Converge DevMate runtime
 
 on:
-  pull_request:
-    branches:
-      - master
+  issue_comment:
+    types:
+      - created
 
 permissions:
   contents: write
+  pull-requests: read
+  issues: read
 
 concurrency:
-  group: converge-devmate-runtime-${{ github.event.pull_request.number }}
+  group: converge-devmate-runtime-pr-36
   cancel-in-progress: true
 
 jobs:
   converge:
-    if: ${{ github.head_ref == 'refactor/shared-tunnel-runtime' }}
+    if: ${{ github.event.issue.pull_request && github.event.issue.number == 36 && github.event.comment.body == '/converge-runtime' && github.actor == 'Kukutx' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
