@@ -25,9 +25,12 @@ const STARTUP_LOCK_NAME = 'tunnel.start.lock';
 const DEFAULT_RUNTIME_LEASE_MS = 120000;
 const DEFAULT_HEARTBEAT_MS = 15000;
 const DEFAULT_START_TIMEOUT_MS = 20000;
+const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_ATTACHED_POLL_MS = 1000;
 const MAX_RUNTIME_RECORD_BYTES = 64 * 1024;
 const MAX_CAPTURE_BYTES = 64 * 1024;
+const MAX_CONFIGURATION_TEXT = 4096;
+const MAX_RUNTIME_LEASE_MS = 24 * 60 * 60 * 1000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -41,18 +44,32 @@ function safePublicUrl(value) {
   }
 }
 
+function configurationUrl(value) {
+  const raw = String(value || '').trim().slice(0, MAX_CONFIGURATION_TEXT);
+  if (!raw) return '';
+  const normalized = safePublicUrl(raw);
+  return normalized || `invalid:${raw}`;
+}
+
+function runtimeRecordError(message, code, recordFile) {
+  const error = new Error(message);
+  error.code = code;
+  error.recordFile = recordFile;
+  return error;
+}
+
 function stableConfiguration(settings = {}, port = 0) {
   return {
     port: Number(port) || 0,
     provider: normalizeProvider(settings.provider || settings.tunnelProvider || 'ngrok'),
-    publicUrl: safePublicUrl(settings.publicUrl),
-    ngrokUrl: safePublicUrl(settings.ngrokUrl),
-    ngrokCommandPath: String(settings.ngrokCommandPath || '').trim(),
+    publicUrl: configurationUrl(settings.publicUrl),
+    ngrokUrl: configurationUrl(settings.ngrokUrl),
+    ngrokCommandPath: String(settings.ngrokCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
     ngrokUseManagedAccount: settings.ngrokUseManagedAccount !== false,
     ngrokPoolingEnabled: settings.ngrokPoolingEnabled === true,
-    ngrokTrafficPolicyFile: String(settings.ngrokTrafficPolicyFile || '').trim(),
-    cloudflareCommandPath: String(settings.cloudflareCommandPath || '').trim(),
-    deploymentMode: String(settings.deploymentMode || 'personal').trim().toLowerCase()
+    ngrokTrafficPolicyFile: String(settings.ngrokTrafficPolicyFile || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
+    cloudflareCommandPath: String(settings.cloudflareCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
+    deploymentMode: String(settings.deploymentMode || 'personal').trim().toLowerCase().slice(0, 64)
   };
 }
 
@@ -83,6 +100,55 @@ function runtimeRecordStale(record, { at = Date.now(), leaseMs = DEFAULT_RUNTIME
   return !activity || at - activity >= effectiveLease;
 }
 
+function normalizeRuntimeRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const ownerId = String(record.ownerId || '').trim();
+  const hostId = String(record.hostId || '').trim();
+  const hostPid = Number(record.hostPid);
+  const childPid = record.childPid == null ? null : Number(record.childPid);
+  const port = Number(record.port);
+  const rawProvider = String(record.provider || '').trim().toLowerCase();
+  const provider = normalizeProvider(rawProvider);
+  const key = String(record.configurationKey || '').trim().toLowerCase();
+  const status = String(record.status || '').trim().toLowerCase();
+  const publicUrl = safePublicUrl(record.publicUrl);
+  const acquiredAt = String(record.acquiredAt || '');
+  const heartbeatAt = String(record.heartbeatAt || '');
+  const readyAt = record.readyAt == null ? null : String(record.readyAt);
+  const leaseMs = Number(record.leaseMs);
+  const valid =
+    ownerId.length > 0 && ownerId.length <= 512 &&
+    hostId.length > 0 && hostId.length <= 256 &&
+    Number.isInteger(hostPid) && hostPid > 0 &&
+    (childPid == null || (Number.isInteger(childPid) && childPid > 0)) &&
+    Number.isInteger(port) && port > 0 && port <= 65535 &&
+    rawProvider === provider &&
+    /^[a-f0-9]{64}$/.test(key) &&
+    (status === 'pending' || status === 'ready') &&
+    (status === 'ready' ? !!publicUrl : !String(record.publicUrl || '').trim()) &&
+    Number.isFinite(Date.parse(acquiredAt)) &&
+    Number.isFinite(Date.parse(heartbeatAt)) &&
+    (readyAt == null || Number.isFinite(Date.parse(readyAt))) &&
+    Number.isFinite(leaseMs) && leaseMs >= 30000 && leaseMs <= MAX_RUNTIME_LEASE_MS;
+  if (!valid) return null;
+  return {
+    ...record,
+    ownerId,
+    hostId,
+    hostPid,
+    childPid,
+    port,
+    provider,
+    configurationKey: key,
+    status,
+    publicUrl,
+    acquiredAt,
+    heartbeatAt,
+    readyAt,
+    leaseMs
+  };
+}
+
 function quarantineRecord(file, reason = 'invalid') {
   const stat = fs.statSync(file, { throwIfNoEntry: false });
   if (!stat?.isFile()) return null;
@@ -100,34 +166,68 @@ class SharedTunnelRecordStore {
     if (!stateDirectory) throw new Error('A state directory is required for shared tunnel state');
     this.stateDirectory = path.resolve(stateDirectory);
     this.recordFile = path.join(this.stateDirectory, RUNTIME_RECORD_NAME);
-    this.leaseMs = Math.max(30000, Number(leaseMs) || DEFAULT_RUNTIME_LEASE_MS);
+    this.leaseMs = Math.min(
+      MAX_RUNTIME_LEASE_MS,
+      Math.max(30000, Number(leaseMs) || DEFAULT_RUNTIME_LEASE_MS)
+    );
     this.logger = logger;
+  }
+
+  quarantine(reason, description) {
+    const destination = quarantineRecord(this.recordFile, reason);
+    if (!destination) {
+      throw runtimeRecordError(
+        `Could not quarantine ${description} shared tunnel record: ${this.recordFile}`,
+        'DEVMATE_TUNNEL_RECORD_QUARANTINE_FAILED',
+        this.recordFile
+      );
+    }
+    this.logger(`Quarantined ${description} shared tunnel record at ${destination}.`);
+    return null;
   }
 
   read({ includeStale = false } = {}) {
     const stat = fs.statSync(this.recordFile, { throwIfNoEntry: false });
     if (!stat) return null;
-    if (!stat.isFile() || stat.size > MAX_RUNTIME_RECORD_BYTES) {
-      const quarantined = quarantineRecord(this.recordFile, stat.isFile() ? 'oversized' : 'not-file');
-      this.logger(`Quarantined invalid shared tunnel record${quarantined ? ` at ${quarantined}` : ''}.`);
-      return null;
+    if (!stat.isFile()) {
+      throw runtimeRecordError(
+        `Shared tunnel runtime record path is not a file: ${this.recordFile}`,
+        'DEVMATE_TUNNEL_RECORD_PATH_INVALID',
+        this.recordFile
+      );
     }
+    if (stat.size > MAX_RUNTIME_RECORD_BYTES) return this.quarantine('oversized', 'oversized');
+
     let record;
     try {
       record = JSON.parse(fs.readFileSync(this.recordFile, 'utf8').replace(/^\uFEFF/, ''));
     } catch {
-      const quarantined = quarantineRecord(this.recordFile, 'invalid-json');
-      this.logger(`Quarantined malformed shared tunnel record${quarantined ? ` at ${quarantined}` : ''}.`);
-      return null;
+      return this.quarantine('invalid-json', 'malformed');
     }
-    if (!record || typeof record !== 'object' || Array.isArray(record) || Number(record.version) !== RUNTIME_RECORD_VERSION) {
-      const quarantined = quarantineRecord(this.recordFile, 'invalid-record');
-      this.logger(`Quarantined unsupported shared tunnel record${quarantined ? ` at ${quarantined}` : ''}.`);
-      return null;
+
+    const version = Number(record?.version);
+    if (Number.isInteger(version) && version > RUNTIME_RECORD_VERSION) {
+      throw runtimeRecordError(
+        `Shared tunnel runtime record version ${version} is newer than supported version ${RUNTIME_RECORD_VERSION}`,
+        'DEVMATE_TUNNEL_RECORD_FUTURE_VERSION',
+        this.recordFile
+      );
     }
-    const value = { ...record, mtimeMs: stat.mtimeMs };
+
+    const normalized = version === RUNTIME_RECORD_VERSION ? normalizeRuntimeRecord(record) : null;
+    if (!normalized) return this.quarantine('invalid-record', 'invalid');
+
+    const value = { ...normalized, mtimeMs: stat.mtimeMs };
     if (!includeStale && runtimeRecordStale(value, { leaseMs: this.leaseMs })) {
-      try { fs.rmSync(this.recordFile, { force: true }); } catch {}
+      try {
+        fs.rmSync(this.recordFile, { force: true });
+      } catch (error) {
+        throw runtimeRecordError(
+          `Could not remove stale shared tunnel record: ${error.message || error}`,
+          'DEVMATE_TUNNEL_RECORD_STALE_CLEANUP_FAILED',
+          this.recordFile
+        );
+      }
       return null;
     }
     return value;
@@ -156,12 +256,28 @@ class SharedTunnelRecordStore {
       heartbeatAt: nowIso(),
       leaseMs: this.leaseMs
     };
-    atomicWriteJson(this.recordFile, record);
-    return record;
+    const normalized = normalizeRuntimeRecord(record);
+    if (!normalized) {
+      throw runtimeRecordError(
+        'Refusing to persist an invalid shared tunnel runtime record',
+        'DEVMATE_TUNNEL_RECORD_WRITE_INVALID',
+        this.recordFile
+      );
+    }
+    atomicWriteJson(this.recordFile, normalized);
+    return normalized;
   }
 
   remove(ownerId) {
-    const current = this.read({ includeStale: true });
+    let current;
+    try {
+      current = this.read({ includeStale: true });
+    } catch (error) {
+      if (error?.code === 'DEVMATE_TUNNEL_RECORD_FUTURE_VERSION' || error?.code === 'DEVMATE_TUNNEL_RECORD_PATH_INVALID') {
+        return false;
+      }
+      throw error;
+    }
     if (!current || current.ownerId !== ownerId || Number(current.hostPid) !== process.pid) return false;
     try {
       fs.rmSync(this.recordFile, { force: true });
@@ -192,6 +308,7 @@ class SharedTunnelProcess extends EventEmitter {
     this.owned = false;
     this.recordOwnerId = '';
     this.watcher = null;
+    this.readyTimer = null;
     this.started = false;
     this.finished = false;
     queueMicrotask(() => this.initialize());
@@ -230,6 +347,7 @@ class SharedTunnelProcess extends EventEmitter {
       this.runtime.ownerExited(this, code, signal);
       this.finish(code, signal);
     });
+    this.startReadinessTimer();
   }
 
   attachFollower(record) {
@@ -238,10 +356,33 @@ class SharedTunnelProcess extends EventEmitter {
     this.recordOwnerId = record.ownerId;
     this.stdout.write(`Attached to shared DevMate tunnel owned by ${record.hostId || 'another VS Code host'}.\n`);
     this.watcher = setInterval(() => {
-      const current = this.runtime.store.read();
-      if (!current || current.ownerId !== this.recordOwnerId) this.finish(0, null);
+      try {
+        const current = this.runtime.store.read();
+        if (!current || current.ownerId !== this.recordOwnerId) this.finish(0, null);
+      } catch (error) {
+        this.stderr.write(`Shared tunnel attachment ended: ${error.message || error}\n`);
+        this.finish(1, null);
+      }
     }, this.runtime.attachedPollMs);
     this.watcher.unref?.();
+  }
+
+  startReadinessTimer() {
+    if (this.readyTimer || !this.owned || this.finished) return;
+    this.readyTimer = setTimeout(() => {
+      this.readyTimer = null;
+      void this.runtime.expirePendingOwner(this).catch(error => {
+        this.stderr.write(`DevMate shared tunnel readiness cleanup failed: ${error.message || error}\n`);
+      });
+    }, this.runtime.readyTimeoutMs);
+    this.readyTimer.unref?.();
+  }
+
+  clearReadinessTimer() {
+    if (!this.readyTimer) return false;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = null;
+    return true;
   }
 
   finish(code = 0, signal = null) {
@@ -249,6 +390,7 @@ class SharedTunnelProcess extends EventEmitter {
     this.finished = true;
     if (this.watcher) clearInterval(this.watcher);
     this.watcher = null;
+    this.clearReadinessTimer();
     this.exitCode = Number.isInteger(code) ? code : null;
     this.signalCode = signal || null;
     this.stdout.end();
@@ -264,8 +406,11 @@ class SharedTunnelProcess extends EventEmitter {
     if (this.killed || this.finished) return true;
     this.killed = true;
     if (this.owned && this.delegate) {
-      try { return this.delegate.kill?.(signal) ?? true; }
-      catch { return false; }
+      try {
+        return this.delegate.kill?.(signal) ?? true;
+      } catch {
+        return false;
+      }
     }
     if (this.attached || this.started) this.finish(0, signal);
     return true;
@@ -310,6 +455,7 @@ class SharedTunnelRuntime {
     runtimeLeaseMs = DEFAULT_RUNTIME_LEASE_MS,
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
     startTimeoutMs = DEFAULT_START_TIMEOUT_MS,
+    readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,
     attachedPollMs = DEFAULT_ATTACHED_POLL_MS
   } = {}) {
     if (!stateDirectory) throw new Error('A shared state directory is required');
@@ -322,9 +468,13 @@ class SharedTunnelRuntime {
     this.settingsGetter = settings;
     this.hostId = String(hostId || 'vscode');
     this.logger = logger;
-    this.runtimeLeaseMs = Math.max(30000, Number(runtimeLeaseMs) || DEFAULT_RUNTIME_LEASE_MS);
+    this.runtimeLeaseMs = Math.min(
+      MAX_RUNTIME_LEASE_MS,
+      Math.max(30000, Number(runtimeLeaseMs) || DEFAULT_RUNTIME_LEASE_MS)
+    );
     this.heartbeatMs = Math.max(5000, Number(heartbeatMs) || DEFAULT_HEARTBEAT_MS);
     this.startTimeoutMs = Math.max(5000, Number(startTimeoutMs) || DEFAULT_START_TIMEOUT_MS);
+    this.readyTimeoutMs = Math.max(250, Number(readyTimeoutMs) || DEFAULT_READY_TIMEOUT_MS);
     this.attachedPollMs = Math.max(250, Number(attachedPollMs) || DEFAULT_ATTACHED_POLL_MS);
     this.store = new SharedTunnelRecordStore({
       stateDirectory: this.stateDirectory,
@@ -391,16 +541,28 @@ class SharedTunnelRuntime {
   install() {
     if (this.installed) return this;
     if (this.disposed) throw new Error('Shared tunnel runtime is disposed');
-    this.spawnLayer = new SpawnLayer({
-      childProcess: this.childProcess,
-      name: 'devmate-shared-tunnel',
-      wrap: previous => this.wrapSpawn(previous)
-    }).install();
-    this.requestPrevious = this.http.request;
-    this.requestWrapper = this.wrapRequest(this.requestPrevious);
-    this.http.request = this.requestWrapper;
-    this.installed = true;
-    return this;
+    let layer = null;
+    try {
+      layer = new SpawnLayer({
+        childProcess: this.childProcess,
+        name: 'devmate-shared-tunnel',
+        wrap: previous => this.wrapSpawn(previous)
+      }).install();
+      this.spawnLayer = layer;
+      this.requestPrevious = this.http.request;
+      this.requestWrapper = this.wrapRequest(this.requestPrevious);
+      this.http.request = this.requestWrapper;
+      this.installed = true;
+      return this;
+    } catch (error) {
+      try {
+        layer?.dispose();
+      } catch {}
+      this.spawnLayer = null;
+      this.requestPrevious = null;
+      this.requestWrapper = null;
+      throw error;
+    }
   }
 
   suspendSpawn() {
@@ -431,9 +593,11 @@ class SharedTunnelRuntime {
 
   async initializeProcess(processProxy) {
     return this.operations.run('spawn', async () => {
-      if (this.disposed || processProxy.killed) throw Object.assign(new Error('Shared tunnel start was cancelled'), {
-        code: 'DEVMATE_TUNNEL_START_CANCELLED'
-      });
+      if (this.disposed || processProxy.killed) {
+        const error = new Error('Shared tunnel start was cancelled');
+        error.code = 'DEVMATE_TUNNEL_START_CANCELLED';
+        throw error;
+      }
       const { match } = processProxy.launch;
       let active = this.store.read();
       if (active) {
@@ -469,9 +633,11 @@ class SharedTunnelRuntime {
           processProxy.attachFollower(active);
           return;
         }
-        if (processProxy.killed || this.disposed) throw Object.assign(new Error('Shared tunnel start was cancelled'), {
-          code: 'DEVMATE_TUNNEL_START_CANCELLED'
-        });
+        if (processProxy.killed || this.disposed) {
+          const error = new Error('Shared tunnel start was cancelled');
+          error.code = 'DEVMATE_TUNNEL_START_CANCELLED';
+          throw error;
+        }
 
         let child = null;
         try {
@@ -498,7 +664,9 @@ class SharedTunnelRuntime {
           this.startHeartbeat();
         } catch (error) {
           if (child && childActive(child)) {
-            try { child.kill?.('SIGTERM'); } catch {}
+            try {
+              child.kill?.('SIGTERM');
+            } catch {}
           }
           this.store.remove(processProxy.ownerId);
           throw error;
@@ -506,6 +674,33 @@ class SharedTunnelRuntime {
       } finally {
         lease.release();
       }
+    });
+  }
+
+  expirePendingOwner(processProxy) {
+    return this.operations.run('expire-pending', async () => {
+      if (this.ownedProcess !== processProxy || processProxy.finished) {
+        return { expired: false, reason: 'not-owner' };
+      }
+      const record = this.store.read();
+      if (!record || record.ownerId !== processProxy.ownerId) {
+        return { expired: false, reason: 'ownership-changed' };
+      }
+      if (record.status === 'ready' && record.publicUrl) {
+        processProxy.clearReadinessTimer();
+        return { expired: false, reason: 'ready' };
+      }
+      processProxy.stderr.write(
+        `DevMate shared tunnel did not publish a valid HTTPS URL within ${this.readyTimeoutMs}ms; stopping it.\n`
+      );
+      const result = await terminateChild(processProxy.delegate, { timeoutMs: 2000, forceTimeoutMs: 1000 });
+      if (this.ownedProcess === processProxy && !processProxy.finished) {
+        this.stopHeartbeat();
+        this.store.remove(processProxy.ownerId);
+        this.ownedProcess = null;
+        processProxy.finish(result.exited ? 0 : 1, processProxy.delegate?.signalCode || null);
+      }
+      return { expired: true, ...result };
     });
   }
 
@@ -527,6 +722,10 @@ class SharedTunnelRuntime {
         this.store.write(owner.ownerId, { childPid: owner.delegate?.pid || null });
       } catch (error) {
         this.logger(`Shared tunnel heartbeat failed: ${error.message || error}`);
+        try {
+          owner.delegate?.kill?.('SIGTERM');
+        } catch {}
+        this.stopHeartbeat();
       }
     }, this.heartbeatMs);
     this.heartbeat.unref?.();
@@ -542,7 +741,11 @@ class SharedTunnelRuntime {
   ownerExited(processProxy, code, signal) {
     if (this.ownedProcess !== processProxy) return;
     this.stopHeartbeat();
-    this.store.remove(processProxy.ownerId);
+    try {
+      this.store.remove(processProxy.ownerId);
+    } catch (error) {
+      this.logger(`Could not remove shared tunnel owner record: ${error.message || error}`);
+    }
     this.ownedProcess = null;
     this.logger(`Shared tunnel owner exited code=${code} signal=${signal || 'none'}.`);
   }
@@ -551,7 +754,11 @@ class SharedTunnelRuntime {
     this.processes.delete(processProxy);
     if (this.ownedProcess === processProxy && !childActive(processProxy.delegate)) {
       this.stopHeartbeat();
-      this.store.remove(processProxy.ownerId);
+      try {
+        this.store.remove(processProxy.ownerId);
+      } catch (error) {
+        this.logger(`Could not remove finished shared tunnel record: ${error.message || error}`);
+      }
       this.ownedProcess = null;
     }
   }
@@ -567,6 +774,7 @@ class SharedTunnelRuntime {
       publicUrl: normalized,
       readyAt: nowIso()
     });
+    owner.clearReadinessTimer();
     return record;
   }
 
@@ -669,21 +877,34 @@ class SharedTunnelRuntime {
     };
   }
 
-  async dispose({ stopOwned = true } = {}) {
+  dispose({ stopOwned = true } = {}) {
     return this.operations.run('dispose', async () => {
       if (this.disposed) return { disposed: true, alreadyDisposed: true };
+      const owner = this.ownedProcess;
+      if (owner && !stopOwned && childActive(owner.delegate)) {
+        return { disposed: false, reason: 'owned-process-running' };
+      }
+
       this.suspendSpawn();
       for (const processProxy of [...this.processes]) {
         if (!processProxy.owned) processProxy.kill('SIGTERM');
       }
-      const owner = this.ownedProcess;
+
       let stopped = null;
       if (owner && stopOwned && childActive(owner.delegate)) {
         stopped = await terminateChild(owner.delegate, { timeoutMs: 5000, forceTimeoutMs: 2000 });
-        if (!owner.finished && stopped.exited) owner.finish(owner.delegate?.exitCode ?? 0, owner.delegate?.signalCode || null);
+        if (!owner.finished && stopped.exited) {
+          owner.finish(owner.delegate?.exitCode ?? 0, owner.delegate?.signalCode || null);
+        }
       }
       this.stopHeartbeat();
-      if (owner) this.store.remove(owner.ownerId);
+      if (owner) {
+        try {
+          this.store.remove(owner.ownerId);
+        } catch (error) {
+          this.logger(`Could not remove shared tunnel record during dispose: ${error.message || error}`);
+        }
+      }
       this.ownedProcess = null;
       if (this.http.request === this.requestWrapper) this.http.request = this.requestPrevious;
       this.requestPrevious = null;
@@ -698,6 +919,7 @@ class SharedTunnelRuntime {
 module.exports = {
   DEFAULT_ATTACHED_POLL_MS,
   DEFAULT_HEARTBEAT_MS,
+  DEFAULT_READY_TIMEOUT_MS,
   DEFAULT_RUNTIME_LEASE_MS,
   DEFAULT_START_TIMEOUT_MS,
   MAX_CAPTURE_BYTES,
@@ -709,6 +931,7 @@ module.exports = {
   SharedTunnelRecordStore,
   SharedTunnelRuntime,
   configurationKey,
+  normalizeRuntimeRecord,
   processAlive,
   runtimeRecordStale,
   stableConfiguration,
