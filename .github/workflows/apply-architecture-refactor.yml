@@ -25,7 +25,7 @@ on:
       - .github/workflows/apply-architecture-refactor.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: apply-architecture-refactor-final-audit
@@ -91,13 +91,25 @@ jobs:
           docker build --file deploy/docker/Dockerfile --tag devmate-converged .
           docker run --rm --entrypoint node devmate-converged /opt/devmate/scripts/devmate-cli.mjs help
 
-      - name: Commit validated refactor
+      - name: Archive validated source tree
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --stat
-          git commit -m "[architecture-refactor] Unify DevMate runtime core"
-          git push origin HEAD:refactor/shared-tunnel-runtime
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=obsidian-plugin/node_modules \
+            --exclude=obsidian-plugin/dist \
+            --exclude='*.vsix' \
+            --exclude='*.tgz' \
+            --exclude=.godot-ci \
+            --exclude=tmp \
+            -czf "$RUNNER_TEMP/devmate-converged-source.tar.gz" .
+
+      - name: Upload validated source tree
+        uses: actions/upload-artifact@v7
+        with:
+          name: devmate-converged-source
+          path: ${{ runner.temp }}/devmate-converged-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
