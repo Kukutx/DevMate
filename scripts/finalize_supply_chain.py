@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import json
 import textwrap
 
 root = Path(__file__).resolve().parents[1]
@@ -56,6 +57,16 @@ if 'Verify required CI checks passed for tagged commit' not in release:
     release = release.replace(ci_gate_marker, ci_gate_step + ci_gate_marker, 1)
 release_path.write_text(release, encoding='utf-8')
 
+# The Obsidian bundle is verified only against the current stable desktop host.
+manifest_path = root / 'obsidian-plugin' / 'manifest.json'
+manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+manifest['minAppVersion'] = '1.13.4'
+manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+versions_path = root / 'obsidian-plugin' / 'versions.json'
+versions = json.loads(versions_path.read_text(encoding='utf-8'))
+versions[manifest['version']] = '1.13.4'
+versions_path.write_text(json.dumps(versions, indent=2) + '\n', encoding='utf-8')
+
 # This is the sole final CLI persistence contract. It deliberately avoids
 # regular expressions spanning generated lines.
 (root / 'tests' / 'cli-config-store.test.mjs').write_text(
@@ -109,6 +120,8 @@ release_path.write_text(release, encoding='utf-8')
         const root = path.resolve(__dirname, '..');
         const ci = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
         const release = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+        const manifest = require('../obsidian-plugin/manifest.json');
+        const versions = require('../obsidian-plugin/versions.json');
 
         test('permanent CI is read-only and never mutates source branches', () => {
           assert.match(ci, /permissions:[\s\S]*?contents:\s*read/);
@@ -138,10 +151,15 @@ release_path.write_text(release, encoding='utf-8')
           assert.match(release, /"verify" "Linux and Real Godot 4\.7\.1"/);
           assert.doesNotMatch(release, /pull-requests:\s*write|issues:\s*write|actions:\s*write/);
         });
+
+        test('Obsidian release metadata requires the verified stable host', () => {
+          assert.equal(manifest.minAppVersion, '1.13.4');
+          assert.equal(versions[manifest.version], '1.13.4');
+        });
         """
     ).strip() + '\n',
     encoding='utf-8'
 )
 
 Path(__file__).unlink()
-print('Converged permanent workflow permissions, release gate, and final generated tests.')
+print('Converged workflow authority, release gates, host baselines, and final tests.')
