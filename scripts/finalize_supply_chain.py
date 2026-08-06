@@ -27,6 +27,33 @@ required_release_permissions = [
 for permission in required_release_permissions:
     if permission not in release:
         raise RuntimeError(f'Release workflow is missing {permission}')
+if 'checks: read' not in release:
+    release = release.replace('  contents: write\n', '  contents: write\n  checks: read\n', 1)
+
+ci_gate_marker = '      - name: Setup Node\n'
+ci_gate_step = textwrap.dedent(
+    r"""
+          - name: Verify required CI checks passed for tagged commit
+            env:
+              GH_TOKEN: ${{ github.token }}
+            shell: bash
+            run: |
+              set -euo pipefail
+              checks=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
+              for required in "verify" "Linux and Real Godot 4.7.1"; do
+                conclusion=$(printf '%s' "$checks" | jq -r --arg name "$required" '[.check_runs[] | select(.name == $name and .status == "completed")] | sort_by(.completed_at) | last | .conclusion // ""')
+                if [ "$conclusion" != "success" ]; then
+                  echo "Required CI check '$required' is not successful for $GITHUB_SHA: ${conclusion:-missing}" >&2
+                  exit 1
+                fi
+              done
+
+    """
+)
+if 'Verify required CI checks passed for tagged commit' not in release:
+    if ci_gate_marker not in release:
+        raise RuntimeError('Could not add the release CI gate')
+    release = release.replace(ci_gate_marker, ci_gate_step + ci_gate_marker, 1)
 release_path.write_text(release, encoding='utf-8')
 
 # The CLI test is emitted by a prior generator. Replace the only multiline
@@ -76,10 +103,13 @@ cli_test_path.write_text(cli_test, encoding='utf-8')
           assert.match(release, /actions\/upload-artifact@v7/);
         });
 
-        test('release authority is limited to publishing and provenance', () => {
+        test('release authority is limited to publishing, CI verification, and provenance', () => {
           assert.match(release, /contents:\s*write/);
+          assert.match(release, /checks:\s*read/);
           assert.match(release, /id-token:\s*write/);
           assert.match(release, /attestations:\s*write/);
+          assert.match(release, /Verify required CI checks passed for tagged commit/);
+          assert.match(release, /"verify" "Linux and Real Godot 4\.7\.1"/);
           assert.doesNotMatch(release, /pull-requests:\s*write|issues:\s*write|actions:\s*write/);
         });
         """
@@ -88,4 +118,4 @@ cli_test_path.write_text(cli_test, encoding='utf-8')
 )
 
 Path(__file__).unlink()
-print('Converged permanent workflow permissions and generated tests.')
+print('Converged permanent workflow permissions, release gate, and generated tests.')
