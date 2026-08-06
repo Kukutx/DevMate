@@ -10,6 +10,13 @@ on:
       - scripts/finalize_architecture_cleanup.py
       - scripts/finalize_architecture_cleanup_core.py
       - scripts/finalize_runtime_integrity.py
+      - scripts/finalize_cli_config.py
+      - scripts/finalize_network_runtime.py
+      - scripts/finalize_runner_runtime.py
+      - scripts/finalize_version_source.py
+      - scripts/finalize_auth_transport.py
+      - scripts/finalize_supply_chain.py
+      - scripts/finalize_ci_cleanup.py
       - .github/workflows/apply-architecture-refactor.yml
 
 permissions:
