@@ -15,8 +15,13 @@ on:
       - scripts/finalize_runner_runtime.py
       - scripts/finalize_version_source.py
       - scripts/finalize_auth_transport.py
+      - scripts/finalize_smoke_auth.py
+      - scripts/finalize_vsix_contract.py
+      - scripts/finalize_url_sanitization.py
+      - scripts/finalize_test_paths.py
       - scripts/finalize_supply_chain.py
       - scripts/finalize_ci_cleanup.py
+      - scripts/finalize_test_contracts.py
       - .github/workflows/apply-architecture-refactor.yml
 
 permissions:
