@@ -22,7 +22,7 @@ concurrency:
 jobs:
   refactor:
     if: ${{ !contains(github.event.head_commit.message, '[architecture-refactor]') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -35,7 +35,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -46,6 +46,11 @@ jobs:
           python3 scripts/apply_architecture_refactor.py
           python3 scripts/finalize_architecture_refactor.py
           python3 scripts/finalize_architecture_cleanup.py
+
+      - name: Dependency audits
+        run: |
+          npm audit --omit=dev --audit-level=moderate
+          npm audit --audit-level=moderate
 
       - name: Repository contracts
         run: npm run check
@@ -66,6 +71,13 @@ jobs:
         run: |
           npm run build:obsidian
           node scripts/smoke-obsidian-worker.mjs
+
+      - name: Validate standalone Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --file deploy/docker/Dockerfile --tag devmate-converged .
+          docker run --rm --entrypoint node devmate-converged /opt/devmate/scripts/devmate-cli.mjs help
 
       - name: Commit validated refactor
         shell: bash
