@@ -44,6 +44,29 @@ value = value.replace('Math.max(Number(candidate.version) || 0, 11)', 'Math.max(
 value = value.replace('Math.max(11, Number(current.version) || 0, Number(candidate.version) || 0)', 'Math.max(SUPPORTED_CONFIG_VERSION, Number(current.version) || 0, Number(candidate.version) || 0)')
 write('vscode-host/config-sync.js', value)
 
+# The Gateway imports permission and command policy from local-shared instead of keeping a second copy.
+shared = read('gateway/local-shared.mjs')
+shared = shared.replace('function dangerousGuardEnabled(config) {', 'export function dangerousGuardEnabled(config) {', 1)
+write('gateway/local-shared.mjs', shared)
+
+server = read('gateway/server.mjs')
+server = re.sub(r"function readJson\(p\)\{[^\n]*\}\n", '', server, count=1)
+replacements = [
+    (r"function now\(\)\{[^\n]*\}", "function now(){ return shared.now(); }", 'now'),
+    (r"function normalizeSlash\(p\)\{[^\n]*\}", "function normalizeSlash(p){ return shared.normalizeSlash(p); }", 'normalizeSlash'),
+    (r"function pathKey\(p\)\{[^\n]*\}", "function pathKey(p){ return shared.pathKey(p); }", 'pathKey'),
+    (r"function permissionProfile\(cfg\)\{[^\n]*\}", "function permissionProfile(cfg){ return shared.permissionProfile(cfg); }", 'permissionProfile'),
+    (r"function dangerousGuardEnabled\(cfg\)\{[^\n]*\}", "function dangerousGuardEnabled(cfg){ return shared.dangerousGuardEnabled(cfg); }", 'dangerousGuardEnabled'),
+    (r"function assertCanMutate\(cfg, action\)\{[^\n]*\}", "function assertCanMutate(cfg,action){ return shared.assertCanMutate(cfg,action); }", 'assertCanMutate'),
+    (r"function isDangerousCommand\(command\)\{.*?^\}", "function isDangerousCommand(command){ return shared.isDangerousCommand(command); }", 'isDangerousCommand'),
+    (r"function assertCommandAllowed\(cfg, command\)\{.*?^\}", "function assertCommandAllowed(cfg,command){ return shared.assertCommandAllowed(cfg,command); }", 'assertCommandAllowed'),
+]
+for pattern, replacement, label in replacements:
+    server, count = re.subn(pattern, replacement, server, count=1, flags=re.S | re.M)
+    if count != 1:
+        raise RuntimeError(f'Could not unify Gateway {label}')
+write('gateway/server.mjs', server)
+
 # Use current registered settings directly; old extension-storage fallbacks are removed.
 entry = read('extension-entry.js')
 entry = entry.replace("const PREFERENCE_STATE_PREFIX = 'devMate.ngrokPreference.';\n", '')
