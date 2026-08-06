@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-architecture-refactor-v2
+  group: apply-architecture-refactor-v3
   cancel-in-progress: true
 
 jobs:
@@ -41,6 +41,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The finalizer invokes the complete cleanup chain and removes all migration scaffolding.
       - name: Apply architecture migration
         run: |
           python3 scripts/apply_architecture_refactor.py
