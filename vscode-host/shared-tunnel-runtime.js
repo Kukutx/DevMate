@@ -31,7 +31,7 @@ const {
 const { SharedTunnelProcess, childActive } = require('./shared-tunnel-process.js');
 
 const STARTUP_LOCK_NAME = 'tunnel.start.lock';
-const DEFAULT_HEARTBEAT_MS = 15000;
+const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_START_TIMEOUT_MS = 20000;
 const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_ATTACHED_POLL_MS = 1000;
