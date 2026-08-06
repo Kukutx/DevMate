@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout tagged source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -36,7 +36,7 @@ jobs:
           }
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -87,7 +87,7 @@ jobs:
           subject-path: 'release/devmate-*'
 
       - name: Upload release workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: devmate-release-${{ github.ref_name }}
           path: release/*
