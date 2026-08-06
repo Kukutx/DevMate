@@ -1,0 +1,36 @@
+name: Apply Bounded HTTP Client
+
+on:
+  push:
+    branches:
+      - refactor/shared-tunnel-runtime
+    paths:
+      - .github/workflows/apply-bounded-http-client.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/shared-tunnel-runtime
+          fetch-depth: 0
+      - name: Apply and validate bounded HTTP migration
+        shell: bash
+        run: |
+          node scripts/migrate-bounded-http-client.cjs
+          node --check extension.js
+          node --check vscode-host/bounded-http-client.js
+          node --test tests/bounded-http-client.test.cjs
+          grep -q "boundedHttpRequestRaw" extension.js
+          grep -q "vscode-host/bounded-http-client.js" scripts/smoke-vsix-worker.mjs
+          git rm scripts/migrate-bounded-http-client.cjs .github/workflows/apply-bounded-http-client.yml
+          git add extension.js scripts/smoke-vsix-worker.mjs
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git commit -m "Bound VS Code HTTP response size and duration"
+          git push origin HEAD:refactor/shared-tunnel-runtime
