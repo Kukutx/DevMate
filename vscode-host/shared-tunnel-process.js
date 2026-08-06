@@ -27,11 +27,19 @@ class SharedTunnelProcess extends EventEmitter {
     this.readyTimer = null;
     this.started = false;
     this.finished = false;
+    this.recovering = false;
+    this.recoveryCount = 0;
     queueMicrotask(() => this.initialize());
   }
 
   get pid() {
     return this.delegate?.pid || null;
+  }
+
+  reportStartFailure(error, prefix = 'DevMate shared tunnel start failed') {
+    this.stderr.write(`${prefix}: ${error.message || error}\n`);
+    if (this.listenerCount('error') > 0) this.emit('error', error);
+    this.finish(1, null);
   }
 
   async initialize() {
@@ -42,13 +50,14 @@ class SharedTunnelProcess extends EventEmitter {
       if (this.killed && this.owned) this.delegate?.kill?.('SIGTERM');
       if (this.killed && this.attached) this.finish(0, 'SIGTERM');
     } catch (error) {
-      this.stderr.write(`DevMate shared tunnel start failed: ${error.message || error}\n`);
-      if (this.listenerCount('error') > 0) this.emit('error', error);
-      this.finish(1, null);
+      this.reportStartFailure(error);
     }
   }
 
   attachOwner(child, record) {
+    if (this.watcher) clearInterval(this.watcher);
+    this.watcher = null;
+    this.recovering = false;
     this.delegate = child;
     this.owned = true;
     this.attached = false;
@@ -67,20 +76,58 @@ class SharedTunnelProcess extends EventEmitter {
   }
 
   attachFollower(record) {
+    if (this.watcher) clearInterval(this.watcher);
+    this.watcher = null;
+    this.delegate = null;
     this.owned = false;
     this.attached = true;
+    this.recovering = false;
     this.recordOwnerId = record.ownerId;
     this.stdout.write(`Attached to shared DevMate tunnel owned by ${record.hostId || 'another VS Code host'}.\n`);
-    this.watcher = setInterval(() => {
-      try {
-        const current = this.runtime.store.read();
-        if (!current || current.ownerId !== this.recordOwnerId) this.finish(0, null);
-      } catch (error) {
-        this.stderr.write(`Shared tunnel attachment ended: ${error.message || error}\n`);
-        this.finish(1, null);
-      }
-    }, this.runtime.attachedPollMs);
+    this.watcher = setInterval(() => this.checkAttachment(), this.runtime.attachedPollMs);
     this.watcher.unref?.();
+  }
+
+  checkAttachment() {
+    if (this.finished || this.killed || this.recovering) return;
+    try {
+      const current = this.runtime.store.read();
+      if (current?.ownerId === this.recordOwnerId) return;
+      if (current) {
+        if (!this.runtime.recordMatches(current, this.launch.match)) {
+          throw this.runtime.conflictError(current, this.launch.match);
+        }
+        this.recordOwnerId = current.ownerId;
+        this.stdout.write(`Reattached to replacement DevMate tunnel owner ${current.hostId || current.ownerId}.\n`);
+        return;
+      }
+      this.recoverAttachment();
+    } catch (error) {
+      this.reportStartFailure(error, 'Shared tunnel attachment ended');
+    }
+  }
+
+  recoverAttachment() {
+    if (this.finished || this.killed || this.recovering) return;
+    if (this.recoveryCount >= 1) {
+      const error = new Error('Shared tunnel owner disappeared again after follower recovery');
+      error.code = 'DEVMATE_TUNNEL_FOLLOWER_RECOVERY_EXHAUSTED';
+      this.reportStartFailure(error, 'Shared tunnel attachment ended');
+      return;
+    }
+    this.recoveryCount += 1;
+    this.recovering = true;
+    this.attached = false;
+    this.recordOwnerId = '';
+    if (this.watcher) clearInterval(this.watcher);
+    this.watcher = null;
+    this.stdout.write('Shared tunnel owner disappeared before readiness; retrying ownership once.\n');
+    void this.runtime.initializeProcess(this).then(() => {
+      this.recovering = false;
+      this.started = true;
+      if (this.killed && this.owned) this.delegate?.kill?.('SIGTERM');
+      if (this.killed && this.attached) this.finish(0, 'SIGTERM');
+    }).catch(error => this.reportStartFailure(error, 'Shared tunnel follower recovery failed'));
   }
 
   startReadinessTimer() {
@@ -104,6 +151,7 @@ class SharedTunnelProcess extends EventEmitter {
   finish(code = 0, signal = null) {
     if (this.finished) return;
     this.finished = true;
+    this.recovering = false;
     if (this.watcher) clearInterval(this.watcher);
     this.watcher = null;
     this.clearReadinessTimer();
@@ -128,7 +176,7 @@ class SharedTunnelProcess extends EventEmitter {
         return false;
       }
     }
-    if (this.attached || this.started) this.finish(0, signal);
+    if (this.attached || this.recovering || this.started) this.finish(0, signal);
     return true;
   }
 
