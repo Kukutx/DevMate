@@ -6,13 +6,14 @@ const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const childProcess = require('child_process');
+const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-http-client.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
 
 function spawn(...args){ return childProcess.spawn(...args); }
 function spawnSync(...args){ return childProcess.spawnSync(...args); }
 
-const VERSION = '3.2.0';
+const VERSION = '3.3.0';
 const BASE_PORT = 8787;
 const MCP_PATH = '/mcp';
 let gatewayProcess = null;
@@ -343,25 +344,7 @@ async function copyContextBundle(ctx){
 }
 
 function httpRequestRaw(url, options={}, body=null, timeoutMs=4000){
-  return new Promise(resolve=>{
-    let u;
-    try { u = new URL(url); } catch(e) { resolve({ok:false,error:`bad url: ${e.message}`}); return; }
-    const lib = u.protocol === 'https:' ? https : http;
-    const req = lib.request(u, { method: options.method || 'GET', headers: options.headers || {}, timeout: timeoutMs }, res=>{
-      let chunks=[];
-      res.on('data', d=>chunks.push(Buffer.from(d)));
-      res.on('end', ()=>{
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = JSON.parse(text); } catch {}
-        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, headers: res.headers, body: text, json });
-      });
-    });
-    req.on('error',e=>resolve({ok:false,error:e.message}));
-    req.on('timeout',()=>{ req.destroy(); resolve({ok:false,error:'timeout'}); });
-    if(body !== null) req.write(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
-    req.end();
-  });
+  return boundedHttpRequestRaw(url, options, body, timeoutMs);
 }
 function httpGet(url, timeoutMs=1500){ return httpRequestRaw(url, {method:'GET'}, null, timeoutMs); }
 async function postJson(url, payload, timeoutMs=5000){

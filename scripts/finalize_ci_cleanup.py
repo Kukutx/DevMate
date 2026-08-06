@@ -1,109 +1,28 @@
-name: CI
+#!/usr/bin/env python3
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+workflow = root / '.github' / 'workflows' / 'ci.yml'
+workflow.write_text("""name: CI
 
 on:
   push:
     branches:
       - master
       - main
-      - refactor/shared-tunnel-runtime
   pull_request:
 
-permissions:
-  contents: write
-
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  architecture_convergence:
-    name: Architecture convergence
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      changed: ${{ steps.converge.outputs.changed }}
-
-    steps:
-      - name: Checkout pull request branch
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Detect pending architecture convergence
-        id: detect
-        shell: bash
-        run: |
-          if [ -f scripts/apply_architecture_refactor.py ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate unified runtime architecture
-        if: steps.detect.outputs.present == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/apply_architecture_refactor.py
-          python3 scripts/finalize_architecture_refactor.py
-
-      - name: Validate generated architecture
-        if: steps.detect.outputs.present == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run check
-          npm run test:unit
-          npm run smoke:gateway
-          npm run package:vsix
-          node scripts/smoke-vsix-worker.mjs
-          node scripts/smoke-vsix-shared-tunnel.mjs
-          npm run build:obsidian
-          node scripts/smoke-obsidian-worker.mjs
-
-      - name: Commit validated architecture
-        id: converge
-        shell: bash
-        env:
-          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-          PRESENT: ${{ steps.detect.outputs.present }}
-        run: |
-          set -euo pipefail
-          if [ "$PRESENT" != "true" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git commit -m "[architecture-refactor] Unify DevMate runtime core"
-          git push origin "HEAD:${BRANCH_NAME}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
   verify:
-    needs: architecture_convergence
-    if: ${{ needs.architecture_convergence.result == 'success' }}
     runs-on: windows-latest
 
     steps:
-      - name: Checkout converged branch
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -158,8 +77,6 @@ jobs:
 
   godot-real:
     name: Linux and Real Godot 4.7.1
-    needs: architecture_convergence
-    if: ${{ needs.architecture_convergence.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -167,10 +84,8 @@ jobs:
       GODOT_STATUS: stable
 
     steps:
-      - name: Checkout converged branch
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -242,7 +157,7 @@ jobs:
               cd .godot-ci
               checksum_line=$(awk -v file="$archive" '$NF == file { print; exit }' SHA512-SUMS.txt)
               test -n "$checksum_line"
-              printf '%s\n' "$checksum_line" | sha512sum --check --strict -
+              printf '%s\\n' "$checksum_line" | sha512sum --check --strict -
               unzip -q -o "$archive"
               chmod +x "$executable"
             )
@@ -257,3 +172,14 @@ jobs:
 
       - name: Run real Godot deterministic movie capture
         run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs
+""", encoding='utf-8')
+
+# The migration rewrites source references globally. Keep the deleted legacy
+# store in the removed-file contract without mistaking the new shared core for it.
+checker = root / 'scripts' / 'check-repository.mjs'
+checker_source = checker.read_text(encoding='utf-8')
+checker_source = checker_source.replace("'shared/config-store.cjs']", "'host/runtime/config-store.js']")
+checker.write_text(checker_source, encoding='utf-8')
+
+Path(__file__).unlink()
+print('Restored final CI workflow.')
