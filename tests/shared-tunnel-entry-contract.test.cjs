@@ -16,8 +16,8 @@ test('VS Code uses the shared tunnel entry and preserves reverse teardown orderi
   assert.match(source, /new SharedTunnelRuntime\(/);
   assert.match(source, /\.install\(\)/);
   const suspend = source.indexOf('current?.suspendSpawn()');
-  const deactivate = source.indexOf('await baseEntry.deactivate()');
-  const dispose = source.indexOf("await current?.dispose({ stopOwned: true })");
+  const deactivate = suspend < 0 ? -1 : source.indexOf('await baseEntry.deactivate()', suspend);
+  const dispose = deactivate < 0 ? -1 : source.indexOf("await current?.dispose({ stopOwned: true })", deactivate);
   assert.ok(suspend >= 0 && deactivate > suspend, 'Shared spawn layer must be removed before inner layers');
   assert.ok(dispose > deactivate, 'Shared HTTP ownership protection must remain through inner shutdown');
 });
