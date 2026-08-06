@@ -87,7 +87,6 @@ if count != 1:
     raise RuntimeError("Could not locate config-store dependency block")
 write("shared/config-store.cjs", config_store)
 
-old_store = ROOT / "host/runtime/config-store.js"
 new_store = ROOT / "shared/config-store.cjs"
 for path in source_files():
     relative = path.relative_to(ROOT).as_posix()
@@ -135,7 +134,6 @@ write(
     ),
 )
 
-# Explicit VS Code config synchronization replaces Module._load interception.
 write(
     "vscode-host/config-sync.js",
     textwrap.dedent(
@@ -274,8 +272,16 @@ replace(
 replace(
     "extension-entry-platform.js",
     r"const \{\s*loadWithConfigWriteInterceptor,\s*writeMergedExtensionConfig\s*\} = require\('\./extension-config-io'\);",
-    "const { writeExtensionConfig } = require('./vscode-host/config-sync.js');",
+    "const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');",
     "platform config import",
+    regex=True,
+    flags=re.S,
+)
+replace(
+    "extension-entry-platform.js",
+    r"function readJson\(file\) \{.*?\n\}",
+    "function readJson(file) { return readExtensionConfig(file); }",
+    "platform config read",
     regex=True,
     flags=re.S,
 )
@@ -751,11 +757,6 @@ replace(
     regex=True,
 )
 
-# New focused tests replace compatibility tests.
-write(
-    "tests/config-sync.test.cjs",
-    read("tests/config-sync.test.cjs"),
-)
 write(
     "tests/workspace-resolver.test.mjs",
     textwrap.dedent(
@@ -885,7 +886,6 @@ write(
     ),
 )
 
-# Update the lifecycle source contract after deleting the Windows shim.
 lifecycle = read("tests/vscode-runtime-controller-contract.test.cjs")
 lifecycle = lifecycle.replace("const windowsEntry = fs.readFileSync(path.join(root, 'extension-entry-win32.js'), 'utf8');\n", "")
 start = lifecycle.index("test('managed and Windows ngrok wrappers")
@@ -910,7 +910,6 @@ lifecycle = (
 )
 write("tests/vscode-runtime-controller-contract.test.cjs", lifecycle)
 
-# Syntax check also enforces architectural boundaries.
 checker = read("scripts/check-repository.mjs")
 old_tail = "console.log(`Checked ${files.length} JavaScript files.`);"
 new_tail = textwrap.dedent(
@@ -962,7 +961,6 @@ architecture += textwrap.dedent(
 )
 write("docs/ARCHITECTURE.md", architecture)
 
-# No migration or compatibility scaffolding remains in the resulting branch.
 for name in [
     "scripts/apply-architecture-refactor.mjs",
     "scripts/apply_architecture_refactor.py",
