@@ -7,12 +7,96 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: write
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  architecture_convergence:
+    name: Architecture convergence
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.converge.outputs.changed }}
+
+    steps:
+      - name: Checkout pull request branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Detect pending architecture convergence
+        id: detect
+        shell: bash
+        run: |
+          if [ -f scripts/apply_architecture_refactor.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate unified runtime architecture
+        if: steps.detect.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_architecture_refactor.py
+          python3 scripts/finalize_architecture_refactor.py
+          python3 scripts/finalize_architecture_cleanup.py
+
+      - name: Validate generated architecture
+        if: steps.detect.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check
+          npm run test:unit
+          npm run smoke:gateway
+          npm run package:vsix
+          node scripts/smoke-vsix-worker.mjs
+          node scripts/smoke-vsix-shared-tunnel.mjs
+          npm run build:obsidian
+          node scripts/smoke-obsidian-worker.mjs
+
+      - name: Commit validated architecture
+        id: converge
+        shell: bash
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          PRESENT: ${{ steps.detect.outputs.present }}
+        run: |
+          set -euo pipefail
+          if [ "$PRESENT" != "true" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "[architecture-refactor] Unify DevMate runtime core"
+          git push origin "HEAD:${BRANCH_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: architecture_convergence
+    if: ${{ needs.architecture_convergence.result == 'success' && needs.architecture_convergence.outputs.changed != 'true' }}
     runs-on: windows-latest
 
     steps:
@@ -72,6 +156,8 @@ jobs:
 
   godot-real:
     name: Linux and Real Godot 4.7.1
+    needs: architecture_convergence
+    if: ${{ needs.architecture_convergence.result == 'success' && needs.architecture_convergence.outputs.changed != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
