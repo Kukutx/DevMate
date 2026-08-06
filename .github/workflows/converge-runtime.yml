@@ -1,0 +1,76 @@
+name: Converge DevMate runtime
+
+on:
+  push:
+    branches:
+      - refactor/shared-tunnel-runtime
+    paths:
+      - .github/workflows/converge-runtime.yml
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: refactor/shared-tunnel-runtime
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate unified architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_architecture_refactor.py
+          python3 scripts/finalize_architecture_refactor.py
+          python3 scripts/finalize_architecture_cleanup.py
+          rm -f .github/workflows/converge-runtime.yml
+
+      - name: Validate repository contracts
+        run: npm run check
+
+      - name: Validate unit and policy tests
+        run: npm run test:unit
+
+      - name: Validate Gateway
+        run: npm run smoke:gateway
+
+      - name: Validate VSIX package
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run package:vsix
+          node scripts/smoke-vsix-worker.mjs
+          node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Validate Obsidian package
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:obsidian
+          node scripts/smoke-obsidian-worker.mjs
+
+      - name: Commit validated architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git commit -m "[architecture-refactor] Unify DevMate runtime core"
+          git push origin HEAD:refactor/shared-tunnel-runtime
