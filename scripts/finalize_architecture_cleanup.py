@@ -74,8 +74,7 @@ snapshot_core = textwrap.dedent(
     }
 
     function configConflict(file) {
-      const error = configError('DevMate config changed while it was being edited', 'config_conflict', file);
-      return error;
+      return configError('DevMate config changed while it was being edited', 'config_conflict', file);
     }
 
     """
@@ -211,6 +210,20 @@ unsourced_test = textwrap.dedent(
 if insert_after not in persistence_test:
     raise RuntimeError('Could not insert unsourced replacement test')
 persistence_test = persistence_test.replace(insert_after, insert_after + unsourced_test, 1)
+old_error = """  assert.throws(() => shared.readConfig(), error => {
+    assert.match(error.message, /Could not read DevMate config/);
+    assert.match(error.message, /configuration root must be a JSON object/);
+    return true;
+  });"""
+new_error = """  assert.throws(() => shared.readConfig(), error => {
+    assert.equal(error.code, 'config_invalid_root');
+    assert.equal(error.configFile, configPath);
+    assert.match(error.message, /DevMate config root must be a JSON object/);
+    return true;
+  });"""
+if old_error not in persistence_test:
+    raise RuntimeError('Could not update shared-core error contract')
+persistence_test = persistence_test.replace(old_error, new_error, 1)
 write('tests/config-persistence.test.mjs', persistence_test)
 
 state_paths = read('host/runtime/state-paths.js')
@@ -277,5 +290,8 @@ write(
     )
 )
 
-(root / 'scripts/finalize_architecture_cleanup.py').unlink()
+for name in ['scripts/finalize_architecture_cleanup.py', 'scripts/finalize_test_contracts.py']:
+    target = root / name
+    if target.exists():
+        target.unlink()
 print('Completed final architecture cleanup.')
