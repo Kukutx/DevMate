@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import runpy
 import textwrap
 
 root = Path(__file__).resolve().parents[1]
@@ -224,16 +225,19 @@ write(
         const root = path.resolve(__dirname, '..');
 
         test('runtime contains no legacy state migration API or call sites', () => {
+          const forbidden = new RegExp(['migrate', 'Legacy', 'State'].join(''));
+          const legacyDirectory = new RegExp(['legacy', 'Directory'].join(''));
           for (const file of [
             'host/runtime/state-paths.js',
             'vscode-host/runtime-context.js',
             'obsidian-plugin/src/main.js'
           ]) {
             const source = fs.readFileSync(path.join(root, file), 'utf8');
-            assert.doesNotMatch(source, /migrateLegacyState|legacyDirectory/, file);
+            assert.doesNotMatch(source, forbidden, file);
+            assert.doesNotMatch(source, legacyDirectory, file);
           }
           const statePaths = require('../host/runtime/state-paths.js');
-          assert.equal(Object.hasOwn(statePaths, 'migrateLegacyState'), false);
+          assert.equal(Object.keys(statePaths).some(key => forbidden.test(key)), false);
         });
         """
     )
@@ -286,6 +290,12 @@ for path in root.rglob('*'):
     text = text.replace('host/runtime/config-store.js', 'shared/config-store.cjs')
     text = re.sub(r'^.*migrateLegacyState.*\n', '', text, flags=re.M)
     path.write_text(text, encoding='utf-8')
+
+# Run the complete modern cleanup chain even when this script is invoked by an older registered workflow.
+cleanup = root / 'scripts' / 'finalize_architecture_cleanup.py'
+if not cleanup.exists():
+    raise RuntimeError('Final architecture cleanup entrypoint is missing')
+runpy.run_path(str(cleanup), run_name='__main__')
 
 # The final branch contains no migration or compatibility scaffolding.
 for name in [
