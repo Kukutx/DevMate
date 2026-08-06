@@ -22,9 +22,17 @@ test('VS Code uses the shared tunnel entry and preserves reverse teardown orderi
   assert.ok(dispose > deactivate, 'Shared HTTP ownership protection must remain through inner shutdown');
 });
 
-test('VSIX smoke contract includes all shared tunnel modules', () => {
+test('legacy VS Code HTTP calls use the bounded client', () => {
+  const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
+  assert.match(source, /requestRaw: boundedHttpRequestRaw/);
+  assert.match(source, /return boundedHttpRequestRaw\(url, options, body, timeoutMs\)/);
+  assert.doesNotMatch(source, /res\.on\('data',\s*d=>chunks\.push\(Buffer\.from\(d\)\)\)/);
+});
+
+test('VSIX smoke contract includes all shared tunnel and HTTP modules', () => {
   const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-worker.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
+  assert.match(smoke, /vscode-host\/bounded-http-client\.js/);
   assert.match(smoke, /vscode-host\/shared-tunnel-record-store\.js/);
   assert.match(smoke, /vscode-host\/shared-tunnel-process\.js/);
   assert.match(smoke, /vscode-host\/shared-tunnel-runtime\.js/);
