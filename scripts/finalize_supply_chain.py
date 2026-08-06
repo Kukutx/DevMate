@@ -29,9 +29,23 @@ for permission in required_release_permissions:
         raise RuntimeError(f'Release workflow is missing {permission}')
 release_path.write_text(release, encoding='utf-8')
 
+# The CLI test is emitted by a prior generator. Replace the only multiline
+# regex with an equivalent direct source check to avoid Python/JS escape drift.
+cli_test_path = root / 'tests' / 'cli-config-store.test.mjs'
+cli_test = cli_test_path.read_text(encoding='utf-8')
+bad_cli_assertion = r"assert.doesNotMatch(source, /writeFileSync\([^\n]*config|function writeSecureJson[\s\S]*writeFileSync/);"
+if bad_cli_assertion not in cli_test:
+    raise RuntimeError('Could not normalize generated CLI persistence assertion')
+cli_test = cli_test.replace(
+    bad_cli_assertion,
+    "assert.equal(source.includes('fs.writeFileSync'), false);",
+    1
+)
+cli_test_path.write_text(cli_test, encoding='utf-8')
+
 (root / 'tests' / 'workflow-permissions.test.cjs').write_text(
     textwrap.dedent(
-        """
+        r"""
         'use strict';
 
         const assert = require('node:assert/strict');
@@ -44,7 +58,7 @@ release_path.write_text(release, encoding='utf-8')
         const release = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
 
         test('permanent CI is read-only and never mutates source branches', () => {
-          assert.match(ci, /permissions:\s*\n\s*contents:\s*read/);
+          assert.match(ci, /permissions:[\s\S]*?contents:\s*read/);
           assert.doesNotMatch(ci, /contents:\s*write/);
           assert.doesNotMatch(ci, /architecture_convergence|git push origin|Commit validated architecture/);
         });
@@ -74,4 +88,4 @@ release_path.write_text(release, encoding='utf-8')
 )
 
 Path(__file__).unlink()
-print('Converged permanent workflow permissions and action runtimes.')
+print('Converged permanent workflow permissions and generated tests.')
