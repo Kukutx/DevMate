@@ -17,7 +17,8 @@ function config() {
     deployment: { mode: 'team' },
     team: { members: [] },
     production: {},
-    activeWorkspaceId: 'app'
+    activeWorkspaceId: 'app',
+    workspaces: [{ id: 'app', name: 'Application', reference: false, mode: 'workspace-write' }]
   };
 }
 
@@ -77,7 +78,7 @@ test('enforces role capabilities and workspace scopes', () => {
     args: { workspaceId: 'other' },
     config: current,
     principal: reviewer
-  }), /not allowed/);
+  }), error => error.code === 'workspace_not_found');
 });
 
 test('personal owner token remains backwards compatible', () => {
@@ -114,9 +115,8 @@ test('blocks high-risk operations for team tokens even under full local access',
   }), /Force push/);
 });
 
-test('resolves workspace names to scoped workspace ids', () => {
+test('resolves unique workspace names to stable scoped workspace ids', () => {
   const current = config();
-  current.workspaces = [{ id: 'app', name: 'Application' }];
   normalizeDeploymentConfig(current);
   const developer = {
     id: 'd',
@@ -136,7 +136,6 @@ test('resolves workspace names to scoped workspace ids', () => {
 
 test('classifies queue and Runner tools without assigning the active workspace implicitly', () => {
   const current = config();
-  current.workspaces = [{ id: 'app', name: 'Application' }];
   normalizeDeploymentConfig(current);
   assert.equal(requiredCapabilityForTool('job_submit', { destructiveHint: true }, {}), 'validate');
   assert.equal(requiredCapabilityForTool('job_cancel', { destructiveHint: true }, {}), 'write');
@@ -152,7 +151,6 @@ test('classifies queue and Runner tools without assigning the active workspace i
 
 test('reserves Runner credential administration for owner', () => {
   const current = config();
-  current.workspaces = [{ id: 'app', name: 'Application' }];
   normalizeDeploymentConfig(current);
   const maintainer = {
     id: 'm',
