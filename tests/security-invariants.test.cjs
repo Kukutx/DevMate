@@ -8,24 +8,21 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-function repositorySource() {
-  const files = [];
-  const visit = directory => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue;
-      const full = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(full);
-      else if (entry.isFile() && /\.(?:js|cjs|mjs)$/i.test(entry.name)) files.push(full);
-    }
+test('authentication tokens are accepted only from request headers', async () => {
+  const { extractRequestToken } = await import('../gateway/team-access.mjs');
+  const queryOnly = {
+    headers: {},
+    url: '/mcp?token=query-secret'
   };
-  visit(root);
-  return files.map(file => fs.readFileSync(file, 'utf8')).join('\n');
-}
-
-test('authentication tokens are never accepted from URL query parameters', () => {
-  const source = repositorySource();
-  assert.doesNotMatch(source, /searchParams\.get\(\s*['"]token['"]\s*\)/);
-  assert.doesNotMatch(source, /[?&]token=/);
+  assert.equal(extractRequestToken(queryOnly), '');
+  assert.equal(
+    extractRequestToken({ headers: { authorization: 'Bearer bearer-secret' }, url: '/mcp?token=query-secret' }),
+    'bearer-secret'
+  );
+  assert.equal(
+    extractRequestToken({ headers: { 'x-devmate-token': 'header-secret' }, url: '/mcp?token=query-secret' }),
+    'header-secret'
+  );
 });
 
 test('credential rotation does not implicitly reactivate revoked identities', () => {
@@ -39,9 +36,21 @@ test('credential rotation does not implicitly reactivate revoked identities', ()
   }
 });
 
-test('workspace name compatibility never uses first-match id-or-name lookup', () => {
-  const source = repositorySource();
-  assert.doesNotMatch(source, /\.find\([^\n]{0,180}\.id\s*===\s*[^\n]{0,120}\|\|[^\n]{0,120}\.name\s*===/);
+test('workspace resolution is ID-first and rejects ambiguous names', async () => {
+  const { resolveWorkspace } = await import('../gateway/workspace-resolver.mjs');
+  const config = {
+    activeWorkspaceId: 'primary',
+    workspaces: [
+      { id: 'primary', name: 'shared', root: '/one' },
+      { id: 'secondary', name: 'shared', root: '/two' },
+      { id: 'shared', name: 'different', root: '/three' }
+    ]
+  };
+  assert.equal(resolveWorkspace(config, 'shared').id, 'shared');
+  assert.throws(
+    () => resolveWorkspace({ ...config, workspaces: config.workspaces.slice(0, 2) }, 'shared'),
+    error => error?.code === 'workspace_ambiguous'
+  );
 });
 
 test('Runner API matching is version-boundary safe', () => {
@@ -50,11 +59,12 @@ test('Runner API matching is version-boundary safe', () => {
   assert.doesNotMatch(source, /if \(!url\?\.pathname\.startsWith\(PREFIX\)\)/);
 });
 
-test('production Host policy fails closed when no allowlist exists', () => {
-  for (const relative of ['gateway/request-guard.mjs', 'gateway/runner-control-plane.mjs']) {
-    const source = read(relative);
-    assert.match(source, /!allowed\.length\)[^\n]*deployment\?\.mode !== ['"]production['"]/, relative);
-  }
+test('production Host policy fails closed when no allowlist exists', async () => {
+  const { hostAllowed } = await import('../gateway/http-host-policy.mjs');
+  const config = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
+  assert.equal(hostAllowed({ headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '203.0.113.10' } }, config), false);
+  assert.equal(hostAllowed({ headers: { host: '127.0.0.1:8787' }, socket: { remoteAddress: '127.0.0.1' } }, config), true);
+  assert.equal(hostAllowed({ headers: { host: 'localhost:8787' }, socket: { remoteAddress: '203.0.113.10' } }, config), false);
 });
 
 test('explicit invalid config and durable-state versions are rejected', () => {
