@@ -23,9 +23,8 @@ function createHarness({ platform }) {
   fs.writeFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'x'.repeat(120000));
 
   const settings = {
-    vscodeHostEnabled: true,
     vscodeStartupMode: 'manual',
-    sharedRuntimeEnabled: false
+    sharedStateDirectory: stateDirectory
   };
   const registered = [];
   const output = { appendLine() {}, show() {}, dispose() {} };
@@ -56,7 +55,7 @@ function createHarness({ platform }) {
   const context = {
     extensionPath,
     extension: { packageJSON: { version: '3.0.1' } },
-    globalStorageUri: { fsPath: stateDirectory },
+    globalStorageUri: { fsPath: temporaryDirectory('devmate-vscode-extension-storage-') },
     subscriptions: [],
     secrets: { async get() { return ''; } }
   };
