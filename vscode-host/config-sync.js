@@ -51,24 +51,22 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   const currentAuth = object(current.auth);
   const candidateAuth = object(candidate.auth);
   merged.auth = { ...currentAuth };
-  if (!Object.keys(currentAuth).length) Object.assign(merged.auth, candidateAuth);
   if (has(candidateAuth, 'required')) merged.auth.required = candidateAuth.required;
   if (!has(currentAuth, 'token') && has(candidateAuth, 'token')) merged.auth.token = candidateAuth.token;
 
   const currentRuntime = object(current.runtime);
   const candidateRuntime = object(candidate.runtime);
-  merged.runtime = Object.keys(currentRuntime).length ? { ...currentRuntime } : { ...candidateRuntime };
+  merged.runtime = { ...currentRuntime };
   for (const key of ['defaultCommandTimeoutMs', 'maxOutputChars']) {
     if (has(candidateRuntime, key)) merged.runtime[key] = candidateRuntime[key];
   }
 
   const currentTeam = object(current.team);
   const candidateTeam = object(candidate.team);
-  merged.team = Object.keys(currentTeam).length ? { ...currentTeam } : { ...candidateTeam };
+  merged.team = { ...currentTeam };
   for (const key of ['enabled', 'requireWorkspaceLeaseForWrites']) {
     if (has(candidateTeam, key)) merged.team[key] = candidateTeam[key];
   }
-  if (!has(currentTeam, 'members') && has(candidateTeam, 'members')) merged.team.members = candidateTeam.members;
 
   if (has(candidate, 'workspaces')) {
     merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
