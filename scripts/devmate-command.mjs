@@ -1,16 +1,25 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import configStore from '../shared/config-store.cjs';
 import { createRunnerCredential, normalizeRunnerControlConfig } from '../gateway/runner-access.mjs';
-import { createTeamMember, normalizeDeploymentConfig } from '../gateway/team-access.mjs';
-import { __test as legacy } from './devmate-cli.mjs';
+import { normalizeDeploymentConfig } from '../gateway/team-access.mjs';
+import {
+  cleanMode,
+  cleanProvider,
+  configFile,
+  doctor,
+  initConfig,
+  memberCreate,
+  memberList,
+  memberRevoke,
+  memberRotate,
+  normalizeOrigin,
+  ownerUrl,
+  readConfig,
+  serve
+} from './standalone-runtime.mjs';
 
-const { DEFAULT_VERSION, SUPPORTED_CONFIG_VERSION, readJson: readConfigJson, updateConfig } = configStore;
-
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const legacyScript = path.join(scriptDir, 'devmate-cli.mjs');
+const { DEFAULT_VERSION, SUPPORTED_CONFIG_VERSION, updateConfig } = configStore;
 const PRESETS = new Set(['personal', 'team', 'control-plane', 'runner']);
 
 function parseArgs(argv) {
@@ -24,12 +33,11 @@ function parseArgs(argv) {
       continue;
     }
     const [rawKey, inline] = value.slice(2).split('=', 2);
-    const next = inline !== undefined
+    options[rawKey] = inline !== undefined
       ? inline
       : rest[index + 1] && !rest[index + 1].startsWith('--')
         ? rest[++index]
         : true;
-    options[rawKey] = next;
   }
   return { command, options, positional };
 }
@@ -39,7 +47,7 @@ function bool(value, fallback = false) {
   if (typeof value === 'boolean') return value;
   if (['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase())) return true;
   if (['0', 'false', 'no', 'off'].includes(String(value).toLowerCase())) return false;
-  return fallback;
+  throw new Error(`Expected boolean value, received: ${value}`);
 }
 
 function csv(value, fallback = []) {
@@ -47,17 +55,9 @@ function csv(value, fallback = []) {
   return [...new Set(values.map(item => String(item || '').trim()).filter(Boolean))];
 }
 
-function configPath(options) {
-  return path.resolve(String(
-    options.config || process.env.DEVMATE_CONFIG || path.join(process.cwd(), '.devmate-server', 'config.json')
-  ));
-}
+function configPath(options = {}) { return configFile(options); }
 
-function readJson(file) {
-  return readConfigJson(file, null, { strict: true, supportedVersion: true });
-}
-
-function presetOptions(options) {
+function presetOptions(options = {}) {
   const preset = String(options.preset || 'team').trim().toLowerCase();
   if (!PRESETS.has(preset)) throw new Error(`Unknown preset: ${preset}`);
   const defaults = {
@@ -66,12 +66,9 @@ function presetOptions(options) {
     'control-plane': { mode: 'production', provider: 'external', embeddedRunnerEnabled: false, runnerControlEnabled: true },
     runner: { mode: 'personal', provider: 'external', embeddedRunnerEnabled: false, runnerControlEnabled: false }
   }[preset];
-  const provider = String(options.provider || defaults.provider);
   const publicUrl = String(options['public-url'] || '').trim();
-  if (preset === 'control-plane' && !publicUrl) {
-    throw new Error('The control-plane preset requires --public-url https://devmate.example.com');
-  }
-  return { preset, ...defaults, provider, publicUrl };
+  if (preset === 'control-plane' && !publicUrl) throw new Error('The control-plane preset requires --public-url');
+  return { preset, ...defaults, provider: String(options.provider || defaults.provider), publicUrl };
 }
 
 function inferPreset(config) {
@@ -82,36 +79,23 @@ function inferPreset(config) {
 }
 
 function activeWorkspaceIds(config) {
-  const writable = (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly');
-  return writable.map(item => item.id);
+  return (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id);
 }
 
-function bootstrap(options) {
+function bootstrap(options = {}) {
   const preset = presetOptions(options);
   const memberName = String(options['member-name'] || '').trim();
-  if (memberName && !['team', 'control-plane'].includes(preset.preset)) {
-    throw new Error('--member-name requires the team or control-plane preset');
-  }
-  if (options['member-role'] && !memberName) {
-    throw new Error('--member-role requires --member-name');
-  }
+  if (memberName && !['team', 'control-plane'].includes(preset.preset)) throw new Error('--member-name requires team or control-plane');
+  if (options['member-role'] && !memberName) throw new Error('--member-role requires --member-name');
   if (options['runner-concurrency'] !== undefined) {
-    const concurrency = Number(options['runner-concurrency']);
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
-      throw new Error('--runner-concurrency must be an integer from 1 to 16');
-    }
+    const value = Number(options['runner-concurrency']);
+    if (!Number.isInteger(value) || value < 1 || value > 16) throw new Error('--runner-concurrency must be an integer from 1 to 16');
   }
 
-  const init = legacy.initConfig({
-    ...options,
-    mode: preset.mode,
-    provider: preset.provider,
-    'public-url': preset.publicUrl
-  });
-  let config = null;
-  let member = null;
+  const initialized = initConfig({ ...options, mode: preset.mode, provider: preset.provider, 'public-url': preset.publicUrl });
+  let config;
   let runner = null;
-  updateConfig(init.file, current => {
+  updateConfig(initialized.file, current => {
     config = normalizeRunnerControlConfig(normalizeDeploymentConfig(current));
     config.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(config.version) || 0);
     config.appVersion = DEFAULT_VERSION;
@@ -123,25 +107,13 @@ function bootstrap(options) {
       config.permissions.blockDangerousOperations = true;
       config.permissions.confirmBeforePush = true;
     }
-
-    if (memberName) {
-      member = createTeamMember(config, {
-        name: memberName,
-        role: String(options['member-role'] || 'developer'),
-        workspaceIds: csv(options['member-workspaces'], [config.activeWorkspaceId]),
-        expiresAt: options['member-expires-at'] || null
-      });
-    }
-
     const createDefaultRunner = preset.preset === 'control-plane' && !bool(options['no-runner-credential']);
     const runnerName = String(options['runner-name'] || (createDefaultRunner ? 'Default Runner' : '')).trim();
     if (runnerName) {
-      const workspaceIds = csv(options['runner-workspaces'], activeWorkspaceIds(config));
-      const capabilities = csv(options['runner-capabilities'], ['core', 'external']);
       runner = createRunnerCredential(config, {
         name: runnerName,
-        workspaceIds,
-        capabilities,
+        workspaceIds: csv(options['runner-workspaces'], activeWorkspaceIds(config)),
+        capabilities: csv(options['runner-capabilities'], ['core', 'external']),
         maxConcurrent: Number(options['runner-concurrency']) || 1,
         expiresAt: options['runner-expires-at'] || null
       });
@@ -150,132 +122,88 @@ function bootstrap(options) {
     return config;
   });
 
-  const next = [];
-  if (preset.preset === 'runner') {
-    next.push('Set DEVMATE_RUNNER_TOKEN or DEVMATE_RUNNER_TOKEN_FILE, then run devmate-runner with this config.');
-  } else {
-    next.push(`Start the Gateway with: devmate serve --config ${init.file}`);
-    if (runner) next.push('Move the one-time dmr_ token to the Runner host secret manager.');
-    if (member) next.push('Give the one-time dmt_ token only to its intended team member.');
-  }
+  const member = memberName ? memberCreate({
+    config: initialized.file,
+    name: memberName,
+    role: String(options['member-role'] || 'developer'),
+    workspaces: csv(options['member-workspaces'], [config.activeWorkspaceId]).join(','),
+    'expires-at': options['member-expires-at'] || null
+  }) : null;
+
   return {
     ok: true,
     preset: preset.preset,
-    config: init.file,
-    ownerToken: init.token,
-    ownerUrl: legacy.ownerUrl({ config: init.file, url: preset.publicUrl || undefined }),
+    config: initialized.file,
+    ownerToken: initialized.token,
+    ownerUrl: ownerUrl({ config: initialized.file, url: preset.publicUrl || undefined }),
     member,
     runner,
-    next
+    next: preset.preset === 'runner'
+      ? ['Set the Runner credential and start devmate-runner.']
+      : [`Start with: devmate serve --config ${initialized.file}`]
   };
 }
-function status(options) {
+
+function status(options = {}) {
   const file = configPath(options);
-  const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readJson(file)));
+  const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readConfig(file)));
   const preset = inferPreset(config);
-  const activeMembers = (config.team.members || []).filter(item =>
-    !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
-  );
-  const activeRunnerCredentials = (config.runnerControl.credentials || []).filter(item =>
-    !item.disabled && item.salt && item.tokenHash && item.workspaceIds?.length &&
-    (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+  const activeMembers = (config.team.members || []).filter(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()));
+  const activeRunners = (config.runnerControl.credentials || []).filter(item =>
+    !item.disabled && item.salt && item.tokenHash && item.workspaceIds?.length && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
   );
   const workspaces = config.workspaces || [];
   const warnings = [];
   if (!config.auth?.token && config.auth?.required !== false) warnings.push('Owner token is missing.');
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
   if (config.team.enabled && !activeMembers.length) warnings.push('Team mode has no active member credentials.');
-  if (config.runnerControl.enabled && !activeRunnerCredentials.length) warnings.push('External Runner control is enabled but no active scoped Runner credential exists.');
-  if (preset !== 'runner' && config.jobs?.embeddedRunnerEnabled === false && !config.runnerControl.enabled) {
-    warnings.push('Embedded Runner is disabled and external Runner control is not enabled.');
-  }
+  if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control has no active credential.');
+  if (preset !== 'runner' && config.jobs?.embeddedRunnerEnabled === false && !config.runnerControl.enabled) warnings.push('No execution path is enabled.');
   return {
     ok: warnings.length === 0,
     config: file,
     preset,
-    deployment: {
-      mode: config.deployment.mode,
-      tunnelProvider: config.deployment.tunnelProvider,
-      publicUrl: config.deployment.publicUrl || null
-    },
-    workspaces: {
-      total: workspaces.length,
-      writable: workspaces.filter(item => !item.reference && item.mode !== 'readonly').length,
-      activeWorkspaceId: config.activeWorkspaceId || null
-    },
-    team: {
-      enabled: config.team.enabled,
-      activeMembers: activeMembers.length,
-      totalMembers: config.team.members.length,
-      workspaceLeasesRequired: config.team.requireWorkspaceLeaseForWrites
-    },
-    execution: {
-      embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false,
-      externalRunnerControlEnabled: config.runnerControl.enabled,
-      activeRunnerCredentials: activeRunnerCredentials.length,
-      enabledPlugins: config.plugins?.enabled || []
-    },
+    deployment: { mode: config.deployment.mode, tunnelProvider: config.deployment.tunnelProvider, publicUrl: config.deployment.publicUrl || null },
+    workspaces: { total: workspaces.length, writable: workspaces.filter(item => !item.reference && item.mode !== 'readonly').length, activeWorkspaceId: config.activeWorkspaceId || null },
+    team: { enabled: config.team.enabled, activeMembers: activeMembers.length, totalMembers: config.team.members.length, workspaceLeasesRequired: config.team.requireWorkspaceLeaseForWrites },
+    execution: { embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false, externalRunnerControlEnabled: config.runnerControl.enabled, activeRunnerCredentials: activeRunners.length, enabledPlugins: config.plugins?.enabled || [] },
     warnings
   };
 }
 
 function help() {
-  return `DevMate command\n\nRecommended:\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [options]\n  devmate status --config <path>\n\nBootstrap examples:\n  devmate bootstrap --preset team --workspace /srv/project --member-name Alice\n  devmate bootstrap --preset control-plane --workspace /srv/project --public-url https://devmate.example.com\n  devmate bootstrap --preset runner --workspace /srv/project --config /var/lib/devmate-runner/config.json\n\nExisting commands such as init, serve, doctor, owner-url, and member-* remain supported.\n`;
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path>\n  devmate status --config <path>\n  devmate init --workspace <path> [--mode personal|team|production]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n`;
 }
 
-async function forwardLegacy(argv) {
-  const child = spawn(process.execPath, [legacyScript, ...argv], {
-    stdio: 'inherit',
-    env: process.env,
-    windowsHide: true
-  });
-  const onSigint = () => {
-    try { child.kill('SIGINT'); } catch {}
-  };
-  const onSigterm = () => {
-    try { child.kill('SIGTERM'); } catch {}
-  };
-  process.once('SIGINT', onSigint);
-  process.once('SIGTERM', onSigterm);
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      process.removeListener('SIGINT', onSigint);
-      process.removeListener('SIGTERM', onSigterm);
-      if (signal) process.kill(process.pid, signal);
-      else process.exitCode = code ?? 1;
-      resolve();
-    });
-  });
-}
-
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) {
-  const argv = process.argv.slice(2);
+async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
-  try {
-    if (command === 'bootstrap') console.log(JSON.stringify(bootstrap(options), null, 2));
-    else if (command === 'status') {
-      const result = status(options);
-      console.log(JSON.stringify(result, null, 2));
-      if (!result.ok) process.exitCode = 1;
-    } else if (command === 'help' || command === '--help' || command === '-h') console.log(help());
-    else await forwardLegacy(argv);
-  } catch (error) {
-    console.error(`DevMate: ${error?.message || error}`);
-    process.exitCode = 1;
+  if (command === 'bootstrap') return console.log(JSON.stringify(bootstrap(options), null, 2));
+  if (command === 'status') {
+    const result = status(options); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; return;
   }
+  if (command === 'init') {
+    const result = initConfig(options);
+    return console.log(JSON.stringify({ ok: true, config: result.file, ownerToken: result.token, ownerUrl: ownerUrl({ ...options, config: result.file }) }, null, 2));
+  }
+  if (command === 'serve') return serve(options);
+  if (command === 'doctor') {
+    const result = doctor(options); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; return;
+  }
+  if (command === 'owner-url') return console.log(ownerUrl(options));
+  if (command === 'member-list') return console.log(JSON.stringify({ members: memberList(options) }, null, 2));
+  if (command === 'member-create') return console.log(JSON.stringify(memberCreate(options), null, 2));
+  if (command === 'member-rotate') return console.log(JSON.stringify(memberRotate(options), null, 2));
+  if (command === 'member-revoke') return console.log(JSON.stringify({ member: memberRevoke(options) }, null, 2));
+  if (command === 'help' || command === '--help' || command === '-h') return console.log(help());
+  throw new Error(`Unknown command: ${command}`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
+  main().catch(error => { console.error(`DevMate: ${error?.message || error}`); process.exitCode = 1; });
 }
 
 export const __test = {
-  PRESETS,
-  activeWorkspaceIds,
-  bool,
-  bootstrap,
-  configPath,
-  csv,
-  inferPreset,
-  parseArgs,
-  presetOptions,
-  status
+  PRESETS, activeWorkspaceIds, bool, bootstrap, cleanMode, cleanProvider, configPath, csv, doctor,
+  inferPreset, initConfig, memberCreate, memberList, memberRevoke, memberRotate, normalizeOrigin,
+  ownerUrl, parseArgs, presetOptions, status
 };
