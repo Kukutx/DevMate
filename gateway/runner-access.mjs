@@ -151,7 +151,6 @@ export function rotateRunnerCredentialToken(config, id) {
   credential.tokenHash = hashSecret(secret, salt);
   credential.tokenVersion = defaultedInteger(credential.tokenVersion, 1, 1, Number.MAX_SAFE_INTEGER - 1, 'runner credential tokenVersion') + 1;
   credential.updatedAt = new Date().toISOString();
-  credential.disabled = false;
   return { credential: runnerCredentialPublic(credential), token: `dmr_${credential.id}_${secret}` };
 }
 
