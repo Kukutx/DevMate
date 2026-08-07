@@ -1,7 +1,7 @@
 'use strict';
 
 const vscode = require('vscode');
-const childProcess = require('child_process');
+const childProcess = require('./vscode-host/runtime-io.js');
 const { SpawnLayer } = require('./vscode-host/spawn-layer.js');
 const {
   buildNgrokArgs,
