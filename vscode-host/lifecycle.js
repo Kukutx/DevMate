@@ -16,8 +16,7 @@ const {
 } = require('./runtime-context.js');
 
 const RELOAD_SETTINGS = [
-  'devMate.vscodeHostEnabled',
-  'devMate.sharedRuntimeEnabled',
+  'devMate.vscodeStartupMode',
   'devMate.sharedStateDirectory'
 ];
 
@@ -42,7 +41,7 @@ class VscodeHostLifecycle {
   }
 
   enabled() {
-    return setting(this.vscode, 'vscodeHostEnabled', true) !== false && this.startupMode() !== 'disabled';
+    return this.startupMode() !== 'disabled';
   }
 
   startupMode() {
