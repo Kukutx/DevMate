@@ -38,7 +38,7 @@ Unresponsive runtime processes are force-terminated only after the bounded shutd
 
 ## Shared state
 
-With `devMate.sharedRuntimeEnabled` enabled, VS Code and other supported hosts resolve the same workspace-derived state directory:
+VS Code and other supported hosts always resolve the same workspace-derived state directory unless an explicit shared-state override is configured:
 
 ```text
 ~/.devmate/hosts/<workspace-name>-<path-hash>/
