@@ -4,7 +4,7 @@
 
 Run `DevMate: Switch ngrok Account`, paste the complete Authtoken from the new account, and select **Start Now**. DevMate stores the token in VS Code Secret Storage and injects it only into the ngrok process it starts, so the old global `ngrok.yml` account no longer controls DevMate.
 
-For first-time configuration, run `DevMate: Configure ngrok (Recommended)`.
+For first-time configuration, run the DevMate ngrok setup command.
 
 ## ERR_NGROK_334: endpoint already online
 
@@ -19,7 +19,7 @@ Do not enable pooling as a normal fix. Pooling can route ChatGPT requests to ano
 
 ## ngrok authentication fails
 
-Run `DevMate: Switch ngrok Account` and paste the new Authtoken again. Use `DevMate: ngrok Diagnostics` to confirm that account mode is `DevMate-managed Secret Storage` and that a managed token is present.
+Run `DevMate: Switch ngrok Account` and paste the new Authtoken again. Use the DevMate tunnel diagnostics to confirm that account mode is `DevMate-managed Secret Storage` and that a managed token is present.
 
 When intentionally using the global configuration instead, run:
 
@@ -58,8 +58,8 @@ If ChatGPT reports a generic creation error:
 1. Run `DevMate: Copy URL` again and paste the fresh endpoint.
 2. Run `DevMate: Copy Bearer Token` again and replace the Bearer credential.
 3. Confirm the URL ends in `/mcp` and contains no credential query string.
-4. If ngrok restarted and the public host changed, update the connector URL.
-5. Run `DevMate: Doctor` and confirm `Public MCP preflight OK`.
+4. If the tunnel restarted and the public host changed, update the connector URL.
+5. Run `DevMate: Doctor` and confirm the public MCP preflight succeeds.
 
 ## 401 Unauthorized
 
@@ -69,17 +69,17 @@ A token embedded in the URL does not authenticate the request. This is deliberat
 
 ## 404 or Connection Error
 
-The tunnel URL is stale, ngrok is not ready, or the `/mcp` path was removed. Run `DevMate: Start` again and use the newly verified endpoint.
+The tunnel URL is stale, the configured provider is not ready, or the `/mcp` path was removed. Run `DevMate: Start` again and use the newly verified endpoint.
 
 ## Model Switch Looks Disconnected
 
-Switching models or reasoning modes can leave the current chat without the connector selected, or can force ChatGPT to rediscover tools. This is separate from the local gateway being down.
+Switching models or reasoning modes can leave the current chat without the connector selected, or can force ChatGPT to rediscover tools. This is separate from the local Gateway being down.
 
 1. Ask ChatGPT to run `devmate_status_panel`.
 2. If the panel renders, ChatGPT can still reach DevMate; check the panel advice and continue.
 3. If no tools are available, add the DevMate connector again from the `+` menu in the chat.
 4. If tools are available but the panel reports stale preflight, run `DevMate: Copy URL` or `DevMate: Start` in VS Code.
-5. If the ngrok host changed, update the endpoint URL. If authentication fails, refresh the Bearer credential separately with `DevMate: Copy Bearer Token`.
+5. If the public host changed, update the endpoint URL. If authentication fails, refresh the Bearer credential separately with `DevMate: Copy Bearer Token`.
 
 If the model surface you want to use cannot call MCP tools, use `Copy Context` in the DevMate panel and paste that bundle into the chat. Treat it as planning context only; reconnect DevMate before asking ChatGPT to edit files, run commands, or use Git.
 
@@ -87,7 +87,7 @@ If the model surface you want to use cannot call MCP tools, use `Copy Context` i
 
 DevMate uses the active VS Code folder as the only writable workspace by default. Open the intended folder in VS Code, then run `DevMate: Start` again. Use `list_workspaces` or `gateway_status` from ChatGPT to verify the active workspace.
 
-Older DevMate builds kept previously opened writable workspaces in `config.json`. Current builds collapse that state to the active VS Code folder plus explicit readonly references. Use References for other projects you want ChatGPT to inspect.
+Current builds keep the active VS Code folder plus explicit readonly references. Use References for other projects you want ChatGPT to inspect.
 
 ## Reference Project Management
 
@@ -101,4 +101,6 @@ Put project rules in root `AGENTS.md` or `CLAUDE.md`. DevMate exposes them throu
 
 ## Review Before Finishing
 
-Use `show_changes` for a compact Git status, diff stat, file totals, and bounded patch. Use `task_report` when you also need recent DevMate audit entries.
+Use `show_changes` for a compact Git status, diff stat, file totals, and bounded patch. If the change belongs to an active work session, inspect `work_session_status` and finish with `work_session_finish` after review.
+
+If you later need to reverse that session's safe file mutations, call `work_session_rollback`. In team or production mode, reacquire the affected workspace lease first if the session was already finished. Commands and Git history are intentionally not auto-reversed.
