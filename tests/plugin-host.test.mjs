@@ -10,6 +10,7 @@ const configPath = path.join(temp, 'config.json');
 await fsp.mkdir(workspace, { recursive: true });
 await fsp.writeFile(path.join(workspace, 'project.godot'), '[application]\nconfig/name="Test"\n', 'utf8');
 await fsp.writeFile(configPath, `${JSON.stringify({
+  version: 11,
   permissions: { profile: 'fullAccess' },
   runtime: {},
   workspaces: [{ id: 'workspace', name: 'workspace', root: workspace, mode: 'workspace-write', reference: false }],
