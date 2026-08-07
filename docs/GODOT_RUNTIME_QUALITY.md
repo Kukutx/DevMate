@@ -1,6 +1,6 @@
 # Godot runtime and quality workflows
 
-DevMate 2.6 adds a runtime-aware quality layer on top of the existing Godot audit, native/Web acceptance, and export tools. It answers four separate questions before a long build or test begins:
+DevMate provides a runtime-aware quality layer on top of the Godot audit, native/Web acceptance, and export tools. It answers four separate questions before a long build or test begins:
 
 1. Is the selected Godot runtime usable on this host?
 2. Which scenes, resources, scripts, and assets does the project depend on?
@@ -33,7 +33,7 @@ The operation:
 
 - verifies the configured executable through the Godot executable allowlist;
 - saves project-local Godot defaults;
-- optionally installs or upgrades QA Bridge v2;
+- optionally installs or upgrades the current QA Bridge v3;
 - remains workspace-scoped and requires write permission plus a lease in team mode.
 
 ## Runtime status
