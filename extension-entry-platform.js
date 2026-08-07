@@ -1,9 +1,8 @@
 'use strict';
 
 const vscode = require('vscode');
-const childProcess = require('child_process');
-const http = require('http');
 const path = require('path');
+const runtimeIo = require('./vscode-host/runtime-io.js');
 const {
   TunnelCompatibilityManager,
   normalizePublicUrl
@@ -325,23 +324,23 @@ function register(context, id, handler) {
 }
 
 function installProcessWrappers() {
-  originalSpawn = childProcess.spawn.bind(childProcess);
-  originalSpawnSync = childProcess.spawnSync.bind(childProcess);
+  originalSpawn = runtimeIo.spawn;
+  originalSpawnSync = runtimeIo.spawnSync;
+  originalHttpRequest = runtimeIo.httpRequest;
   manager = new TunnelCompatibilityManager({
     settings: tunnelSettings,
     secrets: secretState,
     log
   });
-  childProcess.spawn = manager.wrapSpawn(originalSpawn);
-  childProcess.spawnSync = manager.wrapSpawnSync(originalSpawnSync);
-  originalHttpRequest = http.request.bind(http);
-  http.request = manager.wrapHttpRequest(originalHttpRequest);
+  runtimeIo.spawn = manager.wrapSpawn(originalSpawn);
+  runtimeIo.spawnSync = manager.wrapSpawnSync(originalSpawnSync);
+  runtimeIo.httpRequest = manager.wrapHttpRequest(originalHttpRequest);
 }
 
 function restoreProcessWrappers() {
-  if (originalSpawn) childProcess.spawn = originalSpawn;
-  if (originalSpawnSync) childProcess.spawnSync = originalSpawnSync;
-  if (originalHttpRequest) http.request = originalHttpRequest;
+  if (originalSpawn) runtimeIo.spawn = originalSpawn;
+  if (originalSpawnSync) runtimeIo.spawnSync = originalSpawnSync;
+  if (originalHttpRequest) runtimeIo.httpRequest = originalHttpRequest;
   originalSpawn = null;
   originalSpawnSync = null;
   originalHttpRequest = null;
