@@ -42,14 +42,19 @@ test('isolates Runner control secrets from the local Gateway child', () => {
   }
 });
 
-test('forwards claim proof only from the in-memory claimed job', () => {
-  const job = { id: 'job-1', claim: { generation: 4, token: 'claim-secret' } };
+test('forwards only valid in-memory claim proof', () => {
+  const claimToken = 'A'.repeat(43);
+  const job = { id: 'job-1', claim: { generation: 4, token: claimToken } };
   assert.deepEqual(__test.claimBody(job, { leaseSeconds: 60 }), {
     leaseSeconds: 60,
     claimGeneration: 4,
-    claimToken: 'claim-secret'
+    claimToken
   });
-  assert.deepEqual(__test.claimBody({ id: 'legacy' }, { leaseSeconds: 60 }), { leaseSeconds: 60 });
+  assert.throws(() => __test.claimBody({ id: 'missing-proof' }, { leaseSeconds: 60 }), /missing Runner claim proof/);
+  assert.throws(
+    () => __test.claimBody({ id: 'bad-token', claim: { generation: 1, token: 'claim-secret' } }),
+    /invalid claim token/
+  );
 });
 
 test('classifies claim and ownership conflicts as terminal local ownership loss', () => {
