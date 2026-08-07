@@ -97,12 +97,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     return path.join(this.vaultRoot, relative);
   }
 
-  stateDirectory(pluginDirectory) {
+  stateDirectory() {
     return resolveStateDirectory({
       workspaceRoot: this.vaultRoot,
-      overrideDirectory: this.settings.sharedStateDirectory,
-      localDirectory: path.join(pluginDirectory, 'state'),
-      shared: this.settings.sharedRuntime
+      overrideDirectory: this.settings.sharedStateDirectory
     });
   }
 
@@ -120,7 +118,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     await this.bridge?.stop();
     this.bridge = null;
     const pluginDirectory = this.pluginDirectory();
-    const stateDirectory = this.stateDirectory(pluginDirectory);
+    const stateDirectory = this.stateDirectory();
     const sameState = this.controller && path.resolve(this.controller.stateDirectory) === path.resolve(stateDirectory);
     if (!sameState) {
       await this.controller?.dispose({ stopOwned: true });
