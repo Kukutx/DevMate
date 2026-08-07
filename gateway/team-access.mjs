@@ -86,11 +86,7 @@ export function normalizeDeploymentConfig(config) {
   else deployment.publicUrl = deployment.publicUrl.trim();
 
   const team = objectField(config, 'team');
-  const expectedTeamEnabled = mode !== 'personal';
-  if (team.enabled !== undefined && team.enabled !== expectedTeamEnabled) {
-    throw new Error(`team.enabled must be ${expectedTeamEnabled} when deployment mode is ${mode}`);
-  }
-  team.enabled = expectedTeamEnabled;
+  team.enabled = mode !== 'personal';
   team.members = defaultedArray(team.members, [], 'team.members');
   team.requireWorkspaceLeaseForWrites = defaultedBoolean(
     team.requireWorkspaceLeaseForWrites,
