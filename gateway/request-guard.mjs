@@ -41,9 +41,14 @@ function hostCandidates(req) {
 
 function hostAllowed(req, config) {
   const allowed = config.production?.allowedHosts || [];
-  if (!allowed.length) return true;
   const candidates = hostCandidates(req);
-  if (candidates.some(item => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(item) || item.startsWith('127.0.0.1:') || item.startsWith('localhost:'))) return true;
+  const local = candidates.some(item =>
+    ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(item) ||
+    item.startsWith('127.0.0.1:') ||
+    item.startsWith('localhost:')
+  );
+  if (local) return true;
+  if (!allowed.length) return config.deployment?.mode !== 'production';
   return allowed.some(item => candidates.includes(String(item).toLowerCase()));
 }
 
