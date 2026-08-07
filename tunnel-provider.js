@@ -3,8 +3,7 @@
 const path = require('path');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
-
-const PROVIDERS = new Set(['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
+const { tunnelProvider } = require('./vscode-host/tunnel-settings.js');
 
 function commandBase(command) {
   return path.basename(String(command || '').replace(/\\/g, '/')).toLowerCase();
@@ -15,8 +14,8 @@ function isNgrokCommand(command) {
 }
 
 function normalizeProvider(value) {
-  const provider = String(value || 'ngrok').trim().toLowerCase();
-  return PROVIDERS.has(provider) ? provider : 'ngrok';
+  const provider = value === undefined ? 'ngrok' : String(value).trim().toLowerCase();
+  return tunnelProvider(provider);
 }
 
 function normalizePublicUrl(value) {
@@ -237,8 +236,9 @@ class TunnelCompatibilityManager {
 
   settings() {
     const raw = this.settingsGetter() || {};
+    const provider = raw.provider !== undefined ? raw.provider : raw.tunnelProvider;
     return {
-      provider: normalizeProvider(raw.provider || raw.tunnelProvider),
+      provider: normalizeProvider(provider),
       publicUrl: raw.publicUrl || '',
       cloudflareCommandPath: raw.cloudflareCommandPath || '',
       ngrokTrafficPolicyFile: raw.ngrokTrafficPolicyFile || '',
