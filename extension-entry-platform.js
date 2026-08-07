@@ -3,13 +3,17 @@
 const vscode = require('vscode');
 const childProcess = require('child_process');
 const http = require('http');
-const fs = require('fs');
 const path = require('path');
 const {
   TunnelCompatibilityManager,
-  normalizeProvider,
   normalizePublicUrl
 } = require('./tunnel-provider');
+const {
+  deploymentMode: validateDeploymentMode,
+  strictInteger,
+  tunnelMaxRestarts,
+  tunnelProvider: validateTunnelProvider
+} = require('./vscode-host/tunnel-settings.js');
 const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
@@ -18,7 +22,6 @@ const NGROK_POLICY_DOCS = 'https://ngrok.com/docs/traffic-policy/';
 
 let innerExtension = null;
 let output = null;
-let globalContext = null;
 let cloudflareTunnelToken = '';
 let originalSpawn = null;
 let originalSpawnSync = null;
@@ -48,14 +51,20 @@ function setting(name, fallback) {
   return value === undefined ? fallback : value;
 }
 
+function strictBoolean(value, label) {
+  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
 function tunnelSettings() {
+  const provider = validateTunnelProvider(String(setting('tunnelProvider', 'ngrok')).trim().toLowerCase());
   return {
-    provider: normalizeProvider(setting('tunnelProvider', 'ngrok')),
+    provider,
     publicUrl: String(setting('publicUrl', '') || '').trim(),
     cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),
     ngrokTrafficPolicyFile: String(setting('ngrokTrafficPolicyFile', '') || '').trim(),
-    autoRestart: setting('tunnelAutoRestart', true) !== false,
-    maxRestarts: Number(setting('tunnelMaxRestarts', 10) || 10)
+    autoRestart: strictBoolean(setting('tunnelAutoRestart', true), 'tunnelAutoRestart'),
+    maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10))
   };
 }
 
@@ -72,8 +81,7 @@ async function openExternal(url) {
 }
 
 function deploymentMode() {
-  const value = String(setting('deploymentMode', 'personal') || 'personal');
-  return ['personal', 'team', 'production'].includes(value) ? value : 'personal';
+  return validateDeploymentMode(String(setting('deploymentMode', 'personal')).trim().toLowerCase());
 }
 
 function hostFromPublicUrl(value) {
@@ -96,23 +104,40 @@ function syncDeploymentConfig(context) {
   data.deployment.publicUrl = settings.publicUrl ? normalizePublicUrl(settings.publicUrl) : '';
   data.team ||= {};
   data.team.enabled = mode !== 'personal';
-  data.team.requireWorkspaceLeaseForWrites =
-    setting('teamRequireWorkspaceLeaseForWrites', mode !== 'personal') !== false;
+  data.team.requireWorkspaceLeaseForWrites = strictBoolean(
+    setting('teamRequireWorkspaceLeaseForWrites', mode !== 'personal'),
+    'teamRequireWorkspaceLeaseForWrites'
+  );
   data.production ||= {};
-  data.production.maxRequestBytes = Number(setting('productionMaxRequestBytes', 2097152) || 2097152);
-  data.production.requestsPerMinute = Number(
-    setting('productionRequestsPerMinute', mode === 'production' ? 120 : 600) || 120
+  data.production.maxRequestBytes = strictInteger(
+    setting('productionMaxRequestBytes', 2097152), 2097152, 64 * 1024, 32 * 1024 * 1024, 'productionMaxRequestBytes'
   );
-  data.production.maxConcurrentRequests = Number(
-    setting('productionMaxConcurrentRequests', mode === 'production' ? 24 : 64) || 24
+  data.production.requestsPerMinute = strictInteger(
+    setting('productionRequestsPerMinute', mode === 'production' ? 120 : 600),
+    mode === 'production' ? 120 : 600,
+    10,
+    10000,
+    'productionRequestsPerMinute'
   );
-  data.production.maxConcurrentPerPrincipal = Number(
-    setting('productionMaxConcurrentPerPrincipal', mode === 'production' ? 4 : 16) || 4
+  data.production.maxConcurrentRequests = strictInteger(
+    setting('productionMaxConcurrentRequests', mode === 'production' ? 24 : 64),
+    mode === 'production' ? 24 : 64,
+    1,
+    256,
+    'productionMaxConcurrentRequests'
   );
-  data.production.requestTimeoutMs = Number(setting('productionRequestTimeoutMs', 900000) || 900000);
-  const configuredHosts = Array.isArray(setting('allowedPublicHosts', []))
-    ? setting('allowedPublicHosts', [])
-    : [];
+  data.production.maxConcurrentPerPrincipal = strictInteger(
+    setting('productionMaxConcurrentPerPrincipal', mode === 'production' ? 4 : 16),
+    mode === 'production' ? 4 : 16,
+    1,
+    64,
+    'productionMaxConcurrentPerPrincipal'
+  );
+  data.production.requestTimeoutMs = strictInteger(
+    setting('productionRequestTimeoutMs', 900000), 900000, 1000, 60 * 60 * 1000, 'productionRequestTimeoutMs'
+  );
+  const configuredHosts = setting('allowedPublicHosts', []);
+  if (!Array.isArray(configuredHosts)) throw new Error('allowedPublicHosts must be an array');
   const publicHost = hostFromPublicUrl(settings.publicUrl);
   data.production.allowedHosts = [...new Set(
     [...configuredHosts, publicHost]
@@ -323,7 +348,6 @@ function restoreProcessWrappers() {
 }
 
 async function activate(context) {
-  globalContext = context;
   output = vscode.window.createOutputChannel('DevMate Deployment');
   context.subscriptions.push(output);
   cloudflareTunnelToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
@@ -371,7 +395,6 @@ async function deactivate() {
     restoreProcessWrappers();
     innerExtension = null;
     manager = null;
-    globalContext = null;
   }
 }
 
