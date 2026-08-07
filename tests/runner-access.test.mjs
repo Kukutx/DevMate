@@ -65,3 +65,14 @@ test('updates, rotates, expires, and revokes runner credentials', () => {
   revokeRunnerCredential(current, created.credential.id);
   assert.equal(verifyRunnerToken(rotated.token, current), null);
 });
+
+test('rotating a revoked Runner token does not reactivate the credential', () => {
+  const current = config();
+  const created = createRunnerCredential(current, { name: 'Revoked Runner', workspaceIds: ['app'] });
+  revokeRunnerCredential(current, created.credential.id);
+  const rotated = rotateRunnerCredentialToken(current, created.credential.id);
+  assert.equal(rotated.credential.disabled, true);
+  assert.equal(verifyRunnerToken(rotated.token, current), null);
+  updateRunnerCredential(current, created.credential.id, { disabled: false });
+  assert.equal(verifyRunnerToken(rotated.token, current)?.id, created.credential.id);
+});
