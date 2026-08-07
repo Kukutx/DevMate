@@ -147,7 +147,7 @@ export function compactJobStore(store, {
 export function assertJobStoreCapacity(store, options = {}) {
   const maxActiveJobs = cleanLimit(options.maxActiveJobs, MAX_ACTIVE_JOBS, 1, 100_000);
   const compacted = compactJobStore(store, options);
-  if (options.enforceActive !== false && compacted.activeJobs > maxActiveJobs) {
+  if (compacted.activeJobs > maxActiveJobs) {
     throw capacityError(`DevMate active Job limit reached (${maxActiveJobs})`, {
       activeJobs: compacted.activeJobs,
       maxActiveJobs
