@@ -4,10 +4,24 @@ const { ItemView } = require('obsidian');
 
 const VIEW_TYPE = 'devmate-obsidian';
 
+function setText(element, value) {
+  if (!element) return;
+  const next = String(value ?? '');
+  if (element.textContent !== next) element.textContent = next;
+}
+
+function setVisible(element, visible) {
+  if (!element) return;
+  const display = visible ? '' : 'none';
+  if (element.style.display !== display) element.style.display = display;
+}
+
 class DevMateView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    this.ui = null;
+    this.refreshGeneration = 0;
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -15,28 +29,36 @@ class DevMateView extends ItemView {
   getIcon() { return 'bot'; }
 
   async onOpen() {
-    await this.render();
+    this.build();
+    await this.refresh();
   }
 
-  async render() {
+  async onClose() {
+    this.refreshGeneration += 1;
+    this.ui = null;
+  }
+
+  build() {
+    if (this.ui) return;
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass('devmate-obsidian-panel');
     container.createEl('h2', { text: 'DevMate' });
 
-    const status = await this.plugin.runtimeStatus();
     const statusCard = container.createDiv({ cls: 'devmate-status-card' });
-    statusCard.createEl('strong', { text: status.label });
-    statusCard.createEl('div', { text: status.detail, cls: 'devmate-muted' });
+    const statusLabel = statusCard.createEl('strong');
+    const statusDetail = statusCard.createEl('div', { cls: 'devmate-muted' });
 
     const actions = container.createDiv({ cls: 'devmate-actions' });
     const action = (label, handler) => {
       const button = actions.createEl('button', { text: label });
       button.onclick = async () => {
+        if (button.disabled) return;
         button.disabled = true;
         try { await handler(); }
-        finally { button.disabled = false; await this.render(); }
+        finally { button.disabled = false; }
       };
+      return button;
     };
     action('Start', () => this.plugin.startRuntime());
     action('Stop', () => this.plugin.stopRuntime());
@@ -45,47 +67,95 @@ class DevMateView extends ItemView {
     action('Copy context', () => this.plugin.copyContextBundle());
     action('Copy diagnostics', () => this.plugin.copyDiagnostics());
 
-    const runtime = this.plugin.controller;
     container.createEl('h3', { text: 'Workspace' });
     const list = container.createEl('dl', { cls: 'devmate-details' });
-    const detail = (name, value) => {
+    const detail = name => {
       list.createEl('dt', { text: name });
-      list.createEl('dd', { text: String(value || 'Unavailable') });
+      return list.createEl('dd');
     };
-    detail('Vault', this.plugin.vaultRoot);
-    detail('State', runtime?.stateDirectory);
-    detail('Startup', this.plugin.settings.startupMode);
-    detail('Gateway runtime', runtime?.lastLaunch?.mode || 'embedded Worker');
+    const vault = detail('Vault');
+    const state = detail('State');
+    const startup = detail('Startup');
+    const gatewayRuntime = detail('Gateway runtime');
+    const nodeRuntime = detail('Node runtime');
 
-    const failure = this.plugin.runtimeDiagnostics?.lastFailure;
-    if (failure) {
-      container.createEl('h3', { text: 'Startup problem' });
-      const failureCard = container.createDiv({ cls: 'devmate-status-card' });
-      failureCard.createEl('strong', { text: failure.message });
-      failureCard.createEl('div', {
-        text: 'Use Copy diagnostics when reporting this problem. No note content or MCP token is included.',
-        cls: 'devmate-muted'
-      });
-    }
+    const failureSection = container.createDiv();
+    failureSection.createEl('h3', { text: 'Startup problem' });
+    const failureCard = failureSection.createDiv({ cls: 'devmate-status-card' });
+    const failureMessage = failureCard.createEl('strong');
+    failureCard.createEl('div', {
+      text: 'Use Copy diagnostics when reporting this problem. No note content or MCP token is included.',
+      cls: 'devmate-muted'
+    });
 
-    const note = this.plugin.app.workspace.getActiveFile();
     container.createEl('h3', { text: 'Active note' });
-    container.createEl('div', { text: note?.path || 'No active note', cls: 'devmate-note-path' });
+    const activeNote = container.createEl('div', { cls: 'devmate-note-path' });
 
+    const indexSection = container.createDiv();
+    indexSection.createEl('h3', { text: 'Vault index' });
+    const indexCard = indexSection.createDiv({ cls: 'devmate-status-card' });
+    const indexCount = indexCard.createEl('strong');
+    const indexDetail = indexCard.createEl('div', { cls: 'devmate-muted' });
+
+    this.ui = {
+      statusLabel,
+      statusDetail,
+      vault,
+      state,
+      startup,
+      gatewayRuntime,
+      nodeRuntime,
+      failureSection,
+      failureMessage,
+      activeNote,
+      indexSection,
+      indexCount,
+      indexDetail
+    };
+    setVisible(failureSection, false);
+    setVisible(indexSection, false);
+  }
+
+  async refresh(status = null) {
+    this.build();
+    const generation = ++this.refreshGeneration;
+    const resolvedStatus = status || await this.plugin.runtimeStatus();
+    if (generation !== this.refreshGeneration || !this.ui) return;
+
+    const runtime = this.plugin.controller;
+    const failure = this.plugin.runtimeDiagnostics?.lastFailure;
+    const note = this.plugin.app.workspace.getActiveFile();
     const index = this.plugin.bridge?.index;
+    const node = this.plugin.nodeRuntime;
+
+    setText(this.ui.statusLabel, resolvedStatus.label);
+    setText(this.ui.statusDetail, resolvedStatus.detail);
+    setText(this.ui.vault, this.plugin.vaultRoot || 'Unavailable');
+    setText(this.ui.state, runtime?.stateDirectory || 'Unavailable');
+    setText(this.ui.startup, this.plugin.settings.startupMode);
+    setText(this.ui.gatewayRuntime, runtime?.lastLaunch?.mode || 'child_process');
+    setText(this.ui.nodeRuntime, node ? `${node.nodeVersion} · ${node.executable}` : 'Auto-detect on start');
+
+    setVisible(this.ui.failureSection, !!failure);
+    if (failure) setText(this.ui.failureMessage, failure.message);
+
+    setText(this.ui.activeNote, note?.path || 'No active note');
+
+    setVisible(this.ui.indexSection, !!index);
     if (index) {
-      container.createEl('h3', { text: 'Vault index' });
-      const indexCard = container.createDiv({ cls: 'devmate-status-card' });
-      indexCard.createEl('strong', { text: `${index.records.size} Markdown notes` });
-      indexCard.createEl('div', {
-        text: `Generation ${index.generation} · refreshed ${index.refreshedAt || 'not yet'}`,
-        cls: 'devmate-muted'
-      });
+      setText(this.ui.indexCount, `${index.records.size} Markdown notes`);
+      setText(this.ui.indexDetail, `Generation ${index.generation} · refreshed ${index.refreshedAt || 'not yet'}`);
     }
+  }
+
+  render(status = null) {
+    return this.refresh(status);
   }
 }
 
 module.exports = {
   DevMateView,
-  VIEW_TYPE
+  VIEW_TYPE,
+  setText,
+  setVisible
 };
