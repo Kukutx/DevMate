@@ -10,6 +10,14 @@ function strictEnum(value, allowed, label) {
   return value;
 }
 
+function strictInteger(value, fallback, min, max, label) {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+  }
+  return value;
+}
+
 function tunnelProvider(value) {
   return strictEnum(value, PROVIDERS, 'tunnel provider');
 }
@@ -18,9 +26,15 @@ function deploymentMode(value) {
   return strictEnum(value, DEPLOYMENT_MODES, 'deployment mode');
 }
 
+function tunnelMaxRestarts(value) {
+  return strictInteger(value, 10, 0, 100, 'tunnelMaxRestarts');
+}
+
 module.exports = {
   DEPLOYMENT_MODES,
   PROVIDERS,
   deploymentMode,
+  strictInteger,
+  tunnelMaxRestarts,
   tunnelProvider
 };
