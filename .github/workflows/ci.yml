@@ -56,8 +56,8 @@ jobs:
       - name: Package VSIX
         run: npm run package:vsix
 
-      - name: Smoke test packaged VSIX Worker
-        run: node scripts/smoke-vsix-worker.mjs
+      - name: Smoke test packaged VSIX runtime
+        run: node scripts/smoke-vsix-runtime.mjs
 
       - name: Smoke test packaged VSIX shared tunnel
         run: node scripts/smoke-vsix-shared-tunnel.mjs
@@ -65,8 +65,8 @@ jobs:
       - name: Build Obsidian plugin
         run: npm run build:obsidian
 
-      - name: Smoke test Obsidian Worker bundle
-        run: node scripts/smoke-obsidian-worker.mjs
+      - name: Smoke test Obsidian runtime bundle
+        run: node scripts/smoke-obsidian-runtime.mjs
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v7
@@ -119,8 +119,8 @@ jobs:
       - name: Linux package VSIX
         run: npm run package:vsix
 
-      - name: Linux packaged VSIX Worker smoke test
-        run: node scripts/smoke-vsix-worker.mjs
+      - name: Linux packaged VSIX runtime smoke test
+        run: node scripts/smoke-vsix-runtime.mjs
 
       - name: Linux packaged VSIX shared tunnel smoke test
         run: node scripts/smoke-vsix-shared-tunnel.mjs
@@ -128,8 +128,8 @@ jobs:
       - name: Linux Obsidian plugin build
         run: npm run build:obsidian
 
-      - name: Linux Obsidian Worker bundle smoke test
-        run: node scripts/smoke-obsidian-worker.mjs
+      - name: Linux Obsidian runtime bundle smoke test
+        run: node scripts/smoke-obsidian-runtime.mjs
 
       - name: Linux standalone Docker build and network smoke
         shell: bash
