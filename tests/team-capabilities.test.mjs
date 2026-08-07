@@ -32,6 +32,7 @@ await fsp.writeFile(configPath, JSON.stringify({
 
 const { installTeamCapabilities } = await import('../gateway/team-capabilities.mjs');
 const { runWithRequestContext } = await import('../gateway/request-context.mjs');
+const { __test: teamToolDataTest } = await import('../gateway/team-tool-data.mjs');
 
 class MockServer {
   constructor() {
@@ -96,6 +97,19 @@ test('registers deployment, team, and lease tools', async () => {
     ),
     /owner role/
   );
+});
+
+test('production readiness host contract matches the public URL route', () => {
+  const config = {
+    deployment: { mode: 'production', publicUrl: 'https://devmate.example.com' },
+    production: { allowedHosts: ['wrong.example.com'] }
+  };
+  assert.equal(teamToolDataTest.allowedPublicHost(config), false);
+  config.production.allowedHosts = ['devmate.example.com'];
+  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
+  config.deployment.publicUrl = 'https://devmate.example.com:8443';
+  config.production.allowedHosts = ['devmate.example.com'];
+  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
 });
 
 test.after(async () => fsp.rm(temp, { recursive: true, force: true }));
