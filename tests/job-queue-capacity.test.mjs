@@ -80,6 +80,16 @@ test('rejects a new Job when the active queue reaches its hard limit', () => {
   assert.equal(queue.jobQueueCapacityStatus().activeJobs, limits.MAX_ACTIVE_JOBS);
 });
 
+test('every Job store write enforces current capacity limits', () => {
+  const store = emptyStore();
+  store.jobs = Array.from({ length: limits.MAX_ACTIVE_JOBS + 1 }, (_, index) => activeJob(index));
+  assert.throws(() => queue.__test.writeStore(store), error => {
+    assert.equal(error.code, 'job_queue_capacity');
+    assert.match(error.message, /active Job limit/);
+    return true;
+  });
+});
+
 test('prunes long-offline Runner records during normal reads', () => {
   const store = emptyStore();
   store.runners = [{
