@@ -37,13 +37,6 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   assertSupportedConfigVersion(current);
   assertSupportedConfigVersion(candidate);
 
-  if (!Object.keys(current).length) {
-    return {
-      ...candidate,
-      version: Math.max(Number(candidate.version) || 0, SUPPORTED_CONFIG_VERSION)
-    };
-  }
-
   const merged = { ...current };
   for (const key of [
     'appVersion', 'server', 'permissions', 'maintenance', 'commands',
