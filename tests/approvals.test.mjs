@@ -28,6 +28,33 @@ const call = {
   args: { workspaceId: 'app', remote: 'origin', branch: 'main' }
 };
 
+test('uses strict approval policy values instead of coercing malformed configuration', () => {
+  assert.deepEqual(approvals.approvalPolicy(config), {
+    enabled: true,
+    requiredCapabilities: ['publish', 'admin'],
+    requiredTools: [],
+    ttlSeconds: 3600,
+    separationOfDuties: true,
+    ownerBypass: true
+  });
+  assert.throws(() => approvals.approvalPolicy({
+    deployment: { mode: 'production' },
+    team: { approvals: { enabled: 'false' } }
+  }), /must be boolean/);
+  assert.throws(() => approvals.approvalPolicy({
+    deployment: { mode: 'production' },
+    team: { approvals: { ttlSeconds: '300' } }
+  }), /must be an integer/);
+  assert.throws(() => approvals.approvalPolicy({
+    deployment: { mode: 'production' },
+    team: { approvals: { requiredCapabilities: ['publish', 'root'] } }
+  }), /Invalid approval capability/);
+  assert.throws(() => approvals.approvalPolicy({
+    deployment: { mode: 'production' },
+    team: { approvals: { ownerByPass: false } }
+  }), /Unknown team\.approvals setting/);
+});
+
 test('requires a separate maintainer and consumes approval on exact retry', () => {
   let pending;
   assert.throws(() => approvals.ensureToolApproval(call), error => {
