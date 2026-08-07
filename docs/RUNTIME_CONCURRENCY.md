@@ -13,7 +13,7 @@ idle -> starting -> running -> stopping -> idle
                        \-> error
 ```
 
-Repeated Start calls reuse the owned Gateway or attach to the matching shared instance. Stop and Restart wait for the Worker to exit and release its state before the next transition begins.
+Repeated Start calls reuse the owned Gateway or attach to the matching shared instance. Stop and Restart wait for the isolated Gateway child process to exit and release its state before the next transition begins.
 
 ## Cross-host startup lease
 
@@ -34,18 +34,18 @@ The running Gateway records a separate instance lock containing:
 - a random lock token;
 - the DevMate instance ID;
 - the host-generated runtime owner ID;
-- process and Worker thread identifiers;
+- the Gateway process ID and thread metadata;
 - launch mode;
 - acquisition and heartbeat timestamps;
 - lease duration.
 
-The Gateway refreshes this lock while alive. Worker and child-process exits stop the heartbeat. A stale lock can be recovered even when a dead Worker shared the still-running parent process PID. Host-side cleanup may remove a lock only when its runtime owner ID matches the exited Worker, preventing one host from deleting another host's active lock.
+Desktop hosts launch the Gateway in one isolated `child_process` model. The Gateway refreshes its lock while alive; process exit stops the heartbeat. Host-side cleanup may remove a lock only when its runtime owner ID matches the exited process, preventing one host from deleting another host's active lock.
 
-The lock lease is request-aware: it is at least 20 minutes and expands beyond longer configured request timeouts. The normal heartbeat interval is 30 seconds rather than 5 seconds, reducing steady-state lock metadata writes by about 83% while short test leases still use a proportionally faster heartbeat.
+The lock lease is request-aware: it is at least 20 minutes and expands beyond longer configured request timeouts. The normal heartbeat interval is 30 seconds rather than 5 seconds, reducing steady-state lock metadata writes while short test leases still use a proportionally faster heartbeat.
 
 ## Configuration recovery and write efficiency
 
-`config.json` is no longer treated as a blank first-run configuration when it is corrupt or too large.
+`config.json` is not treated as a blank first-run configuration when it is corrupt or too large.
 
 - Missing config: create a new personal configuration.
 - Valid interrupted Windows replacement: restore the newest valid replacement.
@@ -54,13 +54,23 @@ The lock lease is request-aware: it is at least 20 minutes and expands beyond lo
 - All changed writes remain atomic, restrictive, and protected by the cross-process config lock.
 - A locked mutation that produces identical JSON returns without creating a temporary file, calling `fsync`, or replacing `config.json`.
 
-The no-op write check is important for Obsidian's periodic status refresh and repeated health checks: an unchanged runtime no longer rewrites shared configuration every five seconds. This preserves instance IDs, authentication tokens, workspaces, permissions, and host context while reducing avoidable disk activity.
+Obsidian additionally deduplicates identical host-context snapshots before writing them. Its five-second status poll updates existing panel fields rather than clearing and rebuilding the panel DOM, so health polling does not cause visual flicker or unnecessary state churn.
 
 ## Explicit VS Code runtime boundaries
 
-The Gateway Worker router may use an activation-scoped `SpawnLayer` because it must route the packaged Gateway launch into `worker_threads` while leaving unrelated child processes native. Tunnel providers do not participate in that wrapper chain.
+VS Code uses the same `RuntimeController` child-process lifecycle as Obsidian. There is no Gateway Worker router and no global `child_process` monkey patch.
 
-`TunnelController` receives provider settings and Secret Storage values directly, starts the selected provider directly, and exposes Start/Stop/status through `vscode-host/tunnel-runtime.js`. ngrok setup code only manages settings and credentials; platform deployment code only manages deployment configuration and diagnostics. Neither layer rewrites `child_process`, the private runtime I/O adapter, nor HTTP request functions.
+`TunnelController` receives provider settings and Secret Storage values directly, starts the selected provider directly, and exposes Start/Stop/status through `vscode-host/tunnel-runtime.js`. ngrok setup code only manages settings and credentials; platform deployment code only manages deployment configuration and diagnostics. Neither layer rewrites the private runtime I/O adapter nor HTTP request functions.
+
+## Obsidian Node runtime
+
+The Gateway itself requires Node.js 24 or newer. Obsidian resolves a verified Gateway runtime in this order:
+
+1. an explicitly configured Node executable;
+2. the Obsidian/Electron executable when its embedded Node runtime is current and can run as Node;
+3. `node` from `PATH`.
+
+Each candidate is probed before launch. If no Node 24+ runtime is usable, startup fails with diagnostics instead of falling back to an incompatible renderer or Worker runtime.
 
 ## Bounded local health probes
 
@@ -70,10 +80,10 @@ Host health probes cap response bytes and destroy oversized responses. A malform
 
 Runtime changes must pass on Windows and Linux:
 
-1. unit tests for operation ordering, startup lease expiry, config recovery, no-op config writes, bounded health reads, Worker shutdown, provider-native tunnel ownership/recovery, and owner-matched lock cleanup;
-2. two controllers starting concurrently against one state directory, with exactly one owned Gateway;
+1. unit tests for operation ordering, startup lease expiry, config recovery, no-op config writes, bounded health reads, Node runtime resolution, provider-native tunnel ownership/recovery, and owner-matched lock cleanup;
+2. two controllers starting concurrently against one state directory, with exactly one owned child-process Gateway;
 3. provider-native tunnel owner/follower convergence, configuration conflict handling, launch failure cleanup, readiness timeout, and close-only process termination;
-4. real VSIX extraction and packaged Gateway/tunnel runtime checks;
-5. real Obsidian bundle start/health/stop/same-port restart;
-6. forced Worker failure followed by owner-matched lock recovery;
+4. real VSIX extraction and packaged child-process Gateway/tunnel runtime checks;
+5. real Obsidian bundle child-process start/health/stop/same-port restart;
+6. Obsidian panel stability and duplicate-context-write regression checks;
 7. existing Gateway, MCP tool registration, Docker, and Godot regression gates.
