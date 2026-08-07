@@ -46,7 +46,7 @@ function assertToolFailure(result, pattern, label) {
   assert.match(result.text, pattern, `${label} failed for the wrong reason`);
 }
 
-test('real MCP team flow closes auth, work-session, lease, write and release lifecycle', async () => {
+test('real MCP team flow closes auth, work-session, lease, write, finish and rollback lifecycle', async () => {
   const root = process.cwd();
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-team-e2e-'));
   const workspaceRoot = path.join(temp, 'workspace');
@@ -137,10 +137,10 @@ test('real MCP team flow closes auth, work-session, lease, write and release lif
     assertToolFailure(noLease, /requires a lease/i, 'write before session');
     assert.equal(fs.existsSync(path.join(workspaceRoot, 'before-session.txt')), false);
 
-    const started = await callTool('team_work_session_start', {
+    const started = await callTool('work_session_start', {
       workspaceId: 'app', title: 'E2E session', purpose: 'business closure', ttlSeconds: 300
     }, developerToken);
-    assertToolSuccess(started, 'team_work_session_start');
+    assertToolSuccess(started, 'work_session_start');
     const session = structured(started)?.session;
     assert.ok(session?.id);
     assert.ok(session?.leaseId);
@@ -152,12 +152,17 @@ test('real MCP team flow closes auth, work-session, lease, write and release lif
     assertToolSuccess(write, 'create_file during session');
     assert.equal(fs.readFileSync(path.join(workspaceRoot, 'during-session.txt'), 'utf8'), 'written under lease');
 
-    const status = await callTool('team_work_session_status', { workspaceId: 'app' }, developerToken);
-    assertToolSuccess(status, 'team_work_session_status');
-    assert.ok((structured(status)?.sessions || []).some(item => item.id === session.id && item.lease?.id === session.leaseId));
+    const status = await callTool('work_session_status', { id: session.id }, developerToken);
+    assertToolSuccess(status, 'work_session_status');
+    assert.equal(structured(status)?.session?.id, session.id);
+    assert.equal(structured(status)?.session?.lease?.id, session.leaseId);
 
-    const finished = await callTool('team_work_session_finish', { id: session.id }, developerToken);
-    assertToolSuccess(finished, 'team_work_session_finish');
+    const dryRun = await callTool('work_session_rollback', { workSessionId: session.id, dryRun: true }, developerToken);
+    assertToolSuccess(dryRun, 'work_session_rollback dry run');
+    assert.equal(fs.existsSync(path.join(workspaceRoot, 'during-session.txt')), true);
+
+    const finished = await callTool('work_session_finish', { id: session.id }, developerToken);
+    assertToolSuccess(finished, 'work_session_finish');
     assert.equal(structured(finished)?.finished, true);
     assert.equal(structured(finished)?.lease?.released, true);
 
@@ -166,6 +171,18 @@ test('real MCP team flow closes auth, work-session, lease, write and release lif
     }, developerToken);
     assertToolFailure(afterLease, /requires a lease/i, 'write after session');
     assert.equal(fs.existsSync(path.join(workspaceRoot, 'after-session.txt')), false);
+
+    const noRollbackLease = await callTool('work_session_rollback', { workSessionId: session.id }, developerToken);
+    assertToolFailure(noRollbackLease, /requires a lease/i, 'rollback without lease');
+
+    const reacquired = await callTool('workspace_lease_acquire', {
+      workspaceId: 'app', purpose: 'rollback finished session', ttlSeconds: 300
+    }, developerToken);
+    assertToolSuccess(reacquired, 'workspace_lease_acquire for rollback');
+
+    const rollback = await callTool('work_session_rollback', { workSessionId: session.id }, developerToken);
+    assertToolSuccess(rollback, 'work_session_rollback');
+    assert.equal(fs.existsSync(path.join(workspaceRoot, 'during-session.txt')), false);
   } finally {
     if (child.exitCode === null) {
       child.kill();
