@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import {
   assertCanMutate, audit, getWritableWorkspace, normalizeSlash, permissionProfile, readConfig,
   resolveWorkspaceCwd, syncTrustedRootsIntoConfig, toolText, writeConfig
 } from '../local-shared.mjs';
+import { executeCommand } from '../command-process.mjs';
+import { resolveWorkspace } from '../workspace-resolver.mjs';
 import {
   listPersistentProcesses, readPersistentOutput, startPersistentProcess, stopPersistentProcess
 } from '../persistent-processes.mjs';
@@ -44,53 +45,33 @@ function truncate(value, maxChars) {
   return { text: text.slice(0, maxChars), truncated: text.length > maxChars, length: text.length };
 }
 
-export function runExecutable(executable, args = [], options = {}) {
+export async function runExecutable(executable, args = [], options = {}) {
   const timeoutMs = clamp(options.timeoutMs, DEFAULT_TIMEOUT_MS, 1000, 1800000);
   const maxOutputChars = clamp(options.maxOutputChars, DEFAULT_MAX_OUTPUT_CHARS, 1000, 500000);
   const cwd = options.cwd || process.cwd();
-  return new Promise(resolve => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const child = spawn(executable, args.map(value => String(value)), {
-      cwd,
-      shell: false,
-      windowsHide: true,
-      env: { ...process.env, ...(options.environment || {}) }
-    });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try { child.kill('SIGKILL'); } catch {}
-      const out = truncate(stdout, maxOutputChars);
-      const err = truncate(stderr, maxOutputChars);
-      resolve({ executable, args, cwd, exitCode: null, timedOut: true, stdout: out.text, stderr: err.text, stdoutTruncated: out.truncated, stderrTruncated: err.truncated });
-    }, timeoutMs);
-    child.stdout?.on('data', chunk => {
-      stdout += String(chunk);
-      if (stdout.length > maxOutputChars * 2) stdout = stdout.slice(-maxOutputChars * 2);
-    });
-    child.stderr?.on('data', chunk => {
-      stderr += String(chunk);
-      if (stderr.length > maxOutputChars * 2) stderr = stderr.slice(-maxOutputChars * 2);
-    });
-    child.on('error', error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const out = truncate(stdout, maxOutputChars);
-      const err = truncate(stderr, maxOutputChars);
-      resolve({ executable, args, cwd, exitCode: null, timedOut: false, error: error.message, stdout: out.text, stderr: err.text, stdoutTruncated: out.truncated, stderrTruncated: err.truncated });
-    });
-    child.on('close', code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const out = truncate(stdout, maxOutputChars);
-      const err = truncate(stderr, maxOutputChars);
-      resolve({ executable, args, cwd, exitCode: code, timedOut: false, stdout: out.text, stderr: err.text, stdoutTruncated: out.truncated, stderrTruncated: err.truncated });
-    });
+  const result = await executeCommand(executable, args.map(value => String(value)), {
+    cwd,
+    timeoutMs,
+    maxOutputChars,
+    shell: false,
+    environment: { ...process.env, ...(options.environment || {}) }
   });
+  return {
+    executable,
+    args,
+    cwd,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    error: result.error,
+    timedOut: result.timedOut,
+    terminated: result.terminated,
+    forced: result.forced,
+    exitConfirmed: result.exitConfirmed,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    stdoutTruncated: result.stdoutTruncated,
+    stderrTruncated: result.stderrTruncated
+  };
 }
 
 function quoteShellArg(value) {
@@ -165,11 +146,7 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
   const getWorkspace = (workspaceId, { writable = false } = {}) => {
     const config = syncTrustedRootsIntoConfig();
     if (writable) return getWritableWorkspace(config, workspaceId);
-    const workspace = workspaceId
-      ? config.workspaces?.find(item => item.id === workspaceId || item.name === workspaceId)
-      : config.workspaces?.find(item => item.id === config.activeWorkspaceId) || config.workspaces?.find(item => !item.reference) || config.workspaces?.[0];
-    if (!workspace) throw new Error('No workspace configured');
-    return workspace;
+    return resolveWorkspace(config, workspaceId || '');
   };
   return {
     plugin: manifest,
