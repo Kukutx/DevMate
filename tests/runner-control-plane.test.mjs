@@ -123,16 +123,19 @@ const runner = {
 
 test('fails closed for public Runner Hosts when production allowlist is empty', () => {
   const production = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
-  assert.equal(__test.hostAllowed({ headers: { host: 'runner.example.com' } }, production), false);
-  assert.equal(__test.hostAllowed({ headers: { host: '127.0.0.1:8787' } }, production), true);
+  const publicRequest = host => ({ headers: { host }, socket: { remoteAddress: '203.0.113.10' } });
+  const localRequest = host => ({ headers: { host }, socket: { remoteAddress: '127.0.0.1' } });
+  assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), production), false);
+  assert.equal(__test.hostAllowed(localRequest('127.0.0.1:8787'), production), true);
+  assert.equal(__test.hostAllowed(publicRequest('localhost:8787'), production), false);
   const restricted = {
     deployment: { mode: 'production' },
     production: { allowedHosts: ['runner.example.com'] }
   };
-  assert.equal(__test.hostAllowed({ headers: { host: 'runner.example.com' } }, restricted), true);
-  assert.equal(__test.hostAllowed({ headers: { host: 'evil.example.com' } }, restricted), false);
+  assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), restricted), true);
+  assert.equal(__test.hostAllowed(publicRequest('evil.example.com'), restricted), false);
   const team = { deployment: { mode: 'team' }, production: { allowedHosts: [] } };
-  assert.equal(__test.hostAllowed({ headers: { host: 'runner.example.com' } }, team), true);
+  assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), team), true);
 });
 
 test('rejects invalid credentials, protocol versions, and malformed request bodies', async () => {
