@@ -188,7 +188,6 @@ export function rotateTeamMemberToken(config, id) {
   member.tokenHash = hashSecret(secret, salt);
   member.tokenVersion = (member.tokenVersion || 1) + 1;
   member.updatedAt = new Date().toISOString();
-  member.disabled = false;
   return { member: memberPublic(member), token: `dmt_${member.id}_${secret}` };
 }
 
