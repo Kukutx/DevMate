@@ -7,7 +7,9 @@ const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
-const managedEntry = fs.readFileSync(path.join(root, 'extension-entry.js'), 'utf8');
+const ngrokSetupEntry = fs.readFileSync(path.join(root, 'extension-entry.js'), 'utf8');
+const tunnelEntry = fs.readFileSync(path.join(root, 'extension-entry-shared-tunnel.js'), 'utf8');
+const tunnelController = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
 
 test('actual VS Code Start and Stop use the shared RuntimeController', () => {
   assert.match(source, /const \{ RuntimeController, SUPPORTED_CONFIG_VERSION \} = require\('\.\/host\/runtime-controller\.js'\)/);
@@ -29,19 +31,25 @@ test('actual VS Code process calls resolve the private active spawn chain at cal
   assert.doesNotMatch(source, /data\.version\s*=\s*9\b/);
 });
 
-test('managed ngrok wrapper is an activation-scoped SpawnLayer', () => {
-  assert.match(managedEntry, /require\('\.\/vscode-host\/spawn-layer\.js'\)/);
-  assert.match(managedEntry, /require\('\.\/vscode-host\/runtime-io\.js'\)/);
-  assert.match(managedEntry, /new SpawnLayer\(/);
-  assert.match(managedEntry, /\.install\(\)/);
-  assert.match(managedEntry, /\.dispose\(\)/);
-  assert.match(managedEntry, /activationAttempted/);
-  assert.match(managedEntry, /activated/);
-  assert.doesNotMatch(managedEntry, /loadBaseExtensionWithNgrokWrapper/);
+test('ngrok setup is settings-only and provider processes are owned by TunnelController', () => {
+  assert.doesNotMatch(ngrokSetupEntry, /SpawnLayer|runtime-io\.js|createExtensionSpawn|installManagedSpawnLayer/);
+  assert.match(ngrokSetupEntry, /context\.secrets\.store\(SECRET_KEY, token\)/);
+  assert.match(ngrokSetupEntry, /activationAttempted/);
+  assert.match(ngrokSetupEntry, /activated/);
+
+  assert.match(tunnelEntry, /new TunnelController\(/);
+  assert.match(tunnelEntry, /setTunnelController\(runtime\)/);
+  assert.match(tunnelEntry, /getSecrets: \(\) => tunnelSecrets\(context\)/);
+  assert.match(tunnelController, /this\.childProcess\.spawn\(launch\.command, launch\.args, launch\.options\)/);
+  assert.doesNotMatch(tunnelController, /TunnelCompatibilityManager|virtualHttpRequest|virtualChild/);
 });
 
-test('auxiliary process exit handlers cannot clear newer process handles', () => {
+test('auxiliary process and tunnel ownership cannot clear newer handles', () => {
   assert.match(source, /if\(startCommandProcess === child\) startCommandProcess=null/);
-  assert.match(source, /if\(ngrokProcess === child\)\{ ngrokProcess=null; lastPublicUrl=''; \}/);
-  assert.match(source, /Leaving existing tunnel running because this VS Code host does not own its process/);
+  assert.match(source, /if\(gatewayProcess !== child\) return/);
+  assert.doesNotMatch(source, /ngrokProcess/);
+
+  assert.match(tunnelController, /if \(this\.child !== child\) return/);
+  assert.match(tunnelController, /if \(!ownerId \|\| this\.ownerId === ownerId\)/);
+  assert.match(tunnelController, /record\.ownerId !== this\.ownerId/);
 });
