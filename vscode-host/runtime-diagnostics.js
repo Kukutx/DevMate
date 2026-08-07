@@ -33,7 +33,7 @@ class VscodeRuntimeDiagnostics {
     this.store.clearFailure();
   }
 
-  selfCheck({ router } = {}) {
+  selfCheck() {
     const checks = [];
     const add = (id, ok, detail) => checks.push({ id, ok: !!ok, detail: String(detail || '') });
     const stateDirectory = this.runtimeContext.globalStorageUri.fsPath;
@@ -45,7 +45,7 @@ class VscodeRuntimeDiagnostics {
     add('state-directory', fs.statSync(stateDirectory, { throwIfNoEntry: false })?.isDirectory(), stateDirectory);
     add('gateway-bundle', !!gateway, gateway || candidates.join(' | '));
     add('gateway-bundle-size', !!gateway && fs.statSync(gateway).size > 100000, gateway ? `${fs.statSync(gateway).size} bytes` : 'missing');
-    add('spawn-router', router?.mode === 'worker_threads', router?.mode || 'not installed');
+    add('gateway-launch-mode', true, 'child_process');
     add('config-file', fs.statSync(configFile, { throwIfNoEntry: false })?.isFile(), configFile);
     add('workspace', workspaceFolders(this.vscode).length > 0, `${workspaceFolders(this.vscode).length} folder(s)`);
     add('node-runtime', !!process.versions.node, process.versions.node || 'missing');
@@ -57,7 +57,7 @@ class VscodeRuntimeDiagnostics {
     return { ok, checks, gateway, stateDirectory, configFile };
   }
 
-  snapshot({ router, startupMode, enabled } = {}) {
+  snapshot({ startupMode, enabled } = {}) {
     let config = null;
     try {
       config = JSON.parse(fs.readFileSync(runtimeConfigPath(this.runtimeContext), 'utf8').replace(/^\uFEFF/, ''));
@@ -70,7 +70,7 @@ class VscodeRuntimeDiagnostics {
         vscodeVersion: this.vscode.version || null,
         enabled,
         startupMode,
-        launchMode: router?.mode || null
+        launchMode: 'child_process'
       },
       environment: {
         platform: process.platform,
