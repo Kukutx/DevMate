@@ -12,12 +12,11 @@ const {
 const {
   cloudflareLaunch,
   decorateNgrokArgs,
-  normalizeAutoRestart,
-  normalizeMaxRestarts,
   normalizeProvider,
   normalizePublicUrl,
   parseTryCloudflareUrl
 } = require('../tunnel-provider.js');
+const { tunnelMaxRestarts } = require('./tunnel-settings.js');
 const {
   DEFAULT_RUNTIME_LEASE_MS,
   SharedTunnelRecordStore,
@@ -40,12 +39,18 @@ function childActive(child) {
   return !!child && child.exitCode == null && child.killed !== true;
 }
 
+function strictAutoRestart(value) {
+  if (value === undefined) return true;
+  if (typeof value !== 'boolean') throw new Error('tunnelAutoRestart must be a boolean');
+  return value;
+}
+
 function normalizeSettings(raw = {}) {
   return {
     ...raw,
     provider: normalizeProvider(raw.provider !== undefined ? raw.provider : raw.tunnelProvider),
-    autoRestart: normalizeAutoRestart(raw.autoRestart),
-    maxRestarts: normalizeMaxRestarts(raw.maxRestarts)
+    autoRestart: strictAutoRestart(raw.autoRestart),
+    maxRestarts: tunnelMaxRestarts(raw.maxRestarts)
   };
 }
 
@@ -156,6 +161,7 @@ class TunnelController {
     this.store = new SharedTunnelRecordStore({ stateDirectory, leaseMs: this.runtimeLeaseMs, logger });
     this.ownerId = '';
     this.child = null;
+    this.childReady = false;
     this.port = 0;
     this.restartCount = 0;
     this.heartbeat = null;
@@ -235,6 +241,17 @@ class TunnelController {
     this.heartbeat = null;
   }
 
+  resetOwnership(ownerId = this.ownerId) {
+    this.stopHeartbeat();
+    if (ownerId) this.store.remove(ownerId);
+    if (!ownerId || this.ownerId === ownerId) {
+      this.ownerId = '';
+      this.port = 0;
+      this.restartCount = 0;
+      this.childReady = false;
+    }
+  }
+
   async providerReadyUrl(launch, match, child, timeoutMs) {
     if (launch.provider === 'external') return launch.publicUrl;
     const deadline = Date.now() + timeoutMs;
@@ -268,23 +285,33 @@ class TunnelController {
     throw error;
   }
 
-  attachChild(child, launch, match) {
+  attachChild(child, match) {
     this.child = child;
+    this.childReady = false;
+    let terminal = false;
+    const finish = (code, signal) => {
+      if (terminal) return;
+      terminal = true;
+      if (this.child !== child) return;
+      const wasReady = this.childReady;
+      this.child = null;
+      this.childReady = false;
+      if (this.stopping || this.disposed) return;
+      this.logger(`Tunnel provider ended code=${code ?? 'none'} signal=${signal || 'none'}.`);
+      if (!wasReady) {
+        this.resetOwnership();
+        return;
+      }
+      void this.handleUnexpectedExit(match).catch(error => {
+        this.logger(`Tunnel restart failed: ${error.message || error}`);
+        this.resetOwnership();
+      });
+    };
     child.stdout?.on('data', chunk => this.logger(`[${match.provider}] ${String(chunk).trimEnd()}`));
     child.stderr?.on('data', chunk => this.logger(`[${match.provider}:err] ${String(chunk).trimEnd()}`));
     child.on?.('error', error => this.logger(`Tunnel process error: ${error.message || error}`));
-    child.once?.('exit', (code, signal) => {
-      if (this.child !== child) return;
-      this.child = null;
-      if (this.stopping || this.disposed) return;
-      this.logger(`Tunnel provider exited code=${code} signal=${signal || 'none'}.`);
-      void this.handleUnexpectedExit(match).catch(error => {
-        this.logger(`Tunnel restart failed: ${error.message || error}`);
-        this.store.remove(this.ownerId);
-        this.ownerId = '';
-        this.stopHeartbeat();
-      });
-    });
+    child.once?.('exit', finish);
+    child.once?.('close', finish);
   }
 
   async spawnProvider(match, { preserveOwner = false } = {}) {
@@ -295,58 +322,62 @@ class TunnelController {
       this.ownerId = `${this.hostId}-tunnel-${process.pid}-${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`;
       this.restartCount = 0;
     }
+    const ownerId = this.ownerId;
     this.port = match.port;
+    let child = null;
 
-    if (launch.provider === 'external') {
-      this.store.write(this.ownerId, {
+    try {
+      if (launch.provider === 'external') {
+        this.store.write(ownerId, {
+          hostId: this.hostId,
+          childPid: null,
+          port: match.port,
+          provider: match.provider,
+          configurationKey: match.configurationKey,
+          status: 'ready',
+          publicUrl: launch.publicUrl,
+          readyAt: nowIso()
+        });
+        this.startHeartbeat();
+        return this.store.read();
+      }
+
+      const checkArgs = launch.provider === 'ngrok' ? ['version'] : ['--version'];
+      const check = this.childProcess.spawnSync(launch.command, checkArgs, {
+        encoding: 'utf8', windowsHide: true, env: launch.options?.env || process.env
+      });
+      if (check.error || check.status !== 0) {
+        throw new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
+      }
+
+      child = this.childProcess.spawn(launch.command, launch.args, launch.options);
+      if (!child || typeof child.on !== 'function') throw new Error('Tunnel provider did not return a process-like handle');
+      this.attachChild(child, match);
+      this.store.write(ownerId, {
         hostId: this.hostId,
-        childPid: null,
+        childPid: child.pid || null,
         port: match.port,
         provider: match.provider,
         configurationKey: match.configurationKey,
-        status: 'ready',
-        publicUrl: launch.publicUrl,
-        readyAt: nowIso()
+        status: 'pending',
+        publicUrl: ''
       });
       this.startHeartbeat();
-      return this.store.read();
-    }
-
-    const checkArgs = launch.provider === 'ngrok' ? ['version'] : ['--version'];
-    const check = this.childProcess.spawnSync(launch.command, checkArgs, {
-      encoding: 'utf8', windowsHide: true, env: launch.options?.env || process.env
-    });
-    if (check.error || check.status !== 0) {
-      throw new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
-    }
-
-    const child = this.childProcess.spawn(launch.command, launch.args, launch.options);
-    this.attachChild(child, launch, match);
-    this.store.write(this.ownerId, {
-      hostId: this.hostId,
-      childPid: child.pid || null,
-      port: match.port,
-      provider: match.provider,
-      configurationKey: match.configurationKey,
-      status: 'pending',
-      publicUrl: ''
-    });
-    this.startHeartbeat();
-    try {
       const publicUrl = await this.providerReadyUrl(launch, match, child, this.readyTimeoutMs);
-      this.store.write(this.ownerId, {
+      this.store.write(ownerId, {
         childPid: child.pid || null,
         status: 'ready',
         publicUrl,
         readyAt: nowIso()
       });
+      if (this.child === child && this.ownerId === ownerId) this.childReady = true;
       return this.store.read();
     } catch (error) {
-      try { await terminateChild(child, { timeoutMs: 2000, forceTimeoutMs: 1000 }); } catch {}
+      if (child && childActive(child)) {
+        try { await terminateChild(child, { timeoutMs: 2000, forceTimeoutMs: 1000 }); } catch {}
+      }
       if (this.child === child) this.child = null;
-      this.store.remove(this.ownerId);
-      this.ownerId = '';
-      this.stopHeartbeat();
+      this.resetOwnership(ownerId);
       throw error;
     }
   }
@@ -354,9 +385,7 @@ class TunnelController {
   async handleUnexpectedExit(match) {
     const settings = this.settings();
     if (!settings.autoRestart || this.restartCount >= settings.maxRestarts || !this.ownerId) {
-      this.store.remove(this.ownerId);
-      this.ownerId = '';
-      this.stopHeartbeat();
+      this.resetOwnership();
       return;
     }
     this.restartCount += 1;
@@ -423,8 +452,32 @@ class TunnelController {
 
   async stop() {
     const record = this.store.read();
-    if (!record) return { stopped: false, reason: 'not-running' };
+    if (!record) {
+      this.stopping = true;
+      try {
+        let stopped = true;
+        if (childActive(this.child)) {
+          const result = await terminateChild(this.child, { timeoutMs: 5000, forceTimeoutMs: 2000 });
+          stopped = result.exited;
+        }
+        this.child = null;
+        this.resetOwnership();
+        return { stopped: false, reason: stopped ? 'not-running' : 'process-exit-timeout' };
+      } finally {
+        this.stopping = false;
+      }
+    }
     if (!this.ownerId || record.ownerId !== this.ownerId) {
+      if (this.ownerId) {
+        this.stopping = true;
+        try {
+          if (childActive(this.child)) await terminateChild(this.child, { timeoutMs: 5000, forceTimeoutMs: 2000 });
+          this.child = null;
+          this.resetOwnership(this.ownerId);
+        } finally {
+          this.stopping = false;
+        }
+      }
       return { stopped: false, reason: 'managed-by-another-host', publicUrl: record.publicUrl };
     }
     this.stopping = true;
@@ -435,11 +488,7 @@ class TunnelController {
         stopped = result.exited;
       }
       this.child = null;
-      this.stopHeartbeat();
-      this.store.remove(this.ownerId);
-      this.ownerId = '';
-      this.port = 0;
-      this.restartCount = 0;
+      this.resetOwnership(this.ownerId);
       return { stopped, reason: stopped ? '' : 'process-exit-timeout' };
     } finally {
       this.stopping = false;
@@ -470,5 +519,6 @@ module.exports = {
   buildProviderLaunch,
   childActive,
   nativeNgrokPublicUrl,
-  normalizeSettings
+  normalizeSettings,
+  strictAutoRestart
 };
