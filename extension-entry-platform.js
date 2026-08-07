@@ -1,15 +1,14 @@
 'use strict';
 
 const vscode = require('vscode');
-const childProcess = require('child_process');
-const http = require('http');
-const fs = require('fs');
 const path = require('path');
+const runtimeAdapter = require('./vscode-host/runtime-adapter.js');
 const {
   TunnelCompatibilityManager,
   normalizeProvider,
   normalizePublicUrl
 } = require('./tunnel-provider');
+const { deploymentMode: validateDeploymentMode } = require('./vscode-host/tunnel-settings.js');
 const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
@@ -18,7 +17,6 @@ const NGROK_POLICY_DOCS = 'https://ngrok.com/docs/traffic-policy/';
 
 let innerExtension = null;
 let output = null;
-let globalContext = null;
 let cloudflareTunnelToken = '';
 let originalSpawn = null;
 let originalSpawnSync = null;
@@ -72,8 +70,8 @@ async function openExternal(url) {
 }
 
 function deploymentMode() {
-  const value = String(setting('deploymentMode', 'personal') || 'personal');
-  return ['personal', 'team', 'production'].includes(value) ? value : 'personal';
+  const value = String(setting('deploymentMode', 'personal')).trim().toLowerCase();
+  return validateDeploymentMode(value);
 }
 
 function hostFromPublicUrl(value) {
@@ -300,30 +298,29 @@ function register(context, id, handler) {
 }
 
 function installProcessWrappers() {
-  originalSpawn = childProcess.spawn.bind(childProcess);
-  originalSpawnSync = childProcess.spawnSync.bind(childProcess);
+  originalSpawn = runtimeAdapter.spawn;
+  originalSpawnSync = runtimeAdapter.spawnSync;
+  originalHttpRequest = runtimeAdapter.request;
   manager = new TunnelCompatibilityManager({
     settings: tunnelSettings,
     secrets: secretState,
     log
   });
-  childProcess.spawn = manager.wrapSpawn(originalSpawn);
-  childProcess.spawnSync = manager.wrapSpawnSync(originalSpawnSync);
-  originalHttpRequest = http.request.bind(http);
-  http.request = manager.wrapHttpRequest(originalHttpRequest);
+  runtimeAdapter.spawn = manager.wrapSpawn(originalSpawn);
+  runtimeAdapter.spawnSync = manager.wrapSpawnSync(originalSpawnSync);
+  runtimeAdapter.request = manager.wrapHttpRequest(originalHttpRequest);
 }
 
 function restoreProcessWrappers() {
-  if (originalSpawn) childProcess.spawn = originalSpawn;
-  if (originalSpawnSync) childProcess.spawnSync = originalSpawnSync;
-  if (originalHttpRequest) http.request = originalHttpRequest;
+  if (originalSpawn) runtimeAdapter.spawn = originalSpawn;
+  if (originalSpawnSync) runtimeAdapter.spawnSync = originalSpawnSync;
+  if (originalHttpRequest) runtimeAdapter.request = originalHttpRequest;
   originalSpawn = null;
   originalSpawnSync = null;
   originalHttpRequest = null;
 }
 
 async function activate(context) {
-  globalContext = context;
   output = vscode.window.createOutputChannel('DevMate Deployment');
   context.subscriptions.push(output);
   cloudflareTunnelToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
@@ -348,8 +345,7 @@ async function activate(context) {
     await updateSetting('ngrokUseManagedAccount', false);
   }
 
-  const entry = './extension-entry';
-  innerExtension = require(entry);
+  innerExtension = require('./extension-entry');
   await innerExtension.activate(context);
   syncDeploymentConfig(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
@@ -371,7 +367,6 @@ async function deactivate() {
     restoreProcessWrappers();
     innerExtension = null;
     manager = null;
-    globalContext = null;
   }
 }
 
