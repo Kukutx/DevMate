@@ -226,3 +226,9 @@ Repository verification is discovery-based:
 - Linux CI verifies the official Godot archive checksum, real editor parsing, QA Bridge, native telemetry and deterministic capture.
 
 See `MAINTAINABILITY.md` for extension rules and review checklists.
+
+## Unified runtime core
+
+DevMate 3.3 uses one configuration persistence contract in `shared/config-store.cjs`. VS Code, the Gateway, shared tunnel coordination, and tests all use the same supported-version check, lock, atomic replacement, recovery, size bound, and file-permission behavior. Runtime code does not intercept Node module loading or write `config.json` directly.
+
+Workspace selection is ID-first through `gateway/workspace-resolver.mjs`; display-name lookup is accepted only when unique. Transient commands run through `gateway/command-process.mjs`, which owns and terminates the complete process tree on timeout and Gateway shutdown.

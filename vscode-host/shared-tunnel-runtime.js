@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('node:path');
-const { readJson } = require('../host/runtime/config-store.js');
+const { readJson } = require('../shared/config-store.cjs');
 const { OperationCoordinator } = require('../host/runtime/operation-coordinator.js');
 const { terminateChild } = require('../host/runtime/process-controller.js');
 const { StartupLease, waitForStartupLease } = require('../host/runtime/startup-lease.js');

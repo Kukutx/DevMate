@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { atomicWriteJson } = require('../host/runtime/config-store.js');
+const { atomicWriteJson } = require('../shared/config-store.cjs');
 const { normalizeProvider, normalizePublicUrl } = require('../tunnel-provider.js');
 
 const RUNTIME_RECORD_VERSION = 1;

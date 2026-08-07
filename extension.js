@@ -6,6 +6,7 @@ const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const childProcess = require('child_process');
+const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-http-client.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
@@ -13,7 +14,7 @@ const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-
 function spawn(...args){ return childProcess.spawn(...args); }
 function spawnSync(...args){ return childProcess.spawnSync(...args); }
 
-const VERSION = '3.3.0';
+const { version: VERSION } = require('./package.json');
 const BASE_PORT = 8787;
 const MCP_PATH = '/mcp';
 let gatewayProcess = null;
@@ -42,8 +43,8 @@ function gatewayPath(ctx){
 }
 function esc(v){ return String(v ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch])); }
 function currentRoot(){ return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''; }
-function readJson(p){ try { return JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,'')); } catch { return null; } }
-function writeJson(p,data){ ensureDir(path.dirname(p)); fs.writeFileSync(p, JSON.stringify(data,null,2)+'\n','utf8'); }
+function readJson(p){ return readExtensionConfig(p); }
+function writeJson(p,data){ return writeExtensionConfig(p,data); }
 function makeId(root){ return path.basename(root).replace(/[^a-zA-Z0-9_-]+/g,'-').toLowerCase() || 'workspace'; }
 function pathKey(p){ const resolved = path.resolve(p); return process.platform === 'win32' ? resolved.toLowerCase() : resolved; }
 function samePath(a,b){ return !!a && !!b && pathKey(a) === pathKey(b); }
@@ -164,11 +165,14 @@ function collectVsCodeContext(){
 }
 function redactUrl(url){
   try {
-    const u = new URL(url);
-    if(u.searchParams.has('token')) u.searchParams.set('token','redacted');
-    return u.toString();
+    const value = new URL(url);
+    value.username = '';
+    value.password = '';
+    value.search = '';
+    value.hash = '';
+    return value.toString();
   } catch {
-    return String(url || '').replace(/([?&]token=)[^&\s]+/g,'$1redacted');
+    return '';
   }
 }
 function publicHost(url){
@@ -182,11 +186,12 @@ function updateConnectionSnapshot(ctx, patch){
   writeJson(configPath(ctx), data);
   refreshPanel();
 }
-function mcpUrlFor(baseUrl, ctx){
+function mcpUrlFor(baseUrl){
+  return new URL(`${String(baseUrl).replace(/\/$/,'')}${MCP_PATH}`).toString();
+}
+function mcpToken(ctx=globalContext){
   const data = ctx ? ensureConfig(ctx,false) : null;
-  const u = new URL(`${String(baseUrl).replace(/\/$/,'')}${MCP_PATH}`);
-  if(authRequired() && data?.auth?.token) u.searchParams.set('token', data.auth.token);
-  return u.toString();
+  return authRequired() ? String(data?.auth?.token || '') : '';
 }
 
 function defaultConfig(ctx){
@@ -241,7 +246,7 @@ function ensureConfig(ctx, forceCurrent=false, portOverride=null){
   data.permissions.readOnly = permissionProfile() === 'readOnly';
   data.permissions.blockDangerousOperations = permissionProfile() !== 'fullAccess' && cfg().get('blockDangerousOperations') !== false;
   data.permissions.confirmBeforePush = !!cfg().get('confirmBeforePush');
-  data.permissions.allowDirectoryMutations = permissionProfile() === 'fullAccess' || !!cfg().get('allowDirectoryMutations');
+  data.permissions.allowDirectoryMutations = cfg().get('allowDirectoryMutations') === true;
   data.workspaces ||= [];
   data.commands ||= [];
   const root = currentRoot();
@@ -347,10 +352,10 @@ function httpRequestRaw(url, options={}, body=null, timeoutMs=4000){
   return boundedHttpRequestRaw(url, options, body, timeoutMs);
 }
 function httpGet(url, timeoutMs=1500){ return httpRequestRaw(url, {method:'GET'}, null, timeoutMs); }
-async function postJson(url, payload, timeoutMs=5000){
+async function postJson(url, payload, timeoutMs=5000, headers={}){
   return httpRequestRaw(url, {
     method: 'POST',
-    headers: { 'Content-Type':'application/json', 'Accept':'application/json, text/event-stream' }
+    headers: { 'Content-Type':'application/json', 'Accept':'application/json, text/event-stream', ...headers }
   }, JSON.stringify(payload), timeoutMs);
 }
 async function healthAt(port){ return httpGet(`http://127.0.0.1:${port}/control/health`,1200); }
@@ -548,8 +553,10 @@ async function startNgrok(ctx){
   throw new Error('ngrok did not expose a public URL for the current gateway port. Open Show Logs for details.');
 }
 async function mcpHandshakeTest(baseUrl, ctx=globalContext){
-  const mcp = mcpUrlFor(baseUrl, ctx);
-  const init = await postJson(mcp, { jsonrpc:'2.0', id:1, method:'initialize', params:{ protocolVersion:'2025-03-26', capabilities:{}, clientInfo:{name:'devmate-preflight', version:VERSION} } }, 8000);
+  const mcp = mcpUrlFor(baseUrl);
+  const token = mcpToken(ctx);
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const init = await postJson(mcp, { jsonrpc:'2.0', id:1, method:'initialize', params:{ protocolVersion:'2025-03-26', capabilities:{}, clientInfo:{name:'devmate-preflight', version:VERSION} } }, 8000, headers);
   const serverName = init.json?.result?.serverInfo?.name;
   if(!init.ok || serverName !== 'devmate'){
     throw new Error(`MCP initialize failed via ${redactUrl(mcp)}. Expected DevMate server, got ${serverName || 'none'}. HTTP=${init.status||'none'} error=${init.error||''} body=${String(init.body||'').slice(0,300)}`);
@@ -628,6 +635,17 @@ async function copyUrl(){
     vscode.window.showInformationMessage(`Copied verified MCP URL: ${redactUrl(test.mcp)}`);
   }catch(e){ updateConnectionSnapshot(globalContext,{lastError:String(e.message || e),lastErrorAt:new Date().toISOString()}); log(`MCP URL verification failed: ${e.stack || e.message || e}`); vscode.window.showErrorMessage(`MCP URL is not healthy: ${e.message || e}`); }
 }
+async function copyConnectionToken(ctx=globalContext){
+  try{
+    const token = mcpToken(ctx);
+    if(!token) return vscode.window.showWarningMessage('DevMate authentication is disabled or no owner token is configured.');
+    await vscode.env.clipboard.writeText(token);
+    vscode.window.showInformationMessage('DevMate Bearer token copied. Keep it private and send it in the Authorization header.');
+  }catch(e){
+    vscode.window.showErrorMessage(`Bearer token copy failed: ${e.message || e}`);
+  }
+}
+
 async function copyStarterPrompt(){
   const text = '使用 DevMate，完成这个开发任务。需要时可以读取、搜索、修改文件、运行命令和使用 Git；完成后用 task_report 总结结果。';
   await vscode.env.clipboard.writeText(text); vscode.window.showInformationMessage('Starter prompt copied.');
@@ -1033,6 +1051,7 @@ function activate(context){
   register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
   register(context,'devMate.restart',()=>lifecycleOperations.run('restart',async()=>{await stopAll(); return quickStart(context);}));
   register(context,'devMate.copyUrl',()=>copyUrl());
+  register(context,'devMate.copyToken',()=>copyConnectionToken(context));
   register(context,'devMate.addReference',()=>addReference(context));
   register(context,'devMate.clearReferences',()=>clearReferences(context));
   register(context,'devMate.doctor',()=>doctor(context));

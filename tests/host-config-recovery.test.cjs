@@ -10,7 +10,7 @@ const {
   ensurePersonalConfig,
   readJson,
   recoverConfigReplacement
-} = require('../host/runtime/config-store.js');
+} = require('../shared/config-store.cjs');
 
 function temporaryDirectory(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

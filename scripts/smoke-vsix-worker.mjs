@@ -76,7 +76,7 @@ try {
     'vscode-host/shared-tunnel-process.js',
     'vscode-host/shared-tunnel-runtime.js',
     'host/runtime-controller.js',
-    'host/runtime/config-store.js',
+    'shared/config-store.cjs',
     'host/runtime/diagnostics-store.js',
     'host/runtime/instance-lock-cleanup.js',
     'host/runtime/network.js',

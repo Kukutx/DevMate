@@ -1,3 +1,4 @@
+
 'use strict';
 
 const crypto = require('node:crypto');
@@ -16,10 +17,7 @@ function expandHome(value, homeDirectory = os.homedir()) {
 }
 
 function normalizedWorkspaceRoot(root) {
-  const resolved = path.resolve(String(root || '.'));
-  let real = resolved;
-  try { real = fs.realpathSync.native(resolved); }
-  catch { try { real = fs.realpathSync(resolved); } catch {} }
+  const real = fs.realpathSync.native(path.resolve(String(root || '.')));
   return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
@@ -41,51 +39,21 @@ function defaultSharedStateDirectory(root, { homeDirectory = os.homedir() } = {}
 function resolveStateDirectory({
   workspaceRoot,
   overrideDirectory = '',
-  legacyDirectory = '',
+  localDirectory = '',
   shared = true,
   homeDirectory = os.homedir()
 } = {}) {
   const override = expandHome(overrideDirectory, homeDirectory);
   if (override) return path.resolve(override);
-  if (shared && workspaceRoot) return defaultSharedStateDirectory(workspaceRoot, { homeDirectory });
-  if (legacyDirectory) return path.resolve(legacyDirectory);
-  if (!workspaceRoot) throw new Error('A workspace root or state directory is required');
-  return path.join(path.resolve(workspaceRoot), '.devmate-server');
-}
-
-function copyDirectory(source, target) {
-  const ignored = new Set(['gateway.lock', 'runtime.pid', 'runtime.json']);
-  fs.cpSync(source, target, {
-    recursive: true,
-    errorOnExist: false,
-    force: false,
-    filter(candidate) {
-      const base = path.basename(candidate);
-      return !ignored.has(base) && !base.endsWith('.lock') && !base.endsWith('.tmp') && !base.includes('.replace-');
-    }
-  });
-}
-
-function migrateLegacyState({ legacyDirectory, stateDirectory } = {}) {
-  if (!legacyDirectory || !stateDirectory) return { migrated: false, reason: 'missing-directory' };
-  const source = path.resolve(legacyDirectory);
-  const target = path.resolve(stateDirectory);
-  if (source === target) return { migrated: false, reason: 'same-directory' };
-  if (!fs.statSync(source, { throwIfNoEntry: false })?.isDirectory()) {
-    return { migrated: false, reason: 'legacy-missing' };
-  }
-  const targetConfig = path.join(target, 'config.json');
-  if (fs.existsSync(targetConfig)) return { migrated: false, reason: 'target-config-exists' };
-  fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-  copyDirectory(source, target);
-  return { migrated: fs.existsSync(targetConfig), reason: 'copied' };
+  if (shared) return defaultSharedStateDirectory(workspaceRoot, { homeDirectory });
+  if (localDirectory) return path.resolve(localDirectory);
+  if (!workspaceRoot) throw new Error('A workspace root or local state directory is required');
+  return path.join(path.resolve(workspaceRoot), '.devmate');
 }
 
 module.exports = {
-  copyDirectory,
   defaultSharedStateDirectory,
   expandHome,
-  migrateLegacyState,
   normalizedWorkspaceRoot,
   resolveStateDirectory,
   workspaceRuntimeId

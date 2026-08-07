@@ -36,10 +36,6 @@ function updateJson(relativePath, mutate, description) {
   else fs.writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
 }
 
-updateText('extension.js', /const VERSION = '[^']+';/, `const VERSION = '${version}';`, 'extension runtime version');
-updateText('gateway/server.mjs', /const VERSION = '[^']+';/, `const VERSION = '${version}';`, 'Gateway runtime version');
-updateText('host/runtime/constants.js', /const DEFAULT_VERSION = '[^']+';/, `const DEFAULT_VERSION = '${version}';`, 'shared host runtime version');
-updateText('scripts/devmate-command.mjs', /config\.appVersion = '[^']+';/, `config.appVersion = '${version}';`, 'bootstrap config version');
 updateText('tests/smoke-gateway.mjs', /appVersion: '[^']+',/, `appVersion: '${version}',`, 'Gateway smoke version');
 updateText('tests/smoke-local-capabilities.mjs', /appVersion: '[^']+',/, `appVersion: '${version}',`, 'local smoke version');
 

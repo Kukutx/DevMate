@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { ensurePersonalConfig } = require('../host/runtime/config-store.js');
+const { ensurePersonalConfig } = require('../shared/config-store.cjs');
 const { normalizedWorkspaceRoot } = require('../host/runtime/state-paths.js');
 
 function temporaryDirectory(prefix) {

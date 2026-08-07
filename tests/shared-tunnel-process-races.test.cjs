@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { SharedTunnelProcess } = require('../vscode-host/shared-tunnel-process.js');
 const { SharedTunnelRuntime } = require('../vscode-host/shared-tunnel-runtime.js');
-const { atomicWriteJson } = require('../host/runtime/config-store.js');
+const { atomicWriteJson } = require('../shared/config-store.cjs');
 const { virtualHttpRequest } = require('../tunnel-provider.js');
 
 function waitFor(predicate, timeoutMs = 3000) {

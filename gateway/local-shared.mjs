@@ -2,17 +2,15 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import lockModule from '../config-file-lock.cjs';
-
-const { withFileLockSync } = lockModule;
+import configStore from '../shared/config-store.cjs';
+import { resolveWorkspace } from './workspace-resolver.mjs';
 
 export const CONFIG_PATH = process.env.DEVMATE_CONFIG || process.env.AIWG_CONFIG;
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
 const AUDIT_LOG = CONFIG_DIR ? path.join(CONFIG_DIR, 'state', 'audit.jsonl') : '';
-const CONFIG_SOURCE = Symbol.for('devmate.configSource');
 const SENSITIVE_KEY = /token|secret|password|authorization|api[_-]?key|credential|private[_-]?key/i;
 export const MAX_AUDIT_ENTRY_BYTES = 64 * 1024;
-export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
+export const MAX_CONFIG_BYTES = configStore.MAX_CONFIG_BYTES;
 export const DEFAULT_MAX_PROCESSES = 8;
 export const MAX_MAX_PROCESSES = 32;
 export const DEFAULT_OUTPUT_BYTES = 1024 * 1024;
@@ -25,209 +23,28 @@ export function pathKey(value) {
 }
 export function normalizeSlash(value) { return String(value || '').replace(/\\/g, '/'); }
 
-function fingerprint(value) {
-  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
-}
-
-function fsyncDirectory(directory) {
-  let fd = null;
-  try {
-    fd = fs.openSync(directory, 'r');
-    fs.fsyncSync(fd);
-  } catch {
-  } finally {
-    if (fd != null) {
-      try { fs.closeSync(fd); } catch {}
-    }
-  }
-}
-
-function attachConfigSource(config, source) {
-  Object.defineProperty(config, CONFIG_SOURCE, {
-    value: Object.freeze({ ...source }),
-    configurable: true,
-    enumerable: false,
-    writable: true
-  });
-  return config;
-}
-
-function configConflict(message) {
-  const error = new Error(message);
-  error.code = 'config_conflict';
-  return error;
-}
-
-function validConfigFile(file) {
-  try {
-    const stat = fs.statSync(file, { throwIfNoEntry: false });
-    if (!stat?.isFile() || stat.size > MAX_CONFIG_BYTES) return false;
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-    return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
-  } catch {
-    return false;
-  }
-}
-
-function replacementCandidates() {
-  if (!CONFIG_PATH || !CONFIG_DIR) return [];
-  const prefix = `${path.basename(CONFIG_PATH)}.replace-`;
-  return fs.readdirSync(CONFIG_DIR, { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
-    .map(entry => {
-      const file = path.join(CONFIG_DIR, entry.name);
-      const stat = fs.statSync(file, { throwIfNoEntry: false });
-      return stat ? { file, mtimeMs: stat.mtimeMs } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-}
-
-function cleanupReplacementCandidates(candidates, except = '') {
-  for (const candidate of candidates) {
-    if (candidate.file === except) continue;
-    try { fs.rmSync(candidate.file, { force: true }); } catch {}
-  }
-}
-
 export function recoverConfigReplacement() {
-  if (!CONFIG_PATH || !CONFIG_DIR || !fs.existsSync(CONFIG_DIR)) return null;
-  const candidates = replacementCandidates();
-  if (fs.existsSync(CONFIG_PATH) && validConfigFile(CONFIG_PATH)) {
-    cleanupReplacementCandidates(candidates);
-    return null;
-  }
-  const candidate = candidates.find(item => validConfigFile(item.file));
-  if (!candidate) return null;
-  if (fs.existsSync(CONFIG_PATH)) {
-    const corrupt = `${CONFIG_PATH}.corrupt-${Date.now()}`;
-    try { fs.renameSync(CONFIG_PATH, corrupt); }
-    catch { try { fs.rmSync(CONFIG_PATH, { force: true }); } catch {} }
-  }
-  fs.renameSync(candidate.file, CONFIG_PATH);
-  try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
-  fsyncDirectory(CONFIG_DIR);
-  cleanupReplacementCandidates(candidates, candidate.file);
-  return candidate.file;
+  if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
+  return configStore.recoverConfigReplacement(CONFIG_PATH);
 }
 
 export function readConfig() {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
-  try {
-    recoverConfigReplacement();
-    const stat = fs.statSync(CONFIG_PATH, { throwIfNoEntry: false });
-    if (!stat?.isFile()) throw new Error('configuration file does not exist');
-    if (stat.size > MAX_CONFIG_BYTES) {
-      const error = new Error(`configuration exceeds the ${MAX_CONFIG_BYTES} byte limit`);
-      error.code = 'config_too_large';
-      throw error;
-    }
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('configuration root must be a JSON object');
-    }
-    return attachConfigSource(parsed, { exists: true, hash: fingerprint(raw) });
-  } catch (error) {
-    const wrapped = new Error(`Could not read DevMate config ${CONFIG_PATH}: ${error.message || error}`);
-    if (error?.code) wrapped.code = error.code;
-    throw wrapped;
-  }
+  return configStore.readConfigSnapshot(CONFIG_PATH);
 }
 
-function writeConfigUnlocked(config, { force = false } = {}) {
+export function writeConfig(config) {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
-  if (!config || typeof config !== 'object' || Array.isArray(config)) {
-    throw new TypeError('DevMate config must be a JSON object');
-  }
-  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(CONFIG_DIR, 0o700); } catch {}
-  recoverConfigReplacement();
-  const source = config[CONFIG_SOURCE] || null;
-  if (!force && source) {
-    const exists = fs.existsSync(CONFIG_PATH);
-    if (exists !== source.exists) {
-      throw configConflict(`DevMate config changed while it was being edited: ${CONFIG_PATH}`);
-    }
-    if (exists) {
-      const current = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
-      if (fingerprint(current) !== source.hash) {
-        throw configConflict(`DevMate config changed while it was being edited: ${CONFIG_PATH}`);
-      }
-    }
-  }
-
-  const payload = `${JSON.stringify(config, null, 2)}\n`;
-  const payloadBytes = Buffer.byteLength(payload, 'utf8');
-  if (payloadBytes > MAX_CONFIG_BYTES) {
-    const error = new Error(`DevMate config exceeds the ${MAX_CONFIG_BYTES} byte limit (${payloadBytes} bytes)`);
-    error.code = 'config_too_large';
-    throw error;
-  }
-  const temporary = `${CONFIG_PATH}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  let fd = null;
-  try {
-    fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, payload, 'utf8');
-    try { fs.fsyncSync(fd); } catch {}
-    fs.closeSync(fd);
-    fd = null;
-    try {
-      fs.renameSync(temporary, CONFIG_PATH);
-    } catch (error) {
-      if (process.platform !== 'win32') throw error;
-      const previous = `${CONFIG_PATH}.replace-${process.pid}-${Date.now()}`;
-      let movedPrevious = false;
-      try {
-        if (fs.existsSync(CONFIG_PATH)) {
-          fs.renameSync(CONFIG_PATH, previous);
-          movedPrevious = true;
-        }
-        fs.renameSync(temporary, CONFIG_PATH);
-        if (movedPrevious) fs.rmSync(previous, { force: true });
-      } catch (replacementError) {
-        if (!fs.existsSync(CONFIG_PATH) && movedPrevious && fs.existsSync(previous)) {
-          try { fs.renameSync(previous, CONFIG_PATH); } catch {}
-        }
-        throw replacementError;
-      }
-    }
-    try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {}
-    fsyncDirectory(CONFIG_DIR);
-    attachConfigSource(config, { exists: true, hash: fingerprint(payload) });
-    return config;
-  } finally {
-    if (fd != null) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.rmSync(temporary, { force: true }); } catch {}
-  }
+  return configStore.replaceConfig(CONFIG_PATH, config);
 }
 
-export function writeConfig(config, options = {}) {
+export function mutateConfig(mutator) {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
-  return withFileLockSync(CONFIG_PATH, () => writeConfigUnlocked(config, options));
-}
-
-export function mutateConfig(mutator, { retries = 3 } = {}) {
-  if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
-  return withFileLockSync(CONFIG_PATH, () => {
-    const attempts = Math.min(10, Math.max(1, Math.trunc(Number(retries) || 3)));
-    let lastError = null;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const current = readConfig();
-      const changed = mutator(current);
-      if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
-      if (changed === false) return current;
-      const next = changed === undefined ? current : changed;
-      try {
-        return writeConfigUnlocked(next);
-      } catch (error) {
-        if (error?.code !== 'config_conflict' || attempt === attempts - 1) throw error;
-        lastError = error;
-      }
-    }
-    throw lastError || configConflict('DevMate config could not be updated because it kept changing');
+  return configStore.updateConfig(CONFIG_PATH, current => {
+    const changed = mutator(current);
+    if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
+    if (changed === false) return current;
+    return changed === undefined ? current : changed;
   });
 }
 
@@ -245,7 +62,7 @@ export function assertCanMutate(config, action) {
 export function assertFullAccess(config, action) {
   if (permissionProfile(config) !== 'fullAccess') throw new Error(`${action} requires the fullAccess permission profile`);
 }
-function dangerousGuardEnabled(config) {
+export function dangerousGuardEnabled(config) {
   return permissionProfile(config) !== 'fullAccess' && config.permissions?.blockDangerousOperations !== false;
 }
 export function isDangerousCommand(command) {
@@ -316,7 +133,7 @@ function boundedAuditLine(entry) {
   return serialized;
 }
 
-export async function audit(action, payload = {}) {
+export async function audit(action, payload = {}, options = {}) {
   if (!AUDIT_LOG) return;
   try {
     await fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true, mode: 0o700 });
@@ -325,7 +142,7 @@ export async function audit(action, payload = {}) {
     const system = {
       time: now(),
       action: redactSensitiveString(action).slice(0, 200),
-      taskId: config.task?.currentTaskId || null,
+      taskId: options.taskId ?? config.task?.currentTaskId ?? null,
       permissionProfile: permissionProfile(config)
     };
     const line = boundedAuditLine({ ...(safe && typeof safe === 'object' && !Array.isArray(safe) ? safe : { detail: safe }), ...system });
@@ -390,9 +207,7 @@ function activeWorkspace(config) {
     config.workspaces?.find(item => !item.reference && !item.trusted) || config.workspaces?.[0];
 }
 export function getWritableWorkspace(config, id) {
-  const workspace = id
-    ? config.workspaces?.find(item => item.id === id || item.name === id)
-    : activeWorkspace(config);
+  const workspace = id ? resolveWorkspace(config, id) : activeWorkspace(config);
   if (!workspace) throw new Error('No workspace configured');
   if (workspace.reference || workspace.mode === 'readonly') throw new Error(`Workspace is readonly/reference: ${workspace.id}`);
   return workspace;
@@ -426,14 +241,4 @@ export function processLimits(config) {
   };
 }
 
-export const __test = {
-  CONFIG_SOURCE,
-  attachConfigSource,
-  boundedAuditLine,
-  cleanupReplacementCandidates,
-  configConflict,
-  fingerprint,
-  fsyncDirectory,
-  replacementCandidates,
-  validConfigFile
-};
+export const __test = { boundedAuditLine };

@@ -1,3 +1,5 @@
+import { resolveWorkspaceId } from './workspace-resolver.mjs';
+
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,199}$/;
 const CAPABILITIES = Object.freeze(['read', 'validate', 'write', 'execute', 'git', 'publish', 'admin']);
 
@@ -21,7 +23,7 @@ const PUBLISH_TOOLS = new Set([
 ]);
 
 const VALIDATE_TOOLS = new Set([
-  'run_smart_checks', 'job_submit', 'job_retry', 'obsidian_properties_batch_preview',
+  'job_submit', 'job_retry', 'obsidian_properties_batch_preview',
   'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
   'godot_doctor', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web',
   'godot_native_test', 'godot_acceptance_test', 'godot_acceptance_run_saved', 'godot_acceptance_suite',
@@ -30,7 +32,7 @@ const VALIDATE_TOOLS = new Set([
 ]);
 
 const EXECUTE_TOOLS = new Set([
-  'run_command', 'start_process', 'send_process_input', 'stop_process', 'godot_run'
+  'run_command', 'run_configured_command', 'run_project_script', 'run_smart_checks', 'start_process', 'send_process_input', 'stop_process', 'godot_run'
 ]);
 
 const WRITE_TOOLS = new Set([
@@ -119,8 +121,7 @@ export function toolWorkspaceId(name, args = {}, config = {}) {
     tool.startsWith('runner_')
   ) return null;
   const explicit = String(args?.workspaceId || '').trim();
-  if (explicit) return config.workspaces?.find(item => item.id === explicit || item.name === explicit)?.id || explicit;
-  return config.activeWorkspaceId || null;
+  return resolveWorkspaceId(config, explicit);
 }
 
 export function jobTargetPolicy(name, config = {}) {

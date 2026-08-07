@@ -10,8 +10,8 @@
     "url": "https://github.com/Kukutx/DevMate.git"
   },
   "engines": {
-    "vscode": "^1.90.0",
-    "node": ">=18"
+    "vscode": "^1.132.0",
+    "node": ">=24"
   },
   "categories": [
     "Machine Learning",
@@ -68,6 +68,11 @@
       {
         "command": "devMate.copyUrl",
         "title": "DevMate: Copy URL"
+      },
+      {
+        "command": "devMate.copyToken",
+        "title": "DevMate: Copy Bearer Token",
+        "category": "DevMate"
       },
       {
         "command": "devMate.addReference",

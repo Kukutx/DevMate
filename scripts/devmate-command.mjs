@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import configStore from '../shared/config-store.cjs';
 import { createRunnerCredential, normalizeRunnerControlConfig } from '../gateway/runner-access.mjs';
 import { createTeamMember, normalizeDeploymentConfig } from '../gateway/team-access.mjs';
 import { __test as legacy } from './devmate-cli.mjs';
+
+const { DEFAULT_VERSION, SUPPORTED_CONFIG_VERSION, readJson: readConfigJson, updateConfig } = configStore;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const legacyScript = path.join(scriptDir, 'devmate-cli.mjs');
@@ -52,13 +54,7 @@ function configPath(options) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-}
-
-function writeSecureJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(file, 0o600); } catch {}
+  return readConfigJson(file, null, { strict: true, supportedVersion: true });
 }
 
 function presetOptions(options) {
@@ -112,45 +108,48 @@ function bootstrap(options) {
     provider: preset.provider,
     'public-url': preset.publicUrl
   });
-  const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(init.config));
-  config.version = Math.max(11, Number(config.version) || 0);
-  config.appVersion = '3.3.0';
-  config.jobs ||= {};
-  config.jobs.embeddedRunnerEnabled = preset.embeddedRunnerEnabled;
-  config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
-  config.runnerControl.enabled = preset.runnerControlEnabled;
-  if (preset.preset === 'runner') {
-    config.permissions.blockDangerousOperations = true;
-    config.permissions.confirmBeforePush = true;
-  }
-
+  let config = null;
   let member = null;
-  if (memberName) {
-    member = createTeamMember(config, {
-      name: memberName,
-      role: String(options['member-role'] || 'developer'),
-      workspaceIds: csv(options['member-workspaces'], [config.activeWorkspaceId]),
-      expiresAt: options['member-expires-at'] || null
-    });
-  }
-
   let runner = null;
-  const createDefaultRunner = preset.preset === 'control-plane' && !bool(options['no-runner-credential']);
-  const runnerName = String(options['runner-name'] || (createDefaultRunner ? 'Default Runner' : '')).trim();
-  if (runnerName) {
-    const workspaceIds = csv(options['runner-workspaces'], activeWorkspaceIds(config));
-    const capabilities = csv(options['runner-capabilities'], ['core', 'external']);
-    runner = createRunnerCredential(config, {
-      name: runnerName,
-      workspaceIds,
-      capabilities,
-      maxConcurrent: Number(options['runner-concurrency']) || 1,
-      expiresAt: options['runner-expires-at'] || null
-    });
-    config.runnerControl.enabled = true;
-  }
+  updateConfig(init.file, current => {
+    config = normalizeRunnerControlConfig(normalizeDeploymentConfig(current));
+    config.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(config.version) || 0);
+    config.appVersion = DEFAULT_VERSION;
+    config.jobs ||= {};
+    config.jobs.embeddedRunnerEnabled = preset.embeddedRunnerEnabled;
+    config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
+    config.runnerControl.enabled = preset.runnerControlEnabled;
+    if (preset.preset === 'runner') {
+      config.permissions.blockDangerousOperations = true;
+      config.permissions.confirmBeforePush = true;
+    }
 
-  writeSecureJson(init.file, config);
+    if (memberName) {
+      member = createTeamMember(config, {
+        name: memberName,
+        role: String(options['member-role'] || 'developer'),
+        workspaceIds: csv(options['member-workspaces'], [config.activeWorkspaceId]),
+        expiresAt: options['member-expires-at'] || null
+      });
+    }
+
+    const createDefaultRunner = preset.preset === 'control-plane' && !bool(options['no-runner-credential']);
+    const runnerName = String(options['runner-name'] || (createDefaultRunner ? 'Default Runner' : '')).trim();
+    if (runnerName) {
+      const workspaceIds = csv(options['runner-workspaces'], activeWorkspaceIds(config));
+      const capabilities = csv(options['runner-capabilities'], ['core', 'external']);
+      runner = createRunnerCredential(config, {
+        name: runnerName,
+        workspaceIds,
+        capabilities,
+        maxConcurrent: Number(options['runner-concurrency']) || 1,
+        expiresAt: options['runner-expires-at'] || null
+      });
+      config.runnerControl.enabled = true;
+    }
+    return config;
+  });
+
   const next = [];
   if (preset.preset === 'runner') {
     next.push('Set DEVMATE_RUNNER_TOKEN or DEVMATE_RUNNER_TOKEN_FILE, then run devmate-runner with this config.');
@@ -170,7 +169,6 @@ function bootstrap(options) {
     next
   };
 }
-
 function status(options) {
   const file = configPath(options);
   const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readJson(file)));

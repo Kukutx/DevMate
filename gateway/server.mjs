@@ -8,9 +8,13 @@ import { spawn } from 'node:child_process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import packageJson from '../package.json' with { type: 'json' };
 import { DEFAULT_MAINTENANCE, maintenanceOptions, pruneState, stateSummary } from './maintenance.mjs';
+import * as shared from './local-shared.mjs';
+import { executeCommand } from './command-process.mjs';
+import { resolveWorkspace } from './workspace-resolver.mjs';
 
-const VERSION = '3.3.0';
+const VERSION = packageJson.version;
 const CONFIG_PATH = process.env.DEVMATE_CONFIG || process.env.AIWG_CONFIG;
 if (!CONFIG_PATH) { console.error('DEVMATE_CONFIG is required'); process.exit(1); }
 const CONFIG_DIR = path.dirname(CONFIG_PATH);
@@ -34,12 +38,10 @@ const PROJECT_INSTRUCTION_BASENAMES = new Set(['agents.md','claude.md']);
 const ROOT_PROJECT_INSTRUCTION_FILES = ['AGENTS.md','CLAUDE.md'];
 const PROJECT_INSTRUCTION_SKIP_DIRS = new Set([...HIDDEN_DIRS, '.github', '.vscode', '.idea', 'tmp']);
 
-function readJson(p){ return JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,'')); }
-function loadConfig(){ const c=readJson(CONFIG_PATH); c.server ||= {}; c.instanceId ||= 'missing-instance'; c.server.port ||= 8787; c.server.mcpPath = '/mcp'; c.runtime ||= {}; c.runtime.defaultCommandTimeoutMs ||= DEFAULT_TIMEOUT_MS; c.runtime.maxOutputChars ||= DEFAULT_MAX_OUTPUT; c.maintenance = maintenanceOptions(c.maintenance || DEFAULT_MAINTENANCE); c.connection ||= {}; c.workspaces ||= []; c.commands ||= []; return c; }
-function saveConfig(c){ fs.writeFileSync(CONFIG_PATH, JSON.stringify(c,null,2)+'\n','utf8'); }
-function now(){ return new Date().toISOString(); }
+function loadConfig(){ const c=shared.readConfig(); c.server ||= {}; c.instanceId ||= 'missing-instance'; c.server.port ||= 8787; c.server.mcpPath = '/mcp'; c.runtime ||= {}; c.runtime.defaultCommandTimeoutMs ||= DEFAULT_TIMEOUT_MS; c.runtime.maxOutputChars ||= DEFAULT_MAX_OUTPUT; c.maintenance = maintenanceOptions(c.maintenance || DEFAULT_MAINTENANCE); c.connection ||= {}; c.workspaces ||= []; c.commands ||= []; return c; }
+function now(){ return shared.now(); }
 function relParts(p){ return String(p||'').split(/[\\/]+/).filter(Boolean); }
-function normalizeSlash(p){ return String(p||'').replace(/\\/g,'/'); }
+function normalizeSlash(p){ return shared.normalizeSlash(p); }
 function isHidden(rel){ return relParts(rel).map(x=>x.toLowerCase()).some(x=>HIDDEN_DIRS.has(x)); }
 function isEnvFile(base){ const b=base.toLowerCase(); return b === '.env' || b.startsWith('.env.') || b === 'env.local' || b.endsWith('.env'); }
 function isEnvExample(base){ const b=base.toLowerCase(); return b === '.env.example' || b === '.env.sample' || b.endsWith('.env.example') || b.endsWith('.env.sample'); }
@@ -47,7 +49,7 @@ function isBinaryOrSecret(rel){ const base=path.basename(rel); if(isHidden(rel))
 function isTextAllowed(rel){ if(isBinaryOrSecret(rel)) return false; const base=path.basename(rel); if(ALLOW_BASENAME.has(base)) return true; if(base.startsWith('.env') && isEnvExample(base)) return true; const ext=path.extname(base).toLowerCase(); return TEXT_EXT.has(ext); }
 function isInside(root, target){ const rel=path.relative(root, target); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); }
 function safeResolve(root, sub='.'){ const rootPath=path.resolve(root); const target=path.resolve(rootPath, sub || '.'); if(!isInside(rootPath,target)) throw new Error(`Path escapes workspace root: ${sub}`); return target; }
-function pathKey(p){ return process.platform === 'win32' ? String(p).toLowerCase() : String(p); }
+function pathKey(p){ return shared.pathKey(p); }
 function realPathInside(root, full){ try{ const rootReal=fs.realpathSync.native(root); const fullReal=fs.realpathSync.native(full); return isInside(rootReal, fullReal) ? fullReal : null; }catch{ return null; } }
 function assertRealInside(root, full){
   const rootReal = fs.realpathSync.native(root);
@@ -67,36 +69,19 @@ function isWorkspaceRootRel(rel){ const n=normalizeSlash(path.normalize(rel || '
 function sha256(text){ return crypto.createHash('sha256').update(text,'utf8').digest('hex'); }
 function newTaskId(){ return `task-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`; }
 function activeWorkspace(cfg){ return cfg.workspaces.find(w=>w.id===cfg.activeWorkspaceId) || cfg.workspaces.find(w=>!w.reference) || cfg.workspaces[0]; }
-function getWs(cfg,id){ const w=id ? cfg.workspaces.find(x=>x.id===id || x.name===id) : activeWorkspace(cfg); if(!w) throw new Error('No workspace configured. Open a project in VS Code and run One-click Start.'); return w; }
+function getWs(cfg,id){ return resolveWorkspace(cfg,id); }
 function wsPublic(w){ return { id:w.id, name:w.name, role:w.role || (w.reference?'reference':'active'), mode:w.mode || (w.reference?'readonly':'workspace-write'), reference:!!w.reference, writable:!w.reference && (w.mode||'workspace-write') !== 'readonly', root:path.basename(w.root||'') }; }
-function permissionProfile(cfg){ return cfg.permissions?.profile || (cfg.permissions?.readOnly ? 'readOnly' : 'fullAccess'); }
+function permissionProfile(cfg){ return shared.permissionProfile(cfg); }
 function isReadOnlyProfile(cfg){ return permissionProfile(cfg) === 'readOnly'; }
-function dangerousGuardEnabled(cfg){ return permissionProfile(cfg) !== 'fullAccess' && cfg.permissions?.blockDangerousOperations !== false; }
-function assertCanMutate(cfg, action){ if(isReadOnlyProfile(cfg)) throw new Error(`${action} blocked by readOnly permission profile`); }
+function dangerousGuardEnabled(cfg){ return shared.dangerousGuardEnabled(cfg); }
+function assertCanMutate(cfg,action){ return shared.assertCanMutate(cfg,action); }
 function assertReadable(w,rel){ if(!isTextAllowed(rel)) throw new Error(`Read blocked: secret/binary/hidden path: ${rel}`); return assertRealInside(w.root, safeResolve(w.root,rel)); }
 function assertWritable(cfg,w,rel){ assertCanMutate(cfg,'Write'); if(w.reference || (w.mode||'workspace-write') === 'readonly') throw new Error(`Workspace is readonly/reference: ${w.id}`); if(isWorkspaceRootRel(rel)) throw new Error('Write blocked: workspace root cannot be mutated directly'); if(isBinaryOrSecret(rel)) throw new Error(`Write blocked: secret/binary/hidden path: ${rel}`); return assertRealInside(w.root, safeResolve(w.root,rel)); }
 function assertCwd(w,cwd='.') { return assertRealInside(w.root, safeResolve(w.root,cwd||'.')); }
 function truncate(s,max=DEFAULT_MAX_OUTPUT){ s=String(s??''); return { text:s.slice(0,max), truncated:s.length>max, length:s.length }; }
-function toolText(payload){ return { content:[{type:'text', text: JSON.stringify(payload,null,2)}], structuredContent: payload }; }
-function redactSensitiveString(value){
-  return String(value ?? '')
-    .replace(/([?&](?:token|key|secret|password|auth|authorization)=)[^&\s]+/gi, '$1redacted')
-    .replace(/(\b(?:token|secret|password|authorization|api[_-]?key|authToken)\s*[:=]\s*)[^\s&"'`]+/gi, '$1redacted')
-    .replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
-    .replace(/(\b(?:--password|--token|--api-key|--secret)\s+)[^\s]+/gi, '$1redacted')
-    .replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, 'sk-redacted');
-}
-function redactSensitivePayload(value, key=''){
-  if(value == null) return value;
-  if(typeof value === 'string') return /token|secret|password|authorization|api[_-]?key|auth/i.test(key) ? 'redacted' : redactSensitiveString(value);
-  if(Array.isArray(value)) return value.map((item, index) => redactSensitivePayload(item, String(index)));
-  if(typeof value === 'object'){
-    const out = {};
-    for(const [k,v] of Object.entries(value)) out[k] = redactSensitivePayload(v, k);
-    return out;
-  }
-  return value;
-}
+function toolText(payload){ return shared.toolText(payload); }
+function redactSensitiveString(value){ return shared.redactSensitiveString(value); }
+function redactSensitivePayload(value){ return shared.redactSensitiveValue(value); }
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 const READ_ONLY_TOOLS = new Set([
   'gateway_status','gateway_self_test','task_status','list_workspaces','vscode_context','active_editor_context','list_diagnostics',
@@ -126,7 +111,7 @@ function toolConfig(name, config){
     annotations: { ...toolAnnotations(name), ...(config.annotations || {}) }
   };
 }
-function clampInt(value, fallback, min, max){ const n=Number(value); if(!Number.isFinite(n)) return fallback; return Math.min(max, Math.max(min, Math.trunc(n))); }
+function clampInt(value,fallback,min,max){ return shared.clampInt(value,fallback,min,max); }
 function commandLimits(cfg, timeoutMs, maxOutputChars){
   return {
     timeoutMs: clampInt(timeoutMs ?? cfg.runtime?.defaultCommandTimeoutMs, DEFAULT_TIMEOUT_MS, 1000, 1800000),
@@ -134,26 +119,11 @@ function commandLimits(cfg, timeoutMs, maxOutputChars){
   };
 }
 function timingSafeStringEqual(a,b){ const ab=Buffer.from(String(a||'')); const bb=Buffer.from(String(b||'')); return ab.length === bb.length && crypto.timingSafeEqual(ab,bb); }
-function requestToken(req,url){ const h=req.headers.authorization || ''; const bearer=String(h).match(/^Bearer\s+(.+)$/i)?.[1]; return bearer || req.headers['x-devmate-token'] || url.searchParams.get('token') || ''; }
-function isAuthorized(req,url,cfg){ if(cfg.auth?.required === false) return true; const expected=cfg.auth?.token; if(!expected) return false; return timingSafeStringEqual(requestToken(req,url), expected); }
+function requestToken(req){ const h=req.headers.authorization || ''; const bearer=String(h).match(/^Bearer\s+(.+)$/i)?.[1]; return bearer || req.headers['x-devmate-token'] || ''; }
+function isAuthorized(req,url,cfg){ if(cfg.auth?.required === false) return true; const expected=cfg.auth?.token; if(!expected) return false; return timingSafeStringEqual(requestToken(req), expected); }
 function assertPushAllowed(cfg){ if(cfg.permissions?.confirmBeforePush) throw new Error('Git push is blocked by devMate.confirmBeforePush. Review locally, then disable that setting to push.'); }
-function isDangerousCommand(command){
-  const c = String(command || '').toLowerCase().replace(/\s+/g,' ').trim();
-  return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(c) ||
-    /\bremove-item\b.*\b-recurse\b.*\b-force\b/.test(c) ||
-    /\brmdir\b.*\s\/s\b/.test(c) ||
-    /\bdel\b.*\s\/s\b/.test(c) ||
-    /\bformat\b\s+[a-z]:/.test(c) ||
-    /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(c) ||
-    /\bgit\s+reset\b.*--hard\b/.test(c) ||
-    /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(c) ||
-    /\bgit\s+push\b.*--force\b/.test(c) ||
-    /\bgit\s+push\b.*--force-with-lease\b/.test(c);
-}
-function assertCommandAllowed(cfg, command){
-  assertCanMutate(cfg,'Command execution');
-  if(dangerousGuardEnabled(cfg) && isDangerousCommand(command)) throw new Error(`Dangerous command blocked by DevMate guard: ${command}`);
-}
+function isDangerousCommand(command){ return shared.isDangerousCommand(command); }
+function assertCommandAllowed(cfg,command){ return shared.assertCommandAllowed(cfg,command); }
 function isDangerousGitArgs(args=[]){
   const a = args.map(x=>String(x).toLowerCase());
   const joined = a.join(' ');
@@ -195,21 +165,7 @@ async function assertDirectoryMutationAllowed(cfg,w,full,rel){
   await scan(full);
   return st;
 }
-async function audit(action, payload){
-  try{
-    fs.mkdirSync(STATE_ROOT,{recursive:true});
-    const cfg = loadConfig();
-    const safePayload = redactSensitivePayload(payload || {});
-    const entry = {
-      time: now(),
-      action,
-      taskId: payload?.taskId || cfg.task?.currentTaskId || null,
-      permissionProfile: permissionProfile(cfg),
-      ...safePayload
-    };
-    await fsp.appendFile(AUDIT_LOG, JSON.stringify(entry)+'\n','utf8');
-  }catch{}
-}
+async function audit(action,payload,options){ return shared.audit(action,payload,options); }
 async function readAuditEntries(limit=1000){
   let lines=[];
   try{ lines=(await fsp.readFile(AUDIT_LOG,'utf8')).trim().split(/\r?\n/).filter(Boolean); }catch{}
@@ -277,8 +233,7 @@ async function allFiles(dir,root,out,max=10000,visited=new Set()){
     else if(e.isFile() && isTextAllowed(rel)) out.push(full);
   }
 }
-function execProcess(command,args,{cwd,timeoutMs=DEFAULT_TIMEOUT_MS,maxOutputChars=DEFAULT_MAX_OUTPUT,shell=false}={}){ return new Promise(resolve=>{ const child=spawn(command,args,{cwd,encoding:'utf8',shell,windowsHide:true}); let stdout='', stderr='', done=false; const timer=setTimeout(()=>{ if(done) return; done=true; try{child.kill('SIGKILL');}catch{} resolve({command:shell?command:[command,...args].join(' '),cwd,exitCode:null,timedOut:true,...truncateOutputs(stdout,stderr,maxOutputChars)}); },timeoutMs); child.stdout?.on('data',d=>{ stdout += d.toString(); if(stdout.length>maxOutputChars*2) stdout=stdout.slice(-maxOutputChars*2); }); child.stderr?.on('data',d=>{ stderr += d.toString(); if(stderr.length>maxOutputChars*2) stderr=stderr.slice(-maxOutputChars*2); }); child.on('error',e=>{ if(done) return; done=true; clearTimeout(timer); resolve({command:shell?command:[command,...args].join(' '),cwd,exitCode:null,error:e.message,...truncateOutputs(stdout,stderr,maxOutputChars)}); }); child.on('close',code=>{ if(done) return; done=true; clearTimeout(timer); resolve({command:shell?command:[command,...args].join(' '),cwd,exitCode:code,timedOut:false,...truncateOutputs(stdout,stderr,maxOutputChars)}); }); }); }
-function truncateOutputs(stdout,stderr,max){ const so=truncate(stdout,max); const se=truncate(stderr,max); return {stdout:so.text,stderr:se.text,stdoutTruncated:so.truncated,stderrTruncated:se.truncated}; }
+function execProcess(command,args,options={}){ return executeCommand(command,args,options); }
 async function runGit(w,args,maxOutputChars=DEFAULT_MAX_OUTPUT,timeoutMs=DEFAULT_TIMEOUT_MS){ return execProcess('git',args,{cwd:w.root,maxOutputChars,timeoutMs,shell:false}); }
 function gitRel(w, rel){ const full=safeResolve(w.root, rel); return normalizeSlash(path.relative(w.root,full)); }
 function getGitPaths(w, paths){ if(!Array.isArray(paths)||paths.length===0) return []; return paths.map(p=>gitRel(w,p)); }
@@ -688,8 +643,8 @@ function createServer(){
   server.registerTool('maintenance_status',{title:'Maintenance status',description:'Show backup/audit retention settings and current local state size.',inputSchema:{}},async()=>{ const cfg=loadConfig(); return toolText({retention:cfg.maintenance,storage:await stateSummary({backupRoot:BACKUP_ROOT,auditLog:AUDIT_LOG})}); });
   server.registerTool('connection_diagnostics',{title:'Connection diagnostics',description:'Use this to check whether ChatGPT is currently connected to DevMate, whether VS Code context is fresh, and what may need fixing after switching models or reconnecting.',inputSchema:{},_meta:{ui:{visibility:['model','app']},'openai/widgetAccessible':true}},async()=>toolText(await connectionDiagnosticsData()));
   server.registerTool('devmate_status_panel',{title:'Show DevMate status panel',description:'Use this to render a ChatGPT Apps panel showing DevMate connection, VS Code context, diagnostics, permissions, and last public preflight status.',inputSchema:{},_meta:{ui:{resourceUri:STATUS_UI_URI,visibility:['model','app']},'openai/outputTemplate':STATUS_UI_URI,'openai/widgetAccessible':true,'openai/toolInvocation/invoking':'Checking DevMate','openai/toolInvocation/invoked':'DevMate status ready'}},async()=>{ const diagnostics=await connectionDiagnosticsData(); return {content:[{type:'text',text:`DevMate status: ${diagnostics.status}. VS Code context ${diagnostics.vscode.fresh ? 'fresh' : 'needs attention'}.`}],structuredContent:diagnostics,_meta:{diagnostics}}; });
-  server.registerTool('start_task',{title:'Start task session',description:'Start a task session so subsequent writes, commands, and Git mutations share a rollback/report taskId.',inputSchema:{title:z.string().optional()}},async({title=''})=>{ const cfg=loadConfig(); cfg.task={currentTaskId:newTaskId(),title,startedAt:now()}; saveConfig(cfg); await audit('start_task',{taskId:cfg.task.currentTaskId,title}); return toolText({task:cfg.task}); });
-  server.registerTool('finish_task',{title:'Finish task session',description:'Finish the current task session and keep audit history available.',inputSchema:{}},async()=>{ const cfg=loadConfig(); const task=cfg.task || null; if(cfg.task) cfg.task.finishedAt=now(); const finished=cfg.task || null; delete cfg.task; saveConfig(cfg); if(finished) await audit('finish_task',{taskId:finished.currentTaskId,title:finished.title,startedAt:finished.startedAt,finishedAt:finished.finishedAt}); return toolText({finished:finished || task}); });
+  server.registerTool('start_task',{title:'Start task session',description:'Start a task session so subsequent writes, commands, and Git mutations share a rollback/report taskId.',inputSchema:{title:z.string().optional()}},async({title=''})=>{ let task; shared.mutateConfig(cfg=>{ task={currentTaskId:newTaskId(),title,startedAt:now()}; cfg.task=task; return cfg; }); await audit('start_task',{taskId:task.currentTaskId,title}); return toolText({task}); });
+  server.registerTool('finish_task',{title:'Finish task session',description:'Finish the current task session and keep audit history available.',inputSchema:{}},async()=>{ let finished=null; shared.mutateConfig(cfg=>{ if(!cfg.task) return false; finished={...cfg.task,finishedAt:now()}; delete cfg.task; return cfg; }); if(finished) await audit('finish_task',{title:finished.title,startedAt:finished.startedAt,finishedAt:finished.finishedAt},{taskId:finished.currentTaskId}); return toolText({finished}); });
   server.registerTool('task_status',{title:'Task status',description:'Show current task session and recent audit entries for it.',inputSchema:{taskId:z.string().optional(),limit:z.number().int().min(1).max(500).optional()}},async({taskId,limit=100})=>{ const cfg=loadConfig(); const id=taskId || cfg.task?.currentTaskId || null; const entries=(await readAuditEntries(5000)).filter(e=>!id || e.taskId===id).slice(-limit); return toolText({currentTask:cfg.task || null,taskId:id,entries}); });
   server.registerTool('rollback_task',{title:'Rollback task file changes',description:'Rollback file changes from a task session using DevMate backups. Commands and Git history are reported but not automatically reversed.',inputSchema:{taskId:z.string(),dryRun:z.boolean().optional(),limit:z.number().int().min(1).max(1000).optional()}},async({taskId,dryRun=false,limit=1000})=>{ const cfg=loadConfig(); assertCanMutate(cfg,'Rollback'); const entries=(await readAuditEntries(10000)).filter(e=>e.taskId===taskId).slice(-limit); const results=[]; for(const entry of entries.slice().reverse()){ if(['start_task','finish_task','rollback_task'].includes(entry.action)) continue; try{ results.push({entry,rollback:await rollbackEntry(cfg,entry,dryRun)}); }catch(e){ results.push({entry,rollback:{failed:true,error:e.message}}); } } await audit('rollback_task',{taskId,targetTaskId:taskId,dryRun,resultCount:results.length}); return toolText({taskId,dryRun,results}); });
   server.registerTool('list_workspaces',{title:'List workspaces',description:'List active writable and readonly reference workspaces.',inputSchema:{}},async()=>{ const cfg=loadConfig(); return toolText({activeWorkspaceId:cfg.activeWorkspaceId,workspaces:cfg.workspaces.map(wsPublic)}); });
@@ -786,4 +741,5 @@ const httpServer = http.createServer(async (req,res)=>{
   }
   res.writeHead(404,{'content-type':'text/plain'}); res.end('Not Found');
 });
-httpServer.listen(config.server.port,'127.0.0.1',()=>{ console.log(`DevMate ${VERSION} listening on http://127.0.0.1:${config.server.port}/mcp`); console.log(`Config: ${CONFIG_PATH}`); });
+const bindHost=String(process.env.DEVMATE_BIND_HOST || config.server?.host || '127.0.0.1');
+httpServer.listen(config.server.port,bindHost,()=>{ console.log(`DevMate ${VERSION} listening on http://${bindHost}:${config.server.port}/mcp`); console.log(`Config: ${CONFIG_PATH}`); });

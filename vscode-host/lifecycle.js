@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const defaultChildProcess = require('node:child_process');
-const { readJson } = require('../host/runtime/config-store.js');
+const { readJson } = require('../shared/config-store.cjs');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { VscodeContextMirror } = require('./context-mirror.js');
 const { installGatewayWorkerRouter } = require('./gateway-spawn-router.js');

@@ -65,9 +65,13 @@ async function waitReady() {
   throw new Error(`Gateway did not become ready.\nstdout=${stdout}\nstderr=${stderr}`);
 }
 async function rpc(method, params) {
-  return fetchJson(`http://127.0.0.1:${port}/mcp?token=${encodeURIComponent(token)}`, {
+  return fetchJson(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: `Bearer ${token}`
+    },
     body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000), method, params })
   });
 }

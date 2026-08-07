@@ -9,11 +9,7 @@ const { RuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const { DevMateSettingTab, normalizeSettings } = require('./settings.js');
 const { DevMateView, VIEW_TYPE } = require('./view.js');
 const { createWorkerSpawn } = require('./worker-spawn.js');
-const {
-  RuntimeController,
-  migrateLegacyState,
-  resolveStateDirectory
-} = require('../../host/runtime-controller.js');
+const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
 
 const HOST_ID = 'obsidian';
 
@@ -51,6 +47,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.addCommand({ id: 'restart', name: 'Restart', callback: () => this.restartRuntime() });
     this.addCommand({ id: 'open', name: 'Open panel', callback: () => this.openView() });
     this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });
+    this.addCommand({ id: 'copy-token', name: 'Copy MCP bearer token', callback: () => this.copyConnectionToken() });
     this.addCommand({ id: 'copy-context', name: 'Copy active vault context', callback: () => this.copyContextBundle() });
     this.addCommand({ id: 'copy-diagnostics', name: 'Copy diagnostics', callback: () => this.copyDiagnostics() });
 
@@ -101,15 +98,12 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   stateDirectory(pluginDirectory) {
-    const legacyDirectory = path.join(pluginDirectory, 'state');
-    const stateDirectory = resolveStateDirectory({
+    return resolveStateDirectory({
       workspaceRoot: this.vaultRoot,
       overrideDirectory: this.settings.sharedStateDirectory,
-      legacyDirectory,
+      localDirectory: path.join(pluginDirectory, 'state'),
       shared: this.settings.sharedRuntime
     });
-    if (this.settings.sharedRuntime) migrateLegacyState({ legacyDirectory, stateDirectory });
-    return stateDirectory;
   }
 
   logRuntime(message) {
@@ -317,6 +311,20 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       new Notice('DevMate MCP URL copied.');
     } catch (error) {
       new Notice(`Could not copy MCP URL: ${error.message || error}`);
+    }
+  }
+
+  async copyConnectionToken() {
+    try {
+      const token = this.controller.ownerToken();
+      if (!token) {
+        new Notice('DevMate authentication is disabled or no owner token is configured.');
+        return;
+      }
+      await navigator.clipboard.writeText(token);
+      new Notice('DevMate bearer token copied. Keep it private and use it in the Authorization header.');
+    } catch (error) {
+      new Notice(`Could not copy bearer token: ${error.message || error}`);
     }
   }
 

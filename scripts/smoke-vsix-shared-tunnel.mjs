@@ -142,7 +142,7 @@ try {
 
   const requireFromVsix = createRequire(packageFile);
   const { SharedTunnelRuntime } = requireFromVsix('./vscode-host/shared-tunnel-runtime.js');
-  const { atomicWriteJson } = requireFromVsix('./host/runtime/config-store.js');
+  const { atomicWriteJson } = requireFromVsix('./shared/config-store.cjs');
   const { virtualHttpRequest } = requireFromVsix('./tunnel-provider.js');
 
   const port = 18787;

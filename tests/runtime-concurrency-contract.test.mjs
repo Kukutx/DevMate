@@ -47,7 +47,7 @@ test('Gateway instance locks use owner identity and renewable leases', () => {
 });
 
 test('host config recovery rejects silent reset conditions', () => {
-  const config = source('host/runtime/config-store.js');
+  const config = source('shared/config-store.cjs');
   assert.match(config, /unsupported_config_version/);
   assert.match(config, /config_invalid_json/);
   assert.match(config, /config_too_large/);

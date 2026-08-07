@@ -7,6 +7,7 @@ import { durableStateStatus } from './durable-state.mjs';
 import { listRunners } from './job-queue.mjs';
 import { normalizeRunnerControlConfig } from './runner-access.mjs';
 import { listWorkspaceLeases } from './workspace-leases.mjs';
+import { resolveWorkspaceId } from './workspace-resolver.mjs';
 
 export function principalNow() {
   return requestPrincipal() || fallbackLocalPrincipal();
@@ -35,17 +36,12 @@ export function cleanOrigin(value, required = false) {
 }
 
 export function workspaceIds(config, values = []) {
-  const map = new Map();
-  for (const item of config.workspaces || []) {
-    map.set(item.id, item.id);
-    map.set(item.name, item.id);
-  }
-  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))]
-    .map(value => {
-      const id = map.get(value);
-      if (!id) throw new Error(`Workspace not found for member scope: ${value}`);
-      return id;
-    });
+  return [...new Set(
+    values
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .map(value => resolveWorkspaceId(config, value))
+  )];
 }
 
 function runnerSummary(config) {
