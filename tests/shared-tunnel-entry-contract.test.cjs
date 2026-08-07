@@ -7,27 +7,39 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-test('VS Code entry owns the host lifecycle and preserves reverse teardown ordering', () => {
+test('VS Code entry owns the host lifecycle and provider-native tunnel controller', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   assert.equal(fs.existsSync(path.join(root, 'extension-entry-host.js')), false);
 
   const source = fs.readFileSync(path.join(root, 'extension-entry-shared-tunnel.js'), 'utf8');
   assert.match(source, /VscodeHostLifecycle/);
-  assert.match(source, /lifecycle = new VscodeHostLifecycle\(\{ vscode \}\)/);
+  assert.match(source, /TunnelController/);
+  assert.match(source, /setTunnelController/);
+  assert.match(source, /clearTunnelController/);
   assert.match(source, /validateTunnelProvider\(provider\)/);
   assert.match(source, /validateDeploymentMode\(deploymentMode\)/);
   const validation = source.indexOf('tunnelSettings();');
+  const controller = source.indexOf('runtime = new TunnelController({');
+  const registry = source.indexOf('setTunnelController(runtime)');
   const activation = source.indexOf('await lifecycle.activate(context)');
-  assert.ok(validation >= 0 && activation > validation, 'Tunnel settings must be validated before platform activation');
-  assert.match(source, /new SharedTunnelRuntime\(/);
-  assert.match(source, /\.install\(\)/);
+  assert.ok(validation >= 0 && controller > validation, 'Tunnel settings must be validated before controller creation');
+  assert.ok(registry > controller && activation > registry, 'Tunnel runtime must be registered before platform activation');
 
-  const suspend = source.indexOf('currentRuntime?.suspendSpawn()');
-  const deactivate = suspend < 0 ? -1 : source.indexOf('await currentLifecycle?.deactivate()', suspend);
-  const dispose = deactivate < 0 ? -1 : source.indexOf('await currentRuntime?.dispose({ stopOwned: true })', deactivate);
-  assert.ok(suspend >= 0 && deactivate > suspend, 'Shared spawn layer must stop accepting work before host teardown');
-  assert.ok(dispose > deactivate, 'Shared tunnel ownership must remain active through host teardown');
+  const deactivate = source.indexOf('await currentLifecycle?.deactivate()');
+  const clear = source.indexOf('clearTunnelController(currentRuntime)', deactivate);
+  const dispose = source.indexOf('await currentRuntime?.dispose({ stopOwned: true })', clear);
+  assert.ok(deactivate >= 0 && clear > deactivate, 'Tunnel registry must remain available during extension teardown');
+  assert.ok(dispose > clear, 'Tunnel controller must be disposed after the inner lifecycle stops');
+});
+
+test('VS Code tunnel actions call the explicit provider-native runtime', () => {
+  const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
+  assert.match(source, /startTunnel\(port\)/);
+  assert.match(source, /stopTunnel\(\)/);
+  assert.match(source, /tunnelStatus\(/);
+  assert.doesNotMatch(source, /getNgrokTunnels|deleteNgrokTunnel|getNgrokPublicUrlForPort|startNgrok|ngrokProcess/);
+  assert.doesNotMatch(source, /127\.0\.0\.1:4040\/api\/tunnels/);
 });
 
 test('VS Code HTTP calls use the bounded client', () => {
@@ -37,25 +49,20 @@ test('VS Code HTTP calls use the bounded client', () => {
   assert.doesNotMatch(source, /res\.on\('data',\s*d=>chunks\.push\(Buffer\.from\(d\)\)\)/);
 });
 
-test('VSIX smoke contract includes all shared tunnel and HTTP modules', () => {
+test('VSIX smoke contract includes the provider-native tunnel runtime', () => {
   const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-worker.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
   assert.doesNotMatch(smoke, /extension-entry-host\.js/);
   assert.match(smoke, /vscode-host\/bounded-http-client\.js/);
-  assert.match(smoke, /vscode-host\/shared-tunnel-record-store\.js/);
-  assert.match(smoke, /vscode-host\/shared-tunnel-process\.js/);
-  assert.match(smoke, /vscode-host\/shared-tunnel-runtime\.js/);
 
-  const packagedSmoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-shared-tunnel.mjs'), 'utf8');
-  assert.match(packagedSmoke, /requireFromVsix\('\.\/vscode-host\/shared-tunnel-runtime\.js'\)/);
-  assert.match(packagedSmoke, /singleProviderSpawnVerified/);
-  assert.match(packagedSmoke, /followerOwnershipVerified/);
+  const controller = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
+  assert.match(controller, /class TunnelController/);
+  assert.match(controller, /cloudflareLaunch/);
+  assert.match(controller, /nativeNgrokPublicUrl/);
 });
 
-test('Windows and Linux CI both execute the installed shared tunnel smoke', () => {
+test('Windows and Linux CI execute tunnel runtime validation', () => {
   const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-  const invocations = workflow.match(/node scripts\/smoke-vsix-shared-tunnel\.mjs/g) || [];
-  assert.equal(invocations.length, 2);
-  assert.match(workflow, /Smoke test packaged VSIX shared tunnel/);
-  assert.match(workflow, /Linux packaged VSIX shared tunnel smoke test/);
+  assert.match(workflow, /Discovered unit and policy tests/);
+  assert.match(workflow, /Linux discovered unit and policy tests/);
 });
