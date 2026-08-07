@@ -112,4 +112,16 @@ test('production readiness host contract matches the public URL route', () => {
   assert.equal(teamToolDataTest.allowedPublicHost(config), true);
 });
 
+test('team readiness honors an explicitly configured Host allowlist', () => {
+  const config = {
+    deployment: { mode: 'team', publicUrl: 'https://team.example.com' },
+    production: { allowedHosts: [] }
+  };
+  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
+  config.production.allowedHosts = ['wrong.example.com'];
+  assert.equal(teamToolDataTest.allowedPublicHost(config), false);
+  config.production.allowedHosts = ['team.example.com'];
+  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
+});
+
 test.after(async () => fsp.rm(temp, { recursive: true, force: true }));
