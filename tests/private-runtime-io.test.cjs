@@ -2,7 +2,9 @@
 
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const fs = require('node:fs');
 const http = require('node:http');
+const path = require('node:path');
 const test = require('node:test');
 const runtimeIo = require('../vscode-host/runtime-io.js');
 const { SpawnLayer } = require('../vscode-host/spawn-layer.js');
@@ -11,6 +13,11 @@ const { defaultTransports } = require('../vscode-host/bounded-http-client.js');
 const globalSpawn = childProcess.spawn;
 const globalSpawnSync = childProcess.spawnSync;
 const globalHttpRequest = http.request;
+const root = path.resolve(__dirname, '..');
+
+function source(relative) {
+  return fs.readFileSync(path.join(root, relative), 'utf8');
+}
 
 test.afterEach(() => {
   runtimeIo.reset();
@@ -73,4 +80,22 @@ test('runtime adapter rejects non-callable replacements and resets atomically', 
   runtimeIo.httpRequest = () => null;
   runtimeIo.reset();
   assert.equal(runtimeIo.isNative(), true);
+});
+
+test('VS Code production entrypoints route IO through the private adapter and never assign Node globals', () => {
+  const files = [
+    'extension.js',
+    'extension-entry.js',
+    'extension-entry-platform.js',
+    'vscode-host/bounded-http-client.js'
+  ];
+  for (const relative of files) {
+    const text = source(relative);
+    assert.doesNotMatch(text, /\bchildProcess\.(?:spawn|spawnSync)\s*=/, relative);
+    assert.doesNotMatch(text, /\bhttp\.request\s*=/, relative);
+  }
+  assert.match(source('extension.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
+  assert.match(source('extension-entry.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
+  assert.match(source('extension-entry-platform.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
+  assert.match(source('vscode-host/bounded-http-client.js'), /require\('\.\/runtime-io\.js'\)/);
 });
