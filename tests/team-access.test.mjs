@@ -48,8 +48,27 @@ test('creates hashed team tokens and verifies scoped principals', () => {
   assert.deepEqual(principal.workspaceIds, ['app']);
 });
 
+test('rejects empty Team workspace scopes instead of treating them as global access', () => {
+  const current = config();
+  normalizeDeploymentConfig(current);
+  assert.throws(() => createTeamMember(current, {
+    name: 'Unscoped',
+    role: 'developer',
+    workspaceIds: []
+  }), /at least one explicit workspace ID/);
+
+  const created = createTeamMember(current, {
+    name: 'Scoped',
+    role: 'developer',
+    workspaceIds: ['app']
+  });
+  current.team.members[0].workspaceIds = [];
+  assert.equal(verifyAccessToken(created.token, current), null, 'historical unscoped credentials must be invalid');
+});
+
 test('enforces role capabilities and workspace scopes', () => {
   const current = config();
+  current.workspaces.push({ id: 'other', name: 'Other', reference: false, mode: 'workspace-write' });
   normalizeDeploymentConfig(current);
   const reviewer = {
     id: 'r',
@@ -78,15 +97,23 @@ test('enforces role capabilities and workspace scopes', () => {
     args: { workspaceId: 'other' },
     config: current,
     principal: reviewer
-  }), error => error.code === 'workspace_not_found');
+  }), /not allowed to access workspace other/);
 });
 
-test('personal owner token remains backwards compatible', () => {
+test('personal owner token remains unrestricted by Team workspace scope', () => {
   const current = config();
+  current.workspaces.push({ id: 'other', name: 'Other', reference: false, mode: 'workspace-write' });
   normalizeDeploymentConfig(current);
   const principal = verifyAccessToken('owner-secret-token-value', current);
   assert.equal(principal.role, 'owner');
   assert.equal(principal.source, 'personal-token');
+  assert.equal(authorizeToolCall({
+    name: 'read_file',
+    annotations: { readOnlyHint: true },
+    args: { workspaceId: 'other' },
+    config: current,
+    principal
+  }).workspaceId, 'other');
 });
 
 test('blocks high-risk operations for team tokens even under full local access', () => {
