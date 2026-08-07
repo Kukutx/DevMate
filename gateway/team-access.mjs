@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { uniqueCredentialId } from './credential-id.mjs';
 import {
   ownerOnlyTool,
   requiredCapabilityForTool,
@@ -33,11 +34,6 @@ function timingSafeEqualText(a, b) {
   const aa = Buffer.from(String(a || ''));
   const bb = Buffer.from(String(b || ''));
   return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
-}
-
-function cleanId(value, fallback = 'member') {
-  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
-  return normalized || fallback;
 }
 
 function parseExpiry(value) {
@@ -143,12 +139,12 @@ function hashSecret(secret, salt) {
 }
 
 function uniqueMemberId(config, requested = '') {
-  const base = cleanId(requested || `member-${crypto.randomBytes(3).toString('hex')}`);
-  const used = new Set((config.team?.members || []).map(member => member.id));
-  let id = base;
-  let index = 2;
-  while (used.has(id)) id = `${base}-${index++}`;
-  return id;
+  const seed = requested || `member-${crypto.randomBytes(3).toString('hex')}`;
+  return uniqueCredentialId(
+    (config.team?.members || []).map(member => member.id),
+    seed,
+    { fallback: 'member' }
+  );
 }
 
 export function createTeamMember(config, input = {}) {
@@ -320,5 +316,6 @@ export const __test = {
   requiredCapabilityForTool,
   scopedWorkspaceIds,
   timingSafeEqualText,
-  toolWorkspaceId
+  toolWorkspaceId,
+  uniqueMemberId
 };
