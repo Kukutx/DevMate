@@ -66,7 +66,7 @@ test('workspace runtime IDs are stable and path-specific', () => {
 test('shared state resolves below the configured home directory', () => {
   const root = temporaryDirectory('devmate-state-root-');
   const home = temporaryDirectory('devmate-state-home-');
-  const state = resolveStateDirectory({ workspaceRoot: root, shared: true, homeDirectory: home });
+  const state = resolveStateDirectory({ workspaceRoot: root, homeDirectory: home });
   assert.equal(path.dirname(path.dirname(state)), path.join(home, '.devmate'));
   assert.match(path.basename(state), /^[a-z0-9_.-]+-[a-f0-9]{12}$/);
 });
@@ -83,17 +83,6 @@ test('personal config creation preserves unrelated fields on later updates', () 
   const updated = ensurePersonalConfig({ configFile: file, workspaceRoot: root, preferredPort: 9999 });
   assert.deepEqual(updated.custom, { keep: true });
   assert.equal(updated.server.port, 9123);
-});
-
-
-test('non-shared state resolves to the explicit local directory', () => {
-  const root = temporaryDirectory('devmate-local-root-');
-  const local = temporaryDirectory('devmate-local-state-');
-  assert.equal(resolveStateDirectory({
-    workspaceRoot: root,
-    localDirectory: local,
-    shared: false
-  }), path.resolve(local));
 });
 
 test('runtime controller publishes a bounded generic host context', () => {
