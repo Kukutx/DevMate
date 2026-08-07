@@ -8,6 +8,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import configStore from '../shared/config-store.cjs';
 import { terminateProcessTree } from '../gateway/command-process.mjs';
+import {
+  booleanFlag,
+  integerOption,
+  integerValue,
+  jobTimeout,
+  parseRunnerArgs,
+  stringValue
+} from './runner-options.mjs';
 
 const { readJson: readConfigJson } = configStore;
 
@@ -20,19 +28,6 @@ const RUNNER_SECRET_ENV = [
   'DEVMATE_RUNNER_CAPABILITIES'
 ];
 
-function parseArgs(argv) {
-  const output = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const item = argv[index];
-    if (!item.startsWith('--')) continue;
-    const key = item.slice(2);
-    const next = argv[index + 1];
-    if (!next || next.startsWith('--')) output[key] = true;
-    else { output[key] = next; index += 1; }
-  }
-  return output;
-}
-
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -42,8 +37,10 @@ function loadConfig(file) {
 }
 
 function normalizeControlUrl(value, allowHttp = false) {
-  const raw = String(value || '').trim();
-  if (!raw) throw new Error('Runner control URL is required through --control-url or DEVMATE_RUNNER_CONTROL_URL');
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('Runner control URL is required through --control-url or DEVMATE_RUNNER_CONTROL_URL');
+  }
+  const raw = value.trim();
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
   const url = new URL(candidate);
   const local = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
@@ -51,19 +48,33 @@ function normalizeControlUrl(value, allowHttp = false) {
     throw new Error('External Runner control URL must use HTTPS; HTTP is allowed only for loopback or with --allow-http');
   }
   if (url.username || url.password || url.search || url.hash) throw new Error('Runner control URL must not include credentials, query, or fragment');
+  if (url.pathname && url.pathname !== '/') throw new Error('Runner control URL must be an origin without a path');
   return `${url.protocol}//${url.host}`;
 }
 
 function runnerToken(options) {
-  const environment = process.env.DEVMATE_RUNNER_TOKEN || '';
-  if (environment) return environment.trim();
-  const tokenFile = String(options['token-file'] || process.env.DEVMATE_RUNNER_TOKEN_FILE || '').trim();
-  if (tokenFile) return fs.readFileSync(path.resolve(tokenFile), 'utf8').trim();
+  const environment = process.env.DEVMATE_RUNNER_TOKEN;
+  if (environment !== undefined) {
+    if (!environment.trim()) throw new Error('DEVMATE_RUNNER_TOKEN must not be empty');
+    return environment.trim();
+  }
+  const rawTokenFile = options['token-file'] ?? process.env.DEVMATE_RUNNER_TOKEN_FILE;
+  if (rawTokenFile !== undefined) {
+    const tokenFile = stringValue(rawTokenFile, undefined, 'Runner token file');
+    const token = fs.readFileSync(path.resolve(tokenFile), 'utf8').trim();
+    if (!token) throw new Error('Runner token file is empty');
+    return token;
+  }
   throw new Error('Runner token is required in DEVMATE_RUNNER_TOKEN or --token-file. Command-line token values are intentionally unsupported.');
 }
 
 function gatewayEnvironment(configPath) {
-  const environment = { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DISABLE_EMBEDDED_RUNNER: '1', DEVMATE_BIND_HOST: '127.0.0.1' };
+  const environment = {
+    ...process.env,
+    DEVMATE_CONFIG: configPath,
+    DEVMATE_DISABLE_EMBEDDED_RUNNER: '1',
+    DEVMATE_BIND_HOST: '127.0.0.1'
+  };
   for (const key of RUNNER_SECRET_ENV) delete environment[key];
   return environment;
 }
@@ -73,39 +84,67 @@ function clearRunnerSecretsFromProcess() {
 }
 
 function gatewayScript(options) {
-  if (options['gateway-script']) return path.resolve(String(options['gateway-script']));
+  if (options['gateway-script'] !== undefined) return path.resolve(stringValue(options['gateway-script'], undefined, '--gateway-script'));
   const bundle = path.join(root, 'gateway', 'server.bundle.mjs');
   if (fs.existsSync(bundle)) return bundle;
   return path.join(root, 'gateway', 'server-entry.mjs');
 }
 
 function customCapabilities(options) {
-  return String(options.capabilities || process.env.DEVMATE_RUNNER_CAPABILITIES || '')
-    .split(',')
-    .map(value => value.trim().toLowerCase())
-    .filter(Boolean);
+  const raw = options.capabilities ?? process.env.DEVMATE_RUNNER_CAPABILITIES;
+  if (raw === undefined) return [];
+  if (typeof raw !== 'string') throw new Error('Runner capabilities must be a comma-separated string');
+  const capabilities = raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+  if (!capabilities.length) throw new Error('Runner capabilities must contain at least one capability when provided');
+  return [...new Set(capabilities)];
 }
 
 function runnerCapabilities(config, options = {}) {
   const output = new Set(['core', 'external', ...customCapabilities(options)]);
-  const enabled = new Set(config.plugins?.enabled || []);
+  const enabledPlugins = config.plugins?.enabled;
+  if (enabledPlugins !== undefined && !Array.isArray(enabledPlugins)) throw new Error('plugins.enabled must be an array');
+  const enabled = new Set((enabledPlugins || []).map(value => {
+    if (typeof value !== 'string') throw new Error('plugins.enabled must contain only strings');
+    return value;
+  }));
   if (enabled.has('devmate.browser-qa')) output.add('browser-qa');
-  if (enabled.has('devmate.godot')) { output.add('godot'); output.add('browser-qa'); }
+  if (enabled.has('devmate.godot')) {
+    output.add('godot');
+    output.add('browser-qa');
+  }
   return [...output].sort();
 }
 
+function runnerWorkspaceIds(config) {
+  if (!Array.isArray(config.workspaces)) throw new Error('Runner config workspaces must be an array');
+  const ids = [];
+  const seen = new Set();
+  for (const item of config.workspaces) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('Runner workspace entries must be objects');
+    if (item.reference || item.mode === 'readonly') continue;
+    if (typeof item.id !== 'string' || !item.id.trim()) throw new Error('Writable Runner workspaces require a non-empty id');
+    const id = item.id.trim();
+    if (!seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
 function runnerMetadata(config, options) {
+  const defaultConcurrency = integerValue(config.runtime?.maxConcurrentJobs, 1, 1, 8, 'runtime.maxConcurrentJobs');
   return {
-    version: config.appVersion || 'unknown',
+    version: typeof config.appVersion === 'string' && config.appVersion ? config.appVersion : 'unknown',
     platform: process.platform,
     arch: process.arch,
     capabilities: runnerCapabilities(config, options),
-    workspaceIds: (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id),
-    maxConcurrent: Math.min(16, Math.max(1, Math.trunc(Number(options.concurrency) || Number(config.runtime?.maxConcurrentJobs) || 1))),
+    workspaceIds: runnerWorkspaceIds(config),
+    maxConcurrent: integerOption(options.concurrency, defaultConcurrency, 1, 16, '--concurrency'),
     labels: {
       hostname: os.hostname(),
       kind: 'external',
-      agentVersion: config.appVersion || 'unknown'
+      agentVersion: typeof config.appVersion === 'string' && config.appVersion ? config.appVersion : 'unknown'
     }
   };
 }
@@ -143,10 +182,11 @@ async function waitGateway(port, child, timeoutMs = 30000) {
 }
 
 function localMcpClient(config) {
-  const port = Number(config.server?.port || 8787);
-  const mcpPath = config.server?.mcpPath || '/mcp';
-  const token = String(config.auth?.token || '');
-  if (!token) throw new Error('Runner local DevMate config must contain an owner auth token');
+  const port = integerValue(config.server?.port, 8787, 1, 65535, 'server.port');
+  const mcpPath = config.server?.mcpPath === undefined ? '/mcp' : config.server.mcpPath;
+  if (typeof mcpPath !== 'string' || !mcpPath.startsWith('/')) throw new Error('server.mcpPath must be an absolute path');
+  const token = config.auth?.token;
+  if (typeof token !== 'string' || !token) throw new Error('Runner local DevMate config must contain an owner auth token');
   let client = null;
   let transport = null;
   let connecting = null;
@@ -171,13 +211,13 @@ function localMcpClient(config) {
   }
   return {
     initialize,
-    async callTool(name, args, signal, timeout = 900000) {
+    async callTool(name, args, signal, timeout) {
       await initialize();
-      const boundedTimeout = Math.min(60 * 60 * 1000, Math.max(1000, Number(timeout) || 900000));
+      const timeoutMs = jobTimeout(timeout);
       return client.callTool(
         { name, arguments: args || {} },
         undefined,
-        { signal, timeout: boundedTimeout, maxTotalTimeout: boundedTimeout }
+        { signal, timeout: timeoutMs, maxTotalTimeout: timeoutMs }
       );
     },
     async close() {
@@ -193,8 +233,10 @@ function localMcpClient(config) {
 }
 
 function claimBody(job, body = {}) {
-  const claim = job?.claim && typeof job.claim === 'object' ? job.claim : null;
-  if (!claim) return body;
+  const claim = job?.claim;
+  if (!claim || typeof claim !== 'object' || Array.isArray(claim)) throw new Error(`Job ${job?.id || '(unknown)'} is missing Runner claim proof`);
+  if (!Number.isInteger(claim.generation) || claim.generation < 1) throw new Error(`Job ${job?.id || '(unknown)'} has an invalid claim generation`);
+  if (typeof claim.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(claim.token)) throw new Error(`Job ${job?.id || '(unknown)'} has an invalid claim token`);
   return {
     ...body,
     claimGeneration: claim.generation,
@@ -242,26 +284,30 @@ function toolError(result) {
   return new Error(text || 'Local MCP tool returned an error result');
 }
 
-export async function runExternalRunner(options = parseArgs(process.argv.slice(2))) {
-  const rawConfigPath = String(options.config || process.env.DEVMATE_RUNNER_CONFIG || '').trim();
-  if (!rawConfigPath) throw new Error('Existing local DevMate config is required through --config or DEVMATE_RUNNER_CONFIG');
-  const configPath = path.resolve(rawConfigPath);
+export async function runExternalRunner(options = parseRunnerArgs(process.argv.slice(2))) {
+  const configInput = options.config ?? process.env.DEVMATE_RUNNER_CONFIG;
+  if (configInput === undefined) throw new Error('Existing local DevMate config is required through --config or DEVMATE_RUNNER_CONFIG');
+  const configPath = path.resolve(stringValue(configInput, undefined, 'Runner config path'));
   if (!fs.statSync(configPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Runner config is not a file: ${configPath}`);
   process.env.DEVMATE_CONFIG = configPath;
   const config = loadConfig(configPath);
-  if ((config.deployment?.mode || 'personal') !== 'personal') {
+  if (config.deployment?.mode !== 'personal') {
     throw new Error('External Runner local config must use personal deployment mode. Central team policy belongs to the control-plane Gateway.');
   }
   if (config.auth?.required === false) throw new Error('External Runner local Gateway must keep owner-token authentication enabled');
   const metadata = runnerMetadata(config, options);
   if (!metadata.workspaceIds.length) throw new Error('External Runner local config must contain at least one writable workspace');
-  const origin = normalizeControlUrl(options['control-url'] || process.env.DEVMATE_RUNNER_CONTROL_URL, options['allow-http'] === true);
+  const allowHttp = booleanFlag(options['allow-http'], '--allow-http');
+  const noSpawn = booleanFlag(options['no-spawn'], '--no-spawn');
+  const once = booleanFlag(options.once, '--once');
+  const controlInput = options['control-url'] ?? process.env.DEVMATE_RUNNER_CONTROL_URL;
+  const origin = normalizeControlUrl(controlInput, allowHttp);
   const token = runnerToken(options);
   const childEnvironment = gatewayEnvironment(configPath);
   clearRunnerSecretsFromProcess();
-  const port = Number(config.server?.port || 8787);
-  const leaseSeconds = Math.min(300, Math.max(30, Math.trunc(Number(options['lease-seconds']) || 90)));
-  const pollMs = Math.min(30000, Math.max(500, Math.trunc(Number(options['poll-ms']) || 2000)));
+  const port = integerValue(config.server?.port, 8787, 1, 65535, 'server.port');
+  const leaseSeconds = integerOption(options['lease-seconds'], 90, 15, 300, '--lease-seconds');
+  const pollMs = integerOption(options['poll-ms'], 2000, 500, 30000, '--poll-ms');
   const maximum = metadata.maxConcurrent;
   const control = controlClient(origin, token, metadata);
   const local = localMcpClient(config);
@@ -270,7 +316,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
   let child = null;
   let stopping = false;
 
-  if (options['no-spawn'] !== true) {
+  if (!noSpawn) {
     child = spawn(process.execPath, [gatewayScript(options)], {
       cwd: root,
       env: childEnvironment,
@@ -373,7 +419,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
       inflight.set(job.id, promise);
       void promise;
     }
-    if (options.once === true) {
+    if (once) {
       await Promise.allSettled([...inflight.values()]);
       break;
     }
@@ -399,8 +445,9 @@ export const __test = {
   localMcpClient,
   normalizeControlUrl,
   ownershipLostError,
-  parseArgs,
   runnerCapabilities,
   runnerMetadata,
+  runnerToken,
+  runnerWorkspaceIds,
   toolError
 };
