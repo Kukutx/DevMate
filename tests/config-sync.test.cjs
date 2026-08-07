@@ -64,6 +64,25 @@
           assert.equal(merged.connection.lastPreflightAt, 'now');
         });
 
+        test('first extension write cannot seed Gateway-owned state', () => {
+          const merged = mergeExtensionConfig({}, {
+            version: SUPPORTED_CONFIG_VERSION,
+            instanceId: 'new',
+            workspaces: [{ id: 'app' }, { id: 'forged', trusted: true, role: 'trusted' }],
+            task: { currentTaskId: 'forged-task' },
+            jobs: { embeddedRunnerEnabled: false },
+            runnerControl: { enabled: true },
+            plugins: { enabled: ['forged'] },
+            trustedWritableRoots: [{ id: 'forged' }],
+            hostRuntime: { owner: 'forged' }
+          });
+          assert.equal(merged.instanceId, 'new');
+          assert.deepEqual(merged.workspaces, [{ id: 'app' }]);
+          for (const key of ['task', 'jobs', 'runnerControl', 'plugins', 'trustedWritableRoots', 'hostRuntime']) {
+            assert.equal(Object.hasOwn(merged, key), false, `${key} must remain Gateway-owned`);
+          }
+        });
+
         test('writes through the shared locked atomic store', () => {
           const file = tempFile();
           writeExtensionConfig(file, {
