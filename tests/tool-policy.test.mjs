@@ -44,6 +44,19 @@ test('classifies mature Godot tools by actual side effect', () => {
   assert.equal(requiredCapabilityForTool('obsidian_properties_batch_apply', { destructiveHint: true }), 'write');
 });
 
+
+test('classifies every workspace-controlled command entry as execute', () => {
+  for (const name of [
+    'run_command',
+    'run_configured_command',
+    'run_project_script',
+    'run_smart_checks',
+    'start_process'
+  ]) {
+    assert.equal(requiredCapabilityForTool(name, { destructiveHint: true }), 'execute', name);
+  }
+});
+
 test('routes Web Godot jobs to Browser QA capable runners', () => {
   for (const name of [
     'godot_export_web',

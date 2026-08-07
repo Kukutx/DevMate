@@ -9,7 +9,6 @@ const test = require('node:test');
 const {
   RuntimeController,
   ensurePersonalConfig,
-  migrateLegacyState,
   readJson,
   resolveStateDirectory,
   workspaceRuntimeId
@@ -58,9 +57,10 @@ process.on('SIGINT', stop);
 }
 
 test('workspace runtime IDs are stable and path-specific', () => {
-  const root = temporaryDirectory('devmate-runtime-id-');
-  assert.equal(workspaceRuntimeId(root), workspaceRuntimeId(root));
-  assert.notEqual(workspaceRuntimeId(root), workspaceRuntimeId(path.join(root, 'nested')));
+  const first = temporaryDirectory('devmate-runtime-id-first-');
+  const second = temporaryDirectory('devmate-runtime-id-second-');
+  assert.equal(workspaceRuntimeId(first), workspaceRuntimeId(first));
+  assert.notEqual(workspaceRuntimeId(first), workspaceRuntimeId(second));
 });
 
 test('shared state resolves below the configured home directory', () => {
@@ -85,17 +85,15 @@ test('personal config creation preserves unrelated fields on later updates', () 
   assert.equal(updated.server.port, 9123);
 });
 
-test('legacy state migrates only when the shared config is absent', () => {
-  const legacy = temporaryDirectory('devmate-legacy-');
-  const shared = temporaryDirectory('devmate-shared-parent-');
-  const target = path.join(shared, 'state');
-  fs.writeFileSync(path.join(legacy, 'config.json'), '{"instanceId":"legacy"}\n', 'utf8');
-  fs.writeFileSync(path.join(legacy, 'runtime.pid'), '123', 'utf8');
-  const result = migrateLegacyState({ legacyDirectory: legacy, stateDirectory: target });
-  assert.equal(result.migrated, true);
-  assert.equal(readJson(path.join(target, 'config.json')).instanceId, 'legacy');
-  assert.equal(fs.existsSync(path.join(target, 'runtime.pid')), false);
-  assert.equal(migrateLegacyState({ legacyDirectory: legacy, stateDirectory: target }).reason, 'target-config-exists');
+
+test('non-shared state resolves to the explicit local directory', () => {
+  const root = temporaryDirectory('devmate-local-root-');
+  const local = temporaryDirectory('devmate-local-state-');
+  assert.equal(resolveStateDirectory({
+    workspaceRoot: root,
+    localDirectory: local,
+    shared: false
+  }), path.resolve(local));
 });
 
 test('runtime controller publishes a bounded generic host context', () => {

@@ -1,15 +1,19 @@
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+ENV NODE_ENV=production \
+    DEVMATE_BIND_HOST=0.0.0.0
+
 WORKDIR /opt/devmate
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
+COPY config-file-lock.cjs ./
 COPY gateway ./gateway
+COPY shared ./shared
 COPY scripts ./scripts
-COPY extension.js extension-entry-platform.js extension-entry-win32.js extension-entry.js ngrok-launch-compat.js ngrok-support.js tunnel-provider.js ./
 
 RUN mkdir -p /var/lib/devmate /srv/devmate-workspaces \
   && chown -R node:node /opt/devmate /var/lib/devmate /srv/devmate-workspaces

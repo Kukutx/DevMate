@@ -6,6 +6,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import configStore from '../shared/config-store.cjs';
+import { terminateProcessTree } from '../gateway/command-process.mjs';
+
+const { readJson: readConfigJson } = configStore;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RUNNER_SECRET_ENV = [
@@ -33,8 +37,8 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function loadJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+function loadConfig(file) {
+  return readConfigJson(file, null, { strict: true, supportedVersion: true });
 }
 
 function normalizeControlUrl(value, allowHttp = false) {
@@ -59,7 +63,7 @@ function runnerToken(options) {
 }
 
 function gatewayEnvironment(configPath) {
-  const environment = { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DISABLE_EMBEDDED_RUNNER: '1' };
+  const environment = { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DISABLE_EMBEDDED_RUNNER: '1', DEVMATE_BIND_HOST: '127.0.0.1' };
   for (const key of RUNNER_SECRET_ENV) delete environment[key];
   return environment;
 }
@@ -244,7 +248,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
   const configPath = path.resolve(rawConfigPath);
   if (!fs.statSync(configPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Runner config is not a file: ${configPath}`);
   process.env.DEVMATE_CONFIG = configPath;
-  const config = loadJson(configPath);
+  const config = loadConfig(configPath);
   if ((config.deployment?.mode || 'personal') !== 'personal') {
     throw new Error('External Runner local config must use personal deployment mode. Central team policy belongs to the control-plane Gateway.');
   }
@@ -271,6 +275,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
       cwd: root,
       env: childEnvironment,
       windowsHide: true,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe']
     });
     child.stdout?.on('data', chunk => process.stdout.write(`[gateway] ${chunk}`));
@@ -348,7 +353,7 @@ export async function runExternalRunner(options = parseArgs(process.argv.slice(2
     publicLog('Runner stopping', `inflight=${inflight.size}`);
     await Promise.race([Promise.allSettled([...inflight.values()]), delay(15000)]);
     try { await local.close(); } catch {}
-    if (child && child.exitCode === null) child.kill();
+    if (child && child.exitCode === null) await terminateProcessTree(child);
   }
 
   process.once('SIGINT', () => { void stop().finally(() => process.exit(0)); });

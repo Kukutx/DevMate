@@ -2,10 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {
-  migrateLegacyState,
-  resolveStateDirectory
-} = require('../host/runtime-controller.js');
+const { resolveStateDirectory } = require('../host/runtime-controller.js');
 
 function currentWorkspaceRoot(vscode) {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
@@ -26,16 +23,14 @@ function setting(vscode, name, fallback) {
 
 function resolveVscodeStateDirectory(vscode, context) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
+  if (!workspaceRoot) return context.globalStorageUri.fsPath;
   const shared = setting(vscode, 'sharedRuntimeEnabled', true) !== false;
-  if (!workspaceRoot || !shared) return context.globalStorageUri.fsPath;
-  const legacyDirectory = context.globalStorageUri.fsPath;
   const stateDirectory = resolveStateDirectory({
     workspaceRoot,
     overrideDirectory: String(setting(vscode, 'sharedStateDirectory', '') || '').trim(),
-    legacyDirectory,
-    shared: true
+    localDirectory: context.globalStorageUri.fsPath,
+    shared
   });
-  migrateLegacyState({ legacyDirectory, stateDirectory });
   fs.mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(stateDirectory, 0o700); } catch {}
   return stateDirectory;

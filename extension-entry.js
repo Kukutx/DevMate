@@ -18,7 +18,6 @@ const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
 const NGROK_DOMAINS_URL = 'https://dashboard.ngrok.com/domains';
 const NGROK_AGENTS_URL = 'https://dashboard.ngrok.com/agents';
 const NOTICE_DEBOUNCE_MS = 15000;
-const PREFERENCE_STATE_PREFIX = 'devMate.ngrokPreference.';
 
 let baseExtension = null;
 let managedAuthtoken = '';
@@ -34,46 +33,13 @@ function config() {
   return vscode.workspace.getConfiguration('devMate');
 }
 
-function preferenceStateKey(name) {
-  return `${PREFERENCE_STATE_PREFIX}${name}`;
-}
-
 function preferenceValue(name, fallback) {
-  const cfg = config();
-  let inspected;
-  try { inspected = cfg.inspect(name); } catch {}
-
-  if (inspected) {
-    const explicit = inspected.workspaceFolderValue ?? inspected.workspaceValue ?? inspected.globalValue;
-    if (explicit !== undefined) return explicit;
-  }
-
-  const stored = globalContext?.globalState.get(preferenceStateKey(name));
-  if (stored !== undefined) return stored;
-
-  try {
-    const configured = cfg.get(name);
-    return configured === undefined ? fallback : configured;
-  } catch {
-    return fallback;
-  }
+  const value = config().get(name);
+  return value === undefined ? fallback : value;
 }
 
 async function updatePreference(name, value) {
-  await globalContext?.globalState.update(preferenceStateKey(name), value);
-
-  try {
-    const cfg = config();
-    if (!cfg.inspect(name)) {
-      log(`Setting devMate.${name} is not registered by VS Code; using DevMate extension storage instead.`);
-      return false;
-    }
-    await cfg.update(name, value, vscode.ConfigurationTarget.Global);
-    return true;
-  } catch (error) {
-    log(`Could not update devMate.${name} in User Settings; using DevMate extension storage instead: ${error.message || error}`);
-    return false;
-  }
+  await config().update(name, value, vscode.ConfigurationTarget.Global);
 }
 
 function ngrokCommand() {

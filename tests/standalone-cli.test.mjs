@@ -18,7 +18,8 @@ test('creates a secure standalone team config, owner URL, and team member', asyn
   });
   assert.equal(result.config.deployment.mode, 'team');
   assert.equal(result.config.deployment.publicUrl, 'https://devmate.example.com');
-  assert.match(__test.ownerUrl({ config }), /^https:\/\/devmate\.example\.com\/mcp\?token=/);
+  assert.equal(__test.ownerUrl({ config }), 'https://devmate.example.com/mcp');
+  assert.match(result.token, /^[A-Za-z0-9_-]{40,}$/);
   const created = __test.memberCreate({
     config,
     name: 'Alice',

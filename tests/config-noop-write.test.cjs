@@ -8,7 +8,7 @@ const test = require('node:test');
 const {
   atomicWriteJson,
   updateConfig
-} = require('../host/runtime/config-store.js');
+} = require('../shared/config-store.cjs');
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

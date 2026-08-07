@@ -2,6 +2,7 @@ import http from 'node:http';
 import { isMainThread, parentPort } from 'node:worker_threads';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
+import { shutdownCommandProcesses } from './command-process.mjs';
 import { readConfig } from './local-shared.mjs';
 import { installPlatformCapabilities } from './platform-capabilities.mjs';
 import { shutdownPluginServices } from './plugins/plugin-host.mjs';
@@ -62,6 +63,7 @@ async function shutdown(reason = '') {
     try { await shutdownPluginServices(); } catch {}
     try { await shutdownTeamServices(); } catch {}
     try { await shutdownPersistentProcesses(); } catch {}
+    try { await shutdownCommandProcesses(); } catch {}
     try { resetRunnerControlState(); } catch {}
     try { resetRequestGuardState(); } catch {}
     try { releaseGatewayInstanceLock(); } catch {}

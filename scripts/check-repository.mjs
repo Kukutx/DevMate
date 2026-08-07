@@ -58,4 +58,21 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Checked ${files.length} JavaScript files.`);
+const forbidden = [
+  ['gateway/server.mjs', /writeFileSync\(CONFIG_PATH/, 'direct Gateway config write'],
+  ['extension.js', /permissionProfile\(\) === 'fullAccess' \|\| .*allowDirectoryMutations/, 'directory permission bypass'],
+  ['extension-entry-platform.js', /extension-config-io|extension-entry-win32/, 'removed compatibility entry'],
+  ['gateway/team-tool-data.mjs', /map\.set\(item\.name/, 'ambiguous workspace scope map']
+];
+for (const [file, pattern, label] of forbidden) {
+  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  if (pattern.test(source)) failures.push({ file, output: label });
+}
+for (const removed of ['extension-config-io.js', 'extension-entry-win32.js', 'ngrok-launch-compat.js', 'host/runtime/config-store.js']) {
+  if (fs.existsSync(path.join(root, removed))) failures.push({ file: removed, output: 'removed architecture file still exists' });
+}
+if (failures.length) {
+  for (const failure of failures) console.error(`\nRepository contract failed: ${failure.file}\n${failure.output}`);
+  process.exit(1);
+}
+console.log(`Checked ${files.length} JavaScript files and architecture contracts.`);

@@ -83,15 +83,14 @@ async function waitReady() {
 }
 
 async function rpc(method, params, authToken = token) {
-  const url = authToken
-    ? `http://127.0.0.1:${port}/mcp?token=${encodeURIComponent(authToken)}`
-    : `http://127.0.0.1:${port}/mcp`;
-  return fetchJson(url, {
+  const headers = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream'
+  };
+  if (authToken) headers.authorization = `Bearer ${authToken}`;
+  return fetchJson(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream'
-    },
+    headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000), method, params })
   });
 }

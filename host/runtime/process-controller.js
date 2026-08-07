@@ -10,7 +10,7 @@ const {
   DEFAULT_VERSION,
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
-const { ensurePersonalConfig, readJson, updateConfig } = require('./config-store.js');
+const { ensurePersonalConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
 const { cleanupOwnedGatewayInstanceLock } = require('./instance-lock-cleanup.js');
 const { choosePort, healthAt, healthMatches } = require('./network.js');
 const { OperationCoordinator } = require('./operation-coordinator.js');
@@ -464,9 +464,12 @@ class RuntimeController {
     const config = this.ensureConfig();
     const origin = String(publicOrigin || config.deployment?.publicUrl || `http://127.0.0.1:${config.server.port}`)
       .replace(/\/$/, '');
-    const url = new URL(`${origin}${config.server?.mcpPath || '/mcp'}`);
-    if (config.auth?.required !== false && config.auth?.token) url.searchParams.set('token', config.auth.token);
-    return url.toString();
+    return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
+  }
+
+  ownerToken() {
+    const config = this.ensureConfig();
+    return config.auth?.required === false ? '' : String(config.auth?.token || '');
   }
 
   dispose({ stopOwned = false } = {}) {

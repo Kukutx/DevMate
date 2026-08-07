@@ -10,8 +10,8 @@
     "url": "https://github.com/Kukutx/DevMate.git"
   },
   "engines": {
-    "vscode": "^1.90.0",
-    "node": ">=18"
+    "vscode": "^1.132.0",
+    "node": ">=24"
   },
   "categories": [
     "Machine Learning",
@@ -24,6 +24,7 @@
     "onCommand:devMate.stop",
     "onCommand:devMate.restart",
     "onCommand:devMate.copyUrl",
+    "onCommand:devMate.copyToken",
     "onCommand:devMate.addReference",
     "onCommand:devMate.clearReferences",
     "onCommand:devMate.doctor",
@@ -68,6 +69,11 @@
       {
         "command": "devMate.copyUrl",
         "title": "DevMate: Copy URL"
+      },
+      {
+        "command": "devMate.copyToken",
+        "title": "DevMate: Copy Bearer Token",
+        "category": "DevMate"
       },
       {
         "command": "devMate.addReference",
@@ -431,7 +437,7 @@
     "build:obsidian": "npm run version:check && node obsidian-plugin/esbuild.config.mjs && node scripts/check-obsidian-release.mjs --dist",
     "compile": "npm run build",
     "vscode:prepublish": "npm run build",
-    "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-obsidian-release.mjs",
+    "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs",
     "test:unit": "node scripts/run-tests.mjs",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package",
@@ -450,7 +456,8 @@
   },
   "devDependencies": {
     "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "js-yaml": "^4.3.1"
   },
   "license": "MIT",
   "overrides": {

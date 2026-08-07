@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import configStore from '../shared/config-store.cjs';
 import {
   createTeamMember,
   memberPublic,
@@ -11,6 +12,8 @@ import {
   revokeTeamMember,
   rotateTeamMemberToken
 } from '../gateway/team-access.mjs';
+
+const { DEFAULT_VERSION, SUPPORTED_CONFIG_VERSION, readJson: readConfigJson, updateConfig } = configStore;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..');
@@ -49,16 +52,7 @@ function configFile(options) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-}
-
-function writeSecureJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600
-  });
-  try { fs.chmodSync(file, 0o600); } catch {}
+  return readConfigJson(file, null, { strict: true, supportedVersion: true });
 }
 
 function cleanMode(value) {
@@ -117,8 +111,8 @@ function initConfig(options) {
     httpsOnly: mode === 'production'
   });
   const config = {
-    version: 10,
-    appVersion: 'standalone',
+    version: SUPPORTED_CONFIG_VERSION,
+    appVersion: DEFAULT_VERSION,
     instanceId: `standalone-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
     server: { port, mcpPath: '/mcp' },
     runtime: {
@@ -177,7 +171,7 @@ function initConfig(options) {
     plugins: { enabled: [], settings: {} },
     trustedWritableRoots: []
   };
-  writeSecureJson(file, config);
+  updateConfig(file, () => config);
   return { file, config, token };
 }
 
@@ -249,9 +243,7 @@ function ownerUrl(options) {
     config.deployment?.publicUrl ||
     `http://127.0.0.1:${config.server?.port || 8787}`
   );
-  const url = new URL(`${origin}${config.server?.mcpPath || '/mcp'}`);
-  url.searchParams.set('token', config.auth.token);
-  return url.toString();
+  return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
 }
 
 function memberList(options) {
@@ -261,41 +253,50 @@ function memberList(options) {
 
 function memberCreate(options) {
   const file = configFile(options);
-  const config = normalizeDeploymentConfig(readJson(file));
-  if (!config.team.enabled) throw new Error('Team mode is not enabled in this config');
   const workspaceIds = String(options.workspaces || options.workspace || '')
     .split(',')
     .map(value => value.trim())
     .filter(Boolean);
-  const result = createTeamMember(config, {
-    id: options.id,
-    name: String(options.name || '').trim(),
-    role: options.role,
-    workspaceIds,
-    expiresAt: options['expires-at'] || null
+  let result = null;
+  updateConfig(file, current => {
+    const config = normalizeDeploymentConfig(current);
+    if (!config.team.enabled) throw new Error('Team mode is not enabled in this config');
+    result = createTeamMember(config, {
+      id: options.id,
+      name: String(options.name || '').trim(),
+      role: options.role,
+      workspaceIds,
+      expiresAt: options['expires-at'] || null
+    });
+    if (!result.member.name) throw new Error('--name is required');
+    return config;
   });
-  if (!result.member.name) throw new Error('--name is required');
-  writeSecureJson(file, config);
   return result;
 }
 
 function memberRotate(options) {
   const file = configFile(options);
-  const config = normalizeDeploymentConfig(readJson(file));
   const id = String(options.id || '').trim();
   if (!id) throw new Error('--id is required');
-  const result = rotateTeamMemberToken(config, id);
-  writeSecureJson(file, config);
+  let result = null;
+  updateConfig(file, current => {
+    const config = normalizeDeploymentConfig(current);
+    result = rotateTeamMemberToken(config, id);
+    return config;
+  });
   return result;
 }
 
 function memberRevoke(options) {
   const file = configFile(options);
-  const config = normalizeDeploymentConfig(readJson(file));
   const id = String(options.id || '').trim();
   if (!id) throw new Error('--id is required');
-  const member = revokeTeamMember(config, id);
-  writeSecureJson(file, config);
+  let member = null;
+  updateConfig(file, current => {
+    const config = normalizeDeploymentConfig(current);
+    member = revokeTeamMember(config, id);
+    return config;
+  });
   return member;
 }
 
@@ -312,7 +313,7 @@ async function serve(options) {
 }
 
 function help() {
-  return `DevMate standalone gateway\n\nCommands:\n  devmate init --workspace <path> [--config <path>] [--mode personal|team|production] [--provider ngrok|cloudflare-managed|external]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path> [--url https://devmate.example.com]\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> [--role developer] [--workspaces workspace]\n  devmate member-rotate --config <path> --id <member-id>\n  devmate member-revoke --config <path> --id <member-id>\n\nSecrets for production tunnels remain outside config.json. Run ngrok/cloudflared as a separate managed service or use the VS Code deployment integration.\n`;
+  return `DevMate standalone gateway\n\nCommands:\n  devmate init --workspace <path> [--config <path>] [--mode personal|team|production] [--provider ngrok|cloudflare-managed|external]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path> [--url https://devmate.example.com]  # send ownerToken as Authorization: Bearer\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> [--role developer] [--workspaces workspace]\n  devmate member-rotate --config <path> --id <member-id>\n  devmate member-revoke --config <path> --id <member-id>\n\nSecrets for production tunnels remain outside config.json. Run ngrok/cloudflared as a separate managed service or use the VS Code deployment integration.\n`;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

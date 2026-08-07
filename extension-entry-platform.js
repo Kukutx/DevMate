@@ -10,10 +10,7 @@ const {
   normalizeProvider,
   normalizePublicUrl
 } = require('./tunnel-provider');
-const {
-  loadWithConfigWriteInterceptor,
-  writeMergedExtensionConfig
-} = require('./extension-config-io');
+const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -40,16 +37,10 @@ function configPath(context) {
   return path.join(context.globalStorageUri.fsPath, 'config.json');
 }
 
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return null;
-  }
-}
+function readJson(file) { return readExtensionConfig(file); }
 
 function writeJson(file, value) {
-  writeMergedExtensionConfig(fs, file, value);
+  writeExtensionConfig(file, value);
 }
 
 function setting(name, fallback) {
@@ -357,8 +348,8 @@ async function activate(context) {
     await updateSetting('ngrokUseManagedAccount', false);
   }
 
-  const entry = process.platform === 'win32' ? './extension-entry-win32' : './extension-entry';
-  innerExtension = loadWithConfigWriteInterceptor(require.resolve(entry), configPath(context));
+  const entry = './extension-entry';
+  innerExtension = require(entry);
   await innerExtension.activate(context);
   syncDeploymentConfig(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {

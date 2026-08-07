@@ -3,14 +3,21 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { withFileLockSync } = require('../../config-file-lock.cjs');
-const {
-  DEFAULT_PORT,
-  DEFAULT_VERSION,
-  MAX_CONFIG_BYTES,
-  SUPPORTED_CONFIG_VERSION
-} = require('./constants.js');
-const { normalizedWorkspaceRoot } = require('./state-paths.js');
+const { withFileLockSync } = require('../config-file-lock.cjs');
+const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
+const packageJson = require('../package.json');
+const DEFAULT_PORT = 8787;
+const DEFAULT_VERSION = packageJson.version;
+const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
+const SUPPORTED_CONFIG_VERSION = 11;
+
+function normalizedWorkspaceRoot(root) {
+  const resolved = path.resolve(String(root || '.'));
+  let real = resolved;
+  try { real = fs.realpathSync.native(resolved); }
+  catch { real = fs.realpathSync(resolved); }
+  return process.platform === 'win32' ? real.toLowerCase() : real;
+}
 
 function configError(message, code, file, cause = null) {
   const error = new Error(`${message}: ${file}`);
@@ -67,6 +74,57 @@ function readJson(file, fallback = null, { strict = false, supportedVersion = fa
     if (strict) throw error;
     return fallback;
   }
+}
+
+
+function fingerprint(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function readConfigState(file) {
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat) return { exists: false, raw: '', hash: null, value: {} };
+  if (!stat.isFile()) throw configError('DevMate config path is not a file', 'config_not_file', file);
+  if (stat.size > MAX_CONFIG_BYTES) {
+    const error = configError(`DevMate config exceeds ${MAX_CONFIG_BYTES} bytes (${stat.size} bytes)`, 'config_too_large', file);
+    error.bytes = stat.size;
+    error.maxBytes = MAX_CONFIG_BYTES;
+    throw error;
+  }
+  let raw;
+  let value;
+  try {
+    raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+    value = JSON.parse(raw);
+  } catch (cause) {
+    throw configError('DevMate config contains invalid JSON', 'config_invalid_json', file, cause);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw configError('DevMate config root must be a JSON object', 'config_invalid_root', file);
+  }
+  assertSupportedConfigVersion(value, file);
+  return { exists: true, raw, hash: fingerprint(raw), value };
+}
+
+function attachConfigSnapshot(value, file, state) {
+  Object.defineProperty(value, CONFIG_SNAPSHOT, {
+    value: Object.freeze({ file: path.resolve(file), exists: state.exists, hash: state.hash }),
+    enumerable: false,
+    configurable: false,
+    writable: false
+  });
+  return value;
+}
+
+function readConfigSnapshot(file) {
+  const target = path.resolve(file);
+  recoverConfigReplacement(target);
+  const state = readConfigState(target);
+  return attachConfigSnapshot(state.value, target, state);
+}
+
+function configConflict(file) {
+  return configError('DevMate config changed while it was being edited', 'config_conflict', file);
 }
 
 function fsyncDirectory(directory) {
@@ -225,19 +283,56 @@ function atomicWriteJson(file, value) {
   }
 }
 
-function updateConfig(file, mutator) {
+
+function replaceConfig(file, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw configError('DevMate config replacement requires a JSON object', 'config_invalid_write', file);
+  }
+  const target = path.resolve(file);
+  const source = value[CONFIG_SNAPSHOT];
+  if (!source || source.file !== target) {
+    throw configError('DevMate config replacement requires a current snapshot', 'config_snapshot_required', target);
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  return withFileLockSync(target, () => {
+    recoverConfigReplacement(target);
+    const current = readConfigState(target);
+    if (current.exists !== source.exists || current.hash !== source.hash) throw configConflict(target);
+    assertSupportedConfigVersion(value, target);
+    atomicWriteJson(target, value);
+    return readConfigSnapshot(target);
+  });
+}
+
+function updateConfig(file, mutator, { retries = 3 } = {}) {
   if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  return withFileLockSync(file, () => {
-    const recovery = recoverConfigReplacement(file);
-    const current = recovery.value || {};
-    assertSupportedConfigVersion(current, file);
-    const before = JSON.stringify(current);
-    const next = mutator(current) || current;
-    assertSupportedConfigVersion(next, file);
-    const unchanged = recovery.value !== null && JSON.stringify(next) === before;
-    if (!unchanged) atomicWriteJson(file, next);
-    return next;
+  const target = path.resolve(file);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const attempts = Math.min(10, Math.max(1, Math.trunc(Number(retries) || 3)));
+  return withFileLockSync(target, () => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      recoverConfigReplacement(target);
+      const beforeState = readConfigState(target);
+      const current = attachConfigSnapshot(beforeState.value, target, beforeState);
+      const beforeJson = JSON.stringify(current);
+      const changed = mutator(current);
+      if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
+      if (changed === false) return current;
+      const next = changed === undefined ? current : changed;
+      if (!next || typeof next !== 'object' || Array.isArray(next)) {
+        throw configError('Config mutator must return a JSON object', 'config_invalid_write', target);
+      }
+      assertSupportedConfigVersion(next, target);
+      const afterState = readConfigState(target);
+      if (afterState.exists !== beforeState.exists || afterState.hash !== beforeState.hash) {
+        if (attempt === attempts - 1) throw configConflict(target);
+        continue;
+      }
+      if (beforeState.exists && JSON.stringify(next) === beforeJson) return current;
+      atomicWriteJson(target, next);
+      return readConfigSnapshot(target);
+    }
+    throw configConflict(target);
   });
 }
 
@@ -382,6 +477,9 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
 }
 
 module.exports = {
+  DEFAULT_VERSION,
+  MAX_CONFIG_BYTES,
+  SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
   atomicWriteJson,
   cleanupReplacementCandidates,
@@ -392,7 +490,9 @@ module.exports = {
   parseJsonObjectFile,
   quarantineConfig,
   randomToken,
+  readConfigSnapshot,
   readJson,
+  replaceConfig,
   recoverConfigReplacement,
   replacementCandidates,
   updateConfig,

@@ -25,7 +25,10 @@ async function withConfig(t, prefix, initial = { version: 1 }) {
 
 test('writes DevMate config atomically with valid JSON and no temporary files', async t => {
   const { directory, configPath, shared } = await withConfig(t, 'devmate-config-');
-  shared.writeConfig({ version: 2, nested: { ready: true } });
+  const config = shared.readConfig();
+  config.version = 2;
+  config.nested = { ready: true };
+  shared.writeConfig(config);
   assert.deepEqual(shared.readConfig(), { version: 2, nested: { ready: true } });
   const entries = await fsp.readdir(directory);
   assert.deepEqual(entries, ['config.json']);
@@ -33,6 +36,16 @@ test('writes DevMate config atomically with valid JSON and no temporary files', 
     const mode = fs.statSync(configPath).mode & 0o777;
     assert.equal(mode, 0o600);
   }
+});
+
+
+test('rejects unsourced whole-document replacement', async t => {
+  const { shared } = await withConfig(t, 'devmate-config-unsourced-', { version: 1, keep: true });
+  assert.throws(() => shared.writeConfig({ version: 1, replace: true }), error => {
+    assert.equal(error.code, 'config_snapshot_required');
+    return true;
+  });
+  assert.deepEqual(shared.readConfig(), { version: 1, keep: true });
 });
 
 test('rejects stale configuration snapshots instead of losing a concurrent update', async t => {
@@ -135,12 +148,27 @@ test('bounds each audit event and preserves trusted system fields', async t => {
   }
 });
 
+
+test('accepts an explicit trusted task ID after task state is cleared', async t => {
+  const { directory, shared } = await withConfig(t, 'devmate-config-finished-task-', {
+    version: 1,
+    permissions: { profile: 'fullAccess' }
+  });
+  await shared.audit('finish_task', { taskId: 'forged', title: 'done' }, { taskId: 'task-real' });
+  const auditPath = path.join(directory, 'state', 'audit.jsonl');
+  const entry = JSON.parse((await fsp.readFile(auditPath, 'utf8')).trim());
+  assert.equal(entry.taskId, 'task-real');
+  assert.equal(entry.action, 'finish_task');
+  assert.equal(entry.title, 'done');
+});
+
 test('rejects malformed configuration roots with the config path in the error', async t => {
   const { configPath, shared } = await withConfig(t, 'devmate-config-invalid-');
   await fsp.writeFile(configPath, '[]\n', 'utf8');
   assert.throws(() => shared.readConfig(), error => {
-    assert.match(error.message, /Could not read DevMate config/);
-    assert.match(error.message, /configuration root must be a JSON object/);
+    assert.equal(error.code, 'config_invalid_root');
+    assert.equal(error.configFile, configPath);
+    assert.match(error.message, /DevMate config root must be a JSON object/);
     return true;
   });
 });
