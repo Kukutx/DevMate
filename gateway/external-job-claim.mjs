@@ -2,6 +2,7 @@ import { now } from './local-shared.mjs';
 import { mutateDurableDocument } from './durable-state.mjs';
 import { compactJobStore } from './job-store-limits.mjs';
 import { issueRunnerClaimInStore, normalizeRunnerClaimStore } from './runner-claim-fencing.mjs';
+import { defaultedInteger } from './strict-config.mjs';
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -72,14 +73,16 @@ function selectCandidate(store, runner, timestamp = Date.now()) {
 export function claimExternalJob({ runnerId, leaseSeconds = 60 }) {
   const owner = String(runnerId || '').trim();
   if (!owner) throw new Error('runnerId is required');
+  const lease = defaultedInteger(leaseSeconds, 60, 15, 300, 'Runner leaseSeconds');
   return mutateDurableDocument(document => {
     const store = normalizeJobStore(document.namespaces.jobs);
     compactJobStore(store);
     if (store.drain.active) return null;
     const runner = store.runners.find(item => item.id === owner);
     if (!runner || runner.status !== 'online') throw new Error(`Runner is not online: ${owner}`);
+    const maxConcurrent = defaultedInteger(runner.maxConcurrent, 1, 1, 16, 'Runner maxConcurrent');
     const running = store.jobs.filter(job => job.runnerId === owner && job.status === 'running').length;
-    if (running >= Number(runner.maxConcurrent || 1)) return null;
+    if (running >= maxConcurrent) return null;
     const job = selectCandidate(store, runner);
     if (!job) return null;
     const fromStatus = job.status;
@@ -87,7 +90,7 @@ export function claimExternalJob({ runnerId, leaseSeconds = 60 }) {
     job.runnerId = owner;
     job.startedAt ||= now();
     job.updatedAt = now();
-    job.leaseExpiresAt = new Date(Date.now() + Math.min(300, Math.max(15, Number(leaseSeconds) || 60)) * 1000).toISOString();
+    job.leaseExpiresAt = new Date(Date.now() + lease * 1000).toISOString();
     if (fromStatus !== 'waiting_approval' && fromStatus !== 'blocked_lease') job.attempts += 1;
     appendEvent(job, 'claimed', { runnerId: owner, fromStatus, attempt: job.attempts, fenced: true });
     runner.runningJobs = running + 1;
