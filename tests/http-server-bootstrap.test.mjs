@@ -82,10 +82,17 @@ test('rejects invalid bootstrap dependencies without mutating the HTTP module', 
   assert.equal(httpModule.createServer, originalCreateServer);
 });
 
-test('Gateway runtime restores the process-global HTTP factory after server module bootstrap', () => {
+test('Gateway runtime restores the process-global HTTP factory after all bootstrap initialization', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const source = fs.readFileSync(path.join(root, 'gateway', 'server-runtime.mjs'), 'utf8');
   assert.match(source, /installHttpServerBootstrap\(http,/);
-  assert.match(source, /try\s*\{\s*await import\('\.\/server\.mjs'\);\s*\}\s*finally\s*\{\s*httpBootstrap\.restore\(\);\s*\}/s);
   assert.doesNotMatch(source, /http\.createServer\s*=/);
+
+  const bootstrapStart = source.lastIndexOf('\ntry {');
+  assert.ok(bootstrapStart > 0);
+  const bootstrapBlock = source.slice(bootstrapStart);
+  assert.match(bootstrapBlock, /installPlatformCapabilities\(McpServer\)/);
+  assert.match(bootstrapBlock, /startJobRuntime\(\)/);
+  assert.match(bootstrapBlock, /await import\('\.\/server\.mjs'\)/);
+  assert.match(bootstrapBlock, /finally\s*\{\s*httpBootstrap\.restore\(\);\s*\}/s);
 });
