@@ -6,7 +6,10 @@ import {
   createTeamMember,
   normalizeDeploymentConfig,
   requiredCapabilityForTool,
+  revokeTeamMember,
+  rotateTeamMemberToken,
   toolWorkspaceId,
+  updateTeamMember,
   verifyAccessToken
 } from '../gateway/team-access.mjs';
 
@@ -46,6 +49,23 @@ test('creates hashed team tokens and verifies scoped principals', () => {
   assert.equal(principal.id, created.member.id);
   assert.equal(principal.role, 'developer');
   assert.deepEqual(principal.workspaceIds, ['app']);
+});
+
+test('rotating a revoked Team token does not reactivate the member', () => {
+  const current = config();
+  normalizeDeploymentConfig(current);
+  const created = createTeamMember(current, {
+    id: 'revoked-member',
+    name: 'Revoked member',
+    role: 'developer',
+    workspaceIds: ['app']
+  });
+  revokeTeamMember(current, created.member.id);
+  const rotated = rotateTeamMemberToken(current, created.member.id);
+  assert.equal(rotated.member.disabled, true);
+  assert.equal(verifyAccessToken(rotated.token, current), null);
+  updateTeamMember(current, created.member.id, { disabled: false });
+  assert.equal(verifyAccessToken(rotated.token, current)?.id, created.member.id);
 });
 
 test('rejects empty Team workspace scopes instead of treating them as global access', () => {
