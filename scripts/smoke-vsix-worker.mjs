@@ -69,8 +69,8 @@ try {
     'vscode-host/spawn-layer.js',
     'vscode-host/bounded-http-client.js',
     'vscode-host/shared-tunnel-record-store.js',
-    'vscode-host/shared-tunnel-process.js',
-    'vscode-host/shared-tunnel-runtime.js',
+    'vscode-host/tunnel-controller.js',
+    'vscode-host/tunnel-runtime.js',
     'host/runtime-controller.js',
     'shared/config-store.cjs',
     'host/runtime/diagnostics-store.js',
@@ -85,6 +85,9 @@ try {
   for (const relative of requiredFiles) {
     const file = path.join(extensionPath, relative);
     assert.equal(fs.statSync(file, { throwIfNoEntry: false })?.isFile(), true, `VSIX is missing ${relative}`);
+  }
+  for (const retired of ['vscode-host/shared-tunnel-process.js', 'vscode-host/shared-tunnel-runtime.js']) {
+    assert.equal(fs.existsSync(path.join(extensionPath, retired)), false, `VSIX must not package retired ${retired}`);
   }
 
   const requireFromVsix = createRequire(packageFile);
@@ -161,6 +164,8 @@ try {
     singleWorkerVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
+    providerNativeTunnelRuntimePackaged: true,
+    retiredTunnelRuntimeExcluded: true,
     spawnLayerPackaged: true
   }));
 } finally {

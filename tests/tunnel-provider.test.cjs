@@ -1,18 +1,16 @@
+'use strict';
+
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   cloudflareLaunch,
   decorateNgrokArgs,
-  normalizeAutoRestart,
-  normalizeMaxRestarts,
   normalizeProvider,
   normalizePublicUrl,
-  parsePort,
-  parseTryCloudflareUrl,
-  TunnelCompatibilityManager
+  parseTryCloudflareUrl
 } = require('../tunnel-provider');
 
-test('builds safe tunnel provider commands without exposing managed tokens in args', () => {
+test('builds safe Cloudflare managed commands without exposing tokens in args', () => {
   const launch = cloudflareLaunch(
     'cloudflare-managed',
     8787,
@@ -22,9 +20,28 @@ test('builds safe tunnel provider commands without exposing managed tokens in ar
   assert.deepEqual(launch.args, ['tunnel', 'run']);
   assert.equal(launch.options.env.TUNNEL_TOKEN, 'secret-token-value-long-enough');
   assert.equal(launch.args.join(' ').includes('secret-token'), false);
+  assert.equal(launch.publicUrl, 'https://devmate.example.com');
 });
 
-test('rejects explicit invalid tunnel providers instead of falling back to ngrok', () => {
+test('builds a native Cloudflare quick tunnel launch', () => {
+  const launch = cloudflareLaunch('cloudflare-quick', 8787, { cloudflareCommandPath: 'cloudflared' }, {});
+  assert.equal(launch.command, 'cloudflared');
+  assert.deepEqual(launch.args, ['tunnel', '--url', 'http://127.0.0.1:8787']);
+  assert.equal(launch.publicUrl, '');
+});
+
+test('Cloudflare managed mode requires its own token and stable HTTPS origin', () => {
+  assert.throws(
+    () => cloudflareLaunch('cloudflare-managed', 8787, { publicUrl: 'https://devmate.example.com' }, {}),
+    /token is not configured/
+  );
+  assert.throws(
+    () => cloudflareLaunch('cloudflare-managed', 8787, { publicUrl: 'http://devmate.example.com' }, { cloudflareTunnelToken: 'secret' }),
+    /https/
+  );
+});
+
+test('rejects explicit invalid tunnel providers instead of falling back', () => {
   assert.equal(normalizeProvider(undefined), 'ngrok');
   assert.equal(normalizeProvider(' CLOUDFLARE-QUICK '), 'cloudflare-quick');
   assert.throws(() => normalizeProvider(''), /Unknown tunnel provider/);
@@ -32,30 +49,15 @@ test('rejects explicit invalid tunnel providers instead of falling back to ngrok
   assert.throws(() => normalizeProvider('typo-provider'), /Unknown tunnel provider/);
 });
 
-test('defaults only missing restart settings and rejects malformed explicit values', () => {
-  assert.equal(normalizeAutoRestart(undefined), true);
-  assert.equal(normalizeAutoRestart(false), false);
-  assert.throws(() => normalizeAutoRestart('false'), /must be a boolean/);
-  assert.equal(normalizeMaxRestarts(undefined), 10);
-  assert.equal(normalizeMaxRestarts(0), 0);
-  assert.equal(normalizeMaxRestarts(50), 50);
-  for (const value of ['10', null, -1, 51, 1.5, NaN]) {
-    assert.throws(() => normalizeMaxRestarts(value), /integer from 0 to 50/);
-  }
-
-  const manager = new TunnelCompatibilityManager({
-    settings: () => ({ provider: 'external', publicUrl: 'https://devmate.example.com', autoRestart: false, maxRestarts: 0 })
-  });
-  assert.equal(manager.diagnostics().autoRestart, false);
-  assert.equal(manager.diagnostics().maxRestarts, 0);
-});
-
-test('decorates ngrok production policies and parses provider output', () => {
+test('decorates real ngrok launches and parses provider output', () => {
   assert.deepEqual(
     decorateNgrokArgs(['http', '8787'], { ngrokTrafficPolicyFile: 'policy.yml' }),
     ['http', '8787', '--traffic-policy-file', 'policy.yml']
   );
-  assert.equal(parsePort(['http', 'http://127.0.0.1:8787']), 8787);
+  assert.deepEqual(
+    decorateNgrokArgs(['http', '8787', '--traffic-policy-file', 'existing.yml'], { ngrokTrafficPolicyFile: 'policy.yml' }),
+    ['http', '8787', '--traffic-policy-file', 'existing.yml']
+  );
   assert.equal(
     parseTryCloudflareUrl('Ready https://random-name.trycloudflare.com now'),
     'https://random-name.trycloudflare.com'
@@ -63,38 +65,14 @@ test('decorates ngrok production policies and parses provider output', () => {
   assert.equal(normalizePublicUrl('devmate.example.com'), 'https://devmate.example.com');
 });
 
-test('provides a virtual ngrok compatibility API for alternate tunnel providers', async () => {
-  const manager = new TunnelCompatibilityManager({
-    settings: () => ({ provider: 'external', publicUrl: 'https://devmate.example.com' })
-  });
-  manager.publicUrl = 'https://devmate.example.com';
-  manager.localPort = 8787;
-  const wrapped = manager.wrapHttpRequest(() => {
-    throw new Error('unexpected real request');
-  });
-  const result = await new Promise((resolve, reject) => {
-    const req = wrapped(
-      new URL('http://127.0.0.1:4040/api/tunnels'),
-      { method: 'GET' },
-      res => {
-        let text = '';
-        res.on('data', data => { text += data; });
-        res.on('end', () => resolve({ status: res.statusCode, text }));
-      }
-    );
-    req.on('error', reject);
-    req.end();
-  });
-  assert.equal(result.status, 200);
-  assert.match(result.text, /devmate\.example\.com/);
-});
-
-test('passes native ngrok API requests through unchanged', () => {
-  const sentinel = { native: true };
-  const manager = new TunnelCompatibilityManager({ settings: () => ({ provider: 'ngrok' }) });
-  const wrapped = manager.wrapHttpRequest(() => sentinel);
-  assert.equal(
-    wrapped(new URL('http://127.0.0.1:4040/api/tunnels'), { method: 'GET' }),
-    sentinel
-  );
+test('public tunnel origins reject paths, credentials, queries, and non-HTTPS schemes', () => {
+  for (const value of [
+    'http://devmate.example.com',
+    'https://user:pass@devmate.example.com',
+    'https://devmate.example.com/mcp',
+    'https://devmate.example.com?token=x',
+    'https://devmate.example.com#fragment'
+  ]) {
+    assert.throws(() => normalizePublicUrl(value));
+  }
 });
