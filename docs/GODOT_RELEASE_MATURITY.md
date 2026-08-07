@@ -1,6 +1,6 @@
 # Godot maturity and release evidence
 
-DevMate 2.8 completes the project-local Godot loop from initial automation setup to an explicit release decision. The tools in this guide do not publish a build, modify signing credentials, or approve their own evidence.
+DevMate's current Godot integration covers the project-local loop from initial automation setup to an explicit release decision. The tools in this guide do not publish a build, modify signing credentials, or approve their own evidence.
 
 ## Complete workflow
 
@@ -199,6 +199,6 @@ Baseline updates and automation bootstrap are intentionally not durable jobs bec
 
 ## Recommended stopping point
 
-At DevMate 2.8, the Godot integration covers setup, project audit, dependency analysis, native/Web QA, deterministic input, performance budgets, baselines and regression, framework tests, capture, export matrices, durable Runner execution, quality reporting, and evidence-based release decisions.
+The current Godot integration covers setup, project audit, dependency analysis, native/Web QA, deterministic input, performance budgets, baselines and regression, framework tests, capture, export matrices, durable Runner execution, quality reporting, and evidence-based release decisions.
 
 Further additions should be driven by a real project requirement rather than generic feature growth. Examples that belong in future, separate work are platform signing integrations, distributed control-plane high availability, engine-editor UI embedding, and organization-specific release systems.
