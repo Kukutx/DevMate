@@ -5,10 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
+import configStore from '../shared/config-store.cjs';
 
+const { SUPPORTED_CONFIG_VERSION } = configStore;
 const moduleUrl = pathToFileURL(path.resolve('gateway/local-shared.mjs')).href;
 
-async function withConfig(t, prefix, initial = { version: 1 }) {
+async function withConfig(t, prefix, initial = { version: SUPPORTED_CONFIG_VERSION }) {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   const configPath = path.join(directory, 'config.json');
@@ -26,10 +28,9 @@ async function withConfig(t, prefix, initial = { version: 1 }) {
 test('writes DevMate config atomically with valid JSON and no temporary files', async t => {
   const { directory, configPath, shared } = await withConfig(t, 'devmate-config-');
   const config = shared.readConfig();
-  config.version = 2;
   config.nested = { ready: true };
   shared.writeConfig(config);
-  assert.deepEqual(shared.readConfig(), { version: 2, nested: { ready: true } });
+  assert.deepEqual(shared.readConfig(), { version: SUPPORTED_CONFIG_VERSION, nested: { ready: true } });
   const entries = await fsp.readdir(directory);
   assert.deepEqual(entries, ['config.json']);
   if (process.platform !== 'win32') {
@@ -38,18 +39,17 @@ test('writes DevMate config atomically with valid JSON and no temporary files', 
   }
 });
 
-
 test('rejects unsourced whole-document replacement', async t => {
-  const { shared } = await withConfig(t, 'devmate-config-unsourced-', { version: 1, keep: true });
-  assert.throws(() => shared.writeConfig({ version: 1, replace: true }), error => {
+  const { shared } = await withConfig(t, 'devmate-config-unsourced-', { version: SUPPORTED_CONFIG_VERSION, keep: true });
+  assert.throws(() => shared.writeConfig({ version: SUPPORTED_CONFIG_VERSION, replace: true }), error => {
     assert.equal(error.code, 'config_snapshot_required');
     return true;
   });
-  assert.deepEqual(shared.readConfig(), { version: 1, keep: true });
+  assert.deepEqual(shared.readConfig(), { version: SUPPORTED_CONFIG_VERSION, keep: true });
 });
 
 test('rejects stale configuration snapshots instead of losing a concurrent update', async t => {
-  const { configPath, shared } = await withConfig(t, 'devmate-config-conflict-', { version: 1, first: false, second: false });
+  const { configPath, shared } = await withConfig(t, 'devmate-config-conflict-', { version: SUPPORTED_CONFIG_VERSION, first: false, second: false });
   const first = shared.readConfig();
   const stale = shared.readConfig();
   first.first = true;
@@ -59,45 +59,45 @@ test('rejects stale configuration snapshots instead of losing a concurrent updat
     assert.equal(error.code, 'config_conflict');
     return true;
   });
-  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: 1, first: true, second: false });
+  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: SUPPORTED_CONFIG_VERSION, first: true, second: false });
 });
 
 test('retries a synchronous config mutation after a detected concurrent writer', async t => {
-  const { configPath, shared } = await withConfig(t, 'devmate-config-retry-', { version: 1, external: 0, local: 0 });
+  const { configPath, shared } = await withConfig(t, 'devmate-config-retry-', { version: SUPPORTED_CONFIG_VERSION, external: 0, local: 0 });
   let attempts = 0;
   shared.mutateConfig(config => {
     attempts += 1;
     config.local += 1;
     if (attempts === 1) {
-      fs.writeFileSync(configPath, `${JSON.stringify({ version: 1, external: 1, local: 0 })}\n`, 'utf8');
+      fs.writeFileSync(configPath, `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, external: 1, local: 0 })}\n`, 'utf8');
     }
     return config;
   });
   assert.equal(attempts, 2);
-  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: 1, external: 1, local: 1 });
+  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: SUPPORTED_CONFIG_VERSION, external: 1, local: 1 });
 });
 
 test('recovers an interrupted Windows-style replacement backup', async t => {
-  const { directory, configPath, shared } = await withConfig(t, 'devmate-config-recovery-', { version: 1 });
+  const { directory, configPath, shared } = await withConfig(t, 'devmate-config-recovery-');
   await fsp.rm(configPath);
   const backup = `${configPath}.replace-123-456`;
-  await fsp.writeFile(backup, '{"version":7,"recovered":true}\n', 'utf8');
-  assert.deepEqual(shared.readConfig(), { version: 7, recovered: true });
+  await fsp.writeFile(backup, `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, recovered: true })}\n`, 'utf8');
+  assert.deepEqual(shared.readConfig(), { version: SUPPORTED_CONFIG_VERSION, recovered: true });
   assert.equal(fs.existsSync(configPath), true);
   assert.equal(fs.existsSync(backup), false);
   assert.deepEqual(await fsp.readdir(directory), ['config.json']);
 });
 
 test('restores a valid replacement before quarantining a corrupt main config', async t => {
-  const { directory, configPath, shared } = await withConfig(t, 'devmate-config-corrupt-recovery-', { version: 1 });
+  const { directory, configPath, shared } = await withConfig(t, 'devmate-config-corrupt-recovery-');
   await fsp.writeFile(configPath, '{"broken":', 'utf8');
   const backup = `${configPath}.replace-123-789`;
-  await fsp.writeFile(backup, '{"version":9,"restored":true}\n', 'utf8');
-  assert.deepEqual(shared.readConfig(), { version: 9, restored: true });
+  await fsp.writeFile(backup, `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, restored: true })}\n`, 'utf8');
+  assert.deepEqual(shared.readConfig(), { version: SUPPORTED_CONFIG_VERSION, restored: true });
   assert.equal(fs.existsSync(backup), false);
   const entries = await fsp.readdir(directory);
   assert.equal(entries.some(name => name.startsWith('config.json.corrupt-')), true);
-  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: 9, restored: true });
+  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: SUPPORTED_CONFIG_VERSION, restored: true });
 });
 
 test('redacts nested credentials, raw DevMate tokens, and circular audit values', async t => {
@@ -105,9 +105,9 @@ test('redacts nested credentials, raw DevMate tokens, and circular audit values'
   const secret = `${'a'.repeat(20)}_${'b'.repeat(22)}`;
   const value = {
     nested: {
-      authorization: 'Bearer abcdefghijklmnop',
+      authorization: 'Bearer example-credential',
       note: `member=dmt_data_ops_${secret}`,
-      child: { apiKey: 'super-secret' }
+      child: { apiKey: 'example-value' }
     }
   };
   value.self = value;
@@ -120,7 +120,7 @@ test('redacts nested credentials, raw DevMate tokens, and circular audit values'
 
 test('bounds each audit event and preserves trusted system fields', async t => {
   const { directory, shared } = await withConfig(t, 'devmate-config-audit-', {
-    version: 1,
+    version: SUPPORTED_CONFIG_VERSION,
     permissions: { profile: 'fullAccess' },
     task: { currentTaskId: 'task-real' }
   });
@@ -148,10 +148,9 @@ test('bounds each audit event and preserves trusted system fields', async t => {
   }
 });
 
-
 test('accepts an explicit trusted task ID after task state is cleared', async t => {
   const { directory, shared } = await withConfig(t, 'devmate-config-finished-task-', {
-    version: 1,
+    version: SUPPORTED_CONFIG_VERSION,
     permissions: { profile: 'fullAccess' }
   });
   await shared.audit('finish_task', { taskId: 'forged', title: 'done' }, { taskId: 'task-real' });

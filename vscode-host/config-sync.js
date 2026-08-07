@@ -1,4 +1,3 @@
-
 'use strict';
 
 const {
@@ -34,7 +33,8 @@ function mergeWorkspaces(candidate, current) {
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
-  assertSupportedConfigVersion(current);
+  const initializing = Object.keys(current).length === 0;
+  if (!initializing) assertSupportedConfigVersion(current);
   assertSupportedConfigVersion(candidate);
 
   const merged = { ...current };
@@ -45,7 +45,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
 
-  merged.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(current.version) || 0, Number(candidate.version) || 0);
+  merged.version = SUPPORTED_CONFIG_VERSION;
   merged.instanceId = has(current, 'instanceId') ? current.instanceId : candidate.instanceId;
 
   const currentAuth = object(current.auth);

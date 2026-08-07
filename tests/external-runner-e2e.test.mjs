@@ -119,6 +119,7 @@ const controlPort = controlServer.address().port;
 
 const configPath = path.join(temp, 'config.json');
 await fsp.writeFile(configPath, JSON.stringify({
+  version: 11,
   appVersion: '2.3.0',
   instanceId: 'external-runner-e2e',
   server: { port: localPort, mcpPath: '/mcp' },
