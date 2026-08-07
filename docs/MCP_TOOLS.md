@@ -1,6 +1,19 @@
 # MCP Tools
 
-DevMate exposes a common development tool surface in personal, team, and production modes. Team authorization is applied to core, plugin, job, and Runner-administration tools.
+DevMate exposes one development tool surface in personal, team, and production modes. Team authorization is applied to core, plugin, job, and Runner-administration tools.
+
+## Work sessions
+
+All deployment modes use the same work-session model:
+
+- `work_session_start`
+- `work_session_status`
+- `work_session_finish`
+- `work_session_rollback`
+
+`work_session_start` binds the caller to one workspace and acquires that workspace lease. Core file, command, validation, and Git calls made while the session is active are associated with its `workSessionId` in the audit log.
+
+`work_session_rollback` safely reverses recorded file mutations such as create, write, patch, delete, move, and backup restore. It does not automatically reverse shell commands or Git history. In team and production modes, the caller must hold the affected workspace lease when performing a rollback. A finished session can therefore be rolled back later after reacquiring the workspace lease.
 
 ## Deployment and team operations
 
@@ -22,9 +35,6 @@ Always available:
 - `workspace_lease_acquire`
 - `workspace_lease_status`
 - `workspace_lease_release`
-- `team_work_session_start`
-- `team_work_session_status`
-- `team_work_session_finish`
 - `published_preview_share`
 - `published_preview_list`
 - `published_preview_revoke`
@@ -66,9 +76,9 @@ Owner-managed Runner control tools:
 - `runner_credential_rotate`
 - `runner_credential_revoke`
 
-`runner_control_status` reports whether the embedded Runner and external control API are enabled, bounded API limits, credential counts, and the durable Runner registry.
+`runner_control_status` reports configured and live embedded Runner state separately, external control API state, bounded API limits, credential counts, and the durable Runner registry.
 
-`runner_control_configure` can enable or disable `/runner/v1`, control the embedded Runner lifecycle, and change bounded API limits. Changing the embedded Runner lifecycle requires a Gateway restart.
+`runner_control_configure` can enable or disable `/runner/v1`, control the embedded Runner lifecycle, and change bounded API limits. An embedded Runner lifecycle change may require a Gateway restart; readiness uses the live runtime state rather than configuration alone.
 
 Every `dmr_` credential has explicit workspace scopes, capabilities, concurrency, expiry, rotation, disable, and revocation. Runner tokens cannot call MCP tools.
 
@@ -91,12 +101,9 @@ A protected tool call creates a pending approval and fails without executing. A 
 
 - `gateway_status`, `gateway_self_test`, `maintenance_status`
 - `connection_diagnostics`, `devmate_status_panel`
-- legacy personal task tools: `start_task`, `finish_task`, `task_status`, `rollback_task`
 - `list_workspaces`, `vscode_context`, `active_editor_context`, `list_diagnostics`
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
-
-In team mode, use team work sessions rather than the legacy singleton task session.
 
 ## Obsidian knowledge tools
 
@@ -238,11 +245,10 @@ Publishing requires Maintainer capability and, in production, normally requires 
 ## Reporting and metrics
 
 - `show_changes`
-- `task_report`
 - `godot_quality_report`
 - `deployment_metrics`
 - `deployment_runtime_state`
 
-Prometheus-compatible metrics are available from loopback only at `/control/metrics`.
+Use `show_changes` for the final review of source changes before finishing a work session. Prometheus-compatible metrics are available from loopback only at `/control/metrics`.
 
 See `TEAM_DEPLOYMENT.md`, `JOBS.md`, `EXTERNAL_RUNNERS.md`, `GODOT_AUTOMATION.md`, `GODOT_RUNTIME_QUALITY.md`, `GODOT_TEST_PERFORMANCE.md`, `OPERATIONS.md`, `TUNNELS.md`, and `SECURITY.md` for detailed behavior and trust boundaries.
