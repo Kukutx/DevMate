@@ -41,6 +41,11 @@ test('Gateway shared modules require the current DEVMATE_CONFIG contract', () =>
   assert.doesNotMatch(source('gateway/local-shared.mjs'), /AIWG_CONFIG/);
 });
 
+test('Job capacity validation cannot bypass the current active-work limit', () => {
+  assert.doesNotMatch(source('gateway/job-store-limits.mjs'), /enforceActive/);
+  assert.doesNotMatch(source('gateway/job-queue.mjs'), /enforceActive|strict\s*[:=]\s*false/);
+});
+
 test('provider-native tunnel runtime contains no retired compatibility layer', () => {
   for (const retired of [
     'vscode-host/shared-tunnel-runtime.js',
