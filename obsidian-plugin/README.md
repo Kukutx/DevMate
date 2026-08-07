@@ -6,7 +6,10 @@ DevMate is a desktop-only Obsidian host for the same local-first MCP Gateway use
 
 - share one workspace-derived Gateway and state directory with VS Code;
 - auto start, manual start, restart, or attach to an existing matching Gateway;
-- run the bundled Gateway in an embedded Node Worker without requiring an external Node.js installation;
+- run the bundled Gateway in an isolated Node.js 24+ child process rather than inside the Obsidian renderer;
+- auto-detect a usable Node runtime and allow an explicit Node executable override;
+- keep the DevMate panel DOM stable during health polling instead of rebuilding it periodically;
+- deduplicate unchanged host-context snapshots before writing shared state;
 - publish bounded active-note, selection, Property, link, heading, tag, and vault context;
 - incrementally index note metadata instead of rescanning the vault for each request;
 - query notes by folder, path, tags, Properties, metadata search, and modification dates;
@@ -38,11 +41,11 @@ Copy the contents of `obsidian-plugin/dist` into:
 
 Then enable **DevMate** under Community Plugins.
 
-The bundle contains its own DevMate Gateway and does not require the VS Code extension.
+The plugin bundle contains its own DevMate Gateway code and does not require the VS Code extension. The Gateway runtime requires Node.js 24 or newer. DevMate first tries a configured executable, then a compatible Obsidian/Electron runtime, then `node` from `PATH`. If none is usable, startup fails with a clear diagnostic instead of using an incompatible Worker runtime.
 
 ## Shared runtime
 
-When VS Code and Obsidian use the same workspace root, both resolve the same state directory under `~/.devmate/hosts/`. The first host starts the Gateway; later hosts verify the same `instanceId` and attach. A host never stops a process owned by another host.
+When VS Code and Obsidian use the same workspace root, both resolve the same state directory under `~/.devmate/hosts/`. The first host starts the isolated Gateway process; later hosts verify the same `instanceId` and attach. A host never stops a process owned by another host.
 
 ## Main MCP tools
 
