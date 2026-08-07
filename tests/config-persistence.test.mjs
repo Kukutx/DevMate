@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import configStore from '../shared/config-store.cjs';
+import { runWithWorkSessionContext } from '../gateway/request-context.mjs';
 
 const { SUPPORTED_CONFIG_VERSION } = configStore;
 const moduleUrl = pathToFileURL(path.resolve('gateway/local-shared.mjs')).href;
@@ -121,24 +122,23 @@ test('redacts nested credentials, raw DevMate tokens, and circular audit values'
 test('bounds each audit event and preserves trusted system fields', async t => {
   const { directory, shared } = await withConfig(t, 'devmate-config-audit-', {
     version: SUPPORTED_CONFIG_VERSION,
-    permissions: { profile: 'fullAccess' },
-    task: { currentTaskId: 'task-real' }
+    permissions: { profile: 'fullAccess' }
   });
   const secret = `${'a'.repeat(20)}_${'b'.repeat(22)}`;
-  await shared.audit('large_event', {
+  await runWithWorkSessionContext('work-real', () => shared.audit('large_event', {
     time: 'forged',
     action: 'forged',
-    taskId: 'forged',
+    workSessionId: 'forged',
     permissionProfile: 'forged',
     nested: { token: `dmt_member_${secret}` },
     huge: 'x'.repeat(200000)
-  });
+  }));
   const auditPath = path.join(directory, 'state', 'audit.jsonl');
   const line = (await fsp.readFile(auditPath, 'utf8')).trim();
   assert.ok(Buffer.byteLength(line, 'utf8') <= shared.MAX_AUDIT_ENTRY_BYTES);
   const entry = JSON.parse(line);
   assert.equal(entry.action, 'large_event');
-  assert.equal(entry.taskId, 'task-real');
+  assert.equal(entry.workSessionId, 'work-real');
   assert.equal(entry.permissionProfile, 'fullAccess');
   assert.equal(entry.truncated, true);
   assert.ok(entry.originalBytes > shared.MAX_AUDIT_ENTRY_BYTES);
@@ -148,16 +148,16 @@ test('bounds each audit event and preserves trusted system fields', async t => {
   }
 });
 
-test('accepts an explicit trusted task ID after task state is cleared', async t => {
-  const { directory, shared } = await withConfig(t, 'devmate-config-finished-task-', {
+test('accepts an explicit trusted work session ID after session state is cleared', async t => {
+  const { directory, shared } = await withConfig(t, 'devmate-config-finished-session-', {
     version: SUPPORTED_CONFIG_VERSION,
     permissions: { profile: 'fullAccess' }
   });
-  await shared.audit('finish_task', { taskId: 'forged', title: 'done' }, { taskId: 'task-real' });
+  await shared.audit('work_session_finish', { workSessionId: 'forged', title: 'done' }, { workSessionId: 'work-real' });
   const auditPath = path.join(directory, 'state', 'audit.jsonl');
   const entry = JSON.parse((await fsp.readFile(auditPath, 'utf8')).trim());
-  assert.equal(entry.taskId, 'task-real');
-  assert.equal(entry.action, 'finish_task');
+  assert.equal(entry.workSessionId, 'work-real');
+  assert.equal(entry.action, 'work_session_finish');
   assert.equal(entry.title, 'done');
 });
 
