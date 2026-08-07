@@ -5,6 +5,7 @@ import { fallbackLocalPrincipal, normalizeDeploymentConfig } from './team-access
 import { approvalPolicy } from './approvals.mjs';
 import { durableStateStatus } from './durable-state.mjs';
 import { listRunners } from './job-queue.mjs';
+import { jobRuntimeStatus } from './job-runtime.mjs';
 import { normalizeRunnerControlConfig } from './runner-access.mjs';
 import { listWorkspaceLeases } from './workspace-leases.mjs';
 import { resolveWorkspaceId } from './workspace-resolver.mjs';
@@ -60,8 +61,10 @@ function runnerSummary(config) {
     item.labels?.kind === 'external' || item.capabilities?.includes('external')
   );
   const onlineExternal = external.filter(item => item.status === 'online');
+  const runtime = jobRuntimeStatus();
   return {
     embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false,
+    embeddedRunnerRunning: runtime.started && !runtime.stopping,
     externalControlEnabled: config.runnerControl.enabled,
     credentialCount: credentials.length,
     activeCredentialCount: activeCredentials.length,
@@ -192,12 +195,14 @@ export function readiness(config = readConfig()) {
   );
   add(
     'runner-execution',
-    runners.embeddedRunnerEnabled || runners.externalControlEnabled,
-    runners.embeddedRunnerEnabled
-      ? 'embedded Runner enabled'
-      : runners.externalControlEnabled
-        ? 'external control enabled'
-        : 'no Runner execution path enabled'
+    runners.embeddedRunnerRunning || runners.externalControlEnabled,
+    runners.embeddedRunnerRunning
+      ? 'embedded Runner running'
+      : runners.embeddedRunnerEnabled
+        ? 'embedded Runner configured but not running; restart the Gateway'
+        : runners.externalControlEnabled
+          ? 'external control enabled'
+          : 'no Runner execution path enabled'
   );
   add(
     'runner-credentials',
@@ -208,9 +213,9 @@ export function readiness(config = readConfig()) {
   );
   add(
     'external-runners-online',
-    runners.embeddedRunnerEnabled || runners.onlineExternalRunners > 0,
-    runners.embeddedRunnerEnabled
-      ? 'not required while embedded Runner is enabled'
+    runners.embeddedRunnerRunning || runners.onlineExternalRunners > 0,
+    runners.embeddedRunnerRunning
+      ? 'not required while embedded Runner is running'
       : `${runners.onlineExternalRunners} online external Runner(s)`
   );
   add(
