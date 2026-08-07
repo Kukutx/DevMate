@@ -39,16 +39,11 @@ function defaultSharedStateDirectory(root, { homeDirectory = os.homedir() } = {}
 function resolveStateDirectory({
   workspaceRoot,
   overrideDirectory = '',
-  localDirectory = '',
-  shared = true,
   homeDirectory = os.homedir()
 } = {}) {
   const override = expandHome(overrideDirectory, homeDirectory);
   if (override) return path.resolve(override);
-  if (shared) return defaultSharedStateDirectory(workspaceRoot, { homeDirectory });
-  if (localDirectory) return path.resolve(localDirectory);
-  if (!workspaceRoot) throw new Error('A workspace root or local state directory is required');
-  return path.join(path.resolve(workspaceRoot), '.devmate');
+  return defaultSharedStateDirectory(workspaceRoot, { homeDirectory });
 }
 
 module.exports = {
