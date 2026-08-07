@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   startupMode: 'auto',
   sharedStateDirectory: '',
   preferredPort: 8787,
-  stopWhenObsidianCloses: false,
+  nodeExecutable: '',
   captureSelection: true,
   publicOrigin: ''
 });
@@ -34,7 +34,7 @@ function normalizeSettings(value = {}) {
     startupMode: STARTUP_MODES.has(input.startupMode) ? input.startupMode : DEFAULT_SETTINGS.startupMode,
     sharedStateDirectory: String(input.sharedStateDirectory || '').trim(),
     preferredPort: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_SETTINGS.preferredPort,
-    stopWhenObsidianCloses: input.stopWhenObsidianCloses === true,
+    nodeExecutable: String(input.nodeExecutable || '').trim(),
     captureSelection: input.captureSelection !== false,
     publicOrigin
   };
@@ -103,6 +103,19 @@ class DevMateSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Node.js executable')
+      .setDesc('Optional Node.js 24+ executable. Leave empty to auto-detect the Obsidian/Electron runtime or a system Node installation.')
+      .addText(text => text
+        .setPlaceholder('C:\\Program Files\\nodejs\\node.exe')
+        .setValue(this.plugin.settings.nodeExecutable)
+        .onChange(async value => {
+          this.plugin.settings.nodeExecutable = value.trim();
+          await this.plugin.saveSettings();
+          this.plugin.invalidateNodeRuntime();
+          this.plugin.scheduleReconfigure();
+        }));
+
+    new Setting(containerEl)
       .setName('Public origin')
       .setDesc('Optional clean HTTPS origin managed outside Obsidian. It is used when copying the MCP URL.')
       .addText(text => text
@@ -127,16 +140,6 @@ class DevMateSettingTab extends PluginSettingTab {
           this.plugin.settings.captureSelection = value;
           await this.plugin.saveSettings();
           this.plugin.scheduleContextCapture();
-        }));
-
-    new Setting(containerEl)
-      .setName('Stop owned Gateway when Obsidian closes')
-      .setDesc('Off by default so VS Code or another host can keep using the shared Gateway.')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.stopWhenObsidianCloses)
-        .onChange(async value => {
-          this.plugin.settings.stopWhenObsidianCloses = value;
-          await this.plugin.saveSettings();
         }));
   }
 }
