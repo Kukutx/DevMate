@@ -15,7 +15,11 @@ test('VS Code entry owns the host lifecycle and preserves reverse teardown order
   const source = fs.readFileSync(path.join(root, 'extension-entry-shared-tunnel.js'), 'utf8');
   assert.match(source, /VscodeHostLifecycle/);
   assert.match(source, /lifecycle = new VscodeHostLifecycle\(\{ vscode \}\)/);
-  assert.match(source, /await lifecycle\.activate\(context\)/);
+  assert.match(source, /validateTunnelProvider\(provider\)/);
+  assert.match(source, /validateDeploymentMode\(deploymentMode\)/);
+  const validation = source.indexOf('tunnelSettings();');
+  const activation = source.indexOf('await lifecycle.activate(context)');
+  assert.ok(validation >= 0 && activation > validation, 'Tunnel settings must be validated before platform activation');
   assert.match(source, /new SharedTunnelRuntime\(/);
   assert.match(source, /\.install\(\)/);
 
