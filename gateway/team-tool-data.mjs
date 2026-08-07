@@ -70,6 +70,20 @@ function runnerSummary(config) {
   };
 }
 
+function allowedPublicHost(config) {
+  if (config.deployment.mode !== 'production') return true;
+  const allowed = new Set((config.production.allowedHosts || [])
+    .map(value => String(value || '').trim().toLowerCase())
+    .filter(Boolean));
+  if (!allowed.size || !config.deployment.publicUrl) return false;
+  try {
+    const url = new URL(config.deployment.publicUrl);
+    return allowed.has(url.host.toLowerCase()) || allowed.has(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function publicDeployment(config = readConfig()) {
   normalizeDeploymentConfig(config);
   normalizeRunnerControlConfig(config);
@@ -112,6 +126,8 @@ export function readiness(config = readConfig()) {
   const approvals = approvalPolicy(config);
   const durable = durableStateStatus();
   const runners = runnerSummary(config);
+  const sharedDeployment = config.deployment.mode !== 'personal';
+  const publicHostAllowed = allowedPublicHost(config);
 
   add(
     'owner-token',
@@ -136,8 +152,12 @@ export function readiness(config = readConfig()) {
   );
   add(
     'allowed-hosts',
-    config.deployment.mode !== 'production' || config.production.allowedHosts.length > 0,
-    config.production.allowedHosts.join(', ') || 'not restricted'
+    config.deployment.mode !== 'production' || publicHostAllowed,
+    config.deployment.mode !== 'production'
+      ? config.production.allowedHosts.join(', ') || 'not required'
+      : publicHostAllowed
+        ? config.production.allowedHosts.join(', ')
+        : `public URL host is not allowed by: ${config.production.allowedHosts.join(', ') || 'no configured hosts'}`
   );
   add(
     'auth-required',
@@ -158,8 +178,17 @@ export function readiness(config = readConfig()) {
   );
   add(
     'durable-state',
-    config.deployment.mode === 'personal' || durable.enabled,
-    durable.path || 'in-memory only'
+    !sharedDeployment || (durable.enabled && !durable.recovery),
+    durable.recovery
+      ? `recovery warning: ${durable.recovery.error || 'state recovery occurred'}`
+      : durable.path || 'in-memory only'
+  );
+  add(
+    'instance-lock',
+    !sharedDeployment || !!durable.instanceLock,
+    durable.instanceLock
+      ? `held by pid ${durable.instanceLock.pid}`
+      : sharedDeployment ? 'no active Gateway instance lock' : 'not required'
   );
   add(
     'runner-execution',
@@ -255,4 +284,4 @@ export function teamStatus(config = readConfig()) {
   };
 }
 
-export const __test = { runnerSummary };
+export const __test = { allowedPublicHost, runnerSummary };
