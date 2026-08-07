@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('../shared/config-store.cjs');
 const { normalizeProvider, normalizePublicUrl } = require('../tunnel-provider.js');
+const { deploymentMode: validateDeploymentMode } = require('./tunnel-settings.js');
 
 const RUNTIME_RECORD_VERSION = 1;
 const RUNTIME_RECORD_NAME = 'tunnel.runtime.json';
@@ -40,9 +41,13 @@ function runtimeRecordError(message, code, recordFile) {
 }
 
 function stableConfiguration(settings = {}, port = 0) {
+  const providerValue = settings.provider !== undefined ? settings.provider : settings.tunnelProvider;
+  const modeValue = settings.deploymentMode === undefined
+    ? 'personal'
+    : String(settings.deploymentMode).trim().toLowerCase();
   return {
     port: Number(port) || 0,
-    provider: normalizeProvider(settings.provider || settings.tunnelProvider || 'ngrok'),
+    provider: normalizeProvider(providerValue),
     publicUrl: configurationUrl(settings.publicUrl),
     ngrokUrl: configurationUrl(settings.ngrokUrl),
     ngrokCommandPath: String(settings.ngrokCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
@@ -50,7 +55,7 @@ function stableConfiguration(settings = {}, port = 0) {
     ngrokPoolingEnabled: settings.ngrokPoolingEnabled === true,
     ngrokTrafficPolicyFile: String(settings.ngrokTrafficPolicyFile || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
     cloudflareCommandPath: String(settings.cloudflareCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
-    deploymentMode: String(settings.deploymentMode || 'personal').trim().toLowerCase().slice(0, 64)
+    deploymentMode: validateDeploymentMode(modeValue)
   };
 }
 
@@ -88,7 +93,12 @@ function normalizeRuntimeRecord(record) {
   const childPid = record.childPid == null ? null : Number(record.childPid);
   const port = Number(record.port);
   const rawProvider = String(record.provider || '').trim().toLowerCase();
-  const provider = normalizeProvider(rawProvider);
+  let provider;
+  try {
+    provider = normalizeProvider(rawProvider);
+  } catch {
+    return null;
+  }
   const key = String(record.configurationKey || '').trim().toLowerCase();
   const status = String(record.status || '').trim().toLowerCase();
   const publicUrl = safePublicUrl(record.publicUrl);
@@ -217,6 +227,7 @@ class SharedTunnelRecordStore {
       error.code = 'DEVMATE_TUNNEL_OWNER_CHANGED';
       throw error;
     }
+    const providerValue = patch.provider !== undefined ? patch.provider : current?.provider;
     const record = {
       version: RUNTIME_RECORD_VERSION,
       ownerId,
@@ -224,7 +235,7 @@ class SharedTunnelRecordStore {
       hostPid: process.pid,
       childPid: patch.childPid ?? current?.childPid ?? null,
       port: Number(patch.port ?? current?.port ?? 0),
-      provider: normalizeProvider(patch.provider || current?.provider || 'ngrok'),
+      provider: normalizeProvider(providerValue),
       configurationKey: String(patch.configurationKey || current?.configurationKey || ''),
       status: String(patch.status || current?.status || 'pending'),
       publicUrl: safePublicUrl(patch.publicUrl ?? current?.publicUrl ?? ''),
