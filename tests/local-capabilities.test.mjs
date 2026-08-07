@@ -12,7 +12,7 @@ fs.mkdirSync(activeRoot, { recursive: true });
 fs.mkdirSync(trustedRoot, { recursive: true });
 const configPath = path.join(tempRoot, 'config.json');
 fs.writeFileSync(configPath, JSON.stringify({
-  version: 9,
+  version: 11,
   appVersion: '1.16.0',
   activeWorkspaceId: 'active',
   workspaces: [{ id: 'active', name: 'active', root: activeRoot, mode: 'workspace-write', reference: false, role: 'active' }],
@@ -149,7 +149,7 @@ test('persistent-process limits and dangerous command classification are bounded
   });
   assert.equal(shared.isDangerousCommand('git reset --hard'), true);
   assert.equal(shared.isDangerousCommand('npm run dev'), false);
-  assert.equal(shared.redactSensitiveString('token=secret-value'), 'token=redacted');
+  assert.equal(shared.redactSensitiveString('token=placeholder-value'), 'token=redacted');
 });
 
 test('cleanup stops any remaining process trees', async () => {
