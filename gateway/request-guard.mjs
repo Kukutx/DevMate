@@ -92,6 +92,12 @@ function consumeRateLimit(principalId, limit, store = rateWindows) {
   return consumeFixedWindow(store, principalId, limit, { maxEntries: 10_000 });
 }
 
+function consumePreviewRateLimit(req, config) {
+  const key = `preview-ip:${remoteAddress(req) || 'unknown'}`;
+  const limit = Math.max(240, config.production.requestsPerMinute * 4);
+  return consumeRateLimit(key, limit, preAuthRateWindows);
+}
+
 function enterConcurrency(principalId, config) {
   const maxGlobal = config.production.maxConcurrentRequests;
   const maxPrincipal = config.production.maxConcurrentPerPrincipal;
@@ -210,6 +216,15 @@ export function guardListener(listener) {
     res.setHeader('x-devmate-request-id', requestId);
 
     if (publishedPreview) {
+      const previewRate = consumePreviewRateLimit(req, config);
+      res.setHeader('x-devmate-rate-limit-remaining', String(previewRate.remaining));
+      res.setHeader('x-devmate-rate-limit-reset', new Date(previewRate.resetAt).toISOString());
+      if (!previewRate.allowed) {
+        jsonError(res, 429, 'Published preview request rate limit exceeded', 'preview_rate_limited', requestId, {
+          resetAt: new Date(previewRate.resetAt).toISOString()
+        });
+        return;
+      }
       handlePublishedPreview(req, res, url);
       return;
     }
@@ -318,6 +333,7 @@ export function resetRequestGuardState() {
 
 export const __test = {
   activities,
+  consumePreviewRateLimit,
   consumeRateLimit,
   enterConcurrency,
   globalInflight: () => globalInflight,
