@@ -4,6 +4,12 @@ import {
   requiredCapabilityForTool,
   toolWorkspaceId
 } from './tool-policy.mjs';
+import {
+  defaultedArray,
+  defaultedBoolean,
+  defaultedEnum,
+  defaultedInteger
+} from './strict-config.mjs';
 
 export { requiredCapabilityForTool, toolWorkspaceId } from './tool-policy.mjs';
 
@@ -35,83 +41,74 @@ function cleanId(value, fallback = 'member') {
 }
 
 function parseExpiry(value) {
-  if (!value) return null;
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new Error('expiresAt must be a valid ISO date-time');
   const time = Date.parse(value);
   if (!Number.isFinite(time)) throw new Error('expiresAt must be a valid ISO date-time');
   return new Date(time).toISOString();
 }
 
-function enumValue(value, allowed, fallback, label) {
-  if (value === undefined || value === null || value === '') return fallback;
-  if (!allowed.includes(value)) throw new Error(`Unknown ${label}: ${value}`);
-  return value;
-}
-
-function boundedInteger(value, fallback, min, max, label) {
-  if (value === undefined || value === null || value === '') return fallback;
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < min || number > max) {
-    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+function objectField(config, key) {
+  if (config[key] === undefined) config[key] = {};
+  if (!config[key] || typeof config[key] !== 'object' || Array.isArray(config[key])) {
+    throw new TypeError(`${key} must be an object`);
   }
-  return number;
+  return config[key];
 }
 
-function booleanValue(value, fallback, label) {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
-  return value;
+function stringList(value, label) {
+  const items = defaultedArray(value, [], label);
+  return [...new Set(items.map(item => {
+    if (typeof item !== 'string') throw new TypeError(`${label} must contain only strings`);
+    return item.trim();
+  }).filter(Boolean))];
 }
 
 export function normalizeDeploymentConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
-  config.deployment ||= {};
-  if (typeof config.deployment !== 'object' || Array.isArray(config.deployment)) throw new TypeError('deployment must be an object');
-  const mode = enumValue(config.deployment.mode, DEPLOYMENT_MODES, 'personal', 'deployment mode');
-  const provider = enumValue(config.deployment.tunnelProvider, TUNNEL_PROVIDERS, 'ngrok', 'tunnel provider');
+
+  const deployment = objectField(config, 'deployment');
+  const mode = defaultedEnum(deployment.mode, DEPLOYMENT_MODES, 'personal', 'deployment mode');
+  const provider = defaultedEnum(deployment.tunnelProvider, TUNNEL_PROVIDERS, 'ngrok', 'tunnel provider');
   if (mode === 'production' && provider === 'cloudflare-quick') {
     throw new Error('Cloudflare Quick Tunnels are development-only and cannot be used in production mode');
   }
-  config.deployment.mode = mode;
-  config.deployment.tunnelProvider = provider;
-  config.deployment.publicUrl = String(config.deployment.publicUrl || '').trim();
+  deployment.mode = mode;
+  deployment.tunnelProvider = provider;
+  if (deployment.publicUrl === undefined) deployment.publicUrl = '';
+  else if (typeof deployment.publicUrl !== 'string') throw new TypeError('deployment.publicUrl must be a string');
+  else deployment.publicUrl = deployment.publicUrl.trim();
 
-  config.team ||= {};
-  if (typeof config.team !== 'object' || Array.isArray(config.team)) throw new TypeError('team must be an object');
-  config.team.enabled = mode !== 'personal';
-  if (config.team.members === undefined) config.team.members = [];
-  if (!Array.isArray(config.team.members)) throw new TypeError('team.members must be an array');
-  config.team.requireWorkspaceLeaseForWrites = booleanValue(
-    config.team.requireWorkspaceLeaseForWrites,
+  const team = objectField(config, 'team');
+  team.enabled = mode !== 'personal';
+  team.members = defaultedArray(team.members, [], 'team.members');
+  team.requireWorkspaceLeaseForWrites = defaultedBoolean(
+    team.requireWorkspaceLeaseForWrites,
     mode !== 'personal',
     'team.requireWorkspaceLeaseForWrites'
   );
-  config.team.defaultMemberRole = enumValue(config.team.defaultMemberRole, TEAM_ROLES, 'developer', 'team role');
-  config.team.maxMembers = boundedInteger(config.team.maxMembers, 100, 1, 500, 'team.maxMembers');
+  team.defaultMemberRole = defaultedEnum(team.defaultMemberRole, TEAM_ROLES, 'developer', 'team role');
+  team.maxMembers = defaultedInteger(team.maxMembers, 100, 1, 500, 'team.maxMembers');
 
-  config.runtime ||= {};
-  if (typeof config.runtime !== 'object' || Array.isArray(config.runtime)) throw new TypeError('runtime must be an object');
-  config.runtime.maxConcurrentJobs = boundedInteger(config.runtime.maxConcurrentJobs, 2, 1, 8, 'runtime.maxConcurrentJobs');
+  const runtime = objectField(config, 'runtime');
+  runtime.maxConcurrentJobs = defaultedInteger(runtime.maxConcurrentJobs, 2, 1, 8, 'runtime.maxConcurrentJobs');
 
-  config.jobs ||= {};
-  if (typeof config.jobs !== 'object' || Array.isArray(config.jobs)) throw new TypeError('jobs must be an object');
-  config.jobs.allowJobGitSave = booleanValue(config.jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
-  config.jobs.embeddedRunnerEnabled = booleanValue(config.jobs.embeddedRunnerEnabled, true, 'jobs.embeddedRunnerEnabled');
+  const jobs = objectField(config, 'jobs');
+  jobs.allowJobGitSave = defaultedBoolean(jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
+  jobs.embeddedRunnerEnabled = defaultedBoolean(jobs.embeddedRunnerEnabled, true, 'jobs.embeddedRunnerEnabled');
 
-  config.production ||= {};
-  if (typeof config.production !== 'object' || Array.isArray(config.production)) throw new TypeError('production must be an object');
-  config.production.maxRequestBytes = boundedInteger(config.production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024, 'production.maxRequestBytes');
-  config.production.requestsPerMinute = boundedInteger(config.production.requestsPerMinute, mode === 'production' ? 120 : 600, 10, 10000, 'production.requestsPerMinute');
-  config.production.maxConcurrentRequests = boundedInteger(config.production.maxConcurrentRequests, mode === 'production' ? 24 : 64, 1, 256, 'production.maxConcurrentRequests');
-  config.production.maxConcurrentPerPrincipal = boundedInteger(config.production.maxConcurrentPerPrincipal, mode === 'production' ? 4 : 16, 1, 64, 'production.maxConcurrentPerPrincipal');
-  config.production.requestTimeoutMs = boundedInteger(config.production.requestTimeoutMs, 15 * 60 * 1000, 1000, 60 * 60 * 1000, 'production.requestTimeoutMs');
-  if (config.production.allowedHosts === undefined) config.production.allowedHosts = [];
-  if (!Array.isArray(config.production.allowedHosts)) throw new TypeError('production.allowedHosts must be an array');
-  config.production.allowedHosts = [...new Set(config.production.allowedHosts.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
+  const production = objectField(config, 'production');
+  production.maxRequestBytes = defaultedInteger(production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024, 'production.maxRequestBytes');
+  production.requestsPerMinute = defaultedInteger(production.requestsPerMinute, mode === 'production' ? 120 : 600, 10, 10000, 'production.requestsPerMinute');
+  production.maxConcurrentRequests = defaultedInteger(production.maxConcurrentRequests, mode === 'production' ? 24 : 64, 1, 256, 'production.maxConcurrentRequests');
+  production.maxConcurrentPerPrincipal = defaultedInteger(production.maxConcurrentPerPrincipal, mode === 'production' ? 4 : 16, 1, 64, 'production.maxConcurrentPerPrincipal');
+  production.requestTimeoutMs = defaultedInteger(production.requestTimeoutMs, 15 * 60 * 1000, 1000, 60 * 60 * 1000, 'production.requestTimeoutMs');
+  production.allowedHosts = stringList(production.allowedHosts, 'production.allowedHosts').map(value => value.toLowerCase());
   return config;
 }
 
 export function roleCapabilities(role) {
-  if (!TEAM_ROLES.includes(role)) throw new Error(`Unknown team role: ${role}`);
+  if (typeof role !== 'string' || !TEAM_ROLES.includes(role)) throw new Error(`Unknown team role: ${String(role)}`);
   return ROLE_CAPABILITIES[role];
 }
 
@@ -151,21 +148,22 @@ function uniqueMemberId(config, requested = '') {
 export function createTeamMember(config, input = {}) {
   normalizeDeploymentConfig(config);
   if (config.team.members.length >= config.team.maxMembers) throw new Error(`Team member limit reached (${config.team.maxMembers})`);
-  const role = enumValue(input.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
+  const role = defaultedEnum(input.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
   const id = uniqueMemberId(config, input.id || input.name);
+  const workspaceIds = stringList(input.workspaceIds, 'workspaceIds');
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
-  const now = new Date().toISOString();
+  const timestamp = new Date().toISOString();
   const member = {
     id,
     name: String(input.name || id).trim().slice(0, 200) || id,
     role,
-    workspaceIds: [...new Set((input.workspaceIds || []).map(value => String(value || '').trim()).filter(Boolean))],
+    workspaceIds,
     salt,
     tokenHash: hashSecret(secret, salt),
     tokenVersion: 1,
-    createdAt: now,
-    updatedAt: now,
+    createdAt: timestamp,
+    updatedAt: timestamp,
     expiresAt: parseExpiry(input.expiresAt),
     disabled: false,
     lastUsedAt: null
@@ -193,16 +191,10 @@ export function updateTeamMember(config, id, patch = {}) {
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   if (patch.name !== undefined) member.name = String(patch.name || '').trim().slice(0, 200) || member.id;
-  if (patch.role !== undefined) member.role = enumValue(patch.role, TEAM_ROLES, null, 'team role');
-  if (patch.workspaceIds !== undefined) {
-    if (!Array.isArray(patch.workspaceIds)) throw new Error('workspaceIds must be an array');
-    member.workspaceIds = [...new Set(patch.workspaceIds.map(value => String(value || '').trim()).filter(Boolean))];
-  }
+  if (patch.role !== undefined) member.role = defaultedEnum(patch.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
+  if (patch.workspaceIds !== undefined) member.workspaceIds = stringList(patch.workspaceIds, 'workspaceIds');
   if (patch.expiresAt !== undefined) member.expiresAt = parseExpiry(patch.expiresAt);
-  if (patch.disabled !== undefined) {
-    if (typeof patch.disabled !== 'boolean') throw new Error('disabled must be a boolean');
-    member.disabled = patch.disabled;
-  }
+  if (patch.disabled !== undefined) member.disabled = defaultedBoolean(patch.disabled, false, 'disabled');
   member.updatedAt = new Date().toISOString();
   return memberPublic(member);
 }
@@ -315,9 +307,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
 
 export const __test = {
   ROLE_CAPABILITIES,
-  boundedInteger,
   dangerousCommand,
-  enumValue,
   hashSecret,
   parseTeamToken,
   requiredCapabilityForTool,
