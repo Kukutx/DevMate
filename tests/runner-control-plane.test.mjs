@@ -11,7 +11,7 @@ process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const baseConfig = {
-  appVersion: '2.9.1',
+  appVersion: '3.3.0',
   instanceId: 'runner-control-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
   permissions: { profile: 'fullAccess' },
@@ -112,52 +112,61 @@ async function request(relative, token = created.token, body = {}, protocol = '1
 }
 
 const runner = {
-  capabilities: ['core', 'external', 'unapproved-capability'],
-  workspaceIds: ['app', 'other'],
-  maxConcurrent: 8,
-  version: '2.9.1',
+  capabilities: ['core', 'external'],
+  workspaceIds: ['app'],
+  maxConcurrent: 2,
+  version: '3.3.0',
   platform: 'linux',
   arch: 'x64',
   labels: { hostname: 'runner-one' }
 };
 
-test('rejects invalid credentials, protocol versions, and non-overlapping workspaces', async () => {
+test('rejects invalid credentials, protocol versions, and malformed request bodies', async () => {
   const wrongProtocol = await request('/heartbeat', created.token, {}, '2');
   assert.equal(wrongProtocol.response.status, 426);
-  const invalid = await request(
-    '/heartbeat',
-    'dmr_missing_invalid-token-value-long-enough',
-    {}
-  );
+  const invalid = await request('/heartbeat', 'dmr_missing_invalid-token-value-long-enough', {});
   assert.equal(invalid.response.status, 401);
-  const wrongWorkspace = await request('/heartbeat', created.token, {
-    runner: {
-      capabilities: ['core', 'external'],
-      workspaceIds: ['other']
-    }
-  });
-  assert.equal(wrongWorkspace.response.status, 400);
-  assert.match(wrongWorkspace.json.error, /at least one local workspaceId/);
+  const arrayBody = await request('/heartbeat', created.token, []);
+  assert.equal(arrayBody.response.status, 400);
+  assert.match(arrayBody.json.error, /JSON object/);
 });
 
-test('registers, claims, renews, and completes a scoped remote job', async () => {
+test('rejects Runner metadata outside credential scope instead of silently intersecting or clamping', async () => {
+  const cases = [
+    [{ ...runner, workspaceIds: ['app', 'other'] }, /workspaceIds contains values outside credential scope/],
+    [{ ...runner, capabilities: ['core', 'external', 'unapproved'] }, /capabilities contains values outside credential scope/],
+    [{ ...runner, capabilities: ['external'] }, /must explicitly include core and external/],
+    [{ ...runner, maxConcurrent: 3 }, /maxConcurrent/],
+    [{ ...runner, maxConcurrent: '2' }, /maxConcurrent/],
+    [{ ...runner, labels: [] }, /labels must be an object/],
+    [{ ...runner, version: 42 }, /version must be a string/]
+  ];
+  for (const [metadata, pattern] of cases) {
+    const result = await request('/heartbeat', created.token, { runner: metadata });
+    assert.equal(result.response.status, 400);
+    assert.match(result.json.error, pattern);
+  }
+});
+
+test('registers, claims, renews, and completes a strictly scoped remote job', async () => {
   const heartbeat = await request('/heartbeat', created.token, { runner });
   assert.equal(heartbeat.response.status, 200);
   assert.deepEqual(heartbeat.json.runner.capabilities, ['core', 'external']);
   assert.deepEqual(heartbeat.json.runner.workspaceIds, ['app']);
   assert.equal(heartbeat.json.runner.maxConcurrent, 2);
-  assert.equal(heartbeat.json.runner.version, '2.9.1');
+  assert.equal(heartbeat.json.runner.version, '3.3.0');
 
-  const claimed = await request('/jobs/claim', created.token, {
-    runner,
-    leaseSeconds: 60
-  });
+  const claimed = await request('/jobs/claim', created.token, { runner, leaseSeconds: 60 });
   assert.equal(claimed.response.status, 200);
   assert.equal(claimed.json.job.id, queued.id);
   assert.deepEqual(claimed.json.job.arguments, { workspaceId: 'app' });
   assert.deepEqual(claimed.json.job.artifactPaths, ['artifacts/report.json']);
   assert.equal(claimed.json.job.claim.generation, 1);
   assert.match(claimed.json.job.claim.token, /^[A-Za-z0-9_-]{43}$/);
+
+  const missingProof = await request(`/jobs/${queued.id}/renew`, created.token, { leaseSeconds: 60 });
+  assert.equal(missingProof.response.status, 400);
+  assert.equal(missingProof.json.code, 'claim_fence_proof_required');
 
   const renewed = await request(
     `/jobs/${queued.id}/renew`,
@@ -168,7 +177,7 @@ test('registers, claims, renews, and completes a scoped remote job', async () =>
   assert.equal(renewed.json.renewed, true);
   assert.equal(renewed.json.cancelRequested, false);
   const runnerAfterRenew = listRunners().find(item => item.id === created.credential.id);
-  assert.equal(runnerAfterRenew.version, '2.9.1');
+  assert.equal(runnerAfterRenew.version, '3.3.0');
   assert.equal(runnerAfterRenew.platform, 'linux');
   assert.equal(runnerAfterRenew.labels.hostname, 'runner-one');
 
@@ -245,10 +254,41 @@ test('rejects stale completion after a lease expires and the same Runner reclaim
   assert.equal(getJob(job.id, { includeResult: true }).result.stale, false);
 });
 
-test('sanitizes empty results safely', () => {
+test('rejects non-boolean retryable flags instead of treating them as true', async () => {
+  const job = createJob({
+    principal,
+    tool: 'project_snapshot',
+    args: { workspaceId: 'app' },
+    workspaceId: 'app',
+    requiredCapabilities: ['core', 'external'],
+    maxAttempts: 1
+  });
+  const claimed = await request('/jobs/claim', created.token, { runner, leaseSeconds: 60 });
+  assert.equal(claimed.json.job.id, job.id);
+  const invalid = await request(`/jobs/${job.id}/fail`, created.token, {
+    ...proof(claimed.json.job),
+    error: 'failed',
+    retryable: 'false'
+  });
+  assert.equal(invalid.response.status, 400);
+  assert.match(invalid.json.error, /retryable must be a boolean/);
+  assert.equal(getJob(job.id).status, 'running');
+
+  const failed = await request(`/jobs/${job.id}/fail`, created.token, {
+    ...proof(claimed.json.job),
+    error: 'failed',
+    retryable: false
+  });
+  assert.equal(failed.response.status, 200);
+  assert.equal(getJob(job.id).status, 'failed');
+});
+
+test('sanitizes empty results safely and rejects malformed artifact metadata', () => {
   assert.equal(__test.sanitizeResult(undefined), null);
   assert.equal(__test.artifactPathAllowed('artifacts/report.json'), true);
   assert.equal(__test.artifactPathAllowed('secrets/private.key'), false);
+  assert.throws(() => __test.sanitizeArtifacts([{ path: 'report.json', bytes: '12' }], 'runner', 'app'), /artifact.bytes/);
+  assert.throws(() => __test.sanitizeArtifacts('not-an-array', 'runner', 'app'), /artifacts must be an array/);
 });
 
 test.after(async () => {
