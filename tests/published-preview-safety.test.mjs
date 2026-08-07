@@ -40,6 +40,15 @@ test.afterEach(async () => {
 });
 test.after(async () => fsp.rm(root, { recursive: true, force: true }));
 
+test('requires a clean HTTPS public origin while allowing loopback HTTP', () => {
+  assert.equal(__test.normalizeShareOrigin('https://devmate.example.com/'), 'https://devmate.example.com');
+  assert.equal(__test.normalizeShareOrigin('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');
+  assert.throws(() => __test.normalizeShareOrigin('http://devmate.example.com'), /must use HTTPS/);
+  assert.throws(() => __test.normalizeShareOrigin('https://user:pass@devmate.example.com'), /clean origin/);
+  assert.throws(() => __test.normalizeShareOrigin('https://devmate.example.com/path'), /clean origin/);
+  assert.throws(() => __test.normalizeShareOrigin('https://devmate.example.com?token=secret'), /clean origin/);
+});
+
 test('tolerates malformed cookie encoding without throwing', () => {
   const parsed = __test.parseCookies({ headers: { cookie: 'valid=ok; broken=%E0%A4%A; next=value' } });
   assert.equal(parsed.valid, 'ok');
@@ -61,6 +70,19 @@ test('bounds browser sessions per share', async () => {
   assert.throws(() => __test.createBrowserSession(created.share), /session limit reached/);
   const capacity = previewShareCapacityStatus();
   assert.equal(capacity.sessions, MAX_SESSIONS_PER_SHARE);
+});
+
+test('rejects coerced preview limits instead of silently clamping them', async () => {
+  const preview = await startPreview({ workspaceId: 'app', root });
+  const base = {
+    previewId: preview.id,
+    principal: { id: 'owner', name: 'Owner' },
+    publicUrl: 'https://devmate.example.com'
+  };
+  assert.throws(() => createPreviewShare({ ...base, ttlSeconds: '300' }), /must be an integer/);
+  assert.throws(() => createPreviewShare({ ...base, ttlSeconds: 10 }), /must be an integer/);
+  assert.throws(() => createPreviewShare({ ...base, maxUses: '1' }), /must be an integer/);
+  assert.throws(() => createPreviewShare({ ...base, maxUses: 100001 }), /must be an integer/);
 });
 
 test('rejects write methods before proxying preview content', async () => {
