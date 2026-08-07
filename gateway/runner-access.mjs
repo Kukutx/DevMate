@@ -55,9 +55,9 @@ function uniqueCredentialId(config, requested = '') {
 
 export function normalizeRunnerControlConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
-  config.runnerControl ||= {};
+  if (config.runnerControl === undefined) config.runnerControl = {};
   const control = config.runnerControl;
-  if (typeof control !== 'object' || Array.isArray(control)) throw new TypeError('runnerControl must be an object');
+  if (!control || typeof control !== 'object' || Array.isArray(control)) throw new TypeError('runnerControl must be an object');
   control.enabled = defaultedBoolean(control.enabled, false, 'runnerControl.enabled');
   if (control.path === undefined) control.path = '/runner/v1';
   else if (control.path !== '/runner/v1') throw new Error('runnerControl.path must be /runner/v1');
@@ -90,13 +90,13 @@ export function createRunnerCredential(config, input = {}) {
   if (config.runnerControl.credentials.length >= config.runnerControl.maxCredentials) {
     throw new Error(`Runner credential limit reached (${config.runnerControl.maxCredentials})`);
   }
-  const workspaceIds = normalizeStrings(input.workspaceIds ?? [], 200);
+  const workspaceIds = normalizeStrings(input.workspaceIds === undefined ? [] : input.workspaceIds, 200);
   if (!workspaceIds.length) throw new Error('External Runner credentials require at least one explicit workspaceId');
   const id = uniqueCredentialId(config, input.id || input.name);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
   const timestamp = new Date().toISOString();
-  const capabilities = normalizeStrings(input.capabilities ?? ['core', 'external'], 50).map(value => value.toLowerCase());
+  const capabilities = normalizeStrings(input.capabilities === undefined ? ['core', 'external'] : input.capabilities, 50).map(value => value.toLowerCase());
   const credential = {
     id,
     name: String(input.name || id).trim().slice(0, 200) || id,
@@ -179,9 +179,9 @@ export function verifyRunnerToken(token, config) {
   if (credential.expiresAt && Date.parse(credential.expiresAt) <= Date.now()) return null;
   const candidate = hashSecret(parsed.secret, credential.salt);
   if (!timingSafeEqualText(candidate, credential.tokenHash)) return null;
-  const workspaceIds = normalizeStrings(credential.workspaceIds ?? [], 200);
+  const workspaceIds = normalizeStrings(credential.workspaceIds === undefined ? [] : credential.workspaceIds, 200);
   if (!workspaceIds.length) return null;
-  const capabilities = normalizeStrings(credential.capabilities ?? [], 50);
+  const capabilities = normalizeStrings(credential.capabilities === undefined ? [] : credential.capabilities, 50);
   if (!capabilities.includes('core') || !capabilities.includes('external')) {
     throw new Error(`Runner credential ${credential.id} is missing required core/external capabilities`);
   }
