@@ -12,7 +12,7 @@ CI must never silently modify source or release metadata before validating it.
 
 Runtime dependencies must pass `npm audit --omit=dev --audit-level=moderate` as a blocking gate. A transitive override is allowed only when the direct package cannot yet express the patched range and the exact override passes the full unit, Gateway smoke, and platform CI suites.
 
-DevMate 2.9.2 uses the official MCP TypeScript SDK 1.30.x and pins its Hono Node adapter to the audited 2.0.10 patch. Removing or changing this override requires a clean runtime audit and the same behavioral regression gates.
+DevMate uses the MCP TypeScript SDK version declared in `package.json`; any transitive runtime override must remain pinned to an audited patch. Removing or changing an override requires a clean runtime audit and the same behavioral regression gates.
 
 The complete dependency tree, including development and packaging tools, must also pass `npm audit --audit-level=moderate` as a blocking gate on Windows and Linux. Packaging-tool advisories cannot be downgraded to warnings because those tools process repository-controlled manifests, Markdown, YAML, links, and extension assets.
 
