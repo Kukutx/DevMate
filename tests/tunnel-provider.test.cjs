@@ -3,6 +3,7 @@ const test = require('node:test');
 const {
   cloudflareLaunch,
   decorateNgrokArgs,
+  normalizeProvider,
   normalizePublicUrl,
   parsePort,
   parseTryCloudflareUrl
@@ -18,6 +19,14 @@ test('builds safe tunnel provider commands without exposing managed tokens in ar
   assert.deepEqual(launch.args, ['tunnel', 'run']);
   assert.equal(launch.options.env.TUNNEL_TOKEN, 'secret-token-value-long-enough');
   assert.equal(launch.args.join(' ').includes('secret-token'), false);
+});
+
+test('rejects explicit invalid tunnel providers instead of falling back to ngrok', () => {
+  assert.equal(normalizeProvider(undefined), 'ngrok');
+  assert.equal(normalizeProvider(' CLOUDFLARE-QUICK '), 'cloudflare-quick');
+  assert.throws(() => normalizeProvider(''), /Unknown tunnel provider/);
+  assert.throws(() => normalizeProvider(null), /Unknown tunnel provider/);
+  assert.throws(() => normalizeProvider('typo-provider'), /Unknown tunnel provider/);
 });
 
 test('decorates ngrok production policies and parses provider output', () => {
