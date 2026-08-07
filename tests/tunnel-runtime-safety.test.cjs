@@ -10,6 +10,7 @@ const test = require('node:test');
 const { atomicWriteJson } = require('../shared/config-store.cjs');
 const {
   TunnelController,
+  childActive,
   normalizeSettings
 } = require('../vscode-host/tunnel-controller.js');
 const {
@@ -115,10 +116,44 @@ class FakeChild extends EventEmitter {
   }
 }
 
+class StubbornChild extends FakeChild {
+  kill(signal = 'SIGTERM') {
+    this.killed = true;
+    this.signalCode = signal;
+    return true;
+  }
+}
+
 test('current tunnel settings accept 100 restarts but reject malformed values', () => {
   assert.equal(normalizeSettings({ provider: 'external', maxRestarts: 100 }).maxRestarts, 100);
   assert.throws(() => normalizeSettings({ provider: 'external', maxRestarts: 101 }), /0 to 100/);
   assert.throws(() => normalizeSettings({ provider: 'external', autoRestart: 'false' }), /must be a boolean/);
+});
+
+test('sending a kill signal does not count as provider exit', () => {
+  const child = new FakeChild();
+  child.killed = true;
+  assert.equal(child.exitCode, null);
+  assert.equal(childActive(child), true);
+  child.exitCode = 0;
+  assert.equal(childActive(child), false);
+});
+
+test('external provider does not depend on unrelated secret storage', async () => {
+  const stateDirectory = tempState();
+  const controller = new TunnelController({
+    stateDirectory,
+    settings: externalSettings,
+    getSecrets: async () => { throw new Error('secret storage unavailable'); }
+  });
+  try {
+    const started = await controller.start(8787);
+    assert.equal(started.owned, true);
+    assert.equal(started.publicUrl, 'https://safe.example.test');
+  } finally {
+    await controller.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
 });
 
 test('preserves future shared tunnel records byte-for-byte', () => {
@@ -248,6 +283,43 @@ test('readiness timeout terminates the provider and clears ownership', async () 
   }
 });
 
+test('failed startup cleanup preserves a live provider for explicit retry', async () => {
+  const stateDirectory = tempState();
+  const child = new StubbornChild();
+  const childProcess = {
+    spawn() { return child; },
+    spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; }
+  };
+  const controller = new TunnelController({
+    stateDirectory,
+    settings: quickSettings,
+    childProcess,
+    readyTimeoutMs: 1000,
+    startTimeoutMs: 2000,
+    stopTimeoutMs: 100,
+    forceStopTimeoutMs: 100
+  });
+  let ownerId = '';
+  try {
+    await assert.rejects(
+      controller.start(8787),
+      error => error?.code === 'DEVMATE_TUNNEL_READY_TIMEOUT' && error.cleanupPending === true
+    );
+    ownerId = controller.ownerId;
+    assert.ok(ownerId);
+    assert.equal(controller.child, child);
+    assert.equal(childActive(child), true);
+    assert.equal(controller.store.read()?.ownerId, ownerId);
+  } finally {
+    child.exitCode = 0;
+    child.emit('exit', 0, 'SIGKILL');
+    child.emit('close', 0, 'SIGKILL');
+    await waitFor(() => controller.ownerId === '' && controller.store.read() === null).catch(() => {});
+    await controller.dispose({ stopOwned: false }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
 test('error plus close without exit removes a ready provider owner exactly once', async () => {
   const stateDirectory = tempState();
   const child = new FakeChild();
@@ -271,6 +343,96 @@ test('error plus close without exit removes a ready provider owner exactly once'
     child.closeOnly();
     await waitFor(() => controller.ownerId === '' && controller.store.read() === null);
     assert.equal(controller.child, null);
+  } finally {
+    await controller.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('stop timeout preserves a live provider and shared ownership', async () => {
+  const stateDirectory = tempState();
+  const child = new StubbornChild();
+  const childProcess = {
+    spawn() {
+      setTimeout(() => child.stdout.write('Ready https://stubborn.trycloudflare.com\n'), 25);
+      return child;
+    },
+    spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; }
+  };
+  const controller = new TunnelController({
+    stateDirectory,
+    settings: quickSettings,
+    childProcess,
+    readyTimeoutMs: 2000,
+    stopTimeoutMs: 100,
+    forceStopTimeoutMs: 100
+  });
+  try {
+    const started = await controller.start(8787);
+    const ownerId = controller.ownerId;
+    assert.equal(started.owned, true);
+    assert.deepEqual(await controller.stop(), { stopped: false, reason: 'process-exit-timeout' });
+    assert.equal(controller.child, child);
+    assert.equal(controller.ownerId, ownerId);
+    assert.equal(controller.store.read()?.ownerId, ownerId);
+    const disposed = await controller.dispose({ stopOwned: true });
+    assert.equal(disposed.disposed, false);
+    assert.equal(disposed.reason, 'process-exit-timeout');
+    assert.equal(controller.disposed, false);
+
+    child.exitCode = 0;
+    child.emit('exit', 0, 'SIGKILL');
+    child.emit('close', 0, 'SIGKILL');
+    await waitFor(() => controller.ownerId === '' && controller.store.read() === null);
+    assert.deepEqual(await controller.dispose({ stopOwned: false }), { disposed: true });
+  } finally {
+    if (!controller.disposed) {
+      child.exitCode = 0;
+      child.emit('exit', 0, 'SIGKILL');
+      child.emit('close', 0, 'SIGKILL');
+      await controller.dispose({ stopOwned: false }).catch(() => {});
+    }
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('auto-restart re-evaluates provider settings after backoff', async () => {
+  const stateDirectory = tempState();
+  let settings = { ...quickSettings(), autoRestart: true, maxRestarts: 3 };
+  const children = [];
+  let spawnCount = 0;
+  const childProcess = {
+    spawn() {
+      spawnCount += 1;
+      const child = new FakeChild();
+      children.push(child);
+      setTimeout(() => child.stdout.write(`Ready https://restart-${spawnCount}.trycloudflare.com\n`), 25);
+      return child;
+    },
+    spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; }
+  };
+  const controller = new TunnelController({
+    stateDirectory,
+    settings: () => settings,
+    childProcess,
+    readyTimeoutMs: 2000
+  });
+  try {
+    assert.equal((await controller.start(8787)).provider, undefined);
+    assert.equal(spawnCount, 1);
+    settings = { ...externalSettings('https://switched.example.test'), autoRestart: true, maxRestarts: 3 };
+    const first = children[0];
+    first.exitCode = 1;
+    first.emit('exit', 1, null);
+    first.emit('close', 1, null);
+
+    await waitFor(() => {
+      const record = controller.store.read();
+      return record?.provider === 'external' && record.publicUrl === 'https://switched.example.test';
+    });
+    const record = controller.store.read();
+    assert.equal(record.configurationKey, configurationKey(settings, 8787));
+    assert.equal(spawnCount, 1);
   } finally {
     await controller.dispose({ stopOwned: true }).catch(() => {});
     fs.rmSync(stateDirectory, { recursive: true, force: true });

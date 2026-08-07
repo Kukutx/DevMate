@@ -28,6 +28,8 @@ const STARTUP_LOCK_NAME = 'tunnel.start.lock';
 const DEFAULT_START_TIMEOUT_MS = 20000;
 const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_HEARTBEAT_MS = 30000;
+const DEFAULT_STOP_TIMEOUT_MS = 5000;
+const DEFAULT_FORCE_STOP_TIMEOUT_MS = 2000;
 const NATIVE_NGROK_API = 'http://127.0.0.1:4040/api/tunnels';
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 
@@ -36,7 +38,7 @@ function delay(ms) {
 }
 
 function childActive(child) {
-  return !!child && child.exitCode == null && child.killed !== true;
+  return !!child && child.exitCode == null;
 }
 
 function strictAutoRestart(value) {
@@ -143,7 +145,9 @@ class TunnelController {
     runtimeLeaseMs = DEFAULT_RUNTIME_LEASE_MS,
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
     startTimeoutMs = DEFAULT_START_TIMEOUT_MS,
-    readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS
+    readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,
+    stopTimeoutMs = DEFAULT_STOP_TIMEOUT_MS,
+    forceStopTimeoutMs = DEFAULT_FORCE_STOP_TIMEOUT_MS
   } = {}) {
     if (!stateDirectory) throw new Error('A shared state directory is required');
     if (!childProcess?.spawn || !childProcess?.spawnSync) throw new TypeError('A child_process-compatible module is required');
@@ -158,6 +162,8 @@ class TunnelController {
     this.heartbeatMs = Math.max(5000, Number(heartbeatMs) || DEFAULT_HEARTBEAT_MS);
     this.startTimeoutMs = Math.max(1000, Number(startTimeoutMs) || DEFAULT_START_TIMEOUT_MS);
     this.readyTimeoutMs = Math.max(1000, Number(readyTimeoutMs) || DEFAULT_READY_TIMEOUT_MS);
+    this.stopTimeoutMs = Math.max(100, Number(stopTimeoutMs) || DEFAULT_STOP_TIMEOUT_MS);
+    this.forceStopTimeoutMs = Math.max(100, Number(forceStopTimeoutMs) || DEFAULT_FORCE_STOP_TIMEOUT_MS);
     this.store = new SharedTunnelRecordStore({ stateDirectory, leaseMs: this.runtimeLeaseMs, logger });
     this.ownerId = '';
     this.child = null;
@@ -316,7 +322,7 @@ class TunnelController {
 
   async spawnProvider(match, { preserveOwner = false } = {}) {
     const settings = match.settings;
-    const secrets = await this.getSecrets();
+    const secrets = settings.provider === 'external' ? {} : await this.getSecrets();
     const launch = buildProviderLaunch(match.port, settings, secrets || {});
     if (!preserveOwner) {
       this.ownerId = `${this.hostId}-tunnel-${process.pid}-${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`;
@@ -373,8 +379,22 @@ class TunnelController {
       if (this.child === child && this.ownerId === ownerId) this.childReady = true;
       return this.store.read();
     } catch (error) {
+      let cleanup = { exited: true, forced: false };
       if (child && childActive(child)) {
-        try { await terminateChild(child, { timeoutMs: 2000, forceTimeoutMs: 1000 }); } catch {}
+        try {
+          cleanup = await terminateChild(child, {
+            timeoutMs: Math.min(2000, this.stopTimeoutMs),
+            forceTimeoutMs: Math.min(1000, this.forceStopTimeoutMs)
+          });
+        } catch (cleanupError) {
+          cleanup = { exited: false, forced: false, error: cleanupError?.message || String(cleanupError) };
+        }
+      }
+      if (child && childActive(child) && !cleanup.exited) {
+        error.cleanupPending = true;
+        error.cleanupReason = cleanup.error || 'process-exit-timeout';
+        this.logger(`Tunnel startup cleanup did not confirm provider exit: ${error.cleanupReason}`);
+        throw error;
       }
       if (this.child === child) this.child = null;
       this.resetOwnership(ownerId);
@@ -393,7 +413,18 @@ class TunnelController {
     this.store.write(this.ownerId, { childPid: null, status: 'pending', publicUrl: '', readyAt: null });
     await delay(delayMs);
     if (this.stopping || this.disposed || !this.ownerId) return;
-    await this.spawnProvider({ ...match, settings: this.settings() }, { preserveOwner: true });
+
+    const nextMatch = this.match(match.port);
+    if (!nextMatch.settings.autoRestart || this.restartCount > nextMatch.settings.maxRestarts) {
+      this.resetOwnership();
+      return;
+    }
+    if (nextMatch.provider !== match.provider || nextMatch.configurationKey !== match.configurationKey) {
+      this.resetOwnership();
+      await this.start(match.port);
+      return;
+    }
+    await this.spawnProvider(nextMatch, { preserveOwner: true });
   }
 
   async start(port) {
@@ -450,30 +481,38 @@ class TunnelController {
     };
   }
 
+  async terminateLocalChild() {
+    if (!childActive(this.child)) return { exited: true, forced: false };
+    return terminateChild(this.child, {
+      timeoutMs: this.stopTimeoutMs,
+      forceTimeoutMs: this.forceStopTimeoutMs
+    });
+  }
+
   async stop() {
     const record = this.store.read();
     if (!record) {
       this.stopping = true;
       try {
-        let stopped = true;
-        if (childActive(this.child)) {
-          const result = await terminateChild(this.child, { timeoutMs: 5000, forceTimeoutMs: 2000 });
-          stopped = result.exited;
-        }
+        const result = await this.terminateLocalChild();
+        if (!result.exited) return { stopped: false, reason: 'process-exit-timeout' };
         this.child = null;
         this.resetOwnership();
-        return { stopped: false, reason: stopped ? 'not-running' : 'process-exit-timeout' };
+        return { stopped: false, reason: 'not-running' };
       } finally {
         this.stopping = false;
       }
     }
     if (!this.ownerId || record.ownerId !== this.ownerId) {
-      if (this.ownerId) {
+      if (this.child || this.ownerId) {
         this.stopping = true;
         try {
-          if (childActive(this.child)) await terminateChild(this.child, { timeoutMs: 5000, forceTimeoutMs: 2000 });
+          const result = await this.terminateLocalChild();
+          if (!result.exited) {
+            return { stopped: false, reason: 'local-process-exit-timeout', publicUrl: record.publicUrl };
+          }
           this.child = null;
-          this.resetOwnership(this.ownerId);
+          if (this.ownerId) this.resetOwnership(this.ownerId);
         } finally {
           this.stopping = false;
         }
@@ -482,14 +521,11 @@ class TunnelController {
     }
     this.stopping = true;
     try {
-      let stopped = true;
-      if (childActive(this.child)) {
-        const result = await terminateChild(this.child, { timeoutMs: 5000, forceTimeoutMs: 2000 });
-        stopped = result.exited;
-      }
+      const result = await this.terminateLocalChild();
+      if (!result.exited) return { stopped: false, reason: 'process-exit-timeout' };
       this.child = null;
       this.resetOwnership(this.ownerId);
-      return { stopped, reason: stopped ? '' : 'process-exit-timeout' };
+      return { stopped: true, reason: '' };
     } finally {
       this.stopping = false;
     }
@@ -497,8 +533,10 @@ class TunnelController {
 
   async dispose({ stopOwned = true } = {}) {
     if (this.disposed) return { disposed: true, alreadyDisposed: true };
-    if (stopOwned) await this.stop();
-    else if (this.ownerId && this.store.read()?.ownerId === this.ownerId) {
+    if (stopOwned) {
+      const stopped = await this.stop();
+      if (childActive(this.child)) return { disposed: false, reason: 'process-exit-timeout', stop: stopped };
+    } else if (childActive(this.child) || (this.ownerId && this.store.read()?.ownerId === this.ownerId)) {
       return { disposed: false, reason: 'owned-process-running' };
     }
     this.stopHeartbeat();
@@ -508,9 +546,11 @@ class TunnelController {
 }
 
 module.exports = {
+  DEFAULT_FORCE_STOP_TIMEOUT_MS,
   DEFAULT_HEARTBEAT_MS,
   DEFAULT_READY_TIMEOUT_MS,
   DEFAULT_START_TIMEOUT_MS,
+  DEFAULT_STOP_TIMEOUT_MS,
   MAX_PROVIDER_RESPONSE_BYTES,
   NATIVE_NGROK_API,
   STARTUP_LOCK_NAME,
