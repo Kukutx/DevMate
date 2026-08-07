@@ -2,14 +2,14 @@ import crypto from 'node:crypto';
 import { mutateConfig, readConfig } from './local-shared.mjs';
 import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { hostAllowed, isLocalRequest, loopbackHost, loopbackSocket, remoteAddress } from './http-host-policy.mjs';
-import { createRequestConcurrencyLimiter } from './request-concurrency.mjs';
+import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
 import { extractRequestToken, fallbackLocalPrincipal, normalizeDeploymentConfig, verifyAccessToken } from './team-access.mjs';
 
 const rateWindows = new Map();
 const preAuthRateWindows = new Map();
-const requestConcurrency = createRequestConcurrencyLimiter();
+const requestConcurrency = sharedHttpRequestConcurrency;
 const activities = new Map();
 let installed = false;
 
@@ -91,7 +91,7 @@ function consumePreviewRateLimit(req, config) {
 
 function enterConcurrency(principalId, config) {
   return requestConcurrency.enter(
-    principalId,
+    `mcp:${principalId}`,
     config.production.maxConcurrentRequests,
     config.production.maxConcurrentPerPrincipal
   );
