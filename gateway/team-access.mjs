@@ -8,6 +8,8 @@ import {
 export { requiredCapabilityForTool, toolWorkspaceId } from './tool-policy.mjs';
 
 export const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
+export const DEPLOYMENT_MODES = Object.freeze(['personal', 'team', 'production']);
+export const TUNNEL_PROVIDERS = Object.freeze(['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
 
 const ROLE_CAPABILITIES = Object.freeze({
   observer: new Set(['read']),
@@ -39,48 +41,78 @@ function parseExpiry(value) {
   return new Date(time).toISOString();
 }
 
+function enumValue(value, allowed, fallback, label) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (!allowed.includes(value)) throw new Error(`Unknown ${label}: ${value}`);
+  return value;
+}
+
+function boundedInteger(value, fallback, min, max, label) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+  }
+  return number;
+}
+
+function booleanValue(value, fallback, label) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
 export function normalizeDeploymentConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
   config.deployment ||= {};
-  const mode = ['personal', 'team', 'production'].includes(config.deployment.mode) ? config.deployment.mode : 'personal';
+  if (typeof config.deployment !== 'object' || Array.isArray(config.deployment)) throw new TypeError('deployment must be an object');
+  const mode = enumValue(config.deployment.mode, DEPLOYMENT_MODES, 'personal', 'deployment mode');
+  const provider = enumValue(config.deployment.tunnelProvider, TUNNEL_PROVIDERS, 'ngrok', 'tunnel provider');
+  if (mode === 'production' && provider === 'cloudflare-quick') {
+    throw new Error('Cloudflare Quick Tunnels are development-only and cannot be used in production mode');
+  }
   config.deployment.mode = mode;
-  config.deployment.tunnelProvider ||= 'ngrok';
-  config.deployment.publicUrl ||= '';
+  config.deployment.tunnelProvider = provider;
+  config.deployment.publicUrl = String(config.deployment.publicUrl || '').trim();
 
   config.team ||= {};
+  if (typeof config.team !== 'object' || Array.isArray(config.team)) throw new TypeError('team must be an object');
   config.team.enabled = mode !== 'personal';
-  if (!Array.isArray(config.team.members)) config.team.members = [];
-  config.team.requireWorkspaceLeaseForWrites = config.team.requireWorkspaceLeaseForWrites ?? (mode !== 'personal');
-  config.team.defaultMemberRole = TEAM_ROLES.includes(config.team.defaultMemberRole) ? config.team.defaultMemberRole : 'developer';
-  config.team.maxMembers = Number.isFinite(Number(config.team.maxMembers))
-    ? Math.min(500, Math.max(1, Math.trunc(Number(config.team.maxMembers))))
-    : 100;
+  if (config.team.members === undefined) config.team.members = [];
+  if (!Array.isArray(config.team.members)) throw new TypeError('team.members must be an array');
+  config.team.requireWorkspaceLeaseForWrites = booleanValue(
+    config.team.requireWorkspaceLeaseForWrites,
+    mode !== 'personal',
+    'team.requireWorkspaceLeaseForWrites'
+  );
+  config.team.defaultMemberRole = enumValue(config.team.defaultMemberRole, TEAM_ROLES, 'developer', 'team role');
+  config.team.maxMembers = boundedInteger(config.team.maxMembers, 100, 1, 500, 'team.maxMembers');
 
   config.runtime ||= {};
-  config.runtime.maxConcurrentJobs = clampInt(config.runtime.maxConcurrentJobs, 2, 1, 8);
+  if (typeof config.runtime !== 'object' || Array.isArray(config.runtime)) throw new TypeError('runtime must be an object');
+  config.runtime.maxConcurrentJobs = boundedInteger(config.runtime.maxConcurrentJobs, 2, 1, 8, 'runtime.maxConcurrentJobs');
+
   config.jobs ||= {};
-  config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
-  config.jobs.embeddedRunnerEnabled = config.jobs.embeddedRunnerEnabled !== false;
+  if (typeof config.jobs !== 'object' || Array.isArray(config.jobs)) throw new TypeError('jobs must be an object');
+  config.jobs.allowJobGitSave = booleanValue(config.jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
+  config.jobs.embeddedRunnerEnabled = booleanValue(config.jobs.embeddedRunnerEnabled, true, 'jobs.embeddedRunnerEnabled');
 
   config.production ||= {};
-  config.production.maxRequestBytes = clampInt(config.production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024);
-  config.production.requestsPerMinute = clampInt(config.production.requestsPerMinute, mode === 'production' ? 120 : 600, 10, 10000);
-  config.production.maxConcurrentRequests = clampInt(config.production.maxConcurrentRequests, mode === 'production' ? 24 : 64, 1, 256);
-  config.production.maxConcurrentPerPrincipal = clampInt(config.production.maxConcurrentPerPrincipal, mode === 'production' ? 4 : 16, 1, 64);
-  config.production.requestTimeoutMs = clampInt(config.production.requestTimeoutMs, 15 * 60 * 1000, 1000, 60 * 60 * 1000);
-  if (!Array.isArray(config.production.allowedHosts)) config.production.allowedHosts = [];
+  if (typeof config.production !== 'object' || Array.isArray(config.production)) throw new TypeError('production must be an object');
+  config.production.maxRequestBytes = boundedInteger(config.production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024, 'production.maxRequestBytes');
+  config.production.requestsPerMinute = boundedInteger(config.production.requestsPerMinute, mode === 'production' ? 120 : 600, 10, 10000, 'production.requestsPerMinute');
+  config.production.maxConcurrentRequests = boundedInteger(config.production.maxConcurrentRequests, mode === 'production' ? 24 : 64, 1, 256, 'production.maxConcurrentRequests');
+  config.production.maxConcurrentPerPrincipal = boundedInteger(config.production.maxConcurrentPerPrincipal, mode === 'production' ? 4 : 16, 1, 64, 'production.maxConcurrentPerPrincipal');
+  config.production.requestTimeoutMs = boundedInteger(config.production.requestTimeoutMs, 15 * 60 * 1000, 1000, 60 * 60 * 1000, 'production.requestTimeoutMs');
+  if (config.production.allowedHosts === undefined) config.production.allowedHosts = [];
+  if (!Array.isArray(config.production.allowedHosts)) throw new TypeError('production.allowedHosts must be an array');
   config.production.allowedHosts = [...new Set(config.production.allowedHosts.map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
   return config;
 }
 
-function clampInt(value, fallback, min, max) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.min(max, Math.max(min, Math.trunc(number)));
-}
-
 export function roleCapabilities(role) {
-  const normalized = TEAM_ROLES.includes(role) ? role : 'observer';
-  return ROLE_CAPABILITIES[normalized];
+  if (!TEAM_ROLES.includes(role)) throw new Error(`Unknown team role: ${role}`);
+  return ROLE_CAPABILITIES[role];
 }
 
 export function roleAllows(role, capability) {
@@ -93,7 +125,7 @@ export function memberPublic(member) {
     id: member.id,
     name: member.name,
     role: member.role,
-    workspaceIds: Array.isArray(member.workspaceIds) ? member.workspaceIds : [],
+    workspaceIds: Array.isArray(member.workspaceIds) ? [...member.workspaceIds] : [],
     createdAt: member.createdAt || null,
     updatedAt: member.updatedAt || null,
     expiresAt: member.expiresAt || null,
@@ -119,7 +151,7 @@ function uniqueMemberId(config, requested = '') {
 export function createTeamMember(config, input = {}) {
   normalizeDeploymentConfig(config);
   if (config.team.members.length >= config.team.maxMembers) throw new Error(`Team member limit reached (${config.team.maxMembers})`);
-  const role = TEAM_ROLES.includes(input.role) ? input.role : config.team.defaultMemberRole;
+  const role = enumValue(input.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
   const id = uniqueMemberId(config, input.id || input.name);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
@@ -161,16 +193,16 @@ export function updateTeamMember(config, id, patch = {}) {
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   if (patch.name !== undefined) member.name = String(patch.name || '').trim().slice(0, 200) || member.id;
-  if (patch.role !== undefined) {
-    if (!TEAM_ROLES.includes(patch.role)) throw new Error(`Unknown team role: ${patch.role}`);
-    member.role = patch.role;
-  }
+  if (patch.role !== undefined) member.role = enumValue(patch.role, TEAM_ROLES, null, 'team role');
   if (patch.workspaceIds !== undefined) {
     if (!Array.isArray(patch.workspaceIds)) throw new Error('workspaceIds must be an array');
     member.workspaceIds = [...new Set(patch.workspaceIds.map(value => String(value || '').trim()).filter(Boolean))];
   }
   if (patch.expiresAt !== undefined) member.expiresAt = parseExpiry(patch.expiresAt);
-  if (patch.disabled !== undefined) member.disabled = !!patch.disabled;
+  if (patch.disabled !== undefined) {
+    if (typeof patch.disabled !== 'boolean') throw new Error('disabled must be a boolean');
+    member.disabled = patch.disabled;
+  }
   member.updatedAt = new Date().toISOString();
   return memberPublic(member);
 }
@@ -207,6 +239,7 @@ export function verifyAccessToken(token, config, { updateLastUsed = false } = {}
   if (!parsed) return null;
   const member = config.team.members.find(item => item.id === parsed.id);
   if (!member || member.disabled || !member.salt || !member.tokenHash) return null;
+  if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
   if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) return null;
   const candidate = hashSecret(parsed.secret, member.salt);
   if (!timingSafeEqualText(candidate, member.tokenHash)) return null;
@@ -215,16 +248,16 @@ export function verifyAccessToken(token, config, { updateLastUsed = false } = {}
     id: member.id,
     name: member.name,
     role: member.role,
-    workspaceIds: Array.isArray(member.workspaceIds) ? member.workspaceIds : [],
+    workspaceIds: Array.isArray(member.workspaceIds) ? [...member.workspaceIds] : [],
     source: 'team-token',
     tokenVersion: member.tokenVersion || 1
   };
 }
 
-export function extractRequestToken(req, url) {
+export function extractRequestToken(req) {
   const authorization = String(req?.headers?.authorization || '');
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  return bearer || req?.headers?.['x-devmate-token'] || url?.searchParams?.get('token') || '';
+  return bearer || req?.headers?.['x-devmate-token'] || '';
 }
 
 export function fallbackLocalPrincipal() {
@@ -282,7 +315,9 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
 
 export const __test = {
   ROLE_CAPABILITIES,
+  boundedInteger,
   dangerousCommand,
+  enumValue,
   hashSecret,
   parseTeamToken,
   requiredCapabilityForTool,
