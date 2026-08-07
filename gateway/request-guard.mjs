@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { mutateConfig, readConfig } from './local-shared.mjs';
 import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
+import { hostAllowed, isLocalRequest, loopbackHost, loopbackSocket, remoteAddress } from './http-host-policy.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
 import { extractRequestToken, fallbackLocalPrincipal, normalizeDeploymentConfig, verifyAccessToken } from './team-access.mjs';
@@ -22,37 +23,6 @@ function requestPath(req) {
 function requestUrl(req) {
   try { return new URL(req.url || '/', 'http://localhost'); }
   catch { return null; }
-}
-
-function remoteAddress(req) {
-  return req.socket?.remoteAddress || '';
-}
-
-function hostCandidates(req) {
-  const value = String(req.headers?.host || '').trim().toLowerCase();
-  if (!value) return [];
-  const candidates = new Set([value]);
-  try {
-    const parsed = new URL(`http://${value}`);
-    candidates.add(parsed.hostname.toLowerCase());
-  } catch {}
-  return [...candidates];
-}
-
-function loopbackHost(req) {
-  return hostCandidates(req).some(item =>
-    ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(item) ||
-    item.startsWith('127.0.0.1:') ||
-    item.startsWith('localhost:')
-  );
-}
-
-function hostAllowed(req, config) {
-  const allowed = config.production?.allowedHosts || [];
-  const candidates = hostCandidates(req);
-  if (loopbackHost(req)) return true;
-  if (!allowed.length) return config.deployment?.mode !== 'production';
-  return allowed.some(item => candidates.includes(String(item).toLowerCase()));
 }
 
 function jsonError(res, status, message, code, requestId, extra = {}) {
@@ -91,7 +61,7 @@ export function authenticateGatewayRequest(req, url, config) {
   normalizeDeploymentConfig(config);
   const token = extractRequestToken(req, url);
   if (!config.team.enabled && config.auth?.required === false && !token) {
-    return loopbackHost(req) ? fallbackLocalPrincipal() : null;
+    return isLocalRequest(req) ? fallbackLocalPrincipal() : null;
   }
   const principal = verifyAccessToken(token, config);
   if (!principal) return null;
@@ -357,7 +327,9 @@ export const __test = {
   globalInflight: () => globalInflight,
   hostAllowed,
   installRequestBodyLimit,
+  isLocalRequest,
   loopbackHost,
+  loopbackSocket,
   normalizeInnerAuthorization,
   preAuthRateWindows,
   principalInflight,
