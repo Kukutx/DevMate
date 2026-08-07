@@ -94,7 +94,7 @@ export function ownerOnlyTool(name) {
   return OWNER_ONLY_TOOLS.has(String(name || ''));
 }
 
-export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
+function explicitCapabilityForTool(name, annotations = {}, args = {}) {
   const tool = String(name || '');
   if (OWNER_ONLY_TOOLS.has(tool) || ADMIN_TOOLS.has(tool)) return 'admin';
   if (tool === 'git_save' && args?.push) return 'publish';
@@ -109,7 +109,11 @@ export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
   if (WRITE_TOOLS.has(tool)) return 'write';
   if (annotations?.readOnlyHint === true) return 'read';
   if (annotations?.destructiveHint === true) return 'write';
-  return 'read';
+  return null;
+}
+
+export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
+  return explicitCapabilityForTool(name, annotations, args) || 'admin';
 }
 
 export function toolWorkspaceId(name, args = {}, config = {}) {
@@ -154,6 +158,8 @@ export function validateToolRegistration(name, config = {}) {
     if (annotations.readOnlyHint === true && annotations.destructiveHint === true) {
       errors.push(`Tool ${tool || '(empty)'} cannot be both read-only and destructive`);
     }
+    const explicitCapability = explicitCapabilityForTool(tool, annotations);
+    if (!explicitCapability) errors.push(`Tool ${tool || '(empty)'} has no explicit capability policy`);
     if (annotations.readOnlyHint === true && requiredCapabilityForTool(tool, annotations) !== 'read') {
       warnings.push(`Tool ${tool} is annotated read-only but policy requires ${requiredCapabilityForTool(tool, annotations)}`);
     }
@@ -191,5 +197,6 @@ export const __test = {
   PUBLISH_TOOLS,
   TOOL_NAME_PATTERN,
   VALIDATE_TOOLS,
-  WRITE_TOOLS
+  WRITE_TOOLS,
+  explicitCapabilityForTool
 };
