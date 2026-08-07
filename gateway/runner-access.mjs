@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { uniqueCredentialId } from './credential-id.mjs';
 import { defaultedBoolean, defaultedInteger } from './strict-config.mjs';
 
 export const RUNNER_PROTOCOL_VERSION = 1;
@@ -11,15 +12,6 @@ function timingSafeEqualText(a, b) {
   const aa = Buffer.from(String(a || ''));
   const bb = Buffer.from(String(b || ''));
   return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
-}
-
-function cleanId(value, fallback = 'runner') {
-  const normalized = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return normalized || fallback;
 }
 
 function parseExpiry(value) {
@@ -44,13 +36,13 @@ function hashSecret(secret, salt) {
   return base64url(crypto.scryptSync(String(secret), Buffer.from(salt, 'base64url'), 32));
 }
 
-function uniqueCredentialId(config, requested = '') {
-  const base = cleanId(requested || `runner-${crypto.randomBytes(3).toString('hex')}`);
-  const used = new Set((config.runnerControl?.credentials || []).map(item => item.id));
-  let id = base;
-  let index = 2;
-  while (used.has(id)) id = `${base}-${index++}`;
-  return id;
+function uniqueRunnerCredentialId(config, requested = '') {
+  const seed = requested || `runner-${crypto.randomBytes(3).toString('hex')}`;
+  return uniqueCredentialId(
+    (config.runnerControl?.credentials || []).map(item => item.id),
+    seed,
+    { fallback: 'runner' }
+  );
 }
 
 export function normalizeRunnerControlConfig(config) {
@@ -92,7 +84,7 @@ export function createRunnerCredential(config, input = {}) {
   }
   const workspaceIds = normalizeStrings(input.workspaceIds === undefined ? [] : input.workspaceIds, 200);
   if (!workspaceIds.length) throw new Error('External Runner credentials require at least one explicit workspaceId');
-  const id = uniqueCredentialId(config, input.id || input.name);
+  const id = uniqueRunnerCredentialId(config, input.id || input.name);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
   const timestamp = new Date().toISOString();
@@ -205,4 +197,9 @@ export function touchRunnerCredential(config, id, at = new Date().toISOString())
   return true;
 }
 
-export const __test = { hashSecret, parseRunnerToken, timingSafeEqualText };
+export const __test = {
+  hashSecret,
+  parseRunnerToken,
+  timingSafeEqualText,
+  uniqueRunnerCredentialId
+};
