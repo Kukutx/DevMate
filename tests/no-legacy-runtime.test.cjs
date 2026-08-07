@@ -37,8 +37,39 @@ test('host runtime cannot fall back to retired host or per-extension modes', () 
   assert.doesNotMatch(source('package.json'), /vscodeHostEnabled|sharedRuntimeEnabled/);
 });
 
-test('Gateway shared modules require the current DEVMATE_CONFIG contract', () => {
+test('Gateway modules require the current DEVMATE_CONFIG contract', () => {
   assert.doesNotMatch(source('gateway/local-shared.mjs'), /AIWG_CONFIG/);
+  assert.doesNotMatch(source('gateway/server.mjs'), /AIWG_CONFIG/);
+});
+
+test('personal and team workflows expose one work session model only', () => {
+  assert.equal(fs.existsSync(path.join(root, 'gateway', 'team-work-sessions.mjs')), false);
+  const production = [
+    'gateway/server.mjs',
+    'gateway/local-shared.mjs',
+    'gateway/tool-policy.mjs',
+    'gateway/team-capabilities.mjs',
+    'gateway/team-collaboration-tools.mjs',
+    'vscode-host/config-sync.js'
+  ].map(source).join('\n');
+  for (const retired of [
+    /\bstart_task\b/,
+    /\bfinish_task\b/,
+    /\btask_status\b/,
+    /\brollback_task\b/,
+    /\btask_report\b/,
+    /\bteam_work_session_(?:start|status|finish)\b/,
+    /\bcurrentTaskId\b/,
+    /\btaskId\b/
+  ]) {
+    assert.doesNotMatch(production, retired);
+  }
+  assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_start/);
+  assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_status/);
+  assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_finish/);
+  assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_rollback/);
+  assert.match(source('gateway/local-shared.mjs'), /workSessionId/);
+  assert.match(source('gateway/work-session-rollback.mjs'), /workSessionId/);
 });
 
 test('Job capacity validation cannot bypass the current active-work limit', () => {
