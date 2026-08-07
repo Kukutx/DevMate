@@ -2,16 +2,18 @@
 
 const path = require('node:path');
 const { FileSystemAdapter, Notice, Plugin } = require('obsidian');
+const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
 const { ObsidianHostBridge } = require('./host-bridge.js');
 const { ObsidianContextProvider } = require('./context-provider.js');
 const { RuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const { DevMateSettingTab, normalizeSettings } = require('./settings.js');
 const { DevMateView, VIEW_TYPE } = require('./view.js');
-const { createWorkerSpawn } = require('./worker-spawn.js');
 const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
 
 const HOST_ID = 'obsidian';
+const CONTEXT_CAPTURE_DEBOUNCE_MS = 750;
+const STATUS_REFRESH_MS = 5000;
 
 module.exports = class DevMateObsidianPlugin extends Plugin {
   async onload() {
@@ -24,6 +26,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.bridge = null;
     this.contextProvider = null;
     this.runtimeDiagnostics = null;
+    this.nodeRuntime = null;
+    this.nodeRuntimeKey = '';
+    this.lastStatusText = '';
     this.vaultRoot = '';
     this.layoutReady = false;
     this.unloading = false;
@@ -66,7 +71,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on('changed', file => {
       if (file.path === this.app.workspace.getActiveFile()?.path) this.scheduleContextCapture();
     }));
-    this.registerInterval(window.setInterval(() => this.refreshStatus(), 5000));
+    this.registerInterval(window.setInterval(() => {
+      this.refreshStatus().catch(error => this.logRuntime(`Status refresh failed: ${error.message || error}`));
+    }, STATUS_REFRESH_MS));
 
     await this.reconfigureRuntime({ startBridge: true, capture: true });
     if (this.settings.enabled && this.settings.startupMode === 'auto') await this.startRuntime({ quiet: true });
@@ -109,6 +116,23 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.runtimeDiagnostics?.append(message);
   }
 
+  invalidateNodeRuntime() {
+    this.nodeRuntime = null;
+    this.nodeRuntimeKey = '';
+  }
+
+  ensureNodeRuntime() {
+    if (!this.controller) throw new Error('DevMate runtime controller is unavailable');
+    const key = `${this.settings.nodeExecutable || 'auto'}|${process.execPath}|${process.versions.node || ''}`;
+    if (this.nodeRuntime && this.nodeRuntimeKey === key) return this.nodeRuntime;
+    const runtime = resolveNodeRuntime({ preferredExecutable: this.settings.nodeExecutable });
+    this.nodeRuntime = runtime;
+    this.nodeRuntimeKey = key;
+    this.controller.nodeExecutable = runtime.executable;
+    this.logRuntime(`Using Node ${runtime.nodeVersion} Gateway runtime from ${runtime.source}: ${runtime.executable}`);
+    return runtime;
+  }
+
   reconfigureRuntime(options = {}) {
     if (this.unloading) return Promise.resolve({ skipped: true, reason: 'unloading' });
     return this.hostOperations.run('reconfigure', () => this.reconfigureRuntimeInternal(options));
@@ -120,6 +144,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     const pluginDirectory = this.pluginDirectory();
     const stateDirectory = this.stateDirectory();
     const sameState = this.controller && path.resolve(this.controller.stateDirectory) === path.resolve(stateDirectory);
+    this.invalidateNodeRuntime();
     if (!sameState) {
       await this.controller?.dispose({ stopOwned: true });
       this.runtimeDiagnostics = new RuntimeDiagnostics({
@@ -134,10 +159,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         preferredPort: this.settings.preferredPort,
         appVersion: this.manifest.version,
         hostId: HOST_ID,
-        spawnImpl: createWorkerSpawn(),
         logger: message => this.logRuntime(message)
       });
-      this.logRuntime(`Configured embedded Worker Gateway for ${this.vaultRoot}.`);
+      this.logRuntime(`Configured child-process Gateway for ${this.vaultRoot}.`);
     } else {
       this.controller.preferredPort = this.settings.preferredPort;
       this.runtimeDiagnostics?.setStateDirectory(stateDirectory);
@@ -175,7 +199,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.contextTimer = window.setTimeout(() => {
       this.contextTimer = null;
       this.captureContext().catch(error => this.logRuntime(`Context capture failed: ${error.message || error}`));
-    }, 350);
+    }, CONTEXT_CAPTURE_DEBOUNCE_MS);
   }
 
   captureContext() {
@@ -219,11 +243,15 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async refreshStatus() {
-    if (!this.statusBar || !this.controller) return;
+    if (!this.statusBar || !this.controller || this.unloading) return;
     const status = await this.runtimeStatus();
-    this.statusBar.setText(status.state === 'running' ? `DevMate: on :${status.port}` : status.label);
+    const statusText = status.state === 'running' ? `DevMate: on :${status.port}` : status.label;
+    if (statusText !== this.lastStatusText) {
+      this.statusBar.setText(statusText);
+      this.lastStatusText = statusText;
+    }
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof DevMateView) leaf.view.render();
+      if (leaf.view instanceof DevMateView) await leaf.view.refresh(status);
     }
   }
 
@@ -239,13 +267,14 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
     try {
       if (!this.bridge && this.layoutReady) await this.reconfigureRuntimeInternal({ startBridge: true, capture: true });
+      this.ensureNodeRuntime();
       await this.captureContextInternal();
-      this.logRuntime('Starting embedded DevMate Gateway.');
+      this.logRuntime('Starting DevMate Gateway child process.');
       const result = await this.controller.start();
       this.runtimeDiagnostics?.clearFailure();
       this.logRuntime(result.attached
         ? `Attached to existing DevMate Gateway on port ${result.port}.`
-        : `Embedded DevMate Gateway started on port ${result.port}.`);
+        : `DevMate Gateway child process started on port ${result.port}.`);
       if (!quiet) new Notice(result.attached ? 'Attached to the existing DevMate Gateway.' : 'DevMate Gateway started.');
       return { ok: true, ...result };
     } catch (error) {
@@ -275,8 +304,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         this.runtimeDiagnostics?.clearFailure();
         new Notice('DevMate Gateway is not running.');
       }
+      return result;
     } catch (error) {
       new Notice(`DevMate stop failed: ${error.message || error}`);
+      return { stopped: false, reason: error.message || String(error) };
     } finally {
       await this.refreshStatus();
     }
@@ -289,14 +320,17 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   async restartRuntimeInternal() {
     try {
-      this.logRuntime('Restarting DevMate Gateway.');
+      this.ensureNodeRuntime();
+      this.logRuntime('Restarting DevMate Gateway child process.');
       const result = await this.controller.restart();
       this.runtimeDiagnostics?.clearFailure();
       if (result.attached) new Notice('Gateway is managed by another host; kept the shared instance attached.');
       else new Notice('DevMate Gateway restarted.');
+      return result;
     } catch (error) {
       this.runtimeDiagnostics?.recordFailure(error);
       new Notice(`DevMate restart failed: ${error.message || error}`);
+      return { restarted: false, reason: error.message || String(error) };
     } finally {
       await this.refreshStatus();
     }
