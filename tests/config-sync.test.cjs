@@ -23,7 +23,6 @@
             version: SUPPORTED_CONFIG_VERSION,
             instanceId: 'stable',
             auth: { required: true, token: 'owner-token' },
-            task: { currentTaskId: 'task-1' },
             runnerControl: { enabled: true },
             trustedWritableRoots: [{ id: 'trusted' }],
             runtime: { maxConcurrentJobs: 4, defaultCommandTimeoutMs: 1000 },
@@ -40,7 +39,6 @@
           assert.equal(merged.instanceId, 'stable');
           assert.equal(merged.auth.token, 'owner-token');
           assert.equal(merged.auth.required, false);
-          assert.equal(merged.task.currentTaskId, 'task-1');
           assert.equal(merged.runtime.maxConcurrentJobs, 4);
           assert.equal(merged.runtime.defaultCommandTimeoutMs, 2000);
           assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
@@ -77,7 +75,6 @@
               forgedPolicy: true
             },
             workspaces: [{ id: 'app' }, { id: 'forged', trusted: true, role: 'trusted' }],
-            task: { currentTaskId: 'forged-task' },
             jobs: { embeddedRunnerEnabled: false },
             runnerControl: { enabled: true },
             plugins: { enabled: ['forged'] },
@@ -89,7 +86,7 @@
           assert.deepEqual(merged.runtime, { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 });
           assert.deepEqual(merged.team, { enabled: true, requireWorkspaceLeaseForWrites: true });
           assert.deepEqual(merged.workspaces, [{ id: 'app' }]);
-          for (const key of ['task', 'jobs', 'runnerControl', 'plugins', 'trustedWritableRoots', 'hostRuntime']) {
+          for (const key of ['jobs', 'runnerControl', 'plugins', 'trustedWritableRoots', 'hostRuntime']) {
             assert.equal(Object.hasOwn(merged, key), false, `${key} must remain Gateway-owned`);
           }
         });
