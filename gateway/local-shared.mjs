@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import configStore from '../shared/config-store.cjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 
-export const CONFIG_PATH = process.env.DEVMATE_CONFIG || process.env.AIWG_CONFIG;
+export const CONFIG_PATH = process.env.DEVMATE_CONFIG;
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
 const AUDIT_LOG = CONFIG_DIR ? path.join(CONFIG_DIR, 'state', 'audit.jsonl') : '';
 const SENSITIVE_KEY = /token|secret|password|authorization|api[_-]?key|credential|private[_-]?key/i;
