@@ -50,7 +50,8 @@ test('personal and team workflows expose one work session model only', () => {
     'gateway/tool-policy.mjs',
     'gateway/team-capabilities.mjs',
     'gateway/team-collaboration-tools.mjs',
-    'vscode-host/config-sync.js'
+    'vscode-host/config-sync.js',
+    'extension.js'
   ].map(source).join('\n');
   for (const retired of [
     /\bstart_task\b/,
@@ -70,6 +71,9 @@ test('personal and team workflows expose one work session model only', () => {
   assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_rollback/);
   assert.match(source('gateway/local-shared.mjs'), /workSessionId/);
   assert.match(source('gateway/work-session-rollback.mjs'), /workSessionId/);
+  assert.match(source('extension.js'), /work_session_start/);
+  assert.match(source('extension.js'), /show_changes/);
+  assert.match(source('extension.js'), /work_session_finish/);
 });
 
 test('Job capacity validation cannot bypass the current active-work limit', () => {
