@@ -42,3 +42,5 @@ export function createRequestConcurrencyLimiter() {
     global: () => global
   };
 }
+
+export const sharedHttpRequestConcurrency = createRequestConcurrencyLimiter();

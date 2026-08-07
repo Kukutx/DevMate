@@ -18,6 +18,20 @@ function normalizeProvider(value) {
   return tunnelProvider(provider);
 }
 
+function normalizeAutoRestart(value) {
+  if (value === undefined) return true;
+  if (typeof value !== 'boolean') throw new Error('tunnel autoRestart must be a boolean');
+  return value;
+}
+
+function normalizeMaxRestarts(value) {
+  if (value === undefined) return 10;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 50) {
+    throw new Error('tunnel maxRestarts must be an integer from 0 to 50');
+  }
+  return value;
+}
+
 function normalizePublicUrl(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -156,8 +170,8 @@ class ManagedTunnelProcess extends EventEmitter {
       this.emit('exit', code, signal);
       return;
     }
-    const maxRestarts = Math.min(50, Math.max(0, Number(this.settings.maxRestarts) || 10));
-    if (this.settings.autoRestart === false || this.restartCount >= maxRestarts) {
+    const maxRestarts = this.settings.maxRestarts;
+    if (!this.settings.autoRestart || this.restartCount >= maxRestarts) {
       this.emit('exit', code, signal);
       return;
     }
@@ -242,8 +256,8 @@ class TunnelCompatibilityManager {
       publicUrl: raw.publicUrl || '',
       cloudflareCommandPath: raw.cloudflareCommandPath || '',
       ngrokTrafficPolicyFile: raw.ngrokTrafficPolicyFile || '',
-      autoRestart: raw.autoRestart,
-      maxRestarts: raw.maxRestarts
+      autoRestart: normalizeAutoRestart(raw.autoRestart),
+      maxRestarts: normalizeMaxRestarts(raw.maxRestarts)
     };
   }
 
@@ -365,8 +379,8 @@ class TunnelCompatibilityManager {
       localPort: this.localPort,
       running: !!this.current && !this.current.killed,
       pid: this.current?.pid || null,
-      autoRestart: settings.autoRestart !== false,
-      maxRestarts: Number(settings.maxRestarts) || 10,
+      autoRestart: settings.autoRestart,
+      maxRestarts: settings.maxRestarts,
       ngrokTrafficPolicyFile: settings.ngrokTrafficPolicyFile || null,
       cloudflareCommandPath: settings.cloudflareCommandPath || 'cloudflared'
     };
@@ -379,6 +393,8 @@ module.exports = {
   cloudflareLaunch,
   decorateNgrokArgs,
   isNgrokCommand,
+  normalizeAutoRestart,
+  normalizeMaxRestarts,
   normalizeProvider,
   normalizePublicUrl,
   parsePort,

@@ -2,15 +2,15 @@ import crypto from 'node:crypto';
 import { mutateConfig, readConfig } from './local-shared.mjs';
 import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { hostAllowed, isLocalRequest, loopbackHost, loopbackSocket, remoteAddress } from './http-host-policy.mjs';
+import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
 import { extractRequestToken, fallbackLocalPrincipal, normalizeDeploymentConfig, verifyAccessToken } from './team-access.mjs';
 
 const rateWindows = new Map();
 const preAuthRateWindows = new Map();
-const principalInflight = new Map();
+const requestConcurrency = sharedHttpRequestConcurrency;
 const activities = new Map();
-let globalInflight = 0;
 let installed = false;
 
 function nowIso() { return new Date().toISOString(); }
@@ -68,7 +68,7 @@ export function authenticateGatewayRequest(req, url, config) {
   return principal;
 }
 
-function normalizeInnerAuthorization(req, config, principal) {
+function normalizeInnerAuthorization(req, config) {
   if (req.headers) delete req.headers['x-devmate-token'];
   if (config.auth?.required === false) {
     if (req.headers) delete req.headers.authorization;
@@ -90,25 +90,11 @@ function consumePreviewRateLimit(req, config) {
 }
 
 function enterConcurrency(principalId, config) {
-  const maxGlobal = config.production.maxConcurrentRequests;
-  const maxPrincipal = config.production.maxConcurrentPerPrincipal;
-  const currentPrincipal = principalInflight.get(principalId) || 0;
-  if (globalInflight >= maxGlobal) return { allowed: false, reason: 'global', current: globalInflight, limit: maxGlobal };
-  if (currentPrincipal >= maxPrincipal) return { allowed: false, reason: 'principal', current: currentPrincipal, limit: maxPrincipal };
-  globalInflight += 1;
-  principalInflight.set(principalId, currentPrincipal + 1);
-  let released = false;
-  return {
-    allowed: true,
-    release() {
-      if (released) return;
-      released = true;
-      globalInflight = Math.max(0, globalInflight - 1);
-      const next = Math.max(0, (principalInflight.get(principalId) || 1) - 1);
-      if (next) principalInflight.set(principalId, next);
-      else principalInflight.delete(principalId);
-    }
-  };
+  return requestConcurrency.enter(
+    `mcp:${principalId}`,
+    config.production.maxConcurrentRequests,
+    config.production.maxConcurrentPerPrincipal
+  );
 }
 
 function activityKey(req, principal) {
@@ -257,7 +243,7 @@ export function guardListener(listener) {
     touchTeamMemberBestEffort(principal);
     recordActivity(req, principal, requestId);
 
-    if (!normalizeInnerAuthorization(req, config, principal)) {
+    if (!normalizeInnerAuthorization(req, config)) {
       concurrency.release();
       jsonError(res, 503, 'DevMate owner token is not configured', 'owner_token_missing', requestId);
       return;
@@ -314,9 +300,8 @@ export function installGatewayRequestGuard(httpModule) {
 export function resetRequestGuardState() {
   rateWindows.clear();
   preAuthRateWindows.clear();
-  principalInflight.clear();
+  requestConcurrency.reset();
   activities.clear();
-  globalInflight = 0;
 }
 
 export const __test = {
@@ -324,7 +309,7 @@ export const __test = {
   consumePreviewRateLimit,
   consumeRateLimit,
   enterConcurrency,
-  globalInflight: () => globalInflight,
+  globalInflight: requestConcurrency.global,
   hostAllowed,
   installRequestBodyLimit,
   isLocalRequest,
@@ -332,7 +317,7 @@ export const __test = {
   loopbackSocket,
   normalizeInnerAuthorization,
   preAuthRateWindows,
-  principalInflight,
+  principalInflight: requestConcurrency.principals,
   rateWindows,
   touchTeamMemberBestEffort
 };

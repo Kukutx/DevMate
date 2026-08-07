@@ -4,6 +4,7 @@ import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-
 import { readDurableNamespace } from './durable-state.mjs';
 import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
 import { hostAllowed, remoteAddress } from './http-host-policy.mjs';
+import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { preflightQueuedJob } from './job-preflight.mjs';
 import { claimExternalJob } from './external-job-claim.mjs';
 import {
@@ -28,6 +29,7 @@ import {
   touchRunnerCredential,
   verifyRunnerToken
 } from './runner-access.mjs';
+import { normalizeDeploymentConfig } from './team-access.mjs';
 
 const INSTALLED = Symbol.for('devmate.runnerControlPlaneInstalled');
 const rateWindows = new Map();
@@ -67,6 +69,14 @@ function bearerToken(req) {
 
 function consumeRate(id, limit) {
   return consumeFixedWindow(rateWindows, id, limit, { maxEntries: 10_000 }).allowed;
+}
+
+function enterRequestConcurrency(principal, config) {
+  return sharedHttpRequestConcurrency.enter(
+    `runner:${principal.id}`,
+    config.production.maxConcurrentRequests,
+    config.production.maxConcurrentPerPrincipal
+  );
 }
 
 function json(res, status, payload, requestId) {
@@ -436,7 +446,7 @@ export function runnerControlListener(listener) {
     const started = Date.now();
     const requestId = `runner-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     try {
-      const config = normalizeRunnerControlConfig(readConfig());
+      const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readConfig()));
       if (!config.runnerControl.enabled) {
         return json(res, 404, {
           error: 'External runner control plane is disabled',
@@ -461,7 +471,7 @@ export function runnerControlListener(listener) {
           code: 'host_not_allowed'
         }, requestId);
       }
-      req.setTimeout?.(config.production?.requestTimeoutMs || 900000);
+      req.setTimeout?.(config.production.requestTimeoutMs);
       const preauthKey = `preauth:${remoteAddress(req) || 'unknown'}`;
       if (!consumeRate(preauthKey, Math.max(120, config.runnerControl.requestsPerMinute * 2))) {
         return json(res, 429, {
@@ -482,24 +492,37 @@ export function runnerControlListener(listener) {
           code: 'rate_limited'
         }, requestId);
       }
-      const body = await readJsonBody(req, config.runnerControl.maxRequestBytes);
-      touchCredentialBestEffort(principal.id);
-      await routeRequest(req, res, url, config, principal, body, requestId);
-      incrementCounter('devmate_runner_control_requests_total', {
-        runner: principal.id,
-        route: url.pathname,
-        status: res.statusCode
-      }, 1);
-      observeDuration('devmate_runner_control_duration_ms', {
-        route: url.pathname
-      }, Date.now() - started);
-      await audit('runner_control_request', {
-        requestId,
-        runnerId: principal.id,
-        path: url.pathname,
-        status: res.statusCode,
-        durationMs: Date.now() - started
-      });
+      const concurrency = enterRequestConcurrency(principal, config);
+      if (!concurrency.allowed) {
+        return json(res, 429, {
+          error: 'Runner concurrent request limit exceeded',
+          code: 'concurrency_limited',
+          scope: concurrency.reason,
+          limit: concurrency.limit
+        }, requestId);
+      }
+      try {
+        const body = await readJsonBody(req, config.runnerControl.maxRequestBytes);
+        touchCredentialBestEffort(principal.id);
+        await routeRequest(req, res, url, config, principal, body, requestId);
+        incrementCounter('devmate_runner_control_requests_total', {
+          runner: principal.id,
+          route: url.pathname,
+          status: res.statusCode
+        }, 1);
+        observeDuration('devmate_runner_control_duration_ms', {
+          route: url.pathname
+        }, Date.now() - started);
+        await audit('runner_control_request', {
+          requestId,
+          runnerId: principal.id,
+          path: url.pathname,
+          status: res.statusCode,
+          durationMs: Date.now() - started
+        });
+      } finally {
+        concurrency.release();
+      }
     } catch (error) {
       const ownershipConflict = /does not own running job|not found|no longer owns|claim/i.test(String(error?.message || ''));
       const status = Number(error?.status) || (ownershipConflict ? 409 : 500);
@@ -540,6 +563,7 @@ export const __test = {
   claimProof,
   consumeClaimBestEffort,
   consumeRate,
+  enterRequestConcurrency,
   executionEnvelope,
   hostAllowed,
   rateWindows,
