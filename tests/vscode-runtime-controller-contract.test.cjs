@@ -50,6 +50,7 @@ test('auxiliary process and tunnel ownership cannot clear newer handles', () => 
   assert.doesNotMatch(source, /ngrokProcess/);
 
   assert.match(tunnelController, /if \(this\.child !== child\) return/);
-  assert.match(tunnelController, /if \(!ownerId \|\| this\.ownerId === ownerId\)/);
+  assert.match(tunnelController, /if \(ownerId && this\.ownerId !== ownerId\) return false/);
+  assert.match(tunnelController, /this\.clearLocalOwnership\(ownerId\)/);
   assert.match(tunnelController, /record\.ownerId !== this\.ownerId/);
 });
