@@ -10,7 +10,7 @@ Normal MCP tool calls remain the right choice for short, interactive operations.
 - the ChatGPT connection may be refreshed or interrupted;
 - execution must be routed to a platform-specific or high-capacity host;
 - the result should retain bounded events and artifact metadata;
-- a task may need to wait for another maintainer's approval;
+- a job may need to wait for another maintainer's approval;
 - a shared workspace lease may temporarily be unavailable;
 - the gateway must be drained before an upgrade without losing queued work.
 
@@ -18,13 +18,13 @@ Normal MCP tool calls remain the right choice for short, interactive operations.
 
 Run `job_target_catalog` before submission. The built-in allowlist includes:
 
-- `project_snapshot`, `show_changes`, and `task_report`;
+- `project_snapshot` and `show_changes`;
 - `run_smart_checks`, `run_project_script`, and `run_configured_command`;
 - `browser_qa_run` and `browser_qa_run_saved`;
 - Godot validation, Web export, and acceptance tools;
 - `git_save` without `push`.
 
-`run_command`, force operations, direct push, member management, credential rotation, and arbitrary tools cannot be queued. Platform plugins only appear when enabled and registered.
+`run_command`, force operations, direct push, member management, credential rotation, work-session administration, and arbitrary tools cannot be queued. Platform plugins only appear when enabled and registered.
 
 ## Submit a job
 
@@ -90,9 +90,9 @@ When a job enters `waiting_approval`:
 
 1. Read the approval request with `team_approval_list`.
 2. A different maintainer or owner approves it.
-3. a compatible Runner retries the same target and consumes the approval once.
+3. A compatible Runner retries the same target and consumes the approval once.
 
-Approval is consumed before the task is delivered. If a remote Runner disappears after claim, a later attempt may require a new approval.
+Approval is consumed before the job is delivered. If a remote Runner disappears after claim, a later attempt may require a new approval.
 
 When a job enters `blocked_lease`:
 
@@ -176,9 +176,15 @@ Before maintenance or upgrade:
 
 Owner/local recovery credentials remain usable during drain. Team members may still read state and cancel their visible jobs.
 
+## Work-session interaction
+
+Interactive work uses `work_session_start`, `work_session_status`, `work_session_finish`, and optional `work_session_rollback`. The work-session lease and a durable job's authorization preflight share the same central lease state, so a job can become `blocked_lease` if its requester no longer owns the required workspace.
+
+Work sessions themselves are not durable job targets. Use `show_changes` for a queueable source-change summary.
+
 ## Durability boundary
 
-Jobs, Runner registration, events, results, drain state, approvals, leases, and team work sessions use the same atomic single-host runtime state file on the central Gateway:
+Jobs, Runner registration, events, results, drain state, approvals, leases, and work sessions use the same atomic single-host runtime state file on the central Gateway:
 
 ```text
 <config-directory>/state/runtime-state.json
