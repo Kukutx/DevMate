@@ -1,8 +1,6 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
-const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const childProcess = require('./vscode-host/runtime-io.js');
@@ -10,6 +8,7 @@ const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/con
 const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-http-client.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
+const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 
 function spawn(...args){ return childProcess.spawn(...args); }
 function spawnSync(...args){ return childProcess.spawnSync(...args); }
@@ -20,7 +19,6 @@ const MCP_PATH = '/mcp';
 let gatewayProcess = null;
 let gatewayController = null;
 let gatewayControllerKey = '';
-let ngrokProcess = null;
 let output = null;
 let statusBar = null;
 let panel = null;
@@ -29,11 +27,11 @@ let selectedPort = BASE_PORT;
 let globalContext = null;
 let startCommandProcess = null;
 let contextWriteTimer = null;
-const lifecycleOperations = new OperationCoordinator({ name: 'vscode-legacy-lifecycle' });
+const lifecycleOperations = new OperationCoordinator({ name: 'vscode-lifecycle' });
 
 function cfg(){ return vscode.workspace.getConfiguration('devMate'); }
 function configuredPort(){ return Number(cfg().get('port') || BASE_PORT); }
-function ngrokCommand(){ return cfg().get('ngrokCommandPath') || 'ngrok'; }
+function configuredTunnelProvider(){ return String(cfg().get('tunnelProvider') || 'ngrok').trim().toLowerCase(); }
 function log(s){ if(output) output.appendLine(`[${new Date().toLocaleTimeString()}] ${s}`); }
 function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
 function configPath(ctx){ return path.join(ctx.globalStorageUri.fsPath,'config.json'); }
@@ -379,7 +377,7 @@ async function choosePort(ctx){
     if(!health.ok && await isPortFree(p)) return p;
     log(`Port ${p} is busy or occupied by a different service; trying next port.`);
   }
-  throw new Error(`No free port found from ${base} to ${base+19}. Close old gateway/ngrok/node processes and try again.`);
+  throw new Error(`No free port found from ${base} to ${base+19}. Close old gateway/tunnel/node processes and try again.`);
 }
 async function isCurrentGatewayUp(ctx){
   const data = ensureConfig(ctx,false);
@@ -422,8 +420,8 @@ async function ensureGatewayController(ctx){
   return gatewayController;
 }
 function trackGatewayProcess(child){
-  if(!child || child.__devMateLegacyTracked) return;
-  child.__devMateLegacyTracked = true;
+  if(!child || child.__devMateTracked) return;
+  child.__devMateTracked = true;
   child.once('exit',(code,signal)=>{
     if(gatewayProcess !== child) return;
     gatewayProcess = null;
@@ -480,77 +478,29 @@ async function startGateway(ctx){
   runDefaultStartCommand();
   return result;
 }
-async function getNgrokTunnels(){
-  const r = await httpGet('http://127.0.0.1:4040/api/tunnels',900);
-  if(!r.ok || !r.json?.tunnels) return [];
-  return r.json.tunnels || [];
-}
-async function deleteNgrokTunnel(t){
-  if(!t?.name) return false;
-  const r = await httpRequestRaw(`http://127.0.0.1:4040/api/tunnels/${encodeURIComponent(t.name)}`, {method:'DELETE'}, null, 2500);
-  return r.ok || r.status === 204;
-}
-function tunnelPort(t){
-  const addr = t?.config?.addr || t?.config?.addr_url || t?.addr || '';
-  const m = String(addr).match(/:(\d+)(?:\/)?$/);
-  return m ? Number(m[1]) : null;
-}
-async function stopNgrokTunnels(tunnels=[]){
-  const child = ngrokProcess;
-  if(!child){
-    if(tunnels.length) log('Leaving existing tunnel running because this VS Code host does not own its process.');
-    return {stopped:false,reason:'managed-by-another-host'};
-  }
-  try{ if(child.exitCode == null && !child.killed) child.kill(); }catch{}
-  const exited = await waitForProcessExit(child, 5000);
-  if(ngrokProcess === child) ngrokProcess=null;
-  lastPublicUrl='';
-  for(const t of tunnels){
-    const ok = await deleteNgrokTunnel(t);
-    log(ok ? `Stopped owned tunnel ${t.public_url || t.name}.` : `Could not stop owned tunnel ${t.public_url || t.name}.`);
-  }
-  return {stopped:exited,reason:exited ? '' : 'process-exit-timeout'};
-}
-async function getNgrokPublicUrlForPort(port){
-  const tunnels = await getNgrokTunnels();
-  const t = tunnels.find(x => x.public_url?.startsWith('https://') && tunnelPort(x) === port);
-  return t?.public_url || '';
-}
-async function startNgrok(ctx){
+function currentTunnelStatus(ctx=globalContext){
   const data = ensureConfig(ctx,false);
-  const p = Number(data.server.port || selectedPort);
-  let existing = await getNgrokPublicUrlForPort(p);
-  if(existing){ lastPublicUrl = existing; log(`Using existing ngrok tunnel for port ${p}: ${existing}`); return existing; }
-  if(ngrokProcess && ngrokProcess.exitCode == null){
-    const previous = ngrokProcess;
-    try{ if(!previous.killed) previous.kill(); }catch{}
-    await waitForProcessExit(previous, 5000);
-    if(ngrokProcess === previous) ngrokProcess = null;
+  return tunnelStatus(Number(data.server.port || selectedPort));
+}
+async function startPublicTunnel(ctx){
+  const data = ensureConfig(ctx,false);
+  const port = Number(data.server.port || selectedPort);
+  const result = await startTunnel(port);
+  const publicUrl = result?.publicUrl || result?.record?.publicUrl || '';
+  if(!publicUrl) throw new Error(`Tunnel provider ${result?.record?.provider || configuredTunnelProvider()} did not publish a public URL.`);
+  lastPublicUrl = publicUrl;
+  const provider = result?.record?.provider || configuredTunnelProvider();
+  log(result.attached
+    ? `Attached to shared ${provider} tunnel for port ${port}: ${publicUrl}`
+    : `${provider} tunnel ready for port ${port}: ${publicUrl}`);
+  return {...result, publicUrl};
+}
+async function stopPublicTunnel(){
+  try{
+    return await stopTunnel();
+  } finally {
     lastPublicUrl = '';
-    log('Stopped previous owned tunnel process before starting the current port.');
   }
-  const other = (await getNgrokTunnels()).find(x => x.public_url?.startsWith('https://'));
-  if(other){
-    log(`Found another ngrok tunnel ${other.public_url} -> port ${tunnelPort(other)}. Leaving it running and starting a DevMate tunnel for port ${p}.`);
-  }
-  const exe = ngrokCommand();
-  const check = spawnSync(exe,['version'],{encoding:'utf8',windowsHide:true});
-  if(check.error) throw new Error(`ngrok not found. Install and authenticate ngrok first. Error: ${check.error.message}`);
-  const child = spawn(exe,['http',String(p)],{windowsHide:true});
-  ngrokProcess = child;
-  child.stdout.on('data',d=>log(`[ngrok] ${String(d).trimEnd()}`));
-  child.stderr.on('data',d=>log(`[ngrok:err] ${String(d).trimEnd()}`));
-  child.on('exit',(code,signal)=>{
-    log(`ngrok exited code=${code} signal=${signal}`);
-    if(ngrokProcess === child){ ngrokProcess=null; lastPublicUrl=''; }
-    refreshPanel();
-  });
-  for(let i=0;i<60;i++){
-    await new Promise(r=>setTimeout(r,300));
-    const url=await getNgrokPublicUrlForPort(p);
-    if(url){ lastPublicUrl=url; log(`ngrok ready for port ${p}: ${url}`); return url; }
-  }
-  throw new Error('ngrok did not expose a public URL for the current gateway port. Open Show Logs for details.');
 }
 async function mcpHandshakeTest(baseUrl, ctx=globalContext){
   const mcp = mcpUrlFor(baseUrl);
@@ -572,8 +522,9 @@ async function quickStart(ctx){
     output.show(true);
     if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
     const gateway = await startGateway(ctx);
-    const publicUrl = await startNgrok(ctx);
-    log('Running public MCP preflight through ngrok before copying URL...');
+    const tunnel = await startPublicTunnel(ctx);
+    const publicUrl = tunnel.publicUrl;
+    log(`Running public MCP preflight through ${tunnel.record?.provider || configuredTunnelProvider()} before copying URL...`);
     const test = await mcpHandshakeTest(publicUrl, ctx);
     const stamp = new Date().toISOString();
     if(cfg().get('autoCopyUrl')) await vscode.env.clipboard.writeText(test.mcp);
@@ -591,7 +542,7 @@ async function quickStart(ctx){
     log(`Public MCP preflight OK: ${redactUrl(test.mcp)}, tools=${test.toolCount}`);
     vscode.window.showInformationMessage(cfg().get('autoCopyUrl') ? `Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcp)}` : `Ready. Verified MCP URL: ${redactUrl(test.mcp)}`);
     refreshPanel();
-    return {ok:true,gateway,publicUrl,toolCount:test.toolCount,server:test.server};
+    return {ok:true,gateway,tunnel,publicUrl,toolCount:test.toolCount,server:test.server};
   }catch(e){
     const message = String(e.message || e);
     updateConnectionSnapshot(ctx,{lastError:message,lastErrorAt:new Date().toISOString()});
@@ -601,23 +552,27 @@ async function quickStart(ctx){
   }
 }
 async function stopAll(){
-  if(globalContext){
-    try{
-      const data = ensureConfig(globalContext,false);
-      const port = Number(data.server.port || selectedPort);
-      const tunnels = (await getNgrokTunnels()).filter(t => tunnelPort(t) === port);
-      if(tunnels.length || ngrokProcess) await stopNgrokTunnels(tunnels);
-    }catch(e){ log(`Could not stop ngrok tunnel cleanly: ${e.message || e}`); }
+  let tunnel = {stopped:false,reason:'not-running'};
+  try{
+    tunnel = await stopPublicTunnel();
+  }catch(e){
+    log(`Could not stop public tunnel cleanly: ${e.message || e}`);
   }
   const gateway = await stopGatewayProcess();
   await stopStartCommand();
   lastPublicUrl=''; setStatus('DevMate: stopped'); refreshPanel();
-  return {ok:gateway.stopped || gateway.reason === 'not-running',gateway};
+  return {ok:gateway.stopped || gateway.reason === 'not-running',gateway,tunnel};
 }
 async function copyUrl(){
-  const data = ensureConfig(globalContext,false);
-  const url = await getNgrokPublicUrlForPort(Number(data.server.port || selectedPort));
-  if(!url) return vscode.window.showWarningMessage('No ngrok URL for current gateway port. Run One-click Start first.');
+  let status;
+  try{
+    status = currentTunnelStatus(globalContext);
+  }catch(e){
+    return vscode.window.showWarningMessage(`Public tunnel is unavailable: ${e.message || e}`);
+  }
+  const url = status.publicUrl || '';
+  if(!url) return vscode.window.showWarningMessage('No public tunnel URL for the current gateway port. Run DevMate: Start first.');
+  lastPublicUrl = url;
   try{
     const test = await mcpHandshakeTest(url, globalContext);
     const stamp = new Date().toISOString();
@@ -854,6 +809,7 @@ async function saveReferencesJson(ctx, value){
 async function doctor(ctx){
   const checks=[];
   const data=ensureConfig(ctx,false);
+  const provider=configuredTunnelProvider();
   checks.push(`Version: ${VERSION}`);
   checks.push(`VS Code workspace: ${currentRoot() || 'NONE'}`);
   checks.push(`Extension path: ${ctx.extensionPath}`);
@@ -861,10 +817,23 @@ async function doctor(ctx){
   checks.push(`Configured/current port: ${data.server.port}`);
   checks.push(`Node: ${process.execPath}`);
   const git=spawnSync('git',['--version'],{encoding:'utf8',windowsHide:true}); checks.push(`git: ${git.error ? 'MISSING' : git.stdout.trim()}`);
-  const ng=spawnSync(ngrokCommand(),['version'],{encoding:'utf8',windowsHide:true}); checks.push(`ngrok: ${ng.error ? 'MISSING' : ng.stdout.trim().split(/\r?\n/)[0]}`);
+  if(provider === 'ngrok'){
+    const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
+    const result=spawnSync(command,['version'],{encoding:'utf8',windowsHide:true});
+    checks.push(`ngrok: ${result.error ? 'MISSING' : String(result.stdout || result.stderr || '').trim().split(/\r?\n/)[0]}`);
+  } else if(provider.startsWith('cloudflare')){
+    const command=String(cfg().get('cloudflareCommandPath') || 'cloudflared');
+    const result=spawnSync(command,['--version'],{encoding:'utf8',windowsHide:true});
+    checks.push(`cloudflared: ${result.error ? 'MISSING' : String(result.stdout || result.stderr || '').trim().split(/\r?\n/)[0]}`);
+  } else {
+    checks.push('tunnel executable: external ingress');
+  }
   const h=await healthAt(Number(data.server.port||selectedPort)); checks.push(`Gateway health: ${healthMatches(h,ctx) ? 'OK' : `not current/failed (${h.status||h.error||'no response'})`}`);
-  const url=await getNgrokPublicUrlForPort(Number(data.server.port||selectedPort)); checks.push(`ngrok url for current port: ${url || 'not running'}`);
-  if(url){ try{ const test=await mcpHandshakeTest(url); checks.push(`public MCP preflight: OK tools=${test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
+  try{
+    const tunnel=currentTunnelStatus(ctx);
+    checks.push(`Tunnel: ${tunnel.running ? `${tunnel.provider} ${tunnel.publicUrl || 'starting'}` : `${provider} not running`}`);
+    if(tunnel.publicUrl){ try{ const test=await mcpHandshakeTest(tunnel.publicUrl,ctx); checks.push(`public MCP preflight: OK tools=${test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
+  }catch(e){ checks.push(`Tunnel: unavailable (${e.message || e})`); }
   output.show(true); checks.forEach(x=>log(`[doctor] ${x}`)); vscode.window.showInformationMessage('Doctor finished. See DevMate output.');
 }
 
@@ -876,8 +845,18 @@ async function setup(ctx){
   await doctor(ctx);
   const actions=[];
   if(!currentRoot()) actions.push('Open a project folder in VS Code.');
-  const ng=spawnSync(ngrokCommand(),['version'],{encoding:'utf8',windowsHide:true});
-  if(ng.error) actions.push('Install and login ngrok, then run DevMate: Start.');
+  const provider=configuredTunnelProvider();
+  if(provider === 'ngrok'){
+    const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
+    const result=spawnSync(command,['version'],{encoding:'utf8',windowsHide:true});
+    if(result.error) actions.push('Install ngrok, then configure its DevMate account and run DevMate: Start.');
+  } else if(provider.startsWith('cloudflare')){
+    const command=String(cfg().get('cloudflareCommandPath') || 'cloudflared');
+    const result=spawnSync(command,['--version'],{encoding:'utf8',windowsHide:true});
+    if(result.error) actions.push('Install cloudflared, then run DevMate: Start.');
+  } else if(provider === 'external' && !String(cfg().get('publicUrl') || '').trim()) {
+    actions.push('Configure devMate.publicUrl for the external ingress.');
+  }
   if(actions.length) vscode.window.showWarningMessage(`DevMate setup needs: ${actions.join(' ')}`);
   else vscode.window.showInformationMessage('DevMate setup looks ready. Run DevMate: Start.');
 }
