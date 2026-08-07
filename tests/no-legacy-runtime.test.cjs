@@ -11,6 +11,17 @@ function source(file) {
   return fs.readFileSync(path.join(root, file), 'utf8');
 }
 
+const RETIRED_SESSION_API = [
+  /\bstart_task\b/,
+  /\bfinish_task\b/,
+  /\btask_status\b/,
+  /\brollback_task\b/,
+  /\btask_report\b/,
+  /\bteam_work_session_(?:start|status|finish)\b/,
+  /\bcurrentTaskId\b/,
+  /\btaskId\b/
+];
+
 test('runtime contains no legacy state migration API or forwarding entry layers', () => {
   const forbidden = new RegExp(['migrate', 'Legacy', 'State'].join(''));
   const legacyDirectory = new RegExp(['legacy', 'Directory'].join(''));
@@ -53,18 +64,7 @@ test('personal and team workflows expose one work session model only', () => {
     'vscode-host/config-sync.js',
     'extension.js'
   ].map(source).join('\n');
-  for (const retired of [
-    /\bstart_task\b/,
-    /\bfinish_task\b/,
-    /\btask_status\b/,
-    /\brollback_task\b/,
-    /\btask_report\b/,
-    /\bteam_work_session_(?:start|status|finish)\b/,
-    /\bcurrentTaskId\b/,
-    /\btaskId\b/
-  ]) {
-    assert.doesNotMatch(production, retired);
-  }
+  for (const retired of RETIRED_SESSION_API) assert.doesNotMatch(production, retired);
   assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_start/);
   assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_status/);
   assert.match(source('gateway/team-collaboration-tools.mjs'), /work_session_finish/);
@@ -74,6 +74,21 @@ test('personal and team workflows expose one work session model only', () => {
   assert.match(source('extension.js'), /work_session_start/);
   assert.match(source('extension.js'), /show_changes/);
   assert.match(source('extension.js'), /work_session_finish/);
+});
+
+test('current user and agent guidance contains no retired session API', () => {
+  const currentGuidance = [
+    'AGENTS.md',
+    'docs/MCP_TOOLS.md',
+    'docs/JOBS.md',
+    'docs/TESTING.md',
+    'docs/TEAM_DEPLOYMENT.md',
+    'docs/TROUBLESHOOTING.md'
+  ];
+  for (const file of currentGuidance) {
+    const text = source(file);
+    for (const retired of RETIRED_SESSION_API) assert.doesNotMatch(text, retired, file);
+  }
 });
 
 test('Job capacity validation cannot bypass the current active-work limit', () => {
