@@ -11,7 +11,7 @@ const bundledGateway = path.join(root, 'gateway', 'server.bundle.mjs');
 const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundledGateway) ? 'gateway/server.bundle.mjs' : 'gateway/server.mjs');
 
 const config = {
-  version: 9,
+  version: 11,
   appVersion: '3.3.0',
   instanceId: `smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
