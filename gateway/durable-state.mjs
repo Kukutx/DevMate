@@ -40,11 +40,20 @@ function unsupportedVersion(version) {
   return error;
 }
 
+function invalidVersion(version) {
+  const error = new Error(`DevMate durable state has an invalid version: ${String(version)}`);
+  error.code = 'invalid_state_version';
+  error.stateVersion = version;
+  return error;
+}
+
 function normalizeDocument(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyDocument();
-  const sourceVersion = Number(value.version ?? 0);
-  if (Number.isFinite(sourceVersion) && sourceVersion > DOCUMENT_VERSION) {
-    throw unsupportedVersion(sourceVersion);
+  if (Object.hasOwn(value, 'version')) {
+    if (typeof value.version !== 'number' || !Number.isInteger(value.version) || value.version < 1) {
+      throw invalidVersion(value.version);
+    }
+    if (value.version > DOCUMENT_VERSION) throw unsupportedVersion(value.version);
   }
   const namespaces = value.namespaces && typeof value.namespaces === 'object' && !Array.isArray(value.namespaces)
     ? value.namespaces
@@ -495,6 +504,7 @@ export const __test = {
   validDurableFile,
   fsyncDirectory,
   gatewayInstanceLockStale,
+  invalidVersion,
   lockActivityMs,
   normalizeDocument,
   processAlive,
