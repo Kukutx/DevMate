@@ -7,6 +7,10 @@ const vscode = require('vscode');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
 const { SharedTunnelRuntime } = require('./vscode-host/shared-tunnel-runtime.js');
+const {
+  deploymentMode: validateDeploymentMode,
+  tunnelProvider: validateTunnelProvider
+} = require('./vscode-host/tunnel-settings.js');
 
 let lifecycle = null;
 let runtime = null;
@@ -15,8 +19,10 @@ let activation = null;
 let deactivation = null;
 
 function tunnelSettings() {
+  const provider = String(setting(vscode, 'tunnelProvider', 'ngrok')).trim().toLowerCase();
+  const deploymentMode = String(setting(vscode, 'deploymentMode', 'personal')).trim().toLowerCase();
   return {
-    provider: setting(vscode, 'tunnelProvider', 'ngrok'),
+    provider: validateTunnelProvider(provider),
     publicUrl: setting(vscode, 'publicUrl', ''),
     ngrokUrl: setting(vscode, 'ngrokUrl', ''),
     ngrokCommandPath: setting(vscode, 'ngrokCommandPath', ''),
@@ -24,7 +30,7 @@ function tunnelSettings() {
     ngrokPoolingEnabled: setting(vscode, 'ngrokPoolingEnabled', false) === true,
     ngrokTrafficPolicyFile: setting(vscode, 'ngrokTrafficPolicyFile', ''),
     cloudflareCommandPath: setting(vscode, 'cloudflareCommandPath', ''),
-    deploymentMode: setting(vscode, 'deploymentMode', 'personal')
+    deploymentMode: validateDeploymentMode(deploymentMode)
   };
 }
 
@@ -40,6 +46,7 @@ async function activate(context) {
     context.subscriptions.push(output);
     lifecycle = new VscodeHostLifecycle({ vscode });
     try {
+      tunnelSettings();
       await lifecycle.activate(context);
       const stateDirectory = resolveVscodeStateDirectory(vscode, context);
       runtime = new SharedTunnelRuntime({
