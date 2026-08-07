@@ -121,6 +121,20 @@ const runner = {
   labels: { hostname: 'runner-one' }
 };
 
+test('fails closed for public Runner Hosts when production allowlist is empty', () => {
+  const production = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
+  assert.equal(__test.hostAllowed({ headers: { host: 'runner.example.com' } }, production), false);
+  assert.equal(__test.hostAllowed({ headers: { host: '127.0.0.1:8787' } }, production), true);
+  const restricted = {
+    deployment: { mode: 'production' },
+    production: { allowedHosts: ['runner.example.com'] }
+  };
+  assert.equal(__test.hostAllowed({ headers: { host: 'runner.example.com' } }, restricted), true);
+  assert.equal(__test.hostAllowed({ headers: { host: 'evil.example.com' } }, restricted), false);
+  const team = { deployment: { mode: 'team' }, production: { allowedHosts: [] } };
+  assert.equal(__test.hostAllowed({ headers: { host: 'runner.example.com' } }, team), true);
+});
+
 test('rejects invalid credentials, protocol versions, and malformed request bodies', async () => {
   const wrongProtocol = await request('/heartbeat', created.token, {}, '2');
   assert.equal(wrongProtocol.response.status, 426);
