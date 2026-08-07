@@ -68,6 +68,7 @@ const localPort = localServer.address().port;
 
 let claimCount = 0;
 let completion = null;
+const claimToken = 'B'.repeat(43);
 const controlServer = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   assert.equal(req.headers['x-devmate-runner-protocol'], '1');
@@ -89,16 +90,25 @@ const controlServer = http.createServer(async (req, res) => {
         workspaceId: 'app',
         arguments: { workspaceId: 'app' },
         artifactPaths: ['artifacts'],
-        timeoutMs: 30000
+        timeoutMs: 30000,
+        claim: { generation: 1, token: claimToken }
       } : null
     });
   }
-  if (url.pathname.endsWith('/renew')) return respond({ renewed: true, cancelRequested: false });
+  if (url.pathname.endsWith('/renew')) {
+    assert.equal(body.claimGeneration, 1);
+    assert.equal(body.claimToken, claimToken);
+    return respond({ renewed: true, cancelRequested: false });
+  }
   if (url.pathname.endsWith('/complete')) {
+    assert.equal(body.claimGeneration, 1);
+    assert.equal(body.claimToken, claimToken);
     completion = body;
     return respond({ job: { id: 'job-e2e', status: 'succeeded' } });
   }
   if (url.pathname.endsWith('/fail') || url.pathname.endsWith('/cancelled')) {
+    assert.equal(body.claimGeneration, 1);
+    assert.equal(body.claimToken, claimToken);
     return respond({ job: { id: 'job-e2e', status: 'failed' } });
   }
   res.writeHead(404, { 'content-type': 'application/json' });
@@ -132,6 +142,8 @@ test('executes a remote job through the official local MCP client and reports ar
     'poll-ms': '500'
   });
   assert.ok(completion);
+  assert.equal(completion.claimGeneration, 1);
+  assert.equal(completion.claimToken, claimToken);
   assert.equal(completion.result.structuredContent.ok, true);
   assert.equal(completion.artifacts.length, 1);
   assert.equal(completion.artifacts[0].path, 'artifacts/remote.json');
