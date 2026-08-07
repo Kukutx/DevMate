@@ -46,6 +46,24 @@
           assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
         });
 
+        test('partial extension updates preserve existing workspaces', () => {
+          const current = {
+            version: SUPPORTED_CONFIG_VERSION,
+            instanceId: 'stable',
+            workspaces: [
+              { id: 'app', root: '/workspace/app' },
+              { id: 'docs', root: '/workspace/docs', reference: true, mode: 'readonly' },
+              { id: 'trusted', root: '/workspace/shared', trusted: true, role: 'trusted' }
+            ]
+          };
+          const merged = mergeExtensionConfig(current, {
+            version: SUPPORTED_CONFIG_VERSION,
+            connection: { lastPreflightAt: 'now' }
+          });
+          assert.deepEqual(merged.workspaces, current.workspaces);
+          assert.equal(merged.connection.lastPreflightAt, 'now');
+        });
+
         test('writes through the shared locked atomic store', () => {
           const file = tempFile();
           writeExtensionConfig(file, {
@@ -71,8 +89,7 @@
             error => error.code === 'config_invalid_json');
 
           const future = tempFile();
-          const original = `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION + 1 })}
-`;
+          const original = `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION + 1 })}\n`;
           fs.writeFileSync(future, original, 'utf8');
           assert.throws(() => writeExtensionConfig(future, { version: SUPPORTED_CONFIG_VERSION }),
             error => error.code === 'unsupported_config_version');
