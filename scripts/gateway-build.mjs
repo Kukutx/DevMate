@@ -9,7 +9,7 @@ export function gatewayBuildOptions({ root, outfile, logLevel = 'info' }) {
     bundle: true,
     platform: 'node',
     format: 'esm',
-    target: 'node18',
+    target: 'node24',
     packages: 'bundle',
     external: ['vscode'],
     sourcemap: false,
