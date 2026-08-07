@@ -44,14 +44,15 @@ export function acquireWorkspaceLease({ workspaceId, principal, ttlSeconds = 180
   }
   const ttl = Math.min(24 * 60 * 60, Math.max(60, Math.trunc(Number(ttlSeconds) || 1800)));
   const now = Date.now();
+  const samePrincipal = current?.principalId === principal.id;
   const lease = {
-    id: current?.id || `lease-${crypto.randomBytes(8).toString('hex')}`,
+    id: samePrincipal ? current.id : `lease-${crypto.randomBytes(8).toString('hex')}`,
     workspaceId: id,
     principalId: principal.id,
     principalName: principal.name || principal.id,
     principalRole: principal.role,
     purpose: String(purpose || '').trim().slice(0, 500),
-    acquiredAt: current?.principalId === principal.id ? current.acquiredAt : nowIso(),
+    acquiredAt: samePrincipal ? current.acquiredAt : nowIso(),
     renewedAt: nowIso(),
     expiresAt: new Date(now + ttl * 1000).toISOString()
   };
