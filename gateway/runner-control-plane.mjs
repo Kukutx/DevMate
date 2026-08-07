@@ -65,15 +65,16 @@ function remoteAddress(req) {
 
 function hostAllowed(req, config) {
   const allowed = config.production?.allowedHosts || [];
-  if (!allowed.length) return true;
   const raw = String(req.headers?.host || '').trim().toLowerCase();
   if (!raw) return false;
   const candidates = new Set([raw]);
   try { candidates.add(new URL(`http://${raw}`).hostname.toLowerCase()); } catch {}
-  if ([...candidates].some(value =>
+  const local = [...candidates].some(value =>
     ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(value) ||
     value.startsWith('127.0.0.1:') || value.startsWith('localhost:')
-  )) return true;
+  );
+  if (local) return true;
+  if (!allowed.length) return config.deployment?.mode !== 'production';
   return allowed.some(value => candidates.has(String(value || '').toLowerCase()));
 }
 
