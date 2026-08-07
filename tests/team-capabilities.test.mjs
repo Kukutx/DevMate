@@ -8,6 +8,7 @@ const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-team-cap-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
 await fsp.writeFile(configPath, JSON.stringify({
+  version: 11,
   auth: { required: true, token: 'owner-token-value-long-enough' },
   permissions: { profile: 'fullAccess' },
   deployment: {
