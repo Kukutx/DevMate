@@ -6,7 +6,6 @@ const STARTUP_MODES = new Set(['auto', 'manual', 'disabled']);
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   startupMode: 'auto',
-  sharedRuntime: true,
   sharedStateDirectory: '',
   preferredPort: 8787,
   stopWhenObsidianCloses: false,
@@ -33,7 +32,6 @@ function normalizeSettings(value = {}) {
   return {
     enabled: input.enabled !== false,
     startupMode: STARTUP_MODES.has(input.startupMode) ? input.startupMode : DEFAULT_SETTINGS.startupMode,
-    sharedRuntime: input.sharedRuntime !== false,
     sharedStateDirectory: String(input.sharedStateDirectory || '').trim(),
     preferredPort: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_SETTINGS.preferredPort,
     stopWhenObsidianCloses: input.stopWhenObsidianCloses === true,
@@ -74,17 +72,6 @@ class DevMateSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.startupMode)
         .onChange(async value => {
           this.plugin.settings.startupMode = value;
-          await this.plugin.saveSettings();
-          await this.plugin.reconfigureRuntime();
-        }));
-
-    new Setting(containerEl)
-      .setName('Use shared runtime state')
-      .setDesc('Use the same workspace-derived state directory as the VS Code host so both applications attach to one Gateway.')
-      .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.sharedRuntime)
-        .onChange(async value => {
-          this.plugin.settings.sharedRuntime = value;
           await this.plugin.saveSettings();
           await this.plugin.reconfigureRuntime();
         }));
