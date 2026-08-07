@@ -21,5 +21,5 @@ RUN mkdir -p /var/lib/devmate /srv/devmate-workspaces \
 USER node
 EXPOSE 8787
 VOLUME ["/var/lib/devmate", "/srv/devmate-workspaces"]
-ENTRYPOINT ["node", "/opt/devmate/scripts/devmate-cli.mjs"]
+ENTRYPOINT ["node", "/opt/devmate/scripts/devmate-command.mjs"]
 CMD ["serve", "--config", "/var/lib/devmate/config.json"]
