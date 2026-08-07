@@ -19,10 +19,11 @@ test('actual VS Code Start and Stop use the shared RuntimeController', () => {
   assert.doesNotMatch(source, /gatewayProcess\s*=\s*spawnNode\(/);
 });
 
-test('actual VS Code process calls resolve the active spawn chain at call time', () => {
-  assert.match(source, /const childProcess = require\('child_process'\)/);
+test('actual VS Code process calls resolve the private active spawn chain at call time', () => {
+  assert.match(source, /const childProcess = require\('\.\/vscode-host\/runtime-io\.js'\)/);
   assert.match(source, /function spawn\(\.\.\.args\)\{ return childProcess\.spawn\(\.\.\.args\); \}/);
   assert.match(source, /function spawnSync\(\.\.\.args\)\{ return childProcess\.spawnSync\(\.\.\.args\); \}/);
+  assert.doesNotMatch(source, /const childProcess = require\('child_process'\)/);
   assert.doesNotMatch(source, /const \{ spawn, spawnSync \} = require\('child_process'\)/);
   assert.doesNotMatch(source, /version:\s*9\b/);
   assert.doesNotMatch(source, /data\.version\s*=\s*9\b/);
@@ -30,6 +31,7 @@ test('actual VS Code process calls resolve the active spawn chain at call time',
 
 test('managed ngrok wrapper is an activation-scoped SpawnLayer', () => {
   assert.match(managedEntry, /require\('\.\/vscode-host\/spawn-layer\.js'\)/);
+  assert.match(managedEntry, /require\('\.\/vscode-host\/runtime-io\.js'\)/);
   assert.match(managedEntry, /new SpawnLayer\(/);
   assert.match(managedEntry, /\.install\(\)/);
   assert.match(managedEntry, /\.dispose\(\)/);
@@ -37,6 +39,7 @@ test('managed ngrok wrapper is an activation-scoped SpawnLayer', () => {
   assert.match(managedEntry, /activated/);
   assert.doesNotMatch(managedEntry, /loadBaseExtensionWithNgrokWrapper/);
 });
+
 test('auxiliary process exit handlers cannot clear newer process handles', () => {
   assert.match(source, /if\(startCommandProcess === child\) startCommandProcess=null/);
   assert.match(source, /if\(ngrokProcess === child\)\{ ngrokProcess=null; lastPublicUrl=''; \}/);
