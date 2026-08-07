@@ -6,7 +6,7 @@ DevMate is host-neutral at the Gateway layer. VS Code, Obsidian, the standalone 
 
 ```text
 VS Code host ───────┐
-Obsidian host ──────┼─ shared state/config ─ DevMate Gateway ─ MCP clients
+Obsidian host ──────┼─ shared state/config ─ isolated DevMate Gateway process ─ MCP clients
 Standalone CLI ─────┘                         │
                                              └─ external Runners
 ```
@@ -21,23 +21,15 @@ Hosts resolving the same root share the owner token, `instanceId`, selected port
 
 ## Shared host runtime
 
-`host/runtime-controller.js` is the shared host runtime facade. Its implementation is split into:
-
-```text
-host/runtime/
-├─ constants.js
-├─ state-paths.js
-├─ config-store.js
-├─ network.js
-└─ process-controller.js
-```
+`host/runtime-controller.js` is the shared host runtime facade. Its implementation is split into focused modules under `host/runtime/`, including state paths, network health, Node runtime resolution, operation coordination and process ownership.
 
 Responsibilities are intentionally separated:
 
 - deterministic shared state-path resolution;
 - locked restrictive configuration persistence;
 - loopback health and port selection;
-- process ownership, attach/start/stop/restart, and bounded host context.
+- verified Node runtime selection where the host needs it;
+- child-process ownership, attach/start/stop/restart, and bounded host context.
 
 A host first checks `/control/health`:
 
@@ -46,6 +38,8 @@ A host first checks `/control/health`:
 - occupied non-matching port: search the next 19 ports and persist the choice;
 - attached process: never terminate it;
 - owned process: may stop or restart it.
+
+VS Code and Obsidian use one desktop runtime model: an isolated Gateway child process. There is no per-host Worker implementation or process-global spawn router.
 
 ## Host settings
 
@@ -60,11 +54,11 @@ A host first checks `/control/health`:
 - Startup mode: default auto;
 - Shared state directory override; otherwise the vault-derived shared state path is always used;
 - Preferred loopback port;
+- optional Node.js 24+ executable override;
 - clean externally managed HTTPS origin;
-- bounded selection capture;
-- stop owned Gateway on close: default off.
+- bounded selection capture.
 
-Obsidian remains desktop-only because the embedded Gateway requires Node.js, local processes, filesystem roots, Git, and installed toolchains.
+Obsidian remains desktop-only because the Gateway requires Node.js, local processes, filesystem roots, Git, and installed toolchains. It probes a configured Node executable first, then a compatible Obsidian/Electron Node runtime, then `node` from `PATH`. An owned Gateway is stopped cleanly when the plugin unloads; a Gateway owned by another host is left untouched.
 
 ## Generic host context
 
@@ -80,7 +74,7 @@ Hosts publish bounded snapshots under `hostContexts` and identify the most recen
 }
 ```
 
-The Gateway exposes `host_context_list` and `host_context`. Full file bodies are not copied into configuration; they remain explicit workspace reads.
+The Gateway exposes `host_context_list` and `host_context`. Full file bodies are not copied into configuration; they remain explicit workspace reads. Obsidian skips unchanged context snapshots so editor and metadata event bursts do not cause redundant state writes.
 
 ## Obsidian plugin architecture
 
@@ -88,8 +82,9 @@ The Gateway exposes `host_context_list` and `host_context`. Full file bodies are
 obsidian-plugin/src/
 ├─ main.js                 lifecycle coordinator
 ├─ settings.js             validation and settings UI
-├─ context-provider.js     bounded active-vault context
-├─ view.js                 panel rendering
+├─ context-provider.js     bounded/deduplicated active-vault context
+├─ view.js                 stable panel DOM + incremental refresh
+├─ runtime-diagnostics.js  bounded startup/runtime diagnostics
 ├─ host-bridge.js          host bridge facade
 └─ bridge/
    ├─ server.js            authenticated loopback protocol
@@ -104,7 +99,7 @@ obsidian-plugin/src/
    └─ plan-store.js
 ```
 
-The bridge publishes an explicit protocol version and capability catalog. Gateway requests must match the bridge workspace ID and normalized workspace root.
+The bridge publishes an explicit protocol version and capability catalog. Gateway requests must match the bridge workspace ID and normalized workspace root. The DevMate panel is constructed once and health polling updates only changed fields, so the five-second status interval does not clear/rebuild the side panel.
 
 ## Data and mutation boundary
 
@@ -127,7 +122,7 @@ npm run test:unit
 npm run build:obsidian
 ```
 
-The release contract validates `manifest.json`, `versions.json`, semantic versions, minimum Obsidian compatibility, required bundle files, and bundle size limits.
+The release contract validates `manifest.json`, `versions.json`, semantic versions, minimum Obsidian compatibility, required bundle files, and bundle size limits. CI additionally launches the built Obsidian Gateway through the child-process runtime, verifies health, stops it, restarts on the same port, and confirms lock cleanup.
 
 Generated plugin assets:
 
