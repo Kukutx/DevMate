@@ -4,10 +4,11 @@ const path = require('node:path');
 const childProcess = require('node:child_process');
 const http = require('node:http');
 const vscode = require('vscode');
-const baseEntry = require('./extension-entry-host.js');
+const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
 const { SharedTunnelRuntime } = require('./vscode-host/shared-tunnel-runtime.js');
 
+let lifecycle = null;
 let runtime = null;
 let output = null;
 let activation = null;
@@ -34,11 +35,12 @@ function log(message) {
 async function activate(context) {
   if (activation) return activation;
   activation = (async () => {
-    if (runtime) await deactivate();
+    if (runtime || lifecycle) await deactivate();
     output = vscode.window.createOutputChannel('DevMate Shared Tunnel');
     context.subscriptions.push(output);
-    await baseEntry.activate(context);
+    lifecycle = new VscodeHostLifecycle({ vscode });
     try {
+      await lifecycle.activate(context);
       const stateDirectory = resolveVscodeStateDirectory(vscode, context);
       runtime = new SharedTunnelRuntime({
         stateDirectory,
@@ -51,41 +53,35 @@ async function activate(context) {
       }).install();
       log(`Shared tunnel coordination ready in ${stateDirectory}.`);
     } catch (error) {
-      try { await baseEntry.deactivate(); } catch {}
+      const currentLifecycle = lifecycle;
+      lifecycle = null;
+      try { await currentLifecycle?.deactivate(); } catch {}
       runtime = null;
       output = null;
       throw error;
     }
   })();
-  try {
-    return await activation;
-  } finally {
-    activation = null;
-  }
+  try { return await activation; }
+  finally { activation = null; }
 }
 
 async function deactivate() {
   if (deactivation) return deactivation;
   deactivation = (async () => {
-    const current = runtime;
+    const currentRuntime = runtime;
+    const currentLifecycle = lifecycle;
     runtime = null;
-    current?.suspendSpawn();
+    lifecycle = null;
+    currentRuntime?.suspendSpawn();
     try {
-      await baseEntry.deactivate();
+      await currentLifecycle?.deactivate();
     } finally {
-      try { await current?.dispose({ stopOwned: true }); }
+      try { await currentRuntime?.dispose({ stopOwned: true }); }
       finally { output = null; }
     }
   })();
-  try {
-    return await deactivation;
-  } finally {
-    deactivation = null;
-  }
+  try { return await deactivation; }
+  finally { deactivation = null; }
 }
 
-module.exports = {
-  activate,
-  deactivate,
-  tunnelSettings
-};
+module.exports = { activate, deactivate, tunnelSettings };
