@@ -5,7 +5,7 @@ import test from 'node:test';
 
 const root = path.resolve(import.meta.dirname, '..');
 const gateway = fs.readFileSync(path.join(root, 'gateway', 'server.mjs'), 'utf8');
-const cli = fs.readFileSync(path.join(root, 'scripts', 'devmate-cli.mjs'), 'utf8');
+const cli = fs.readFileSync(path.join(root, 'scripts', 'standalone-runtime.mjs'), 'utf8');
 const controller = fs.readFileSync(path.join(root, 'host', 'runtime', 'process-controller.js'), 'utf8');
 const extension = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
 const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'main.js'), 'utf8');
