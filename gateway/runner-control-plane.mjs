@@ -254,7 +254,7 @@ function sanitizeResult(value) {
 }
 
 function artifactPathAllowed(relative) {
-  if (!relative || relative.includes('\0') || /^[a-z]:\//i.test(relative) || relative.startsWith('//')) return false;
+  if (!relative || relative.includes('\0') || relative.startsWith('/') || /^[a-z]:\//i.test(relative) || relative.startsWith('//')) return false;
   const parts = relative.split('/').filter(Boolean);
   if (!parts.length || parts.some(part =>
     part === '.' || part === '..' || part.startsWith('.') || BLOCKED_ARTIFACT_SEGMENTS.has(part.toLowerCase())
@@ -270,7 +270,7 @@ function sanitizeArtifacts(values, runnerId, workspaceId) {
   for (const item of values.slice(0, 100)) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw requestError('artifact entries must be objects');
     if (typeof item.path !== 'string') throw requestError('artifact.path must be a string');
-    const relative = item.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    const relative = item.path.replace(/\\/g, '/');
     if (!artifactPathAllowed(relative) || seen.has(relative)) continue;
     seen.add(relative);
     const bytes = item.bytes === undefined ? 0 : item.bytes;
@@ -450,7 +450,7 @@ export function runnerControlListener(listener) {
   if (typeof listener !== 'function') throw new TypeError('HTTP listener must be a function');
   return async function devmateRunnerControl(req, res) {
     const url = requestUrl(req);
-    if (!url?.pathname.startsWith(PREFIX)) return listener(req, res);
+    if (!url || (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`))) return listener(req, res);
     const started = Date.now();
     const requestId = `runner-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     try {
