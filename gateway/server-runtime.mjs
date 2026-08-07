@@ -15,8 +15,6 @@ import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 
 acquireGatewayInstanceLock();
-installPlatformCapabilities(McpServer);
-if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
 
 const createdHttpServers = new Set();
 const httpBootstrap = installHttpServerBootstrap(http, {
@@ -94,6 +92,8 @@ if (!isMainThread && parentPort) {
 }
 
 try {
+  installPlatformCapabilities(McpServer);
+  if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
   await import('./server.mjs');
 } finally {
   httpBootstrap.restore();
