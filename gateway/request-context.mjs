@@ -6,6 +6,11 @@ export function runWithRequestContext(context, fn) {
   return storage.run(Object.freeze({ ...(context || {}) }), fn);
 }
 
+export function runWithWorkSessionContext(workSessionId, fn) {
+  const current = requestContext() || {};
+  return storage.run(Object.freeze({ ...current, workSessionId: workSessionId || null }), fn);
+}
+
 export function requestContext() {
   return storage.getStore() || null;
 }
@@ -16,4 +21,8 @@ export function requestPrincipal() {
 
 export function requestId() {
   return requestContext()?.requestId || null;
+}
+
+export function requestWorkSessionId() {
+  return requestContext()?.workSessionId || null;
 }
