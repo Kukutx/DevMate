@@ -5,15 +5,17 @@ import path from 'node:path';
 import test from 'node:test';
 import configStore from '../shared/config-store.cjs';
 import packageJson from '../package.json' with { type: 'json' };
-import { __test as cli } from '../scripts/devmate-cli.mjs';
+import { __test as cli } from '../scripts/devmate-command.mjs';
 
-test('standalone CLIs use only the shared configuration store', () => {
-  for (const relative of ['scripts/devmate-cli.mjs', 'scripts/devmate-command.mjs']) {
+test('standalone CLI uses the shared configuration store without a compatibility subprocess', () => {
+  for (const relative of ['scripts/standalone-runtime.mjs', 'scripts/devmate-command.mjs']) {
     const source = fs.readFileSync(path.resolve(import.meta.dirname, '..', relative), 'utf8');
     assert.match(source, /shared\/config-store\.cjs/);
     assert.equal(source.includes('fs.writeFileSync'), false);
-    assert.equal(source.includes('function writeSecureJson'), false);
   }
+  const command = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'scripts/devmate-command.mjs'), 'utf8');
+  assert.equal(command.includes('devmate-cli.mjs'), false);
+  assert.equal(command.includes('spawn('), false);
 });
 
 test('standalone initialization writes the supported package version atomically', () => {
