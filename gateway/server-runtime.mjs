@@ -8,26 +8,26 @@ import { installPlatformCapabilities } from './platform-capabilities.mjs';
 import { shutdownPluginServices } from './plugins/plugin-host.mjs';
 import { installGatewayRequestGuard, resetRequestGuardState } from './request-guard.mjs';
 import { installHttpObservability } from './http-observability.mjs';
+import { installHttpServerBootstrap } from './http-server-bootstrap.mjs';
 import { acquireGatewayInstanceLock, releaseGatewayInstanceLock } from './durable-state.mjs';
 import { shutdownTeamServices } from './team-capabilities.mjs';
 import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 
 acquireGatewayInstanceLock();
-installHttpObservability(http);
-installGatewayRequestGuard(http);
-installRunnerControlPlane(http);
-installPlatformCapabilities(McpServer);
-if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
 
 const createdHttpServers = new Set();
-const createHttpServer = http.createServer.bind(http);
-http.createServer = (...args) => {
-  const server = createHttpServer(...args);
-  createdHttpServers.add(server);
-  server.once('close', () => createdHttpServers.delete(server));
-  return server;
-};
+const httpBootstrap = installHttpServerBootstrap(http, {
+  installers: [
+    installHttpObservability,
+    installGatewayRequestGuard,
+    installRunnerControlPlane
+  ],
+  onServer(server) {
+    createdHttpServers.add(server);
+    server.once?.('close', () => createdHttpServers.delete(server));
+  }
+});
 
 function closeHttpServer(server, timeoutMs = 3000) {
   return new Promise(resolve => {
@@ -91,4 +91,10 @@ if (!isMainThread && parentPort) {
   });
 }
 
-await import('./server.mjs');
+try {
+  installPlatformCapabilities(McpServer);
+  if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
+  await import('./server.mjs');
+} finally {
+  httpBootstrap.restore();
+}
