@@ -171,6 +171,8 @@ class TunnelController {
     this.port = 0;
     this.restartCount = 0;
     this.heartbeat = null;
+    this.ownershipFailureCount = 0;
+    this.ownershipCleanup = null;
     this.stopping = false;
     this.disposed = false;
   }
@@ -226,17 +228,89 @@ class TunnelController {
     throw error;
   }
 
+  clearLocalOwnership(ownerId = this.ownerId) {
+    if (ownerId && this.ownerId !== ownerId) return false;
+    this.ownerId = '';
+    this.port = 0;
+    this.restartCount = 0;
+    this.childReady = false;
+    this.ownershipFailureCount = 0;
+    return true;
+  }
+
+  async cleanupLostOwnership(reason, ownerId = this.ownerId) {
+    if (!ownerId || this.ownerId !== ownerId) return { cleaned: true, superseded: true };
+    if (this.ownershipCleanup) return this.ownershipCleanup;
+    this.ownershipCleanup = (async () => {
+      this.logger(`Tunnel shared ownership was lost (${reason}); closing the local provider fail-closed.`);
+      if (!childActive(this.child)) {
+        this.child = null;
+        this.stopHeartbeat();
+        this.clearLocalOwnership(ownerId);
+        return { cleaned: true, exited: true };
+      }
+      const previousStopping = this.stopping;
+      this.stopping = true;
+      try {
+        let result;
+        try {
+          result = await this.terminateLocalChild();
+        } catch (error) {
+          result = { exited: false, error: error?.message || String(error) };
+        }
+        if (!result.exited) {
+          this.logger(`Tunnel ownership-loss cleanup could not confirm provider exit: ${result.error || 'process-exit-timeout'}`);
+          return { cleaned: false, exited: false };
+        }
+        this.child = null;
+        this.stopHeartbeat();
+        this.clearLocalOwnership(ownerId);
+        return { cleaned: true, exited: true };
+      } finally {
+        this.stopping = previousStopping;
+      }
+    })();
+    try {
+      return await this.ownershipCleanup;
+    } finally {
+      this.ownershipCleanup = null;
+    }
+  }
+
+  async verifyOwnership() {
+    const ownerId = this.ownerId;
+    if (!ownerId || this.disposed) return { healthy: false, inactive: true };
+    try {
+      const record = this.store.read();
+      if (record && record.ownerId === ownerId) {
+        this.ownershipFailureCount = 0;
+        this.store.write(ownerId, { childPid: this.child?.pid || null });
+        return { healthy: true };
+      }
+      const definitive = !!record;
+      this.ownershipFailureCount = definitive ? 2 : this.ownershipFailureCount + 1;
+      if (this.ownershipFailureCount < 2) {
+        this.logger('Tunnel shared ownership record is temporarily unavailable; requiring a second failed heartbeat before fail-closed cleanup.');
+        return { healthy: false, pending: true };
+      }
+      const reason = record ? `owner changed to ${record.ownerId}` : 'shared record missing';
+      const cleanup = await this.cleanupLostOwnership(reason, ownerId);
+      return { healthy: false, cleanup };
+    } catch (error) {
+      this.ownershipFailureCount += 1;
+      this.logger(`Tunnel heartbeat failed: ${error.message || error}`);
+      if (this.ownershipFailureCount < 2) return { healthy: false, pending: true, error };
+      const cleanup = await this.cleanupLostOwnership('shared state read/write failure', ownerId);
+      return { healthy: false, cleanup, error };
+    }
+  }
+
   startHeartbeat() {
     if (this.heartbeat || !this.ownerId) return;
     this.heartbeat = setInterval(() => {
-      try {
-        const record = this.store.read();
-        if (!record || record.ownerId !== this.ownerId) return this.stopHeartbeat();
-        this.store.write(this.ownerId, { childPid: this.child?.pid || null });
-      } catch (error) {
-        this.logger(`Tunnel heartbeat failed: ${error.message || error}`);
-        this.stopHeartbeat();
-      }
+      void this.verifyOwnership().catch(error => {
+        this.logger(`Tunnel ownership verification failed: ${error.message || error}`);
+      });
     }, this.heartbeatMs);
     this.heartbeat.unref?.();
   }
@@ -250,12 +324,7 @@ class TunnelController {
   resetOwnership(ownerId = this.ownerId) {
     this.stopHeartbeat();
     if (ownerId) this.store.remove(ownerId);
-    if (!ownerId || this.ownerId === ownerId) {
-      this.ownerId = '';
-      this.port = 0;
-      this.restartCount = 0;
-      this.childReady = false;
-    }
+    this.clearLocalOwnership(ownerId);
   }
 
   async providerReadyUrl(launch, match, child, timeoutMs) {
@@ -327,6 +396,7 @@ class TunnelController {
     if (!preserveOwner) {
       this.ownerId = `${this.hostId}-tunnel-${process.pid}-${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`;
       this.restartCount = 0;
+      this.ownershipFailureCount = 0;
     }
     const ownerId = this.ownerId;
     this.port = match.port;
