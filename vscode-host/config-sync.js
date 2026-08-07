@@ -77,8 +77,10 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
   if (!has(currentTeam, 'members') && has(candidateTeam, 'members')) merged.team.members = candidateTeam.members;
 
-  if (has(candidate, 'workspaces') || has(current, 'workspaces')) {
+  if (has(candidate, 'workspaces')) {
     merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
+  } else if (has(current, 'workspaces')) {
+    merged.workspaces = current.workspaces;
   }
 
   for (const key of ['hostRuntime', 'plugins', 'jobs', 'runnerControl', 'task', 'trustedWritableRoots']) {
