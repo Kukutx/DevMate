@@ -138,3 +138,14 @@ test('maintains a separate authentication-attempt limiter', () => {
   assert.equal(guard.__test.consumeRateLimit('ip:test', 2, guard.__test.preAuthRateWindows).allowed, true);
   assert.equal(guard.__test.consumeRateLimit('ip:test', 2, guard.__test.preAuthRateWindows).allowed, false);
 });
+
+test('rate limits unauthenticated published preview traffic per remote address', () => {
+  guard.resetRequestGuardState();
+  const request = { socket: { remoteAddress: '203.0.113.10' } };
+  const previewConfig = { production: { requestsPerMinute: 10 } };
+  for (let index = 0; index < 240; index += 1) {
+    assert.equal(guard.__test.consumePreviewRateLimit(request, previewConfig).allowed, true);
+  }
+  assert.equal(guard.__test.consumePreviewRateLimit(request, previewConfig).allowed, false);
+  assert.equal(guard.__test.consumePreviewRateLimit({ socket: { remoteAddress: '203.0.113.11' } }, previewConfig).allowed, true);
+});
