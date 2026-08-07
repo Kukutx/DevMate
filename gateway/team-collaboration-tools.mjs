@@ -19,9 +19,11 @@ import {
   workspaceLease
 } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
+import { resolveWorkspaceId } from './workspace-resolver.mjs';
 
 function resolveWorkspace(config, value) {
-  const workspace = config.workspaces?.find(item => item.id === value || item.name === value);
+  const id = resolveWorkspaceId(config, String(value || '').trim());
+  const workspace = config.workspaces?.find(item => item.id === id);
   if (!workspace) throw new Error(`Workspace not found: ${value}`);
   return workspace;
 }
@@ -75,10 +77,13 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: ro
   }, async ({ workspaceId, all = false }) => {
     const principal = principalNow();
+    const config = normalizeDeploymentConfig(readConfig());
+    const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;
+    if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);
     const canSeeAll = ['owner', 'maintainer'].includes(principal.role);
     let items = listWorkSessions({
       principalId: all && canSeeAll ? undefined : principal.id,
-      workspaceId
+      workspaceId: resolvedWorkspaceId
     });
     if (principal.workspaceIds?.length) {
       items = items.filter(item => principal.workspaceIds.includes(item.workspaceId));
@@ -206,13 +211,16 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: ro
   }, async ({ workspaceId }) => {
     const principal = principalNow();
-    let leases = workspaceId
-      ? [workspaceLease(workspaceId)].filter(Boolean)
+    const config = normalizeDeploymentConfig(readConfig());
+    const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;
+    if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);
+    let leases = resolvedWorkspaceId
+      ? [workspaceLease(resolvedWorkspaceId)].filter(Boolean)
       : listWorkspaceLeases();
     if (principal.workspaceIds?.length) {
       leases = leases.filter(item => principal.workspaceIds.includes(item.workspaceId));
     }
-    return toolText(workspaceId ? { lease: leases[0] || null } : { leases });
+    return toolText(resolvedWorkspaceId ? { lease: leases[0] || null } : { leases });
   });
 
   register('workspace_lease_release', {
@@ -224,12 +232,14 @@ export function registerTeamCollaborationTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async input => {
+    const config = normalizeDeploymentConfig(readConfig());
     const principal = principalNow();
-    assertVisibleWorkspace(principal, input.workspaceId, 'release a lease for');
-    const result = releaseWorkspaceLease({ ...input, principal });
+    const workspace = resolveWorkspace(config, input.workspaceId);
+    assertVisibleWorkspace(principal, workspace.id, 'release a lease for');
+    const result = releaseWorkspaceLease({ ...input, workspaceId: workspace.id, principal });
     await audit('workspace_lease_release', {
       principalId: principal.id,
-      workspace: input.workspaceId
+      workspace: workspace.id
     });
     return toolText(result);
   });
