@@ -5,6 +5,7 @@ const CAPABILITIES = Object.freeze(['read', 'validate', 'write', 'execute', 'git
 
 const ADMIN_TOOLS = new Set([
   'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke', 'team_activity_status',
+  'team_approval_configure', 'team_approval_decide',
   'read_audit_log', 'list_backups', 'task_status', 'task_report', 'start_task', 'finish_task', 'rollback_task', 'local_capabilities_status', 'list_trusted_roots',
   'plugin_enable', 'plugin_disable', 'plugin_configure', 'configure_local_capabilities', 'published_preview_list',
   'add_trusted_root', 'remove_trusted_root',
@@ -14,6 +15,7 @@ const ADMIN_TOOLS = new Set([
 
 const OWNER_ONLY_TOOLS = new Set([
   'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
+  'team_approval_configure',
   'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
 ]);
 
@@ -23,7 +25,7 @@ const PUBLISH_TOOLS = new Set([
 ]);
 
 const VALIDATE_TOOLS = new Set([
-  'job_submit', 'job_retry', 'obsidian_properties_batch_preview',
+  'job_submit', 'job_retry', 'team_approval_cancel', 'obsidian_properties_batch_preview',
   'browser_qa_run', 'browser_qa_run_saved', 'web_preview_start', 'web_preview_stop',
   'godot_doctor', 'godot_validate', 'godot_export', 'godot_export_matrix', 'godot_export_web',
   'godot_native_test', 'godot_acceptance_test', 'godot_acceptance_run_saved', 'godot_acceptance_suite',
