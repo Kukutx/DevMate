@@ -11,6 +11,7 @@ function clampText(value, max = 20000) {
 class ObsidianContextProvider {
   constructor(plugin) {
     this.plugin = plugin;
+    this.lastCaptureSignature = '';
   }
 
   activeEditorContext() {
@@ -64,14 +65,24 @@ class ObsidianContextProvider {
 
   capture(controller) {
     if (!controller || !this.plugin.settings.enabled) return null;
-    return controller.updateHostContext({
+    const context = {
       kind: 'knowledge-base',
-      capturedAt: new Date().toISOString(),
       workspaceRoot: this.plugin.vaultRoot,
       vault: this.vaultSummary(),
       activeDocument: this.currentNoteContext(),
       editor: this.activeEditorContext()
+    };
+    const signature = JSON.stringify(context);
+    if (signature === this.lastCaptureSignature) return { skipped: true, reason: 'unchanged' };
+    this.lastCaptureSignature = signature;
+    return controller.updateHostContext({
+      ...context,
+      capturedAt: new Date().toISOString()
     });
+  }
+
+  invalidateCapture() {
+    this.lastCaptureSignature = '';
   }
 
   async bundle() {
