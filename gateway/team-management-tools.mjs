@@ -117,12 +117,12 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_create', {
     title: 'Create DevMate team member',
-    description: 'Create a scoped team identity and return its token once. Requires owner.',
+    description: 'Create a team identity with explicit workspace scope and return its token once. Requires owner.',
     inputSchema: {
       id: z.string().max(120).optional(),
       name: z.string().min(1).max(200),
       role: z.enum(TEAM_ROLES).optional(),
-      workspaceIds: z.array(z.string().min(1).max(300)).max(100).optional(),
+      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100),
       expiresAt: z.string().datetime().optional()
     },
     annotations: rw
@@ -130,7 +130,7 @@ export function registerTeamManagementTools(register, annotations) {
     const config = normalizeDeploymentConfig(readConfig());
     const result = createTeamMember(config, {
       ...input,
-      workspaceIds: workspaceIds(config, input.workspaceIds || [])
+      workspaceIds: workspaceIds(config, input.workspaceIds)
     });
     writeConfig(config);
     await audit('team_member_create', {
@@ -147,12 +147,12 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_update', {
     title: 'Update DevMate team member',
-    description: 'Update role, workspace scopes, expiry, or enabled state. Requires owner.',
+    description: 'Update role, explicit workspace scopes, expiry, or enabled state. Requires owner.',
     inputSchema: {
       id: z.string().min(1),
       name: z.string().max(200).optional(),
       role: z.enum(TEAM_ROLES).optional(),
-      workspaceIds: z.array(z.string().min(1).max(300)).max(100).optional(),
+      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100).optional(),
       expiresAt: z.string().datetime().nullable().optional(),
       disabled: z.boolean().optional()
     },
