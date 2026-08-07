@@ -10,8 +10,10 @@ import {
 import {
   finishWorkSession,
   listWorkSessions,
-  startWorkSession
-} from './team-work-sessions.mjs';
+  startWorkSession,
+  workSession
+} from './work-sessions.mjs';
+import { rollbackWorkSession } from './work-session-rollback.mjs';
 import {
   acquireWorkspaceLease,
   listWorkspaceLeases,
@@ -37,9 +39,9 @@ function assertVisibleWorkspace(principal, workspaceId, action = 'access') {
 export function registerTeamCollaborationTools(register, annotations) {
   const { ro, rw } = annotations;
 
-  register('team_work_session_start', {
-    title: 'Start team work session',
-    description: 'Start a principal-scoped complex work session and acquire its workspace lease.',
+  register('work_session_start', {
+    title: 'Start work session',
+    description: 'Start a principal-scoped work session and acquire its workspace lease. Available in personal, team, and production modes.',
     inputSchema: {
       workspaceId: z.string().min(1),
       title: z.string().max(500).optional(),
@@ -58,26 +60,39 @@ export function registerTeamCollaborationTools(register, annotations) {
       workspaceId: workspace.id,
       principal
     });
-    await audit('team_work_session_start', {
+    await audit('work_session_start', {
       principalId: principal.id,
+      principalName: principal.name,
       workspace: workspace.id,
-      sessionId: session.id,
-      leaseId: session.leaseId
-    });
+      leaseId: session.leaseId,
+      title: session.title,
+      purpose: session.purpose
+    }, { workSessionId: session.id });
     return toolText({ session });
   });
 
-  register('team_work_session_status', {
-    title: 'Team work session status',
-    description: 'List the caller work sessions or, for maintainers and owners, visible team sessions.',
+  register('work_session_status', {
+    title: 'Work session status',
+    description: 'Inspect one visible work session or list the caller sessions. Maintainers and owners may list all visible sessions.',
     inputSchema: {
+      id: z.string().optional(),
       workspaceId: z.string().optional(),
       all: z.boolean().optional()
     },
     annotations: ro
-  }, async ({ workspaceId, all = false }) => {
+  }, async ({ id, workspaceId, all = false }) => {
     const principal = principalNow();
     const config = normalizeDeploymentConfig(readConfig());
+    if (id) {
+      const item = workSession(id);
+      if (!item) return toolText({ session: null });
+      assertVisibleWorkspace(principal, item.workspaceId);
+      const canSeeOthers = ['owner', 'maintainer'].includes(principal.role);
+      if (item.principalId !== principal.id && !canSeeOthers) {
+        throw new Error(`Work session ${id} belongs to ${item.principalName || item.principalId}`);
+      }
+      return toolText({ session: item });
+    }
     const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;
     if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);
     const canSeeAll = ['owner', 'maintainer'].includes(principal.role);
@@ -91,9 +106,9 @@ export function registerTeamCollaborationTools(register, annotations) {
     return toolText({ sessions: items });
   });
 
-  register('team_work_session_finish', {
-    title: 'Finish team work session',
-    description: 'Finish a work session and optionally release its lease.',
+  register('work_session_finish', {
+    title: 'Finish work session',
+    description: 'Finish a work session and optionally release the lease that belongs to that session tenure.',
     inputSchema: {
       id: z.string().min(1),
       force: z.boolean().optional(),
@@ -103,12 +118,27 @@ export function registerTeamCollaborationTools(register, annotations) {
   }, async ({ id, force = false, releaseLease = true }) => {
     const principal = principalNow();
     const result = finishWorkSession({ id, principal, force, releaseLease });
-    await audit('team_work_session_finish', {
+    await audit('work_session_finish', {
       principalId: principal.id,
-      sessionId: id,
-      finished: result.finished
-    });
+      workspace: result.session?.workspaceId || null,
+      finished: result.finished,
+      leaseReleased: result.lease?.released === true
+    }, { workSessionId: id });
     return toolText(result);
+  });
+
+  register('work_session_rollback', {
+    title: 'Rollback work session',
+    description: 'Rollback safe file mutations recorded in a work session. Team callers must hold the affected workspace lease; commands and Git history are never automatically reversed.',
+    inputSchema: {
+      workSessionId: z.string().min(1),
+      dryRun: z.boolean().optional(),
+      limit: z.number().int().min(1).max(1000).optional()
+    },
+    annotations: rw
+  }, async ({ workSessionId, dryRun = false, limit = 1000 }) => {
+    const principal = principalNow();
+    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, limit }));
   });
 
   register('published_preview_share', {
