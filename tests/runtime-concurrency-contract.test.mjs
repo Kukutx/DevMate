@@ -18,7 +18,7 @@ test('shared runtime controller serializes all lifecycle transitions', () => {
   assert.match(code, /DEVMATE_RUNTIME_OWNER_ID/);
 });
 
-test('VS Code legacy lifecycle and Obsidian host use operation coordinators', () => {
+test('desktop host lifecycles serialize state transitions', () => {
   const vscode = source('extension.js');
   const obsidian = source('obsidian-plugin/src/main.js');
   assert.match(vscode, /new OperationCoordinator\(\{ name: 'vscode-legacy-lifecycle' \}\)/);
@@ -32,6 +32,17 @@ test('VS Code legacy lifecycle and Obsidian host use operation coordinators', ()
   assert.match(obsidian, /hostOperations\.run\('stop'/);
   assert.match(obsidian, /hostOperations\.run\('restart'/);
   assert.match(obsidian, /hostOperations\.run\('unload'/);
+});
+
+test('VS Code creates configuration from the shared store before platform activation', () => {
+  const lifecycle = source('vscode-host/lifecycle.js');
+  assert.match(lifecycle, /ensurePersonalConfig/);
+  const ensure = lifecycle.indexOf('ensurePersonalConfig({');
+  const platform = lifecycle.indexOf('await this.platformExtension.activate(this.runtimeContext)');
+  assert.ok(ensure >= 0 && platform > ensure, 'shared personal config must exist before extension activation');
+
+  const store = source('shared/config-store.cjs');
+  assert.match(store, /commands:\s*\[\]/);
 });
 
 test('Gateway instance locks use owner identity and renewable leases', () => {
