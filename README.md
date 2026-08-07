@@ -44,14 +44,14 @@ See [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) for all presets and options.
 
 ## VS Code personal setup
 
-1. Install ngrok.
-2. Run `DevMate: Configure ngrok`.
-3. Store the Authtoken in VS Code Secret Storage.
-4. Open a project and run `DevMate: Start`.
+1. Open a project and run `DevMate: Tunnel Setup`.
+2. Choose `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or an existing external HTTPS ingress.
+3. Configure only the credential or executable required by that provider. ngrok and managed Cloudflare credentials are stored in VS Code Secret Storage; external ingress requires no tunnel credential.
+4. Run `DevMate: Start`.
 5. Add the copied HTTPS `/mcp` endpoint to ChatGPT.
 6. Run `DevMate: Copy Bearer Token` and configure that value as the connector's Bearer credential.
 
-The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL.
+The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL. See [`docs/TUNNELS.md`](docs/TUNNELS.md) for provider requirements and production guidance.
 
 ## Obsidian setup
 
