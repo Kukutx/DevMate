@@ -11,6 +11,7 @@ process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const baseConfig = {
+  version: 11,
   appVersion: '3.3.0',
   instanceId: 'runner-control-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
