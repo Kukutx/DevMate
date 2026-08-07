@@ -1,6 +1,6 @@
 # DevMate bootstrap
 
-`devmate bootstrap` creates a complete starting configuration in one command. It is the recommended standalone setup path in DevMate 2.4.
+`devmate bootstrap` creates a complete starting configuration in one command and is the recommended standalone setup path.
 
 ## Presets
 
@@ -19,7 +19,7 @@ npx devmate bootstrap \
   --workspace /srv/project
 ```
 
-Start it with the `next` command returned in the JSON response.
+Start it with the `next` command returned in the JSON response. The response returns the endpoint and credentials separately; do not embed credentials in the MCP URL.
 
 ## Team
 
@@ -36,11 +36,11 @@ npx devmate bootstrap \
 The response includes:
 
 - the config path;
-- the owner token and owner MCP URL;
+- the owner MCP endpoint and owner token as separate values;
 - the member's one-time `dmt_` token;
 - the next startup action.
 
-The member token is returned once and only its salted hash is written to config.
+The member token is returned once and only its salted hash is written to config. MCP clients send owner/member credentials through request headers, normally `Authorization: Bearer <token>`.
 
 ## Production control plane
 
@@ -131,9 +131,9 @@ It summarizes:
 --no-runner-credential
 ```
 
-## Compatibility commands
+## Granular commands
 
-The original granular CLI remains available:
+The lower-level CLI remains available when you need a specific operation:
 
 ```text
 devmate init
@@ -146,4 +146,4 @@ devmate member-rotate
 devmate member-revoke
 ```
 
-They are forwarded to the legacy-compatible implementation by the new command frontend.
+These commands use the same current configuration store and runtime contracts as `devmate bootstrap`; there is no separate legacy persistence path.

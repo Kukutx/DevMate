@@ -34,37 +34,42 @@ Clear `devMate.ngrokUrl` and use the selected account's default development doma
 
 ## ChatGPT Connector Creation Fails
 
-Use the URL copied by `DevMate: Start` or `DevMate: Copy URL`. The URL must look like:
+Use the endpoint copied by `DevMate: Start` or `DevMate: Copy URL`. It must look like:
 
 ```text
-https://example.ngrok-free.dev/mcp?token=<real-token>
+https://example.ngrok-free.dev/mcp
 ```
 
-Do not copy a URL from DevMate logs, the panel label, or a screenshot when it shows `token=redacted`. Redacted URLs are intentionally not usable.
+Then run `DevMate: Copy Bearer Token` and configure that value as the connector's Bearer credential.
+
+Do not append credentials to the URL. Current DevMate accepts MCP credentials only from request headers; `/mcp?token=...` is intentionally not an authentication mechanism.
 
 In ChatGPT's connector form:
 
 - Connection type: server URL.
-- Authentication: no authentication.
-- URL path: keep `/mcp`.
-- Query string: keep `?token=<real-token>`.
+- URL: the copied HTTPS `/mcp` endpoint.
+- Authentication: Bearer token.
+- Bearer token: the value copied by `DevMate: Copy Bearer Token`.
+- Query string: none.
 - Risk acknowledgement: enabled, because local MCP tools can edit files and run commands.
 
 If ChatGPT reports a generic creation error:
 
-1. Click `DevMate: Copy URL` again and paste the fresh clipboard value.
-2. Make sure the pasted URL still includes `/mcp?token=`.
-3. If ngrok restarted, delete the old connector and create a new one with the new URL.
-4. Run `DevMate: Doctor` and confirm `Public MCP preflight OK`.
-5. Keep authentication set to no authentication because DevMate already authenticates with the URL token.
+1. Run `DevMate: Copy URL` again and paste the fresh endpoint.
+2. Run `DevMate: Copy Bearer Token` again and replace the Bearer credential.
+3. Confirm the URL ends in `/mcp` and contains no credential query string.
+4. If ngrok restarted and the public host changed, update the connector URL.
+5. Run `DevMate: Doctor` and confirm `Public MCP preflight OK`.
 
 ## 401 Unauthorized
 
-The connector URL is missing the token, contains `token=redacted`, or was copied from an old DevMate install/config. Use `DevMate: Copy URL` and paste the fresh clipboard value.
+The request is missing a valid Bearer credential or uses a stale token. Run `DevMate: Copy Bearer Token` and update the connector credential.
+
+A token embedded in the URL does not authenticate the request. This is deliberate so credentials do not leak through browser history, proxy logs, screenshots, copied links, or analytics.
 
 ## 404 or Connection Error
 
-The tunnel URL is stale, ngrok is not ready, or the `/mcp` path was removed. Run `DevMate: Start` again and use the newly verified URL.
+The tunnel URL is stale, ngrok is not ready, or the `/mcp` path was removed. Run `DevMate: Start` again and use the newly verified endpoint.
 
 ## Model Switch Looks Disconnected
 
@@ -74,7 +79,7 @@ Switching models or reasoning modes can leave the current chat without the conne
 2. If the panel renders, ChatGPT can still reach DevMate; check the panel advice and continue.
 3. If no tools are available, add the DevMate connector again from the `+` menu in the chat.
 4. If tools are available but the panel reports stale preflight, run `DevMate: Copy URL` or `DevMate: Start` in VS Code.
-5. If the ngrok host changed, recreate or update the ChatGPT connector with the newly copied full token URL.
+5. If the ngrok host changed, update the endpoint URL. If authentication fails, refresh the Bearer credential separately with `DevMate: Copy Bearer Token`.
 
 If the model surface you want to use cannot call MCP tools, use `Copy Context` in the DevMate panel and paste that bundle into the chat. Treat it as planning context only; reconnect DevMate before asking ChatGPT to edit files, run commands, or use Git.
 
@@ -82,7 +87,7 @@ If the model surface you want to use cannot call MCP tools, use `Copy Context` i
 
 DevMate uses the active VS Code folder as the only writable workspace by default. Open the intended folder in VS Code, then run `DevMate: Start` again. Use `list_workspaces` or `gateway_status` from ChatGPT to verify the active workspace.
 
-Older DevMate builds kept previously opened writable workspaces in `config.json`. Current builds automatically collapse that state to the active VS Code folder plus explicit readonly references. Use References for other projects you want ChatGPT to inspect.
+Older DevMate builds kept previously opened writable workspaces in `config.json`. Current builds collapse that state to the active VS Code folder plus explicit readonly references. Use References for other projects you want ChatGPT to inspect.
 
 ## Reference Project Management
 

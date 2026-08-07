@@ -48,7 +48,10 @@ See [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) for all presets and options.
 2. Run `DevMate: Configure ngrok`.
 3. Store the Authtoken in VS Code Secret Storage.
 4. Open a project and run `DevMate: Start`.
-5. Add the copied `/mcp?token=...` URL to ChatGPT.
+5. Add the copied HTTPS `/mcp` endpoint to ChatGPT.
+6. Run `DevMate: Copy Bearer Token` and configure that value as the connector's Bearer credential.
+
+The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL.
 
 ## Obsidian setup
 
@@ -71,7 +74,7 @@ DevMate supports ngrok, Cloudflare Quick Tunnel for development, Cloudflare mana
 
 ```text
 ChatGPT / team members
-        │ MCP + owner/dmt_ token
+        │ MCP + Bearer owner/dmt_ token
         ▼
 DevMate Gateway
   ├─ Capability Host and tool contracts
@@ -206,7 +209,8 @@ Use drain mode before upgrades so new mutations and job claims stop while in-fli
 
 ## Safety boundary
 
-- Gateways bind to `127.0.0.1`; ingress is provided by a tunnel or reverse proxy.
+- Gateways bind to `127.0.0.1` by default; container deployments opt into an explicit container bind host while host publishing remains loopback-bound.
+- MCP credentials are accepted only from request headers; endpoint URLs never contain owner/member credentials.
 - MCP, Runner, and preview credentials are separate.
 - Workspace paths use realpath containment and block secrets, keys, databases, logs, and real `.env` files.
 - Runner capabilities are scheduling metadata, not an operating-system sandbox.
@@ -222,7 +226,7 @@ Use drain mode before upgrades so new mutations and job claims stop while in-fli
 
 ```bash
 npm install
-npm run check       # discovers all JavaScript source
+npm run check       # discovers all JavaScript source and validates workflows
 npm run test:unit   # discovers all normal tests
 npm run smoke:gateway
 npm run package:vsix
