@@ -82,20 +82,25 @@ test('runtime adapter rejects non-callable replacements and resets atomically', 
   assert.equal(runtimeIo.isNative(), true);
 });
 
-test('VS Code production entrypoints route IO through the private adapter and never assign Node globals', () => {
+test('VS Code runtime IO is explicit and setup layers never monkey patch adapters or Node globals', () => {
   const files = [
     'extension.js',
     'extension-entry.js',
     'extension-entry-platform.js',
+    'vscode-host/tunnel-controller.js',
     'vscode-host/bounded-http-client.js'
   ];
   for (const relative of files) {
     const text = source(relative);
     assert.doesNotMatch(text, /\bchildProcess\.(?:spawn|spawnSync)\s*=/, relative);
     assert.doesNotMatch(text, /\bhttp\.request\s*=/, relative);
+    assert.doesNotMatch(text, /runtimeIo\.(?:spawn|spawnSync|httpRequest)\s*=/, relative);
   }
+
   assert.match(source('extension.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
-  assert.match(source('extension-entry.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
-  assert.match(source('extension-entry-platform.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
   assert.match(source('vscode-host/bounded-http-client.js'), /require\('\.\/runtime-io\.js'\)/);
+
+  assert.doesNotMatch(source('extension-entry.js'), /runtime-io\.js|SpawnLayer|installManagedSpawnLayer/);
+  assert.doesNotMatch(source('extension-entry-platform.js'), /runtime-io\.js|installProcessWrappers|TunnelCompatibilityManager/);
+  assert.match(source('vscode-host/tunnel-controller.js'), /require\('node:child_process'\)/);
 });
