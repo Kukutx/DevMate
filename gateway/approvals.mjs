@@ -1,9 +1,19 @@
 import crypto from 'node:crypto';
 import { redactSensitiveString } from './local-shared.mjs';
 import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
+import { defaultedArray, defaultedBoolean, defaultedInteger } from './strict-config.mjs';
 
 const NAMESPACE = 'approvals';
 const FINAL_STATUSES = new Set(['rejected', 'cancelled', 'consumed', 'expired']);
+const APPROVAL_CAPABILITIES = new Set(['read', 'validate', 'write', 'execute', 'git', 'publish', 'admin']);
+const APPROVAL_POLICY_KEYS = new Set([
+  'enabled',
+  'requiredCapabilities',
+  'requiredTools',
+  'ttlSeconds',
+  'separationOfDuties',
+  'ownerBypass'
+]);
 
 function nowIso() { return new Date().toISOString(); }
 
@@ -67,18 +77,51 @@ function summarize(value, depth = 0) {
   return String(value).slice(0, 200);
 }
 
+function policyObject(config) {
+  const raw = config?.team?.approvals;
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('team.approvals must be an object');
+  }
+  const unknown = Object.keys(raw).filter(key => !APPROVAL_POLICY_KEYS.has(key));
+  if (unknown.length) throw new Error(`Unknown team.approvals setting: ${unknown[0]}`);
+  return raw;
+}
+
+function capabilityList(value, fallback) {
+  const items = defaultedArray(value, fallback, 'team.approvals.requiredCapabilities');
+  const output = [];
+  for (const item of items) {
+    if (typeof item !== 'string' || !APPROVAL_CAPABILITIES.has(item)) {
+      throw new Error(`Invalid approval capability: ${String(item)}`);
+    }
+    if (!output.includes(item)) output.push(item);
+  }
+  return output;
+}
+
+function toolList(value) {
+  const items = defaultedArray(value, [], 'team.approvals.requiredTools');
+  const output = [];
+  for (const item of items) {
+    if (typeof item !== 'string' || !/^[a-z][a-z0-9_]{0,199}$/.test(item)) {
+      throw new Error(`Invalid approval tool name: ${String(item)}`);
+    }
+    if (!output.includes(item)) output.push(item);
+  }
+  return output;
+}
+
 export function approvalPolicy(config) {
-  const raw = config?.team?.approvals || {};
+  const raw = policyObject(config);
   const production = config?.deployment?.mode === 'production';
   return {
-    enabled: raw.enabled ?? production,
-    requiredCapabilities: Array.isArray(raw.requiredCapabilities)
-      ? [...new Set(raw.requiredCapabilities)]
-      : (production ? ['publish', 'admin'] : []),
-    requiredTools: Array.isArray(raw.requiredTools) ? [...new Set(raw.requiredTools)] : [],
-    ttlSeconds: Math.min(86400, Math.max(300, Math.trunc(Number(raw.ttlSeconds) || 3600))),
-    separationOfDuties: raw.separationOfDuties !== false,
-    ownerBypass: raw.ownerBypass !== false
+    enabled: defaultedBoolean(raw.enabled, production, 'team.approvals.enabled'),
+    requiredCapabilities: capabilityList(raw.requiredCapabilities, production ? ['publish', 'admin'] : []),
+    requiredTools: toolList(raw.requiredTools),
+    ttlSeconds: defaultedInteger(raw.ttlSeconds, 3600, 300, 86400, 'team.approvals.ttlSeconds'),
+    separationOfDuties: defaultedBoolean(raw.separationOfDuties, true, 'team.approvals.separationOfDuties'),
+    ownerBypass: defaultedBoolean(raw.ownerBypass, true, 'team.approvals.ownerBypass')
   };
 }
 
@@ -241,4 +284,4 @@ export function clearApprovalRequests() {
   writeStore({ version: 1, requests: [] });
 }
 
-export const __test = { canonical, prune, publicRequest, readStore, summarize };
+export const __test = { canonical, capabilityList, policyObject, prune, publicRequest, summarize, toolList };
