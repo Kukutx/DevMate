@@ -1,12 +1,10 @@
 'use strict';
 
+const childProcess = require('node:child_process');
 const vscode = require('vscode');
 const path = require('path');
-const runtimeIo = require('./vscode-host/runtime-io.js');
-const {
-  TunnelCompatibilityManager,
-  normalizePublicUrl
-} = require('./tunnel-provider');
+const { normalizePublicUrl } = require('./tunnel-provider');
+const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const {
   deploymentMode: validateDeploymentMode,
   strictInteger,
@@ -22,10 +20,6 @@ const NGROK_POLICY_DOCS = 'https://ngrok.com/docs/traffic-policy/';
 let innerExtension = null;
 let output = null;
 let cloudflareTunnelToken = '';
-let originalSpawn = null;
-let originalSpawnSync = null;
-let originalHttpRequest = null;
-let manager = null;
 
 function cfg() {
   return vscode.workspace.getConfiguration('devMate');
@@ -65,10 +59,6 @@ function tunnelSettings() {
     autoRestart: strictBoolean(setting('tunnelAutoRestart', true), 'tunnelAutoRestart'),
     maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10))
   };
-}
-
-function secretState() {
-  return { cloudflareTunnelToken };
 }
 
 async function updateSetting(name, value) {
@@ -148,7 +138,7 @@ function syncDeploymentConfig(context) {
 }
 
 function checkCommand(command, args = ['--version']) {
-  const result = originalSpawnSync(command, args, {
+  const result = childProcess.spawnSync(command, args, {
     encoding: 'utf8',
     windowsHide: true,
     timeout: 10000
@@ -251,7 +241,6 @@ async function configureDeployment(context) {
   await updateSetting('deploymentMode', modeChoice.value);
   await updateSetting('tunnelProvider', providerChoice.value);
 
-  if (providerChoice.value !== 'ngrok') await updateSetting('ngrokUseManagedAccount', false);
   if (providerChoice.value === 'ngrok') {
     const policyChoice = await vscode.window.showQuickPick([
       { label: 'Continue with current ngrok setup', value: 'keep' },
@@ -313,9 +302,21 @@ async function tunnelDoctor(context) {
     log(`cloudflared: ${check.ok ? check.output : `MISSING (${check.output})`}`);
     log(`Managed tunnel token: ${cloudflareTunnelToken ? 'configured' : 'not configured'}`);
   } else {
-    log('External provider: DevMate will verify the configured URL but will not manage its process.');
+    log('External provider: DevMate verifies the configured URL and does not manage an ingress process.');
   }
-  log(`Runtime: ${JSON.stringify(manager.diagnostics())}`);
+  try {
+    const runtime = tunnelStatus();
+    log(`Runtime: ${JSON.stringify({
+      running: runtime.running,
+      owned: runtime.owned,
+      attached: runtime.attached,
+      provider: runtime.provider,
+      publicUrl: runtime.publicUrl || null,
+      port: runtime.port || null
+    })}`);
+  } catch (error) {
+    log(`Runtime unavailable: ${error.message || error}`);
+  }
   vscode.window.showInformationMessage('Deployment diagnostics finished. See DevMate Deployment output.');
 }
 
@@ -323,43 +324,19 @@ function register(context, id, handler) {
   context.subscriptions.push(vscode.commands.registerCommand(id, handler));
 }
 
-function installProcessWrappers() {
-  originalSpawn = runtimeIo.spawn;
-  originalSpawnSync = runtimeIo.spawnSync;
-  originalHttpRequest = runtimeIo.httpRequest;
-  manager = new TunnelCompatibilityManager({
-    settings: tunnelSettings,
-    secrets: secretState,
-    log
-  });
-  runtimeIo.spawn = manager.wrapSpawn(originalSpawn);
-  runtimeIo.spawnSync = manager.wrapSpawnSync(originalSpawnSync);
-  runtimeIo.httpRequest = manager.wrapHttpRequest(originalHttpRequest);
-}
-
-function restoreProcessWrappers() {
-  if (originalSpawn) runtimeIo.spawn = originalSpawn;
-  if (originalSpawnSync) runtimeIo.spawnSync = originalSpawnSync;
-  if (originalHttpRequest) runtimeIo.httpRequest = originalHttpRequest;
-  originalSpawn = null;
-  originalSpawnSync = null;
-  originalHttpRequest = null;
-}
-
 async function activate(context) {
   output = vscode.window.createOutputChannel('DevMate Deployment');
   context.subscriptions.push(output);
   cloudflareTunnelToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
-  installProcessWrappers();
 
   register(context, 'devMate.deploymentSetup', () => configureDeployment(context));
   register(context, 'devMate.tunnelSetup', () => configureDeployment(context));
   register(context, 'devMate.tunnelDoctor', () => tunnelDoctor(context));
   register(context, 'devMate.cloudflareSetToken', () => promptCloudflareToken(context));
   register(context, 'devMate.cloudflareClearToken', async () => {
+    try { await stopTunnel(); } catch {}
     await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
     cloudflareTunnelToken = '';
-    manager.stop();
     vscode.window.showInformationMessage('Cloudflare Tunnel token removed from VS Code Secret Storage.');
   });
   register(context, 'devMate.openTunnelDocs', async () => {
@@ -367,12 +344,7 @@ async function activate(context) {
     await openExternal(provider.startsWith('cloudflare') ? CLOUDFLARE_DOCS : NGROK_POLICY_DOCS);
   });
 
-  if (tunnelSettings().provider !== 'ngrok' && setting('ngrokUseManagedAccount', true) !== false) {
-    await updateSetting('ngrokUseManagedAccount', false);
-  }
-
-  const entry = './extension-entry';
-  innerExtension = require(entry);
+  innerExtension = require('./extension-entry');
   await innerExtension.activate(context);
   syncDeploymentConfig(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
@@ -390,10 +362,7 @@ async function deactivate() {
   try {
     if (innerExtension?.deactivate) await innerExtension.deactivate();
   } finally {
-    manager?.stop();
-    restoreProcessWrappers();
     innerExtension = null;
-    manager = null;
   }
 }
 
