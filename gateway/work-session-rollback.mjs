@@ -124,7 +124,7 @@ async function rollbackEntry(config, entry, dryRun) {
   return { action: entry.action, skipped: true, reason: 'unsupported rollback action' };
 }
 
-export async function rollbackWorkSession({ workSessionId, principal, dryRun = false, limit = 1000 }) {
+export async function rollbackWorkSession({ workSessionId, principal, dryRun = false, force = false, limit = 1000 }) {
   const id = String(workSessionId || '').trim();
   if (!id) throw new Error('workSessionId is required');
   if (!principal?.id) throw new Error('Authenticated principal is required');
@@ -135,11 +135,20 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
 
   const start = entries.find(entry => entry.action === 'work_session_start');
   const canManageOthers = principal.role === 'owner' || principal.role === 'maintainer';
-  if (start?.principalId && start.principalId !== principal.id && !canManageOthers) {
-    throw new Error(`Work session ${id} belongs to ${start.principalName || start.principalId}`);
+  if (!start?.principalId) {
+    throw new Error(`Work session ownership metadata is unavailable: ${id}`);
+  }
+  if (start.principalId !== principal.id) {
+    if (!canManageOthers) {
+      throw new Error(`Work session ${id} belongs to ${start.principalName || start.principalId}`);
+    }
+    if (!force) {
+      throw new Error(`Rollback of another principal's work session requires force=true: ${id}`);
+    }
   }
 
   const workspaceIds = [...new Set(entries.map(entry => entry.workspace).filter(Boolean))];
+  if (!workspaceIds.length) throw new Error(`Work session has no rollback workspace metadata: ${id}`);
   for (const workspaceId of workspaceIds) {
     if (principal.workspaceIds?.length && !principal.workspaceIds.includes(workspaceId)) {
       throw new Error(`Principal ${principal.id} is not allowed to rollback workspace ${workspaceId}`);
@@ -157,10 +166,11 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
     principalId: principal.id,
     targetWorkSessionId: id,
     dryRun,
+    force,
     resultCount: results.length,
     workspaces: workspaceIds
   }, { workSessionId: id });
-  return { workSessionId: id, dryRun, results };
+  return { workSessionId: id, dryRun, force, results };
 }
 
 export const __test = {
