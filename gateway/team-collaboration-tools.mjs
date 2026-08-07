@@ -129,16 +129,17 @@ export function registerTeamCollaborationTools(register, annotations) {
 
   register('work_session_rollback', {
     title: 'Rollback work session',
-    description: 'Rollback safe file mutations recorded in a work session. Team callers must hold the affected workspace lease; commands and Git history are never automatically reversed.',
+    description: 'Rollback safe file mutations recorded in a work session. Team callers must hold the affected workspace lease; commands and Git history are never automatically reversed. Maintainers and owners must pass force=true to rollback another principal session.',
     inputSchema: {
       workSessionId: z.string().min(1),
       dryRun: z.boolean().optional(),
+      force: z.boolean().optional(),
       limit: z.number().int().min(1).max(1000).optional()
     },
     annotations: rw
-  }, async ({ workSessionId, dryRun = false, limit = 1000 }) => {
+  }, async ({ workSessionId, dryRun = false, force = false, limit = 1000 }) => {
     const principal = principalNow();
-    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, limit }));
+    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit }));
   });
 
   register('published_preview_share', {
