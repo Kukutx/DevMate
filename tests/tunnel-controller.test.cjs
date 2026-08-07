@@ -9,9 +9,30 @@ const {
   TunnelController,
   buildProviderLaunch
 } = require('../vscode-host/tunnel-controller.js');
+const {
+  clearTunnelController,
+  setTunnelController,
+  startTunnel,
+  stopTunnel,
+  tunnelStatus
+} = require('../vscode-host/tunnel-runtime.js');
 
 function temporaryDirectory(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function waitFor(predicate, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      let value;
+      try { value = predicate(); } catch (error) { reject(error); return; }
+      if (value) { resolve(value); return; }
+      if (Date.now() >= deadline) { reject(new Error('Timed out waiting for tunnel condition')); return; }
+      setTimeout(poll, 25);
+    };
+    poll();
+  });
 }
 
 function externalSettings() {
@@ -73,4 +94,24 @@ test('two hosts share one provider-native tunnel record without a virtual ngrok 
   await first.dispose();
   await second.dispose({ stopOwned: false });
   fs.rmSync(stateDirectory, { recursive: true, force: true });
+});
+
+test('an attached runtime automatically takes ownership after the shared owner stops', async () => {
+  const stateDirectory = temporaryDirectory('devmate-provider-native-failover-');
+  const first = new TunnelController({ stateDirectory, settings: externalSettings, hostId: 'owner' });
+  const second = new TunnelController({ stateDirectory, settings: externalSettings, hostId: 'follower' });
+  try {
+    assert.equal((await first.start(8788)).owned, true);
+    setTunnelController(second);
+    assert.equal((await startTunnel(8788)).attached, true);
+    assert.equal((await first.stop()).stopped, true);
+    await waitFor(() => tunnelStatus(8788).owned === true);
+    assert.equal(tunnelStatus(8788).publicUrl, 'https://devmate.example.com');
+    assert.equal((await stopTunnel()).stopped, true);
+  } finally {
+    clearTunnelController();
+    await first.dispose({ stopOwned: true }).catch(() => {});
+    await second.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
 });
