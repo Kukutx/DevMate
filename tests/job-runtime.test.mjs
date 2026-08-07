@@ -9,6 +9,7 @@ const workspace = path.join(root, 'workspace');
 const configPath = path.join(root, 'config.json');
 await fsp.mkdir(path.join(workspace, 'artifacts'), { recursive: true });
 await fsp.writeFile(configPath, JSON.stringify({
+  version: 11,
   appVersion: '2.2.0',
   instanceId: 'runtime-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
