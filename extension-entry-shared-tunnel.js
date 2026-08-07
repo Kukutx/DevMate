@@ -1,8 +1,9 @@
 'use strict';
 
 const path = require('node:path');
+const childProcess = require('node:child_process');
+const http = require('node:http');
 const vscode = require('vscode');
-const runtimeAdapter = require('./vscode-host/runtime-adapter.js');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
 const { SharedTunnelRuntime } = require('./vscode-host/shared-tunnel-runtime.js');
@@ -37,15 +38,15 @@ async function activate(context) {
     if (runtime || lifecycle) await deactivate();
     output = vscode.window.createOutputChannel('DevMate Shared Tunnel');
     context.subscriptions.push(output);
-    lifecycle = new VscodeHostLifecycle({ vscode, childProcessModule: runtimeAdapter });
+    lifecycle = new VscodeHostLifecycle({ vscode });
     try {
       await lifecycle.activate(context);
       const stateDirectory = resolveVscodeStateDirectory(vscode, context);
       runtime = new SharedTunnelRuntime({
         stateDirectory,
         configFile: path.join(stateDirectory, 'config.json'),
-        childProcess: runtimeAdapter,
-        http: runtimeAdapter,
+        childProcess,
+        http,
         settings: tunnelSettings,
         hostId: `vscode-${process.pid}`,
         logger: log
