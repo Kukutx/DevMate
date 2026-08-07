@@ -9,7 +9,7 @@ const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
 await fsp.writeFile(configPath, JSON.stringify({
   version: 11,
-  appVersion: '2.3.0',
+  appVersion: '3.3.0',
   auth: { required: true, token: 'owner-token-long-enough' },
   deployment: { mode: 'team' },
   team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: false },
@@ -42,7 +42,7 @@ registerRunnerTools(
   }
 );
 
-test('Runner topology status requires maintainer or owner', async () => {
+test('Runner topology status distinguishes configured and live embedded state', async () => {
   await assert.rejects(
     runWithRequestContext({ principal: principal('reviewer') }, () =>
       tools.get('runner_control_status').handler({})
@@ -53,23 +53,35 @@ test('Runner topology status requires maintainer or owner', async () => {
     tools.get('runner_control_status').handler({})
   );
   assert.equal(status.structuredContent.embeddedRunnerEnabled, true);
+  assert.equal(status.structuredContent.embeddedRunnerRunning, false);
   assert.equal(status.structuredContent.externalControlEnabled, false);
 });
 
-test('Runner control changes and credentials require owner', async () => {
+test('Runner control reports restart only when desired lifecycle differs from live state', async () => {
   await assert.rejects(
     runWithRequestContext({ principal: principal('maintainer') }, () =>
       tools.get('runner_control_configure').handler({ enabled: true })
     ),
     /owner role/
   );
-  const configured = await runWithRequestContext({ principal: principal('owner') }, () =>
+
+  const disabled = await runWithRequestContext({ principal: principal('owner') }, () =>
     tools.get('runner_control_configure').handler({ enabled: true, embeddedRunnerEnabled: false })
   );
-  assert.equal(configured.structuredContent.runnerControl.externalControlEnabled, true);
-  assert.equal(configured.structuredContent.runnerControl.embeddedRunnerEnabled, false);
-  assert.equal(configured.structuredContent.restartRequired, true);
+  assert.equal(disabled.structuredContent.runnerControl.externalControlEnabled, true);
+  assert.equal(disabled.structuredContent.runnerControl.embeddedRunnerEnabled, false);
+  assert.equal(disabled.structuredContent.runnerControl.embeddedRunnerRunning, false);
+  assert.equal(disabled.structuredContent.restartRequired, false);
 
+  const enabled = await runWithRequestContext({ principal: principal('owner') }, () =>
+    tools.get('runner_control_configure').handler({ embeddedRunnerEnabled: true })
+  );
+  assert.equal(enabled.structuredContent.runnerControl.embeddedRunnerEnabled, true);
+  assert.equal(enabled.structuredContent.runnerControl.embeddedRunnerRunning, false);
+  assert.equal(enabled.structuredContent.restartRequired, true);
+});
+
+test('Runner credentials require owner and preserve explicit workspace scope', async () => {
   await assert.rejects(
     runWithRequestContext({ principal: principal('maintainer') }, () =>
       tools.get('runner_credential_create').handler({
