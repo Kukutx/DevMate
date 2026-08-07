@@ -27,6 +27,20 @@ test('persists namespaced runtime state atomically', () => {
   assert.ok(status.bytes > 0);
 });
 
+test('accepts versionless legacy state but rejects explicit invalid versions', () => {
+  assert.deepEqual(durable.__test.normalizeDocument({ namespaces: { legacy: { ok: true } } }), {
+    version: durable.DOCUMENT_VERSION,
+    updatedAt: null,
+    namespaces: { legacy: { ok: true } }
+  });
+  for (const version of [null, '1', 0, -1, 1.5, Number.NaN]) {
+    assert.throws(() => durable.__test.normalizeDocument({ version, namespaces: {} }), error => {
+      assert.equal(error.code, 'invalid_state_version');
+      return true;
+    });
+  }
+});
+
 test('derives a request-aware instance lock lease while allowing explicit test leases', () => {
   assert.equal(
     durable.configuredGatewayInstanceLeaseMs({}),
