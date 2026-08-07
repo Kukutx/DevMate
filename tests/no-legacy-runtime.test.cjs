@@ -29,7 +29,14 @@ test('runtime contains no legacy state migration API or forwarding entry layers'
   assert.equal(Object.keys(statePaths).some(key => forbidden.test(key)), false);
 });
 
-test('host runtime cannot fall back to the retired per-extension state mode', () => {
+test('host runtime cannot fall back to retired host or per-extension modes', () => {
   assert.doesNotMatch(source('host/runtime/state-paths.js'), /localDirectory|shared\s*=/);
   assert.doesNotMatch(source('vscode-host/runtime-context.js'), /sharedRuntimeEnabled|localDirectory/);
+  assert.doesNotMatch(source('vscode-host/lifecycle.js'), /vscodeHostEnabled|sharedRuntimeEnabled/);
+  assert.doesNotMatch(source('obsidian-plugin/src/settings.js'), /sharedRuntime/);
+  assert.doesNotMatch(source('package.json'), /vscodeHostEnabled|sharedRuntimeEnabled/);
+});
+
+test('Gateway shared modules require the current DEVMATE_CONFIG contract', () => {
+  assert.doesNotMatch(source('gateway/local-shared.mjs'), /AIWG_CONFIG/);
 });
