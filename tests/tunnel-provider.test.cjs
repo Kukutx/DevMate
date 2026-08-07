@@ -3,10 +3,13 @@ const test = require('node:test');
 const {
   cloudflareLaunch,
   decorateNgrokArgs,
+  normalizeAutoRestart,
+  normalizeMaxRestarts,
   normalizeProvider,
   normalizePublicUrl,
   parsePort,
-  parseTryCloudflareUrl
+  parseTryCloudflareUrl,
+  TunnelCompatibilityManager
 } = require('../tunnel-provider');
 
 test('builds safe tunnel provider commands without exposing managed tokens in args', () => {
@@ -29,6 +32,24 @@ test('rejects explicit invalid tunnel providers instead of falling back to ngrok
   assert.throws(() => normalizeProvider('typo-provider'), /Unknown tunnel provider/);
 });
 
+test('defaults only missing restart settings and rejects malformed explicit values', () => {
+  assert.equal(normalizeAutoRestart(undefined), true);
+  assert.equal(normalizeAutoRestart(false), false);
+  assert.throws(() => normalizeAutoRestart('false'), /must be a boolean/);
+  assert.equal(normalizeMaxRestarts(undefined), 10);
+  assert.equal(normalizeMaxRestarts(0), 0);
+  assert.equal(normalizeMaxRestarts(50), 50);
+  for (const value of ['10', null, -1, 51, 1.5, NaN]) {
+    assert.throws(() => normalizeMaxRestarts(value), /integer from 0 to 50/);
+  }
+
+  const manager = new TunnelCompatibilityManager({
+    settings: () => ({ provider: 'external', publicUrl: 'https://devmate.example.com', autoRestart: false, maxRestarts: 0 })
+  });
+  assert.equal(manager.diagnostics().autoRestart, false);
+  assert.equal(manager.diagnostics().maxRestarts, 0);
+});
+
 test('decorates ngrok production policies and parses provider output', () => {
   assert.deepEqual(
     decorateNgrokArgs(['http', '8787'], { ngrokTrafficPolicyFile: 'policy.yml' }),
@@ -43,7 +64,6 @@ test('decorates ngrok production policies and parses provider output', () => {
 });
 
 test('provides a virtual ngrok compatibility API for alternate tunnel providers', async () => {
-  const { TunnelCompatibilityManager } = require('../tunnel-provider');
   const manager = new TunnelCompatibilityManager({
     settings: () => ({ provider: 'external', publicUrl: 'https://devmate.example.com' })
   });
@@ -70,7 +90,6 @@ test('provides a virtual ngrok compatibility API for alternate tunnel providers'
 });
 
 test('passes native ngrok API requests through unchanged', () => {
-  const { TunnelCompatibilityManager } = require('../tunnel-provider');
   const sentinel = { native: true };
   const manager = new TunnelCompatibilityManager({ settings: () => ({ provider: 'ngrok' }) });
   const wrapped = manager.wrapHttpRequest(() => sentinel);
