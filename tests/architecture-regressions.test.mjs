@@ -21,8 +21,8 @@ test('fullAccess does not silently enable directory mutations', () => {
 
 test('Gateway has no direct configuration writes or duplicate audit implementation', () => {
   const source = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'gateway', 'server.mjs'), 'utf8');
-  assert.doesNotMatch(source, /writeFileSync\(CONFIG_PATH/);
-  assert.match(source, /shared\.mutateConfig/);
+  assert.doesNotMatch(source, /writeFileSync\(CONFIG_PATH|writeFile\(CONFIG_PATH|shared\.writeConfig|shared\.mutateConfig/);
+  assert.match(source, /shared\.readConfig/);
   assert.match(source, /shared\.audit/);
 });
 
