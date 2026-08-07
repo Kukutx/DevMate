@@ -7,6 +7,7 @@ import test from 'node:test';
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-approval-integration-'));
 const configPath = path.join(temp, 'config.json');
 await fsp.writeFile(configPath, JSON.stringify({
+  version: 11,
   instanceId: 'approval-integration',
   auth: { required: true, token: 'owner-token-value-long-enough' },
   permissions: { profile: 'fullAccess' },
