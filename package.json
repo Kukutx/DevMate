@@ -164,11 +164,6 @@
       "title": "DevMate",
       "type": "object",
       "properties": {
-        "devMate.vscodeHostEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable the DevMate VS Code host. Reload the window after changing this setting."
-        },
         "devMate.vscodeStartupMode": {
           "type": "string",
           "default": "auto",
@@ -183,12 +178,6 @@
             "Disable the VS Code host until this setting is changed."
           ],
           "description": "VS Code host startup behavior."
-        },
-        "devMate.sharedRuntimeEnabled": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "description": "Share one workspace-derived DevMate state directory with other hosts such as Obsidian."
         },
         "devMate.sharedStateDirectory": {
           "type": "string",
