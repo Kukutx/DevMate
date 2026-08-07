@@ -91,6 +91,12 @@ class RuntimeDiagnostics {
 
   report({ plugin, controller, status }) {
     const snapshot = controller?.diagnosticSnapshot?.() || null;
+    const selectedNode = plugin?.nodeRuntime ? {
+      source: plugin.nodeRuntime.source || null,
+      executable: plugin.nodeRuntime.executable || null,
+      nodeVersion: plugin.nodeRuntime.nodeVersion || null,
+      electronVersion: plugin.nodeRuntime.electronVersion || null
+    } : null;
     const report = {
       generatedAt: new Date().toISOString(),
       plugin: {
@@ -104,7 +110,8 @@ class RuntimeDiagnostics {
         arch: process.arch,
         node: process.versions.node || null,
         electron: process.versions.electron || null,
-        chrome: process.versions.chrome || null
+        chrome: process.versions.chrome || null,
+        gatewayNodeRuntime: selectedNode
       },
       workspace: {
         vaultRoot: this.vaultRoot,
