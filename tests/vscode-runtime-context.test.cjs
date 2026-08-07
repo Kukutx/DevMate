@@ -32,14 +32,11 @@ function fakeVscode(root, settings = {}) {
 
 test('resolves a shared VS Code state directory from the workspace root', () => {
   const root = temporaryDirectory('devmate-vscode-root-');
-  const legacy = temporaryDirectory('devmate-vscode-legacy-');
+  const local = temporaryDirectory('devmate-vscode-local-');
   const shared = temporaryDirectory('devmate-vscode-shared-');
-  const vscode = fakeVscode(root, {
-    sharedRuntimeEnabled: true,
-    sharedStateDirectory: shared
-  });
+  const vscode = fakeVscode(root, { sharedStateDirectory: shared });
   const context = {
-    globalStorageUri: { fsPath: legacy },
+    globalStorageUri: { fsPath: local },
     extensionPath: root,
     marker() { return this; }
   };
@@ -52,12 +49,10 @@ test('resolves a shared VS Code state directory from the workspace root', () => 
   assert.deepEqual(workspaceFolders(vscode), [{ name: path.basename(root), path: root, index: 0 }]);
 });
 
-test('falls back to extension storage without a workspace or when sharing is disabled', () => {
-  const legacy = temporaryDirectory('devmate-vscode-local-');
-  const context = { globalStorageUri: { fsPath: legacy }, extensionPath: legacy };
-  assert.equal(resolveVscodeStateDirectory(fakeVscode('', {}), context), legacy);
-  const root = temporaryDirectory('devmate-vscode-disabled-root-');
-  assert.equal(resolveVscodeStateDirectory(fakeVscode(root, { sharedRuntimeEnabled: false }), context), legacy);
+test('uses extension storage only when no workspace is open', () => {
+  const local = temporaryDirectory('devmate-vscode-local-');
+  const context = { globalStorageUri: { fsPath: local }, extensionPath: local };
+  assert.equal(resolveVscodeStateDirectory(fakeVscode('', {}), context), local);
 });
 
 test('orders packaged Gateway candidates with the bundle first', () => {
