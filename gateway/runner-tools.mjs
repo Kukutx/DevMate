@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { listRunners } from './job-queue.mjs';
+import { jobRuntimeStatus } from './job-runtime.mjs';
 import {
   createRunnerCredential,
   normalizeRunnerControlConfig,
@@ -26,8 +27,10 @@ function ownerNow() {
 }
 
 function publicRuntime(config) {
+  const runtime = jobRuntimeStatus();
   return {
     embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false,
+    embeddedRunnerRunning: runtime.started && !runtime.stopping,
     externalControlEnabled: config.runnerControl.enabled,
     path: config.runnerControl.path,
     maxRequestBytes: config.runnerControl.maxRequestBytes,
@@ -45,7 +48,7 @@ export function registerRunnerTools(register, annotations) {
 
   register('runner_control_status', {
     title: 'External runner control status',
-    description: 'Show embedded/external Runner state, credential count, limits, and currently known runners. Requires maintainer or owner.',
+    description: 'Show configured and live embedded/external Runner state, credential count, limits, and currently known runners. Requires maintainer or owner.',
     inputSchema: {},
     annotations: ro
   }, async () => {
@@ -75,14 +78,16 @@ export function registerRunnerTools(register, annotations) {
     if (patch.embeddedRunnerEnabled !== undefined) config.jobs.embeddedRunnerEnabled = patch.embeddedRunnerEnabled;
     normalizeRunnerControlConfig(config);
     writeConfig(config);
-    await audit('runner_control_configure', { principalId: principal.id, ...patch });
+    const runtime = publicRuntime(config);
+    const restartRequired = patch.embeddedRunnerEnabled !== undefined && runtime.embeddedRunnerEnabled !== runtime.embeddedRunnerRunning;
+    await audit('runner_control_configure', { principalId: principal.id, ...patch, restartRequired });
     return toolText({
       configured: true,
-      runnerControl: publicRuntime(config),
-      restartRequired: patch.embeddedRunnerEnabled !== undefined,
-      note: patch.embeddedRunnerEnabled !== undefined
+      runnerControl: runtime,
+      restartRequired,
+      note: restartRequired
         ? 'Restart the Gateway to apply the embedded Runner lifecycle change.'
-        : 'External Runner API limit changes apply immediately.'
+        : 'The configured Runner lifecycle already matches the live Gateway state.'
     });
   });
 
