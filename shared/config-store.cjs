@@ -51,8 +51,15 @@ function parseJsonObjectFile(file) {
 }
 
 function assertSupportedConfigVersion(config, file) {
-  const version = Number(config?.version || 0);
-  if (Number.isFinite(version) && version > SUPPORTED_CONFIG_VERSION) {
+  if (!config || typeof config !== 'object' || Array.isArray(config) || !Object.hasOwn(config, 'version')) return config;
+  const version = config.version;
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
+    const error = configError(`DevMate config has an invalid version ${String(version)}`, 'invalid_config_version', file);
+    error.configVersion = version;
+    error.supportedVersion = SUPPORTED_CONFIG_VERSION;
+    throw error;
+  }
+  if (version > SUPPORTED_CONFIG_VERSION) {
     const error = configError(
       `DevMate config version ${version} is newer than supported version ${SUPPORTED_CONFIG_VERSION}`,
       'unsupported_config_version',
@@ -75,7 +82,6 @@ function readJson(file, fallback = null, { strict = false, supportedVersion = fa
     return fallback;
   }
 }
-
 
 function fingerprint(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
@@ -282,7 +288,6 @@ function atomicWriteJson(file, value) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
   }
 }
-
 
 function replaceConfig(file, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
