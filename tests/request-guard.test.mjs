@@ -149,3 +149,17 @@ test('rate limits unauthenticated published preview traffic per remote address',
   assert.equal(guard.__test.consumePreviewRateLimit(request, previewConfig).allowed, false);
   assert.equal(guard.__test.consumePreviewRateLimit({ socket: { remoteAddress: '203.0.113.11' } }, previewConfig).allowed, true);
 });
+
+test('fails closed for public Host values when production allowlist is empty', () => {
+  const production = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
+  assert.equal(guard.__test.hostAllowed({ headers: { host: 'devmate.example.com' } }, production), false);
+  assert.equal(guard.__test.hostAllowed({ headers: { host: '127.0.0.1:8787' } }, production), true);
+  const team = { deployment: { mode: 'team' }, production: { allowedHosts: [] } };
+  assert.equal(guard.__test.hostAllowed({ headers: { host: 'devmate.example.com' } }, team), true);
+  const restricted = {
+    deployment: { mode: 'production' },
+    production: { allowedHosts: ['devmate.example.com'] }
+  };
+  assert.equal(guard.__test.hostAllowed({ headers: { host: 'devmate.example.com' } }, restricted), true);
+  assert.equal(guard.__test.hostAllowed({ headers: { host: 'evil.example.com' } }, restricted), false);
+});
