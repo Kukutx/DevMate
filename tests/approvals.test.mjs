@@ -40,7 +40,7 @@ test('uses strict approval policy values instead of coercing malformed configura
   assert.throws(() => approvals.approvalPolicy({
     deployment: { mode: 'production' },
     team: { approvals: { enabled: 'false' } }
-  }), /must be boolean/);
+  }), /must be a boolean/);
   assert.throws(() => approvals.approvalPolicy({
     deployment: { mode: 'production' },
     team: { approvals: { ttlSeconds: '300' } }
