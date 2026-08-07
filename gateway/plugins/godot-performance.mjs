@@ -69,7 +69,6 @@ const BUDGET_FIELDS = Object.freeze({
   minSamples: { metric: null, statistic: null, direction: 'min' },
   minFpsP05: { metric: 'fps', statistic: 'p05', direction: 'min' },
   minFpsP50: { metric: 'fps', statistic: 'p50', direction: 'min' },
-  minFpsP95: { metric: 'fps', statistic: 'p95', direction: 'min' },
   maxProcessMsP95: { metric: 'process_ms', statistic: 'p95', direction: 'max' },
   maxPhysicsMsP95: { metric: 'physics_ms', statistic: 'p95', direction: 'max' },
   maxMemoryBytes: { metric: 'memory_static_bytes', statistic: 'max', direction: 'max' },
@@ -81,6 +80,9 @@ const BUDGET_FIELDS = Object.freeze({
 });
 
 export function evaluatePerformanceBudgets(summary, budgets = {}) {
+  for (const field of Object.keys(budgets || {})) {
+    if (!Object.hasOwn(BUDGET_FIELDS, field)) throw new Error(`Unknown Godot performance budget: ${field}`);
+  }
   const results = [];
   for (const [field, definition] of Object.entries(BUDGET_FIELDS)) {
     if (budgets[field] == null) continue;

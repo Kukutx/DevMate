@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { loadAdvancedAutomation, runAdvancedSuite } from '../gateway/plugins/godot-advanced-automation.mjs';
+import { advancedScenarioSchema, loadAdvancedAutomation, runAdvancedSuite } from '../gateway/plugins/godot-advanced-automation.mjs';
 import { evaluatePerformanceBudgets, percentile, runMovieCapture, runPerformanceTest, summarizePerformance } from '../gateway/plugins/godot-performance.mjs';
 import { inspectGodotTests, parseJunitXml, runGodotTests, __test as testAdapterTest } from '../gateway/plugins/godot-tests.mjs';
 import { installQaBridge, inspectQaBridge, __test as bridgeTest } from '../gateway/plugins/godot-qa-bridge.mjs';
@@ -53,7 +53,7 @@ function performanceReport() {
   };
 }
 
-test('summarizes performance percentiles and evaluates budgets', () => {
+test('summarizes performance percentiles and evaluates only current budgets', () => {
   assert.equal(percentile([1, 2, 3, 4], 0.5), 2.5);
   const summary = summarizePerformance(performanceReport(), { warmupMs: 1000 });
   assert.equal(summary.evaluatedSamples, 3);
@@ -63,6 +63,14 @@ test('summarizes performance percentiles and evaluates budgets', () => {
   assert.equal(budget.configured, 5);
   assert.equal(budget.failed, 1);
   assert.equal(budget.results.find(item => item.field === 'maxOrphanNodeCount').passed, false);
+  assert.throws(
+    () => evaluatePerformanceBudgets(summary, { minFpsP95: 60 }),
+    /Unknown Godot performance budget: minFpsP95/
+  );
+  assert.throws(
+    () => advancedScenarioSchema.parse({ id: 'legacy-budget', kind: 'performance', budgets: { minFpsP95: 60 } }),
+    /minFpsP95|Unrecognized key/
+  );
 });
 
 test('parses bounded JUnit reports', () => {

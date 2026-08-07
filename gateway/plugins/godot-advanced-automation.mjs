@@ -21,7 +21,6 @@ const budgetSchema = z.object({
   minSamples: z.number().int().min(1).max(5000).optional(),
   minFpsP05: z.number().min(0).max(1000).optional(),
   minFpsP50: z.number().min(0).max(1000).optional(),
-  minFpsP95: z.number().min(0).max(1000).optional(),
   maxProcessMsP95: z.number().min(0).max(10000).optional(),
   maxPhysicsMsP95: z.number().min(0).max(10000).optional(),
   maxMemoryBytes: z.number().min(0).max(Number.MAX_SAFE_INTEGER).optional(),

@@ -109,7 +109,7 @@ p95
 p99
 ```
 
-For minimum-FPS budgets, `minFpsP05` is usually the most useful lower-tail threshold. `minFpsP50` checks the median. The legacy `minFpsP95` field remains accepted but is less representative of frame-rate drops.
+For minimum-FPS budgets, use `minFpsP05` for lower-tail behavior and `minFpsP50` for median behavior. Unknown performance budget fields are rejected rather than silently ignored.
 
 For frame-time, memory, node, draw-call, and physics-pair budgets, upper-tail or maximum thresholds are used.
 

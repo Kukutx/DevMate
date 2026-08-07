@@ -62,3 +62,14 @@ test('provider-native tunnel runtime contains no retired compatibility layer', (
   assert.doesNotMatch(source('extension-entry.js'), /SpawnLayer|createExtensionSpawn|installManagedSpawnLayer/);
   assert.match(source('vscode-host/tunnel-controller.js'), /NATIVE_NGROK_API = 'http:\/\/127\.0\.0\.1:4040\/api\/tunnels'/);
 });
+
+test('Godot performance budgets expose only current lower-tail FPS fields', () => {
+  for (const file of [
+    'gateway/plugins/godot-performance.mjs',
+    'gateway/plugins/godot-advanced.mjs',
+    'gateway/plugins/godot-advanced-automation.mjs',
+    'gateway/plugins/godot-final.mjs'
+  ]) {
+    assert.doesNotMatch(source(file), /minFpsP95/, file);
+  }
+});
