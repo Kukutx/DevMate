@@ -24,10 +24,7 @@ let vscodeController = null;
 let obsidianController = null;
 
 function extractArchive() {
-  const tar = spawnSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', vsix, '-C', extractRoot], {
-    encoding: 'utf8',
-    windowsHide: true
-  });
+  const tar = spawnSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', vsix, '-C', extractRoot], { encoding: 'utf8', windowsHide: true });
   if (tar.status === 0) return;
   if (process.platform === 'win32') {
     const zip = path.join(extractRoot, 'package.zip');
@@ -66,7 +63,6 @@ try {
 
   const requiredFiles = [
     'extension-entry-shared-tunnel.js',
-    'extension-entry-host.js',
     'vscode-host/lifecycle.js',
     'vscode-host/gateway-spawn-router.js',
     'vscode-host/runtime-diagnostics.js',
