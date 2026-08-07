@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import configStore from '../shared/config-store.cjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
+import { requestWorkSessionId } from './request-context.mjs';
 
 export const CONFIG_PATH = process.env.DEVMATE_CONFIG;
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
@@ -117,7 +118,7 @@ function boundedAuditLine(entry) {
   const base = {
     time: entry.time,
     action: entry.action,
-    taskId: entry.taskId,
+    workSessionId: entry.workSessionId,
     permissionProfile: entry.permissionProfile,
     truncated: true,
     originalBytes
@@ -142,7 +143,7 @@ export async function audit(action, payload = {}, options = {}) {
     const system = {
       time: now(),
       action: redactSensitiveString(action).slice(0, 200),
-      taskId: options.taskId ?? config.task?.currentTaskId ?? null,
+      workSessionId: options.workSessionId ?? requestWorkSessionId(),
       permissionProfile: permissionProfile(config)
     };
     const line = boundedAuditLine({ ...(safe && typeof safe === 'object' && !Array.isArray(safe) ? safe : { detail: safe }), ...system });
@@ -150,6 +151,16 @@ export async function audit(action, payload = {}, options = {}) {
     try { await fsp.chmod(AUDIT_LOG, 0o600); } catch {}
   } catch {}
 }
+
+export async function readAuditEntries(limit = 1000) {
+  let lines = [];
+  try { lines = (await fsp.readFile(AUDIT_LOG, 'utf8')).trim().split(/\r?\n/).filter(Boolean); } catch {}
+  return lines.slice(-Math.max(1, Number(limit) || 1000)).map(line => {
+    try { return redactSensitiveValue(JSON.parse(line)); }
+    catch { return { raw: redactSensitiveString(line) }; }
+  });
+}
+
 export function toolText(payload) {
   return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }], structuredContent: payload };
 }
