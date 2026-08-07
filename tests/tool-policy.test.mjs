@@ -44,6 +44,27 @@ test('classifies mature Godot tools by actual side effect', () => {
   assert.equal(requiredCapabilityForTool('obsidian_properties_batch_apply', { destructiveHint: true }), 'write');
 });
 
+test('fails closed when a new tool has no explicit capability or side-effect annotation', () => {
+  assert.equal(requiredCapabilityForTool('future_tool', {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false
+  }), 'admin');
+  const registration = validateToolRegistration('future_tool', {
+    title: 'Future tool',
+    description: 'An intentionally unclassified tool.',
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false
+    }
+  });
+  assert.equal(registration.ok, false);
+  assert.match(registration.errors.join('\n'), /no explicit capability policy/);
+});
 
 test('classifies every workspace-controlled command entry as execute', () => {
   for (const name of [
