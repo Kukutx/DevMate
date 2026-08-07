@@ -2,7 +2,8 @@
 
 const fs = require('node:fs');
 const defaultChildProcess = require('node:child_process');
-const { readJson } = require('../shared/config-store.cjs');
+const { ensurePersonalConfig, readJson } = require('../shared/config-store.cjs');
+const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { VscodeContextMirror } = require('./context-mirror.js');
 const { installGatewayWorkerRouter } = require('./gateway-spawn-router.js');
@@ -68,6 +69,15 @@ class VscodeHostLifecycle {
 
     this.runtimeContext = createRuntimeContext(this.vscode, context);
     this.workspaceRootAtActivation = currentWorkspaceRoot(this.vscode);
+    if (this.workspaceRootAtActivation) {
+      ensurePersonalConfig({
+        configFile: runtimeConfigPath(this.runtimeContext),
+        workspaceRoot: this.workspaceRootAtActivation,
+        preferredPort: Number(setting(this.vscode, 'port', 8787)),
+        appVersion: context.extension?.packageJSON?.version || APP_VERSION
+      });
+    }
+
     this.output = this.vscode.window.createOutputChannel('DevMate Host');
     context.subscriptions.push(this.output);
     this.diagnostics = new VscodeRuntimeDiagnostics({
@@ -76,7 +86,7 @@ class VscodeHostLifecycle {
       runtimeContext: this.runtimeContext,
       output: this.output
     });
-    this.diagnostics.append(`Activating DevMate VS Code host ${context.extension?.packageJSON?.version || ''}.`);
+    this.diagnostics.append(`Activating DevMate VS Code host ${context.extension?.packageJSON?.version || APP_VERSION}.`);
 
     this.router = installGatewayWorkerRouter({
       childProcess: this.childProcessModule,
