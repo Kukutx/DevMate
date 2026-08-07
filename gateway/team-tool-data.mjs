@@ -74,11 +74,13 @@ function runnerSummary(config) {
 }
 
 function allowedPublicHost(config) {
-  if (config.deployment.mode !== 'production') return true;
+  const mode = config.deployment.mode;
+  if (mode === 'personal') return true;
   const allowed = new Set((config.production.allowedHosts || [])
     .map(value => String(value || '').trim().toLowerCase())
     .filter(Boolean));
-  if (!allowed.size || !config.deployment.publicUrl) return false;
+  if (!allowed.size) return mode !== 'production';
+  if (!config.deployment.publicUrl) return false;
   try {
     const url = new URL(config.deployment.publicUrl);
     return allowed.has(url.host.toLowerCase()) || allowed.has(url.hostname.toLowerCase());
@@ -131,6 +133,7 @@ export function readiness(config = readConfig()) {
   const runners = runnerSummary(config);
   const sharedDeployment = config.deployment.mode !== 'personal';
   const publicHostAllowed = allowedPublicHost(config);
+  const hostPolicyActive = config.deployment.mode === 'production' || config.production.allowedHosts.length > 0;
 
   add(
     'owner-token',
@@ -155,9 +158,9 @@ export function readiness(config = readConfig()) {
   );
   add(
     'allowed-hosts',
-    config.deployment.mode !== 'production' || publicHostAllowed,
-    config.deployment.mode !== 'production'
-      ? config.production.allowedHosts.join(', ') || 'not required'
+    !hostPolicyActive || publicHostAllowed,
+    !hostPolicyActive
+      ? 'not restricted'
       : publicHostAllowed
         ? config.production.allowedHosts.join(', ')
         : `public URL host is not allowed by: ${config.production.allowedHosts.join(', ') || 'no configured hosts'}`
