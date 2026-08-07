@@ -64,6 +64,12 @@ function stringList(value, label) {
   }).filter(Boolean))];
 }
 
+function scopedWorkspaceIds(value, label = 'workspaceIds') {
+  const ids = stringList(value, label);
+  if (!ids.length) throw new Error(`${label} must contain at least one explicit workspace ID`);
+  return ids;
+}
+
 export function normalizeDeploymentConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
 
@@ -80,7 +86,11 @@ export function normalizeDeploymentConfig(config) {
   else deployment.publicUrl = deployment.publicUrl.trim();
 
   const team = objectField(config, 'team');
-  team.enabled = mode !== 'personal';
+  const expectedTeamEnabled = mode !== 'personal';
+  if (team.enabled !== undefined && team.enabled !== expectedTeamEnabled) {
+    throw new Error(`team.enabled must be ${expectedTeamEnabled} when deployment mode is ${mode}`);
+  }
+  team.enabled = expectedTeamEnabled;
   team.members = defaultedArray(team.members, [], 'team.members');
   team.requireWorkspaceLeaseForWrites = defaultedBoolean(
     team.requireWorkspaceLeaseForWrites,
@@ -150,7 +160,7 @@ export function createTeamMember(config, input = {}) {
   if (config.team.members.length >= config.team.maxMembers) throw new Error(`Team member limit reached (${config.team.maxMembers})`);
   const role = defaultedEnum(input.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
   const id = uniqueMemberId(config, input.id || input.name);
-  const workspaceIds = stringList(input.workspaceIds, 'workspaceIds');
+  const workspaceIds = scopedWorkspaceIds(input.workspaceIds);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
   const timestamp = new Date().toISOString();
@@ -192,7 +202,7 @@ export function updateTeamMember(config, id, patch = {}) {
   if (!member) throw new Error(`Team member not found: ${id}`);
   if (patch.name !== undefined) member.name = String(patch.name || '').trim().slice(0, 200) || member.id;
   if (patch.role !== undefined) member.role = defaultedEnum(patch.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
-  if (patch.workspaceIds !== undefined) member.workspaceIds = stringList(patch.workspaceIds, 'workspaceIds');
+  if (patch.workspaceIds !== undefined) member.workspaceIds = scopedWorkspaceIds(patch.workspaceIds);
   if (patch.expiresAt !== undefined) member.expiresAt = parseExpiry(patch.expiresAt);
   if (patch.disabled !== undefined) member.disabled = defaultedBoolean(patch.disabled, false, 'disabled');
   member.updatedAt = new Date().toISOString();
@@ -233,6 +243,8 @@ export function verifyAccessToken(token, config, { updateLastUsed = false } = {}
   if (!member || member.disabled || !member.salt || !member.tokenHash) return null;
   if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
   if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) return null;
+  const workspaceIds = Array.isArray(member.workspaceIds) ? member.workspaceIds.filter(id => typeof id === 'string' && id.trim()) : [];
+  if (!workspaceIds.length) return null;
   const candidate = hashSecret(parsed.secret, member.salt);
   if (!timingSafeEqualText(candidate, member.tokenHash)) return null;
   if (updateLastUsed) member.lastUsedAt = new Date().toISOString();
@@ -240,7 +252,7 @@ export function verifyAccessToken(token, config, { updateLastUsed = false } = {}
     id: member.id,
     name: member.name,
     role: member.role,
-    workspaceIds: Array.isArray(member.workspaceIds) ? [...member.workspaceIds] : [],
+    workspaceIds: [...new Set(workspaceIds.map(id => id.trim()))],
     source: 'team-token',
     tokenVersion: member.tokenVersion || 1
   };
@@ -299,7 +311,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
     throw new Error(`Role ${effectivePrincipal.role} cannot use ${name}; required capability: ${capability}`);
   }
   const workspaceId = toolWorkspaceId(name, args, config);
-  if (workspaceId && effectivePrincipal.workspaceIds?.length && !effectivePrincipal.workspaceIds.includes(workspaceId)) {
+  if (workspaceId && effectivePrincipal.source === 'team-token' && !effectivePrincipal.workspaceIds.includes(workspaceId)) {
     throw new Error(`Principal ${effectivePrincipal.id} is not allowed to access workspace ${workspaceId}`);
   }
   return { principal: effectivePrincipal, capability, workspaceId };
@@ -311,6 +323,7 @@ export const __test = {
   hashSecret,
   parseTeamToken,
   requiredCapabilityForTool,
+  scopedWorkspaceIds,
   timingSafeEqualText,
   toolWorkspaceId
 };
