@@ -50,10 +50,11 @@ test('VS Code HTTP calls use the bounded client', () => {
 });
 
 test('VSIX smoke contract includes the provider-native tunnel runtime', () => {
-  const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-worker.mjs'), 'utf8');
+  const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-runtime.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
   assert.doesNotMatch(smoke, /extension-entry-host\.js/);
   assert.match(smoke, /vscode-host\/bounded-http-client\.js/);
+  assert.match(smoke, /launchMode, 'child_process'/);
 
   const controller = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
   assert.match(controller, /class TunnelController/);
@@ -63,6 +64,7 @@ test('VSIX smoke contract includes the provider-native tunnel runtime', () => {
 
 test('Windows and Linux CI execute tunnel runtime validation', () => {
   const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-  assert.match(workflow, /Discovered unit and policy tests/);
-  assert.match(workflow, /Linux discovered unit and policy tests/);
+  assert.match(workflow, /Smoke test packaged VSIX runtime/);
+  assert.match(workflow, /Linux packaged VSIX runtime smoke test/);
+  assert.match(workflow, /packaged VSIX shared tunnel/);
 });
