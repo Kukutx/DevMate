@@ -51,9 +51,9 @@ class FakeChild extends EventEmitter {
 
   kill(signal = 'SIGTERM') {
     this.killed = true;
-    this.signalCode = signal;
-    if (this.stubborn || this.exitCode != null) return true;
+    if (this.stubborn || this.exitCode != null || this.signalCode != null) return true;
     this.exitCode = 0;
+    this.signalCode = signal;
     queueMicrotask(() => {
       this.emit('exit', 0, signal);
       this.emit('close', 0, signal);
