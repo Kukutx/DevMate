@@ -1,7 +1,7 @@
 'use strict';
 
-const http = require('node:http');
 const https = require('node:https');
+const runtimeIo = require('./runtime-io.js');
 
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MIN_MAX_RESPONSE_BYTES = 1024;
@@ -16,13 +16,20 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Math.trunc(numeric)));
 }
 
+function defaultTransports() {
+  return {
+    http: { request: (...args) => runtimeIo.httpRequest(...args) },
+    https
+  };
+}
+
 function requestRaw(
   url,
   options = {},
   body = null,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxBytes = DEFAULT_MAX_RESPONSE_BYTES,
-  transports = { http, https }
+  transports = null
 ) {
   return new Promise(resolve => {
     let target;
@@ -40,7 +47,8 @@ function requestRaw(
       MIN_MAX_RESPONSE_BYTES,
       MAX_MAX_RESPONSE_BYTES
     );
-    const transport = target.protocol === 'https:' ? transports.https : transports.http;
+    const effectiveTransports = transports || defaultTransports();
+    const transport = target.protocol === 'https:' ? effectiveTransports.https : effectiveTransports.http;
     if (!transport?.request || !['http:', 'https:'].includes(target.protocol)) {
       resolve({ ok: false, error: `unsupported protocol: ${target.protocol || '(missing)'}` });
       return;
@@ -143,5 +151,6 @@ module.exports = {
   MIN_MAX_RESPONSE_BYTES,
   MIN_TIMEOUT_MS,
   boundedInteger,
+  defaultTransports,
   requestRaw
 };
