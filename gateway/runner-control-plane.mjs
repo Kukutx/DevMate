@@ -27,7 +27,6 @@ import {
   touchRunnerCredential,
   verifyRunnerToken
 } from './runner-access.mjs';
-import { defaultedInteger } from './strict-config.mjs';
 
 const INSTALLED = Symbol.for('devmate.runnerControlPlaneInstalled');
 const rateWindows = new Map();
@@ -45,6 +44,14 @@ function requestError(message, code = 'invalid_runner_request') {
   error.status = 400;
   error.code = code;
   return error;
+}
+
+function requestInteger(value, fallback, min, max, label) {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw requestError(`${label} must be an integer from ${min} to ${max}`);
+  }
+  return value;
 }
 
 function requestUrl(req) {
@@ -177,13 +184,7 @@ function runnerRegistration(principal, body) {
     throw requestError('runner.capabilities must explicitly include core and external');
   }
   const workspaceIds = scopedSubset(body.workspaceIds, principal.workspaceIds, 'runner.workspaceIds');
-  const maxConcurrent = defaultedInteger(
-    body.maxConcurrent,
-    principal.maxConcurrent,
-    1,
-    principal.maxConcurrent,
-    'runner.maxConcurrent'
-  );
+  const maxConcurrent = requestInteger(body.maxConcurrent, principal.maxConcurrent, 1, principal.maxConcurrent, 'runner.maxConcurrent');
   return {
     id: principal.id,
     name: principal.name,
@@ -349,7 +350,8 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
   }
 
   if (pathName === `${PREFIX}/jobs/claim`) {
-    const claimed = claimExternalJob({ runnerId: principal.id, leaseSeconds: body.leaseSeconds });
+    const leaseSeconds = requestInteger(body.leaseSeconds, 60, 15, 300, 'leaseSeconds');
+    const claimed = claimExternalJob({ runnerId: principal.id, leaseSeconds });
     const job = claimed?.job || null;
     if (!job) return json(res, 200, { runner, job: null }, requestId);
     try {
@@ -398,11 +400,8 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
   validateRunnerClaim(proof);
 
   if (action === 'renew') {
-    const renewed = renewJobLease({
-      id,
-      runnerId: principal.id,
-      leaseSeconds: body.leaseSeconds
-    });
+    const leaseSeconds = requestInteger(body.leaseSeconds, 60, 15, 300, 'leaseSeconds');
+    const renewed = renewJobLease({ id, runnerId: principal.id, leaseSeconds });
     if (!renewed) {
       revokeRunnerClaim(id);
       return json(res, 409, {
@@ -562,6 +561,7 @@ export const __test = {
   hostAllowed,
   rateWindows,
   requestError,
+  requestInteger,
   runnerLabels,
   runnerRegistration,
   sanitizeArtifacts,
