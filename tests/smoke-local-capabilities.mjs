@@ -13,7 +13,7 @@ const configPath = path.join(tempRoot, 'config.json');
 const gatewayScript = path.join(root, 'gateway', 'server.bundle.mjs');
 
 fs.writeFileSync(configPath, JSON.stringify({
-  version: 9,
+  version: 11,
   appVersion: '3.3.0',
   instanceId: `local-smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
