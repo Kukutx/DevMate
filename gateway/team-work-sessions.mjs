@@ -83,10 +83,21 @@ export function finishWorkSession({ id, principal, force = false, releaseLease =
   }
   const canForce = principal?.role === 'owner' || principal?.role === 'maintainer';
   if (session.principalId !== principal?.id && !(force && canForce)) throw new Error(`Work session ${id} belongs to ${session.principalName || session.principalId}`);
+
+  let lease = null;
+  if (releaseLease) {
+    const currentLease = workspaceLease(session.workspaceId);
+    if (!currentLease) {
+      lease = { released: false, workspaceId: session.workspaceId, reason: 'not leased' };
+    } else if (currentLease.id !== session.leaseId || currentLease.principalId !== session.principalId) {
+      lease = { released: false, workspaceId: session.workspaceId, reason: 'lease changed since session started' };
+    } else {
+      lease = releaseWorkspaceLease({ workspaceId: session.workspaceId, principal, force: force && canForce });
+    }
+  }
+
   sessions.delete(id);
   persist();
-  let lease = null;
-  if (releaseLease) lease = releaseWorkspaceLease({ workspaceId: session.workspaceId, principal, force: force && canForce });
   return { finished: true, session: { ...session, finishedAt: nowIso() }, lease };
 }
 
