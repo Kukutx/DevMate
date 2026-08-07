@@ -41,6 +41,32 @@ test('stores only a hash and accepts the active claim proof', () => {
   assert.equal(stored.generations['job-1'].generation, 1);
 });
 
+test('requires claim generation and token from the first claim onward', () => {
+  const issued = claims.issueRunnerClaim({
+    jobId: 'job-proof',
+    runnerId: 'runner-a',
+    leaseExpiresAt: new Date(Date.now() + 60000).toISOString()
+  });
+  assert.throws(() => claims.validateRunnerClaim({
+    jobId: 'job-proof',
+    runnerId: 'runner-a'
+  }), error => {
+    assert.equal(error.code, 'claim_fence_proof_required');
+    return true;
+  });
+  assert.throws(() => claims.validateRunnerClaim({
+    jobId: 'job-proof',
+    runnerId: 'runner-a',
+    generation: issued.generation
+  }), /proof is required/);
+  assert.throws(() => claims.validateRunnerClaim({
+    jobId: 'job-proof',
+    runnerId: 'runner-a',
+    generation: issued.generation,
+    token: 'wrong'
+  }), /token is invalid/);
+});
+
 test('rejects a stale proof after the same job is reissued', () => {
   const first = claims.issueRunnerClaim({
     jobId: 'job-replayed',
@@ -63,40 +89,12 @@ test('rejects a stale proof after the same job is reissued', () => {
     assert.match(error.message, /stale/);
     return true;
   });
-  assert.throws(() => claims.validateRunnerClaim({
-    jobId: 'job-replayed',
-    runnerId: 'runner-a',
-    allowLegacyFirst: true
-  }), /stale/);
   assert.equal(claims.validateRunnerClaim({
     jobId: 'job-replayed',
     runnerId: 'runner-a',
     generation: second.generation,
     token: second.token
   }).generation, 2);
-});
-
-test('allows legacy proof omission only for the first claim generation', () => {
-  claims.issueRunnerClaim({
-    jobId: 'job-legacy',
-    runnerId: 'runner-a',
-    leaseExpiresAt: new Date(Date.now() + 60000).toISOString()
-  });
-  assert.equal(claims.validateRunnerClaim({
-    jobId: 'job-legacy',
-    runnerId: 'runner-a',
-    allowLegacyFirst: true
-  }).generation, 1);
-  claims.issueRunnerClaim({
-    jobId: 'job-legacy',
-    runnerId: 'runner-a',
-    leaseExpiresAt: new Date(Date.now() + 60000).toISOString()
-  });
-  assert.throws(() => claims.validateRunnerClaim({
-    jobId: 'job-legacy',
-    runnerId: 'runner-a',
-    allowLegacyFirst: true
-  }), /stale/);
 });
 
 test('retains the generation watermark after a claim is consumed', () => {
@@ -120,7 +118,8 @@ test('retains the generation watermark after a claim is consumed', () => {
   assert.throws(() => claims.validateRunnerClaim({
     jobId: 'job-consumed',
     runnerId: 'runner-a',
-    allowLegacyFirst: true
+    generation: first.generation,
+    token: first.token
   }), /stale/);
 });
 
@@ -149,6 +148,14 @@ test('renews and consumes a claim without exposing its token in status', () => {
   });
   assert.equal(claims.runnerClaimStatus().active.length, 0);
   assert.equal(claims.runnerClaimStatus().retainedGenerations, 1);
+});
+
+test('rejects non-future claim leases', () => {
+  assert.throws(() => claims.issueRunnerClaim({
+    jobId: 'job-expired',
+    runnerId: 'runner-a',
+    leaseExpiresAt: new Date(Date.now() - 1000).toISOString()
+  }), /future leaseExpiresAt/);
 });
 
 test.after(async () => fsp.rm(root, { recursive: true, force: true }));
