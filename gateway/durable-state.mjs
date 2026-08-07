@@ -34,9 +34,11 @@ function emptyDocument() {
 }
 
 function unsupportedVersion(version) {
-  const error = new Error(`DevMate durable state version ${version} is newer than supported version ${DOCUMENT_VERSION}; start a compatible DevMate version instead of overwriting it`);
+  const label = version == null ? 'missing' : String(version);
+  const error = new Error(`DevMate durable state version ${label} is unsupported; version ${DOCUMENT_VERSION} is required and incompatible state will not be overwritten`);
   error.code = 'unsupported_state_version';
   error.stateVersion = version;
+  error.supportedVersion = DOCUMENT_VERSION;
   return error;
 }
 
@@ -44,24 +46,32 @@ function invalidVersion(version) {
   const error = new Error(`DevMate durable state has an invalid version: ${String(version)}`);
   error.code = 'invalid_state_version';
   error.stateVersion = version;
+  error.supportedVersion = DOCUMENT_VERSION;
+  return error;
+}
+
+function invalidDocument(message) {
+  const error = new Error(`DevMate durable state is invalid: ${message}`);
+  error.code = 'invalid_state_document';
   return error;
 }
 
 function normalizeDocument(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyDocument();
-  if (Object.hasOwn(value, 'version')) {
-    if (typeof value.version !== 'number' || !Number.isInteger(value.version) || value.version < 1) {
-      throw invalidVersion(value.version);
-    }
-    if (value.version > DOCUMENT_VERSION) throw unsupportedVersion(value.version);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalidDocument('root must be a JSON object');
   }
-  const namespaces = value.namespaces && typeof value.namespaces === 'object' && !Array.isArray(value.namespaces)
-    ? value.namespaces
-    : {};
+  if (!Object.hasOwn(value, 'version')) throw unsupportedVersion(null);
+  if (typeof value.version !== 'number' || !Number.isInteger(value.version) || value.version < 1) {
+    throw invalidVersion(value.version);
+  }
+  if (value.version !== DOCUMENT_VERSION) throw unsupportedVersion(value.version);
+  if (!value.namespaces || typeof value.namespaces !== 'object' || Array.isArray(value.namespaces)) {
+    throw invalidDocument('namespaces must be a JSON object');
+  }
   return {
     version: DOCUMENT_VERSION,
     updatedAt: value.updatedAt || null,
-    namespaces
+    namespaces: value.namespaces
   };
 }
 
@@ -99,25 +109,33 @@ function replacementCandidates() {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-function validDurableFile(file) {
+function durableFileCompatibility(file) {
   try {
     const stat = fs.statSync(file, { throwIfNoEntry: false });
-    if (!stat?.isFile() || stat.size > MAX_DURABLE_STATE_BYTES) return false;
+    if (!stat?.isFile() || stat.size > MAX_DURABLE_STATE_BYTES) return 'invalid';
     normalizeDocument(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')));
-    return true;
+    return 'current';
   } catch (error) {
-    return error?.code === 'unsupported_state_version';
+    return error?.code === 'unsupported_state_version' ? 'unsupported' : 'invalid';
   }
+}
+
+function validDurableFile(file) {
+  return durableFileCompatibility(file) === 'current';
 }
 
 export function recoverDurableStateReplacement() {
   if (!RUNTIME_STATE_PATH || !STATE_ROOT || !fs.existsSync(STATE_ROOT)) return null;
   const candidates = replacementCandidates();
-  if (fs.existsSync(RUNTIME_STATE_PATH) && validDurableFile(RUNTIME_STATE_PATH)) {
-    for (const candidate of candidates) {
-      try { fs.rmSync(candidate.file, { force: true }); } catch {}
+  if (fs.existsSync(RUNTIME_STATE_PATH)) {
+    const compatibility = durableFileCompatibility(RUNTIME_STATE_PATH);
+    if (compatibility === 'current') {
+      for (const candidate of candidates) {
+        try { fs.rmSync(candidate.file, { force: true }); } catch {}
+      }
+      return null;
     }
-    return null;
+    if (compatibility === 'unsupported') return null;
   }
   const candidate = candidates.find(item => validDurableFile(item.file));
   if (!candidate) return null;
@@ -128,7 +146,8 @@ export function recoverDurableStateReplacement() {
   fs.renameSync(candidate.file, RUNTIME_STATE_PATH);
   try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
   fsyncDirectory(STATE_ROOT);
-  for (const stale of candidates.slice(1)) {
+  for (const stale of candidates) {
+    if (stale.file === candidate.file) continue;
     try { fs.rmSync(stale.file, { force: true }); } catch {}
   }
   return candidate.file;
@@ -500,10 +519,12 @@ export function resetDurableStateForTests() {
 
 export const __test = {
   atomicWrite,
+  durableFileCompatibility,
   emptyDocument,
   validDurableFile,
   fsyncDirectory,
   gatewayInstanceLockStale,
+  invalidDocument,
   invalidVersion,
   lockActivityMs,
   normalizeDocument,

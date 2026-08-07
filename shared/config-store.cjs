@@ -51,7 +51,17 @@ function parseJsonObjectFile(file) {
 }
 
 function assertSupportedConfigVersion(config, file) {
-  if (!config || typeof config !== 'object' || Array.isArray(config) || !Object.hasOwn(config, 'version')) return config;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
+  if (!Object.hasOwn(config, 'version')) {
+    const error = configError(
+      `DevMate config has no schema version; version ${SUPPORTED_CONFIG_VERSION} is required`,
+      'unsupported_config_version',
+      file
+    );
+    error.configVersion = null;
+    error.supportedVersion = SUPPORTED_CONFIG_VERSION;
+    throw error;
+  }
   const version = config.version;
   if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
     const error = configError(`DevMate config has an invalid version ${String(version)}`, 'invalid_config_version', file);
@@ -59,9 +69,9 @@ function assertSupportedConfigVersion(config, file) {
     error.supportedVersion = SUPPORTED_CONFIG_VERSION;
     throw error;
   }
-  if (version > SUPPORTED_CONFIG_VERSION) {
+  if (version !== SUPPORTED_CONFIG_VERSION) {
     const error = configError(
-      `DevMate config version ${version} is newer than supported version ${SUPPORTED_CONFIG_VERSION}`,
+      `DevMate config version ${version} is not supported; version ${SUPPORTED_CONFIG_VERSION} is required`,
       'unsupported_config_version',
       file
     );
@@ -433,7 +443,6 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   return updateConfig(file, current => {
     if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: preferredPort, appVersion });
     const config = current;
-    config.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(config.version) || 0);
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     config.hostRuntime ||= {};

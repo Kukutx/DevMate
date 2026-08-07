@@ -7,7 +7,7 @@ import test from 'node:test';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-durable-state-'));
 const configPath = path.join(temp, 'config.json');
-await fsp.writeFile(configPath, JSON.stringify({ instanceId: 'durable-test', permissions: { profile: 'fullAccess' } }), 'utf8');
+await fsp.writeFile(configPath, JSON.stringify({ version: 11, instanceId: 'durable-test', permissions: { profile: 'fullAccess' } }), 'utf8');
 process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_RUNTIME_OWNER_ID = 'durable-owner';
 process.env.DEVMATE_RUNTIME_PARENT_PID = String(process.pid);
@@ -27,15 +27,38 @@ test('persists namespaced runtime state atomically', () => {
   assert.ok(status.bytes > 0);
 });
 
-test('accepts versionless legacy state but rejects explicit invalid versions', () => {
-  assert.deepEqual(durable.__test.normalizeDocument({ namespaces: { legacy: { ok: true } } }), {
+test('accepts only the current durable state schema version', () => {
+  assert.deepEqual(durable.__test.normalizeDocument({
     version: durable.DOCUMENT_VERSION,
     updatedAt: null,
-    namespaces: { legacy: { ok: true } }
+    namespaces: { current: { ok: true } }
+  }), {
+    version: durable.DOCUMENT_VERSION,
+    updatedAt: null,
+    namespaces: { current: { ok: true } }
+  });
+
+  assert.throws(() => durable.__test.normalizeDocument({ namespaces: {} }), error => {
+    assert.equal(error.code, 'unsupported_state_version');
+    assert.equal(error.stateVersion, null);
+    return true;
+  });
+  assert.throws(() => durable.__test.normalizeDocument({ version: durable.DOCUMENT_VERSION + 1, namespaces: {} }), error => {
+    assert.equal(error.code, 'unsupported_state_version');
+    return true;
   });
   for (const version of [null, '1', 0, -1, 1.5, Number.NaN]) {
     assert.throws(() => durable.__test.normalizeDocument({ version, namespaces: {} }), error => {
       assert.equal(error.code, 'invalid_state_version');
+      return true;
+    });
+  }
+});
+
+test('rejects malformed durable document structure instead of silently dropping state', () => {
+  for (const value of [null, [], 'state', { version: durable.DOCUMENT_VERSION }, { version: durable.DOCUMENT_VERSION, namespaces: [] }]) {
+    assert.throws(() => durable.__test.normalizeDocument(value), error => {
+      assert.equal(error.code, 'invalid_state_document');
       return true;
     });
   }
@@ -129,23 +152,43 @@ test('recovers a previous durable document after an interrupted Windows-style re
   assert.equal(fs.existsSync(replacement), false);
 });
 
-test('refuses to quarantine or overwrite state from a newer DevMate version', () => {
-  const future = {
+test('unsupported durable state is refused without quarantine or overwrite', () => {
+  const directory = path.dirname(durable.RUNTIME_STATE_PATH);
+  fs.mkdirSync(directory, { recursive: true });
+  for (const state of [
+    { updatedAt: null, namespaces: { versionless: { protected: true } } },
+    { version: durable.DOCUMENT_VERSION + 1, updatedAt: null, namespaces: { future: { protected: true } } }
+  ]) {
+    const original = `${JSON.stringify(state, null, 2)}\n`;
+    fs.writeFileSync(durable.RUNTIME_STATE_PATH, original, 'utf8');
+    durable.resetDurableStateForTests();
+    assert.throws(() => durable.readDurableNamespace('protected', null), error => {
+      assert.equal(error.code, 'unsupported_state_version');
+      return true;
+    });
+    assert.equal(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8'), original);
+    const entries = fs.readdirSync(directory);
+    assert.equal(entries.some(name => name.startsWith(`${path.basename(durable.RUNTIME_STATE_PATH)}.corrupt-`)), false);
+  }
+});
+
+test('unsupported replacement candidates are preserved but never promoted', () => {
+  const replacement = `${durable.RUNTIME_STATE_PATH}.replace-future-1`;
+  const corrupt = '{broken-json';
+  const future = `${JSON.stringify({
     version: durable.DOCUMENT_VERSION + 1,
-    updatedAt: new Date().toISOString(),
+    updatedAt: null,
     namespaces: { future: { protected: true } }
-  };
+  }, null, 2)}\n`;
   fs.mkdirSync(path.dirname(durable.RUNTIME_STATE_PATH), { recursive: true });
-  fs.writeFileSync(durable.RUNTIME_STATE_PATH, `${JSON.stringify(future, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(durable.RUNTIME_STATE_PATH, corrupt, 'utf8');
+  fs.writeFileSync(replacement, future, 'utf8');
   durable.resetDurableStateForTests();
-  assert.throws(() => durable.readDurableNamespace('future', null), error => {
-    assert.equal(error.code, 'unsupported_state_version');
-    assert.match(error.message, /newer than supported/);
-    return true;
-  });
-  assert.deepEqual(JSON.parse(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8')), future);
-  const entries = fs.readdirSync(path.dirname(durable.RUNTIME_STATE_PATH));
-  assert.equal(entries.some(name => name.includes('.corrupt-')), false);
+  assert.equal(durable.recoverDurableStateReplacement(), null);
+  assert.equal(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8'), corrupt);
+  assert.equal(fs.readFileSync(replacement, 'utf8'), future);
+  fs.rmSync(durable.RUNTIME_STATE_PATH, { force: true });
+  fs.rmSync(replacement, { force: true });
 });
 
 test.after(async () => {
