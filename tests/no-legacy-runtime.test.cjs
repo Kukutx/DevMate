@@ -48,6 +48,27 @@ test('host runtime cannot fall back to retired host or per-extension modes', () 
   assert.doesNotMatch(source('package.json'), /vscodeHostEnabled|sharedRuntimeEnabled/);
 });
 
+test('desktop hosts expose one isolated child-process Gateway runtime only', () => {
+  for (const retired of [
+    'host/runtime/worker-process.js',
+    'vscode-host/gateway-spawn-router.js',
+    'obsidian-plugin/src/worker-spawn.js',
+    'scripts/smoke-vsix-worker.mjs',
+    'scripts/smoke-obsidian-worker.mjs',
+    'tests/worker-process.test.cjs',
+    'tests/vscode-gateway-spawn-router.test.cjs',
+    'tests/vscode-router-dispose-race.test.cjs',
+    'tests/obsidian-worker-runtime.test.cjs'
+  ]) {
+    assert.equal(fs.existsSync(path.join(root, retired)), false, retired);
+  }
+  assert.doesNotMatch(source('vscode-host/lifecycle.js'), /gateway-spawn-router|installGatewayWorkerRouter|createWorkerSpawn/);
+  assert.doesNotMatch(source('obsidian-plugin/src/main.js'), /worker-spawn|createWorkerSpawn|new Worker\s*\(/);
+  assert.match(source('vscode-host/runtime-diagnostics.js'), /child_process/);
+  assert.match(source('obsidian-plugin/src/main.js'), /resolveNodeRuntime/);
+  assert.match(source('host/runtime/process-controller.js'), /spawnImpl = spawn/);
+});
+
 test('Gateway modules require the current DEVMATE_CONFIG contract', () => {
   assert.doesNotMatch(source('gateway/local-shared.mjs'), /AIWG_CONFIG/);
   assert.doesNotMatch(source('gateway/server.mjs'), /AIWG_CONFIG/);
