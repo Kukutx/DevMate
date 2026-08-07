@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { getPreview } from './plugins/preview-manager.mjs';
+import { defaultedInteger } from './strict-config.mjs';
 
 export const MAX_PREVIEW_SHARES = 1000;
 export const MAX_PREVIEW_SESSIONS = 10000;
@@ -20,6 +21,19 @@ function capacityError(message) {
 
 function tokenHash(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('base64url');
+}
+
+function normalizeShareOrigin(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('A stable deployment publicUrl is required to publish previews');
+  const url = new URL(value.trim());
+  const local = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) {
+    throw new Error('Published preview publicUrl must use HTTPS; HTTP is allowed only for loopback');
+  }
+  if (url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== '/')) {
+    throw new Error('Published preview publicUrl must be a clean origin without credentials, path, query, or fragment');
+  }
+  return `${url.protocol}//${url.host}`;
 }
 
 function parseCookies(req) {
@@ -59,10 +73,10 @@ export function createPreviewShare({ previewId, principal, publicUrl, ttlSeconds
   if (shares.size >= MAX_PREVIEW_SHARES) {
     throw capacityError(`Published preview share limit reached (${MAX_PREVIEW_SHARES})`);
   }
+  const origin = normalizeShareOrigin(publicUrl);
   const preview = getPreview(previewId);
-  const origin = String(publicUrl || '').replace(/\/$/, '');
-  if (!origin) throw new Error('A stable deployment publicUrl is required to publish previews');
-  const ttl = Math.min(86400, Math.max(60, Math.trunc(Number(ttlSeconds) || 3600)));
+  const ttl = defaultedInteger(ttlSeconds, 3600, 60, 86400, 'published preview ttlSeconds');
+  const allowedUses = defaultedInteger(maxUses, 0, 0, 100000, 'published preview maxUses');
   const secret = crypto.randomBytes(32).toString('base64url');
   const id = crypto.randomBytes(6).toString('hex');
   const token = `dmps_${id}_${secret}`;
@@ -74,7 +88,7 @@ export function createPreviewShare({ previewId, principal, publicUrl, ttlSeconds
     createdByName: principal?.name || principal?.id || 'unknown',
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
-    maxUses: Math.min(100000, Math.max(0, Math.trunc(Number(maxUses) || 0))),
+    maxUses: allowedUses,
     uses: 0,
     revoked: false
   };
@@ -278,6 +292,7 @@ export const __test = {
   PREFIX,
   capacityError,
   createBrowserSession,
+  normalizeShareOrigin,
   parseCookies,
   pruneShares,
   sessions,
