@@ -1,12 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
-const defaultChildProcess = require('node:child_process');
 const { ensurePersonalConfig, readJson } = require('../shared/config-store.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { VscodeContextMirror } = require('./context-mirror.js');
-const { installGatewayWorkerRouter } = require('./gateway-spawn-router.js');
 const { VscodeRuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const {
   createRuntimeContext,
@@ -21,15 +19,13 @@ const RELOAD_SETTINGS = [
 ];
 
 class VscodeHostLifecycle {
-  constructor({ vscode, platformExtension = null, childProcessModule = defaultChildProcess }) {
+  constructor({ vscode, platformExtension = null }) {
     this.vscode = vscode;
     this.platformExtension = platformExtension || require('../extension-entry-platform.js');
-    this.childProcessModule = childProcessModule;
     this.context = null;
     this.runtimeContext = null;
     this.output = null;
     this.diagnostics = null;
-    this.router = null;
     this.mirror = null;
     this.startupTimer = null;
     this.active = false;
@@ -87,12 +83,6 @@ class VscodeHostLifecycle {
     });
     this.diagnostics.append(`Activating DevMate VS Code host ${context.extension?.packageJSON?.version || APP_VERSION}.`);
 
-    this.router = installGatewayWorkerRouter({
-      childProcess: this.childProcessModule,
-      extensionPath: context.extensionPath,
-      diagnostics: this.diagnostics
-    });
-
     context.subscriptions.push(this.vscode.commands.registerCommand('devMate.copyHostDiagnostics', () =>
       this.copyDiagnostics()
     ));
@@ -148,7 +138,7 @@ class VscodeHostLifecycle {
 
   runSelfCheck(showMessage = false) {
     if (!this.diagnostics) return { ok: false, checks: [] };
-    const result = this.diagnostics.selfCheck({ router: this.router });
+    const result = this.diagnostics.selfCheck();
     if (showMessage) {
       const failed = result.checks.filter(check => !check.ok).map(check => check.id);
       const message = result.ok
@@ -196,7 +186,7 @@ class VscodeHostLifecycle {
     if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before Gateway start'), {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
-    this.diagnostics?.append('Starting DevMate Gateway automatically through the embedded Worker router.');
+    this.diagnostics?.append('Starting DevMate Gateway automatically as an isolated child process.');
     const commandResult = await this.vscode.commands.executeCommand('devMate.start');
     if (commandResult?.ok === false) {
       const error = new Error(commandResult.error || 'DevMate start command reported failure');
@@ -224,7 +214,6 @@ class VscodeHostLifecycle {
   async copyDiagnostics() {
     if (!this.diagnostics) return '';
     const report = await this.diagnostics.copy({
-      router: this.router,
       startupMode: this.startupMode(),
       enabled: this.enabled()
     });
@@ -254,10 +243,6 @@ class VscodeHostLifecycle {
       } finally {
         this.platformActivationAttempted = false;
         this.platformActivated = false;
-        try { await this.router?.dispose({ forceRestore: true }); } catch (error) {
-          this.diagnostics?.recordFailure(error, { phase: 'router-dispose' });
-        }
-        this.router = null;
         this.diagnostics?.append('DevMate VS Code host deactivated.');
         this.active = false;
         this.runtimeContext = null;
