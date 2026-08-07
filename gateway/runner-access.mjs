@@ -21,10 +21,19 @@ function cleanId(value, fallback = 'runner') {
   return normalized || fallback;
 }
 
-function clampInt(value, fallback, min, max) {
+function boundedInteger(value, fallback, min, max, label) {
+  if (value === undefined || value === null || value === '') return fallback;
   const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.min(max, Math.max(min, Math.trunc(number)));
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+  }
+  return number;
+}
+
+function booleanValue(value, fallback, label) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
+  return value;
 }
 
 function parseExpiry(value) {
@@ -35,7 +44,8 @@ function parseExpiry(value) {
 }
 
 function normalizeStrings(values, limit = 200) {
-  return [...new Set((Array.isArray(values) ? values : [])
+  if (!Array.isArray(values)) throw new TypeError('Expected an array of strings');
+  return [...new Set(values
     .map(value => String(value || '').trim())
     .filter(Boolean))].slice(0, limit);
 }
@@ -54,14 +64,18 @@ function uniqueCredentialId(config, requested = '') {
 }
 
 export function normalizeRunnerControlConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
   config.runnerControl ||= {};
   const control = config.runnerControl;
-  control.enabled = control.enabled === true;
+  if (typeof control !== 'object' || Array.isArray(control)) throw new TypeError('runnerControl must be an object');
+  control.enabled = booleanValue(control.enabled, false, 'runnerControl.enabled');
+  if (control.path !== undefined && control.path !== '/runner/v1') throw new Error('runnerControl.path must be /runner/v1');
   control.path = '/runner/v1';
-  control.maxRequestBytes = clampInt(control.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 16 * 1024 * 1024);
-  control.requestsPerMinute = clampInt(control.requestsPerMinute, 600, 30, 10000);
-  control.maxCredentials = clampInt(control.maxCredentials, 100, 1, 500);
-  if (!Array.isArray(control.credentials)) control.credentials = [];
+  control.maxRequestBytes = boundedInteger(control.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 16 * 1024 * 1024, 'runnerControl.maxRequestBytes');
+  control.requestsPerMinute = boundedInteger(control.requestsPerMinute, 600, 30, 10000, 'runnerControl.requestsPerMinute');
+  control.maxCredentials = boundedInteger(control.maxCredentials, 100, 1, 500, 'runnerControl.maxCredentials');
+  if (control.credentials === undefined) control.credentials = [];
+  if (!Array.isArray(control.credentials)) throw new TypeError('runnerControl.credentials must be an array');
   return config;
 }
 
@@ -71,13 +85,13 @@ export function runnerCredentialPublic(credential) {
     name: credential.name,
     capabilities: Array.isArray(credential.capabilities) ? [...credential.capabilities] : [],
     workspaceIds: Array.isArray(credential.workspaceIds) ? [...credential.workspaceIds] : [],
-    maxConcurrent: clampInt(credential.maxConcurrent, 1, 1, 16),
+    maxConcurrent: boundedInteger(credential.maxConcurrent, 1, 1, 16, 'runner credential maxConcurrent'),
     createdAt: credential.createdAt || null,
     updatedAt: credential.updatedAt || null,
     expiresAt: credential.expiresAt || null,
-    disabled: !!credential.disabled,
+    disabled: credential.disabled === true,
     lastUsedAt: credential.lastUsedAt || null,
-    tokenVersion: credential.tokenVersion || 1
+    tokenVersion: boundedInteger(credential.tokenVersion, 1, 1, Number.MAX_SAFE_INTEGER, 'runner credential tokenVersion')
   };
 }
 
@@ -86,18 +100,19 @@ export function createRunnerCredential(config, input = {}) {
   if (config.runnerControl.credentials.length >= config.runnerControl.maxCredentials) {
     throw new Error(`Runner credential limit reached (${config.runnerControl.maxCredentials})`);
   }
-  const workspaceIds = normalizeStrings(input.workspaceIds || [], 200);
+  const workspaceIds = normalizeStrings(input.workspaceIds ?? [], 200);
   if (!workspaceIds.length) throw new Error('External Runner credentials require at least one explicit workspaceId');
   const id = uniqueCredentialId(config, input.id || input.name);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
   const timestamp = new Date().toISOString();
+  const capabilities = normalizeStrings(input.capabilities ?? ['core', 'external'], 50).map(value => value.toLowerCase());
   const credential = {
     id,
     name: String(input.name || id).trim().slice(0, 200) || id,
-    capabilities: normalizeStrings(input.capabilities || ['core', 'external'], 50).map(value => value.toLowerCase()),
+    capabilities,
     workspaceIds,
-    maxConcurrent: clampInt(input.maxConcurrent, 1, 1, 16),
+    maxConcurrent: boundedInteger(input.maxConcurrent, 1, 1, 16, 'Runner maxConcurrent'),
     salt,
     tokenHash: hashSecret(secret, salt),
     tokenVersion: 1,
@@ -129,9 +144,9 @@ export function updateRunnerCredential(config, id, patch = {}) {
     if (!workspaceIds.length) throw new Error('External Runner credentials require at least one explicit workspaceId');
     credential.workspaceIds = workspaceIds;
   }
-  if (patch.maxConcurrent !== undefined) credential.maxConcurrent = clampInt(patch.maxConcurrent, credential.maxConcurrent || 1, 1, 16);
+  if (patch.maxConcurrent !== undefined) credential.maxConcurrent = boundedInteger(patch.maxConcurrent, 1, 1, 16, 'Runner maxConcurrent');
   if (patch.expiresAt !== undefined) credential.expiresAt = parseExpiry(patch.expiresAt);
-  if (patch.disabled !== undefined) credential.disabled = !!patch.disabled;
+  if (patch.disabled !== undefined) credential.disabled = booleanValue(patch.disabled, false, 'Runner disabled');
   credential.updatedAt = new Date().toISOString();
   return runnerCredentialPublic(credential);
 }
@@ -144,7 +159,7 @@ export function rotateRunnerCredentialToken(config, id) {
   const salt = base64url(crypto.randomBytes(16));
   credential.salt = salt;
   credential.tokenHash = hashSecret(secret, salt);
-  credential.tokenVersion = (credential.tokenVersion || 1) + 1;
+  credential.tokenVersion = boundedInteger(credential.tokenVersion, 1, 1, Number.MAX_SAFE_INTEGER - 1, 'runner credential tokenVersion') + 1;
   credential.updatedAt = new Date().toISOString();
   credential.disabled = false;
   return { credential: runnerCredentialPublic(credential), token: `dmr_${credential.id}_${secret}` };
@@ -174,16 +189,20 @@ export function verifyRunnerToken(token, config) {
   if (credential.expiresAt && Date.parse(credential.expiresAt) <= Date.now()) return null;
   const candidate = hashSecret(parsed.secret, credential.salt);
   if (!timingSafeEqualText(candidate, credential.tokenHash)) return null;
-  const workspaceIds = Array.isArray(credential.workspaceIds) ? [...credential.workspaceIds] : [];
+  const workspaceIds = normalizeStrings(credential.workspaceIds ?? [], 200);
   if (!workspaceIds.length) return null;
+  const capabilities = normalizeStrings(credential.capabilities ?? [], 50);
+  if (!capabilities.includes('core') || !capabilities.includes('external')) {
+    throw new Error(`Runner credential ${credential.id} is missing required core/external capabilities`);
+  }
   return {
     id: credential.id,
     name: credential.name || credential.id,
-    capabilities: Array.isArray(credential.capabilities) ? [...credential.capabilities] : ['core', 'external'],
+    capabilities,
     workspaceIds,
-    maxConcurrent: clampInt(credential.maxConcurrent, 1, 1, 16),
+    maxConcurrent: boundedInteger(credential.maxConcurrent, 1, 1, 16, 'Runner maxConcurrent'),
     source: 'runner-token',
-    tokenVersion: credential.tokenVersion || 1
+    tokenVersion: boundedInteger(credential.tokenVersion, 1, 1, Number.MAX_SAFE_INTEGER, 'runner credential tokenVersion')
   };
 }
 
@@ -197,4 +216,4 @@ export function touchRunnerCredential(config, id, at = new Date().toISOString())
   return true;
 }
 
-export const __test = { hashSecret, parseRunnerToken, timingSafeEqualText };
+export const __test = { boundedInteger, hashSecret, parseRunnerToken, timingSafeEqualText };
