@@ -247,6 +247,7 @@ export function registerJobTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, force = false }) => {
     const principal = principalNow();
+    ensureVisible(getJob(id), principal);
     const result = cancelJob({ id, principal, force });
     await audit('job_cancel', {
       principalId: principal.id,
