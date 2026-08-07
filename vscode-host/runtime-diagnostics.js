@@ -51,7 +51,8 @@ class VscodeRuntimeDiagnostics {
     add('node-runtime', !!process.versions.node, process.versions.node || 'missing');
     add('electron-runtime', !!process.versions.electron, process.versions.electron || 'not reported');
 
-    const ok = checks.every(check => check.ok || check.id === 'workspace' || check.id === 'config-file');
+    const informational = new Set(['workspace', 'config-file', 'electron-runtime']);
+    const ok = checks.every(check => check.ok || informational.has(check.id));
     this.append(`VS Code host self-check ${ok ? 'passed' : 'failed'}: ${checks.map(c => `${c.id}=${c.ok ? 'ok' : 'fail'}`).join(', ')}`,
       ok ? 'info' : 'error');
     return { ok, checks, gateway, stateDirectory, configFile };
