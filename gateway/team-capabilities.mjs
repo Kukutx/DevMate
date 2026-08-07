@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { audit, readConfig } from './local-shared.mjs';
-import { requestContext } from './request-context.mjs';
+import { requestContext, runWithWorkSessionContext } from './request-context.mjs';
 import { authorizeToolCall, normalizeDeploymentConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
-import { activeWorkSession, touchWorkSession } from './team-work-sessions.mjs';
+import { activeWorkSession, touchWorkSession } from './work-sessions.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { clearPreviewShares } from './published-previews.mjs';
 import { ensureToolApproval } from './approvals.mjs';
@@ -172,10 +172,15 @@ export function wrapAuthorizedTool(name, config, handler) {
       });
       if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
-      const result = filterResult(name, await handler(args, ...rest), authorized.principal);
+      const result = filterResult(
+        name,
+        await runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest)),
+        authorized.principal
+      );
       const session = authorized.workspaceId
         ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
         : null;
+      const workSessionId = session?.id || active?.id || null;
       incrementCounter('devmate_tool_calls_total', { ...labels, status: 'success' }, 1);
       observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
       await audit('team_tool_call', {
@@ -185,16 +190,16 @@ export function wrapAuthorizedTool(name, config, handler) {
         tool: name,
         capability: authorized.capability,
         workspace: authorized.workspaceId,
-        workSessionId: session?.id || active?.id || null,
         approvalId: approval?.request?.id || null,
         ok: true,
         durationMs: Date.now() - started
-      });
+      }, { workSessionId });
       return result;
     } catch (error) {
       const session = authorized.workspaceId
         ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
         : null;
+      const workSessionId = session?.id || active?.id || null;
       const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
       incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
       observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
@@ -206,12 +211,11 @@ export function wrapAuthorizedTool(name, config, handler) {
         tool: name,
         capability: authorized.capability,
         workspace: authorized.workspaceId,
-        workSessionId: session?.id || active?.id || null,
         approvalId: error?.approvalRequest?.id || null,
         ok: false,
         durationMs: Date.now() - started,
         error: String(error?.message || error).slice(0, 1000)
-      });
+      }, { workSessionId });
       throw error;
     }
   };
