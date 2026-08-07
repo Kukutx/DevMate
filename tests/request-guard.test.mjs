@@ -12,6 +12,7 @@ const access = await import('../gateway/team-access.mjs');
 const requestContextModule = await import('../gateway/request-context.mjs');
 const guard = await import('../gateway/request-guard.mjs');
 const config = {
+  version: 11,
   auth: { required: true, token: 'owner-token-value-long-enough' },
   permissions: { profile: 'fullAccess' },
   deployment: {
@@ -55,7 +56,7 @@ test.after(async () => {
   await fsp.rm(temp, { recursive: true, force: true });
 });
 
-test('authenticates scoped team tokens and rewrites legacy owner authorization', async () => {
+test('authenticates scoped team tokens and rewrites the internal owner credential', async () => {
   const response = await fetch(base, {
     method: 'POST',
     headers: {
