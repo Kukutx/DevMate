@@ -602,7 +602,7 @@ async function copyConnectionToken(ctx=globalContext){
 }
 
 async function copyStarterPrompt(){
-  const text = '使用 DevMate，完成这个开发任务。需要时可以读取、搜索、修改文件、运行命令和使用 Git；完成后用 task_report 总结结果。';
+  const text = '使用 DevMate，完成这个开发任务。复杂任务先用 work_session_start 建立工作会话；需要时读取、搜索、修改文件、运行命令和使用 Git；完成前用 show_changes 检查改动，再用 work_session_finish 结束会话。';
   await vscode.env.clipboard.writeText(text); vscode.window.showInformationMessage('Starter prompt copied.');
 }
 function parseGithubRepo(input){
