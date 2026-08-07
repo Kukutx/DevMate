@@ -39,15 +39,18 @@ function hostCandidates(req) {
   return [...candidates];
 }
 
-function hostAllowed(req, config) {
-  const allowed = config.production?.allowedHosts || [];
-  const candidates = hostCandidates(req);
-  const local = candidates.some(item =>
+function loopbackHost(req) {
+  return hostCandidates(req).some(item =>
     ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(item) ||
     item.startsWith('127.0.0.1:') ||
     item.startsWith('localhost:')
   );
-  if (local) return true;
+}
+
+function hostAllowed(req, config) {
+  const allowed = config.production?.allowedHosts || [];
+  const candidates = hostCandidates(req);
+  if (loopbackHost(req)) return true;
   if (!allowed.length) return config.deployment?.mode !== 'production';
   return allowed.some(item => candidates.includes(String(item).toLowerCase()));
 }
@@ -87,10 +90,23 @@ function touchTeamMemberBestEffort(principal) {
 export function authenticateGatewayRequest(req, url, config) {
   normalizeDeploymentConfig(config);
   const token = extractRequestToken(req, url);
-  if (!config.team.enabled && config.auth?.required === false && !token) return fallbackLocalPrincipal();
+  if (!config.team.enabled && config.auth?.required === false && !token) {
+    return loopbackHost(req) ? fallbackLocalPrincipal() : null;
+  }
   const principal = verifyAccessToken(token, config);
   if (!principal) return null;
   return principal;
+}
+
+function normalizeInnerAuthorization(req, config, principal) {
+  if (req.headers) delete req.headers['x-devmate-token'];
+  if (config.auth?.required === false) {
+    if (req.headers) delete req.headers.authorization;
+    return true;
+  }
+  if (!config.auth?.token) return false;
+  req.headers.authorization = `Bearer ${config.auth.token}`;
+  return true;
 }
 
 function consumeRateLimit(principalId, limit, store = rateWindows) {
@@ -271,13 +287,10 @@ export function guardListener(listener) {
     touchTeamMemberBestEffort(principal);
     recordActivity(req, principal, requestId);
 
-    if (principal.source === 'team-token' && config.auth?.required !== false) {
-      if (!config.auth?.token) {
-        concurrency.release();
-        jsonError(res, 503, 'DevMate owner token is not configured', 'owner_token_missing', requestId);
-        return;
-      }
-      req.headers.authorization = `Bearer ${config.auth.token}`;
+    if (!normalizeInnerAuthorization(req, config, principal)) {
+      concurrency.release();
+      jsonError(res, 503, 'DevMate owner token is not configured', 'owner_token_missing', requestId);
+      return;
     }
 
     req.setTimeout?.(config.production.requestTimeoutMs);
@@ -344,6 +357,8 @@ export const __test = {
   globalInflight: () => globalInflight,
   hostAllowed,
   installRequestBodyLimit,
+  loopbackHost,
+  normalizeInnerAuthorization,
   preAuthRateWindows,
   principalInflight,
   rateWindows,
