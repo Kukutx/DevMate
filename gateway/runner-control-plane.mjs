@@ -3,6 +3,7 @@ import path from 'node:path';
 import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
 import { readDurableNamespace } from './durable-state.mjs';
 import { consumeFixedWindow } from './fixed-window-rate-limit.mjs';
+import { hostAllowed, remoteAddress } from './http-host-policy.mjs';
 import { preflightQueuedJob } from './job-preflight.mjs';
 import { claimExternalJob } from './external-job-claim.mjs';
 import {
@@ -57,25 +58,6 @@ function requestInteger(value, fallback, min, max, label) {
 function requestUrl(req) {
   try { return new URL(req.url || '/', 'http://localhost'); }
   catch { return null; }
-}
-
-function remoteAddress(req) {
-  return req.socket?.remoteAddress || '';
-}
-
-function hostAllowed(req, config) {
-  const allowed = config.production?.allowedHosts || [];
-  const raw = String(req.headers?.host || '').trim().toLowerCase();
-  if (!raw) return false;
-  const candidates = new Set([raw]);
-  try { candidates.add(new URL(`http://${raw}`).hostname.toLowerCase()); } catch {}
-  const local = [...candidates].some(value =>
-    ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(value) ||
-    value.startsWith('127.0.0.1:') || value.startsWith('localhost:')
-  );
-  if (local) return true;
-  if (!allowed.length) return config.deployment?.mode !== 'production';
-  return allowed.some(value => candidates.has(String(value || '').toLowerCase()));
 }
 
 function bearerToken(req) {
