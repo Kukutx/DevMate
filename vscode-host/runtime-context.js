@@ -24,12 +24,9 @@ function setting(vscode, name, fallback) {
 function resolveVscodeStateDirectory(vscode, context) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
   if (!workspaceRoot) return context.globalStorageUri.fsPath;
-  const shared = setting(vscode, 'sharedRuntimeEnabled', true) !== false;
   const stateDirectory = resolveStateDirectory({
     workspaceRoot,
-    overrideDirectory: String(setting(vscode, 'sharedStateDirectory', '') || '').trim(),
-    localDirectory: context.globalStorageUri.fsPath,
-    shared
+    overrideDirectory: String(setting(vscode, 'sharedStateDirectory', '') || '').trim()
   });
   fs.mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(stateDirectory, 0o700); } catch {}
