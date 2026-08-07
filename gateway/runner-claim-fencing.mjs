@@ -16,12 +16,8 @@ export function normalizeRunnerClaimStore(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyStore();
   return {
     version: VERSION,
-    claims: value.claims && typeof value.claims === 'object' && !Array.isArray(value.claims)
-      ? { ...value.claims }
-      : {},
-    generations: value.generations && typeof value.generations === 'object' && !Array.isArray(value.generations)
-      ? { ...value.generations }
-      : {}
+    claims: value.claims && typeof value.claims === 'object' && !Array.isArray(value.claims) ? { ...value.claims } : {},
+    generations: value.generations && typeof value.generations === 'object' && !Array.isArray(value.generations) ? { ...value.generations } : {}
   };
 }
 
@@ -57,9 +53,7 @@ function prune(store, at = Date.now()) {
   }
   for (const [jobId, generation] of Object.entries(store.generations)) {
     const updated = Date.parse(generation?.updatedAt || 0);
-    if (!store.claims[jobId] && (!Number.isFinite(updated) || updated < at - GENERATION_RETENTION_MS)) {
-      delete store.generations[jobId];
-    }
+    if (!store.claims[jobId] && (!Number.isFinite(updated) || updated < at - GENERATION_RETENTION_MS)) delete store.generations[jobId];
   }
   const claims = Object.entries(store.claims);
   if (claims.length > MAX_CLAIMS) {
@@ -89,21 +83,14 @@ function generationValue(store, jobId) {
   return Math.max(active, retained);
 }
 
-function validateRecord(record, {
-  jobId,
-  runnerId,
-  generation,
-  token,
-  allowExpired = false,
-  allowLegacyFirst = false
-}) {
+function validateRecord(record, { jobId, runnerId, generation, token, allowExpired = false }) {
   if (!record) throw claimError(`No active Runner claim exists for job ${jobId}`);
   if (record.runnerId !== runnerId) throw claimError(`Runner ${runnerId} does not own claim for job ${jobId}`);
-  const missingProof = generation == null && !String(token || '');
-  if (!(allowLegacyFirst && missingProof && Number(record.generation) === 1)) {
-    if (Number(record.generation) !== Number(generation)) throw claimError(`Runner claim generation is stale for job ${jobId}`);
-    if (!timingSafeEqualText(record.tokenHash, hashToken(token))) throw claimError(`Runner claim token is invalid for job ${jobId}`);
+  if (!Number.isInteger(generation) || generation < 1 || !String(token || '')) {
+    throw claimError(`Runner claim proof is required for job ${jobId}`, 'claim_fence_proof_required');
   }
+  if (Number(record.generation) !== generation) throw claimError(`Runner claim generation is stale for job ${jobId}`);
+  if (!timingSafeEqualText(record.tokenHash, hashToken(token))) throw claimError(`Runner claim token is invalid for job ${jobId}`);
   if (!allowExpired && Date.parse(record.leaseExpiresAt || 0) <= Date.now()) {
     throw claimError(`Runner claim has expired for job ${jobId}`, 'claim_fence_expired');
   }
@@ -114,6 +101,8 @@ export function issueRunnerClaimInStore(storeValue, { jobId, runnerId, leaseExpi
   const id = String(jobId || '').trim();
   const owner = String(runnerId || '').trim();
   if (!id || !owner) throw new Error('Runner claim requires jobId and runnerId');
+  const expires = Date.parse(leaseExpiresAt || '');
+  if (!Number.isFinite(expires) || expires <= Date.now()) throw new Error('Runner claim requires a future leaseExpiresAt');
   const store = prune(normalizeRunnerClaimStore(storeValue));
   const generation = generationValue(store, id) + 1;
   const token = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
@@ -124,7 +113,7 @@ export function issueRunnerClaimInStore(storeValue, { jobId, runnerId, leaseExpi
     generation,
     tokenHash: hashToken(token),
     issuedAt,
-    leaseExpiresAt: new Date(leaseExpiresAt).toISOString()
+    leaseExpiresAt: new Date(expires).toISOString()
   };
   store.generations[id] = { generation, updatedAt: issuedAt };
   Object.assign(storeValue, store);
@@ -147,7 +136,9 @@ export function validateRunnerClaim(input) {
 export function renewRunnerClaim(input) {
   const store = prune(readStore());
   const record = validateRecord(claimRecord(store, input.jobId), input);
-  record.leaseExpiresAt = new Date(input.leaseExpiresAt).toISOString();
+  const expires = Date.parse(input.leaseExpiresAt || '');
+  if (!Number.isFinite(expires) || expires <= Date.now()) throw new Error('Runner claim renewal requires a future leaseExpiresAt');
+  record.leaseExpiresAt = new Date(expires).toISOString();
   store.generations[input.jobId] = { generation: record.generation, updatedAt: now() };
   writeStore(store);
   return { generation: record.generation, leaseExpiresAt: record.leaseExpiresAt };
