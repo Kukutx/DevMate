@@ -1,3 +1,4 @@
+import { isLoopbackAddress } from './http-host-policy.mjs';
 import { incrementCounter, observeDuration, renderPrometheusMetrics, setGauge } from './observability.mjs';
 
 const INSTALLED = Symbol.for('devmate.httpObservabilityInstalled');
@@ -9,8 +10,7 @@ function pathname(req) {
 }
 
 function isLocal(req) {
-  const address = req.socket?.remoteAddress || '';
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  return isLoopbackAddress(req.socket?.remoteAddress);
 }
 
 function routeLabel(path) {
@@ -18,7 +18,7 @@ function routeLabel(path) {
   if (path === '/health') return 'health';
   if (path === '/control/health') return 'control_health';
   if (path === '/control/metrics') return 'control_metrics';
-  if (path.startsWith('/runner/v1/')) return 'runner_control';
+  if (path === '/runner/v1' || path.startsWith('/runner/v1/')) return 'runner_control';
   if (path.startsWith('/devmate/previews/')) return 'published_preview';
   return 'other';
 }
