@@ -141,6 +141,12 @@ try {
   assert(toolByName.get('connection_diagnostics')?.annotations?.readOnlyHint === true, 'connection_diagnostics is missing readOnlyHint');
   assert(toolByName.get('devmate_status_panel')?.annotations?.readOnlyHint === true, 'devmate_status_panel is missing readOnlyHint');
   assert(toolByName.get('devmate_status_panel')?._meta?.ui?.resourceUri === 'ui://devmate/status.html', 'devmate_status_panel is missing UI resource metadata');
+  for (const name of ['work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback']) {
+    assert(toolByName.has(name), `missing unified work session tool: ${name}`);
+  }
+  for (const name of ['start_task', 'finish_task', 'task_status', 'rollback_task', 'team_work_session_start', 'team_work_session_status', 'team_work_session_finish']) {
+    assert(!toolByName.has(name), `legacy session tool is still exposed: ${name}`);
+  }
 
   const status = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
   assert(status.response.ok && status.text.includes('fullAccess'), `gateway_status did not report fullAccess: ${status.text}`);
@@ -185,18 +191,21 @@ try {
   const auditLog = await rpc('tools/call', { name: 'read_audit_log', arguments: { limit: 20 } });
   assert(auditLog.response.ok && auditLog.text.includes('token=redacted') && !auditLog.text.includes('secret123'), `audit redaction failed: ${auditLog.text}`);
 
-  const task = await rpc('tools/call', { name: 'start_task', arguments: { title: 'smoke rollback' } });
-  assert(task.response.ok && task.text.includes('task-'), `start_task failed: ${task.text}`);
+  const sessionStart = await rpc('tools/call', { name: 'work_session_start', arguments: { workspaceId: 'devmate', title: 'smoke rollback' } });
+  assert(sessionStart.response.ok && sessionStart.text.includes('work-'), `work_session_start failed: ${sessionStart.text}`);
+  const sessionJson = JSON.parse(sessionStart.json.result.content[0].text);
+  const workSessionId = sessionJson.session.id;
   const tempPath = 'tmp/devmate-smoke-rollback.txt';
   const create = await rpc('tools/call', { name: 'create_file', arguments: { path: tempPath, content: 'rollback me', overwrite: true } });
   assert(create.response.ok && create.text.includes('created'), `create_file for rollback failed: ${create.text}`);
-  const taskJson = JSON.parse(task.json.result.content[0].text);
-  const taskId = taskJson.task.currentTaskId;
-  const rollback = await rpc('tools/call', { name: 'rollback_task', arguments: { taskId } });
-  assert(rollback.response.ok && rollback.text.includes('removed'), `rollback_task failed: ${rollback.text}`);
+  const sessionStatus = await rpc('tools/call', { name: 'work_session_status', arguments: { id: workSessionId } });
+  assert(sessionStatus.response.ok && sessionStatus.text.includes(workSessionId), `work_session_status failed: ${sessionStatus.text}`);
+  const finish = await rpc('tools/call', { name: 'work_session_finish', arguments: { id: workSessionId } });
+  assert(finish.response.ok && finish.text.includes('finished'), `work_session_finish failed: ${finish.text}`);
+  const rollback = await rpc('tools/call', { name: 'work_session_rollback', arguments: { workSessionId } });
+  assert(rollback.response.ok && rollback.text.includes('removed'), `work_session_rollback failed: ${rollback.text}`);
   const rolledBackRead = await rpc('tools/call', { name: 'read_file', arguments: { path: tempPath } });
   assertToolError(rolledBackRead, 'rollback removed file');
-  await rpc('tools/call', { name: 'finish_task', arguments: {} });
 
   writeConfigPatch(c => {
     c.permissions = { ...c.permissions, profile: 'balanced', readOnly: false, blockDangerousOperations: true, allowDirectoryMutations: false };
