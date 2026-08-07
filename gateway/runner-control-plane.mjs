@@ -27,6 +27,7 @@ import {
   touchRunnerCredential,
   verifyRunnerToken
 } from './runner-access.mjs';
+import { defaultedInteger } from './strict-config.mjs';
 
 const INSTALLED = Symbol.for('devmate.runnerControlPlaneInstalled');
 const rateWindows = new Map();
@@ -38,6 +39,13 @@ const BLOCKED_ARTIFACT_SEGMENTS = new Set([
 const BLOCKED_ARTIFACT_EXTENSIONS = new Set([
   '.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3', '.log'
 ]);
+
+function requestError(message, code = 'invalid_runner_request') {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = code;
+  return error;
+}
 
 function requestUrl(req) {
   try { return new URL(req.url || '/', 'http://localhost'); }
@@ -103,84 +111,119 @@ async function readJsonBody(req, maxBytes) {
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch {
-    const error = new Error('Runner request body must be valid JSON');
-    error.status = 400;
-    throw error;
+  let body;
+  try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw requestError('Runner request body must be valid JSON', 'invalid_json'); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw requestError('Runner request body must be a JSON object');
   }
+  return body;
 }
 
-function intersect(reported, allowed, fallback = []) {
-  const cleanReported = [...new Set(
-    (Array.isArray(reported) ? reported : fallback)
-      .map(value => String(value || '').trim())
-      .filter(Boolean)
-  )];
-  if (!allowed?.length) return cleanReported;
-  const set = new Set(allowed);
-  return cleanReported.filter(value => set.has(value));
+function stringArray(value, label, fallback) {
+  const source = value === undefined ? fallback : value;
+  if (!Array.isArray(source)) throw requestError(`${label} must be an array of strings`);
+  const output = [];
+  const seen = new Set();
+  for (const item of source) {
+    if (typeof item !== 'string' || !item.trim()) throw requestError(`${label} must contain only non-empty strings`);
+    const clean = item.trim();
+    if (!seen.has(clean)) {
+      seen.add(clean);
+      output.push(clean);
+    }
+  }
+  return output;
 }
 
-function runnerRegistration(principal, body = {}) {
-  const reportedCapabilities = intersect(
-    body.capabilities,
-    principal.capabilities,
-    principal.capabilities
-  ).map(value => value.toLowerCase());
-  const capabilities = reportedCapabilities.length ? reportedCapabilities : ['core'];
-  if (!capabilities.includes('core')) capabilities.unshift('core');
+function scopedSubset(reported, allowed, label, { required = true } = {}) {
+  const values = stringArray(reported, label, allowed);
+  if (required && !values.length) throw requestError(`${label} must contain at least one value`);
+  const permitted = new Set(allowed);
+  const rejected = values.filter(value => !permitted.has(value));
+  if (rejected.length) throw requestError(`${label} contains values outside credential scope: ${rejected.join(', ')}`);
+  return values;
+}
 
-  const reportedWorkspaces = Array.isArray(body.workspaceIds)
-    ? intersect(body.workspaceIds, principal.workspaceIds, [])
-    : [];
-  if (!reportedWorkspaces.length) {
-    const error = new Error('Runner must report at least one local workspaceId allowed by its credential');
-    error.status = 400;
-    throw error;
+function optionalText(value, label, maxLength = 100) {
+  if (value === undefined) return '';
+  if (typeof value !== 'string') throw requestError(`${label} must be a string`);
+  if (value.length > maxLength) throw requestError(`${label} must be at most ${maxLength} characters`);
+  return value;
+}
+
+function runnerLabels(value) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw requestError('runner.labels must be an object');
+  const entries = Object.entries(value);
+  if (entries.length > 100) throw requestError('runner.labels supports at most 100 entries');
+  const labels = {};
+  for (const [key, item] of entries) {
+    if (!key || key.length > 100) throw requestError('runner label keys must be 1-100 characters');
+    if (!['string', 'number', 'boolean'].includes(typeof item) || (typeof item === 'number' && !Number.isFinite(item))) {
+      throw requestError(`runner label ${key} must be a string, finite number, or boolean`);
+    }
+    if (typeof item === 'string' && item.length > 500) throw requestError(`runner label ${key} must be at most 500 characters`);
+    labels[key] = item;
   }
+  return labels;
+}
 
+function runnerRegistration(principal, body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw requestError('runner must be an object');
+  const capabilities = scopedSubset(body.capabilities, principal.capabilities, 'runner.capabilities')
+    .map(value => value.toLowerCase());
+  if (!capabilities.includes('core') || !capabilities.includes('external')) {
+    throw requestError('runner.capabilities must explicitly include core and external');
+  }
+  const workspaceIds = scopedSubset(body.workspaceIds, principal.workspaceIds, 'runner.workspaceIds');
+  const maxConcurrent = defaultedInteger(
+    body.maxConcurrent,
+    principal.maxConcurrent,
+    1,
+    principal.maxConcurrent,
+    'runner.maxConcurrent'
+  );
   return {
     id: principal.id,
     name: principal.name,
     capabilities,
-    workspaceIds: reportedWorkspaces,
-    maxConcurrent: Math.min(
-      principal.maxConcurrent,
-      Math.max(1, Math.trunc(Number(body.maxConcurrent) || principal.maxConcurrent))
-    ),
-    version: String(body.version || '').slice(0, 100),
-    platform: String(body.platform || '').slice(0, 100),
-    arch: String(body.arch || '').slice(0, 100),
-    labels: body.labels && typeof body.labels === 'object' && !Array.isArray(body.labels)
-      ? body.labels
-      : {}
+    workspaceIds,
+    maxConcurrent,
+    version: optionalText(body.version, 'runner.version'),
+    platform: optionalText(body.platform, 'runner.platform'),
+    arch: optionalText(body.arch, 'runner.arch'),
+    labels: runnerLabels(body.labels)
   };
 }
 
 function executionEnvelope(job, claim = null) {
-  try {
-    const store = readDurableNamespace('jobs', { jobs: [] });
-    const internal = Array.isArray(store?.jobs) ? store.jobs.find(item => item.id === job.id) : null;
-    return {
-      ...job,
-      ...(claim ? { claim } : {}),
-      artifactPaths: Array.isArray(internal?.artifactPaths) ? [...internal.artifactPaths] : []
-    };
-  } catch {
-    return { ...job, ...(claim ? { claim } : {}), artifactPaths: [] };
-  }
+  const store = readDurableNamespace('jobs', { jobs: [] });
+  const internal = Array.isArray(store?.jobs) ? store.jobs.find(item => item.id === job.id) : null;
+  return {
+    ...job,
+    ...(claim ? { claim } : {}),
+    artifactPaths: Array.isArray(internal?.artifactPaths) ? [...internal.artifactPaths] : []
+  };
 }
 
 function claimProof(body, jobId, runnerId) {
-  const claim = body?.claim && typeof body.claim === 'object' ? body.claim : {};
-  return {
-    jobId,
-    runnerId,
-    generation: body?.claimGeneration ?? claim.generation,
-    token: body?.claimToken ?? claim.token,
-    allowLegacyFirst: true
-  };
+  if (body.claimGeneration === undefined || body.claimToken === undefined) {
+    throw requestError(`Runner claim proof is required for job ${jobId}`, 'claim_fence_proof_required');
+  }
+  if (typeof body.claimGeneration !== 'number' || !Number.isInteger(body.claimGeneration) || body.claimGeneration < 1) {
+    throw requestError('claimGeneration must be a positive integer', 'claim_fence_proof_required');
+  }
+  if (typeof body.claimToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.claimToken)) {
+    throw requestError('claimToken must be the claim token returned by the control plane', 'claim_fence_proof_required');
+  }
+  return { jobId, runnerId, generation: body.claimGeneration, token: body.claimToken };
+}
+
+function strictBoolean(value, fallback, label) {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'boolean') throw requestError(`${label} must be a boolean`);
+  return value;
 }
 
 function sanitize(value, key = '', depth = 0) {
@@ -218,26 +261,39 @@ function artifactPathAllowed(relative) {
 }
 
 function sanitizeArtifacts(values, runnerId, workspaceId) {
+  if (values === undefined) return [];
+  if (!Array.isArray(values)) throw requestError('artifacts must be an array');
   const output = [];
   const seen = new Set();
-  for (const item of Array.isArray(values) ? values.slice(0, 100) : []) {
-    const relative = String(item?.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  for (const item of values.slice(0, 100)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw requestError('artifact entries must be objects');
+    if (typeof item.path !== 'string') throw requestError('artifact.path must be a string');
+    const relative = item.path.replace(/\\/g, '/').replace(/^\/+/, '');
     if (!artifactPathAllowed(relative) || seen.has(relative)) continue;
     seen.add(relative);
-    const bytes = Math.max(
-      0,
-      Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(Number(item?.bytes) || 0))
-    );
-    const sha256 = /^[a-f0-9]{64}$/i.test(String(item?.sha256 || ''))
-      ? String(item.sha256).toLowerCase()
-      : null;
+    const bytes = item.bytes === undefined ? 0 : item.bytes;
+    if (typeof bytes !== 'number' || !Number.isInteger(bytes) || bytes < 0 || !Number.isSafeInteger(bytes)) {
+      throw requestError('artifact.bytes must be a non-negative safe integer');
+    }
+    let sha256 = null;
+    if (item.sha256 !== undefined && item.sha256 !== null) {
+      if (typeof item.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(item.sha256)) {
+        throw requestError('artifact.sha256 must be a 64-character hexadecimal SHA-256 digest');
+      }
+      sha256 = item.sha256.toLowerCase();
+    }
+    let modifiedAt = null;
+    if (item.modifiedAt !== undefined && item.modifiedAt !== null) {
+      if (typeof item.modifiedAt !== 'string' || !Number.isFinite(Date.parse(item.modifiedAt))) {
+        throw requestError('artifact.modifiedAt must be a valid date-time string');
+      }
+      modifiedAt = new Date(item.modifiedAt).toISOString();
+    }
     output.push({
       workspaceId: workspaceId || null,
       path: relative.slice(0, 2000),
       bytes,
-      modifiedAt: Number.isFinite(Date.parse(item?.modifiedAt || ''))
-        ? new Date(item.modifiedAt).toISOString()
-        : null,
+      modifiedAt,
       sha256,
       remote: true,
       runnerId
@@ -282,7 +338,8 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
   let runner = null;
 
   if (pathName === `${PREFIX}/heartbeat` || pathName === `${PREFIX}/jobs/claim`) {
-    runner = registerRunner(runnerRegistration(principal, body.runner || body));
+    const registration = body.runner === undefined ? body : body.runner;
+    runner = registerRunner(runnerRegistration(principal, registration));
   } else {
     try { heartbeatRunner(principal.id); } catch {}
   }
@@ -335,11 +392,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
   }
   let id;
   try { id = decodeURIComponent(match[1]); }
-  catch {
-    const error = new Error('Runner job identifier is not valid URL encoding');
-    error.status = 400;
-    throw error;
-  }
+  catch { throw requestError('Runner job identifier is not valid URL encoding'); }
   const action = match[2];
   const proof = claimProof(body, id, principal.id);
   validateRunnerClaim(proof);
@@ -378,6 +431,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
     return json(res, 200, { job }, requestId);
   }
 
+  const retryable = action === 'fail' ? strictBoolean(body.retryable, true, 'retryable') : false;
   const job = failJob({
     id,
     runnerId: principal.id,
@@ -386,7 +440,7 @@ async function routeRequest(req, res, url, config, principal, body, requestId) {
         ? 'Runner cancelled execution'
         : 'Runner execution failed')
     )).slice(0, 4000),
-    retryable: action === 'fail' && body.retryable !== false
+    retryable
   });
   consumeClaimBestEffort(proof);
   return json(res, 200, { job }, requestId);
@@ -506,10 +560,14 @@ export const __test = {
   consumeRate,
   executionEnvelope,
   hostAllowed,
-  intersect,
   rateWindows,
+  requestError,
+  runnerLabels,
   runnerRegistration,
   sanitizeArtifacts,
   sanitizeResult,
+  scopedSubset,
+  strictBoolean,
+  stringArray,
   touchCredentialBestEffort
 };
