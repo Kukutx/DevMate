@@ -22,8 +22,9 @@ function blocked(relativePath) {
 
 function workspaceFor(job) {
   const config = readConfig();
-  const workspace = (config.workspaces || []).find(item => item.id === job.workspaceId || item.name === job.workspaceId) || null;
-  if (!workspace) throw new Error(`Workspace not found for job artifact indexing: ${job.workspaceId}`);
+  const workspaceId = String(job?.workspaceId || '').trim();
+  const workspace = (config.workspaces || []).find(item => item.id === workspaceId) || null;
+  if (!workspace) throw new Error(`Workspace ID not found for job artifact indexing: ${workspaceId}`);
   return workspace;
 }
 
@@ -141,4 +142,4 @@ export async function indexJobArtifacts(job, result) {
   return records;
 }
 
-export const __test = { artifactRecords, blocked, collectCandidateValues, isInside, persistedArtifactPaths };
+export const __test = { artifactRecords, blocked, collectCandidateValues, isInside, persistedArtifactPaths, workspaceFor };
