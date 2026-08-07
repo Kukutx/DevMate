@@ -74,7 +74,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     merged.workspaces = current.workspaces;
   }
 
-  for (const key of ['hostRuntime', 'plugins', 'jobs', 'runnerControl', 'task', 'trustedWritableRoots']) {
+  for (const key of ['hostRuntime', 'plugins', 'jobs', 'runnerControl', 'trustedWritableRoots']) {
     if (has(current, key)) merged[key] = current[key];
     else delete merged[key];
   }
