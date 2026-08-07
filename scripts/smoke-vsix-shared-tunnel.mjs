@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
@@ -21,7 +19,6 @@ const extractRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-tunnel-'
 const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-tunnel-state-'));
 let runtimeA = null;
 let runtimeB = null;
-let actualChild = null;
 
 function extractArchive() {
   const tar = spawnSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', vsix, '-C', extractRoot], {
@@ -45,94 +42,6 @@ function extractArchive() {
   if (unzip.status !== 0) throw new Error(`Could not extract VSIX: ${unzip.stderr || tar.stderr}`);
 }
 
-class FakeProviderChild extends EventEmitter {
-  constructor(pid) {
-    super();
-    this.pid = pid;
-    this.stdout = new PassThrough();
-    this.stderr = new PassThrough();
-    this.exitCode = null;
-    this.signalCode = null;
-    this.killed = false;
-  }
-
-  kill(signal = 'SIGTERM') {
-    if (this.killed || this.exitCode != null) return true;
-    this.killed = true;
-    this.exitCode = 0;
-    this.signalCode = signal;
-    queueMicrotask(() => {
-      this.emit('exit', 0, signal);
-      this.emit('close', 0, signal);
-    });
-    return true;
-  }
-}
-
-function providerRequest(virtualHttpRequest, publicUrl, port) {
-  return (input, options, callback) => {
-    let effectiveOptions = options;
-    let effectiveCallback = callback;
-    if (typeof options === 'function') {
-      effectiveCallback = options;
-      effectiveOptions = {};
-    }
-    const target = input instanceof URL ? input : new URL(String(input));
-    const method = String(effectiveOptions?.method || 'GET').toUpperCase();
-    if (target.pathname === '/api/tunnels' && method === 'GET') {
-      return virtualHttpRequest({
-        statusCode: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          tunnels: [{
-            name: 'packaged-provider',
-            public_url: publicUrl,
-            proto: 'https',
-            config: { addr: `http://127.0.0.1:${port}` }
-          }]
-        }),
-        onResponse: effectiveCallback
-      });
-    }
-    if (target.pathname.startsWith('/api/tunnels/') && method === 'DELETE') {
-      return virtualHttpRequest({ statusCode: 204, onResponse: effectiveCallback });
-    }
-    return virtualHttpRequest({ statusCode: 404, onResponse: effectiveCallback });
-  };
-}
-
-function requestJson(httpModule, url, method = 'GET') {
-  return new Promise((resolve, reject) => {
-    const request = httpModule.request(url, { method }, response => {
-      const chunks = [];
-      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
-      response.on('error', reject);
-      response.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = text ? JSON.parse(text) : null; } catch {}
-        resolve({ status: response.statusCode, json, text });
-      });
-    });
-    request.on('error', reject);
-    request.end();
-  });
-}
-
-function waitFor(predicate, timeoutMs = 5000) {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const poll = () => {
-      let value;
-      try { value = predicate(); } catch (error) { reject(error); return; }
-      if (value) { resolve(value); return; }
-      if (Date.now() >= deadline) { reject(new Error('Timed out waiting for packaged tunnel condition')); return; }
-      setTimeout(poll, 20);
-    };
-    poll();
-  });
-}
-
 try {
   extractArchive();
   const extensionPath = path.join(extractRoot, 'extension');
@@ -141,110 +50,72 @@ try {
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
 
   const requireFromVsix = createRequire(packageFile);
-  const { SharedTunnelRuntime } = requireFromVsix('./vscode-host/shared-tunnel-runtime.js');
-  const { atomicWriteJson } = requireFromVsix('./shared/config-store.cjs');
-  const { virtualHttpRequest } = requireFromVsix('./tunnel-provider.js');
+  const { TunnelController } = requireFromVsix('./vscode-host/tunnel-controller.js');
+  const { setTunnelController, clearTunnelController } = requireFromVsix('./vscode-host/tunnel-runtime.js');
 
   const port = 18787;
   const publicUrl = 'https://packaged-shared-tunnel.example.test';
-  atomicWriteJson(path.join(stateDirectory, 'config.json'), {
-    version: 11,
-    appVersion: manifest.version,
-    server: { port, mcpPath: '/mcp' }
-  });
-
-  let spawnCount = 0;
-  const spawnProvider = () => {
-    spawnCount += 1;
-    actualChild = new FakeProviderChild(80000 + spawnCount);
-    return actualChild;
-  };
-  const cpA = { spawn: spawnProvider };
-  const cpB = { spawn: spawnProvider };
-  const httpA = { request: providerRequest(virtualHttpRequest, publicUrl, port) };
-  const httpB = { request: providerRequest(virtualHttpRequest, publicUrl, port) };
   const settings = () => ({
-    provider: 'ngrok',
-    publicUrl: '',
-    ngrokUrl: '',
-    ngrokCommandPath: '',
-    ngrokUseManagedAccount: true,
-    ngrokPoolingEnabled: false,
-    ngrokTrafficPolicyFile: '',
-    cloudflareCommandPath: '',
-    deploymentMode: 'personal'
+    provider: 'external',
+    publicUrl,
+    deploymentMode: 'production',
+    autoRestart: true,
+    maxRestarts: 3
   });
 
-  runtimeA = new SharedTunnelRuntime({
+  runtimeA = new TunnelController({
     stateDirectory,
-    childProcess: cpA,
-    http: httpA,
     settings,
     hostId: 'packaged-vscode-a',
-    runtimeLeaseMs: 30000,
-    heartbeatMs: 5000,
-    attachedPollMs: 100
-  }).install();
-  runtimeB = new SharedTunnelRuntime({
+    heartbeatMs: 5000
+  });
+  runtimeB = new TunnelController({
     stateDirectory,
-    childProcess: cpB,
-    http: httpB,
     settings,
     hostId: 'packaged-vscode-b',
-    runtimeLeaseMs: 30000,
-    heartbeatMs: 5000,
-    attachedPollMs: 100
-  }).install();
+    heartbeatMs: 5000
+  });
 
-  const processA = cpA.spawn('ngrok', ['http', String(port)], {});
-  const processB = cpB.spawn('ngrok', ['http', String(port)], {});
-  await waitFor(() => spawnCount === 1 && (processA.owned || processB.owned));
-  const ownerRuntime = processA.owned ? runtimeA : runtimeB;
-  const ownerHttp = processA.owned ? httpA : httpB;
-  const followerHttp = processA.owned ? httpB : httpA;
-  const ownerProcess = processA.owned ? processA : processB;
-  const followerProcess = processA.owned ? processB : processA;
+  setTunnelController(runtimeA);
+  const owner = await runtimeA.start(port);
+  assert.equal(owner.owned, true);
+  assert.equal(owner.attached, false);
+  assert.equal(owner.publicUrl, publicUrl);
 
-  const ownerProviderView = await requestJson(ownerHttp, 'http://127.0.0.1:4040/api/tunnels');
-  assert.equal(ownerProviderView.status, 200);
-  await waitFor(() => ownerRuntime.store.read()?.status === 'ready');
+  clearTunnelController(runtimeA);
+  setTunnelController(runtimeB);
+  const follower = await runtimeB.start(port);
+  assert.equal(follower.owned, false);
+  assert.equal(follower.attached, true);
+  assert.equal(follower.publicUrl, publicUrl);
+  assert.deepEqual(await runtimeB.stop(), {
+    stopped: false,
+    reason: 'managed-by-another-host',
+    publicUrl
+  });
+  assert.equal(runtimeA.status(port).running, true);
 
-  const followerView = await requestJson(followerHttp, 'http://127.0.0.1:4040/api/tunnels');
-  assert.equal(followerView.status, 200);
-  assert.equal(followerView.json.tunnels[0].public_url, publicUrl);
-  assert.equal(spawnCount, 1, 'Extracted VSIX must create only one provider process');
-
-  const followerDelete = await requestJson(
-    followerHttp,
-    'http://127.0.0.1:4040/api/tunnels/devmate-shared-tunnel',
-    'DELETE'
-  );
-  assert.equal(followerDelete.status, 204);
-  assert.equal(actualChild.killed, false, 'Follower DELETE must not stop the packaged owner');
-
-  followerProcess.kill();
-  await waitFor(() => followerProcess.exitCode === 0);
-  assert.equal(actualChild.killed, false, 'Follower process kill must not stop the packaged owner');
-
-  ownerProcess.kill();
-  await waitFor(() => actualChild.killed && !ownerRuntime.store.read());
+  clearTunnelController(runtimeB);
+  setTunnelController(runtimeA);
+  const stopped = await runtimeA.stop();
+  assert.equal(stopped.stopped, true);
+  assert.equal(runtimeA.status(port).running, false);
   assert.equal(fs.existsSync(path.join(stateDirectory, 'tunnel.start.lock')), false);
 
   console.log(JSON.stringify({
     ok: true,
     vsix: path.basename(vsix),
     version: manifest.version,
-    sharedTunnelPackaged: true,
+    providerNativeTunnelPackaged: true,
     concurrentTunnelHostsVerified: true,
-    singleProviderSpawnVerified: true,
     followerOwnershipVerified: true,
-    ownerCleanupVerified: true
+    ownerCleanupVerified: true,
+    virtualNgrokApiRequired: false
   }));
 } finally {
-  try { runtimeA?.suspendSpawn(); } catch {}
-  try { runtimeB?.suspendSpawn(); } catch {}
+  try { clearTunnelController(); } catch {}
   await runtimeA?.dispose({ stopOwned: true }).catch(() => {});
-  await runtimeB?.dispose({ stopOwned: true }).catch(() => {});
+  await runtimeB?.dispose({ stopOwned: false }).catch(() => {});
   fs.rmSync(extractRoot, { recursive: true, force: true });
   fs.rmSync(stateDirectory, { recursive: true, force: true });
 }
