@@ -21,7 +21,7 @@ Hosts resolving the same root share the owner token, `instanceId`, selected port
 
 ## Shared host runtime
 
-`host/runtime-controller.js` remains the compatibility facade. Its implementation is split into:
+`host/runtime-controller.js` is the shared host runtime facade. Its implementation is split into:
 
 ```text
 host/runtime/
@@ -34,7 +34,7 @@ host/runtime/
 
 Responsibilities are intentionally separated:
 
-- state-path normalization and legacy migration;
+- deterministic shared state-path resolution;
 - locked restrictive configuration persistence;
 - loopback health and port selection;
 - process ownership, attach/start/stop/restart, and bounded host context.
@@ -51,17 +51,14 @@ A host first checks `/control/health`:
 
 ### VS Code
 
-- `devMate.vscodeHostEnabled`: default `true`;
 - `devMate.vscodeStartupMode`: `auto`, `manual`, or `disabled`, default `auto`;
-- `devMate.sharedRuntimeEnabled`: default `true`;
-- `devMate.sharedStateDirectory`: optional absolute override.
+- `devMate.sharedStateDirectory`: optional absolute override; otherwise the workspace-derived shared state path is always used.
 
 ### Obsidian
 
 - Enable Obsidian host: default on;
 - Startup mode: default auto;
-- Use shared runtime: default on;
-- Shared state directory override;
+- Shared state directory override; otherwise the vault-derived shared state path is always used;
 - Preferred loopback port;
 - clean externally managed HTTPS origin;
 - bounded selection capture;
@@ -93,7 +90,7 @@ obsidian-plugin/src/
 ├─ settings.js             validation and settings UI
 ├─ context-provider.js     bounded active-vault context
 ├─ view.js                 panel rendering
-├─ host-bridge.js          compatibility facade
+├─ host-bridge.js          host bridge facade
 └─ bridge/
    ├─ server.js            authenticated loopback protocol
    ├─ vault-index.js       Obsidian event/index adapter
