@@ -7,11 +7,10 @@ import test from 'node:test';
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-runner-readiness-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
-process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const config = {
   version: 11,
-  appVersion: '2.3.0',
+  appVersion: '3.3.0',
   instanceId: 'runner-readiness-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
   deployment: {
@@ -64,7 +63,11 @@ createRunnerCredential(config, {
 });
 await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
 
-const { resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
+const {
+  acquireGatewayInstanceLock,
+  releaseGatewayInstanceLock,
+  resetDurableStateForTests
+} = await import('../gateway/durable-state.mjs');
 const {
   clearJobsForTests,
   registerRunner
@@ -73,10 +76,12 @@ const { readiness } = await import('../gateway/team-tool-data.mjs');
 
 resetDurableStateForTests();
 clearJobsForTests();
+acquireGatewayInstanceLock();
 
 test('control-plane-only production requires an online external Runner', () => {
   const before = readiness(config);
   assert.equal(before.ready, false);
+  assert.equal(before.checks.find(item => item.key === 'instance-lock').ok, true);
   assert.equal(
     before.checks.find(item => item.key === 'external-runners-online').ok,
     false
@@ -88,7 +93,7 @@ test('control-plane-only production requires an online external Runner', () => {
     capabilities: ['core', 'external'],
     workspaceIds: ['app'],
     maxConcurrent: 1,
-    version: '2.3.0',
+    version: '3.3.0',
     platform: 'linux',
     arch: 'x64',
     labels: { kind: 'external' }
@@ -107,7 +112,7 @@ test('control-plane-only production requires an online external Runner', () => {
 });
 
 test.after(async () => {
+  releaseGatewayInstanceLock();
   delete process.env.DEVMATE_CONFIG;
-  delete process.env.DEVMATE_DISABLE_INSTANCE_LOCK;
   await fsp.rm(temp, { recursive: true, force: true });
 });
