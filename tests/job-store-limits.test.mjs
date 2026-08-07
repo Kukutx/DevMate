@@ -89,7 +89,7 @@ test('drops final history under byte pressure while retaining active Jobs', () =
   assert.equal(store.jobs.some(item => item.id === 'final-old'), false);
 });
 
-test('blocks new active work while allowing an existing oversized active queue to drain', () => {
+test('rejects an oversized active queue on every validation path', () => {
   const store = {
     jobs: Array.from({ length: MAX_ACTIVE_JOBS + 1 }, (_, index) => job(`active-${index}`, 'queued', '2026-08-01T00:00:00.000Z')),
     runners: []
@@ -103,7 +103,6 @@ test('blocks new active work while allowing an existing oversized active queue t
     assert.equal(error.code, 'job_queue_capacity');
     return true;
   });
-  assert.equal(assertJobStoreCapacity(structuredClone(store), { enforceActive: false }).activeJobs, MAX_ACTIVE_JOBS + 1);
 });
 
 test('rejects unprunable retained Job and Runner overflow', () => {
@@ -112,7 +111,6 @@ test('rejects unprunable retained Job and Runner overflow', () => {
     runners: []
   };
   assert.throws(() => assertJobStoreCapacity(jobStore, {
-    enforceActive: false,
     maxRetainedJobs: 1
   }), error => error.code === 'job_queue_capacity');
 
