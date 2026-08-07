@@ -21,7 +21,7 @@ test('shared runtime controller serializes all lifecycle transitions', () => {
 test('desktop host lifecycles serialize state transitions', () => {
   const vscode = source('extension.js');
   const obsidian = source('obsidian-plugin/src/main.js');
-  assert.match(vscode, /new OperationCoordinator\(\{ name: 'vscode-legacy-lifecycle' \}\)/);
+  assert.match(vscode, /new OperationCoordinator\(\{ name: 'vscode-lifecycle' \}\)/);
   assert.match(vscode, /lifecycleOperations\.run\('start'/);
   assert.match(vscode, /lifecycleOperations\.run\('stop'/);
   assert.match(vscode, /lifecycleOperations\.run\('restart'/);
