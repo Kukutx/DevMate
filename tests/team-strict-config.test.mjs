@@ -54,6 +54,21 @@ test('provided invalid roles, booleans and numeric limits fail instead of fallin
   assert.throws(() => normalizeDeploymentConfig(hostsConfig), /must contain only strings/);
 });
 
+test('deployment mode is the single source of truth for Team enablement', () => {
+  const config = {
+    deployment: { mode: 'personal' },
+    team: { enabled: true },
+    runtime: {},
+    jobs: {},
+    production: {}
+  };
+  normalizeDeploymentConfig(config);
+  assert.equal(config.team.enabled, false);
+  config.deployment.mode = 'team';
+  normalizeDeploymentConfig(config);
+  assert.equal(config.team.enabled, true);
+});
+
 test('missing optional values still receive the single official defaults', () => {
   const config = {};
   normalizeDeploymentConfig(config);
