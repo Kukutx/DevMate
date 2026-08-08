@@ -10,11 +10,26 @@ const { PublicTunnelVerifier } = require('../vscode-host/public-tunnel-verifier.
 
 function harness(record) {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-verifier-state-'));
-  atomicWriteJson(path.join(stateDirectory, 'config.json'), {
+  const configFile = path.join(stateDirectory, 'config.json');
+  atomicWriteJson(configFile, {
     version: 11,
+    instanceId: 'instance-a',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { required: true, token: 'owner' },
     connection: {}
+  });
+  fs.mkdirSync(path.join(stateDirectory, 'state'), { recursive: true });
+  atomicWriteJson(path.join(stateDirectory, 'state', 'gateway.lock'), {
+    version: 1,
+    runtimeOwnerId: 'gateway-a',
+    pid: process.pid,
+    parentPid: process.ppid || process.pid,
+    instanceId: 'instance-a',
+    configPath: configFile,
+    acquiredAt: '2026-08-08T00:59:00.000Z',
+    heartbeatAt: new Date().toISOString(),
+    leaseMs: 90000,
+    launchMode: 'child_process'
   });
   return {
     stateDirectory,
@@ -82,7 +97,7 @@ test('pending provider and absent tunnel publish distinct states without attempt
   }
 });
 
-test('state callbacks are deduplicated for the same generation', async () => {
+test('state callbacks are deduplicated for the same Gateway+tunnel generation', async () => {
   const h = harness({
     ownerId: 'owner-a', provider: 'cloudflare-quick', port: 8787,
     status: 'ready', publicUrl: 'https://new.example.com',
