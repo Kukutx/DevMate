@@ -27,9 +27,10 @@ test('VS Code delegates authenticated public MCP preflight and session handling 
   const end = extension.indexOf('async function quickStart', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
+  assert.match(block, /const data = ctx \? ensureConfig\(ctx,false\) : null/);
   assert.match(block, /return preflightPublicMcp\(\{/);
-  assert.match(block, /publicUrl/);
-  assert.match(block, /token: mcpToken\(ctx\)/);
+  assert.match(block, /publicUrl: baseUrl/);
+  assert.match(block, /token: data\?\.auth\?\.required === false \? '' : String\(data\?\.auth\?\.token \|\| ''\)/);
   assert.match(block, /clientName: 'devmate-vscode-preflight'/);
   assert.match(block, /clientVersion: VERSION/);
   assert.doesNotMatch(block, /method\s*:\s*'initialize'/);
