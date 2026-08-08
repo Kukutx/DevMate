@@ -28,6 +28,7 @@ const HOST_ID = 'obsidian';
 const CONTEXT_CAPTURE_DEBOUNCE_MS = 750;
 const STATUS_REFRESH_MS = 5000;
 const PUBLIC_REVERIFY_BACKOFF_MS = 30000;
+const SESSION_RECOVERY_RETRY_MS = 30000;
 
 module.exports = class DevMateObsidianPlugin extends Plugin {
   async onload() {
@@ -50,7 +51,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.lastPublicVerificationAttemptAt = 0;
     this.publicVerificationPromise = null;
     this.publicVerificationGeneration = '';
+    this.sessionRequested = false;
     this.recoveryPromise = null;
+    this.recoveryNextAt = 0;
     this.vaultRoot = '';
     this.layoutReady = false;
     this.unloading = false;
@@ -104,6 +107,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   async onunload() {
     this.unloading = true;
+    this.sessionRequested = false;
+    this.recoveryNextAt = 0;
     if (this.contextTimer) window.clearTimeout(this.contextTimer);
     if (this.reconfigureTimer) window.clearTimeout(this.reconfigureTimer);
     this.contextTimer = null;
@@ -229,7 +234,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       return config;
     });
     this.clearPublicVerification();
-    if (status?.state === 'running' && !stopState.remoteOwner) await this.startRuntime({ quiet: true });
+    if (this.sessionRequested && status?.state === 'running' && !stopState.remoteOwner) await this.startRuntime({ quiet: true });
     else await this.refreshStatus();
     return updated;
   }
@@ -260,7 +265,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     const initialRecord = expectedRecord || this.currentTunnelRecord();
     const generation = recordGeneration(initialRecord);
     if (!generation) {
-      const error = new Error('The public connection is not a current ready tunnel generation');
+      const error = new Error('The public connection is not a current ready Gateway+tunnel generation');
       error.code = 'DEVMATE_PUBLIC_MCP_GENERATION_UNAVAILABLE';
       throw error;
     }
@@ -283,7 +288,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         });
         const currentRecord = this.currentTunnelRecord(initialRecord.port);
         if (recordGeneration(currentRecord) !== generation) {
-          const error = new Error('Public MCP verification became stale because the connection generation changed');
+          const error = new Error('Public MCP verification became stale because the Gateway or connection generation changed');
           error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
           throw error;
         }
@@ -305,7 +310,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           recordGeneration(persistedRecord) !== generation ||
           !verifiedForCurrentRecord(persisted, persistedRecord)
         ) {
-          const error = new Error('Public MCP verification could not be committed for the current connection generation');
+          const error = new Error('Public MCP verification could not be committed for the current Gateway+connection generation');
           error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
           throw error;
         }
@@ -387,7 +392,20 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
     this.controller.ensureConfig();
 
-    if (startBridge && this.settings.enabled) {
+    if (!this.settings.enabled) {
+      this.sessionRequested = false;
+      this.recoveryNextAt = 0;
+      try { await this.tunnelController?.stop(); } catch (error) {
+        this.logRuntime(`Could not release public connection while disabling DevMate: ${error.message || error}`);
+      }
+      try { await this.controller?.stop(); } catch (error) {
+        this.logRuntime(`Could not release Gateway while disabling DevMate: ${error.message || error}`);
+      }
+      await this.refreshStatus();
+      return { configured: true, stateDirectory, disabled: true };
+    }
+
+    if (startBridge) {
       const bridge = new ObsidianHostBridge(this, this.controller);
       try {
         await bridge.start();
@@ -534,14 +552,27 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         .catch(error => this.logRuntime(`Public MCP verification failed: ${error.message || error}`));
     }
 
+    const needsFullRecovery = this.sessionRequested && this.settings.enabled && (
+      status.gateway?.state !== 'running' || !status.tunnel?.running
+    );
     if (
-      this.settings.autoStart &&
-      status.gateway?.state === 'running' &&
-      !status.tunnel?.running &&
-      !this.recoveryPromise
+      needsFullRecovery &&
+      !this.recoveryPromise &&
+      Date.now() >= this.recoveryNextAt
     ) {
       this.recoveryPromise = this.startRuntime({ quiet: true })
-        .catch(error => this.logRuntime(`Automatic DevMate recovery failed: ${error.message || error}`))
+        .then(result => {
+          if (!result?.ok || !result?.mcpUrl || Number(result?.toolCount || 0) <= 0) {
+            throw new Error(result?.error || 'DevMate recovery did not reach verified Ready state');
+          }
+          this.recoveryNextAt = 0;
+          this.logRuntime(`Recovered requested DevMate session; tools=${result.toolCount}.`);
+          return result;
+        })
+        .catch(error => {
+          this.recoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
+          this.logRuntime(`Automatic DevMate recovery failed: ${error.message || error}`);
+        })
         .finally(() => { this.recoveryPromise = null; });
     }
   }
@@ -578,6 +609,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
       const preflight = await this.verifyPublicEndpoint(publicUrl, tunnel.record);
       this.runtimeDiagnostics?.clearFailure();
+      this.sessionRequested = true;
+      this.recoveryNextAt = 0;
       let copied = false;
       let copyError = '';
       if (this.settings.autoCopyUrl) {
@@ -592,7 +625,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       }
       if (!quiet) {
         if (copied) new Notice(`DevMate ready. Verified MCP URL copied: ${redactUrl(preflight.mcpUrl)}`);
-        else if (this.settings.autoCopyUrl && copyError) new Notice(`DevMate ready. Automatic URL copy failed; use Copy MCP URL if needed.`);
+        else if (this.settings.autoCopyUrl && copyError) new Notice('DevMate ready. Automatic URL copy failed; use Copy MCP URL if needed.');
         else new Notice(`DevMate ready: ${redactUrl(preflight.mcpUrl)}`);
       }
       return {
@@ -608,6 +641,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         copyError
       };
     } catch (error) {
+      if (this.sessionRequested) this.recoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
       if (tunnel?.owned) {
         try { await this.tunnelController.stop(); } catch (cleanupError) {
           this.logRuntime(`Could not roll back owned public connection after failed Start: ${cleanupError.message || cleanupError}`);
@@ -633,6 +667,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async stopRuntimeInternal({ quiet = false } = {}) {
+    this.sessionRequested = false;
+    this.recoveryNextAt = 0;
     let tunnel = { stopped: false, reason: 'not-running' };
     let gateway = { stopped: false, reason: 'not-running' };
     try {
