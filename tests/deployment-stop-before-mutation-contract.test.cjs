@@ -36,7 +36,7 @@ test('ngrok managed-account removal uses the same provider-scoped stop gate befo
 
 test('deployment wizard confirms old ingress stop before any new deployment or Cloudflare secret commit', () => {
   const start = platform.indexOf('async function configureDeployment');
-  const end = platform.indexOf('function settingPatch', start);
+  const end = platform.indexOf('async function tunnelDoctor', start);
   assert.ok(start >= 0 && end > start);
   const block = platform.slice(start, end);
   const stop = block.indexOf('const stopState = await prepareDeploymentMutation()');
