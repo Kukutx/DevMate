@@ -1,81 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  extractRequestToken,
-  normalizeDeploymentConfig,
-  roleCapabilities
-} from '../gateway/team-access.mjs';
+import { extractRequestToken, normalizeInstanceConfig, roleCapabilities } from '../gateway/team-access.mjs';
+function baseConfig(){return{connection:{provider:'ngrok',publicUrl:''},team:{members:[]},requestPolicy:{},runtime:{},jobs:{}}}
 
-function baseConfig() {
-  return {
-    deployment: { mode: 'team', tunnelProvider: 'ngrok' },
-    team: { members: [] },
-    runtime: {},
-    jobs: {},
-    production: {}
-  };
-}
-
-test('team authentication accepts credentials only from headers', () => {
-  assert.equal(extractRequestToken({ headers: { authorization: 'Bearer owner-token' } }), 'owner-token');
-  assert.equal(extractRequestToken({ headers: { 'x-devmate-token': 'header-token' } }), 'header-token');
-  assert.equal(extractRequestToken({ headers: {} }, new URL('https://example.test/mcp?token=query-token')), '');
-});
-
-test('provided invalid deployment values fail instead of silently changing behavior', () => {
-  assert.throws(() => normalizeDeploymentConfig({ ...baseConfig(), deployment: { mode: 'invalid' } }), /Unknown deployment mode/);
-  assert.throws(() => normalizeDeploymentConfig({ ...baseConfig(), deployment: { mode: null } }), /Unknown deployment mode/);
-  assert.throws(() => normalizeDeploymentConfig({ ...baseConfig(), deployment: { mode: 'team', tunnelProvider: 'invalid' } }), /Unknown tunnel provider/);
-  assert.throws(() => normalizeDeploymentConfig({ ...baseConfig(), deployment: { mode: 'production', tunnelProvider: 'cloudflare-quick' } }), /development-only/);
-  assert.throws(() => normalizeDeploymentConfig({ ...baseConfig(), deployment: null }), /deployment must be an object/);
-  assert.throws(() => normalizeDeploymentConfig({ ...baseConfig(), deployment: { mode: 'team', tunnelProvider: 'ngrok', publicUrl: null } }), /publicUrl must be a string/);
-});
-
-test('provided invalid roles, booleans and numeric limits fail instead of falling back or coercing', () => {
-  const roleConfig = baseConfig();
-  roleConfig.team.defaultMemberRole = null;
-  assert.throws(() => normalizeDeploymentConfig(roleConfig), /Unknown team role/);
-  assert.throws(() => roleCapabilities(null), /Unknown team role/);
-
-  const concurrencyConfig = baseConfig();
-  concurrencyConfig.runtime.maxConcurrentJobs = '2';
-  assert.throws(() => normalizeDeploymentConfig(concurrencyConfig), /runtime\.maxConcurrentJobs/);
-
-  const rateConfig = baseConfig();
-  rateConfig.production.requestsPerMinute = 0;
-  assert.throws(() => normalizeDeploymentConfig(rateConfig), /production\.requestsPerMinute/);
-
-  const booleanConfig = baseConfig();
-  booleanConfig.team.requireWorkspaceLeaseForWrites = 'false';
-  assert.throws(() => normalizeDeploymentConfig(booleanConfig), /must be a boolean/);
-
-  const hostsConfig = baseConfig();
-  hostsConfig.production.allowedHosts = ['example.com', 42];
-  assert.throws(() => normalizeDeploymentConfig(hostsConfig), /must contain only strings/);
-});
-
-test('deployment mode is the single source of truth for Team enablement', () => {
-  const config = {
-    deployment: { mode: 'personal' },
-    team: { enabled: true },
-    runtime: {},
-    jobs: {},
-    production: {}
-  };
-  normalizeDeploymentConfig(config);
-  assert.equal(config.team.enabled, false);
-  config.deployment.mode = 'team';
-  normalizeDeploymentConfig(config);
-  assert.equal(config.team.enabled, true);
-});
-
-test('missing optional values still receive the single official defaults', () => {
-  const config = {};
-  normalizeDeploymentConfig(config);
-  assert.equal(config.deployment.mode, 'personal');
-  assert.equal(config.deployment.tunnelProvider, 'ngrok');
-  assert.equal(config.team.defaultMemberRole, 'developer');
-  assert.equal(config.team.maxMembers, 100);
-  assert.equal(config.runtime.maxConcurrentJobs, 2);
-  assert.deepEqual(config.production.allowedHosts, []);
-});
+test('team authentication accepts credentials only from headers',()=>{assert.equal(extractRequestToken({headers:{authorization:'Bearer owner-token'}}),'owner-token');assert.equal(extractRequestToken({headers:{'x-devmate-token':'header-token'}}),'header-token');assert.equal(extractRequestToken({headers:{}},new URL('https://example.test/mcp?token=query-token')),'')});
+test('invalid connection values fail instead of silently changing behavior',()=>{assert.throws(()=>normalizeInstanceConfig({...baseConfig(),connection:{provider:'invalid'}}),/Unknown connection provider/);assert.throws(()=>normalizeInstanceConfig({...baseConfig(),connection:{provider:null}}),/Unknown connection provider/);assert.throws(()=>normalizeInstanceConfig({...baseConfig(),connection:null}),/connection must be an object/);assert.throws(()=>normalizeInstanceConfig({...baseConfig(),connection:{provider:'ngrok',publicUrl:null}}),/publicUrl must be a string/)});
+test('invalid roles, booleans and numeric policy limits fail without coercion',()=>{const role=baseConfig();role.team.defaultMemberRole=null;assert.throws(()=>normalizeInstanceConfig(role),/Unknown team role/);assert.throws(()=>roleCapabilities(null),/Unknown team role/);const concurrency=baseConfig();concurrency.runtime.maxConcurrentJobs='2';assert.throws(()=>normalizeInstanceConfig(concurrency),/runtime\.maxConcurrentJobs/);const rate=baseConfig();rate.requestPolicy.requestsPerMinute=0;assert.throws(()=>normalizeInstanceConfig(rate),/requestPolicy\.requestsPerMinute/);const boolean=baseConfig();boolean.team.requireWorkspaceLeaseForWrites='false';assert.throws(()=>normalizeInstanceConfig(boolean),/must be a boolean/);const hosts=baseConfig();hosts.requestPolicy.allowedHosts=['example.com',42];assert.throws(()=>normalizeInstanceConfig(hosts),/must contain only strings/)});
+test('missing optional capabilities receive one official default set',()=>{const config={};normalizeInstanceConfig(config);assert.equal(config.connection.provider,'ngrok');assert.equal(config.team.defaultMemberRole,'developer');assert.equal(config.team.maxMembers,100);assert.equal(config.runtime.maxConcurrentJobs,2);assert.deepEqual(config.requestPolicy.allowedHosts,[])});
+test('retired deployment shape is rejected outside the one-time host upgrade boundary',()=>{assert.throws(()=>normalizeInstanceConfig({deployment:{mode:'team'},team:{enabled:true}}),error=>error?.code==='retired_instance_shape')});

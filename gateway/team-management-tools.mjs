@@ -22,12 +22,11 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
-const { normalizeAllowedHosts, reconcileAllowedHosts } = deploymentHosts;
+const { normalizeAllowedHosts } = deploymentHosts;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   const config = normalizeInstanceConfig(inputConfig);
   const previousProvider = config.connection.provider;
-  const previousPublicUrl = config.connection.publicUrl;
   if (patch.tunnelProvider) config.connection.provider = patch.tunnelProvider;
 
   const providerChanged = patch.tunnelProvider !== undefined && patch.tunnelProvider !== previousProvider;
@@ -48,12 +47,6 @@ export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
 
   if (patch.allowedHosts !== undefined) {
     config.requestPolicy.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
-  } else if (connectionTouched) {
-    config.requestPolicy.allowedHosts = reconcileAllowedHosts({
-      currentAllowedHosts: config.requestPolicy.allowedHosts,
-      previousPublicUrl,
-      nextPublicUrl: config.connection.publicUrl
-    });
   }
 
   if (patch.requireWorkspaceLeaseForWrites !== undefined) {
@@ -96,10 +89,7 @@ export function registerTeamManagementTools(register, annotations) {
     annotations: ro
   }, async ({ provider }) => toolText(provider
     ? policyTemplate(provider)
-    : {
-        ngrok: policyTemplate('ngrok'),
-        cloudflare: policyTemplate('cloudflare-managed')
-      }));
+    : { ngrok: policyTemplate('ngrok'), cloudflare: policyTemplate('cloudflare-managed') }));
 
   register('team_status', {
     title: 'DevMate access status',
@@ -137,8 +127,7 @@ export function registerTeamManagementTools(register, annotations) {
   register('team_member_list', {
     title: 'List DevMate team members',
     description: 'List member identities, roles, scopes, expiry, and token versions without exposing token hashes.',
-    inputSchema: {},
-    annotations: ro
+    inputSchema: {}, annotations: ro
   }, async () => {
     const config = normalizeInstanceConfig(readConfig());
     return toolText({ members: config.team.members.map(memberPublic) });
@@ -148,78 +137,44 @@ export function registerTeamManagementTools(register, annotations) {
     title: 'Create DevMate team member',
     description: 'Create a member identity with explicit workspace scope and return its token once. Requires owner.',
     inputSchema: {
-      id: z.string().max(120).optional(),
-      name: z.string().min(1).max(200),
-      role: z.enum(TEAM_ROLES).optional(),
-      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100),
-      expiresAt: z.string().datetime().optional()
-    },
-    annotations: rw
+      id: z.string().max(120).optional(), name: z.string().min(1).max(200), role: z.enum(TEAM_ROLES).optional(),
+      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100), expiresAt: z.string().datetime().optional()
+    }, annotations: rw
   }, async input => {
     const config = normalizeInstanceConfig(readConfig());
-    const result = createTeamMember(config, {
-      ...input,
-      workspaceIds: workspaceIds(config, input.workspaceIds)
-    });
+    const result = createTeamMember(config, { ...input, workspaceIds: workspaceIds(config, input.workspaceIds) });
     writeConfig(config);
-    await audit('team_member_create', {
-      principalId: principalNow().id,
-      memberId: result.member.id,
-      role: result.member.role,
-      workspaceIds: result.member.workspaceIds
-    });
-    return toolText({
-      ...result,
-      warning: 'The token is shown once. Store it in an approved secret manager and do not commit it.'
-    });
+    await audit('team_member_create', { principalId: principalNow().id, memberId: result.member.id, role: result.member.role, workspaceIds: result.member.workspaceIds });
+    return toolText({ ...result, warning: 'The token is shown once. Store it in an approved secret manager and do not commit it.' });
   });
 
   register('team_member_update', {
-    title: 'Update DevMate team member',
-    description: 'Update role, explicit workspace scopes, expiry, or enabled state. Requires owner.',
-    inputSchema: {
-      id: z.string().min(1),
-      name: z.string().max(200).optional(),
-      role: z.enum(TEAM_ROLES).optional(),
-      workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100).optional(),
-      expiresAt: z.string().datetime().nullable().optional(),
-      disabled: z.boolean().optional()
-    },
+    title: 'Update DevMate team member', description: 'Update role, explicit workspace scopes, expiry, or enabled state. Requires owner.',
+    inputSchema: { id: z.string().min(1), name: z.string().max(200).optional(), role: z.enum(TEAM_ROLES).optional(), workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100).optional(), expiresAt: z.string().datetime().nullable().optional(), disabled: z.boolean().optional() },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, ...patch }) => {
     const config = normalizeInstanceConfig(readConfig());
     if (patch.workspaceIds !== undefined) patch.workspaceIds = workspaceIds(config, patch.workspaceIds);
     const member = updateTeamMember(config, id, patch);
     writeConfig(config);
-    await audit('team_member_update', {
-      principalId: principalNow().id,
-      memberId: id,
-      keys: Object.keys(patch)
-    });
+    await audit('team_member_update', { principalId: principalNow().id, memberId: id, keys: Object.keys(patch) });
     return toolText({ member });
   });
 
   register('team_member_rotate', {
-    title: 'Rotate DevMate team token',
-    description: 'Invalidate the old member token and return a new token once. Requires owner.',
-    inputSchema: { id: z.string().min(1) },
-    annotations: rw
+    title: 'Rotate DevMate team token', description: 'Invalidate the old member token and return a new token once. Requires owner.',
+    inputSchema: { id: z.string().min(1) }, annotations: rw
   }, async ({ id }) => {
     const config = normalizeInstanceConfig(readConfig());
     const result = rotateTeamMemberToken(config, id);
     writeConfig(config);
     await audit('team_member_rotate', { principalId: principalNow().id, memberId: id });
-    return toolText({
-      ...result,
-      warning: 'The replacement token is shown once. Update the team secret and revoke old copies.'
-    });
+    return toolText({ ...result, warning: 'The replacement token is shown once. Update the team secret and revoke old copies.' });
   });
 
   register('team_member_revoke', {
-    title: 'Revoke DevMate team member',
-    description: 'Disable a member identity immediately. Requires owner.',
-    inputSchema: { id: z.string().min(1) },
-    annotations: { ...rw, idempotentHint: true }
+    title: 'Revoke DevMate team member', description: 'Disable a member identity immediately. Requires owner.',
+    inputSchema: { id: z.string().min(1) }, annotations: { ...rw, idempotentHint: true }
   }, async ({ id }) => {
     const config = normalizeInstanceConfig(readConfig());
     const member = revokeTeamMember(config, id);
@@ -229,11 +184,7 @@ export function registerTeamManagementTools(register, annotations) {
   });
 
   register('team_activity_status', {
-    title: 'DevMate team activity',
-    description: 'Show recent authenticated MCP clients, request counts, roles, and session IDs. Requires maintainer or owner.',
-    inputSchema: { activeWithinMinutes: z.number().int().min(1).max(1440).optional() },
-    annotations: ro
-  }, async ({ activeWithinMinutes = 60 }) => toolText({
-    activities: activitySnapshot({ activeWithinMinutes })
-  }));
+    title: 'DevMate team activity', description: 'Show recent authenticated MCP clients, request counts, roles, and session IDs. Requires maintainer or owner.',
+    inputSchema: { activeWithinMinutes: z.number().int().min(1).max(1440).optional() }, annotations: ro
+  }, async ({ activeWithinMinutes = 60 }) => toolText({ activities: activitySnapshot({ activeWithinMinutes }) }));
 }

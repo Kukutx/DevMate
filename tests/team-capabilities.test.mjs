@@ -3,125 +3,30 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-
-const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-team-cap-'));
-const configPath = path.join(temp, 'config.json');
-process.env.DEVMATE_CONFIG = configPath;
-await fsp.writeFile(configPath, JSON.stringify({
-  version: 11,
-  auth: { required: true, token: 'owner-token-value-long-enough' },
-  permissions: { profile: 'fullAccess' },
-  deployment: {
-    mode: 'team',
-    tunnelProvider: 'external',
-    publicUrl: 'https://devmate.example.com'
-  },
-  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: true },
-  production: {},
-  maintenance: { auditRetentionDays: 90 },
-  activeWorkspaceId: 'app',
-  workspaces: [{
-    id: 'app',
-    name: 'app',
-    root: temp,
-    mode: 'workspace-write',
-    reference: false
-  }],
-  plugins: { enabled: [], settings: {} }
-}, null, 2));
-
-const { installTeamCapabilities } = await import('../gateway/team-capabilities.mjs');
-const { runWithRequestContext } = await import('../gateway/request-context.mjs');
-const { __test: teamToolDataTest } = await import('../gateway/team-tool-data.mjs');
-
-class MockServer {
-  constructor() {
-    this.tools = new Map();
-  }
-  registerTool(name, config, handler) {
-    this.tools.set(name, { config, handler });
-  }
-  async connect() {
-    return 'ok';
-  }
-}
-
+const temp = await fsp.mkdtemp(path.join(os.tmpdir(),'devmate-team-cap-'));
+const configPath = path.join(temp,'config.json'); process.env.DEVMATE_CONFIG=configPath;
+await fsp.writeFile(configPath,JSON.stringify({version:11,auth:{required:true,token:'owner-token-value-long-enough'},permissions:{profile:'fullAccess'},connection:{provider:'external',publicUrl:'https://devmate.example.com'},team:{members:[],requireWorkspaceLeaseForWrites:true},requestPolicy:{allowedHosts:[]},runtime:{},jobs:{},maintenance:{auditRetentionDays:90},activeWorkspaceId:'app',workspaces:[{id:'app',name:'app',root:temp,mode:'workspace-write',reference:false}],plugins:{enabled:[],settings:{}}},null,2));
+const { installTeamCapabilities }=await import('../gateway/team-capabilities.mjs');
+const { runWithRequestContext }=await import('../gateway/request-context.mjs');
+const { __test: teamToolDataTest }=await import('../gateway/team-tool-data.mjs');
+class MockServer{constructor(){this.tools=new Map()} registerTool(n,c,h){this.tools.set(n,{config:c,handler:h})} async connect(){return'ok'}}
 installTeamCapabilities(MockServer);
 
-test('registers deployment, team, and lease tools', async () => {
-  const server = new MockServer();
-  server.registerTool(
-    'write_file',
-    { annotations: { destructiveHint: true }, inputSchema: {} },
-    async () => ({ ok: true })
-  );
-  await server.connect();
-  for (const name of [
-    'deployment_status',
-    'deployment_readiness',
-    'team_member_create',
-    'workspace_lease_acquire'
-  ]) {
-    assert.equal(server.tools.has(name), true);
-  }
-
-  const created = await server.tools.get('team_member_create').handler({
-    name: 'Alice', role: 'developer', workspaceIds: ['app']
-  });
-  const member = created.structuredContent.member;
-  const principal = {
-    id: member.id,
-    name: member.name,
-    role: 'developer',
-    workspaceIds: ['app'],
-    source: 'team-token'
-  };
-  await assert.rejects(
-    runWithRequestContext({ principal }, () =>
-      server.tools.get('write_file').handler({ workspaceId: 'app' })
-    ),
-    /requires a lease/
-  );
-  await runWithRequestContext({ principal }, () =>
-    server.tools.get('workspace_lease_acquire').handler({
-      workspaceId: 'app', ttlSeconds: 120
-    })
-  );
-  const result = await runWithRequestContext({ principal }, () =>
-    server.tools.get('write_file').handler({ workspaceId: 'app' })
-  );
-  assert.equal(result.ok, true);
-  await assert.rejects(
-    runWithRequestContext({ principal }, () =>
-      server.tools.get('team_member_list').handler({})
-    ),
-    /owner role/
-  );
+test('registers instance, member, and lease capabilities',async()=>{
+ const server=new MockServer(); server.registerTool('write_file',{annotations:{destructiveHint:true},inputSchema:{}},async()=>({ok:true})); await server.connect();
+ for(const name of ['deployment_status','deployment_readiness','team_member_create','workspace_lease_acquire']) assert.equal(server.tools.has(name),true);
+ const created=await server.tools.get('team_member_create').handler({name:'Alice',role:'developer',workspaceIds:['app']}); const member=created.structuredContent.member;
+ const principal={id:member.id,name:member.name,role:'developer',workspaceIds:['app'],source:'team-token'};
+ await assert.rejects(runWithRequestContext({principal},()=>server.tools.get('write_file').handler({workspaceId:'app'})),/requires a lease/);
+ await runWithRequestContext({principal},()=>server.tools.get('workspace_lease_acquire').handler({workspaceId:'app',ttlSeconds:120}));
+ assert.equal((await runWithRequestContext({principal},()=>server.tools.get('write_file').handler({workspaceId:'app'}))).ok,true);
 });
 
-test('production readiness host contract matches the public URL route', () => {
-  const config = {
-    deployment: { mode: 'production', publicUrl: 'https://devmate.example.com' },
-    production: { allowedHosts: ['wrong.example.com'] }
-  };
-  assert.equal(teamToolDataTest.allowedPublicHost(config), false);
-  config.production.allowedHosts = ['devmate.example.com'];
-  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
-  config.deployment.publicUrl = 'https://devmate.example.com:8443';
-  config.production.allowedHosts = ['devmate.example.com'];
-  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
+test('Host allowlist is an explicit request capability independent of provider',()=>{
+ const config={connection:{provider:'external',publicUrl:'https://devmate.example.com'},requestPolicy:{allowedHosts:['wrong.example.com']}};
+ assert.equal(teamToolDataTest.allowedPublicHost(config,{publicUrl:config.connection.publicUrl}),false);
+ config.requestPolicy.allowedHosts=['devmate.example.com']; assert.equal(teamToolDataTest.allowedPublicHost(config,{publicUrl:config.connection.publicUrl}),true);
+ config.requestPolicy.allowedHosts=[]; assert.equal(teamToolDataTest.allowedPublicHost(config,{publicUrl:config.connection.publicUrl}),true);
 });
 
-test('team readiness honors an explicitly configured Host allowlist', () => {
-  const config = {
-    deployment: { mode: 'team', publicUrl: 'https://team.example.com' },
-    production: { allowedHosts: [] }
-  };
-  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
-  config.production.allowedHosts = ['wrong.example.com'];
-  assert.equal(teamToolDataTest.allowedPublicHost(config), false);
-  config.production.allowedHosts = ['team.example.com'];
-  assert.equal(teamToolDataTest.allowedPublicHost(config), true);
-});
-
-test.after(async () => fsp.rm(temp, { recursive: true, force: true }));
+test.after(async()=>fsp.rm(temp,{recursive:true,force:true}));

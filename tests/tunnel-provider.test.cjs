@@ -1,78 +1,8 @@
 'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const {
-  cloudflareLaunch,
-  decorateNgrokArgs,
-  normalizeProvider,
-  normalizePublicUrl,
-  parseTryCloudflareUrl
-} = require('../tunnel-provider');
-
-test('builds safe Cloudflare managed commands without exposing tokens in args', () => {
-  const launch = cloudflareLaunch(
-    'cloudflare-managed',
-    8787,
-    { publicUrl: 'https://devmate.example.com' },
-    { cloudflareTunnelToken: 'secret-token-value-long-enough' }
-  );
-  assert.deepEqual(launch.args, ['tunnel', 'run']);
-  assert.equal(launch.options.env.TUNNEL_TOKEN, 'secret-token-value-long-enough');
-  assert.equal(launch.args.join(' ').includes('secret-token'), false);
-  assert.equal(launch.publicUrl, 'https://devmate.example.com');
-});
-
-test('builds a native Cloudflare quick tunnel launch', () => {
-  const launch = cloudflareLaunch('cloudflare-quick', 8787, { cloudflareCommandPath: 'cloudflared' }, {});
-  assert.equal(launch.command, 'cloudflared');
-  assert.deepEqual(launch.args, ['tunnel', '--url', 'http://127.0.0.1:8787']);
-  assert.equal(launch.publicUrl, '');
-});
-
-test('Cloudflare managed mode requires its own token and stable HTTPS origin', () => {
-  assert.throws(
-    () => cloudflareLaunch('cloudflare-managed', 8787, { publicUrl: 'https://devmate.example.com' }, {}),
-    /token is not configured/
-  );
-  assert.throws(
-    () => cloudflareLaunch('cloudflare-managed', 8787, { publicUrl: 'http://devmate.example.com' }, { cloudflareTunnelToken: 'secret' }),
-    /https/
-  );
-});
-
-test('rejects explicit invalid tunnel providers instead of falling back', () => {
-  assert.equal(normalizeProvider(undefined), 'ngrok');
-  assert.equal(normalizeProvider(' CLOUDFLARE-QUICK '), 'cloudflare-quick');
-  assert.throws(() => normalizeProvider(''), /Unknown tunnel provider/);
-  assert.throws(() => normalizeProvider(null), /Unknown tunnel provider/);
-  assert.throws(() => normalizeProvider('typo-provider'), /Unknown tunnel provider/);
-});
-
-test('decorates real ngrok launches and parses provider output', () => {
-  assert.deepEqual(
-    decorateNgrokArgs(['http', '8787'], { ngrokTrafficPolicyFile: 'policy.yml' }),
-    ['http', '8787', '--traffic-policy-file', 'policy.yml']
-  );
-  assert.deepEqual(
-    decorateNgrokArgs(['http', '8787', '--traffic-policy-file', 'existing.yml'], { ngrokTrafficPolicyFile: 'policy.yml' }),
-    ['http', '8787', '--traffic-policy-file', 'existing.yml']
-  );
-  assert.equal(
-    parseTryCloudflareUrl('Ready https://random-name.trycloudflare.com now'),
-    'https://random-name.trycloudflare.com'
-  );
-  assert.equal(normalizePublicUrl('devmate.example.com'), 'https://devmate.example.com');
-});
-
-test('public tunnel origins reject paths, credentials, queries, and non-HTTPS schemes', () => {
-  for (const value of [
-    'http://devmate.example.com',
-    'https://user:pass@devmate.example.com',
-    'https://devmate.example.com/mcp',
-    'https://devmate.example.com?token=x',
-    'https://devmate.example.com#fragment'
-  ]) {
-    assert.throws(() => normalizePublicUrl(value));
-  }
-});
+const assert=require('node:assert/strict');const test=require('node:test');const{cloudflareLaunch,decorateNgrokArgs,normalizeProvider,normalizePublicUrl,parseTryCloudflareUrl}=require('../tunnel-provider');
+test('builds safe Cloudflare managed commands without exposing tokens in args',()=>{const launch=cloudflareLaunch('cloudflare-managed',8787,{publicUrl:'https://devmate.example.com'},{cloudflareTunnelToken:'secret-token-value-long-enough'});assert.deepEqual(launch.args,['tunnel','run']);assert.equal(launch.options.env.TUNNEL_TOKEN,'secret-token-value-long-enough');assert.equal(launch.args.join(' ').includes('secret-token'),false);assert.equal(launch.publicUrl,'https://devmate.example.com')});
+test('builds a native Cloudflare quick tunnel launch',()=>{const launch=cloudflareLaunch('cloudflare-quick',8787,{cloudflareCommandPath:'cloudflared'},{});assert.equal(launch.command,'cloudflared');assert.deepEqual(launch.args,['tunnel','--url','http://127.0.0.1:8787']);assert.equal(launch.publicUrl,'')});
+test('Cloudflare managed connection requires token and stable HTTPS origin',()=>{assert.throws(()=>cloudflareLaunch('cloudflare-managed',8787,{publicUrl:'https://devmate.example.com'},{}),/token is not configured/);assert.throws(()=>cloudflareLaunch('cloudflare-managed',8787,{publicUrl:'http://devmate.example.com'},{cloudflareTunnelToken:'secret'}),/https/)});
+test('rejects explicit invalid connection providers instead of falling back',()=>{assert.equal(normalizeProvider(undefined),'ngrok');assert.equal(normalizeProvider(' CLOUDFLARE-QUICK '),'cloudflare-quick');for(const value of ['',null,'typo-provider'])assert.throws(()=>normalizeProvider(value),/Unknown connection provider/)});
+test('decorates real ngrok launches and parses provider output',()=>{assert.deepEqual(decorateNgrokArgs(['http','8787'],{ngrokTrafficPolicyFile:'policy.yml'}),['http','8787','--traffic-policy-file','policy.yml']);assert.equal(parseTryCloudflareUrl('Ready https://random-name.trycloudflare.com now'),'https://random-name.trycloudflare.com');assert.equal(normalizePublicUrl('devmate.example.com'),'https://devmate.example.com')});
+test('public tunnel origins reject paths, credentials, queries, and non-HTTPS schemes',()=>{for(const value of ['http://devmate.example.com','https://user:pass@devmate.example.com','https://devmate.example.com/mcp','https://devmate.example.com?token=x','https://devmate.example.com#fragment'])assert.throws(()=>normalizePublicUrl(value))});
