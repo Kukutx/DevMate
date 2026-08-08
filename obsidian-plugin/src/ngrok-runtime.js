@@ -57,12 +57,50 @@ class ObsidianNgrokRuntime {
 
   start(port) {
     if (!this.controller) throw new Error('Obsidian ngrok runtime is disposed');
-    return this.controller.start(port);
+    const numericPort = Number(port);
+    const existing = this.controller.store.read();
+    if (
+      existing &&
+      existing.status === 'ready' &&
+      existing.provider === 'ngrok' &&
+      Number(existing.port) === numericPort &&
+      existing.publicUrl &&
+      existing.ownerId !== this.controller.ownerId
+    ) {
+      this.logger(`Attached to existing shared ngrok endpoint owned by ${existing.hostId || 'another host'}.`);
+      return {
+        attached: true,
+        owned: false,
+        publicUrl: existing.publicUrl,
+        record: existing
+      };
+    }
+    return this.controller.start(numericPort);
   }
 
   status(port) {
     if (!this.controller) return { running: false, owned: false, attached: false, publicUrl: '', provider: 'ngrok', port: Number(port) || 0, record: null };
-    return this.controller.status(port);
+    const numericPort = Number(port);
+    const existing = this.controller.store.read();
+    if (
+      existing &&
+      existing.status === 'ready' &&
+      existing.provider === 'ngrok' &&
+      Number(existing.port) === numericPort &&
+      existing.publicUrl &&
+      existing.ownerId !== this.controller.ownerId
+    ) {
+      return {
+        running: true,
+        owned: false,
+        attached: true,
+        publicUrl: existing.publicUrl,
+        provider: 'ngrok',
+        port: numericPort,
+        record: existing
+      };
+    }
+    return this.controller.status(numericPort);
   }
 
   stop() {
