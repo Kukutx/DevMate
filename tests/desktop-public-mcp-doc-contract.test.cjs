@@ -8,16 +8,24 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('current Obsidian documentation keeps loopback internal and ngrok public', () => {
-  const readme = source('obsidian-plugin/README.md');
+test('documentation preserves the provider-neutral desktop ownership model', () => {
+  const obsidian = source('obsidian-plugin/README.md');
   const host = source('docs/HOST_INTEGRATION.md');
-  for (const [name, text] of [['obsidian readme', readme], ['host integration', host]]) {
-    assert.match(text, /ngrok/i, name);
-    assert.match(text, /public/i, name);
-    assert.match(text, /\/mcp/, name);
-    assert.match(text, /Ready/i, name);
-    assert.doesNotMatch(text, /Public ingress remains explicit/i, name);
-  }
-  assert.match(readme, /127\.0\.0\.1.*internal/i);
-  assert.match(host, /loopback Gateway is internal/i);
+  const tunnels = source('docs/TUNNELS.md');
+
+  assert.match(obsidian, /Obsidian never starts, stops, reconfigures, or takes ownership/i);
+  assert.match(obsidian, /live shared tunnel record/i);
+  assert.match(obsidian, /Public origin/i);
+  assert.match(obsidian, /Copy MCP URL.*never falls back to localhost/is);
+
+  assert.match(host, /ngrok/);
+  assert.match(host, /cloudflare-quick/);
+  assert.match(host, /cloudflare-managed/);
+  assert.match(host, /external/);
+  assert.match(host, /Obsidian does \*\*not\*\* instantiate a tunnel controller/i);
+  assert.match(host, /VS Code\/deployment owns public ingress/i);
+
+  assert.match(tunnels, /Provider selection is a deployment feature, not a compatibility shim/i);
+  assert.doesNotMatch(tunnels, /virtual ngrok-compatible local API/i);
+  assert.match(tunnels, /strict configuration matching/i);
 });
