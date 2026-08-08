@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
-const { normalizeInstanceConfig } = require('./instance-config.cjs');
+const { normalizeInstanceConfig, upgradeLegacyInstanceShape } = require('./instance-config.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
@@ -440,6 +440,7 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   }
   return updateConfig(file, current => {
     if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: requestedPort, appVersion });
+    upgradeLegacyInstanceShape(current);
     const config = normalizeInstanceConfig(current);
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
