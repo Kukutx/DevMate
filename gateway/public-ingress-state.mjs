@@ -3,48 +3,12 @@ import verification from '../shared/public-ingress-verification.cjs';
 import tunnelRecordStore from '../vscode-host/shared-tunnel-record-store.js';
 import { CONFIG_PATH } from './local-shared.mjs';
 
-const { verifiedForCurrentRecord } = verification;
+const {
+  cleanHttpsOrigin,
+  runtimeMatchesDeployment,
+  verifiedForCurrentRecord
+} = verification;
 const { SharedTunnelRecordStore } = tunnelRecordStore;
-
-function cleanHttpsOrigin(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  try {
-    const url = new URL(raw);
-    if (
-      url.protocol !== 'https:' ||
-      !url.hostname ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash ||
-      (url.pathname && url.pathname !== '/')
-    ) return '';
-    return `https://${url.host}`;
-  } catch {
-    return '';
-  }
-}
-
-function runtimeMatchesDeployment(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
-  const desiredProvider = String(config?.deployment?.tunnelProvider || '').trim().toLowerCase();
-  const actualProvider = String(record?.provider || '').trim().toLowerCase();
-  if (desiredProvider && actualProvider !== desiredProvider) {
-    return {
-      matches: false,
-      reason: `shared tunnel provider ${actualProvider || 'unknown'} does not match configured provider ${desiredProvider}`
-    };
-  }
-
-  const configuredUrl = cleanHttpsOrigin(config?.deployment?.publicUrl || '');
-  if (configuredUrl && publicUrl !== configuredUrl) {
-    return {
-      matches: false,
-      reason: `shared tunnel URL ${publicUrl || 'unavailable'} does not match configured stable URL ${configuredUrl}`
-    };
-  }
-  return { matches: true, reason: '' };
-}
 
 export function runtimePublicIngress(config, { stateDirectory } = {}) {
   const directory = stateDirectory || (CONFIG_PATH ? path.dirname(CONFIG_PATH) : '');
