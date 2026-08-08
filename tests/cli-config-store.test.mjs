@@ -23,10 +23,11 @@ test('standalone initialization writes the supported package version atomically'
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'state', 'config.json');
   fs.mkdirSync(workspace);
-  const result = cli.initConfig({ workspace, config, mode: 'personal', provider: 'external' });
+  const result = cli.initConfig({ workspace, config, mode: 'personal', provider: 'ngrok' });
   const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
   assert.equal(result.file, config);
   assert.equal(persisted.version, configStore.SUPPORTED_CONFIG_VERSION);
   assert.equal(persisted.appVersion, packageJson.version);
   assert.equal(persisted.auth.token, result.token);
+  assert.equal(persisted.deployment.tunnelProvider, 'ngrok');
 });
