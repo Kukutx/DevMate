@@ -8,6 +8,7 @@ const gateway = fs.readFileSync(path.join(root, 'gateway', 'server.mjs'), 'utf8'
 const cli = fs.readFileSync(path.join(root, 'scripts', 'standalone-runtime.mjs'), 'utf8');
 const controller = fs.readFileSync(path.join(root, 'host', 'runtime', 'process-controller.js'), 'utf8');
 const extension = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
+const publicMcp = fs.readFileSync(path.join(root, 'host', 'public-mcp.js'), 'utf8');
 const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'main.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -17,12 +18,16 @@ test('Gateway accepts credentials only from request headers', () => {
   assert.doesNotMatch(gateway, /searchParams\.get\('token'\)/);
 });
 
-test('connection URLs never embed owner credentials', () => {
-  for (const source of [cli, controller, extension]) {
+test('connection URLs never embed owner credentials and VS Code delegates bearer transport to the shared preflight helper', () => {
+  for (const source of [cli, controller, extension, publicMcp]) {
     assert.doesNotMatch(source, /searchParams\.set\('token'/);
     assert.doesNotMatch(source, /\?token=/);
   }
-  assert.match(extension, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(extension, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/);
+  assert.match(extension, /return preflightPublicMcp\(\{/);
+  assert.match(publicMcp, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(publicMcp, /MCP-Session-Id/);
+  assert.match(publicMcp, /method: 'tools\/list'/);
 });
 
 test('VS Code and Obsidian expose separate bearer-token copy commands', () => {
