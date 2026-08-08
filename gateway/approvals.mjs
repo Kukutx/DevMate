@@ -114,10 +114,9 @@ function toolList(value) {
 
 export function approvalPolicy(config) {
   const raw = policyObject(config);
-  const production = config?.deployment?.mode === 'production';
   return {
-    enabled: defaultedBoolean(raw.enabled, production, 'team.approvals.enabled'),
-    requiredCapabilities: capabilityList(raw.requiredCapabilities, production ? ['publish', 'admin'] : []),
+    enabled: defaultedBoolean(raw.enabled, false, 'team.approvals.enabled'),
+    requiredCapabilities: capabilityList(raw.requiredCapabilities, []),
     requiredTools: toolList(raw.requiredTools),
     ttlSeconds: defaultedInteger(raw.ttlSeconds, 3600, 300, 86400, 'team.approvals.ttlSeconds'),
     separationOfDuties: defaultedBoolean(raw.separationOfDuties, true, 'team.approvals.separationOfDuties'),
@@ -128,7 +127,7 @@ export function approvalPolicy(config) {
 export function toolNeedsApproval({ config, principal, tool, capability }) {
   const policy = approvalPolicy(config);
   if (String(tool || '').startsWith('team_approval_')) return false;
-  if (!config?.team?.enabled || !policy.enabled) return false;
+  if (!policy.enabled) return false;
   if (!principal || principal.source !== 'team-token') return false;
   if (principal.role === 'owner' && policy.ownerBypass) return false;
   return policy.requiredTools.includes(tool) || policy.requiredCapabilities.includes(capability);
