@@ -24,11 +24,13 @@ test('rejects coerced tunnel restart limits', () => {
   }
 });
 
-test('platform entry uses strict validators instead of provider or numeric fallbacks', () => {
-  const source = fs.readFileSync(path.join(root, 'extension-entry-platform.js'), 'utf8');
-  assert.match(source, /validateTunnelProvider/);
-  assert.match(source, /validateDeploymentMode/);
-  assert.match(source, /strictInteger/);
-  assert.doesNotMatch(source, /normalizeProvider/);
-  assert.doesNotMatch(source, /Number\(setting\('production/);
+test('platform and effective settings layers keep strict validators instead of permissive fallbacks', () => {
+  const platform = fs.readFileSync(path.join(root, 'extension-entry-platform.js'), 'utf8');
+  const effective = fs.readFileSync(path.join(root, 'vscode-host/effective-tunnel-settings.js'), 'utf8');
+  assert.match(platform, /validateTunnelProvider/);
+  assert.match(platform, /strictInteger/);
+  assert.match(effective, /validateTunnelProvider/);
+  assert.match(effective, /validateDeploymentMode/);
+  assert.doesNotMatch(platform, /normalizeProvider/);
+  assert.doesNotMatch(platform, /Number\(setting\('production/);
 });
