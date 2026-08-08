@@ -93,7 +93,7 @@ test('Obsidian is a first-class owner or attacher of the same provider-native sh
   assert.match(main, /new ObsidianHostBridge/);
   assert.match(main, /new TunnelController/);
   assert.match(main, /this\.tunnelController\.start\(gateway\.port\)/);
-  assert.match(main, /verifyPublicEndpoint\(publicUrl\)/);
+  assert.match(main, /verifyPublicEndpoint\(publicUrl, tunnel\.record\)/);
   assert.match(settings, /Connection provider/);
   assert.match(settings, /ngrokAuthtokenEncrypted/);
   assert.match(settings, /cloudflareTunnelTokenEncrypted/);
@@ -125,5 +125,5 @@ test('provider-native runtime remains current-only without the retired virtual n
   const docs = source('docs/TUNNELS.md');
   assert.doesNotMatch(provider, /TunnelCompatibilityManager|virtualHttpRequest|virtualChild|requestTarget/);
   assert.doesNotMatch(docs, /virtual ngrok-compatible local API/i);
-  assert.match(docs, /Provider selection is a deployment feature, not a compatibility shim/i);
+  assert.match(docs, /Provider selection is a \*\*connection capability\*\*, not a runtime mode and not a compatibility shim/i);
 });
