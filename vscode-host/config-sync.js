@@ -45,7 +45,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   const merged = { ...current };
   for (const key of [
     'appVersion', 'permissions', 'maintenance', 'commands',
-    'connection', 'vscodeContext', 'activeWorkspaceId'
+    'vscodeContext', 'activeWorkspaceId'
   ]) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
@@ -76,7 +76,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
 
   for (const key of [
-    'deployment', 'team', 'production', 'hostRuntime', 'plugins',
+    'connection', 'deployment', 'team', 'production', 'requestPolicy', 'hostRuntime', 'plugins',
     'jobs', 'runnerControl', 'trustedWritableRoots'
   ]) {
     preserveCurrentObject(merged, current, key);
