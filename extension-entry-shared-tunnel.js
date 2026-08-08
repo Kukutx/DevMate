@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 const vscode = require('vscode');
 const { version: VERSION } = require('./package.json');
@@ -55,13 +56,14 @@ function ensureSharedDesktopConfig(stateDirectory) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
   if (!workspaceRoot) return null;
   const configFile = path.join(stateDirectory, 'config.json');
+  const existed = fs.statSync(configFile, { throwIfNoEntry: false })?.isFile() === true;
   ensurePersonalConfig({
     configFile,
     workspaceRoot,
     preferredPort: Number(setting(vscode, 'port', 8787)) || 8787,
     appVersion: VERSION
   });
-  normalizeBootstrapDeployment(configFile);
+  if (!existed) normalizeBootstrapDeployment(configFile);
   return configFile;
 }
 
