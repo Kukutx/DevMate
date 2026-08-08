@@ -10,31 +10,34 @@ const {
 function base(overrides = {}) {
   return {
     provider: 'ngrok',
+    publicUrl: '',
     ngrokUrl: 'https://devmate.ngrok-free.app',
+    ngrokCommandPath: 'ngrok',
+    ngrokUseManagedAccount: true,
     ngrokPoolingEnabled: false,
     ngrokTrafficPolicyFile: '',
+    cloudflareCommandPath: 'cloudflared',
     deploymentMode: 'personal',
     ...overrides
   };
 }
 
-test('shared tunnel identity ignores host-local executable and credential-storage choices', () => {
-  const vscode = base({
-    ngrokCommandPath: 'C:\\Tools\\ngrok.exe',
-    ngrokUseManagedAccount: true,
-    cloudflareCommandPath: 'C:\\Tools\\cloudflared.exe'
-  });
-  const obsidian = base({
-    ngrokCommandPath: 'ngrok',
-    ngrokUseManagedAccount: false,
-    cloudflareCommandPath: ''
-  });
-
-  assert.deepEqual(stableConfiguration(vscode, 8787), stableConfiguration(obsidian, 8787));
-  assert.equal(configurationKey(vscode, 8787), configurationKey(obsidian, 8787));
+test('shared tunnel identity includes provider runtime and account choices', () => {
+  assert.notEqual(
+    configurationKey(base({ ngrokCommandPath: 'C:\\Tools\\ngrok.exe' }), 8787),
+    configurationKey(base({ ngrokCommandPath: 'ngrok' }), 8787)
+  );
+  assert.notEqual(
+    configurationKey(base({ ngrokUseManagedAccount: true }), 8787),
+    configurationKey(base({ ngrokUseManagedAccount: false }), 8787)
+  );
+  assert.notEqual(
+    configurationKey(base({ provider: 'cloudflare-quick', cloudflareCommandPath: 'C:\\Tools\\cloudflared.exe' }), 8787),
+    configurationKey(base({ provider: 'cloudflare-quick', cloudflareCommandPath: 'cloudflared' }), 8787)
+  );
 });
 
-test('shared tunnel identity still separates endpoint-affecting configuration', () => {
+test('shared tunnel identity separates endpoint-affecting configuration and port', () => {
   assert.notEqual(
     configurationKey(base({ ngrokUrl: 'https://one.ngrok-free.app' }), 8787),
     configurationKey(base({ ngrokUrl: 'https://two.ngrok-free.app' }), 8787)
@@ -44,4 +47,19 @@ test('shared tunnel identity still separates endpoint-affecting configuration', 
     configurationKey(base({ ngrokPoolingEnabled: true }), 8787)
   );
   assert.notEqual(configurationKey(base(), 8787), configurationKey(base(), 8788));
+});
+
+test('stable tunnel configuration retains all current ownership-defining fields', () => {
+  assert.deepEqual(stableConfiguration(base(), 8787), {
+    port: 8787,
+    provider: 'ngrok',
+    publicUrl: '',
+    ngrokUrl: 'https://devmate.ngrok-free.app',
+    ngrokCommandPath: 'ngrok',
+    ngrokUseManagedAccount: true,
+    ngrokPoolingEnabled: false,
+    ngrokTrafficPolicyFile: '',
+    cloudflareCommandPath: 'cloudflared',
+    deploymentMode: 'personal'
+  });
 });
