@@ -9,6 +9,17 @@ function cleanOrigin(value) {
   return normalizePublicOrigin(text);
 }
 
+function explicitOrigin(publicOrigin = '') {
+  const explicit = cleanOrigin(publicOrigin);
+  if (!explicit) return null;
+  return {
+    source: 'obsidian-setting',
+    publicOrigin: explicit,
+    provider: 'external',
+    ownerHostId: ''
+  };
+}
+
 function readySharedTunnel({ stateDirectory, port, logger = () => {} } = {}) {
   const numericPort = Number(port);
   if (!stateDirectory || !Number.isInteger(numericPort) || numericPort <= 0) return null;
@@ -24,16 +35,7 @@ function readySharedTunnel({ stateDirectory, port, logger = () => {} } = {}) {
   };
 }
 
-function configuredOrigin({ publicOrigin = '', config = null } = {}) {
-  const explicit = cleanOrigin(publicOrigin);
-  if (explicit) {
-    return {
-      source: 'obsidian-setting',
-      publicOrigin: explicit,
-      provider: 'external',
-      ownerHostId: ''
-    };
-  }
+function deploymentOrigin(config = null) {
   const deployment = cleanOrigin(config?.deployment?.publicUrl || '');
   if (!deployment) return null;
   return {
@@ -44,13 +46,21 @@ function configuredOrigin({ publicOrigin = '', config = null } = {}) {
   };
 }
 
+function configuredOrigin({ publicOrigin = '', config = null } = {}) {
+  return explicitOrigin(publicOrigin) || deploymentOrigin(config);
+}
+
 function resolvePublicConnection({ stateDirectory, port, publicOrigin = '', config = null, logger = () => {} } = {}) {
-  return readySharedTunnel({ stateDirectory, port, logger }) || configuredOrigin({ publicOrigin, config });
+  return explicitOrigin(publicOrigin) ||
+    readySharedTunnel({ stateDirectory, port, logger }) ||
+    deploymentOrigin(config);
 }
 
 module.exports = {
   cleanOrigin,
   configuredOrigin,
+  deploymentOrigin,
+  explicitOrigin,
   readySharedTunnel,
   resolvePublicConnection
 };
