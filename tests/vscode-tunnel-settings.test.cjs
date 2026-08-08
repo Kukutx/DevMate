@@ -24,13 +24,17 @@ test('rejects coerced tunnel restart limits', () => {
   }
 });
 
-test('platform and effective settings layers keep strict validators instead of permissive fallbacks', () => {
+test('shared deployment and effective runtime keep strict provider validators while platform has no Global business parser', () => {
   const platform = fs.readFileSync(path.join(root, 'extension-entry-platform.js'), 'utf8');
   const effective = fs.readFileSync(path.join(root, 'vscode-host/effective-tunnel-settings.js'), 'utf8');
-  assert.match(platform, /validateTunnelProvider/);
-  assert.match(platform, /strictInteger/);
+  const editor = fs.readFileSync(path.join(root, 'vscode-host/shared-deployment-config.js'), 'utf8');
+  assert.doesNotMatch(platform, /validateTunnelProvider/);
+  assert.doesNotMatch(platform, /strictInteger/);
+  assert.doesNotMatch(platform, /setting\('deploymentMode'/);
+  assert.doesNotMatch(platform, /setting\('tunnelProvider'/);
   assert.match(effective, /validateTunnelProvider/);
   assert.match(effective, /validateDeploymentMode/);
-  assert.doesNotMatch(platform, /normalizeProvider/);
+  assert.match(editor, /validateTunnelProvider/);
+  assert.match(editor, /validateDeploymentMode/);
   assert.doesNotMatch(platform, /Number\(setting\('production/);
 });
