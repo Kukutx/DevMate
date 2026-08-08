@@ -73,10 +73,15 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
 }
 
 function verifiedForCurrentRecord(config, record) {
-  return !!recordGeneration(record) && verifiedConnection(config, record.publicUrl, { notBefore: record.readyAt });
+  const generation = recordGeneration(record);
+  if (!generation) return false;
+  const persistedGeneration = String(config?.connection?.lastTunnelGeneration || '').trim();
+  if (persistedGeneration && persistedGeneration !== generation) return false;
+  return verifiedConnection(config, record.publicUrl, { notBefore: record.readyAt });
 }
 
-function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOString()) {
+function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOString(), record = null) {
+  const generation = recordGeneration(record);
   return {
     lastPreflightAt: stamp,
     lastPublicOrigin: String(test?.publicOrigin || publicUrl || '').trim(),
@@ -84,6 +89,7 @@ function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOSt
     lastMcpPath: '/mcp',
     lastToolCount: Number(test?.toolCount || 0),
     lastServerName: String(test?.server?.name || 'devmate'),
+    ...(generation ? { lastTunnelGeneration: generation } : {}),
     lastError: '',
     lastErrorAt: null
   };
