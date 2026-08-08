@@ -5,6 +5,7 @@ const path = require('node:path');
 const vscode = require('vscode');
 const { version: VERSION } = require('./package.json');
 const { ensurePersonalConfig } = require('./shared/config-store.cjs');
+const { strictPort } = require('./shared/port.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
@@ -62,7 +63,7 @@ function ensureSharedDesktopConfig(stateDirectory) {
   ensurePersonalConfig({
     configFile,
     workspaceRoot,
-    preferredPort: Number(setting(vscode, 'port', 8787)) || 8787,
+    preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
     appVersion: VERSION
   });
   if (!existed) normalizeBootstrapDeployment(configFile);
