@@ -6,6 +6,7 @@ import { approvalPolicy } from './approvals.mjs';
 import { durableStateStatus } from './durable-state.mjs';
 import { listRunners } from './job-queue.mjs';
 import { jobRuntimeStatus } from './job-runtime.mjs';
+import { effectivePublicIngress, runtimePublicIngress } from './public-ingress-state.mjs';
 import { normalizeRunnerControlConfig } from './runner-access.mjs';
 import { listWorkspaceLeases } from './workspace-leases.mjs';
 import { resolveWorkspaceId } from './workspace-resolver.mjs';
@@ -73,16 +74,16 @@ function runnerSummary(config) {
   };
 }
 
-function allowedPublicHost(config) {
+function allowedPublicHost(config, ingress = effectivePublicIngress(config)) {
   const mode = config.deployment.mode;
   if (mode === 'personal') return true;
   const allowed = new Set((config.production.allowedHosts || [])
     .map(value => String(value || '').trim().toLowerCase())
     .filter(Boolean));
   if (!allowed.size) return mode !== 'production';
-  if (!config.deployment.publicUrl) return false;
+  if (!ingress?.publicUrl) return false;
   try {
-    const url = new URL(config.deployment.publicUrl);
+    const url = new URL(ingress.publicUrl);
     return allowed.has(url.host.toLowerCase()) || allowed.has(url.hostname.toLowerCase());
   } catch {
     return false;
@@ -93,10 +94,19 @@ export function publicDeployment(config = readConfig()) {
   normalizeDeploymentConfig(config);
   normalizeRunnerControlConfig(config);
   const context = requestContext();
+  const runtimeIngress = runtimePublicIngress(config);
+  const effectiveIngress = effectivePublicIngress(config);
   return {
     mode: config.deployment.mode,
     tunnelProvider: config.deployment.tunnelProvider,
     publicUrl: config.deployment.publicUrl || null,
+    effectivePublicUrl: effectiveIngress.publicUrl || null,
+    publicIngress: {
+      source: effectiveIngress.source,
+      provider: effectiveIngress.provider || null,
+      verifiedRuntime: effectiveIngress.source === 'runtime' && effectiveIngress.verified,
+      runtime: runtimeIngress
+    },
     teamEnabled: config.team.enabled,
     requireWorkspaceLeaseForWrites: config.team.requireWorkspaceLeaseForWrites,
     approvalPolicy: approvalPolicy(config),
@@ -132,8 +142,10 @@ export function readiness(config = readConfig()) {
   const durable = durableStateStatus();
   const runners = runnerSummary(config);
   const sharedDeployment = config.deployment.mode !== 'personal';
-  const publicHostAllowed = allowedPublicHost(config);
+  const publicIngress = effectivePublicIngress(config);
+  const publicHostAllowed = allowedPublicHost(config, publicIngress);
   const hostPolicyActive = config.deployment.mode === 'production' || config.production.allowedHosts.length > 0;
+  const publicIngressRequired = config.deployment.mode !== 'personal';
 
   add(
     'owner-token',
@@ -142,8 +154,12 @@ export function readiness(config = readConfig()) {
   );
   add(
     'public-url',
-    config.deployment.mode === 'personal' || !!config.deployment.publicUrl,
-    config.deployment.publicUrl || 'not configured'
+    !publicIngressRequired || publicIngress.available,
+    !publicIngressRequired
+      ? 'not required in personal mode'
+      : publicIngress.available
+        ? `${publicIngress.source}: ${publicIngress.publicUrl}`
+        : publicIngress.reason || 'no effective public ingress'
   );
   add(
     'tunnel-provider',
@@ -163,7 +179,7 @@ export function readiness(config = readConfig()) {
       ? 'not restricted'
       : publicHostAllowed
         ? config.production.allowedHosts.join(', ')
-        : `public URL host is not allowed by: ${config.production.allowedHosts.join(', ') || 'no configured hosts'}`
+        : `effective public URL host is not allowed by: ${config.production.allowedHosts.join(', ') || 'no configured hosts'}`
   );
   add(
     'auth-required',
