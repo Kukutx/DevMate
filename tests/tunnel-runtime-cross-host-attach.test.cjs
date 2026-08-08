@@ -4,13 +4,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const runtime = require('../vscode-host/tunnel-runtime.js');
 
-function controllerWithReadyForeignRecord({ localUrl, sharedUrl }) {
+function controllerWithReadyForeignRecord({ provider = 'ngrok', localUrl, sharedUrl }) {
   let startCalls = 0;
   const record = {
     ownerId: 'obsidian-owner',
     hostId: 'obsidian',
     status: 'ready',
-    provider: 'ngrok',
+    provider,
     port: 8787,
     publicUrl: sharedUrl,
     configurationKey: 'different-host-config-key'
@@ -22,20 +22,24 @@ function controllerWithReadyForeignRecord({ localUrl, sharedUrl }) {
     match(port) {
       return {
         port: Number(port),
-        provider: 'ngrok',
+        provider,
         configurationKey: `local-${localUrl}`,
-        settings: { provider: 'ngrok', ngrokUrl: localUrl }
+        settings: provider === 'ngrok'
+          ? { provider, ngrokUrl: localUrl }
+          : { provider, publicUrl: localUrl }
       };
     },
     async start() {
       startCalls += 1;
-      throw new Error('A competing ngrok process must not be started');
+      if (provider === 'ngrok') throw new Error('A competing ngrok process must not be started');
+      throw Object.assign(new Error('configuration conflict'), { code: 'DEVMATE_TUNNEL_CONFIGURATION_CONFLICT' });
     },
     async stop() {
       return { stopped: false, reason: 'managed-by-another-host', publicUrl: sharedUrl };
     },
     status() {
-      throw new Error('Strict local configuration status must not reject an already-ready foreign endpoint');
+      if (provider === 'ngrok') throw new Error('Strict local configuration status must not reject an already-ready foreign endpoint');
+      throw Object.assign(new Error('configuration conflict'), { code: 'DEVMATE_TUNNEL_CONFIGURATION_CONFLICT' });
     },
     get startCalls() { return startCalls; }
   };
@@ -65,4 +69,23 @@ test('VS Code-style tunnel runtime attaches to an Obsidian-owned ready ngrok end
   const stopped = await runtime.stopTunnel();
   assert.equal(stopped.stopped, false);
   assert.equal(stopped.reason, 'managed-by-another-host');
+});
+
+test('relaxed cross-host attachment never overrides conflicting external ingress configuration', async () => {
+  const controller = controllerWithReadyForeignRecord({
+    provider: 'external',
+    localUrl: 'https://local-external.example.test',
+    sharedUrl: 'https://foreign-external.example.test'
+  });
+  runtime.setTunnelController(controller);
+
+  await assert.rejects(
+    runtime.startTunnel(8787),
+    error => error?.code === 'DEVMATE_TUNNEL_CONFIGURATION_CONFLICT'
+  );
+  assert.equal(controller.startCalls, 1);
+  assert.throws(
+    () => runtime.tunnelStatus(8787),
+    error => error?.code === 'DEVMATE_TUNNEL_CONFIGURATION_CONFLICT'
+  );
 });
