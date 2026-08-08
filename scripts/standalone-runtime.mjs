@@ -51,9 +51,6 @@ export function validateStandaloneIngress({ mode, provider, publicUrl }) {
   if (mode === 'production' && provider === 'cloudflare-quick') {
     throw new Error('Cloudflare Quick Tunnels are development-only and cannot be used for production mode');
   }
-  if ((provider === 'cloudflare-managed' || provider === 'external') && !publicUrl) {
-    throw new Error(`${provider} requires --public-url with a stable HTTPS origin`);
-  }
   if (mode === 'production' && !publicUrl) {
     throw new Error('Production mode requires --public-url with a stable HTTPS origin');
   }
@@ -70,8 +67,7 @@ export function initConfig(options = {}) {
   const provider = cleanProvider(String(options.provider || (mode === 'production' ? 'cloudflare-managed' : 'ngrok')), mode);
   const port = Math.min(65535, Math.max(1024, Number(options.port) || 8787));
   const rawPublicUrl = String(options['public-url'] || '').trim();
-  const requiresHttps = !!rawPublicUrl || mode === 'production' || provider === 'cloudflare-managed' || provider === 'external';
-  const publicUrl = normalizeOrigin(rawPublicUrl, { httpsOnly: requiresHttps });
+  const publicUrl = normalizeOrigin(rawPublicUrl, { httpsOnly: mode === 'production' || !!rawPublicUrl });
   validateStandaloneIngress({ mode, provider, publicUrl });
   const config = newPersonalConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
 
@@ -112,10 +108,8 @@ export function doctor(options = {}) {
   const provider = config.deployment?.tunnelProvider;
   if (provider === 'ngrok') checks.push({ key: 'ngrok', ...executableStatus('ngrok') });
   if (String(provider).startsWith('cloudflare')) checks.push({ key: 'cloudflared', ...executableStatus('cloudflared') });
-  if (config.deployment?.mode === 'production' || provider === 'cloudflare-managed' || provider === 'external') {
-    checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.deployment.publicUrl || ''), detail: config.deployment.publicUrl || 'missing' });
-  }
   if (config.deployment?.mode === 'production') {
+    checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.deployment.publicUrl || ''), detail: config.deployment.publicUrl || 'missing' });
     checks.push({ key: 'allowed-hosts', ok: !!config.production?.allowedHosts?.length, detail: (config.production?.allowedHosts || []).join(', ') || 'missing' });
   }
   return { ok: checks.every(check => check.ok), checks, deployment: config.deployment, teamEnabled: !!config.team?.enabled };
