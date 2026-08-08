@@ -63,9 +63,11 @@ Obsidian bridge/context
 
 Public ingress is resolved independently when available:
 
-1. a live shared tunnel record for the same Gateway port, regardless of provider;
-2. the explicit Obsidian **Public origin** setting;
-3. a stable `deployment.publicUrl` already present in the shared DevMate configuration.
+1. the explicit Obsidian **Public origin** setting, when the user has deliberately selected one;
+2. otherwise, a live shared tunnel record for the same Gateway port, regardless of provider;
+3. otherwise, a stable `deployment.publicUrl` already present in the shared DevMate configuration.
+
+This preserves the original host contract: an explicit Obsidian Public origin is a user override, not a lower-priority hint. A temporary shared tunnel must not silently replace it.
 
 `Copy MCP URL` never falls back to localhost. It requires a public HTTPS origin and then performs:
 
@@ -82,7 +84,7 @@ If no public origin exists, start/configure ingress from VS Code or external inf
 
 When VS Code and Obsidian resolve the same workspace root, both use the same state directory under `~/.devmate/hosts/`. Either host may start the shared Gateway; a later host attaches instead of creating a duplicate.
 
-Tunnel ownership is different: the provider runtime is owned by the VS Code/deployment side. Obsidian only observes a ready shared tunnel record so it can display and verify the active public endpoint. It does not stop or take over that tunnel when Obsidian starts, restarts, closes, or changes settings.
+Tunnel ownership is different: the provider runtime is owned by the VS Code/deployment side. Obsidian only observes a ready shared tunnel record so it can display and verify the active public endpoint when no explicit Public origin overrides it. It does not stop or take over that tunnel when Obsidian starts, restarts, closes, or changes settings.
 
 This preserves the DevMate provider model introduced for team and production use: `ngrok` remains the default personal provider, while Cloudflare Quick, Cloudflare managed, and external HTTPS ingress remain valid deployment choices.
 
