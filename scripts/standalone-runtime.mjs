@@ -3,16 +3,18 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import configStore from '../shared/config-store.cjs';
+import instanceConfig from '../shared/instance-config.cjs';
 import portConfig from '../shared/port.cjs';
 import {
   createTeamMember,
   memberPublic,
-  normalizeDeploymentConfig,
+  normalizeInstanceConfig,
   revokeTeamMember,
   rotateTeamMemberToken
 } from '../gateway/team-access.mjs';
 
 const { DEFAULT_VERSION, newPersonalConfig, readJson: readConfigJson, updateConfig } = configStore;
+const { CONNECTION_PROVIDERS } = instanceConfig;
 const { parsePortOption } = portConfig;
 
 export function configFile(options = {}) {
@@ -23,16 +25,10 @@ export function readConfig(file) {
   return readConfigJson(file, null, { strict: true, supportedVersion: true });
 }
 
-export function cleanMode(value) {
-  if (!['personal', 'team', 'production'].includes(value)) throw new Error(`Unknown deployment mode: ${value}`);
-  return value;
-}
-
-export function cleanProvider(value, mode) {
-  const allowed = ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external'];
-  if (!allowed.includes(value)) throw new Error(`Unknown tunnel provider: ${value}`);
-  if (mode === 'production' && value === 'cloudflare-quick') throw new Error('Cloudflare Quick Tunnels are development-only and cannot be used for production mode');
-  return value;
+export function cleanProvider(value) {
+  const provider = String(value || '').trim().toLowerCase();
+  if (!CONNECTION_PROVIDERS.includes(provider)) throw new Error(`Unknown connection provider: ${value}`);
+  return provider;
 }
 
 export function normalizeOrigin(value, { httpsOnly = false } = {}) {
@@ -49,45 +45,110 @@ export function normalizeOrigin(value, { httpsOnly = false } = {}) {
   return `${url.protocol}//${url.host}`;
 }
 
-export function validateStandaloneIngress({ mode, provider, publicUrl }) {
-  if (mode === 'production' && provider === 'cloudflare-quick') {
-    throw new Error('Cloudflare Quick Tunnels are development-only and cannot be used for production mode');
+export function validateStandaloneIngress({ provider, publicUrl }) {
+  const normalizedProvider = cleanProvider(provider);
+  const normalizedUrl = publicUrl ? normalizeOrigin(publicUrl, { httpsOnly: true }) : '';
+  if ((normalizedProvider === 'cloudflare-managed' || normalizedProvider === 'external') && !normalizedUrl) {
+    throw new Error(`${normalizedProvider} requires --public-url with a stable HTTPS origin`);
   }
-  if (mode === 'production' && !publicUrl) {
-    throw new Error('Production mode requires --public-url with a stable HTTPS origin');
+  return { provider: normalizedProvider, publicUrl: normalizedUrl };
+}
+
+function optionalInteger(value, fallback, min, max, label) {
+  if (value === undefined) return fallback;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < min || numeric > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
   }
-  return { mode, provider, publicUrl };
+  return numeric;
+}
+
+function optionalBoolean(value, fallback, label) {
+  if (value === undefined) return fallback;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  throw new Error(`${label} must be a boolean`);
 }
 
 export function initConfig(options = {}) {
   const file = configFile(options);
-  if (fs.existsSync(file) && options.force !== true && options.force !== 'true') throw new Error(`Config already exists: ${file}. Pass --force to replace it.`);
+  if (fs.existsSync(file) && options.force !== true && options.force !== 'true') {
+    throw new Error(`Config already exists: ${file}. Pass --force to replace it.`);
+  }
   const workspace = path.resolve(String(options.workspace || process.cwd()));
   if (!fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);
 
-  const mode = cleanMode(String(options.mode || 'team'));
-  const provider = cleanProvider(String(options.provider || (mode === 'production' ? 'cloudflare-managed' : 'ngrok')), mode);
+  const provider = cleanProvider(String(options.provider || 'ngrok'));
   const port = parsePortOption(options.port, { label: '--port' });
   const rawPublicUrl = String(options['public-url'] || '').trim();
-  const publicUrl = normalizeOrigin(rawPublicUrl, { httpsOnly: mode === 'production' || !!rawPublicUrl });
-  validateStandaloneIngress({ mode, provider, publicUrl });
+  const publicUrl = rawPublicUrl ? normalizeOrigin(rawPublicUrl, { httpsOnly: true }) : '';
+  validateStandaloneIngress({ provider, publicUrl });
   const config = newPersonalConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
 
   config.instanceId = `standalone-${Date.now().toString(36)}`;
   config.activeWorkspaceId = 'workspace';
   config.workspaces[0].id = 'workspace';
-  config.deployment = { mode, tunnelProvider: provider, publicUrl };
-  config.team.enabled = mode !== 'personal';
-  config.team.requireWorkspaceLeaseForWrites = mode !== 'personal';
-  config.permissions.blockDangerousOperations = mode !== 'personal';
-  config.permissions.confirmBeforePush = mode !== 'personal';
-  config.maintenance.auditRetentionDays = mode === 'production' ? 90 : 30;
-  config.production.requestsPerMinute = mode === 'production' ? 120 : 600;
-  config.production.maxConcurrentRequests = mode === 'production' ? 24 : 64;
-  config.production.maxConcurrentPerPrincipal = mode === 'production' ? 4 : 16;
-  config.production.allowedHosts = publicUrl ? [new URL(publicUrl).host.toLowerCase()] : [];
+  config.connection.provider = provider;
+  config.connection.publicUrl = publicUrl;
+  config.team.requireWorkspaceLeaseForWrites = optionalBoolean(
+    options['require-workspace-lease-for-writes'],
+    config.team.requireWorkspaceLeaseForWrites,
+    '--require-workspace-lease-for-writes'
+  );
+  config.jobs.embeddedRunnerEnabled = optionalBoolean(
+    options['embedded-runner'],
+    config.jobs.embeddedRunnerEnabled,
+    '--embedded-runner'
+  );
+  config.runtime.maxConcurrentJobs = optionalInteger(
+    options['max-concurrent-jobs'],
+    config.runtime.maxConcurrentJobs,
+    1,
+    8,
+    '--max-concurrent-jobs'
+  );
+  config.requestPolicy.requestsPerMinute = optionalInteger(
+    options['requests-per-minute'],
+    config.requestPolicy.requestsPerMinute,
+    10,
+    10000,
+    '--requests-per-minute'
+  );
+  config.requestPolicy.maxConcurrentRequests = optionalInteger(
+    options['max-concurrent-requests'],
+    config.requestPolicy.maxConcurrentRequests,
+    1,
+    256,
+    '--max-concurrent-requests'
+  );
+  config.requestPolicy.maxConcurrentPerPrincipal = optionalInteger(
+    options['max-concurrent-per-principal'],
+    config.requestPolicy.maxConcurrentPerPrincipal,
+    1,
+    64,
+    '--max-concurrent-per-principal'
+  );
+  config.requestPolicy.maxRequestBytes = optionalInteger(
+    options['max-request-bytes'],
+    config.requestPolicy.maxRequestBytes,
+    65536,
+    33554432,
+    '--max-request-bytes'
+  );
+  config.requestPolicy.requestTimeoutMs = optionalInteger(
+    options['request-timeout-ms'],
+    config.requestPolicy.requestTimeoutMs,
+    1000,
+    3600000,
+    '--request-timeout-ms'
+  );
+  config.requestPolicy.allowedHosts = publicUrl && optionalBoolean(options['restrict-public-host'], false, '--restrict-public-host')
+    ? [new URL(publicUrl).host.toLowerCase()]
+    : [];
 
-  updateConfig(file, () => config);
+  updateConfig(file, () => normalizeInstanceConfig(config));
   return { file, config, token: config.auth.token };
 }
 
@@ -98,33 +159,53 @@ function executableStatus(command, args = ['--version']) {
 
 export function doctor(options = {}) {
   const file = configFile(options);
-  const config = normalizeDeploymentConfig(readConfig(file));
+  const config = normalizeInstanceConfig(readConfig(file));
   const workspace = config.workspaces?.find(item => item.id === config.activeWorkspaceId) || config.workspaces?.[0];
   const checks = [
     { key: 'config', ok: true, detail: file },
     { key: 'workspace', ok: !!workspace && !!fs.statSync(workspace.root, { throwIfNoEntry: false })?.isDirectory(), detail: workspace?.root || 'missing' },
-    { key: 'owner-token', ok: !!config.auth?.token, detail: config.auth?.token ? 'configured' : 'missing' },
+    { key: 'owner-token', ok: !!config.auth?.token || config.auth?.required === false, detail: config.auth?.token ? 'configured' : config.auth?.required === false ? 'disabled' : 'missing' },
     { key: 'git', ...executableStatus('git') },
     { key: 'node', ok: true, detail: process.version }
   ];
-  const provider = config.deployment?.tunnelProvider;
+  const provider = config.connection.provider;
   if (provider === 'ngrok') checks.push({ key: 'ngrok', ...executableStatus('ngrok') });
-  if (String(provider).startsWith('cloudflare')) checks.push({ key: 'cloudflared', ...executableStatus('cloudflared') });
-  if (config.deployment?.mode === 'production') {
-    checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.deployment.publicUrl || ''), detail: config.deployment.publicUrl || 'missing' });
-    checks.push({ key: 'allowed-hosts', ok: !!config.production?.allowedHosts?.length, detail: (config.production?.allowedHosts || []).join(', ') || 'missing' });
+  if (provider.startsWith('cloudflare')) checks.push({ key: 'cloudflared', ...executableStatus('cloudflared') });
+  if (provider === 'cloudflare-managed' || provider === 'external') {
+    checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.connection.publicUrl || ''), detail: config.connection.publicUrl || 'missing' });
   }
-  return { ok: checks.every(check => check.ok), checks, deployment: config.deployment, teamEnabled: !!config.team?.enabled };
+  if (config.requestPolicy.allowedHosts.length) {
+    const configuredHost = config.connection.publicUrl ? new URL(config.connection.publicUrl).host.toLowerCase() : '';
+    checks.push({
+      key: 'allowed-hosts',
+      ok: !configuredHost || config.requestPolicy.allowedHosts.includes(configuredHost),
+      detail: config.requestPolicy.allowedHosts.join(', ')
+    });
+  }
+  return {
+    ok: checks.every(check => check.ok),
+    checks,
+    connection: { ...config.connection },
+    access: {
+      ownerOnly: config.team.members.length === 0,
+      memberCount: config.team.members.length,
+      workspaceLeasesRequired: config.team.requireWorkspaceLeaseForWrites
+    },
+    execution: {
+      embeddedRunnerEnabled: config.jobs.embeddedRunnerEnabled,
+      externalRunnerControlEnabled: config.runnerControl?.enabled === true
+    }
+  };
 }
 
 export function ownerUrl(options = {}) {
-  const config = readConfig(configFile(options));
-  const origin = normalizeOrigin(options.url || config.deployment?.publicUrl || `http://127.0.0.1:${config.server?.port || 8787}`);
+  const config = normalizeInstanceConfig(readConfig(configFile(options)));
+  const origin = normalizeOrigin(options.url || config.connection.publicUrl || `http://127.0.0.1:${config.server?.port || 8787}`);
   return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
 }
 
 export function memberList(options = {}) {
-  const config = normalizeDeploymentConfig(readConfig(configFile(options)));
+  const config = normalizeInstanceConfig(readConfig(configFile(options)));
   return config.team.members.map(memberPublic);
 }
 
@@ -133,8 +214,7 @@ export function memberCreate(options = {}) {
   const workspaceIds = String(options.workspaces || options.workspace || '').split(',').map(value => value.trim()).filter(Boolean);
   let result = null;
   updateConfig(file, current => {
-    const config = normalizeDeploymentConfig(current);
-    if (!config.team.enabled) throw new Error('Team mode is not enabled in this config');
+    const config = normalizeInstanceConfig(current);
     const name = String(options.name || '').trim();
     if (!name) throw new Error('--name is required');
     result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });
@@ -148,7 +228,11 @@ export function memberRotate(options = {}) {
   const id = String(options.id || '').trim();
   if (!id) throw new Error('--id is required');
   let result = null;
-  updateConfig(file, current => { const config = normalizeDeploymentConfig(current); result = rotateTeamMemberToken(config, id); return config; });
+  updateConfig(file, current => {
+    const config = normalizeInstanceConfig(current);
+    result = rotateTeamMemberToken(config, id);
+    return config;
+  });
   return result;
 }
 
@@ -157,7 +241,11 @@ export function memberRevoke(options = {}) {
   const id = String(options.id || '').trim();
   if (!id) throw new Error('--id is required');
   let member = null;
-  updateConfig(file, current => { const config = normalizeDeploymentConfig(current); member = revokeTeamMember(config, id); return config; });
+  updateConfig(file, current => {
+    const config = normalizeInstanceConfig(current);
+    member = revokeTeamMember(config, id);
+    return config;
+  });
   return member;
 }
 
