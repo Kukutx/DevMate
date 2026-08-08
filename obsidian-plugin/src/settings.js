@@ -113,7 +113,7 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Public origin')
-      .setDesc('Optional clean HTTPS origin managed outside Obsidian. A live shared VS Code tunnel takes precedence; otherwise this origin is verified before Copy MCP URL succeeds.')
+      .setDesc('Optional clean HTTPS origin managed outside Obsidian. When set, it is the explicit endpoint used for MCP verification; otherwise DevMate discovers the active shared tunnel or shared deployment URL.')
       .addText(text => text
         .setPlaceholder('https://devmate.example.com')
         .setValue(this.plugin.settings.publicOrigin)
