@@ -31,9 +31,12 @@ test('actual VS Code process calls resolve the private active spawn chain at cal
   assert.doesNotMatch(source, /data\.version\s*=\s*9\b/);
 });
 
-test('ngrok setup is settings-only and provider processes are owned by TunnelController', () => {
+test('ngrok setup owns only configuration and secrets while TunnelController owns provider processes', () => {
   assert.doesNotMatch(ngrokSetupEntry, /SpawnLayer|runtime-io\.js|createExtensionSpawn|installManagedSpawnLayer/);
-  assert.match(ngrokSetupEntry, /context\.secrets\.store\(SECRET_KEY, token\)/);
+  assert.match(ngrokSetupEntry, /context\.secrets\.store\(SECRET_KEY, validateAuthtoken\(token\)\)/);
+  assert.match(ngrokSetupEntry, /managedAuthtoken = validateAuthtoken\(token\)/);
+  assert.match(ngrokSetupEntry, /writeActiveNgrokUrl/);
+  assert.doesNotMatch(ngrokSetupEntry, /childProcess\.spawn\(/);
   assert.match(ngrokSetupEntry, /activationAttempted/);
   assert.match(ngrokSetupEntry, /activated/);
 
