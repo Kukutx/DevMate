@@ -220,13 +220,13 @@ async function ensureNgrokInstalled() {
   return false;
 }
 
-async function recommendedSetup(context) {
+async function recommendedSetup(context, { offerStart = true } = {}) {
   const token = await promptAuthtokenValue('DevMate · Quick ngrok Setup');
-  if (!token) return;
+  if (!token) return false;
   let domain = { cancelled: false, changed: true, url: '' };
   if (stableNgrokUrlRequired(sharedConfigFile)) {
     const url = await promptStableUrlValue(configuredUrl());
-    if (url === null) return;
+    if (url === null) return false;
     domain = { cancelled: false, changed: true, url };
   }
   await commitNgrokConfiguration(context, {
@@ -236,10 +236,11 @@ async function recommendedSetup(context) {
     pooling: false
   });
   log('Completed recommended ngrok setup.');
-  await offerStartAgain('ngrok setup is complete.');
+  if (offerStart) await offerStartAgain('ngrok setup is complete.');
+  return true;
 }
 
-async function advancedSetup(context) {
+async function advancedSetup(context, { offerStart = true } = {}) {
   const accountChoice = await vscode.window.showQuickPick([
     {
       label: '$(key) Let DevMate manage the ngrok account',
@@ -256,15 +257,15 @@ async function advancedSetup(context) {
     placeHolder: 'Choose how DevMate should manage the ngrok account',
     ignoreFocusOut: true
   });
-  if (!accountChoice) return;
+  if (!accountChoice) return false;
 
   let token;
   if (accountChoice.value === 'managed') {
     token = await promptAuthtokenValue();
-    if (!token) return;
+    if (!token) return false;
   }
   const domain = await chooseDomain();
-  if (domain.cancelled) return;
+  if (domain.cancelled) return false;
 
   await commitNgrokConfiguration(context, {
     ...(token ? { token } : {}),
@@ -273,12 +274,13 @@ async function advancedSetup(context) {
     pooling: false
   });
   log(`Configured DevMate to use ${accountChoice.value === 'managed' ? 'a managed ngrok account' : 'the global ngrok configuration'}.`);
-  await offerStartAgain('Advanced ngrok setup is complete.');
+  if (offerStart) await offerStartAgain('Advanced ngrok setup is complete.');
+  return true;
 }
 
-async function guidedSetup(context) {
+async function guidedSetup(context, { offerStart = true } = {}) {
   setupOutput.show(true);
-  if (!await ensureNgrokInstalled()) return;
+  if (!await ensureNgrokInstalled()) return false;
 
   const choice = await vscode.window.showQuickPick([
     {
@@ -303,10 +305,15 @@ async function guidedSetup(context) {
     placeHolder: 'Choose a setup path',
     ignoreFocusOut: true
   });
-  if (!choice) return;
-  if (choice.value === 'recommended') await recommendedSetup(context);
-  if (choice.value === 'advanced') await advancedSetup(context);
+  if (!choice) return false;
+  if (choice.value === 'recommended') return recommendedSetup(context, { offerStart });
+  if (choice.value === 'advanced') return advancedSetup(context, { offerStart });
   if (choice.value === 'dashboard') await openExternal(NGROK_SETUP_URL);
+  return false;
+}
+
+async function setupForDeployment(context) {
+  return guidedSetup(context, { offerStart: false });
 }
 
 async function switchAccount(context) {
@@ -467,5 +474,6 @@ async function deactivate() {
 module.exports = {
   activate,
   deactivate,
-  loadBaseExtension
+  loadBaseExtension,
+  setupForDeployment
 };
