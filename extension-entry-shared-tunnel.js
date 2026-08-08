@@ -2,14 +2,11 @@
 
 const vscode = require('vscode');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
+const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
 const { TunnelController } = require('./vscode-host/tunnel-controller.js');
 const { clearTunnelController, setTunnelController } = require('./vscode-host/tunnel-runtime.js');
-const {
-  deploymentMode: validateDeploymentMode,
-  tunnelMaxRestarts,
-  tunnelProvider: validateTunnelProvider
-} = require('./vscode-host/tunnel-settings.js');
+const { tunnelMaxRestarts } = require('./vscode-host/tunnel-settings.js');
 
 const NGROK_TOKEN_SECRET = 'devMate.ngrokAuthtoken';
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
@@ -19,17 +16,16 @@ let runtime = null;
 let output = null;
 let activation = null;
 let deactivation = null;
+let runtimeStateDirectory = '';
 
 function strictBoolean(value, label) {
   if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
   return value;
 }
 
-function tunnelSettings() {
-  const provider = String(setting(vscode, 'tunnelProvider', 'ngrok')).trim().toLowerCase();
-  const deploymentMode = String(setting(vscode, 'deploymentMode', 'personal')).trim().toLowerCase();
+function localTunnelSettings() {
   return {
-    provider: validateTunnelProvider(provider),
+    provider: String(setting(vscode, 'tunnelProvider', 'ngrok')).trim().toLowerCase(),
     publicUrl: setting(vscode, 'publicUrl', ''),
     ngrokUrl: setting(vscode, 'ngrokUrl', ''),
     ngrokCommandPath: setting(vscode, 'ngrokCommandPath', ''),
@@ -39,8 +35,15 @@ function tunnelSettings() {
     cloudflareCommandPath: setting(vscode, 'cloudflareCommandPath', ''),
     autoRestart: strictBoolean(setting(vscode, 'tunnelAutoRestart', true), 'tunnelAutoRestart'),
     maxRestarts: tunnelMaxRestarts(setting(vscode, 'tunnelMaxRestarts', 10)),
-    deploymentMode: validateDeploymentMode(deploymentMode)
+    deploymentMode: String(setting(vscode, 'deploymentMode', 'personal')).trim().toLowerCase()
   };
+}
+
+function tunnelSettings(stateDirectory = runtimeStateDirectory) {
+  return settingsFromState({
+    stateDirectory,
+    localSettings: localTunnelSettings()
+  });
 }
 
 function log(message) {
@@ -66,23 +69,24 @@ async function activate(context) {
     context.subscriptions.push(output);
     lifecycle = new VscodeHostLifecycle({ vscode });
     try {
-      tunnelSettings();
-      const stateDirectory = resolveVscodeStateDirectory(vscode, context);
+      runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
+      localTunnelSettings();
       runtime = new TunnelController({
-        stateDirectory,
-        settings: tunnelSettings,
+        stateDirectory: runtimeStateDirectory,
+        settings: () => tunnelSettings(runtimeStateDirectory),
         getSecrets: () => tunnelSecrets(context),
         hostId: `vscode-${process.pid}`,
         logger: log
       });
       setTunnelController(runtime);
       await lifecycle.activate(context);
-      log(`Provider-native shared tunnel runtime ready in ${stateDirectory}.`);
+      log(`Provider-native shared tunnel runtime ready in ${runtimeStateDirectory}.`);
     } catch (error) {
       const currentRuntime = runtime;
       const currentLifecycle = lifecycle;
       runtime = null;
       lifecycle = null;
+      runtimeStateDirectory = '';
       clearTunnelController(currentRuntime);
       try { await currentLifecycle?.deactivate(); } catch {}
       try { await currentRuntime?.dispose({ stopOwned: true }); } catch {}
@@ -101,6 +105,7 @@ async function deactivate() {
     const currentLifecycle = lifecycle;
     runtime = null;
     lifecycle = null;
+    runtimeStateDirectory = '';
     try {
       await currentLifecycle?.deactivate();
     } finally {
@@ -113,4 +118,10 @@ async function deactivate() {
   finally { deactivation = null; }
 }
 
-module.exports = { activate, deactivate, tunnelSecrets, tunnelSettings };
+module.exports = {
+  activate,
+  deactivate,
+  localTunnelSettings,
+  tunnelSecrets,
+  tunnelSettings
+};
