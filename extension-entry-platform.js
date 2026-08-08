@@ -372,7 +372,7 @@ async function tunnelDoctor(context) {
   } else if (settings.provider.startsWith('cloudflare')) {
     const command = settings.cloudflareCommandPath || 'cloudflared';
     const check = checkCommand(command);
-    log(`cloudflared: ${check.ok ? check.output : `MISSING (${check.output})`);
+    log(`cloudflared: ${check.ok ? check.output : `MISSING (${check.output})`}`);
     if (settings.provider === 'cloudflare-managed') {
       log(`Managed tunnel token: ${cloudflareTunnelToken ? 'configured' : 'not configured'}`);
     }
@@ -413,7 +413,7 @@ async function activate(context) {
     const stopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token change');
     await storeCloudflareToken(context, token);
     if (stopState.remoteOwner) {
-      vscode.window.showInformationMessage('Cloudflare Tunnel token saved locally. The tunnel managed by another host keeps its existing process token until that owner stops it.');
+      vscode.window.showInformationMessage('Cloudflare Tunnel token saved locally. The tunnel managed by another host keeps its existing process token until its owner stops it.');
     } else if (stopState.reason === 'stopped') {
       const choice = await vscode.window.showInformationMessage('Cloudflare Tunnel token saved and the previous managed tunnel was stopped.', 'Start Now');
       if (choice === 'Start Now') await vscode.commands.executeCommand('devMate.start');
