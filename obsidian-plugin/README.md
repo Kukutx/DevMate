@@ -1,11 +1,21 @@
 # DevMate for Obsidian
 
-DevMate is a desktop-only Obsidian host for the same local-first MCP Gateway used by VS Code and standalone deployments. A vault can be used for software projects, research, writing, operations, personal knowledge management, or any Property-based workflow.
+DevMate is a desktop-only Obsidian host for the DevMate MCP Gateway. The product path is the same public-MCP model used by DevMate in VS Code:
+
+```text
+Obsidian vault -> internal loopback Gateway -> ngrok HTTPS -> /mcp -> ChatGPT
+```
+
+`127.0.0.1` is an internal implementation detail. **DevMate is Ready only after the public ngrok `/mcp` endpoint passes MCP `initialize` and `tools/list`.**
 
 ## Core capabilities
 
-- share one workspace-derived Gateway and state directory with VS Code;
-- auto start, manual start, restart, or attach to an existing matching Gateway;
+- start or attach to the workspace-derived Gateway and shared state used by VS Code;
+- start or attach to the shared ngrok tunnel for that Gateway;
+- verify the public HTTPS `/mcp` endpoint before reporting Ready or copying its URL;
+- copy the verified public MCP URL and Bearer credential separately;
+- use the normal ngrok global configuration by default, or optionally store a DevMate-managed Authtoken with Electron OS-backed encryption when available;
+- auto start, manual start, restart, or stop the complete Gateway + ngrok public lifecycle;
 - run the bundled Gateway in an isolated Node.js 24+ child process rather than inside the Obsidian renderer;
 - auto-detect a usable Node runtime and allow an explicit Node executable override;
 - keep the DevMate panel DOM stable during health polling instead of rebuilding it periodically;
@@ -16,13 +26,11 @@ DevMate is a desktop-only Obsidian host for the same local-first MCP Gateway use
 - search Markdown bodies with bounded candidate, file-size, concurrency, result, and snippet limits;
 - explore deterministic inbound and outbound note-link neighborhoods;
 - audit Property coverage/types, orphan notes, unresolved links, duplicate names, and required fields;
-- inspect local index freshness and request latency summaries without transmitting analytics;
 - create, rename, move, trash, and update notes through public Obsidian APIs;
 - preview, apply, and roll back hash-bound batch Property plans;
-- retain bounded atomic operation evidence with conflict-aware rollback;
-- copy the authenticated MCP URL and a bounded context bundle.
+- retain bounded atomic operation evidence with conflict-aware rollback.
 
-## Build
+## Installation and runtime requirements
 
 From the repository root:
 
@@ -41,11 +49,32 @@ Copy the contents of `obsidian-plugin/dist` into:
 
 Then enable **DevMate** under Community Plugins.
 
-The plugin bundle contains its own DevMate Gateway code and does not require the VS Code extension. The Gateway runtime requires Node.js 24 or newer. DevMate first tries a configured executable, then a compatible Obsidian/Electron runtime, then `node` from `PATH`. If none is usable, startup fails with a clear diagnostic instead of using an incompatible Worker runtime.
+The plugin bundle contains its own DevMate Gateway code and does not require the VS Code extension. The isolated Gateway process requires Node.js 24 or newer. DevMate first tries a configured executable, then a compatible Obsidian/Electron Node runtime, then `node` from `PATH`. If none is usable, startup fails with a diagnostic instead of falling back to Worker threads.
+
+ngrok must be installed and authenticated. The simplest setup is the normal ngrok CLI configuration. An optional DevMate-managed Authtoken can be entered in settings; it is accepted only when Electron OS-backed encryption is available.
+
+## Start and Ready contract
+
+`DevMate: Start` is one business operation:
+
+```text
+Gateway start/attach
+-> ngrok start/attach
+-> obtain HTTPS public origin
+-> POST /mcp initialize with Bearer authentication
+-> preserve MCP session state when returned
+-> POST /mcp tools/list with authentication
+-> Ready
+-> copy public https://.../mcp URL when auto-copy is enabled
+```
+
+If ngrok is missing, authentication is invalid, the endpoint cannot be published, or public MCP verification fails, DevMate must not treat the internal loopback Gateway as a usable ChatGPT endpoint.
+
+Use **ngrok Doctor** for executable/account diagnostics. **Copy MCP URL** always re-verifies the public endpoint before copying it.
 
 ## Shared runtime
 
-When VS Code and Obsidian use the same workspace root, both resolve the same state directory under `~/.devmate/hosts/`. The first host starts the isolated Gateway process; later hosts verify the same `instanceId` and attach. A host never stops a process owned by another host.
+When VS Code and Obsidian use the same workspace root, both resolve the same state directory under `~/.devmate/hosts/`. The first host starts the Gateway and ngrok provider; a later host can attach to matching shared ownership rather than creating duplicates. A host never stops a Gateway or tunnel owned by another host.
 
 ## Main MCP tools
 
@@ -74,4 +103,4 @@ See `docs/OBSIDIAN_SEARCH_AND_GRAPH.md`, `docs/OBSIDIAN_DATA_WORKFLOWS.md`, and 
 
 ## Safety
 
-The Host Bridge binds only to loopback and uses a random Bearer token. Workspace identity and root must match. Paths are vault-relative, `.obsidian` is blocked, note mutations use public Obsidian APIs, and all batch mutations require a separate preview plan before application. Content search is read-only, bounded, and uses Obsidian's Vault API; local diagnostics store action-level aggregates rather than note content or query text.
+The internal Gateway and Host Bridge remain loopback-bound. ChatGPT receives only the ngrok HTTPS MCP endpoint. MCP credentials are not embedded in that URL and are accepted only through request headers. Workspace identity and root must match. Paths are vault-relative, `.obsidian` is blocked, note mutations use public Obsidian APIs, and all batch mutations require a separate preview plan before application. Content search is read-only and bounded; local diagnostics do not persist note content, Bearer tokens, or ngrok Authtokens.
