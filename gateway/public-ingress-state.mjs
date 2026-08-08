@@ -5,7 +5,7 @@ import { CONFIG_PATH } from './local-shared.mjs';
 
 const {
   cleanHttpsOrigin,
-  runtimeMatchesDeployment,
+  runtimeMatchesConnection,
   verifiedForCurrentRecord
 } = verification;
 const { SharedTunnelRecordStore } = tunnelRecordStore;
@@ -24,8 +24,8 @@ export function runtimePublicIngress(config, { stateDirectory } = {}) {
     if (!publicUrl) {
       return { available: false, verified: false, source: 'runtime', reason: 'shared tunnel URL is not a clean HTTPS origin' };
     }
-    const deploymentMatch = runtimeMatchesDeployment(config, record, publicUrl);
-    if (!deploymentMatch.matches) {
+    const connectionMatch = runtimeMatchesConnection(config, record, publicUrl);
+    if (!connectionMatch.matches) {
       return {
         available: false,
         verified: false,
@@ -34,7 +34,7 @@ export function runtimePublicIngress(config, { stateDirectory } = {}) {
         provider: record.provider,
         hostId: record.hostId || '',
         readyAt: record.readyAt || null,
-        reason: deploymentMatch.reason,
+        reason: connectionMatch.reason,
         stale: true
       };
     }
@@ -61,34 +61,35 @@ export function runtimePublicIngress(config, { stateDirectory } = {}) {
 }
 
 export function effectivePublicIngress(config, options = {}) {
-  const configured = cleanHttpsOrigin(config?.deployment?.publicUrl || '');
   const runtime = runtimePublicIngress(config, options);
+  if (runtime.available) return runtime;
+
+  const configured = cleanHttpsOrigin(config?.connection?.publicUrl || '');
   if (configured) {
     return {
       available: true,
       verified: false,
       source: 'configured',
       publicUrl: configured,
-      provider: config?.deployment?.tunnelProvider || null,
-      runtime
+      provider: config?.connection?.provider || null,
+      runtime,
+      reason: 'configured HTTPS origin is available but no current runtime preflight is recorded'
     };
   }
-  if (config?.deployment?.mode === 'team' && runtime.available && runtime.verified) return runtime;
+
   return {
     available: false,
     verified: false,
     source: 'none',
     publicUrl: '',
-    provider: config?.deployment?.tunnelProvider || null,
+    provider: config?.connection?.provider || null,
     runtime,
-    reason: config?.deployment?.mode === 'production'
-      ? 'production requires a configured stable public URL'
-      : runtime.reason || 'no effective public ingress'
+    reason: runtime.reason || 'no effective public ingress'
   };
 }
 
 export const __test = {
   cleanHttpsOrigin,
-  runtimeMatchesDeployment,
+  runtimeMatchesConnection,
   verifiedForCurrentRecord
 };
