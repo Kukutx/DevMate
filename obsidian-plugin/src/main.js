@@ -15,6 +15,7 @@ const {
 } = require('../../shared/public-ingress-verification.cjs');
 const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
 const { TunnelController } = require('../../vscode-host/tunnel-controller.js');
+const { assertTunnelSafeForCredentialChange } = require('../../vscode-host/tunnel-stop-policy.js');
 const { tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
 const { ObsidianHostBridge } = require('./host-bridge.js');
 const { ObsidianContextProvider } = require('./context-provider.js');
@@ -213,9 +214,12 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     const requestedProvider = patch.provider === undefined ? null : tunnelProvider(String(patch.provider));
     const requestedPublicUrl = patch.publicUrl === undefined ? null : String(patch.publicUrl || '').trim();
     const status = await this.controller.status().catch(() => null);
+    let stopState = { safe: true, remoteOwner: false, reason: 'not-running', tunnel: null };
     if (this.tunnelController) {
-      try { await this.tunnelController.stop(); } catch (error) {
-        this.logRuntime(`Connection reconfiguration stop reported: ${error.message || error}`);
+      const stopResult = await this.tunnelController.stop();
+      stopState = assertTunnelSafeForCredentialChange(stopResult, 'Obsidian connection configuration change');
+      if (stopState.remoteOwner) {
+        this.logRuntime('The shared public connection remains active in another desktop process; the new configuration will be used by the next connection generation.');
       }
     }
     const updated = updateConfig(this.controller.configFile, config => {
@@ -225,7 +229,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       return config;
     });
     this.clearPublicVerification();
-    if (status?.state === 'running') await this.startRuntime({ quiet: true });
+    if (status?.state === 'running' && !stopState.remoteOwner) await this.startRuntime({ quiet: true });
     else await this.refreshStatus();
     return updated;
   }
@@ -290,7 +294,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           if (recordGeneration(this.currentTunnelRecord(initialRecord.port)) !== generation) return config;
           config.connection = {
             ...config.connection,
-            ...successfulVerificationPatch(test, normalized, stamp)
+            ...successfulVerificationPatch(test, normalized, stamp, initialRecord)
           };
           return config;
         });
@@ -574,11 +578,22 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
       const preflight = await this.verifyPublicEndpoint(publicUrl, tunnel.record);
       this.runtimeDiagnostics?.clearFailure();
-      if (this.settings.autoCopyUrl) await navigator.clipboard.writeText(preflight.mcpUrl);
+      let copied = false;
+      let copyError = '';
+      if (this.settings.autoCopyUrl) {
+        try {
+          await navigator.clipboard.writeText(preflight.mcpUrl);
+          copied = true;
+          this.updateConnectionSnapshot({ lastCopiedAt: new Date().toISOString() });
+        } catch (error) {
+          copyError = error.message || String(error);
+          this.logRuntime(`DevMate reached Ready but automatic MCP URL copy failed: ${copyError}`);
+        }
+      }
       if (!quiet) {
-        new Notice(this.settings.autoCopyUrl
-          ? `DevMate ready. Verified MCP URL copied: ${redactUrl(preflight.mcpUrl)}`
-          : `DevMate ready: ${redactUrl(preflight.mcpUrl)}`);
+        if (copied) new Notice(`DevMate ready. Verified MCP URL copied: ${redactUrl(preflight.mcpUrl)}`);
+        else if (this.settings.autoCopyUrl && copyError) new Notice(`DevMate ready. Automatic URL copy failed; use Copy MCP URL if needed.`);
+        else new Notice(`DevMate ready: ${redactUrl(preflight.mcpUrl)}`);
       }
       return {
         ok: true,
@@ -588,7 +603,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         publicUrl: preflight.publicOrigin,
         mcpUrl: preflight.mcpUrl,
         toolCount: preflight.toolCount,
-        server: preflight.server
+        server: preflight.server,
+        copied,
+        copyError
       };
     } catch (error) {
       if (tunnel?.owned) {
