@@ -14,67 +14,78 @@ async function fixture(name) {
 
 async function readConfig(file) { return JSON.parse(await fsp.readFile(file, 'utf8')); }
 
-test('validates deployment presets', () => {
-  assert.equal(__test.presetOptions({ preset: 'personal' }).mode, 'personal');
-  assert.equal(__test.presetOptions({ preset: 'team' }).embeddedRunnerEnabled, true);
-  assert.throws(() => __test.presetOptions({ preset: 'control-plane' }), /requires --public-url/);
-  assert.throws(() => __test.presetOptions({ preset: 'unknown' }), /Unknown preset/);
-});
-
-test('rejects incompatible bootstrap options before creating a config', async t => {
+test('rejects invalid optional capabilities before creating a config', async t => {
   const current = await fixture('invalid');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   assert.throws(() => __test.bootstrap({
-    preset: 'personal', workspace: current.workspace, config: current.config, 'member-name': 'Alice'
-  }), /requires team or control-plane/);
+    workspace: current.workspace, config: current.config, 'member-role': 'developer'
+  }), /requires --member-name/);
   await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
   assert.throws(() => __test.bootstrap({
-    preset: 'runner', workspace: current.workspace, config: current.config, 'runner-concurrency': '0'
+    workspace: current.workspace, config: current.config, 'runner-concurrency': '0'
   }), /integer from 1 to 16/);
   await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
 });
 
-test('team bootstrap creates one scoped member without persisting its plaintext token', async t => {
-  const current = await fixture('team');
+test('default bootstrap creates one owner-only DevMate instance without a mode', async t => {
+  const current = await fixture('owner');
+  t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
+  const result = __test.bootstrap({ workspace: current.workspace, config: current.config });
+  assert.match(result.ownerToken, /^[A-Za-z0-9_-]{40,}$/);
+  assert.equal(result.connection.provider, 'ngrok');
+  assert.equal(result.access.ownerOnly, true);
+  assert.equal(result.execution.embeddedRunnerEnabled, true);
+  const config = await readConfig(current.config);
+  assert.equal('deployment' in config, false);
+  assert.equal('production' in config, false);
+  assert.equal('preset' in result, false);
+  assert.equal(__test.status({ config: current.config }).ok, true);
+});
+
+test('member access composes with the same instance and never persists its plaintext token', async t => {
+  const current = await fixture('member');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({
-    preset: 'team', workspace: current.workspace, config: current.config, 'member-name': 'Alice', 'member-role': 'developer'
+    workspace: current.workspace,
+    config: current.config,
+    'member-name': 'Alice',
+    'member-role': 'developer'
   });
-  assert.match(result.ownerToken, /^[A-Za-z0-9_-]{40,}$/);
   assert.match(result.member.token, /^dmt_/);
   const config = await readConfig(current.config);
   assert.equal(config.team.members.length, 1);
   assert.equal(config.team.members[0].tokenHash.includes(result.member.token), false);
+  assert.equal(config.connection.provider, 'ngrok');
   assert.equal(config.jobs.embeddedRunnerEnabled, true);
-  assert.equal(__test.status({ config: current.config }).ok, true);
 });
 
-test('control-plane bootstrap creates member and scoped external Runner credential in one command', async t => {
-  const current = await fixture('control-plane');
+test('external Runner control composes with members, connection provider and local execution in one instance', async t => {
+  const current = await fixture('composed');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({
-    preset: 'control-plane', workspace: current.workspace, config: current.config,
-    'public-url': 'https://devmate.example.com', 'member-name': 'Maintainer', 'member-role': 'maintainer',
-    'runner-name': 'Linux Builder', 'runner-capabilities': 'core,external,linux-x64', 'runner-concurrency': '2'
+    workspace: current.workspace,
+    config: current.config,
+    provider: 'external',
+    'public-url': 'https://devmate.example.com',
+    'member-name': 'Maintainer',
+    'member-role': 'maintainer',
+    'runner-name': 'Linux Builder',
+    'runner-capabilities': 'core,external,linux-x64',
+    'runner-concurrency': '2',
+    'embedded-runner': 'false'
   });
   assert.match(result.runner.token, /^dmr_/);
   const config = await readConfig(current.config);
-  assert.equal(config.deployment.mode, 'production');
+  assert.equal(config.connection.provider, 'external');
+  assert.equal(config.connection.publicUrl, 'https://devmate.example.com');
   assert.equal(config.jobs.embeddedRunnerEnabled, false);
   assert.equal(config.runnerControl.enabled, true);
+  assert.equal(config.team.members.length, 1);
   assert.deepEqual(config.runnerControl.credentials[0].workspaceIds, ['workspace']);
   assert.equal(config.runnerControl.credentials[0].tokenHash.includes(result.runner.token), false);
-  assert.equal(__test.status({ config: current.config }).preset, 'control-plane');
-  assert.equal(__test.status({ config: current.config }).ok, true);
-});
-
-test('runner bootstrap is a valid local execution-node configuration', async t => {
-  const current = await fixture('runner');
-  t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
-  const result = __test.bootstrap({ preset: 'runner', workspace: current.workspace, config: current.config });
-  assert.equal(result.preset, 'runner');
   const status = __test.status({ config: current.config });
-  assert.equal(status.preset, 'runner');
   assert.equal(status.ok, true);
-  assert.deepEqual(status.warnings, []);
+  assert.equal(status.execution.externalRunnerControlEnabled, true);
+  assert.equal(status.access.activeMembers, 1);
+  assert.equal('preset' in status, false);
 });

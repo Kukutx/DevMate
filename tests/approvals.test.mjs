@@ -8,8 +8,13 @@ const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-approvals-'));
 const configPath = path.join(temp, 'config.json');
 const config = {
   instanceId: 'approval-test',
-  deployment: { mode: 'production' },
-  team: { enabled: true, members: [] },
+  team: {
+    members: [],
+    approvals: {
+      enabled: true,
+      requiredCapabilities: ['publish', 'admin']
+    }
+  },
   permissions: { profile: 'fullAccess' }
 };
 await fsp.writeFile(configPath, JSON.stringify(config), 'utf8');
@@ -28,7 +33,7 @@ const call = {
   args: { workspaceId: 'app', remote: 'origin', branch: 'main' }
 };
 
-test('uses strict approval policy values instead of coercing malformed configuration', () => {
+test('approval policy is an explicit access capability and validates malformed values strictly', () => {
   assert.deepEqual(approvals.approvalPolicy(config), {
     enabled: true,
     requiredCapabilities: ['publish', 'admin'],
@@ -37,22 +42,11 @@ test('uses strict approval policy values instead of coercing malformed configura
     separationOfDuties: true,
     ownerBypass: true
   });
-  assert.throws(() => approvals.approvalPolicy({
-    deployment: { mode: 'production' },
-    team: { approvals: { enabled: 'false' } }
-  }), /must be a boolean/);
-  assert.throws(() => approvals.approvalPolicy({
-    deployment: { mode: 'production' },
-    team: { approvals: { ttlSeconds: '300' } }
-  }), /must be an integer/);
-  assert.throws(() => approvals.approvalPolicy({
-    deployment: { mode: 'production' },
-    team: { approvals: { requiredCapabilities: ['publish', 'root'] } }
-  }), /Invalid approval capability/);
-  assert.throws(() => approvals.approvalPolicy({
-    deployment: { mode: 'production' },
-    team: { approvals: { ownerByPass: false } }
-  }), /Unknown team\.approvals setting/);
+  assert.equal(approvals.approvalPolicy({ team: { members: [] } }).enabled, false);
+  assert.throws(() => approvals.approvalPolicy({ team: { approvals: { enabled: 'false' } } }), /must be a boolean/);
+  assert.throws(() => approvals.approvalPolicy({ team: { approvals: { ttlSeconds: '300' } } }), /must be an integer/);
+  assert.throws(() => approvals.approvalPolicy({ team: { approvals: { requiredCapabilities: ['publish', 'root'] } } }), /Invalid approval capability/);
+  assert.throws(() => approvals.approvalPolicy({ team: { approvals: { ownerByPass: false } } }), /Unknown team\.approvals setting/);
 });
 
 test('requires a separate maintainer and consumes approval on exact retry', () => {
@@ -62,18 +56,13 @@ test('requires a separate maintainer and consumes approval on exact retry', () =
     return error.code === 'approval_required' && pending?.status === 'pending';
   });
   assert.ok(pending.id.startsWith('approval-'));
-  assert.throws(() => approvals.decideApprovalRequest({
-    id: pending.id,
-    principal: alice,
-    decision: 'approve',
-    config
-  }), /different principal/);
+  assert.throws(() => approvals.decideApprovalRequest({ id: pending.id, principal: alice, decision: 'approve', config }), /different principal/);
 
   const approved = approvals.decideApprovalRequest({
     id: pending.id,
     principal: bob,
     decision: 'approve',
-    note: 'Reviewed deployment diff',
+    note: 'Reviewed change',
     config
   });
   assert.equal(approved.status, 'approved');

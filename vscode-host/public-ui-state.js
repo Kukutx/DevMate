@@ -4,7 +4,7 @@ const { verifiedForCurrentRecord } = require('../shared/public-ingress-verificat
 const { tunnelProvider: validateTunnelProvider } = require('./tunnel-settings.js');
 
 function deploymentProvider(config, fallback = 'ngrok') {
-  const value = config?.deployment?.tunnelProvider;
+  const value = config?.connection?.provider;
   return validateTunnelProvider(String(value === undefined ? fallback : value).trim().toLowerCase());
 }
 
@@ -24,48 +24,16 @@ function publicUiState(config, tunnelStatus = null, { runtimeError = '' } = {}) 
   const failure = currentFailure(config, record);
 
   if (verified) {
-    return {
-      state: 'verified',
-      provider: record.provider || provider,
-      publicUrl,
-      verified: true,
-      failure: '',
-      record,
-      tunnel: tunnelStatus
-    };
+    return { state: 'verified', provider: record.provider || provider, publicUrl, verified: true, failure: '', record, tunnel: tunnelStatus };
   }
   if (record?.status === 'ready' && publicUrl && failure) {
-    return {
-      state: 'failed',
-      provider: record.provider || provider,
-      publicUrl,
-      verified: false,
-      failure,
-      record,
-      tunnel: tunnelStatus
-    };
+    return { state: 'failed', provider: record.provider || provider, publicUrl, verified: false, failure, record, tunnel: tunnelStatus };
   }
   if (record?.status === 'ready' && publicUrl) {
-    return {
-      state: 'unverified',
-      provider: record.provider || provider,
-      publicUrl,
-      verified: false,
-      failure: '',
-      record,
-      tunnel: tunnelStatus
-    };
+    return { state: 'unverified', provider: record.provider || provider, publicUrl, verified: false, failure: '', record, tunnel: tunnelStatus };
   }
   if (record?.status === 'pending' || tunnelStatus?.running) {
-    return {
-      state: 'pending',
-      provider: record?.provider || tunnelStatus?.provider || provider,
-      publicUrl: '',
-      verified: false,
-      failure: '',
-      record,
-      tunnel: tunnelStatus
-    };
+    return { state: 'pending', provider: record?.provider || tunnelStatus?.provider || provider, publicUrl: '', verified: false, failure: '', record, tunnel: tunnelStatus };
   }
   return {
     state: runtimeError ? 'unavailable' : 'absent',
@@ -88,9 +56,4 @@ function statusLabel(state, gateway = null) {
   return 'DevMate: stopped';
 }
 
-module.exports = {
-  currentFailure,
-  deploymentProvider,
-  publicUiState,
-  statusLabel
-};
+module.exports = { currentFailure, deploymentProvider, publicUiState, statusLabel };
