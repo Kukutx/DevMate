@@ -31,7 +31,7 @@ The default shared state directory is:
 ~/.devmate/hosts/<workspace-name>-<real-path-hash>/
 ```
 
-Hosts resolving the same root share the owner token, `instanceId`, selected port, workspaces, audit state, jobs, operation plans, and host contexts. A custom absolute state path can deliberately join roots that differ, such as a VS Code project nested inside a larger Obsidian vault.
+Hosts resolving the same root share the owner token, `instanceId`, selected port, deployment state, workspaces, audit state, jobs, operation plans, and host contexts. A custom absolute state path can deliberately join roots that differ, such as a VS Code project nested inside a larger Obsidian vault.
 
 ## Shared Gateway runtime
 
@@ -55,6 +55,20 @@ A host first checks `/control/health`:
 - owned process: may stop or restart it.
 
 VS Code and Obsidian use one current desktop Gateway model: an isolated child process. There is no per-host Worker implementation or process-global spawn router.
+
+## Deployment configuration boundary
+
+The workspace shared `config.json` is the business source of truth for:
+
+- deployment mode: `personal`, `team`, or `production`;
+- active ingress provider;
+- stable public URL when required;
+- Team lease policy;
+- production request limits and Host allowlist.
+
+Change that state explicitly through **DevMate: Deployment Setup / Tunnel Setup** or the MCP `team_configure` tool. It is not mirrored through machine-global VS Code settings, so changing one project cannot silently change another open workspace.
+
+VS Code machine settings are limited to local execution details and setup candidates, such as provider executable paths, ngrok account mode, pooling/Traffic Policy, automatic restart, and remembered ngrok or managed/external URL candidates. A remembered URL candidate is not the active deployment URL; the active value is the one stored in the workspace shared config.
 
 ## Public ingress ownership
 
@@ -91,10 +105,13 @@ The verification contract does not change host ownership semantics. In particula
 
 - `devMate.vscodeStartupMode`: `auto`, `manual`, or `disabled`, default `auto`;
 - `devMate.sharedStateDirectory`: optional absolute override;
-- `devMate.tunnelProvider`: `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or `external`;
-- `ngrok` remains the default personal provider;
+- provider executable paths and local credential/account behavior remain machine-specific;
+- `devMate.ngrokUrl` and `devMate.publicUrl` are remembered setup candidates only;
+- `devMate.tunnelAutoRestart` and `devMate.tunnelMaxRestarts` control the local managed-provider process lifecycle;
+- active mode/provider/public URL and production policy live in shared config and are edited through Deployment/Tunnel Setup or `team_configure`;
+- `ngrok` remains the default personal provider in the shared personal configuration;
 - provider credentials remain in VS Code Secret Storage or provider/process configuration;
-- `DevMate: Start` runs the selected provider lifecycle and public MCP preflight;
+- `DevMate: Start` runs the provider selected by the current shared workspace deployment and performs public MCP preflight;
 - `DevMate: Copy URL` re-verifies the public endpoint before copying it.
 
 ### Obsidian
@@ -193,4 +210,4 @@ styles.css
 gateway/server.mjs
 ```
 
-The invariant is explicit: **desktop hosts share the Gateway; VS Code/deployment owns public ingress; Obsidian observes or references public ingress but never owns its lifecycle.**
+The invariant is explicit: **desktop hosts share the Gateway; workspace shared config owns deployment business state; VS Code/deployment owns public ingress; Obsidian observes or references public ingress but never owns its lifecycle.**
