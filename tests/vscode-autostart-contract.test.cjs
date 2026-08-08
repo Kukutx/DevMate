@@ -19,7 +19,8 @@ test('real VS Code Start returns the Ready evidence required by automatic lifecy
   assert.match(block, /return \{ok:true,[^\n]*mcpUrl:test\.mcpUrl,[^\n]*toolCount:test\.toolCount/);
   assert.match(lifecycle, /commandResult = await this\.vscode\.commands\.executeCommand\('devMate\.start'/);
   assert.match(lifecycle, /!commandResult\?\.mcpUrl/);
-  assert.match(lifecycle, /Number\(commandResult\?\.toolCount \|\| 0\) <= 0/);
+  assert.match(lifecycle, /!Number\.isInteger\(Number\(commandResult\?\.toolCount\)\)/);
+  assert.match(lifecycle, /Number\(commandResult\.toolCount\) <= 0/);
 });
 
 test('automatic lifecycle reaches Ready from one command instead of invoking setup substeps', () => {
