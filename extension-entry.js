@@ -5,11 +5,10 @@ const path = require('node:path');
 const vscode = require('vscode');
 const { normalizeNgrokUrl, validateAuthtoken } = require('./ngrok-support');
 const {
-  activeNgrokDeployment,
+  activeNgrokConnection,
   configuredNgrokUrl,
-  stableNgrokUrlRequired,
   writeActiveNgrokUrl
-} = require('./vscode-host/ngrok-deployment-state.js');
+} = require('./vscode-host/ngrok-connection-state.js');
 const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const {
   assertTunnelSafeForCredentialChange,
@@ -87,10 +86,10 @@ function currentTunnelRuntime() {
 }
 
 function ngrokCredentialInUse() {
-  const deployment = activeNgrokDeployment(sharedConfigFile);
+  const connection = activeNgrokConnection(sharedConfigFile);
   const runtime = currentTunnelRuntime();
   return credentialProviderInUse('ngrok', {
-    configuredProvider: deployment?.provider || '',
+    configuredProvider: connection?.provider || '',
     runtimeProvider: runtime?.provider || '',
     runtimeRunning: runtime?.running === true
   });
@@ -102,7 +101,7 @@ async function prepareNgrokCredentialMutation(operation) {
   }
   const stopState = assertTunnelSafeForCredentialChange(await stopTunnel(), operation);
   if (stopState.remoteOwner) {
-    log('ngrok credential is changing while the current ngrok tunnel is managed by another host; that process keeps its existing environment until its owner stops it.');
+    log('ngrok credential changed while the currently shared ngrok connection is active in another desktop process.');
   }
   return stopState;
 }
@@ -123,40 +122,38 @@ async function promptAuthtokenValue(title = 'DevMate · ngrok Account') {
 async function promptStableUrlValue(current = configuredUrl()) {
   const value = await vscode.window.showInputBox({
     title: 'DevMate · Stable ngrok URL',
-    prompt: 'Enter a URL or hostname owned by the selected account. Production requires a stable URL. Do not append /mcp.',
+    prompt: 'Optional URL or hostname owned by the selected account. Do not append /mcp.',
     value: current,
     ignoreFocusOut: true,
     validateInput: input => {
+      if (!String(input || '').trim()) return null;
       try { normalizeNgrokUrl(input); return null; } catch (error) { return error.message; }
     }
   });
-  return value === undefined ? null : normalizeNgrokUrl(value);
+  if (value === undefined) return null;
+  return String(value || '').trim() ? normalizeNgrokUrl(value) : '';
 }
 
 async function chooseDomain({ includeKeep = true, current = configuredUrl() } = {}) {
-  const stableRequired = stableNgrokUrlRequired(sharedConfigFile);
-  const items = [];
-  if (!stableRequired) {
-    items.push({
+  const items = [
+    {
       label: '$(sparkle) Use account default development domain (recommended)',
       description: 'Lowest-friction setup and safest choice when changing accounts',
       value: 'default'
-    });
-  }
-  items.push({
-    label: '$(globe) Configure a stable URL',
-    description: stableRequired
-      ? 'Required by the active production ngrok deployment'
-      : 'Developer option; the URL must belong to the selected ngrok account',
-    value: 'custom'
-  });
+    },
+    {
+      label: '$(globe) Configure a stable URL',
+      description: 'Optional developer/deployment choice; the URL must belong to the selected ngrok account',
+      value: 'custom'
+    }
+  ];
   if (includeKeep && current) {
     items.push({
       label: '$(debug-pause) Keep current stable URL',
       description: `${current} — only keep it if the selected account owns it`,
       value: 'keep'
     });
-  } else if (includeKeep && !stableRequired) {
+  } else if (includeKeep) {
     items.push({
       label: '$(debug-pause) Keep current setting',
       description: 'No stable URL is currently configured',
@@ -166,9 +163,7 @@ async function chooseDomain({ includeKeep = true, current = configuredUrl() } = 
 
   const choice = await vscode.window.showQuickPick(items, {
     title: 'DevMate · ngrok URL',
-    placeHolder: stableRequired
-      ? 'Production requires a stable URL owned by the selected account'
-      : 'Choose the public URL strategy for DevMate',
+    placeHolder: 'Choose the public URL strategy for DevMate',
     ignoreFocusOut: true
   });
   if (!choice) return { cancelled: true, changed: false, url: current };
@@ -203,7 +198,7 @@ async function commitNgrokConfiguration(context, {
     useManagedAccount: usesManagedAccount(),
     machineUrl: machineConfiguredUrl(),
     pooling: poolingEnabled(),
-    activeDeployment: activeNgrokDeployment(sharedConfigFile)
+    activeConnection: activeNgrokConnection(sharedConfigFile)
   };
 
   await prepareNgrokCredentialMutation('ngrok configuration change');
@@ -219,7 +214,7 @@ async function commitNgrokConfiguration(context, {
     try { await restoreSecret(context, previous.token); } catch {}
     try { await updatePreference('ngrokUseManagedAccount', previous.useManagedAccount); } catch {}
     try {
-      if (previous.activeDeployment) writeActiveNgrokUrl(sharedConfigFile, previous.activeDeployment.publicUrl);
+      if (previous.activeConnection) writeActiveNgrokUrl(sharedConfigFile, previous.activeConnection.publicUrl);
     } catch {}
     try { await updatePreference('ngrokUrl', previous.machineUrl); } catch {}
     try { await updatePreference('ngrokPoolingEnabled', previous.pooling); } catch {}
@@ -254,16 +249,10 @@ async function ensureNgrokInstalled() {
 async function recommendedSetup(context, { offerStart = true } = {}) {
   const token = await promptAuthtokenValue('DevMate · Quick ngrok Setup');
   if (!token) return false;
-  let domain = { cancelled: false, changed: true, url: '' };
-  if (stableNgrokUrlRequired(sharedConfigFile)) {
-    const url = await promptStableUrlValue(configuredUrl());
-    if (url === null) return false;
-    domain = { cancelled: false, changed: true, url };
-  }
   await commitNgrokConfiguration(context, {
     token,
     useManagedAccount: true,
-    domain,
+    domain: { cancelled: false, changed: true, url: '' },
     pooling: false
   });
   log('Completed recommended ngrok setup.');
@@ -316,9 +305,7 @@ async function guidedSetup(context, { offerStart = true } = {}) {
   const choice = await vscode.window.showQuickPick([
     {
       label: '$(rocket) Quick setup (recommended)',
-      description: stableNgrokUrlRequired(sharedConfigFile)
-        ? 'Configure account credentials and the stable URL required by production'
-        : 'Paste one Authtoken; DevMate uses the account default development domain',
+      description: 'Paste one Authtoken; DevMate uses the account default development domain',
       value: 'recommended'
     },
     {
@@ -343,7 +330,7 @@ async function guidedSetup(context, { offerStart = true } = {}) {
   return false;
 }
 
-async function setupForDeployment(context) {
+async function setupForConnection(context) {
   return guidedSetup(context, { offerStart: false });
 }
 
@@ -354,15 +341,13 @@ async function switchAccount(context) {
   if (!token) return;
 
   const current = configuredUrl();
-  const stableRequired = stableNgrokUrlRequired(sharedConfigFile);
-  const choices = [];
-  if (!stableRequired) {
-    choices.push({
+  const choices = [
+    {
       label: '$(sparkle) Use the new account default domain (recommended)',
       description: 'Prevents the previous account domain from causing ownership errors',
       value: 'default'
-    });
-  }
+    }
+  ];
   if (current) {
     choices.push({
       label: '$(pin) Keep the current stable URL',
@@ -372,15 +357,13 @@ async function switchAccount(context) {
   }
   choices.push({
     label: '$(globe) Choose another stable URL',
-    description: stableRequired ? 'Required alternative for production' : 'Configure a URL owned by the new account',
+    description: 'Configure a URL owned by the new account',
     value: 'custom'
   });
 
   const domainChoice = await vscode.window.showQuickPick(choices, {
     title: 'DevMate · Domain after account switch',
-    placeHolder: stableRequired
-      ? 'Production must keep or choose a stable URL owned by the new account'
-      : 'The default domain is safest after switching accounts',
+    placeHolder: 'The default domain is safest after switching accounts',
     ignoreFocusOut: true
   });
   if (!domainChoice) return;
@@ -415,23 +398,23 @@ async function clearManagedAccount(context) {
   await context.secrets.delete(SECRET_KEY);
   managedAuthtoken = '';
   await updatePreference('ngrokUseManagedAccount', false);
-  vscode.window.showInformationMessage(stopState.remoteOwner
-    ? 'Deleted the DevMate-managed ngrok credential. A tunnel managed by another host was left running and will use its existing process environment until that owner stops it.'
-    : 'Deleted the DevMate-managed ngrok account.');
+  vscode.window.showInformationMessage(stopState.reason === 'stopped'
+    ? 'Deleted the DevMate-managed ngrok credential and stopped the active managed connection.'
+    : 'Deleted the DevMate-managed ngrok credential.');
 }
 
 async function ngrokDoctor() {
   setupOutput.show(true);
   const installed = checkNgrokInstalled();
   const managed = usesManagedAccount();
-  const deployment = activeNgrokDeployment(sharedConfigFile);
+  const connection = activeNgrokConnection(sharedConfigFile);
   log('--- ngrok diagnostics ---');
   log(`Executable: ${ngrokCommand()}`);
   log(`Installed: ${installed.ok ? installed.version : `NO (${installed.message})`}`);
-  log(`Account mode: ${managed ? 'DevMate-managed Secret Storage' : 'global ngrok config'}`);
+  log(`Account source: ${managed ? 'DevMate-managed Secret Storage' : 'global ngrok config'}`);
   log(`Managed token present: ${managedAuthtoken ? 'yes' : 'no'}`);
   log(`Ready to launch: ${installed.ok && (!managed || !!managedAuthtoken) ? 'yes' : 'no'}`);
-  log(`Deployment: ${deployment ? `${deployment.mode} / ngrok` : 'ngrok is not the active shared provider'}`);
+  log(`Connection: ${connection ? 'ngrok is the active shared provider' : 'ngrok is not the active shared provider'}`);
   log(`Effective configured URL: ${configuredUrl() || 'account default / dynamic'}`);
   log(`Pooling: ${poolingEnabled() ? 'enabled (not recommended)' : 'disabled (recommended)'}`);
 
@@ -456,7 +439,7 @@ async function maybePromptForNgrokSetup(context) {
   );
   if (action === 'Quick Setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
   if (action === 'Use Global Config') {
-    await prepareNgrokCredentialMutation('ngrok account-mode change');
+    await prepareNgrokCredentialMutation('ngrok account source change');
     await updatePreference('ngrokUseManagedAccount', false);
   }
 }
@@ -483,7 +466,7 @@ async function activate(context) {
     baseExtension = loadBaseExtension();
     await baseExtension.activate(context);
     activated = true;
-    log(`ngrok setup integration ready. Account mode: ${usesManagedAccount() ? 'managed' : 'global'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
+    log(`ngrok setup integration ready. Account source: ${usesManagedAccount() ? 'managed' : 'global'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
     void maybePromptForNgrokSetup(context);
   } catch (error) {
     try { if (baseExtension?.deactivate) await baseExtension.deactivate(); } catch {}
@@ -512,5 +495,5 @@ module.exports = {
   deactivate,
   loadBaseExtension,
   prepareNgrokCredentialMutation,
-  setupForDeployment
+  setupForConnection
 };
