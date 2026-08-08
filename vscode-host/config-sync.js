@@ -30,6 +30,11 @@ function mergeWorkspaces(candidate, current) {
   return output;
 }
 
+function preserveCurrentObject(merged, current, key) {
+  if (has(current, key)) merged[key] = current[key];
+  else delete merged[key];
+}
+
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
@@ -39,14 +44,17 @@ function mergeExtensionConfig(currentValue, candidateValue) {
 
   const merged = { ...current };
   for (const key of [
-    'appVersion', 'server', 'permissions', 'maintenance', 'commands',
-    'connection', 'vscodeContext', 'activeWorkspaceId', 'deployment', 'production'
+    'appVersion', 'permissions', 'maintenance', 'commands',
+    'connection', 'vscodeContext', 'activeWorkspaceId'
   ]) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
 
   merged.version = SUPPORTED_CONFIG_VERSION;
   merged.instanceId = has(current, 'instanceId') ? current.instanceId : candidate.instanceId;
+
+  if (has(current, 'server')) merged.server = current.server;
+  else if (has(candidate, 'server')) merged.server = candidate.server;
 
   const currentAuth = object(current.auth);
   const candidateAuth = object(candidate.auth);
@@ -61,22 +69,17 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     if (has(candidateRuntime, key)) merged.runtime[key] = candidateRuntime[key];
   }
 
-  const currentTeam = object(current.team);
-  const candidateTeam = object(candidate.team);
-  merged.team = { ...currentTeam };
-  for (const key of ['enabled', 'requireWorkspaceLeaseForWrites']) {
-    if (has(candidateTeam, key)) merged.team[key] = candidateTeam[key];
-  }
-
   if (has(candidate, 'workspaces')) {
     merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
   } else if (has(current, 'workspaces')) {
     merged.workspaces = current.workspaces;
   }
 
-  for (const key of ['hostRuntime', 'plugins', 'jobs', 'runnerControl', 'trustedWritableRoots']) {
-    if (has(current, key)) merged[key] = current[key];
-    else delete merged[key];
+  for (const key of [
+    'deployment', 'team', 'production', 'hostRuntime', 'plugins',
+    'jobs', 'runnerControl', 'trustedWritableRoots'
+  ]) {
+    preserveCurrentObject(merged, current, key);
   }
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
