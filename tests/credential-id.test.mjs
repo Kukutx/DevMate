@@ -21,11 +21,11 @@ test('credential IDs are normalized, bounded, and suffix-safe', () => {
 test('long and duplicate Team member names always produce immediately usable tokens', () => {
   const config = {
     auth: { required: true, token: 'owner-token' },
-    deployment: { mode: 'team', tunnelProvider: 'external' },
+    connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
     team: { members: [] },
+    requestPolicy: {},
     runtime: {},
-    jobs: {},
-    production: {}
+    jobs: {}
   };
   const name = 'Very Long Team Member '.repeat(20);
   const first = createTeamMember(config, { name, workspaceIds: ['app'] });
