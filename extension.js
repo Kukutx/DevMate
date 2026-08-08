@@ -212,7 +212,7 @@ function defaultConfig(ctx){
       allowDirectoryMutations: !!cfg().get('allowDirectoryMutations')
     },
     activeWorkspaceId: root ? makeId(root) : '',
-    workspaces: root ? [{ id: makeId(root), name: path.basename(root), root, mode: 'workspace-write', reference: false, role: 'active' }] : [],
+    workspaces: root ? [{ id: makeId(root), name: path.basename(root), root, mode:'workspace-write', reference:false, role:'active' }] : [],
     commands: [
       { key: 'pnpm-lint', label: 'pnpm lint', command: 'pnpm lint', readOnly: true },
       { key: 'pnpm-test', label: 'pnpm test', command: 'pnpm test', readOnly: true },
@@ -511,7 +511,13 @@ async function mcpHandshakeTest(baseUrl, ctx=globalContext){
   if(!init.ok || serverName !== 'devmate'){
     throw new Error(`MCP initialize failed via ${redactUrl(mcp)}. Expected DevMate server, got ${serverName || 'none'}. HTTP=${init.status||'none'} error=${init.error||''} body=${String(init.body||'').slice(0,300)}`);
   }
-  const tools = await postJson(mcp, { jsonrpc:'2.0', id:2, method:'tools/list', params:{} }, 8000);
+  const sessionId = String(init.headers?.['mcp-session-id'] || '').trim();
+  const toolsHeaders = {
+    ...headers,
+    'MCP-Protocol-Version': '2025-03-26',
+    ...(sessionId ? { 'MCP-Session-Id': sessionId } : {})
+  };
+  const tools = await postJson(mcp, { jsonrpc:'2.0', id:2, method:'tools/list', params:{} }, 8000, toolsHeaders);
   if(!tools.ok || !Array.isArray(tools.json?.result?.tools)){
     throw new Error(`MCP tools/list failed via ${redactUrl(mcp)}. HTTP=${tools.status||'none'} error=${tools.error||''} body=${String(tools.body||'').slice(0,300)}`);
   }
@@ -1024,7 +1030,6 @@ function activate(context){
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(()=>scheduleContextRefresh(context)));
-  // Primary simple commands shown in the command palette.
   register(context,'devMate.start',()=>lifecycleOperations.run('start',()=>quickStart(context)));
   register(context,'devMate.open',()=>openPanel(context));
   register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
