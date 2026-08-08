@@ -1,124 +1,147 @@
-# Tunnel and ingress providers
+# Public connections
 
-DevMate keeps its HTTP Gateway on `127.0.0.1`. The VS Code/deployment layer owns the public HTTPS ingress used by ChatGPT and other remote MCP clients.
+DevMate exposes the local Gateway to ChatGPT through one shared public connection capability. Provider selection is a **connection capability**, not a runtime mode and not a compatibility shim.
 
-## Providers
+Current providers:
 
-| Provider | Use | Lifecycle | Public URL |
-|---|---|---|---|
-| `ngrok` | Personal, team, or production | DevMate-managed provider process | account default or reserved URL |
-| `cloudflare-quick` | Temporary development tests only | DevMate launches `cloudflared` | generated `trycloudflare.com` URL |
-| `cloudflare-managed` | Stable team or production endpoint | DevMate launches `cloudflared tunnel run` | configured stable URL |
-| `external` | Existing reverse proxy, VPN, ingress, or service manager | Not process-managed by DevMate | configured stable URL |
+- `ngrok`
+- `cloudflare-quick`
+- `cloudflare-managed`
+- `external`
 
-Configure the **active workspace deployment** through `DevMate: Deployment Setup` / `DevMate: Tunnel Setup` or the MCP `team_configure` tool. Mode, active provider, stable public URL, Team lease policy, and production limits live in the workspace shared `config.json`; they are not machine-global VS Code settings.
+The shared instance configuration owns the provider and stable public URL:
 
-VS Code machine settings hold only local execution details and setup candidates: provider executable paths, ngrok account/pooling/Traffic Policy behavior, managed-provider restart settings, and remembered `ngrokUrl` / `publicUrl` candidates. A remembered candidate does not override the active workspace deployment.
+```json
+{
+  "connection": {
+    "provider": "ngrok",
+    "publicUrl": ""
+  }
+}
+```
 
-Tunnel credentials remain in VS Code Secret Storage, provider configuration, or process environment, never in project files or DevMate `config.json`.
+Machine-local executable paths, provider credentials and restart preferences remain execution details. They do not replace the shared connection capability as the source of truth.
 
-Obsidian is not a provider owner. It may read the current ready shared tunnel record or use an explicitly configured HTTPS Public origin, but it never starts, stops, restarts, or reconfigures a tunnel.
+## Complete desktop lifecycle
+
+VS Code and Obsidian implement the same public-connection lifecycle:
+
+```text
+Start
+  → start/attach Gateway
+  → start/attach configured public connection
+  → obtain HTTPS origin
+  → MCP initialize
+  → tools/list
+  → Ready
+```
+
+Both desktop hosts can own or attach to the provider-native connection. Neither editor is permanently designated as the ingress owner.
+
+A loopback Gateway without a verified public MCP endpoint is not Ready.
+
+## Shared ownership
+
+The provider runtime stores one bounded shared ownership record under the workspace-derived state directory. The record includes the information required to prove compatibility and identify the current generation, including:
+
+- owner identity,
+- host identity,
+- provider,
+- Gateway port,
+- provider configuration key,
+- status,
+- public HTTPS origin,
+- readiness timestamp,
+- child PID when DevMate owns a provider process.
+
+Startup uses a shared lease so simultaneous desktop Start operations converge on one provider process. Compatible later hosts attach instead of spawning duplicates.
+
+Owners heartbeat the shared record. Loss of ownership triggers fail-closed cleanup of the local provider process. An attached host can take ownership after the previous owner disappears when the shared configuration still matches.
+
+## Configuration identity
+
+Connection ownership is strict. The configuration identity includes endpoint-affecting provider settings and the Gateway port. A running generation with a different provider or incompatible endpoint configuration is not silently reused.
+
+Configuration conflicts are reconciled explicitly. DevMate does not create fallback chains that stitch together unrelated provider settings or stale URLs.
+
+## Generation-scoped verification
+
+A public URL is necessary but insufficient for Ready.
+
+After a provider publishes an HTTPS endpoint, DevMate performs authenticated MCP preflight:
+
+1. `initialize` against `/mcp`.
+2. Validate that the server identifies itself as `devmate`.
+3. Preserve the MCP session ID when supplied.
+4. Call `tools/list` in the same session.
+5. Persist successful evidence for the current provider generation.
+
+Verification is tied to the provider record generation. If the provider restarts, ownership changes or a new `readyAt` is published, previous verification is stale even when the hostname is identical. The host returns to Verifying until the new generation passes preflight.
 
 ## ngrok
 
-The managed-account setup remains supported and `ngrok` remains the default personal provider. Production deployments should use an account-owned stable endpoint and may set `devMate.ngrokTrafficPolicyFile`.
+ngrok is the default connection provider.
 
-Example policy skeleton:
+DevMate supports two account strategies:
 
-```yaml
-on_http_request:
-  - expressions:
-      - req.url.path.startsWith('/mcp')
-    actions:
-      - type: add-headers
-        config:
-          headers:
-            x-devmate-edge: ngrok
-      - type: rate-limit
-        config:
-          name: devmate-api
-          algorithm: sliding_window
-          capacity: 120
-          rate: 60s
-```
+- **Machine/global ngrok configuration**: ngrok uses its normal local configuration.
+- **DevMate-managed account**: the host stores the Authtoken in secure host storage and injects it only into the provider process environment.
 
-Use `deployment_policy_template` for a generated starting point. Edge OAuth, OIDC, JWT validation, IP restrictions, and rate limits are defense-in-depth; keep DevMate bearer authentication enabled.
+Managed-account mode never silently falls back to global credentials when its configured secret is missing. This prevents accidental use of the wrong account.
 
-## Cloudflare Quick Tunnel
+A stable ngrok URL is optional. When no stable URL is configured, ngrok may publish its account/default development endpoint. A configured stable URL must be a clean HTTPS origin owned by the selected account.
 
-DevMate launches:
+Endpoint pooling is disabled by default and should be enabled only when intentionally sharing the same endpoint across trusted agents.
 
-```bash
-cloudflared tunnel --url http://127.0.0.1:<gateway-port>
-```
+## Cloudflare Quick
 
-The generated URL is parsed automatically. This provider is intentionally rejected for `production` mode. It has no stable hostname or production availability contract.
+`cloudflare-quick` starts a native `cloudflared tunnel --url ...` quick tunnel and discovers the TryCloudflare HTTPS endpoint from provider output.
 
-## Cloudflare managed tunnel
+The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh MCP preflight and may produce a new hostname.
 
-Create a remotely managed tunnel and route a stable hostname to the DevMate Gateway. Store its token with `DevMate: Set Cloudflare Tunnel Token`. DevMate launches:
+## Cloudflare managed
 
-```bash
-cloudflared tunnel run
-```
+`cloudflare-managed` requires:
 
-with `TUNNEL_TOKEN` in the child environment. The token is never included in command arguments or config output.
+- a stable HTTPS public origin in the shared connection capability,
+- a host-local managed tunnel token,
+- a usable `cloudflared` executable.
 
-Cloudflare Access can add an identity or Service Auth layer. Automated clients must be able to provide the required Access credentials. DevMate member tokens still enforce application-level roles and workspace scopes.
+The token is supplied through the provider process environment, not command-line arguments or shared configuration.
 
-## External ingress
+## External HTTPS ingress
 
-Use `external` when nginx, Caddy, Kubernetes ingress, a corporate reverse proxy, Tailscale, or a separately managed tunnel already owns the HTTPS endpoint. DevMate records and verifies the configured URL but does not launch or terminate the external ingress process.
+`external` is a first-class provider for an existing reverse proxy, load balancer, VPN gateway or externally managed tunnel.
 
-Required proxy behavior:
+DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and still requires current-generation MCP preflight before Ready.
 
-- forward POST requests and streaming responses for `/mcp`;
-- preserve or set a stable `Host`;
-- allow long request durations for build and test tools;
-- avoid buffering large streamed MCP responses when possible;
-- forward `/devmate/previews/...` only when published review previews are required;
-- keep `/control/health` unreachable from the public network;
-- do not expose the local state/config directory.
+The configured origin must be a clean HTTPS origin without credentials, path, query string or fragment.
 
-## Provider-native ownership and restart
+## Restart and recovery
 
-`vscode-host/tunnel-controller.js` is the current provider-native tunnel state machine. It does not emulate an ngrok API for other providers and does not wrap global process/HTTP modules.
+Managed provider processes can restart automatically after unexpected exit using bounded backoff and a bounded restart count. Settings are re-evaluated before restart so stale provider configuration is not resurrected.
 
-For managed providers it enforces:
+A recovering provider publishes a new generation. The public MCP verifier automatically re-runs preflight; the user does not need to run a separate verification action.
 
-- one shared owner per state directory and configuration identity;
-- strict configuration matching before attachment;
-- startup lease convergence;
-- provider readiness before publishing a shared URL;
-- heartbeat-based ownership verification;
-- fail-closed cleanup after ownership loss;
-- bounded exponential-backoff restart controlled by `devMate.tunnelAutoRestart` and `devMate.tunnelMaxRestarts`;
-- owner-only process termination.
+If a dynamic endpoint changes host, DevMate can notify the user to update the ChatGPT connector URL.
 
-The configuration identity includes provider, port, endpoint configuration, provider executable selection, ngrok account mode, pooling/policy settings, and deployment mode. A process configured differently must not silently attach to an incompatible tunnel record.
+## Stop semantics
 
-When shared deployment state changes outside the local VS Code Setup flow, the public verifier detects a configuration-generation conflict before making a stale MCP request. An owned stale ingress is stopped fail-closed; DevMate does not guess and auto-launch a different provider without an explicit Start.
+Stop is ownership-aware:
 
-## Public MCP verification
+- An owning host terminates its provider process and removes its ownership record after confirmed exit.
+- An attached host does not kill a provider owned by another desktop process.
+- A failed process termination leaves ownership fail-closed so another provider cannot be started concurrently.
+- External ingress has no child process, but shared ownership still follows the same record discipline.
 
-After a public origin is available, DevMate verifies the actual MCP path rather than treating provider readiness as application readiness:
+## Credentials and URLs
 
-1. authenticated `/mcp` `initialize`;
-2. DevMate server identity;
-3. MCP session propagation when returned;
-4. authenticated `tools/list` with protocol/session headers.
+DevMate never places owner or provider credentials in public MCP URLs. MCP authentication uses request headers.
 
-Verification is generation-aware. A result is accepted only if owner, provider, port, ready timestamp, and public URL still match the current shared tunnel record; stale verification results are discarded.
+Provider credentials stay in host-local secure storage or the provider's normal machine configuration. Shared `config.json` stores business configuration such as provider and stable URL, not plaintext provider secrets.
 
-This logic is shared in `host/public-mcp.js` and covered by a real Gateway E2E test.
+## No compatibility runtime
 
-## Diagnostics
+The current tunnel implementation launches each provider natively. There is no virtual ngrok API, ngrok-only wrapper, or retired provider compatibility layer.
 
-Run:
-
-- `DevMate: Tunnel Doctor`;
-- `deployment_status`;
-- `deployment_readiness`;
-- `connection_diagnostics`.
-
-Provider selection is a deployment feature, not a compatibility shim. `ngrok` is the default personal path; Cloudflare and external ingress are current supported product modes.
+This is intentional: ngrok, Cloudflare and external ingress are separate provider implementations behind one shared connection lifecycle, not behaviors emulated through one legacy provider.
