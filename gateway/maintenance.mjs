@@ -1,15 +1,12 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import maintenanceConfig from '../shared/maintenance-config.cjs';
 
+const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export const DEFAULT_MAINTENANCE = {
-  backupRetentionDays: 30,
-  auditRetentionDays: 30,
-  maxBackupBytes: 256 * 1024 * 1024,
-  maxAuditBytes: 5 * 1024 * 1024
-};
+export { DEFAULT_MAINTENANCE };
 
 export function clampMaintenanceNumber(value, fallback, min, max) {
   const n = Number(value);
@@ -18,11 +15,15 @@ export function clampMaintenanceNumber(value, fallback, min, max) {
 }
 
 export function maintenanceOptions(input = {}) {
+  const [backupDaysMin, backupDaysMax] = MAINTENANCE_LIMITS.backupRetentionDays;
+  const [auditDaysMin, auditDaysMax] = MAINTENANCE_LIMITS.auditRetentionDays;
+  const [backupBytesMin, backupBytesMax] = MAINTENANCE_LIMITS.maxBackupBytes;
+  const [auditBytesMin, auditBytesMax] = MAINTENANCE_LIMITS.maxAuditBytes;
   return {
-    backupRetentionDays: clampMaintenanceNumber(input.backupRetentionDays, DEFAULT_MAINTENANCE.backupRetentionDays, 1, 3650),
-    auditRetentionDays: clampMaintenanceNumber(input.auditRetentionDays, DEFAULT_MAINTENANCE.auditRetentionDays, 1, 3650),
-    maxBackupBytes: clampMaintenanceNumber(input.maxBackupBytes, DEFAULT_MAINTENANCE.maxBackupBytes, 1024 * 1024, 10 * 1024 * 1024 * 1024),
-    maxAuditBytes: clampMaintenanceNumber(input.maxAuditBytes, DEFAULT_MAINTENANCE.maxAuditBytes, 256 * 1024, 100 * 1024 * 1024)
+    backupRetentionDays: clampMaintenanceNumber(input.backupRetentionDays, DEFAULT_MAINTENANCE.backupRetentionDays, backupDaysMin, backupDaysMax),
+    auditRetentionDays: clampMaintenanceNumber(input.auditRetentionDays, DEFAULT_MAINTENANCE.auditRetentionDays, auditDaysMin, auditDaysMax),
+    maxBackupBytes: clampMaintenanceNumber(input.maxBackupBytes, DEFAULT_MAINTENANCE.maxBackupBytes, backupBytesMin, backupBytesMax),
+    maxAuditBytes: clampMaintenanceNumber(input.maxAuditBytes, DEFAULT_MAINTENANCE.maxAuditBytes, auditBytesMin, auditBytesMax)
   };
 }
 
