@@ -44,7 +44,7 @@ function verifiedConfig() {
 
 test('shared connection provider is the UI provider source of truth', () => {
   assert.equal(deploymentProvider(config(), 'ngrok'), 'cloudflare-quick');
-  assert.throws(() => deploymentProvider(config({ connection: { provider: 'automatic' } })), /Unknown tunnel provider/);
+  assert.throws(() => deploymentProvider(config({ connection: { provider: 'automatic' } })), /Unknown connection provider/);
 });
 
 test('only the current verified generation is presented as ready', () => {
