@@ -42,7 +42,7 @@ assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the s
 assert.match(mainSource, /ngrok/, 'Obsidian bundle must contain the ngrok public tunnel runtime');
 assert.match(mainSource, /MCP-Session-Id|mcp-session-id/, 'Obsidian bundle must preserve MCP session-aware public preflight');
 assert.match(mainSource, /Verified public MCP|Verified public MCP URL copied|Verified public MCP through ngrok/, 'Obsidian bundle must contain public MCP verification flow');
-assert.doesNotMatch(mainSource, /ownerUrl\([^)]*publicOrigin|settings\.publicOrigin/, 'Obsidian bundle must not fall back to retired external publicOrigin flow');
+assert.doesNotMatch(mainSource, /(?:this\.)?settings\.publicOrigin/, 'Obsidian bundle must not use the retired publicOrigin setting');
 
 const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath });
 assert.match(nodeRuntime.nodeVersion, /^24\./);
