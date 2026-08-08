@@ -1,6 +1,5 @@
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
 const vscode = require('vscode');
 const { version: VERSION } = require('./package.json');
@@ -10,7 +9,6 @@ const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
 const { currentWorkspaceRoot, resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
-const { normalizeBootstrapDeployment } = require('./vscode-host/shared-deployment-config.js');
 const { TunnelController } = require('./vscode-host/tunnel-controller.js');
 const { clearTunnelController, setTunnelController } = require('./vscode-host/tunnel-runtime.js');
 const { tunnelMaxRestarts } = require('./vscode-host/tunnel-settings.js');
@@ -59,14 +57,12 @@ function ensureSharedDesktopConfig(stateDirectory) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
   if (!workspaceRoot) return null;
   const configFile = path.join(stateDirectory, 'config.json');
-  const existed = fs.statSync(configFile, { throwIfNoEntry: false })?.isFile() === true;
   ensurePersonalConfig({
     configFile,
     workspaceRoot,
     preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
     appVersion: VERSION
   });
-  if (!existed) normalizeBootstrapDeployment(configFile);
   return configFile;
 }
 
