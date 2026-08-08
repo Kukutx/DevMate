@@ -39,6 +39,7 @@ class PublicTunnelVerifier {
     logger = () => {},
     preflight = preflightPublicMcp,
     onStateChange = () => {},
+    onConfigurationConflict = () => {},
     onVerified = () => {},
     onError = () => {},
     pollMs = DEFAULT_POLL_MS,
@@ -49,6 +50,7 @@ class PublicTunnelVerifier {
     if (!stateDirectory) throw new Error('A shared state directory is required');
     if (typeof tunnelStatus !== 'function') throw new TypeError('tunnelStatus must be a function');
     if (typeof preflight !== 'function') throw new TypeError('preflight must be a function');
+    if (typeof onConfigurationConflict !== 'function') throw new TypeError('onConfigurationConflict must be a function');
     this.stateDirectory = path.resolve(stateDirectory);
     this.configFile = path.join(this.stateDirectory, 'config.json');
     this.tunnelStatus = tunnelStatus;
@@ -56,6 +58,7 @@ class PublicTunnelVerifier {
     this.logger = logger;
     this.preflight = preflight;
     this.onStateChange = onStateChange;
+    this.onConfigurationConflict = onConfigurationConflict;
     this.onVerified = onVerified;
     this.onError = onError;
     this.pollMs = Math.max(1000, Number(pollMs) || DEFAULT_POLL_MS);
@@ -106,6 +109,16 @@ class PublicTunnelVerifier {
     }
   }
 
+  async handleConfigurationConflict(error, config) {
+    await this.notifyState('configuration-conflict', { error });
+    try {
+      return await this.onConfigurationConflict({ error, config });
+    } catch (callbackError) {
+      this.logger(`Tunnel configuration-conflict cleanup callback failed: ${callbackError.message || callbackError}`);
+      return { handled: false, error: callbackError };
+    }
+  }
+
   async notifyVerified(result) {
     try {
       await this.onVerified(result);
@@ -126,7 +139,14 @@ class PublicTunnelVerifier {
     if (this.disposed) return { checked: false, reason: 'disposed' };
     const config = this.readConfig();
     if (!config) return { checked: false, reason: 'missing-config' };
-    const snapshot = this.snapshot(config);
+    let snapshot;
+    try {
+      snapshot = this.snapshot(config);
+    } catch (error) {
+      if (error?.code !== 'DEVMATE_TUNNEL_CONFIGURATION_CONFLICT') throw error;
+      const cleanup = await this.handleConfigurationConflict(error, config);
+      return { checked: false, reason: 'configuration-conflict', error, cleanup };
+    }
     const record = snapshot.record;
     const generation = recordGeneration(record);
     if (!generation) {
