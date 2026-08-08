@@ -9,24 +9,29 @@ const root = path.resolve(__dirname, '..');
 const ngrok = fs.readFileSync(path.join(root, 'extension-entry.js'), 'utf8');
 const platform = fs.readFileSync(path.join(root, 'extension-entry-platform.js'), 'utf8');
 
-test('ngrok configuration validates stop before mutating Secret Storage or account settings', () => {
+test('ngrok configuration checks whether ngrok credentials are actually in use before mutating Secret Storage', () => {
+  assert.match(ngrok, /function ngrokCredentialInUse\(\)/);
+  assert.match(ngrok, /credentialProviderInUse\('ngrok'/);
+  assert.match(ngrok, /async function prepareNgrokCredentialMutation\(operation\)/);
+
   const start = ngrok.indexOf('async function commitNgrokConfiguration');
   const end = ngrok.indexOf('function checkNgrokInstalled', start);
   assert.ok(start >= 0 && end > start);
   const block = ngrok.slice(start, end);
-  const stop = block.indexOf("executeCommand('devMate.stop')");
-  const gate = block.indexOf('assertTunnelSafeForCredentialChange(stopResult');
+  const gate = block.indexOf("prepareNgrokCredentialMutation('ngrok configuration change')");
   const secret = block.indexOf('context.secrets.store(SECRET_KEY');
-  assert.ok(stop >= 0 && gate > stop && secret > gate);
+  assert.ok(gate >= 0 && secret > gate);
+  assert.doesNotMatch(block, /executeCommand\('devMate\.stop'\)/);
 });
 
-test('ngrok managed-account removal validates stop before deleting the credential', () => {
+test('ngrok managed-account removal uses the same provider-scoped stop gate before deleting the credential', () => {
   const start = ngrok.indexOf('async function clearManagedAccount');
   const end = ngrok.indexOf('async function ngrokDoctor', start);
   const block = ngrok.slice(start, end);
-  assert.ok(block.indexOf("executeCommand('devMate.stop')") < block.indexOf('context.secrets.delete(SECRET_KEY)'));
-  assert.ok(block.indexOf('assertTunnelSafeForCredentialChange(stopResult') < block.indexOf('context.secrets.delete(SECRET_KEY)'));
-  assert.doesNotMatch(block, /try\s*\{\s*await vscode\.commands\.executeCommand\('devMate\.stop'\)/);
+  const gate = block.indexOf("prepareNgrokCredentialMutation('ngrok managed-account removal')");
+  const deletion = block.indexOf('context.secrets.delete(SECRET_KEY)');
+  assert.ok(gate >= 0 && deletion > gate);
+  assert.doesNotMatch(block, /executeCommand\('devMate\.stop'\)/);
 });
 
 test('deployment wizard confirms old ingress stop before any new deployment or Cloudflare secret commit', () => {
@@ -53,13 +58,22 @@ test('remote tunnel owner blocks immediate replacement Start prompt', () => {
   assert.match(block, /return;/);
 });
 
-test('Cloudflare token removal also validates stop before deleting Secret Storage', () => {
-  const start = platform.indexOf("register(context, 'devMate.cloudflareClearToken'");
-  const end = platform.indexOf("register(context, 'devMate.openTunnelDocs'", start);
-  assert.ok(start >= 0 && end > start);
-  const block = platform.slice(start, end);
-  const gate = block.indexOf('assertTunnelSafeForCredentialChange(await stopTunnel()');
-  const deletion = block.indexOf('context.secrets.delete(CLOUDFLARE_TOKEN_SECRET)');
-  assert.ok(gate >= 0 && deletion > gate);
-  assert.doesNotMatch(block, /try\s*\{\s*await stopTunnel\(\);?\s*\}\s*catch\s*\{\s*\}/);
+test('Cloudflare Set and Clear token commands gate only Cloudflare managed credential consumers', () => {
+  assert.match(platform, /function cloudflareCredentialInUse\(context\)/);
+  assert.match(platform, /credentialProviderInUse\('cloudflare-managed'/);
+  assert.match(platform, /async function prepareCloudflareCredentialMutation\(context, operation\)/);
+
+  const setStart = platform.indexOf("register(context, 'devMate.cloudflareSetToken'");
+  const clearStart = platform.indexOf("register(context, 'devMate.cloudflareClearToken'", setStart);
+  const docsStart = platform.indexOf("register(context, 'devMate.openTunnelDocs'", clearStart);
+  assert.ok(setStart >= 0 && clearStart > setStart && docsStart > clearStart);
+
+  const setBlock = platform.slice(setStart, clearStart);
+  assert.ok(setBlock.indexOf("prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token change')") < setBlock.indexOf('storeCloudflareToken(context, token)'));
+  assert.match(setBlock, /stopState\.reason === 'stopped'/);
+  assert.match(setBlock, /Start Now/);
+
+  const clearBlock = platform.slice(clearStart, docsStart);
+  assert.ok(clearBlock.indexOf("prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token removal')") < clearBlock.indexOf('context.secrets.delete(CLOUDFLARE_TOKEN_SECRET)'));
+  assert.doesNotMatch(clearBlock, /try\s*\{\s*await stopTunnel\(\);?\s*\}\s*catch\s*\{\s*\}/);
 });
