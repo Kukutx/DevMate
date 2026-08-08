@@ -125,6 +125,41 @@ test('preflight result is discarded if tunnel generation changes while verificat
   }
 });
 
+test('generation change during persistence cannot be reported as a successful recovery', async () => {
+  const fx = fixture();
+  let statusCalls = 0;
+  try {
+    const original = fx.record;
+    const later = {
+      ...original,
+      ownerId: 'owner-b',
+      publicUrl: 'https://later.example.com',
+      readyAt: '2026-08-08T01:00:30.000Z'
+    };
+    const verifier = new PublicTunnelVerifier({
+      stateDirectory: fx.stateDirectory,
+      tunnelStatus: port => {
+        assert.equal(port, 8787);
+        statusCalls += 1;
+        const record = statusCalls >= 3 ? later : original;
+        return { running: true, publicUrl: record.publicUrl, record };
+      },
+      readyGraceMs: 0,
+      now: () => Date.parse('2026-08-08T01:01:00.000Z'),
+      preflight: async input => successfulTest(input.publicUrl)
+    });
+    const result = await verifier.check();
+    assert.equal(result.stale, true);
+    assert.equal(result.verified, false);
+
+    const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(config.connection.lastPublicHost, 'old.example.com');
+    assert.equal(config.connection.lastPreflightAt, '2026-08-08T00:00:00.000Z');
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('failed verification is generation-scoped, persisted, and retried only after backoff', async () => {
   const fx = fixture();
   let now = Date.parse('2026-08-08T01:01:00.000Z');
@@ -171,6 +206,32 @@ test('failed verification is generation-scoped, persisted, and retried only afte
     await verifier.check();
     assert.equal(calls, 3);
     assert.equal(notices, 2, 'a new failing generation may notify again');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('UI callback failures cannot invalidate a successful public MCP verification', async () => {
+  const fx = fixture();
+  const logs = [];
+  try {
+    const verifier = new PublicTunnelVerifier({
+      stateDirectory: fx.stateDirectory,
+      tunnelStatus: port => fx.status(port),
+      readyGraceMs: 0,
+      now: () => Date.parse('2026-08-08T01:01:00.000Z'),
+      preflight: async input => successfulTest(input.publicUrl),
+      onVerified: async () => { throw new Error('UI unavailable'); },
+      logger: message => logs.push(message)
+    });
+    const result = await verifier.check();
+    assert.equal(result.verified, true);
+    assert.match(logs.join('\n'), /notification failed after successful verification: UI unavailable/);
+
+    const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(config.connection.lastPublicHost, 'new.example.com');
+    assert.equal(config.connection.lastError, '');
+    assert.equal(config.connection.lastErrorAt, null);
   } finally {
     fx.cleanup();
   }
