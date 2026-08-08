@@ -90,6 +90,16 @@ function pluginSettings(overrides = {}) {
   };
 }
 
+async function waitFor(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Timed out waiting for Obsidian ngrok runtime condition');
+}
+
 test('Obsidian ngrok runtime starts a real provider lifecycle and publishes shared HTTPS state', async () => {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-ngrok-'));
   const childProcess = fakeChildProcess();
@@ -134,7 +144,7 @@ test('Obsidian ngrok runtime starts a real provider lifecycle and publishes shar
   }
 });
 
-test('Obsidian safely attaches to a ready shared ngrok endpoint even when local endpoint settings differ', async () => {
+test('Obsidian attaches to a shared ngrok endpoint and automatically takes ownership after the owner exits', async () => {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-ngrok-share-'));
   const ownerProcess = fakeChildProcess();
   const followerProcess = fakeChildProcess();
@@ -149,7 +159,8 @@ test('Obsidian safely attaches to a ready shared ngrok endpoint even when local 
     plugin: pluginSettings({ ngrokUrl: 'https://different-local-setting.ngrok-free.app' }),
     stateDirectory,
     childProcess: followerProcess,
-    httpRequest: fakeNgrokApi('https://should-not-launch.ngrok-free.app'),
+    httpRequest: fakeNgrokApi('https://follower-takeover.ngrok-free.app'),
+    attachmentPollMs: 50,
     controllerOptions: { readyTimeoutMs: 1500, startTimeoutMs: 1500, stopTimeoutMs: 500, forceStopTimeoutMs: 250 }
   });
 
@@ -168,13 +179,20 @@ test('Obsidian safely attaches to a ready shared ngrok endpoint even when local 
     assert.equal(followerStatus.attached, true);
     assert.equal(followerStatus.publicUrl, first.publicUrl);
 
-    const followerStop = await follower.stop();
-    assert.equal(followerStop.stopped, false);
-    assert.equal(followerStop.reason, 'managed-by-another-host');
-    assert.equal(owner.status(8787).running, true);
-
     const ownerStop = await owner.stop();
     assert.equal(ownerStop.stopped, true);
+
+    const takeover = await waitFor(() => {
+      const status = follower.status(8787);
+      return status.owned && status.running ? status : null;
+    });
+    assert.equal(takeover.owned, true);
+    assert.equal(takeover.attached, false);
+    assert.equal(takeover.publicUrl, 'https://follower-takeover.ngrok-free.app');
+    assert.equal(followerProcess.launches.some(item => item.kind === 'spawn'), true, 'follower must launch ngrok only after ownership is released');
+
+    const followerStop = await follower.stop();
+    assert.equal(followerStop.stopped, true);
   } finally {
     await follower.dispose({ stopOwned: true }).catch(() => {});
     await owner.dispose({ stopOwned: true }).catch(() => {});
