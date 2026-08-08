@@ -20,6 +20,39 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
+export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
+  const config = normalizeDeploymentConfig(inputConfig);
+  const previousProvider = config.deployment.tunnelProvider;
+  if (patch.mode) config.deployment.mode = patch.mode;
+  if (patch.tunnelProvider) config.deployment.tunnelProvider = patch.tunnelProvider;
+  if (config.deployment.mode === 'production' && config.deployment.tunnelProvider === 'cloudflare-quick') {
+    throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
+  }
+
+  const providerChanged = patch.tunnelProvider !== undefined && patch.tunnelProvider !== previousProvider;
+  if (patch.publicUrl !== undefined) {
+    config.deployment.publicUrl = cleanOrigin(patch.publicUrl, config.deployment.mode === 'production');
+  } else if (providerChanged || config.deployment.tunnelProvider === 'cloudflare-quick') {
+    config.deployment.publicUrl = '';
+  }
+
+  if (patch.requireWorkspaceLeaseForWrites !== undefined) {
+    config.team.requireWorkspaceLeaseForWrites = patch.requireWorkspaceLeaseForWrites;
+  }
+  for (const key of [
+    'requestsPerMinute',
+    'maxConcurrentRequests',
+    'maxConcurrentPerPrincipal',
+    'maxRequestBytes',
+    'requestTimeoutMs'
+  ]) {
+    if (patch[key] !== undefined) config.production[key] = patch[key];
+  }
+  if (patch.allowedHosts !== undefined) config.production.allowedHosts = patch.allowedHosts;
+  normalizeDeploymentConfig(config);
+  return config;
+}
+
 export function registerTeamManagementTools(register, annotations) {
   const { ro, rw } = annotations;
 
@@ -73,29 +106,7 @@ export function registerTeamManagementTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async patch => {
-    const config = normalizeDeploymentConfig(readConfig());
-    if (patch.mode) config.deployment.mode = patch.mode;
-    if (patch.tunnelProvider) config.deployment.tunnelProvider = patch.tunnelProvider;
-    if (config.deployment.mode === 'production' && config.deployment.tunnelProvider === 'cloudflare-quick') {
-      throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
-    }
-    if (patch.publicUrl !== undefined) {
-      config.deployment.publicUrl = cleanOrigin(patch.publicUrl, config.deployment.mode === 'production');
-    }
-    if (patch.requireWorkspaceLeaseForWrites !== undefined) {
-      config.team.requireWorkspaceLeaseForWrites = patch.requireWorkspaceLeaseForWrites;
-    }
-    for (const key of [
-      'requestsPerMinute',
-      'maxConcurrentRequests',
-      'maxConcurrentPerPrincipal',
-      'maxRequestBytes',
-      'requestTimeoutMs'
-    ]) {
-      if (patch[key] !== undefined) config.production[key] = patch[key];
-    }
-    if (patch.allowedHosts !== undefined) config.production.allowedHosts = patch.allowedHosts;
-    normalizeDeploymentConfig(config);
+    const config = applyTeamConfigurationPatch(readConfig(), patch);
     writeConfig(config);
     await audit('team_configure', {
       principalId: principalNow().id,
