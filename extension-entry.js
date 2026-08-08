@@ -10,6 +10,7 @@ const {
   stableNgrokUrlRequired,
   writeActiveNgrokUrl
 } = require('./vscode-host/ngrok-deployment-state.js');
+const { assertTunnelSafeForCredentialChange } = require('./vscode-host/tunnel-stop-policy.js');
 
 const SECRET_KEY = 'devMate.ngrokAuthtoken';
 const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
@@ -175,7 +176,9 @@ async function commitNgrokConfiguration(context, {
     activeDeployment: activeNgrokDeployment(sharedConfigFile)
   };
 
-  await vscode.commands.executeCommand('devMate.stop');
+  const stopResult = await vscode.commands.executeCommand('devMate.stop');
+  const stopState = assertTunnelSafeForCredentialChange(stopResult, 'ngrok configuration change');
+  if (stopState.remoteOwner) log('ngrok configuration is changing while the current tunnel is managed by another host; that owner will reconcile shared deployment changes.');
   try {
     if (token !== undefined) {
       await context.secrets.store(SECRET_KEY, validateAuthtoken(token));
@@ -380,11 +383,14 @@ async function clearManagedAccount(context) {
     'Delete and Use Global Config'
   );
   if (confirm !== 'Delete and Use Global Config') return;
-  await vscode.commands.executeCommand('devMate.stop');
+  const stopResult = await vscode.commands.executeCommand('devMate.stop');
+  const stopState = assertTunnelSafeForCredentialChange(stopResult, 'ngrok managed-account removal');
   await context.secrets.delete(SECRET_KEY);
   managedAuthtoken = '';
   await updatePreference('ngrokUseManagedAccount', false);
-  vscode.window.showInformationMessage('Deleted the DevMate-managed ngrok account.');
+  vscode.window.showInformationMessage(stopState.remoteOwner
+    ? 'Deleted the DevMate-managed ngrok credential. A tunnel managed by another host was left running and will use its existing process environment until that owner stops it.'
+    : 'Deleted the DevMate-managed ngrok account.');
 }
 
 async function ngrokDoctor() {
