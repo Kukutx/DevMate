@@ -65,6 +65,31 @@ test('new verification evidence binds to the exact tunnel generation', () => {
   assert.equal(verifiedForCurrentRecord(current, takeover), false);
 });
 
+test('same tunnel process requires a fresh preflight when Gateway generation changes', () => {
+  const first = record('2026-08-08T01:00:00.000Z', { gatewayGeneration: 'gateway-a' });
+  const testResult = {
+    publicOrigin: first.publicUrl,
+    toolCount: 25,
+    server: { name: 'devmate' }
+  };
+  const current = {
+    connection: successfulVerificationPatch(testResult, first.publicUrl, '2026-08-08T01:00:01.000Z', first)
+  };
+  assert.equal(current.connection.lastGatewayGeneration, 'gateway-a');
+  assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
+  assert.equal(verifiedForCurrentRecord(current, first), true);
+
+  const restartedGateway = { ...first, gatewayGeneration: 'gateway-b' };
+  assert.notEqual(recordGeneration(restartedGateway), recordGeneration(first));
+  assert.equal(verifiedForCurrentRecord(current, restartedGateway), false);
+});
+
+test('runtime-enriched ready tunnel is never a valid generation when no live Gateway exists', () => {
+  const missingGateway = record('2026-08-08T01:00:00.000Z', { gatewayGeneration: '' });
+  assert.equal(recordGeneration(missingGateway), '');
+  assert.equal(verifiedForCurrentRecord(config(), missingGateway), false);
+});
+
 test('matching host alone can never validate malformed or empty MCP evidence', () => {
   const current = record('2026-08-08T01:00:00.000Z');
   for (const connection of [
