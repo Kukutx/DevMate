@@ -13,7 +13,15 @@ const config = {
   appVersion: '3.3.0',
   instanceId: 'runner-readiness-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
-  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
+  connection: {
+    provider: 'external',
+    publicUrl: 'https://devmate.example.com',
+    lastPreflightAt: new Date().toISOString(),
+    lastPublicHost: 'devmate.example.com',
+    lastMcpPath: '/mcp',
+    lastToolCount: 10,
+    lastServerName: 'devmate'
+  },
   team: {
     members: [{ id: 'developer', name: 'Developer', role: 'developer', disabled: false, workspaceIds: ['app'] }],
     requireWorkspaceLeaseForWrites: true,
@@ -51,9 +59,10 @@ resetDurableStateForTests();
 clearJobsForTests();
 acquireGatewayInstanceLock();
 
-test('external-only execution requires an online external Runner', () => {
+test('external-only execution requires an online external Runner after the public connection is verified', () => {
   const before = readiness(config);
   assert.equal(before.ready, false);
+  assert.equal(before.checks.find(item => item.key === 'public-connection')?.ok, true);
   assert.equal(before.checks.find(item => item.key === 'external-runners-online')?.ok, false);
   assert.equal(before.checks.find(item => item.key === 'runner-credentials')?.ok, true);
 
