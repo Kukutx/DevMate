@@ -117,6 +117,29 @@ async function commitDeploymentSettings(context, localUpdates, sharedPatch) {
   }
 }
 
+async function restoreCloudflareToken(context, previousToken) {
+  if (previousToken) await context.secrets.store(CLOUDFLARE_TOKEN_SECRET, previousToken);
+  else await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
+  cloudflareTunnelToken = previousToken || '';
+}
+
+async function commitCloudflareDeployment(context, token, localUpdates, sharedPatch) {
+  const previousToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
+  try {
+    await storeCloudflareToken(context, token);
+    await commitDeploymentSettings(context, localUpdates, sharedPatch);
+  } catch (error) {
+    try {
+      await restoreCloudflareToken(context, previousToken);
+      log('Restored the previous Cloudflare Tunnel token after deployment configuration failed.');
+    } catch (rollbackError) {
+      error.secretRollbackError = rollbackError?.message || String(rollbackError);
+      log(`Could not restore the previous Cloudflare Tunnel token: ${error.secretRollbackError}`);
+    }
+    throw error;
+  }
+}
+
 async function openExternal(url) {
   await vscode.env.openExternal(vscode.Uri.parse(url));
 }
@@ -198,7 +221,7 @@ function productionHostsForUrl(state, nextUrl) {
 
 async function configureDeployment(context) {
   output.show(true);
-  const state = readDeploymentConfig(configPath(context));
+  let state = readDeploymentConfig(configPath(context));
   if (!state) throw new Error('DevMate shared config is not initialized');
 
   const modeChoice = await vscode.window.showQuickPick([
@@ -243,7 +266,15 @@ async function configureDeployment(context) {
       { label: 'Open Traffic Policy documentation', value: 'policy' }
     ], { title: 'DevMate · ngrok Deployment' });
     if (!policyChoice) return;
-    if (policyChoice.value === 'setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
+    if (policyChoice.value === 'setup') {
+      if (typeof innerExtension?.setupForDeployment !== 'function') {
+        throw new Error('Embedded ngrok deployment setup is unavailable');
+      }
+      const configured = await innerExtension.setupForDeployment(context);
+      if (!configured) return;
+      state = readDeploymentConfig(configPath(context));
+      if (!state) throw new Error('DevMate shared config disappeared during ngrok setup');
+    }
     if (policyChoice.value === 'policy') await openExternal(NGROK_POLICY_DOCS);
     if (modeChoice.value === 'production') {
       const current = state.deployment.tunnelProvider === 'ngrok'
@@ -299,8 +330,8 @@ async function configureDeployment(context) {
     sharedPatch.allowedHosts = productionHostsForUrl(state, stableUrl);
   }
 
-  if (cloudflareToken) await storeCloudflareToken(context, cloudflareToken);
-  await commitDeploymentSettings(context, localUpdates, sharedPatch);
+  if (cloudflareToken) await commitCloudflareDeployment(context, cloudflareToken, localUpdates, sharedPatch);
+  else await commitDeploymentSettings(context, localUpdates, sharedPatch);
   await vscode.commands.executeCommand('devMate.stop');
   const start = await vscode.window.showInformationMessage(
     'DevMate deployment settings saved.',
@@ -513,6 +544,7 @@ async function deactivate() {
 
 module.exports = {
   activate,
+  commitCloudflareDeployment,
   configureDeployment,
   deactivate,
   localTunnelSettings,
