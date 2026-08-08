@@ -22,6 +22,7 @@ const NGROK_POLICY_DOCS = 'https://ngrok.com/docs/traffic-policy/';
 let innerExtension = null;
 let output = null;
 let cloudflareTunnelToken = '';
+let deploymentSettingsCommit = false;
 
 function cfg() {
   return vscode.workspace.getConfiguration('devMate');
@@ -66,6 +67,16 @@ function tunnelSettings() {
 
 async function updateSetting(name, value) {
   await cfg().update(name, value, vscode.ConfigurationTarget.Global);
+}
+
+async function commitDeploymentSettings(context, updates) {
+  deploymentSettingsCommit = true;
+  try {
+    for (const [name, value] of Object.entries(updates)) await updateSetting(name, value);
+  } finally {
+    deploymentSettingsCommit = false;
+  }
+  syncDeploymentConfig(context);
 }
 
 async function openExternal(url) {
@@ -246,8 +257,10 @@ async function configureDeployment(context) {
   });
   if (!providerChoice) return;
 
-  await updateSetting('deploymentMode', modeChoice.value);
-  await updateSetting('tunnelProvider', providerChoice.value);
+  const pendingSettings = {
+    deploymentMode: modeChoice.value,
+    tunnelProvider: providerChoice.value
+  };
 
   if (providerChoice.value === 'ngrok') {
     const policyChoice = await vscode.window.showQuickPick([
@@ -261,7 +274,7 @@ async function configureDeployment(context) {
     if (modeChoice.value === 'production') {
       const url = await promptStableNgrokUrl(String(setting('ngrokUrl', '') || ''));
       if (!url) return;
-      await updateSetting('ngrokUrl', url);
+      pendingSettings.ngrokUrl = url;
     }
   }
   if (providerChoice.value === 'cloudflare-quick') {
@@ -275,19 +288,19 @@ async function configureDeployment(context) {
     }
   }
   if (providerChoice.value === 'cloudflare-managed') {
-    if (!await promptCloudflareToken(context)) return;
     const url = await promptPublicUrl(String(setting('publicUrl', '') || ''));
     if (!url) return;
-    await updateSetting('publicUrl', url);
+    if (!await promptCloudflareToken(context)) return;
+    pendingSettings.publicUrl = url;
   }
   if (providerChoice.value === 'external') {
     const url = await promptPublicUrl(String(setting('publicUrl', '') || ''));
     if (!url) return;
-    await updateSetting('publicUrl', url);
+    pendingSettings.publicUrl = url;
   }
 
-  if (modeChoice.value !== 'personal') await updateSetting('teamRequireWorkspaceLeaseForWrites', true);
-  syncDeploymentConfig(context);
+  if (modeChoice.value !== 'personal') pendingSettings.teamRequireWorkspaceLeaseForWrites = true;
+  await commitDeploymentSettings(context, pendingSettings);
   await vscode.commands.executeCommand('devMate.stop');
   const start = await vscode.window.showInformationMessage(
     'DevMate deployment settings saved.',
@@ -363,7 +376,7 @@ async function activate(context) {
   await innerExtension.activate(context);
   syncDeploymentConfig(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-    if (!event.affectsConfiguration('devMate')) return;
+    if (!event.affectsConfiguration('devMate') || deploymentSettingsCommit) return;
     try {
       syncDeploymentConfig(context);
     } catch (error) {
