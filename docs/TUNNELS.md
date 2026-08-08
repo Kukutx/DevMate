@@ -11,7 +11,11 @@ DevMate keeps its HTTP Gateway on `127.0.0.1`. The VS Code/deployment layer owns
 | `cloudflare-managed` | Stable team or production endpoint | DevMate launches `cloudflared tunnel run` | configured stable URL |
 | `external` | Existing reverse proxy, VPN, ingress, or service manager | Not process-managed by DevMate | configured stable URL |
 
-Configure through `DevMate: Configure Deployment` or VS Code settings. Tunnel credentials remain in VS Code Secret Storage, provider configuration, or process environment, never in project files or DevMate `config.json`.
+Configure the **active workspace deployment** through `DevMate: Deployment Setup` / `DevMate: Tunnel Setup` or the MCP `team_configure` tool. Mode, active provider, stable public URL, Team lease policy, and production limits live in the workspace shared `config.json`; they are not machine-global VS Code settings.
+
+VS Code machine settings hold only local execution details and setup candidates: provider executable paths, ngrok account/pooling/Traffic Policy behavior, managed-provider restart settings, and remembered `ngrokUrl` / `publicUrl` candidates. A remembered candidate does not override the active workspace deployment.
+
+Tunnel credentials remain in VS Code Secret Storage, provider configuration, or process environment, never in project files or DevMate `config.json`.
 
 Obsidian is not a provider owner. It may read the current ready shared tunnel record or use an explicitly configured HTTPS Public origin, but it never starts, stops, restarts, or reconfigures a tunnel.
 
@@ -93,6 +97,8 @@ For managed providers it enforces:
 
 The configuration identity includes provider, port, endpoint configuration, provider executable selection, ngrok account mode, pooling/policy settings, and deployment mode. A process configured differently must not silently attach to an incompatible tunnel record.
 
+When shared deployment state changes outside the local VS Code Setup flow, the public verifier detects a configuration-generation conflict before making a stale MCP request. An owned stale ingress is stopped fail-closed; DevMate does not guess and auto-launch a different provider without an explicit Start.
+
 ## Public MCP verification
 
 After a public origin is available, DevMate verifies the actual MCP path rather than treating provider readiness as application readiness:
@@ -102,13 +108,15 @@ After a public origin is available, DevMate verifies the actual MCP path rather 
 3. MCP session propagation when returned;
 4. authenticated `tools/list` with protocol/session headers.
 
+Verification is generation-aware. A result is accepted only if owner, provider, port, ready timestamp, and public URL still match the current shared tunnel record; stale verification results are discarded.
+
 This logic is shared in `host/public-mcp.js` and covered by a real Gateway E2E test.
 
 ## Diagnostics
 
 Run:
 
-- `DevMate: Deployment / Tunnel Diagnostics`;
+- `DevMate: Tunnel Doctor`;
 - `deployment_status`;
 - `deployment_readiness`;
 - `connection_diagnostics`.
