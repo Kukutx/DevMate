@@ -361,11 +361,62 @@ function settingPatch(context, event) {
   return Object.keys(patch).length ? patch : null;
 }
 
+function settingRollback(context, event) {
+  const state = readDeploymentConfig(configPath(context));
+  if (!state) return {};
+  const rollback = {};
+  const production = state.config?.production || {};
+
+  if (event.affectsConfiguration('devMate.deploymentMode')) rollback.deploymentMode = state.deployment.mode;
+  if (event.affectsConfiguration('devMate.tunnelProvider')) rollback.tunnelProvider = state.deployment.tunnelProvider;
+  if (event.affectsConfiguration('devMate.ngrokUrl') && state.deployment.tunnelProvider === 'ngrok') {
+    rollback.ngrokUrl = state.deployment.publicUrl || '';
+  }
+  if (
+    event.affectsConfiguration('devMate.publicUrl') &&
+    (state.deployment.tunnelProvider === 'cloudflare-managed' || state.deployment.tunnelProvider === 'external')
+  ) {
+    rollback.publicUrl = state.deployment.publicUrl || '';
+  }
+  if (event.affectsConfiguration('devMate.teamRequireWorkspaceLeaseForWrites')) {
+    rollback.teamRequireWorkspaceLeaseForWrites = state.leaseRequired;
+  }
+
+  const fields = {
+    productionMaxRequestBytes: 'maxRequestBytes',
+    productionRequestsPerMinute: 'requestsPerMinute',
+    productionMaxConcurrentRequests: 'maxConcurrentRequests',
+    productionMaxConcurrentPerPrincipal: 'maxConcurrentPerPrincipal',
+    productionRequestTimeoutMs: 'requestTimeoutMs'
+  };
+  for (const [settingName, key] of Object.entries(fields)) {
+    if (event.affectsConfiguration(`devMate.${settingName}`) && production[key] !== undefined) {
+      rollback[settingName] = production[key];
+    }
+  }
+  if (event.affectsConfiguration('devMate.allowedPublicHosts')) rollback.allowedPublicHosts = state.allowedHosts;
+  return rollback;
+}
+
 async function syncExplicitSettingChange(context, event) {
   if (deploymentSettingsCommit) return false;
+  const rollback = settingRollback(context, event);
   const patch = settingPatch(context, event);
   if (!patch) return false;
-  applyDeploymentPatch(configPath(context), patch);
+  try {
+    applyDeploymentPatch(configPath(context), patch);
+  } catch (error) {
+    if (Object.keys(rollback).length) {
+      try {
+        await commitLocalSettings(rollback);
+        log(`Rolled rejected VS Code deployment setting back to shared canonical state: ${Object.keys(rollback).join(', ')}.`);
+      } catch (rollbackError) {
+        error.rollbackError = rollbackError?.message || String(rollbackError);
+        log(`Could not roll rejected deployment setting back to shared state: ${error.rollbackError}`);
+      }
+    }
+    throw error;
+  }
   log(`Applied explicit VS Code deployment setting change to shared config: ${Object.keys(patch).join(', ')}.`);
   return true;
 }
@@ -441,7 +492,8 @@ async function activate(context) {
     try {
       void syncExplicitSettingChange(context, event).catch(error => {
         log(`Could not apply deployment setting change: ${error.message || error}`);
-        vscode.window.showErrorMessage(`DevMate deployment setting was not applied: ${error.message || error}`);
+        const rollbackDetail = error.rollbackError ? ` Settings rollback also failed: ${error.rollbackError}` : '';
+        vscode.window.showErrorMessage(`DevMate deployment setting was not applied: ${error.message || error}.${rollbackDetail}`);
       });
     } catch (error) {
       log(`Could not apply deployment setting change: ${error.message || error}`);
@@ -465,6 +517,7 @@ module.exports = {
   deactivate,
   localTunnelSettings,
   settingPatch,
+  settingRollback,
   syncExplicitSettingChange,
   tunnelSettings
 };
