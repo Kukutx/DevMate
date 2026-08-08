@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-test('VS Code entry owns the host lifecycle and provider-native tunnel controller', () => {
+test('VS Code entry initializes shared config before the provider-native tunnel controller', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   assert.equal(fs.existsSync(path.join(root, 'extension-entry-host.js')), false);
@@ -17,13 +17,21 @@ test('VS Code entry owns the host lifecycle and provider-native tunnel controlle
   assert.match(source, /TunnelController/);
   assert.match(source, /setTunnelController/);
   assert.match(source, /clearTunnelController/);
-  assert.match(source, /validateTunnelProvider\(provider\)/);
-  assert.match(source, /validateDeploymentMode\(deploymentMode\)/);
-  const validation = source.indexOf('tunnelSettings();');
+  assert.match(source, /settingsFromState/);
+  assert.match(source, /ensureSharedDesktopConfig/);
+  assert.match(source, /normalizeBootstrapDeployment/);
+  assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
+
+  const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
+  assert.match(effective, /validateTunnelProvider/);
+  assert.match(effective, /validateDeploymentMode/);
+  assert.match(effective, /readSharedConfig/);
+
+  const config = source.indexOf('ensureSharedDesktopConfig(runtimeStateDirectory)');
   const controller = source.indexOf('runtime = new TunnelController({');
   const registry = source.indexOf('setTunnelController(runtime)');
   const activation = source.indexOf('await lifecycle.activate(context)');
-  assert.ok(validation >= 0 && controller > validation, 'Tunnel settings must be validated before controller creation');
+  assert.ok(config >= 0 && controller > config, 'Shared deployment config must exist before controller creation');
   assert.ok(registry > controller && activation > registry, 'Tunnel runtime must be registered before platform activation');
 
   const deactivate = source.indexOf('await currentLifecycle?.deactivate()');
