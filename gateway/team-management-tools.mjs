@@ -25,15 +25,28 @@ export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   const previousProvider = config.deployment.tunnelProvider;
   if (patch.mode) config.deployment.mode = patch.mode;
   if (patch.tunnelProvider) config.deployment.tunnelProvider = patch.tunnelProvider;
-  if (config.deployment.mode === 'production' && config.deployment.tunnelProvider === 'cloudflare-quick') {
-    throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
-  }
 
   const providerChanged = patch.tunnelProvider !== undefined && patch.tunnelProvider !== previousProvider;
   if (patch.publicUrl !== undefined) {
-    config.deployment.publicUrl = cleanOrigin(patch.publicUrl, config.deployment.mode === 'production');
+    config.deployment.publicUrl = cleanOrigin(patch.publicUrl, false);
   } else if (providerChanged || config.deployment.tunnelProvider === 'cloudflare-quick') {
     config.deployment.publicUrl = '';
+  }
+
+  const deploymentTouched = patch.mode !== undefined || patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
+  if (deploymentTouched) {
+    if (config.deployment.mode === 'production' && config.deployment.tunnelProvider === 'cloudflare-quick') {
+      throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
+    }
+    if (
+      (config.deployment.tunnelProvider === 'cloudflare-managed' || config.deployment.tunnelProvider === 'external') &&
+      !config.deployment.publicUrl
+    ) {
+      throw new Error(`${config.deployment.tunnelProvider} requires a stable public HTTPS URL`);
+    }
+    if (config.deployment.mode === 'production' && !config.deployment.publicUrl) {
+      throw new Error('Production deployment requires a stable public HTTPS URL');
+    }
   }
 
   if (patch.requireWorkspaceLeaseForWrites !== undefined) {
