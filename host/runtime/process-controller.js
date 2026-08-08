@@ -462,7 +462,7 @@ class RuntimeController {
 
   ownerUrl(publicOrigin = '') {
     const config = this.ensureConfig();
-    const origin = String(publicOrigin || config.deployment?.publicUrl || `http://127.0.0.1:${config.server.port}`)
+    const origin = String(publicOrigin || config.connection?.publicUrl || `http://127.0.0.1:${config.server.port}`)
       .replace(/\/$/, '');
     return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
   }
