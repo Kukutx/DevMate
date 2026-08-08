@@ -2,6 +2,7 @@
 
 const CONNECTION_PROVIDERS = Object.freeze(['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
 const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
+const LIFECYCLE_STATES = Object.freeze(['running', 'stopped']);
 
 const DEFAULT_REQUEST_POLICY = Object.freeze({
   maxRequestBytes: 2 * 1024 * 1024,
@@ -67,8 +68,21 @@ function legacyRequestPolicy(config) {
   return object(config.production, 'production');
 }
 
+function normalizeLifecycle(config) {
+  const lifecycle = object(config.lifecycle, 'lifecycle');
+  lifecycle.desiredState = strictEnum(lifecycle.desiredState, LIFECYCLE_STATES, 'stopped', 'lifecycle state');
+  lifecycle.generation = strictInteger(lifecycle.generation, 0, 0, Number.MAX_SAFE_INTEGER, 'lifecycle.generation');
+  lifecycle.updatedAt = lifecycle.updatedAt == null ? null : String(lifecycle.updatedAt);
+  lifecycle.requestedBy = lifecycle.requestedBy == null ? null : String(lifecycle.requestedBy).slice(0, 256);
+  lifecycle.reason = lifecycle.reason == null ? '' : String(lifecycle.reason).slice(0, 500);
+  config.lifecycle = lifecycle;
+  return lifecycle;
+}
+
 function normalizeInstanceConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
+
+  normalizeLifecycle(config);
 
   const previousConnection = object(config.connection, 'connection');
   const oldConnection = legacyConnection(config);
@@ -177,10 +191,12 @@ function accessState(config) {
 module.exports = {
   CONNECTION_PROVIDERS,
   DEFAULT_REQUEST_POLICY,
+  LIFECYCLE_STATES,
   TEAM_ROLES,
   accessState,
   connectionState,
   normalizeInstanceConfig,
+  normalizeLifecycle,
   strictBoolean,
   strictEnum,
   strictInteger,
