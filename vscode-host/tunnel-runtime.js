@@ -24,8 +24,9 @@ function sharedReadyAttachment(current, port) {
     !record ||
     record.status !== 'ready' ||
     !record.publicUrl ||
+    record.provider !== 'ngrok' ||
+    match.provider !== 'ngrok' ||
     Number(record.port) !== numericPort ||
-    record.provider !== match.provider ||
     record.ownerId === current.ownerId
   ) return null;
   return {
