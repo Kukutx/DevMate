@@ -16,11 +16,11 @@ function currentFailure(config, record) {
   return String(config.connection.lastError || '');
 }
 
-function publicUiState(config, tunnelStatus = null, { runtimeError = '' } = {}) {
+function publicUiState(config, tunnelStatus = null, { runtimeError = '', gatewayLock = null } = {}) {
   const provider = deploymentProvider(config);
   const record = tunnelStatus?.record || null;
   const publicUrl = String(record?.publicUrl || tunnelStatus?.publicUrl || '').trim();
-  const verified = !!record && verifiedForCurrentRecord(config, record);
+  const verified = !!record && verifiedForCurrentRecord(config, record, gatewayLock);
   const failure = currentFailure(config, record);
 
   if (verified) {
