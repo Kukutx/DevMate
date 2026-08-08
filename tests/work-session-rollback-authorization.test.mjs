@@ -14,9 +14,9 @@ await fsp.writeFile(configPath, JSON.stringify({
   version: 11,
   auth: { required: true, token: 'owner-token-value-long-enough' },
   permissions: { profile: 'fullAccess' },
-  deployment: { mode: 'team', tunnelProvider: 'external', publicUrl: 'https://devmate.example.com' },
-  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: true },
-  production: {},
+  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
+  team: { members: [], requireWorkspaceLeaseForWrites: true },
+  requestPolicy: { allowedHosts: ['devmate.example.com'] },
   maintenance: { auditRetentionDays: 90 },
   activeWorkspaceId: 'app',
   workspaces: [{ id: 'app', name: 'app', root: workspaceRoot, mode: 'workspace-write', reference: false }]
