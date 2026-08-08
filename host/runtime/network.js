@@ -2,7 +2,7 @@
 
 const http = require('node:http');
 const net = require('node:net');
-const { DEFAULT_PORT } = require('./constants.js');
+const { DEFAULT_PORT, MAX_PORT, strictPort } = require('../../shared/port.cjs');
 
 const MAX_HTTP_JSON_BYTES = 64 * 1024;
 
@@ -65,7 +65,8 @@ function httpJson(url, timeoutMs = 1500, maxBytes = MAX_HTTP_JSON_BYTES) {
 }
 
 function healthAt(port, timeoutMs = 1500) {
-  return httpJson(`http://127.0.0.1:${port}/control/health`, timeoutMs);
+  const validPort = strictPort(port, { label: 'Gateway port' });
+  return httpJson(`http://127.0.0.1:${validPort}/control/health`, timeoutMs);
 }
 
 function healthMatches(health, config) {
@@ -77,6 +78,7 @@ function healthMatches(health, config) {
 }
 
 function isPortFree(port) {
+  const validPort = strictPort(port, { label: 'Gateway port' });
   return new Promise(resolve => {
     const server = net.createServer();
     let settled = false;
@@ -87,19 +89,20 @@ function isPortFree(port) {
     };
     server.once('error', () => finish(false));
     server.once('listening', () => server.close(() => finish(true)));
-    try { server.listen(port, '127.0.0.1'); }
+    try { server.listen(validPort, '127.0.0.1'); }
     catch { finish(false); }
   });
 }
 
 async function choosePort(config, preferredPort = DEFAULT_PORT) {
-  const base = Number(config?.server?.port || preferredPort || DEFAULT_PORT);
-  for (let port = base; port < base + 20; port += 1) {
+  const base = strictPort(config?.server?.port ?? preferredPort, { label: 'Gateway port' });
+  const end = Math.min(MAX_PORT, base + 19);
+  for (let port = base; port <= end; port += 1) {
     const health = await healthAt(port, 600);
     if (healthMatches(health, config)) return { port, attached: true };
     if (!health.ok && await isPortFree(port)) return { port, attached: false };
   }
-  throw new Error(`No free DevMate port found from ${base} to ${base + 19}`);
+  throw new Error(`No free DevMate port found from ${base} to ${end}`);
 }
 
 module.exports = {
