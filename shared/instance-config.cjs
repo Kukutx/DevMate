@@ -64,16 +64,52 @@ function cleanPublicUrl(value) {
   return value.trim();
 }
 
-function legacyConnection(config) {
-  const deployment = object(config.deployment, 'deployment');
-  return {
-    provider: deployment.tunnelProvider,
-    publicUrl: deployment.publicUrl
-  };
+function retiredShapePresent(config) {
+  return Object.hasOwn(config, 'deployment')
+    || Object.hasOwn(config, 'production')
+    || Object.hasOwn(object(config.team, 'team'), 'enabled');
 }
 
-function legacyRequestPolicy(config) {
-  return object(config.production, 'production');
+function upgradeLegacyInstanceShape(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
+  if (!retiredShapePresent(config)) return config;
+
+  const deployment = object(config.deployment, 'deployment');
+  const production = object(config.production, 'production');
+  const connection = object(config.connection, 'connection');
+  const requestPolicy = object(config.requestPolicy, 'requestPolicy');
+  const team = object(config.team, 'team');
+
+  config.connection = {
+    ...connection,
+    provider: connection.provider === undefined ? deployment.tunnelProvider : connection.provider,
+    publicUrl: connection.publicUrl === undefined ? deployment.publicUrl : connection.publicUrl
+  };
+
+  config.requestPolicy = {
+    ...requestPolicy,
+    maxRequestBytes: requestPolicy.maxRequestBytes === undefined ? production.maxRequestBytes : requestPolicy.maxRequestBytes,
+    requestsPerMinute: requestPolicy.requestsPerMinute === undefined ? production.requestsPerMinute : requestPolicy.requestsPerMinute,
+    maxConcurrentRequests: requestPolicy.maxConcurrentRequests === undefined ? production.maxConcurrentRequests : requestPolicy.maxConcurrentRequests,
+    maxConcurrentPerPrincipal: requestPolicy.maxConcurrentPerPrincipal === undefined ? production.maxConcurrentPerPrincipal : requestPolicy.maxConcurrentPerPrincipal,
+    requestTimeoutMs: requestPolicy.requestTimeoutMs === undefined ? production.requestTimeoutMs : requestPolicy.requestTimeoutMs,
+    allowedHosts: requestPolicy.allowedHosts === undefined ? production.allowedHosts : requestPolicy.allowedHosts
+  };
+
+  delete team.enabled;
+  config.team = team;
+  delete config.deployment;
+  delete config.production;
+  return config;
+}
+
+function assertCurrentInstanceShape(config) {
+  if (retiredShapePresent(config)) {
+    const error = new Error('Retired deployment-mode fields must be upgraded before runtime normalization');
+    error.code = 'retired_instance_shape';
+    throw error;
+  }
+  return config;
 }
 
 function normalizeLifecycle(config) {
@@ -89,22 +125,14 @@ function normalizeLifecycle(config) {
 
 function normalizeInstanceConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
-
+  assertCurrentInstanceShape(config);
   normalizeLifecycle(config);
 
   const previousConnection = object(config.connection, 'connection');
-  const oldConnection = legacyConnection(config);
   config.connection = {
     ...previousConnection,
-    provider: strictEnum(
-      previousConnection.provider === undefined ? oldConnection.provider : previousConnection.provider,
-      CONNECTION_PROVIDERS,
-      'ngrok',
-      'connection provider'
-    ),
-    publicUrl: cleanPublicUrl(
-      previousConnection.publicUrl === undefined ? oldConnection.publicUrl : previousConnection.publicUrl
-    )
+    provider: strictEnum(previousConnection.provider, CONNECTION_PROVIDERS, 'ngrok', 'connection provider'),
+    publicUrl: cleanPublicUrl(previousConnection.publicUrl)
   };
 
   const team = object(config.team, 'team');
@@ -116,47 +144,16 @@ function normalizeInstanceConfig(config) {
   );
   team.defaultMemberRole = strictEnum(team.defaultMemberRole, TEAM_ROLES, 'developer', 'team role');
   team.maxMembers = strictInteger(team.maxMembers, 100, 1, 500, 'team.maxMembers');
-  delete team.enabled;
   config.team = team;
 
-  const oldPolicy = legacyRequestPolicy(config);
   const policy = object(config.requestPolicy, 'requestPolicy');
   config.requestPolicy = {
-    maxRequestBytes: strictInteger(
-      policy.maxRequestBytes === undefined ? oldPolicy.maxRequestBytes : policy.maxRequestBytes,
-      DEFAULT_REQUEST_POLICY.maxRequestBytes,
-      ...REQUEST_POLICY_LIMITS.maxRequestBytes,
-      'requestPolicy.maxRequestBytes'
-    ),
-    requestsPerMinute: strictInteger(
-      policy.requestsPerMinute === undefined ? oldPolicy.requestsPerMinute : policy.requestsPerMinute,
-      DEFAULT_REQUEST_POLICY.requestsPerMinute,
-      ...REQUEST_POLICY_LIMITS.requestsPerMinute,
-      'requestPolicy.requestsPerMinute'
-    ),
-    maxConcurrentRequests: strictInteger(
-      policy.maxConcurrentRequests === undefined ? oldPolicy.maxConcurrentRequests : policy.maxConcurrentRequests,
-      DEFAULT_REQUEST_POLICY.maxConcurrentRequests,
-      ...REQUEST_POLICY_LIMITS.maxConcurrentRequests,
-      'requestPolicy.maxConcurrentRequests'
-    ),
-    maxConcurrentPerPrincipal: strictInteger(
-      policy.maxConcurrentPerPrincipal === undefined ? oldPolicy.maxConcurrentPerPrincipal : policy.maxConcurrentPerPrincipal,
-      DEFAULT_REQUEST_POLICY.maxConcurrentPerPrincipal,
-      ...REQUEST_POLICY_LIMITS.maxConcurrentPerPrincipal,
-      'requestPolicy.maxConcurrentPerPrincipal'
-    ),
-    requestTimeoutMs: strictInteger(
-      policy.requestTimeoutMs === undefined ? oldPolicy.requestTimeoutMs : policy.requestTimeoutMs,
-      DEFAULT_REQUEST_POLICY.requestTimeoutMs,
-      ...REQUEST_POLICY_LIMITS.requestTimeoutMs,
-      'requestPolicy.requestTimeoutMs'
-    ),
-    allowedHosts: stringList(
-      policy.allowedHosts === undefined ? oldPolicy.allowedHosts : policy.allowedHosts,
-      DEFAULT_REQUEST_POLICY.allowedHosts,
-      'requestPolicy.allowedHosts'
-    ).map(value => value.toLowerCase())
+    maxRequestBytes: strictInteger(policy.maxRequestBytes, DEFAULT_REQUEST_POLICY.maxRequestBytes, ...REQUEST_POLICY_LIMITS.maxRequestBytes, 'requestPolicy.maxRequestBytes'),
+    requestsPerMinute: strictInteger(policy.requestsPerMinute, DEFAULT_REQUEST_POLICY.requestsPerMinute, ...REQUEST_POLICY_LIMITS.requestsPerMinute, 'requestPolicy.requestsPerMinute'),
+    maxConcurrentRequests: strictInteger(policy.maxConcurrentRequests, DEFAULT_REQUEST_POLICY.maxConcurrentRequests, ...REQUEST_POLICY_LIMITS.maxConcurrentRequests, 'requestPolicy.maxConcurrentRequests'),
+    maxConcurrentPerPrincipal: strictInteger(policy.maxConcurrentPerPrincipal, DEFAULT_REQUEST_POLICY.maxConcurrentPerPrincipal, ...REQUEST_POLICY_LIMITS.maxConcurrentPerPrincipal, 'requestPolicy.maxConcurrentPerPrincipal'),
+    requestTimeoutMs: strictInteger(policy.requestTimeoutMs, DEFAULT_REQUEST_POLICY.requestTimeoutMs, ...REQUEST_POLICY_LIMITS.requestTimeoutMs, 'requestPolicy.requestTimeoutMs'),
+    allowedHosts: stringList(policy.allowedHosts, DEFAULT_REQUEST_POLICY.allowedHosts, 'requestPolicy.allowedHosts').map(value => value.toLowerCase())
   };
 
   const runtime = object(config.runtime, 'runtime');
@@ -167,18 +164,12 @@ function normalizeInstanceConfig(config) {
   jobs.allowJobGitSave = strictBoolean(jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
   jobs.embeddedRunnerEnabled = strictBoolean(jobs.embeddedRunnerEnabled, true, 'jobs.embeddedRunnerEnabled');
   config.jobs = jobs;
-
-  delete config.deployment;
-  delete config.production;
   return config;
 }
 
 function connectionState(config) {
   const normalized = normalizeInstanceConfig(config);
-  return {
-    provider: normalized.connection.provider,
-    publicUrl: normalized.connection.publicUrl
-  };
+  return { provider: normalized.connection.provider, publicUrl: normalized.connection.publicUrl };
 }
 
 function accessState(config) {
@@ -198,11 +189,14 @@ module.exports = {
   REQUEST_POLICY_LIMITS,
   TEAM_ROLES,
   accessState,
+  assertCurrentInstanceShape,
   connectionState,
   normalizeInstanceConfig,
   normalizeLifecycle,
+  retiredShapePresent,
   strictBoolean,
   strictEnum,
   strictInteger,
-  stringList
+  stringList,
+  upgradeLegacyInstanceShape
 };
