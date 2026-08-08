@@ -16,11 +16,7 @@ const {
   assertTunnelSafeForCredentialChange,
   credentialProviderInUse
 } = require('./vscode-host/tunnel-stop-policy.js');
-const {
-  strictInteger,
-  tunnelMaxRestarts,
-  tunnelProvider: validateTunnelProvider
-} = require('./vscode-host/tunnel-settings.js');
+const { tunnelMaxRestarts } = require('./vscode-host/tunnel-settings.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -29,7 +25,6 @@ const NGROK_POLICY_DOCS = 'https://ngrok.com/docs/traffic-policy/';
 let innerExtension = null;
 let output = null;
 let cloudflareTunnelToken = '';
-let deploymentSettingsCommit = false;
 
 function cfg() {
   return vscode.workspace.getConfiguration('devMate');
@@ -55,7 +50,6 @@ function strictBoolean(value, label) {
 
 function localTunnelSettings() {
   return {
-    provider: validateTunnelProvider(String(setting('tunnelProvider', 'ngrok')).trim().toLowerCase()),
     publicUrl: String(setting('publicUrl', '') || '').trim(),
     ngrokUrl: String(setting('ngrokUrl', '') || '').trim(),
     ngrokCommandPath: String(setting('ngrokCommandPath', '') || '').trim(),
@@ -64,8 +58,7 @@ function localTunnelSettings() {
     ngrokTrafficPolicyFile: String(setting('ngrokTrafficPolicyFile', '') || '').trim(),
     cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),
     autoRestart: strictBoolean(setting('tunnelAutoRestart', true), 'tunnelAutoRestart'),
-    maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10)),
-    deploymentMode: String(setting('deploymentMode', 'personal')).trim().toLowerCase()
+    maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10))
   };
 }
 
@@ -106,30 +99,9 @@ async function updateSetting(name, value) {
   await cfg().update(name, value, vscode.ConfigurationTarget.Global);
 }
 
-async function commitLocalSettings(updates) {
-  const previous = new Map();
-  const applied = [];
-  deploymentSettingsCommit = true;
-  try {
-    for (const [name, value] of Object.entries(updates)) {
-      previous.set(name, setting(name, undefined));
-      await updateSetting(name, value);
-      applied.push(name);
-    }
-  } catch (error) {
-    for (const name of applied.reverse()) {
-      try { await updateSetting(name, previous.get(name)); } catch {}
-    }
-    throw error;
-  } finally {
-    deploymentSettingsCommit = false;
-  }
-}
-
 async function commitDeploymentSettings(context, localUpdates, sharedPatch) {
   const previous = new Map();
   const applied = [];
-  deploymentSettingsCommit = true;
   try {
     for (const [name, value] of Object.entries(localUpdates)) {
       previous.set(name, setting(name, undefined));
@@ -142,8 +114,6 @@ async function commitDeploymentSettings(context, localUpdates, sharedPatch) {
       try { await updateSetting(name, previous.get(name)); } catch {}
     }
     throw error;
-  } finally {
-    deploymentSettingsCommit = false;
   }
 }
 
@@ -291,10 +261,7 @@ async function configureDeployment(context) {
   });
   if (!providerChoice) return;
 
-  const localUpdates = {
-    deploymentMode: modeChoice.value,
-    tunnelProvider: providerChoice.value
-  };
+  const localUpdates = {};
   let stableUrl = '';
   let cloudflareToken = null;
 
@@ -391,116 +358,6 @@ async function configureDeployment(context) {
   if (start === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
 }
 
-function settingPatch(context, event) {
-  const state = readDeploymentConfig(configPath(context));
-  if (!state) return null;
-  const patch = {};
-
-  if (event.affectsConfiguration('devMate.deploymentMode')) {
-    patch.mode = String(setting('deploymentMode', state.deployment.mode)).trim().toLowerCase();
-  }
-  if (event.affectsConfiguration('devMate.tunnelProvider')) {
-    const provider = validateTunnelProvider(String(setting('tunnelProvider', state.deployment.tunnelProvider)).trim().toLowerCase());
-    patch.tunnelProvider = provider;
-    patch.publicUrl = stablePublicUrl({
-      provider,
-      ngrokUrl: setting('ngrokUrl', ''),
-      publicUrl: setting('publicUrl', '')
-    });
-  }
-  const provider = patch.tunnelProvider || state.deployment.tunnelProvider;
-  if (event.affectsConfiguration('devMate.ngrokUrl') && provider === 'ngrok') {
-    patch.publicUrl = stablePublicUrl({ provider, ngrokUrl: setting('ngrokUrl', '') });
-  }
-  if (event.affectsConfiguration('devMate.publicUrl') && (provider === 'cloudflare-managed' || provider === 'external')) {
-    patch.publicUrl = stablePublicUrl({ provider, publicUrl: setting('publicUrl', '') });
-  }
-  if (event.affectsConfiguration('devMate.teamRequireWorkspaceLeaseForWrites')) {
-    patch.requireWorkspaceLeaseForWrites = strictBoolean(
-      setting('teamRequireWorkspaceLeaseForWrites', state.leaseRequired),
-      'teamRequireWorkspaceLeaseForWrites'
-    );
-  }
-
-  const limits = {
-    productionMaxRequestBytes: ['maxRequestBytes', 2097152, 65536, 33554432],
-    productionRequestsPerMinute: ['requestsPerMinute', 120, 10, 10000],
-    productionMaxConcurrentRequests: ['maxConcurrentRequests', 24, 1, 256],
-    productionMaxConcurrentPerPrincipal: ['maxConcurrentPerPrincipal', 4, 1, 64],
-    productionRequestTimeoutMs: ['requestTimeoutMs', 900000, 1000, 3600000]
-  };
-  for (const [settingName, [key, fallback, min, max]] of Object.entries(limits)) {
-    if (!event.affectsConfiguration(`devMate.${settingName}`)) continue;
-    patch[key] = strictInteger(setting(settingName, fallback), fallback, min, max, settingName);
-  }
-  if (event.affectsConfiguration('devMate.allowedPublicHosts')) {
-    const values = setting('allowedPublicHosts', []);
-    if (!Array.isArray(values)) throw new TypeError('allowedPublicHosts must be an array');
-    patch.allowedHosts = values;
-  }
-  return Object.keys(patch).length ? patch : null;
-}
-
-function settingRollback(context, event) {
-  const state = readDeploymentConfig(configPath(context));
-  if (!state) return {};
-  const rollback = {};
-  const production = state.config?.production || {};
-
-  if (event.affectsConfiguration('devMate.deploymentMode')) rollback.deploymentMode = state.deployment.mode;
-  if (event.affectsConfiguration('devMate.tunnelProvider')) rollback.tunnelProvider = state.deployment.tunnelProvider;
-  if (event.affectsConfiguration('devMate.ngrokUrl') && state.deployment.tunnelProvider === 'ngrok') {
-    rollback.ngrokUrl = state.deployment.publicUrl || '';
-  }
-  if (
-    event.affectsConfiguration('devMate.publicUrl') &&
-    (state.deployment.tunnelProvider === 'cloudflare-managed' || state.deployment.tunnelProvider === 'external')
-  ) {
-    rollback.publicUrl = state.deployment.publicUrl || '';
-  }
-  if (event.affectsConfiguration('devMate.teamRequireWorkspaceLeaseForWrites')) {
-    rollback.teamRequireWorkspaceLeaseForWrites = state.leaseRequired;
-  }
-
-  const fields = {
-    productionMaxRequestBytes: 'maxRequestBytes',
-    productionRequestsPerMinute: 'requestsPerMinute',
-    productionMaxConcurrentRequests: 'maxConcurrentRequests',
-    productionMaxConcurrentPerPrincipal: 'maxConcurrentPerPrincipal',
-    productionRequestTimeoutMs: 'requestTimeoutMs'
-  };
-  for (const [settingName, key] of Object.entries(fields)) {
-    if (event.affectsConfiguration(`devMate.${settingName}`) && production[key] !== undefined) {
-      rollback[settingName] = production[key];
-    }
-  }
-  if (event.affectsConfiguration('devMate.allowedPublicHosts')) rollback.allowedPublicHosts = state.allowedHosts;
-  return rollback;
-}
-
-async function syncExplicitSettingChange(context, event) {
-  if (deploymentSettingsCommit) return false;
-  const rollback = settingRollback(context, event);
-  const patch = settingPatch(context, event);
-  if (!patch) return false;
-  try {
-    applyDeploymentPatch(configPath(context), patch);
-  } catch (error) {
-    if (Object.keys(rollback).length) {
-      try {
-        await commitLocalSettings(rollback);
-        log(`Rolled rejected VS Code deployment setting back to shared canonical state: ${Object.keys(rollback).join(', ')}.`);
-      } catch (rollbackError) {
-        error.rollbackError = rollbackError?.message || String(rollbackError);
-        log(`Could not roll rejected deployment setting back to shared state: ${error.rollbackError}`);
-      }
-    }
-    throw error;
-  }
-  log(`Applied explicit VS Code deployment setting change to shared config: ${Object.keys(patch).join(', ')}.`);
-  return true;
-}
-
 async function tunnelDoctor(context) {
   output.show(true);
   const settings = tunnelSettings(context);
@@ -515,7 +372,7 @@ async function tunnelDoctor(context) {
   } else if (settings.provider.startsWith('cloudflare')) {
     const command = settings.cloudflareCommandPath || 'cloudflared';
     const check = checkCommand(command);
-    log(`cloudflared: ${check.ok ? check.output : `MISSING (${check.output})`}`);
+    log(`cloudflared: ${check.ok ? check.output : `MISSING (${check.output})`);
     if (settings.provider === 'cloudflare-managed') {
       log(`Managed tunnel token: ${cloudflareTunnelToken ? 'configured' : 'not configured'}`);
     }
@@ -581,18 +438,6 @@ async function activate(context) {
 
   innerExtension = require('./extension-entry');
   await innerExtension.activate(context);
-  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-    if (!event.affectsConfiguration('devMate') || deploymentSettingsCommit) return;
-    try {
-      void syncExplicitSettingChange(context, event).catch(error => {
-        log(`Could not apply deployment setting change: ${error.message || error}`);
-        const rollbackDetail = error.rollbackError ? ` Settings rollback also failed: ${error.rollbackError}` : '';
-        vscode.window.showErrorMessage(`DevMate deployment setting was not applied: ${error.message || error}.${rollbackDetail}`);
-      });
-    } catch (error) {
-      log(`Could not apply deployment setting change: ${error.message || error}`);
-    }
-  }));
   const settings = tunnelSettings(context);
   log(`Deployment integration ready: mode=${settings.deploymentMode} provider=${settings.provider}.`);
 }
@@ -614,8 +459,5 @@ module.exports = {
   localTunnelSettings,
   prepareCloudflareCredentialMutation,
   prepareDeploymentMutation,
-  settingPatch,
-  settingRollback,
-  syncExplicitSettingChange,
   tunnelSettings
 };
