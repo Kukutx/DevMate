@@ -69,7 +69,7 @@ function recordGeneration(record) {
 
 function sessionGeneration(record, gatewayLock) {
   const tunnel = recordGeneration(record);
-  const gateway = gatewayGeneration(gatewayLock);
+  const gateway = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
   return tunnel && gateway ? `${tunnel}::${gateway}` : '';
 }
 
@@ -117,7 +117,7 @@ function verifiedForCurrentRecord(config, record, gatewayLock = null) {
 
   const persistedGatewayGeneration = String(config?.connection?.lastGatewayGeneration || '').trim();
   if (persistedGatewayGeneration) {
-    const currentGatewayGeneration = gatewayGeneration(gatewayLock);
+    const currentGatewayGeneration = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
     if (!currentGatewayGeneration || persistedGatewayGeneration !== currentGatewayGeneration) return false;
   }
 
@@ -132,7 +132,7 @@ function successfulVerificationPatch(
   gatewayLock = null
 ) {
   const tunnelGeneration = recordGeneration(record);
-  const currentGatewayGeneration = gatewayGeneration(gatewayLock);
+  const currentGatewayGeneration = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
   return {
     lastPreflightAt: stamp,
     lastPublicOrigin: String(test?.publicOrigin || publicUrl || '').trim(),
