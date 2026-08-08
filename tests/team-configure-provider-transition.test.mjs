@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyTeamConfigurationPatch } from '../gateway/team-management-tools.mjs';
 
-function config(provider = 'external', publicUrl = 'https://external.example.com') {
+function config(provider = 'external', publicUrl = 'https://external.example.com', allowedHosts = []) {
   return {
     version: 11,
     deployment: { mode: 'team', tunnelProvider: provider, publicUrl },
@@ -19,7 +19,7 @@ function config(provider = 'external', publicUrl = 'https://external.example.com
       maxConcurrentRequests: 64,
       maxConcurrentPerPrincipal: 16,
       requestTimeoutMs: 900000,
-      allowedHosts: []
+      allowedHosts
     },
     jobs: { embeddedRunnerEnabled: true },
     runnerControl: { enabled: false, credentials: [] },
@@ -72,4 +72,36 @@ test('production rejects Cloudflare Quick and requires a stable URL for ngrok', 
   assert.throws(() => applyTeamConfigurationPatch(config('ngrok', ''), {
     mode: 'production'
   }), /requires a stable public HTTPS URL/);
+});
+
+test('production to dynamic team ingress removes only the obsolete active Host', () => {
+  const input = config('external', 'https://prod.example.com', ['prod.example.com', 'manual.example.com']);
+  input.deployment.mode = 'production';
+  const value = applyTeamConfigurationPatch(input, {
+    mode: 'team',
+    tunnelProvider: 'cloudflare-quick'
+  });
+  assert.equal(value.deployment.mode, 'team');
+  assert.equal(value.deployment.publicUrl, '');
+  assert.deepEqual(value.production.allowedHosts, ['manual.example.com']);
+});
+
+test('stable team URL migration replaces the active Host while preserving additional Host policy', () => {
+  const value = applyTeamConfigurationPatch(
+    config('external', 'https://old.example.com', ['old.example.com', 'manual.example.com']),
+    { publicUrl: 'https://new.example.com' }
+  );
+  assert.equal(value.deployment.publicUrl, 'https://new.example.com');
+  assert.deepEqual(value.production.allowedHosts, ['manual.example.com', 'new.example.com']);
+});
+
+test('explicit allowedHosts patch takes precedence over automatic route migration', () => {
+  const value = applyTeamConfigurationPatch(
+    config('external', 'https://old.example.com', ['old.example.com']),
+    {
+      publicUrl: 'https://new.example.com',
+      allowedHosts: ['explicit.example.com']
+    }
+  );
+  assert.deepEqual(value.production.allowedHosts, ['explicit.example.com']);
 });
