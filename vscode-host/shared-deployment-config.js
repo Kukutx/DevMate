@@ -115,33 +115,12 @@ function applyDeploymentPatch(file, patch = {}) {
   });
 }
 
-function normalizeBootstrapDeployment(file) {
-  const current = readDeploymentConfig(file);
-  if (!current) return { changed: false, reason: 'missing-config' };
-  if (
-    current.deployment.mode !== 'personal' ||
-    current.deployment.tunnelProvider !== 'external' ||
-    current.deployment.publicUrl
-  ) return { changed: false, reason: 'already-explicit' };
-  const config = updateConfig(file, value => {
-    value.deployment ||= {};
-    value.deployment.mode = 'personal';
-    value.deployment.tunnelProvider = 'ngrok';
-    value.deployment.publicUrl = '';
-    value.team ||= {};
-    value.team.enabled = false;
-    return value;
-  });
-  return { changed: true, reason: 'replaced-invalid-personal-external-default', config };
-}
-
 module.exports = {
   PRODUCTION_LIMITS,
   applyDeploymentPatch,
   assertDeployableTransition,
   cleanHttpsOrigin,
   deploymentState,
-  normalizeBootstrapDeployment,
   normalizeHostList,
   readDeploymentConfig
 };
