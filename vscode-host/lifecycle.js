@@ -14,7 +14,7 @@ const {
 } = require('./runtime-context.js');
 
 const RELOAD_SETTINGS = [
-  'devMate.vscodeStartupMode',
+  'devMate.vscodeHostEnabled',
   'devMate.sharedStateDirectory'
 ];
 
@@ -37,12 +37,11 @@ class VscodeHostLifecycle {
   }
 
   enabled() {
-    return this.startupMode() !== 'disabled';
+    return setting(this.vscode, 'vscodeHostEnabled', true) !== false;
   }
 
-  startupMode() {
-    const value = String(setting(this.vscode, 'vscodeStartupMode', 'auto') || 'auto');
-    return ['auto', 'manual', 'disabled'].includes(value) ? value : 'auto';
+  autoStart() {
+    return setting(this.vscode, 'autoStart', true) !== false;
   }
 
   async activate(context) {
@@ -103,7 +102,7 @@ class VscodeHostLifecycle {
       this.registerHostListeners(context);
       this.active = true;
       const check = this.runSelfCheck(false);
-      if (!check.ok) this.diagnostics.append('Host activated with self-check failures; automatic start is suppressed.', 'error');
+      if (!check.ok) this.diagnostics.append('Host activated with self-check failures; automatic Start is suppressed.', 'error');
       else this.scheduleAutomaticStart();
     } catch (error) {
       this.diagnostics.recordFailure(error, { phase: 'host-activation' });
@@ -116,7 +115,7 @@ class VscodeHostLifecycle {
       if (!RELOAD_SETTINGS.some(name => event.affectsConfiguration(name))) return;
       this.diagnostics?.append('A host-level setting changed and requires a VS Code window reload.');
       this.vscode.window.showInformationMessage(
-        'DevMate host settings changed. Reload VS Code to apply the new runtime state safely.',
+        'DevMate host settings changed. Reload VS Code to apply the shared runtime safely.',
         'Reload Window'
       ).then(choice => {
         if (choice === 'Reload Window') this.vscode.commands.executeCommand('workbench.action.reloadWindow');
@@ -153,7 +152,7 @@ class VscodeHostLifecycle {
   }
 
   scheduleAutomaticStart() {
-    if (this.startupMode() !== 'auto' || !currentWorkspaceRoot(this.vscode)) return;
+    if (!this.autoStart() || !currentWorkspaceRoot(this.vscode)) return;
     if (this.startupTimer) clearTimeout(this.startupTimer);
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null;
@@ -183,27 +182,32 @@ class VscodeHostLifecycle {
 
   async startAutomatically() {
     const check = this.runSelfCheck(false);
-    if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before Gateway start'), {
+    if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before DevMate Start'), {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
-    this.diagnostics?.append('Starting DevMate Gateway automatically as an isolated child process.');
+    this.diagnostics?.append('Starting DevMate automatically and waiting for verified public MCP Ready state.');
     const commandResult = await this.vscode.commands.executeCommand('devMate.start');
     if (commandResult?.ok === false) {
       const error = new Error(commandResult.error || 'DevMate start command reported failure');
       error.code = commandResult.code || 'DEVMATE_VSCODE_START_COMMAND_FAILED';
       throw error;
     }
+    if (!commandResult?.mcpUrl || !Number.isInteger(Number(commandResult?.toolCount)) || Number(commandResult.toolCount) <= 0) {
+      const error = new Error('DevMate Start returned before the public MCP endpoint reached verified Ready state');
+      error.code = 'DEVMATE_VSCODE_START_NOT_READY';
+      throw error;
+    }
     const ready = await this.verifyGatewayReady();
     this.diagnostics?.clearFailure();
-    this.diagnostics?.append(`Automatic Gateway start verified on port ${ready.port}.`);
-    return ready;
+    this.diagnostics?.append(`Automatic DevMate Start verified on port ${ready.port}; tools=${commandResult.toolCount}.`);
+    return { ...ready, mcpUrl: commandResult.mcpUrl, toolCount: commandResult.toolCount };
   }
 
   async handleStartupFailure(error) {
     this.diagnostics?.recordFailure(error, { phase: 'automatic-start' });
     const detail = error?.message || String(error);
     const choice = await this.vscode.window.showErrorMessage(
-      `DevMate could not start: ${detail}`,
+      `DevMate could not reach Ready state: ${detail}`,
       'Copy diagnostics',
       'Open Host Log'
     );
@@ -214,8 +218,8 @@ class VscodeHostLifecycle {
   async copyDiagnostics() {
     if (!this.diagnostics) return '';
     const report = await this.diagnostics.copy({
-      startupMode: this.startupMode(),
-      enabled: this.enabled()
+      enabled: this.enabled(),
+      autoStart: this.autoStart()
     });
     this.vscode.window.showInformationMessage('DevMate VS Code host diagnostics copied.');
     return report;
