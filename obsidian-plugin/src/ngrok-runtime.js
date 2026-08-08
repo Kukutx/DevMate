@@ -2,13 +2,6 @@
 
 const { decryptSecret } = require('./secret-store.js');
 const { TunnelController } = require('../../vscode-host/tunnel-controller.js');
-const {
-  clearTunnelController,
-  setTunnelController,
-  startTunnel,
-  stopTunnel,
-  tunnelStatus
-} = require('../../vscode-host/tunnel-runtime.js');
 
 class ObsidianNgrokRuntime {
   constructor({
@@ -34,7 +27,6 @@ class ObsidianNgrokRuntime {
       ...(httpRequest ? { httpRequest } : {}),
       ...controllerOptions
     });
-    setTunnelController(this.controller);
   }
 
   settings() {
@@ -64,20 +56,22 @@ class ObsidianNgrokRuntime {
   }
 
   start(port) {
-    return startTunnel(port);
+    if (!this.controller) throw new Error('Obsidian ngrok runtime is disposed');
+    return this.controller.start(port);
   }
 
   status(port) {
-    return tunnelStatus(port);
+    if (!this.controller) return { running: false, owned: false, attached: false, publicUrl: '', provider: 'ngrok', port: Number(port) || 0, record: null };
+    return this.controller.status(port);
   }
 
   stop() {
-    return stopTunnel();
+    if (!this.controller) return Promise.resolve({ stopped: false, reason: 'not-running' });
+    return this.controller.stop();
   }
 
   async dispose({ stopOwned = true } = {}) {
     const current = this.controller;
-    clearTunnelController(current);
     this.controller = null;
     return current?.dispose({ stopOwned }) || { disposed: true };
   }
