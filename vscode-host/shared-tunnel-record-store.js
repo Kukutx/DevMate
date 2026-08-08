@@ -50,8 +50,11 @@ function stableConfiguration(settings = {}, port = 0) {
     provider: normalizeProvider(providerValue),
     publicUrl: configurationUrl(settings.publicUrl),
     ngrokUrl: configurationUrl(settings.ngrokUrl),
+    ngrokCommandPath: String(settings.ngrokCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
+    ngrokUseManagedAccount: settings.ngrokUseManagedAccount !== false,
     ngrokPoolingEnabled: settings.ngrokPoolingEnabled === true,
     ngrokTrafficPolicyFile: String(settings.ngrokTrafficPolicyFile || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
+    cloudflareCommandPath: String(settings.cloudflareCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
     deploymentMode: validateDeploymentMode(modeValue)
   };
 }
