@@ -16,60 +16,44 @@ function local(overrides = {}) {
     cloudflareCommandPath: 'C:\\Tools\\cloudflared.exe',
     autoRestart: true,
     maxRestarts: 7,
-    deploymentMode: 'personal',
     ...overrides
   };
 }
 
-test('shared deployment provider and mode override stale machine business settings', () => {
+test('shared instance connection overrides stale machine connection candidates', () => {
   const result = effectiveTunnelSettings({
     sharedConfig: {
-      deployment: {
-        mode: 'production',
-        tunnelProvider: 'cloudflare-managed',
-        publicUrl: 'https://prod.example.com'
-      }
+      connection: { provider: 'cloudflare-managed', publicUrl: 'https://prod.example.com' }
     },
     localSettings: local()
   });
   assert.equal(result.provider, 'cloudflare-managed');
-  assert.equal(result.deploymentMode, 'production');
   assert.equal(result.publicUrl, 'https://prod.example.com');
   assert.equal(result.ngrokUrl, '');
   assert.equal(result.cloudflareCommandPath, 'C:\\Tools\\cloudflared.exe');
   assert.equal(result.ngrokCommandPath, 'C:\\Tools\\ngrok.exe');
   assert.equal(result.autoRestart, true);
   assert.equal(result.maxRestarts, 7);
+  assert.equal('deploymentMode' in result, false);
 });
 
-test('shared ngrok stable URL becomes the actual ngrok endpoint instead of a machine cache', () => {
+test('shared ngrok URL is authoritative while account execution details remain machine-local', () => {
   const result = effectiveTunnelSettings({
     sharedConfig: {
-      deployment: {
-        mode: 'team',
-        tunnelProvider: 'ngrok',
-        publicUrl: 'https://shared.ngrok-free.app'
-      }
+      connection: { provider: 'ngrok', publicUrl: 'https://shared.ngrok-free.app' }
     },
     localSettings: local({ ngrokUrl: 'https://stale-machine.ngrok-free.app' })
   });
   assert.equal(result.provider, 'ngrok');
-  assert.equal(result.deploymentMode, 'team');
   assert.equal(result.ngrokUrl, 'https://shared.ngrok-free.app');
   assert.equal(result.publicUrl, '');
-  assert.equal(result.ngrokUseManagedAccount, false, 'account storage remains a machine execution detail');
-  assert.equal(result.ngrokPoolingEnabled, true, 'pooling remains a machine execution detail');
+  assert.equal(result.ngrokUseManagedAccount, false);
+  assert.equal(result.ngrokPoolingEnabled, true);
 });
 
 test('Cloudflare Quick never inherits a stable URL from any machine setting', () => {
   const result = effectiveTunnelSettings({
-    sharedConfig: {
-      deployment: {
-        mode: 'team',
-        tunnelProvider: 'cloudflare-quick',
-        publicUrl: ''
-      }
-    },
+    sharedConfig: { connection: { provider: 'cloudflare-quick', publicUrl: '' } },
     localSettings: local()
   });
   assert.equal(result.provider, 'cloudflare-quick');
@@ -77,25 +61,16 @@ test('Cloudflare Quick never inherits a stable URL from any machine setting', ()
   assert.equal(result.ngrokUrl, '');
 });
 
-test('machine business settings are only a bootstrap fallback before shared config exists', () => {
-  const result = effectiveTunnelSettings({
-    sharedConfig: null,
-    localSettings: local({ deploymentMode: 'personal', provider: 'ngrok' })
-  });
+test('machine connection candidates are used only before shared instance config exists', () => {
+  const result = effectiveTunnelSettings({ sharedConfig: null, localSettings: local() });
   assert.equal(result.provider, 'ngrok');
-  assert.equal(result.deploymentMode, 'personal');
   assert.equal(result.ngrokUrl, 'https://machine.ngrok-free.app');
+  assert.equal('deploymentMode' in result, false);
 });
 
-test('invalid shared deployment never silently falls back to machine settings', () => {
+test('invalid shared connection never silently falls back to machine settings', () => {
   assert.throws(() => effectiveTunnelSettings({
-    sharedConfig: {
-      deployment: {
-        mode: 'production',
-        tunnelProvider: 'automatic',
-        publicUrl: 'https://prod.example.com'
-      }
-    },
+    sharedConfig: { connection: { provider: 'automatic', publicUrl: 'https://prod.example.com' } },
     localSettings: local()
-  }), /Unknown tunnel provider/);
+  }), /Unknown connection provider/);
 });

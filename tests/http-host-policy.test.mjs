@@ -13,12 +13,8 @@ function request(host, remoteAddress) {
 }
 
 test('recognizes only actual loopback socket addresses', () => {
-  for (const value of ['127.0.0.1', '127.1.2.3', '::1', '::ffff:127.0.0.1']) {
-    assert.equal(isLoopbackAddress(value), true, value);
-  }
-  for (const value of ['', '0.0.0.0', '192.168.1.10', '203.0.113.10', '::ffff:203.0.113.10']) {
-    assert.equal(isLoopbackAddress(value), false, value);
-  }
+  for (const value of ['127.0.0.1', '127.1.2.3', '::1', '::ffff:127.0.0.1']) assert.equal(isLoopbackAddress(value), true, value);
+  for (const value of ['', '0.0.0.0', '192.168.1.10', '203.0.113.10', '::ffff:203.0.113.10']) assert.equal(isLoopbackAddress(value), false, value);
 });
 
 test('local request requires both loopback Host and loopback socket', () => {
@@ -28,16 +24,16 @@ test('local request requires both loopback Host and loopback socket', () => {
   assert.equal(isLocalRequest(request('127.0.0.1:8787', '127.0.0.1')), true);
 });
 
-test('production Host policy cannot be bypassed with a spoofed localhost Host header', () => {
-  const production = { deployment: { mode: 'production' }, production: { allowedHosts: ['devmate.example.com'] } };
-  assert.equal(hostAllowed(request('devmate.example.com', '203.0.113.10'), production), true);
-  assert.equal(hostAllowed(request('evil.example.com', '203.0.113.10'), production), false);
-  assert.equal(hostAllowed(request('localhost:8787', '203.0.113.10'), production), false);
-  assert.equal(hostAllowed(request('localhost:8787', '127.0.0.1'), production), true);
+test('explicit Host allowlist cannot be bypassed with a spoofed localhost Host header', () => {
+  const restricted = { requestPolicy: { allowedHosts: ['devmate.example.com'] } };
+  assert.equal(hostAllowed(request('devmate.example.com', '203.0.113.10'), restricted), true);
+  assert.equal(hostAllowed(request('evil.example.com', '203.0.113.10'), restricted), false);
+  assert.equal(hostAllowed(request('localhost:8787', '203.0.113.10'), restricted), false);
+  assert.equal(hostAllowed(request('localhost:8787', '127.0.0.1'), restricted), true);
 });
 
-test('team mode stays permissive for public Hosts but never treats spoofed localhost as local', () => {
-  const team = { deployment: { mode: 'team' }, production: { allowedHosts: [] } };
-  assert.equal(hostAllowed(request('devmate.example.com', '203.0.113.10'), team), true);
-  assert.equal(hostAllowed(request('localhost:8787', '203.0.113.10'), team), false);
+test('an empty Host allowlist permits public Hosts but never treats spoofed localhost as local', () => {
+  const unrestricted = { requestPolicy: { allowedHosts: [] } };
+  assert.equal(hostAllowed(request('devmate.example.com', '203.0.113.10'), unrestricted), true);
+  assert.equal(hostAllowed(request('localhost:8787', '203.0.113.10'), unrestricted), false);
 });
