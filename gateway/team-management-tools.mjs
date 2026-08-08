@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import deploymentHosts from '../shared/deployment-hosts.cjs';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { activitySnapshot } from './request-guard.mjs';
 import {
@@ -20,9 +21,12 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
+const { normalizeAllowedHosts, reconcileAllowedHosts } = deploymentHosts;
+
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   const config = normalizeDeploymentConfig(inputConfig);
   const previousProvider = config.deployment.tunnelProvider;
+  const previousPublicUrl = config.deployment.publicUrl;
   if (patch.mode) config.deployment.mode = patch.mode;
   if (patch.tunnelProvider) config.deployment.tunnelProvider = patch.tunnelProvider;
 
@@ -49,6 +53,17 @@ export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
     }
   }
 
+  if (patch.allowedHosts !== undefined) {
+    config.production.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
+  } else if (deploymentTouched) {
+    config.production.allowedHosts = reconcileAllowedHosts({
+      currentAllowedHosts: config.production.allowedHosts,
+      previousPublicUrl,
+      nextPublicUrl: config.deployment.publicUrl,
+      nextMode: config.deployment.mode
+    });
+  }
+
   if (patch.requireWorkspaceLeaseForWrites !== undefined) {
     config.team.requireWorkspaceLeaseForWrites = patch.requireWorkspaceLeaseForWrites;
   }
@@ -61,7 +76,6 @@ export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   ]) {
     if (patch[key] !== undefined) config.production[key] = patch[key];
   }
-  if (patch.allowedHosts !== undefined) config.production.allowedHosts = patch.allowedHosts;
   normalizeDeploymentConfig(config);
   return config;
 }
