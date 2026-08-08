@@ -3,7 +3,9 @@
 const childProcess = require('node:child_process');
 const vscode = require('vscode');
 const path = require('path');
+const { normalizeNgrokUrl } = require('./ngrok-support.js');
 const { normalizePublicUrl } = require('./tunnel-provider');
+const { allowedHosts, stablePublicUrl } = require('./vscode-host/deployment-public-url.js');
 const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const {
   deploymentMode: validateDeploymentMode,
@@ -54,6 +56,7 @@ function tunnelSettings() {
   return {
     provider,
     publicUrl: String(setting('publicUrl', '') || '').trim(),
+    ngrokUrl: String(setting('ngrokUrl', '') || '').trim(),
     cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),
     ngrokTrafficPolicyFile: String(setting('ngrokTrafficPolicyFile', '') || '').trim(),
     autoRestart: strictBoolean(setting('tunnelAutoRestart', true), 'tunnelAutoRestart'),
@@ -73,24 +76,17 @@ function deploymentMode() {
   return validateDeploymentMode(String(setting('deploymentMode', 'personal')).trim().toLowerCase());
 }
 
-function hostFromPublicUrl(value) {
-  try {
-    return new URL(normalizePublicUrl(value)).host.toLowerCase();
-  } catch {
-    return '';
-  }
-}
-
 function syncDeploymentConfig(context) {
   const file = configPath(context);
   const data = readJson(file);
   if (!data) return false;
   const mode = deploymentMode();
   const settings = tunnelSettings();
+  const configuredPublicUrl = stablePublicUrl(settings);
   data.deployment ||= {};
   data.deployment.mode = mode;
   data.deployment.tunnelProvider = settings.provider;
-  data.deployment.publicUrl = settings.publicUrl ? normalizePublicUrl(settings.publicUrl) : '';
+  data.deployment.publicUrl = configuredPublicUrl;
   data.team ||= {};
   data.team.enabled = mode !== 'personal';
   data.team.requireWorkspaceLeaseForWrites = strictBoolean(
@@ -126,13 +122,7 @@ function syncDeploymentConfig(context) {
     setting('productionRequestTimeoutMs', 900000), 900000, 1000, 60 * 60 * 1000, 'productionRequestTimeoutMs'
   );
   const configuredHosts = setting('allowedPublicHosts', []);
-  if (!Array.isArray(configuredHosts)) throw new Error('allowedPublicHosts must be an array');
-  const publicHost = hostFromPublicUrl(settings.publicUrl);
-  data.production.allowedHosts = [...new Set(
-    [...configuredHosts, publicHost]
-      .map(value => String(value || '').trim().toLowerCase())
-      .filter(Boolean)
-  )];
+  data.production.allowedHosts = allowedHosts(configuredHosts, configuredPublicUrl);
   writeJson(file, data);
   return true;
 }
@@ -147,23 +137,6 @@ function checkCommand(command, args = ['--version']) {
     ok: !result.error && result.status === 0,
     output: String(result.stdout || result.stderr || result.error?.message || '').trim()
   };
-}
-
-async function promptCloudflareToken(context, title = 'DevMate · Cloudflare Tunnel Token') {
-  const value = await vscode.window.showInputBox({
-    title,
-    prompt: 'Paste the remotely managed Cloudflare Tunnel token. It is stored only in VS Code Secret Storage.',
-    password: true,
-    ignoreFocusOut: true,
-    validateInput: input => String(input || '').trim().length < 30
-      ? 'Tunnel token looks incomplete.'
-      : null
-  });
-  if (value === undefined) return false;
-  cloudflareTunnelToken = String(value).trim();
-  await context.secrets.store(CLOUDFLARE_TOKEN_SECRET, cloudflareTunnelToken);
-  log('Saved Cloudflare Tunnel token in VS Code Secret Storage.');
-  return true;
 }
 
 async function promptPublicUrl(current = '') {
@@ -182,6 +155,41 @@ async function promptPublicUrl(current = '') {
     }
   });
   return value === undefined ? null : normalizePublicUrl(value);
+}
+
+async function promptStableNgrokUrl(current = '') {
+  const value = await vscode.window.showInputBox({
+    title: 'DevMate · Stable ngrok URL',
+    prompt: 'Production ngrok requires a stable account-owned URL. Enter the hostname or HTTPS origin without /mcp.',
+    value: current,
+    ignoreFocusOut: true,
+    validateInput: input => {
+      try {
+        normalizeNgrokUrl(input);
+        return null;
+      } catch (error) {
+        return error.message;
+      }
+    }
+  });
+  return value === undefined ? null : normalizeNgrokUrl(value);
+}
+
+async function promptCloudflareToken(context, title = 'DevMate · Cloudflare Tunnel Token') {
+  const value = await vscode.window.showInputBox({
+    title,
+    prompt: 'Paste the remotely managed Cloudflare Tunnel token. It is stored only in VS Code Secret Storage.',
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: input => String(input || '').trim().length < 30
+      ? 'Tunnel token looks incomplete.'
+      : null
+  });
+  if (value === undefined) return false;
+  cloudflareTunnelToken = String(value).trim();
+  await context.secrets.store(CLOUDFLARE_TOKEN_SECRET, cloudflareTunnelToken);
+  log('Saved Cloudflare Tunnel token in VS Code Secret Storage.');
+  return true;
 }
 
 async function configureDeployment(context) {
@@ -247,8 +255,14 @@ async function configureDeployment(context) {
       { label: 'Open ngrok account setup', value: 'setup' },
       { label: 'Open Traffic Policy documentation', value: 'policy' }
     ], { title: 'DevMate · ngrok Deployment' });
-    if (policyChoice?.value === 'setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
-    if (policyChoice?.value === 'policy') await openExternal(NGROK_POLICY_DOCS);
+    if (!policyChoice) return;
+    if (policyChoice.value === 'setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
+    if (policyChoice.value === 'policy') await openExternal(NGROK_POLICY_DOCS);
+    if (modeChoice.value === 'production') {
+      const url = await promptStableNgrokUrl(String(setting('ngrokUrl', '') || ''));
+      if (!url) return;
+      await updateSetting('ngrokUrl', url);
+    }
   }
   if (providerChoice.value === 'cloudflare-quick') {
     const command = String(setting('cloudflareCommandPath', '') || 'cloudflared');
@@ -288,10 +302,11 @@ async function tunnelDoctor(context) {
   output.show(true);
   syncDeploymentConfig(context);
   const settings = tunnelSettings();
+  const configuredPublicUrl = stablePublicUrl(settings);
   log('--- deployment/tunnel diagnostics ---');
   log(`Deployment mode: ${deploymentMode()}`);
   log(`Tunnel provider: ${settings.provider}`);
-  log(`Public URL: ${settings.publicUrl || 'not configured'}`);
+  log(`Stable public URL for provider: ${configuredPublicUrl || 'not configured'}`);
   log(`Auto restart: ${settings.autoRestart ? 'enabled' : 'disabled'}; max restarts=${settings.maxRestarts}`);
   if (settings.provider === 'ngrok') {
     log(`ngrok Traffic Policy: ${settings.ngrokTrafficPolicyFile || 'not configured'}`);
