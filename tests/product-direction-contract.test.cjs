@@ -21,6 +21,30 @@ test('VS Code keeps ngrok as default while retaining all current deployment prov
   assert.match(entry, /new TunnelController/);
 });
 
+test('deployment setup commits mode and provider only after required provider input is complete', () => {
+  const platform = source('extension-entry-platform.js');
+  const start = platform.indexOf('async function configureDeployment');
+  const end = platform.indexOf('async function tunnelDoctor', start);
+  assert.ok(start >= 0 && end > start);
+  const block = platform.slice(start, end);
+  assert.match(block, /const pendingSettings =/);
+  assert.match(block, /await commitDeploymentSettings\(context, pendingSettings\)/);
+  assert.doesNotMatch(block, /await updateSetting\('deploymentMode'/);
+  assert.doesNotMatch(block, /await updateSetting\('tunnelProvider'/);
+  assert.match(platform, /if \(!event\.affectsConfiguration\('devMate'\) \|\| deploymentSettingsCommit\) return/);
+});
+
+test('stable deployment URL is selected by provider instead of leaking between providers', () => {
+  const helper = source('vscode-host/deployment-public-url.js');
+  const platform = source('extension-entry-platform.js');
+  assert.match(helper, /provider === 'ngrok'/);
+  assert.match(helper, /settings\.ngrokUrl/);
+  assert.match(helper, /provider === 'cloudflare-managed' \|\| provider === 'external'/);
+  assert.match(helper, /provider === 'cloudflare-quick'\) return ''/);
+  assert.match(platform, /const configuredPublicUrl = stablePublicUrl\(settings\)/);
+  assert.match(platform, /data\.deployment\.publicUrl = configuredPublicUrl/);
+});
+
 test('Obsidian remains a shared Gateway host and never becomes a tunnel-provider owner', () => {
   const main = source('obsidian-plugin/src/main.js');
   const settings = source('obsidian-plugin/src/settings.js');
