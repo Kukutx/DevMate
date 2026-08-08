@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-test('VS Code entry initializes a new shared config before the provider-native tunnel controller without rewriting an existing deployment', () => {
+test('VS Code entry initializes shared config before the provider-native tunnel controller without host-private deployment rewrites', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   assert.equal(fs.existsSync(path.join(root, 'extension-entry-host.js')), false);
@@ -19,10 +19,14 @@ test('VS Code entry initializes a new shared config before the provider-native t
   assert.match(source, /clearTunnelController/);
   assert.match(source, /settingsFromState/);
   assert.match(source, /ensureSharedDesktopConfig/);
-  assert.match(source, /const existed = fs\.statSync\(configFile, \{ throwIfNoEntry: false \}\)\?\.isFile\(\) === true/);
-  assert.match(source, /if \(!existed\) normalizeBootstrapDeployment\(configFile\)/);
-  assert.doesNotMatch(source, /\n\s*normalizeBootstrapDeployment\(configFile\);/);
+  assert.match(source, /ensurePersonalConfig\(\{/);
+  assert.match(source, /preferredPort: strictPort\(setting\(vscode, 'port', 8787\), \{ label: 'devMate\.port' \}\)/);
+  assert.doesNotMatch(source, /normalizeBootstrapDeployment/);
+  assert.doesNotMatch(source, /const existed = fs\.statSync/);
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
+
+  const sharedConfig = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
+  assert.match(sharedConfig, /deployment: \{ mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' \}/);
 
   const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
   assert.match(effective, /validateTunnelProvider/);
