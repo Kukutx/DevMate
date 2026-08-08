@@ -94,7 +94,15 @@ function readExtensionConfig(file) {
 }
 
 function writeExtensionConfig(file, candidate) {
-  return updateConfig(file, current => mergeExtensionConfig(current, candidate));
+  return updateConfig(file, current => {
+    if (!Object.keys(current).length) {
+      const error = new Error('DevMate shared config is missing; restart the host runtime to initialize it safely');
+      error.code = 'DEVMATE_SHARED_CONFIG_MISSING';
+      error.configFile = file;
+      throw error;
+    }
+    return mergeExtensionConfig(current, candidate);
+  });
 }
 
 module.exports = {
