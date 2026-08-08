@@ -17,66 +17,56 @@ const REMOVED_GLOBAL_BUSINESS_SETTINGS = [
   'devMate.productionMaxConcurrentRequests',
   'devMate.productionMaxConcurrentPerPrincipal',
   'devMate.productionRequestTimeoutMs',
-  'devMate.allowedPublicHosts'
+  'devMate.allowedPublicHosts',
+  'devMate.vscodeHostEnabled'
 ];
 
-test('shared personal config owns the ngrok default while retaining all current deployment providers', () => {
+test('fresh shared instance owns the ngrok connection default while retaining all current providers', () => {
   const sharedConfig = source('shared/config-store.cjs');
   const settings = source('vscode-host/tunnel-settings.js');
   const entry = source('extension-entry-shared-tunnel.js');
-  const editor = source('vscode-host/shared-deployment-config.js');
-  assert.match(sharedConfig, /deployment: \{ mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' \}/);
+  assert.match(sharedConfig, /connection: \{ provider: 'ngrok', publicUrl: '' \}/);
   assert.match(settings, /\['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external'\]/);
   assert.match(entry, /settingsFromState/);
   assert.match(entry, /new TunnelController/);
   assert.doesNotMatch(entry, /setting\(vscode, 'tunnelProvider'/);
   assert.doesNotMatch(entry, /setting\(vscode, 'deploymentMode'/);
-  assert.doesNotMatch(entry, /normalizeBootstrapDeployment/);
-  assert.doesNotMatch(editor, /normalizeBootstrapDeployment/);
+  assert.equal(fs.existsSync(path.join(root, 'vscode-host/shared-deployment-config.js')), false);
 });
 
-test('shared workspace config is authoritative for tunnel mode, provider, and stable public URL', () => {
+test('shared workspace connection is authoritative for provider and stable public URL', () => {
   const entry = source('extension-entry-shared-tunnel.js');
   const effective = source('vscode-host/effective-tunnel-settings.js');
   assert.match(entry, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
-  assert.match(effective, /sharedDeployment\(sharedConfig\)/);
-  assert.match(effective, /deployment\?\.provider \|\|/);
-  assert.match(effective, /deployment\?\.mode \|\|/);
+  assert.match(effective, /sharedConnection\(sharedConfig\)/);
+  assert.match(effective, /normalized\.connection\.provider/);
+  assert.match(effective, /normalized\.connection\.publicUrl/);
   assert.match(effective, /provider === 'ngrok' \? fallbackNgrokUrl/);
+  assert.doesNotMatch(effective, /deploymentMode|sharedDeployment|deployment\?\./);
 });
 
-test('VS Code manifest does not expose machine-global deployment business controls', () => {
+test('VS Code manifest exposes one auto-start preference and no machine-global business mode controls', () => {
   const properties = json('package.json').contributes.configuration.properties;
   for (const key of REMOVED_GLOBAL_BUSINESS_SETTINGS) {
-    assert.equal(Object.hasOwn(properties, key), false, `${key} must stay workspace-scoped in shared config`);
+    assert.equal(Object.hasOwn(properties, key), false, `${key} must not be a Global Setting`);
   }
+  assert.equal(Object.hasOwn(properties, 'devMate.autoStart'), true);
   assert.equal(Object.hasOwn(properties, 'devMate.ngrokUrl'), true);
   assert.equal(Object.hasOwn(properties, 'devMate.publicUrl'), true);
 });
 
-test('generic VS Code context writes cannot overwrite shared deployment, team, production, or active server state', () => {
-  const sync = source('vscode-host/config-sync.js');
-  assert.match(sync, /'deployment', 'team', 'production'/);
-  assert.match(sync, /if \(has\(current, 'server'\)\) merged\.server = current\.server/);
-  assert.doesNotMatch(sync, /'connection', 'vscodeContext', 'activeWorkspaceId', 'deployment', 'production'/);
-});
-
-test('deployment setup writes business state directly to the current shared config', () => {
+test('Connection Setup writes only connection capability to the current shared instance', () => {
   const platform = source('extension-entry-platform.js');
-  const start = platform.indexOf('async function configureDeployment');
-  const end = platform.indexOf('async function tunnelDoctor', start);
+  const start = platform.indexOf('async function configureConnection');
+  const end = platform.indexOf('async function connectionDoctor', start);
   assert.ok(start >= 0 && end > start);
   const block = platform.slice(start, end);
-  assert.match(block, /const localUpdates = \{\}/);
-  assert.match(block, /const sharedPatch =/);
-  assert.match(block, /mode: modeChoice\.value/);
-  assert.match(block, /tunnelProvider: providerChoice\.value/);
-  assert.match(block, /await commitDeploymentSettings\(context, localUpdates, sharedPatch\)/);
-  assert.doesNotMatch(block, /localUpdates\.deploymentMode/);
-  assert.doesNotMatch(block, /localUpdates\.tunnelProvider/);
+  assert.match(block, /const sharedPatch = \{\s*provider: providerChoice\.value,\s*publicUrl\s*\}/s);
+  assert.match(block, /await commitConnectionSettings\(context, localUpdates, sharedPatch\)/);
+  assert.doesNotMatch(block, /modeChoice|deploymentMode|productionMax|teamRequireWorkspaceLease/);
 });
 
-test('platform has no Global Settings to shared deployment synchronization path', () => {
+test('platform has no Global Settings to shared instance business synchronization path', () => {
   const platform = source('extension-entry-platform.js');
   assert.doesNotMatch(platform, /settingPatch/);
   assert.doesNotMatch(platform, /settingRollback/);
@@ -84,7 +74,7 @@ test('platform has no Global Settings to shared deployment synchronization path'
   assert.doesNotMatch(platform, /onDidChangeConfiguration/);
 });
 
-test('stable deployment URL candidates remain provider-specific without becoming active business state', () => {
+test('stable URL candidates remain provider-specific without becoming a second business-state source', () => {
   const helper = source('vscode-host/deployment-public-url.js');
   const platform = source('extension-entry-platform.js');
   assert.match(helper, /provider === 'ngrok'/);
@@ -96,26 +86,28 @@ test('stable deployment URL candidates remain provider-specific without becoming
   assert.match(platform, /sharedPatch =/);
 });
 
-test('Obsidian remains a shared Gateway host and never becomes a tunnel-provider owner', () => {
+test('Obsidian is a first-class owner or attacher of the same provider-native shared connection', () => {
   const main = source('obsidian-plugin/src/main.js');
   const settings = source('obsidian-plugin/src/settings.js');
   assert.match(main, /new RuntimeController/);
   assert.match(main, /new ObsidianHostBridge/);
-  assert.match(main, /resolvePublicConnection/);
-  assert.doesNotMatch(main, /new TunnelController|ObsidianNgrokRuntime|ngrokRuntime|NGROK_AUTHTOKEN/);
-  assert.doesNotMatch(main, /deployment\.tunnelProvider\s*=|deployment\.publicUrl\s*=/);
-  assert.match(settings, /publicOrigin/);
-  assert.doesNotMatch(settings, /ngrokCommandPath|ngrokAuthtokenEncrypted|cloudflareCommandPath|tunnelProvider/);
+  assert.match(main, /new TunnelController/);
+  assert.match(main, /this\.tunnelController\.start\(gateway\.port\)/);
+  assert.match(main, /verifyPublicEndpoint\(publicUrl\)/);
+  assert.match(settings, /Connection provider/);
+  assert.match(settings, /ngrokAuthtokenEncrypted/);
+  assert.match(settings, /cloudflareTunnelTokenEncrypted/);
+  assert.equal(fs.existsSync(path.join(root, 'obsidian-plugin/src/public-connection.js')), false);
   assert.equal(fs.existsSync(path.join(root, 'obsidian-plugin/src/ngrok-runtime.js')), false);
-  assert.equal(fs.existsSync(path.join(root, 'obsidian-plugin/src/secret-store.js')), false);
 });
 
-test('Obsidian public connection discovery is passive and provider-neutral', () => {
-  const resolver = source('obsidian-plugin/src/public-connection.js');
-  assert.match(resolver, /SharedTunnelRecordStore/);
-  assert.match(resolver, /record\.provider/);
-  assert.match(resolver, /deployment\?\.tunnelProvider/);
-  assert.doesNotMatch(resolver, /TunnelController|startTunnel|stopTunnel|\.start\(|\.stop\(/);
+test('normal Obsidian UI presents Ready as one product state instead of transport architecture', () => {
+  const view = source('obsidian-plugin/src/view.js');
+  assert.match(view, /action\('Start'/);
+  assert.match(view, /action\('Stop'/);
+  assert.match(view, /action\('Restart'/);
+  assert.match(view, /action\('Copy MCP URL'/);
+  assert.doesNotMatch(view, /Public ingress|Internal Gateway|Verification|internal only/);
 });
 
 test('shared provider ownership remains strict instead of silently merging different configurations', () => {

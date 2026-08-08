@@ -11,9 +11,8 @@ const {
 
 function config(overrides = {}) {
   return {
-    deployment: { mode: 'team', tunnelProvider: 'cloudflare-quick', publicUrl: '' },
-    connection: {},
-    ...overrides
+    connection: { provider: 'cloudflare-quick', publicUrl: '', ...(overrides.connection || {}) },
+    ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== 'connection'))
   };
 }
 
@@ -43,11 +42,9 @@ function verifiedConfig() {
   });
 }
 
-test('shared deployment provider is the UI provider source of truth', () => {
+test('shared connection provider is the UI provider source of truth', () => {
   assert.equal(deploymentProvider(config(), 'ngrok'), 'cloudflare-quick');
-  assert.throws(() => deploymentProvider(config({
-    deployment: { mode: 'team', tunnelProvider: 'automatic', publicUrl: '' }
-  })), /Unknown tunnel provider/);
+  assert.throws(() => deploymentProvider(config({ connection: { provider: 'automatic' } })), /Unknown tunnel provider/);
 });
 
 test('only the current verified generation is presented as ready', () => {
@@ -69,21 +66,11 @@ test('a newly ready generation is pending until it has its own preflight evidenc
 
 test('only errors recorded after the current readyAt mark that generation as failed', () => {
   const record = readyRecord();
-  const stale = config({
-    connection: {
-      lastError: 'old failure',
-      lastErrorAt: '2026-08-08T00:59:59.000Z'
-    }
-  });
+  const stale = config({ connection: { lastError: 'old failure', lastErrorAt: '2026-08-08T00:59:59.000Z' } });
   assert.equal(currentFailure(stale, record), '');
   assert.equal(publicUiState(stale, { running: true, publicUrl: record.publicUrl, record }).state, 'unverified');
 
-  const current = config({
-    connection: {
-      lastError: 'current failure',
-      lastErrorAt: '2026-08-08T01:00:01.000Z'
-    }
-  });
+  const current = config({ connection: { lastError: 'current failure', lastErrorAt: '2026-08-08T01:00:01.000Z' } });
   const failed = publicUiState(current, { running: true, publicUrl: record.publicUrl, record });
   assert.equal(failed.state, 'failed');
   assert.equal(failed.failure, 'current failure');
@@ -91,16 +78,10 @@ test('only errors recorded after the current readyAt mark that generation as fai
 });
 
 test('provider pending and absent states never expose a stale public URL', () => {
-  const pendingRecord = {
-    ownerId: 'owner-a',
-    provider: 'ngrok',
-    port: 8787,
-    status: 'pending',
-    publicUrl: ''
-  };
-  const pending = publicUiState(config({
-    deployment: { mode: 'team', tunnelProvider: 'ngrok', publicUrl: '' }
-  }), { running: true, provider: 'ngrok', publicUrl: '', record: pendingRecord });
+  const pendingRecord = { ownerId: 'owner-a', provider: 'ngrok', port: 8787, status: 'pending', publicUrl: '' };
+  const pending = publicUiState(config({ connection: { provider: 'ngrok' } }), {
+    running: true, provider: 'ngrok', publicUrl: '', record: pendingRecord
+  });
   assert.equal(pending.state, 'pending');
   assert.equal(pending.publicUrl, '');
   assert.equal(statusLabel(pending), 'DevMate: tunnel starting');
