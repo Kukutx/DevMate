@@ -1,213 +1,169 @@
-# DevMate host integration
+# Desktop host integration
 
-DevMate is host-neutral at the Gateway layer. VS Code and Obsidian are desktop adapters over one shared workspace/runtime model, while standalone and Runner deployments use the same Gateway contracts in other deployment shapes.
+DevMate desktop hosts expose the same product lifecycle from different editors. VS Code and Obsidian are peers: each can start or attach to the shared Gateway, start or attach to the configured public connection, verify MCP, recover the connection, and release only the resources it owns.
 
-## Product topology
-
-The current desktop architecture separates **host runtime ownership** from **public ingress ownership**:
+The user-facing contract is deliberately simple:
 
 ```text
-VS Code host ───────┐
-Obsidian host ──────┼─ shared state/config ─ isolated loopback Gateway
-                    │                           │
-                    └─ host context/bridge ─────┘
-                                                │
-                         VS Code/deployment ingress owner
-                           ├─ ngrok
-                           ├─ Cloudflare Quick
-                           ├─ Cloudflare managed
-                           └─ external HTTPS ingress
-                                                │
-                                               /mcp
-                                                │
-                                             ChatGPT
+Start
+  → Gateway available
+  → configured public connection available
+  → authenticated MCP initialize succeeds
+  → tools/list succeeds
+  → Ready
 ```
 
-`127.0.0.1:<port>` is internal transport. ChatGPT uses a public HTTPS `/mcp` endpoint when remote access is required.
+A running loopback Gateway is not Ready. A public HTTPS URL by itself is not Ready. **Ready means the current public connection generation has passed MCP preflight.**
 
-The default shared state directory is:
+## Shared desktop topology
+
+For the same workspace or vault root, desktop hosts resolve the same state directory:
 
 ```text
-~/.devmate/hosts/<workspace-name>-<real-path-hash>/
+VS Code ─────┐
+             ├─ shared state directory
+Obsidian ────┘     ├─ config.json
+                   ├─ one Gateway owner/attachment record
+                   └─ one public-connection owner/attachment record
 ```
 
-Hosts resolving the same root share the owner token, `instanceId`, selected port, deployment state, workspaces, audit state, jobs, operation plans, and host contexts. A custom absolute state path can deliberately join roots that differ, such as a VS Code project nested inside a larger Obsidian vault.
+Both VS Code and Obsidian can own or attach to the same provider-native public connection. There is no product rule that makes one editor the permanent ingress owner.
 
-## Shared Gateway runtime
+The shared runtime coordinates ownership so two desktop processes do not start duplicate Gateway or provider processes. A host that encounters an already healthy compatible runtime attaches to it. A host that owns a resource heartbeats its ownership and cleans it up if ownership is lost.
 
-`host/runtime-controller.js` owns the isolated Gateway process lifecycle. Its focused modules under `host/runtime/` cover state paths, network health, Node runtime resolution, operation coordination, and process ownership.
+## Authoritative configuration
 
-Responsibilities include:
+`config.json` is the authoritative instance business state. Current configuration is capability-based rather than mode-based.
 
-- deterministic shared state-path resolution;
-- restrictive configuration persistence;
-- loopback health and port selection;
-- verified Node runtime selection;
-- child-process ownership, attach/start/stop/restart;
-- bounded host context publication.
-
-A host first checks `/control/health`:
-
-- matching `instanceId`: attach;
-- free configured port: start;
-- occupied non-matching port: search the next 19 ports and persist the choice;
-- attached process: never terminate it;
-- owned process: may stop or restart it.
-
-VS Code and Obsidian use one current desktop Gateway model: an isolated child process. There is no per-host Worker implementation or process-global spawn router.
-
-## Deployment configuration boundary
-
-The workspace shared `config.json` is the business source of truth for:
-
-- deployment mode: `personal`, `team`, or `production`;
-- active ingress provider;
-- stable public URL when required;
-- Team lease policy;
-- production request limits and Host allowlist.
-
-Change that state explicitly through **DevMate: Deployment Setup / Tunnel Setup** or the MCP `team_configure` tool. It is not mirrored through machine-global VS Code settings, so changing one project cannot silently change another open workspace.
-
-VS Code machine settings are limited to local execution details and setup candidates, such as provider executable paths, ngrok account mode, pooling/Traffic Policy, automatic restart, and remembered ngrok or managed/external URL candidates. A remembered URL candidate is not the active deployment URL; the active value is the one stored in the workspace shared config.
-
-## Public ingress ownership
-
-Public ingress is provider-native and independent from the shared Gateway process.
-
-`vscode-host/tunnel-controller.js` implements tunnel ownership, startup convergence, strict configuration matching, readiness, heartbeat, fail-closed ownership loss, bounded restart, and stop semantics. The supported provider model is:
-
-- `ngrok` — default personal workflow and valid team/production provider;
-- `cloudflare-quick` — temporary non-production testing;
-- `cloudflare-managed` — stable managed team/production ingress;
-- `external` — an existing reverse proxy, VPN, ingress, or service manager.
-
-VS Code/deployment code owns provider lifecycle and provider credentials. Obsidian does **not** instantiate a tunnel controller and does not start, stop, restart, take over, or reconfigure public ingress.
-
-Obsidian may observe the ready shared tunnel record for the active Gateway port. This is read-only discovery used to display and verify the public endpoint. If no active shared tunnel exists, Obsidian may use its explicit clean HTTPS **Public origin** setting or the stable `deployment.publicUrl` already present in shared configuration.
-
-## Public MCP verification
-
-A URL is not treated as a verified MCP connection merely because HTTPS responds. Before `Copy MCP URL` succeeds, DevMate performs:
-
-1. `POST /mcp` `initialize` with the current Bearer token;
-2. verify the returned server is DevMate;
-3. preserve the MCP session ID when one is returned;
-4. `POST /mcp` `tools/list` with Bearer, protocol-version, and session headers;
-5. require a valid tool list.
-
-This verification is shared logic in `host/public-mcp.js` and is exercised against the real Gateway in CI.
-
-The verification contract does not change host ownership semantics. In particular, an Obsidian Gateway can be healthy even if public ingress is absent or temporarily unreachable; public connection state is reported separately.
-
-## Host settings
-
-### VS Code
-
-- `devMate.vscodeStartupMode`: `auto`, `manual`, or `disabled`, default `auto`;
-- `devMate.sharedStateDirectory`: optional absolute override;
-- provider executable paths and local credential/account behavior remain machine-specific;
-- `devMate.ngrokUrl` and `devMate.publicUrl` are remembered setup candidates only;
-- `devMate.tunnelAutoRestart` and `devMate.tunnelMaxRestarts` control the local managed-provider process lifecycle;
-- active mode/provider/public URL and production policy live in shared config and are edited through Deployment/Tunnel Setup or `team_configure`;
-- `ngrok` remains the default personal provider in the shared personal configuration;
-- provider credentials remain in VS Code Secret Storage or provider/process configuration;
-- `DevMate: Start` runs the provider selected by the current shared workspace deployment and performs public MCP preflight;
-- `DevMate: Copy URL` re-verifies the public endpoint before copying it.
-
-### Obsidian
-
-- Enable Obsidian host: default on;
-- Startup mode: default auto;
-- Shared state directory override; otherwise the vault-derived path is used;
-- Preferred loopback Gateway port: internal only;
-- optional Node.js 24+ executable override;
-- optional clean HTTPS **Public origin** for ingress managed outside the shared VS Code runtime;
-- bounded selection capture.
-
-Obsidian has no provider-selection, provider-process, provider-restart, or provider-credential settings.
-
-Obsidian remains desktop-only because the Gateway requires Node.js, local processes, filesystem roots, Git, and installed toolchains. It probes a configured Node executable first, then a compatible Obsidian/Electron Node runtime, then `node` from `PATH`.
-
-## Generic host context
-
-Hosts publish bounded snapshots under `hostContexts` and identify the most recently active adapter through `activeHostId`.
+The public connection capability is:
 
 ```json
 {
-  "activeHostId": "obsidian",
-  "hostContexts": {
-    "vscode": { "kind": "editor" },
-    "obsidian": { "kind": "knowledge-base" }
+  "connection": {
+    "provider": "ngrok",
+    "publicUrl": ""
   }
 }
 ```
 
-The Gateway exposes `host_context_list` and `host_context`. Full file bodies are not copied into configuration; they remain explicit workspace reads. Obsidian skips unchanged context snapshots so editor and metadata event bursts do not cause redundant state writes.
+Supported providers are:
 
-## Obsidian plugin architecture
+- `ngrok`
+- `cloudflare-quick`
+- `cloudflare-managed`
+- `external`
 
-```text
-obsidian-plugin/src/
-├─ main.js                 shared Gateway + Obsidian host lifecycle
-├─ public-connection.js    read-only public ingress discovery
-├─ settings.js             host/public-origin settings validation
-├─ context-provider.js     bounded/deduplicated active-vault context
-├─ view.js                 stable panel DOM + incremental refresh
-├─ runtime-diagnostics.js  bounded Gateway startup/runtime diagnostics
-├─ host-bridge.js          host bridge facade
-└─ bridge/
-   ├─ server.js            authenticated loopback protocol
-   ├─ vault-index.js       Obsidian event/index adapter
-   ├─ vault-index-core.js  pure selector/schema logic
-   ├─ note-actions.js      public API mutations
-   ├─ property-batch.js    plan execution orchestration
-   ├─ property-batch-core.js
-   ├─ path-policy.js
-   ├─ record-store.js
-   ├─ operation-store.js
-   └─ plan-store.js
-```
+Access control, request policy, Runner configuration, plugins and maintenance remain independent capabilities. Selecting a connection provider must not silently alter member access, Host restrictions, Runner topology or permission policy.
 
-The bridge publishes an explicit protocol version and capability catalog. Gateway requests must match the bridge workspace ID and normalized workspace root. The DevMate panel is constructed once and health polling updates only changed fields.
+Machine-local execution details such as executable paths and securely stored provider credentials do not become a second source of instance business state.
 
-The panel deliberately separates:
+Retired deployment-mode fields are accepted only by the explicit one-time host shape upgrade. Current runtime normalization rejects them.
 
-- **Public MCP** — the currently discovered/configured HTTPS `/mcp` URL;
-- **Public ingress** — provider/source of that URL;
-- **Internal Gateway** — loopback address labeled internal only;
-- **Verification** — public MCP verification time and discovered tool count.
+## Start lifecycle
 
-## Data and mutation boundary
+Both desktop hosts implement the same complete Start semantics:
 
-- Markdown and Properties remain source of truth;
-- Bases and similar plugins remain presentation/query layers;
-- the metadata index is read-oriented and in-memory;
-- all mutations use public Obsidian APIs;
-- `.obsidian`, path escapes, and null-byte paths are blocked;
-- batch changes require preview and hash preflight;
-- operation and plan records are bounded, restrictive, and atomic;
-- interrupted batches report recovery state instead of being resumed speculatively.
+1. Resolve the shared workspace state directory and current supported config.
+2. Publish current host context.
+3. Start or attach to the shared Gateway.
+4. Start or attach to the configured provider-native public connection.
+5. Obtain the active HTTPS origin from that connection generation.
+6. Run authenticated MCP `initialize` against `/mcp`.
+7. Carry the returned MCP session into `tools/list`.
+8. Persist verification evidence for the current connection generation.
+9. Enter `Ready` and, when enabled, copy the verified MCP URL.
 
-See `OBSIDIAN_DATA_WORKFLOWS.md` for selectors, schema diagnostics, and batch lifecycle.
+No normal Start requires the user to manually start a tunnel, copy an internal Gateway URL, or run a separate verification command.
 
-## Build and release
+## Generation-scoped Ready
 
-```powershell
-npm run check
-npm run test:unit
-npm run build:obsidian
-```
+Provider recovery can reuse the same hostname. URL equality therefore cannot prove that the current process generation is usable.
 
-The release contract validates `manifest.json`, `versions.json`, semantic versions, minimum Obsidian compatibility, required bundle files, and bundle-size limits. CI verifies the built Obsidian package contains the current child-process and public-MCP verification contracts while excluding provider ownership code from the Obsidian bundle.
+The shared verification contract combines the provider record with:
 
-Generated plugin assets:
+- provider identity,
+- owner identity,
+- Gateway port,
+- provider `readyAt`,
+- public HTTPS origin,
+- a successful MCP preflight timestamp,
+- expected DevMate server name,
+- `/mcp` path,
+- a non-empty `tools/list` result.
 
-```text
-main.js
-manifest.json
-versions.json
-styles.css
-gateway/server.mjs
-```
+If a provider restarts, ownership transfers, configuration changes, or a new `readyAt` is published, the previous verification becomes stale immediately. The desktop host reports Starting/Verifying until the new generation passes preflight.
 
-The invariant is explicit: **desktop hosts share the Gateway; workspace shared config owns deployment business state; VS Code/deployment owns public ingress; Obsidian observes or references public ingress but never owns its lifecycle.**
+This rule applies even when the hostname did not change.
+
+## Recovery
+
+The provider-native tunnel controller handles shared startup leases, ownership heartbeats, process exit detection, bounded restart, ownership transfer and fail-closed cleanup.
+
+After a new provider generation becomes ready, DevMate automatically re-verifies MCP. Recovery does not require the user to press a second button.
+
+If a dynamic provider publishes a different hostname, DevMate can notify the user that the ChatGPT connector URL must be updated. That is an external connector consequence, not a reason to split DevMate startup into manual steps.
+
+## Stop and Restart
+
+`Stop` is ownership-aware. A desktop host stops resources it owns and releases its local attachment, but it does not kill a compatible shared resource owned by another host.
+
+`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current public connection generation has passed MCP preflight.
+
+## Copy MCP URL
+
+`Copy MCP URL` never copies the internal loopback Gateway URL. It uses the active public connection and verifies the current generation before copying the `/mcp` endpoint.
+
+The bearer credential is a separate secret. DevMate does not put owner credentials in the URL or query string.
+
+## Provider credentials
+
+Provider credentials are host-local secrets:
+
+- VS Code uses Secret Storage for DevMate-managed ngrok and Cloudflare managed credentials.
+- Obsidian can store optional provider credentials using Electron OS-backed safe storage.
+- ngrok may use the machine's normal ngrok configuration when DevMate-managed account mode is not selected.
+- Cloudflare Quick requires no tunnel credential.
+- External HTTPS ingress does not require DevMate to spawn a provider process.
+
+Credentials are not written to project files or shared `config.json`.
+
+## Obsidian host bridge
+
+Obsidian additionally runs an authenticated loopback host bridge. The public Gateway uses it for operations that require Obsidian's public API, including note metadata and vault-aware actions.
+
+The bridge is an internal host capability. It is not the ChatGPT-facing MCP endpoint and does not replace the shared public connection lifecycle.
+
+## Host context
+
+Each desktop host publishes bounded context into the shared state. Context may include the active file, selection, workspace metadata and host-specific capabilities. Gateway context selection is freshness-aware and does not require duplicate Gateway instances.
+
+## User interface contract
+
+Normal host UI is product-oriented:
+
+- Stopped
+- Starting / Verifying
+- Ready
+- Recovering or Error when action is required
+
+Necessary actions such as Start, Stop, Restart, Copy MCP URL, context and diagnostics remain available. Internal concepts such as provider ownership records, loopback Gateway ports and verification generations belong in diagnostics rather than becoming mandatory user steps.
+
+## Configuration changes
+
+Changing the provider or its endpoint is a configuration operation, not a new runtime mode. The host safely stops or detaches from a provider when required, commits the connection capability, and then uses that configuration on the next complete Start/recovery generation.
+
+A provider configuration owned by another active desktop process is not silently overwritten in memory. Shared configuration remains authoritative and conflicting generations fail closed until reconciled.
+
+## Invariants
+
+The desktop integration must preserve these invariants:
+
+1. One shared Gateway per state directory.
+2. One compatible provider-native public connection per state directory.
+3. Both VS Code and Obsidian may own or attach to those shared resources.
+4. Start is Gateway → public connection → MCP preflight → Ready.
+5. Ready is generation-scoped, never URL-only.
+6. Stop never destroys a resource owned by another host merely because the local host is detaching.
+7. Connection, access, request policy, Runner and plugin capabilities remain orthogonal.
+8. Credentials stay out of URLs and shared project configuration.
+9. No refactor may turn an automatic lifecycle step into a required manual user step.
