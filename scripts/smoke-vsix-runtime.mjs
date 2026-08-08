@@ -61,6 +61,7 @@ try {
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
 
   const requiredFiles = [
+    'extension.js',
     'extension-entry-shared-tunnel.js',
     'vscode-host/lifecycle.js',
     'vscode-host/runtime-diagnostics.js',
@@ -91,6 +92,16 @@ try {
   ]) {
     assert.equal(fs.existsSync(path.join(extensionPath, retired)), false, `VSIX must not package retired ${retired}`);
   }
+
+  const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
+  const handshakeStart = extensionSource.indexOf('async function mcpHandshakeTest');
+  const handshakeEnd = extensionSource.indexOf('async function quickStart', handshakeStart);
+  assert.ok(handshakeStart >= 0 && handshakeEnd > handshakeStart, 'VSIX must package the public MCP preflight');
+  const handshake = extensionSource.slice(handshakeStart, handshakeEnd);
+  assert.match(handshake, /Authorization: `Bearer \$\{token\}`/, 'VSIX initialize preflight must use the bearer token');
+  assert.match(handshake, /MCP-Protocol-Version/, 'VSIX tools/list must send the negotiated MCP protocol version');
+  assert.match(handshake, /MCP-Session-Id/, 'VSIX tools/list must propagate the MCP session id when present');
+  assert.match(handshake, /tools\/list[\s\S]*toolsHeaders/, 'VSIX tools/list must use the authenticated session headers');
 
   const requireFromVsix = createRequire(packageFile);
   const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
@@ -153,6 +164,7 @@ try {
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
+    publicMcpAuthContractVerified: true,
     providerNativeTunnelRuntimePackaged: true,
     retiredWorkerRuntimeExcluded: true,
     retiredTunnelRuntimeExcluded: true
