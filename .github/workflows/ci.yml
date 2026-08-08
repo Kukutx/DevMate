@@ -146,7 +146,8 @@ jobs:
             devmate-ci init \
             --workspace /srv/devmate-workspaces \
             --config /var/lib/devmate/config.json \
-            --provider external >/dev/null
+            --provider external \
+            --public-url https://standalone-ci.example.test >/dev/null
           docker run --detach --rm \
             --name devmate-ci-runtime \
             --publish 127.0.0.1:18787:8787 \
@@ -155,7 +156,7 @@ jobs:
             devmate-ci serve --config /var/lib/devmate/config.json
           trap 'docker rm --force devmate-ci-runtime >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:18787/health >/dev/null; then
+            if curl --fail --silent --header 'Host: standalone-ci.example.test' http://127.0.0.1:18787/health >/dev/null; then
               exit 0
             fi
             sleep 1
