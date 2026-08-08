@@ -8,7 +8,7 @@ import {
   readAuditEntries,
   readConfig
 } from './local-shared.mjs';
-import { normalizeDeploymentConfig } from './team-access.mjs';
+import { normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 
@@ -128,7 +128,7 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
   const id = String(workSessionId || '').trim();
   if (!id) throw new Error('workSessionId is required');
   if (!principal?.id) throw new Error('Authenticated principal is required');
-  const config = normalizeDeploymentConfig(readConfig());
+  const config = normalizeInstanceConfig(readConfig());
   assertCanMutate(config, 'Work session rollback');
   const entries = (await readAuditEntries(10000)).filter(entry => entry.workSessionId === id).slice(-limit);
   if (!entries.length) throw new Error(`Work session audit history not found: ${id}`);
