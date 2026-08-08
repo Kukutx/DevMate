@@ -10,7 +10,11 @@ const {
   stableNgrokUrlRequired,
   writeActiveNgrokUrl
 } = require('./vscode-host/ngrok-deployment-state.js');
-const { assertTunnelSafeForCredentialChange } = require('./vscode-host/tunnel-stop-policy.js');
+const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
+const {
+  assertTunnelSafeForCredentialChange,
+  credentialProviderInUse
+} = require('./vscode-host/tunnel-stop-policy.js');
 
 const SECRET_KEY = 'devMate.ngrokAuthtoken';
 const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
@@ -75,6 +79,32 @@ async function offerStartAgain(message) {
 
 function loadBaseExtension() {
   return require('./extension');
+}
+
+function currentTunnelRuntime() {
+  try { return tunnelStatus(); }
+  catch { return { running: false, provider: '', record: null }; }
+}
+
+function ngrokCredentialInUse() {
+  const deployment = activeNgrokDeployment(sharedConfigFile);
+  const runtime = currentTunnelRuntime();
+  return credentialProviderInUse('ngrok', {
+    configuredProvider: deployment?.provider || '',
+    runtimeProvider: runtime?.provider || '',
+    runtimeRunning: runtime?.running === true
+  });
+}
+
+async function prepareNgrokCredentialMutation(operation) {
+  if (!ngrokCredentialInUse()) {
+    return { safe: true, remoteOwner: false, reason: 'credential-dormant', tunnel: null };
+  }
+  const stopState = assertTunnelSafeForCredentialChange(await stopTunnel(), operation);
+  if (stopState.remoteOwner) {
+    log('ngrok credential is changing while the current ngrok tunnel is managed by another host; that process keeps its existing environment until its owner stops it.');
+  }
+  return stopState;
 }
 
 async function promptAuthtokenValue(title = 'DevMate · ngrok Account') {
@@ -176,9 +206,7 @@ async function commitNgrokConfiguration(context, {
     activeDeployment: activeNgrokDeployment(sharedConfigFile)
   };
 
-  const stopResult = await vscode.commands.executeCommand('devMate.stop');
-  const stopState = assertTunnelSafeForCredentialChange(stopResult, 'ngrok configuration change');
-  if (stopState.remoteOwner) log('ngrok configuration is changing while the current tunnel is managed by another host; that owner will reconcile shared deployment changes.');
+  await prepareNgrokCredentialMutation('ngrok configuration change');
   try {
     if (token !== undefined) {
       await context.secrets.store(SECRET_KEY, validateAuthtoken(token));
@@ -383,8 +411,7 @@ async function clearManagedAccount(context) {
     'Delete and Use Global Config'
   );
   if (confirm !== 'Delete and Use Global Config') return;
-  const stopResult = await vscode.commands.executeCommand('devMate.stop');
-  const stopState = assertTunnelSafeForCredentialChange(stopResult, 'ngrok managed-account removal');
+  const stopState = await prepareNgrokCredentialMutation('ngrok managed-account removal');
   await context.secrets.delete(SECRET_KEY);
   managedAuthtoken = '';
   await updatePreference('ngrokUseManagedAccount', false);
@@ -428,7 +455,10 @@ async function maybePromptForNgrokSetup(context) {
     'Use Global Config'
   );
   if (action === 'Quick Setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
-  if (action === 'Use Global Config') await updatePreference('ngrokUseManagedAccount', false);
+  if (action === 'Use Global Config') {
+    await prepareNgrokCredentialMutation('ngrok account-mode change');
+    await updatePreference('ngrokUseManagedAccount', false);
+  }
 }
 
 async function activate(context) {
@@ -481,5 +511,6 @@ module.exports = {
   activate,
   deactivate,
   loadBaseExtension,
+  prepareNgrokCredentialMutation,
   setupForDeployment
 };
