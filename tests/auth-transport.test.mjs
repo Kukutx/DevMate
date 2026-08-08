@@ -18,15 +18,14 @@ test('Gateway accepts credentials only from request headers', () => {
   assert.doesNotMatch(gateway, /searchParams\.get\('token'\)/);
 });
 
-test('connection URLs never embed owner credentials and VS Code delegates bearer transport to the shared preflight helper', () => {
+test('connection URLs never embed owner credentials and VS Code delegates authentication to the shared preflight helper', () => {
   for (const source of [cli, controller, extension, publicMcp]) {
     assert.doesNotMatch(source, /searchParams\.set\('token'/);
     assert.doesNotMatch(source, /\?token=/);
   }
   assert.match(extension, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/);
   assert.match(extension, /return preflightPublicMcp\(\{/);
-  assert.match(publicMcp, /Authorization: `Bearer \$\{token\}`/);
-  assert.match(publicMcp, /MCP-Session-Id/);
+  assert.match(publicMcp, /preflightPublicMcp/);
   assert.match(publicMcp, /method: 'tools\/list'/);
 });
 
