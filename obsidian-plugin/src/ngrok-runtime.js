@@ -11,7 +11,14 @@ const {
 } = require('../../vscode-host/tunnel-runtime.js');
 
 class ObsidianNgrokRuntime {
-  constructor({ plugin, stateDirectory, logger = () => {} } = {}) {
+  constructor({
+    plugin,
+    stateDirectory,
+    logger = () => {},
+    childProcess = undefined,
+    httpRequest = undefined,
+    controllerOptions = {}
+  } = {}) {
     if (!plugin) throw new Error('Obsidian DevMate plugin is required');
     if (!stateDirectory) throw new Error('Shared DevMate state directory is required');
     this.plugin = plugin;
@@ -22,7 +29,10 @@ class ObsidianNgrokRuntime {
       settings: () => this.settings(),
       getSecrets: () => this.secrets(),
       hostId: `obsidian-${process.pid}`,
-      logger
+      logger,
+      ...(childProcess ? { childProcess } : {}),
+      ...(httpRequest ? { httpRequest } : {}),
+      ...controllerOptions
     });
     setTunnelController(this.controller);
   }
