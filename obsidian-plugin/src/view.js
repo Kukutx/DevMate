@@ -64,8 +64,21 @@ class DevMateView extends ItemView {
     action('Stop', () => this.plugin.stopRuntime());
     action('Restart', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
+    action('Copy Bearer Token', () => this.plugin.copyConnectionToken());
+    action('ngrok Doctor', () => this.plugin.ngrokDoctor());
     action('Copy context', () => this.plugin.copyContextBundle());
     action('Copy diagnostics', () => this.plugin.copyDiagnostics());
+
+    container.createEl('h3', { text: 'Connection' });
+    const connection = container.createEl('dl', { cls: 'devmate-details' });
+    const connectionDetail = name => {
+      connection.createEl('dt', { text: name });
+      return connection.createEl('dd');
+    };
+    const publicMcp = connectionDetail('Public MCP');
+    const tunnel = connectionDetail('ngrok');
+    const internalGateway = connectionDetail('Internal Gateway');
+    const verification = connectionDetail('Verification');
 
     container.createEl('h3', { text: 'Workspace' });
     const list = container.createEl('dl', { cls: 'devmate-details' });
@@ -84,7 +97,7 @@ class DevMateView extends ItemView {
     const failureCard = failureSection.createDiv({ cls: 'devmate-status-card' });
     const failureMessage = failureCard.createEl('strong');
     failureCard.createEl('div', {
-      text: 'Use Copy diagnostics when reporting this problem. No note content or MCP token is included.',
+      text: 'Use Copy diagnostics when reporting this problem. Note content, bearer tokens, and ngrok Authtokens are not included.',
       cls: 'devmate-muted'
     });
 
@@ -100,6 +113,10 @@ class DevMateView extends ItemView {
     this.ui = {
       statusLabel,
       statusDetail,
+      publicMcp,
+      tunnel,
+      internalGateway,
+      verification,
       vault,
       state,
       startup,
@@ -127,9 +144,26 @@ class DevMateView extends ItemView {
     const note = this.plugin.app.workspace.getActiveFile();
     const index = this.plugin.bridge?.index;
     const node = this.plugin.nodeRuntime;
+    const gateway = resolvedStatus.gateway || {};
+    const tunnel = resolvedStatus.tunnel || {};
+    const publicMcp = tunnel.publicUrl ? `${String(tunnel.publicUrl).replace(/\/$/, '')}/mcp` : 'Not available';
 
     setText(this.ui.statusLabel, resolvedStatus.label);
     setText(this.ui.statusDetail, resolvedStatus.detail);
+    setText(this.ui.publicMcp, publicMcp);
+    setText(this.ui.tunnel,
+      tunnel.running
+        ? `${tunnel.provider || 'ngrok'} · ${tunnel.owned ? 'owned by Obsidian' : tunnel.attached ? 'shared from another host' : 'active'}`
+        : 'Not running');
+    setText(this.ui.internalGateway,
+      gateway.state === 'running' || resolvedStatus.port
+        ? `127.0.0.1:${gateway.port || resolvedStatus.port || this.plugin.settings.preferredPort} · internal only`
+        : 'Not running');
+    setText(this.ui.verification,
+      resolvedStatus.verified
+        ? `${this.plugin.lastVerifiedAt || 'verified'} · ${this.plugin.lastVerifiedToolCount || 0} tools`
+        : tunnel.publicUrl ? 'Pending public MCP verification' : 'Not verified');
+
     setText(this.ui.vault, this.plugin.vaultRoot || 'Unavailable');
     setText(this.ui.state, runtime?.stateDirectory || 'Unavailable');
     setText(this.ui.startup, this.plugin.settings.startupMode);
