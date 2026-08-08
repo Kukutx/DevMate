@@ -16,7 +16,7 @@ test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle 
   const block = main.slice(start, end);
   assert.match(block, /gateway = await this\.controller\.start\(\)/);
   assert.match(block, /tunnel = await this\.tunnelController\.start\(gateway\.port\)/);
-  assert.match(block, /const preflight = await this\.verifyPublicEndpoint\(publicUrl\)/);
+  assert.match(block, /const preflight = await this\.verifyPublicEndpoint\(publicUrl, tunnel\.record\)/);
   assert.match(block, /state: 'ready'/);
   assert.match(block, /mcpUrl: preflight\.mcpUrl/);
   assert.match(block, /toolCount: preflight\.toolCount/);
@@ -24,13 +24,25 @@ test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle 
   assert.match(block, /if \(gateway\?\.started && gateway\?\.owned\)[\s\S]*this\.controller\.stop\(\)/);
 });
 
-test('Obsidian Copy MCP URL verifies the active public endpoint before copying it', () => {
+test('Obsidian Ready is tied to the current tunnel generation rather than URL equality', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  assert.match(main, /recordGeneration/);
+  assert.match(main, /verifiedForCurrentRecord/);
+  assert.match(main, /successfulVerificationPatch/);
+  assert.match(main, /const generation = recordGeneration\(initialRecord\)/);
+  assert.match(main, /recordGeneration\(currentRecord\) !== generation/);
+  assert.match(main, /verifiedForCurrentRecord\(persisted, persistedRecord\)/);
+  assert.match(main, /const verified = !!tunnel\.record && verifiedForCurrentRecord\(config, tunnel\.record\)/);
+  assert.doesNotMatch(main, /lastVerifiedPublicUrl\s*===\s*tunnel\.publicUrl/);
+});
+
+test('Obsidian Copy MCP URL verifies the active public endpoint generation before copying it', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async copyConnectionUrl()');
   const end = main.indexOf('async copyConnectionToken()', start);
   assert.ok(start >= 0 && end > start);
   const block = main.slice(start, end);
-  assert.match(block, /await this\.verifyPublicEndpoint/);
+  assert.match(block, /await this\.verifyPublicEndpoint\(publicUrl, tunnel\.record\)/);
   assert.match(block, /navigator\.clipboard\.writeText/);
   assert.doesNotMatch(block, /127\.0\.0\.1|ownerUrl\(/);
   assert.equal(fs.existsSync(path.join(root, 'obsidian-plugin/src/public-connection.js')), false);
