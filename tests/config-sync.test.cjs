@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { SUPPORTED_CONFIG_VERSION } = require('../shared/config-store.cjs');
+const { SUPPORTED_CONFIG_VERSION, atomicWriteJson } = require('../shared/config-store.cjs');
 const {
   mergeExtensionConfig,
   readExtensionConfig,
@@ -79,7 +79,7 @@ test('partial extension updates preserve existing workspaces and shared business
   assert.deepEqual(merged.production, current.production);
 });
 
-test('first extension write cannot seed Gateway-owned state or nested fields', () => {
+test('pure merge never manufactures Gateway-owned nested state', () => {
   const merged = mergeExtensionConfig({}, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new',
@@ -114,11 +114,23 @@ test('first extension write cannot seed Gateway-owned state or nested fields', (
   }
 });
 
-test('writes through the shared locked atomic store', () => {
+test('generic VS Code writer refuses to recreate a missing shared config', () => {
   const file = tempFile();
-  writeExtensionConfig(file, {
+  assert.throws(() => writeExtensionConfig(file, {
+    version: SUPPORTED_CONFIG_VERSION,
+    instanceId: 'new-identity',
+    auth: { required: true, token: 'new-token' },
+    vscodeContext: { capturedAt: 'now' }
+  }), error => error?.code === 'DEVMATE_SHARED_CONFIG_MISSING');
+  assert.equal(fs.existsSync(file), false);
+});
+
+test('writes through the shared locked atomic store after shared initialization', () => {
+  const file = tempFile();
+  atomicWriteJson(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'one',
+    server: { port: 8787, mcpPath: '/mcp' },
     auth: { required: true, token: 'secret' }
   });
   writeExtensionConfig(file, {
