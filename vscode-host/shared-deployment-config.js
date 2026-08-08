@@ -61,6 +61,19 @@ function readDeploymentConfig(file) {
   };
 }
 
+function assertDeployableTransition({ mode, provider, publicUrl, touched }) {
+  if (!touched) return;
+  if (mode === 'production' && provider === 'cloudflare-quick') {
+    throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
+  }
+  if ((provider === 'cloudflare-managed' || provider === 'external') && !publicUrl) {
+    throw new Error(`${provider} requires a stable public HTTPS URL`);
+  }
+  if (mode === 'production' && !publicUrl) {
+    throw new Error('Production deployment requires a stable public HTTPS URL');
+  }
+}
+
 function applyDeploymentPatch(file, patch = {}) {
   return updateConfig(file, config => {
     if (!Object.keys(config).length) throw new Error('DevMate shared config must exist before deployment configuration');
@@ -75,14 +88,11 @@ function applyDeploymentPatch(file, patch = {}) {
     const provider = patch.tunnelProvider !== undefined
       ? validateTunnelProvider(String(patch.tunnelProvider).trim().toLowerCase())
       : current.tunnelProvider;
-    if (mode === 'production' && provider === 'cloudflare-quick') {
-      throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
-    }
-
     let publicUrl = current.publicUrl;
-    if (patch.publicUrl !== undefined) {
-      publicUrl = cleanHttpsOrigin(patch.publicUrl, { required: mode === 'production' });
-    }
+    if (patch.publicUrl !== undefined) publicUrl = cleanHttpsOrigin(patch.publicUrl);
+
+    const deploymentTouched = patch.mode !== undefined || patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
+    assertDeployableTransition({ mode, provider, publicUrl, touched: deploymentTouched });
 
     config.deployment.mode = mode;
     config.deployment.tunnelProvider = provider;
@@ -105,11 +115,33 @@ function applyDeploymentPatch(file, patch = {}) {
   });
 }
 
+function normalizeBootstrapDeployment(file) {
+  const current = readDeploymentConfig(file);
+  if (!current) return { changed: false, reason: 'missing-config' };
+  if (
+    current.deployment.mode !== 'personal' ||
+    current.deployment.tunnelProvider !== 'external' ||
+    current.deployment.publicUrl
+  ) return { changed: false, reason: 'already-explicit' };
+  const config = updateConfig(file, value => {
+    value.deployment ||= {};
+    value.deployment.mode = 'personal';
+    value.deployment.tunnelProvider = 'ngrok';
+    value.deployment.publicUrl = '';
+    value.team ||= {};
+    value.team.enabled = false;
+    return value;
+  });
+  return { changed: true, reason: 'replaced-invalid-personal-external-default', config };
+}
+
 module.exports = {
   PRODUCTION_LIMITS,
   applyDeploymentPatch,
+  assertDeployableTransition,
   cleanHttpsOrigin,
   deploymentState,
+  normalizeBootstrapDeployment,
   normalizeHostList,
   readDeploymentConfig
 };
