@@ -2,6 +2,7 @@
 
 const { normalizeNgrokUrl } = require('../ngrok-support.js');
 const { normalizePublicUrl } = require('../tunnel-provider.js');
+const { allowedHosts, publicHost } = require('../shared/deployment-hosts.cjs');
 
 function stablePublicUrl(settings = {}) {
   const provider = String(settings.provider || '').trim().toLowerCase();
@@ -15,22 +16,6 @@ function stablePublicUrl(settings = {}) {
   }
   if (provider === 'cloudflare-quick') return '';
   throw new Error(`Unsupported tunnel provider: ${provider || 'empty'}`);
-}
-
-function publicHost(value) {
-  const normalized = String(value || '').trim();
-  if (!normalized) return '';
-  try { return new URL(normalized).host.toLowerCase(); }
-  catch { return ''; }
-}
-
-function allowedHosts(configured = [], stableUrl = '') {
-  if (!Array.isArray(configured)) throw new TypeError('allowedPublicHosts must be an array');
-  return [...new Set(
-    [...configured, publicHost(stableUrl)]
-      .map(value => String(value || '').trim().toLowerCase())
-      .filter(Boolean)
-  )];
 }
 
 module.exports = {
