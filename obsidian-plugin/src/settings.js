@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   preferredPort: 8787,
   nodeExecutable: '',
   captureSelection: true,
+  autoCopyUrl: true,
   ngrokCommandPath: '',
   ngrokUrl: '',
   ngrokPoolingEnabled: false,
@@ -42,6 +43,7 @@ function normalizeSettings(value = {}) {
     preferredPort: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_SETTINGS.preferredPort,
     nodeExecutable: String(input.nodeExecutable || '').trim(),
     captureSelection: input.captureSelection !== false,
+    autoCopyUrl: input.autoCopyUrl !== false,
     ngrokCommandPath: String(input.ngrokCommandPath || '').trim(),
     ngrokUrl: normalizedNgrokUrl(input.ngrokUrl),
     ngrokPoolingEnabled: input.ngrokPoolingEnabled === true,
@@ -85,6 +87,16 @@ class DevMateSettingTab extends PluginSettingTab {
           this.plugin.settings.startupMode = value;
           await this.plugin.saveSettings();
           await this.plugin.reconfigureRuntime();
+        }));
+
+    new Setting(containerEl)
+      .setName('Copy verified MCP URL after Start')
+      .setDesc('When enabled, Start copies the public ngrok /mcp URL only after initialize and tools/list both succeed.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoCopyUrl)
+        .onChange(async value => {
+          this.plugin.settings.autoCopyUrl = value;
+          await this.plugin.saveSettings();
         }));
 
     new Setting(containerEl)
@@ -184,7 +196,7 @@ class DevMateSettingTab extends PluginSettingTab {
             this.plugin.settings.ngrokUrl = raw ? normalizeNgrokUrl(raw) : '';
             text.inputEl.removeClass('devmate-setting-invalid');
             await this.plugin.saveSettings();
-          } catch (error) {
+          } catch {
             text.inputEl.addClass('devmate-setting-invalid');
           }
         }));
