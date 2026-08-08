@@ -54,8 +54,8 @@ acquireGatewayInstanceLock();
 test('external-only execution requires an online external Runner', () => {
   const before = readiness(config);
   assert.equal(before.ready, false);
-  assert.equal(before.checks.find(item => item.key === 'instance-lock').ok, true);
-  assert.equal(before.checks.find(item => item.key === 'external-runners-online').ok, false);
+  assert.equal(before.checks.find(item => item.key === 'external-runners-online')?.ok, false);
+  assert.equal(before.checks.find(item => item.key === 'runner-credentials')?.ok, true);
 
   registerRunner({
     id: 'external-runner',
@@ -71,8 +71,8 @@ test('external-only execution requires an online external Runner', () => {
 
   const after = readiness(config);
   assert.equal(after.ready, true);
-  assert.equal(after.checks.find(item => item.key === 'external-runners-online').ok, true);
-  assert.equal(after.checks.find(item => item.key === 'runner-credentials').ok, true);
+  assert.equal(after.checks.find(item => item.key === 'external-runners-online')?.ok, true);
+  assert.equal(after.checks.find(item => item.key === 'runner-credentials')?.ok, true);
 });
 
 test.after(async () => {
