@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
+const { normalizeInstanceConfig } = require('./instance-config.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
@@ -376,10 +377,11 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       defaultCommandTimeoutMs: 180000,
       maxOutputChars: 120000,
       maxPersistentProcesses: 16,
-      persistentProcessOutputBytes: 2097152
+      persistentProcessOutputBytes: 2097152,
+      maxConcurrentJobs: 2
     },
     maintenance: { ...DEFAULT_MAINTENANCE },
-    connection: {},
+    connection: { provider: 'ngrok', publicUrl: '' },
     auth: { required: true, token: randomToken() },
     permissions: {
       profile: 'fullAccess',
@@ -388,15 +390,13 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       confirmBeforePush: false,
       allowDirectoryMutations: false
     },
-    deployment: { mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' },
     team: {
-      enabled: false,
       members: [],
       requireWorkspaceLeaseForWrites: false,
       defaultMemberRole: 'developer',
       maxMembers: 100
     },
-    production: {
+    requestPolicy: {
       maxRequestBytes: 2097152,
       requestsPerMinute: 600,
       maxConcurrentRequests: 64,
@@ -440,7 +440,7 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   }
   return updateConfig(file, current => {
     if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: requestedPort, appVersion });
-    const config = current;
+    const config = normalizeInstanceConfig(current);
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     config.hostRuntime ||= {};
