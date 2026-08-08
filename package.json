@@ -404,8 +404,8 @@
         "devMate.maxAuditBytes": {
           "type": "number",
           "default": 5242880,
-          "minimum": 65536,
-          "maximum": 1073741824,
+          "minimum": 262144,
+          "maximum": 104857600,
           "description": "Maximum audit log bytes."
         },
         "devMate.defaultStartCommand": {
