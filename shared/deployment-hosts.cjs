@@ -21,19 +21,14 @@ function allowedHosts(configured = [], stableUrl = '') {
 function reconcileAllowedHosts({
   currentAllowedHosts = [],
   previousPublicUrl = '',
-  nextPublicUrl = '',
-  nextMode = 'personal'
+  nextPublicUrl = ''
 } = {}) {
-  const mode = String(nextMode || '').trim().toLowerCase();
-  if (!['personal', 'team', 'production'].includes(mode)) throw new Error(`Unknown deployment mode: ${nextMode}`);
   const current = normalizeAllowedHosts(currentAllowedHosts);
+  if (!current.length) return [];
   const previousHost = publicHost(previousPublicUrl);
   const nextHost = publicHost(nextPublicUrl);
   const retained = current.filter(host => host !== previousHost);
-
-  if (mode === 'production') return allowedHosts(retained, nextPublicUrl);
-  if (mode === 'team' && current.length > 0 && nextHost) return allowedHosts(retained, nextPublicUrl);
-  return retained;
+  return nextHost ? allowedHosts(retained, nextPublicUrl) : retained;
 }
 
 module.exports = {
