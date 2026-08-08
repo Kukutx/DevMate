@@ -53,6 +53,12 @@ function gatewayGeneration(lock) {
   ].join('|');
 }
 
+function sessionGeneration(record, gatewayLock) {
+  const tunnel = recordGeneration(record);
+  const gateway = gatewayGeneration(gatewayLock);
+  return tunnel && gateway ? `${tunnel}::${gateway}` : '';
+}
+
 function runtimeMatchesConnection(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
   const desiredProvider = String(config?.connection?.provider || '').trim().toLowerCase();
   const actualProvider = String(record?.provider || '').trim().toLowerCase();
@@ -133,6 +139,7 @@ module.exports = {
   hostOf,
   recordGeneration,
   runtimeMatchesConnection,
+  sessionGeneration,
   successfulVerificationPatch,
   verifiedConnection,
   verifiedForCurrentRecord
