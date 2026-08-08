@@ -7,7 +7,10 @@ const childProcess = require('./vscode-host/runtime-io.js');
 const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-http-client.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
+const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
+const { successfulVerificationPatch } = require('./shared/public-ingress-verification.cjs');
+const { deploymentProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 
 function spawn(...args){ return childProcess.spawn(...args); }
@@ -31,7 +34,6 @@ const lifecycleOperations = new OperationCoordinator({ name: 'vscode-lifecycle' 
 
 function cfg(){ return vscode.workspace.getConfiguration('devMate'); }
 function configuredPort(){ return Number(cfg().get('port') || BASE_PORT); }
-function configuredTunnelProvider(){ return String(cfg().get('tunnelProvider') || 'ngrok').trim().toLowerCase(); }
 function log(s){ if(output) output.appendLine(`[${new Date().toLocaleTimeString()}] ${s}`); }
 function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
 function configPath(ctx){ return path.join(ctx.globalStorageUri.fsPath,'config.json'); }
@@ -173,9 +175,6 @@ function redactUrl(url){
     return '';
   }
 }
-function publicHost(url){
-  try { return new URL(url).host; } catch { return ''; }
-}
 function updateConnectionSnapshot(ctx, patch){
   if(!ctx) return;
   const data = ensureConfig(ctx,false);
@@ -189,7 +188,7 @@ function mcpUrlFor(baseUrl){
 }
 function mcpToken(ctx=globalContext){
   const data = ctx ? ensureConfig(ctx,false) : null;
-  return authRequired() ? String(data?.auth?.token || '') : '';
+  return data?.auth?.required === false ? '' : String(data?.auth?.token || '');
 }
 
 function defaultConfig(ctx){
@@ -350,12 +349,6 @@ function httpRequestRaw(url, options={}, body=null, timeoutMs=4000){
   return boundedHttpRequestRaw(url, options, body, timeoutMs);
 }
 function httpGet(url, timeoutMs=1500){ return httpRequestRaw(url, {method:'GET'}, null, timeoutMs); }
-async function postJson(url, payload, timeoutMs=5000, headers={}){
-  return httpRequestRaw(url, {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'Accept':'application/json, text/event-stream', ...headers }
-  }, JSON.stringify(payload), timeoutMs);
-}
 async function healthAt(port){ return httpGet(`http://127.0.0.1:${port}/control/health`,1200); }
 function healthMatches(r, ctx){
   const cfgData = readJson(configPath(ctx));
@@ -482,18 +475,41 @@ function currentTunnelStatus(ctx=globalContext){
   const data = ensureConfig(ctx,false);
   return tunnelStatus(Number(data.server.port || selectedPort));
 }
+function currentPublicUiState(data){
+  let tunnel = null;
+  let runtimeError = '';
+  try {
+    tunnel = tunnelStatus(Number(data.server?.port || selectedPort));
+  } catch(e) {
+    runtimeError = String(e.message || e);
+  }
+  return publicUiState(data, tunnel, { runtimeError });
+}
+async function syncPublicUiState(ctx=globalContext){
+  if(!ctx) return null;
+  const data = ensureConfig(ctx,false);
+  const state = currentPublicUiState(data);
+  let gateway = null;
+  if(state.state === 'absent' || state.state === 'unavailable'){
+    try { gateway = await gatewayController?.status(); } catch {}
+  }
+  lastPublicUrl = state.verified ? state.publicUrl : '';
+  setStatus(statusLabel(state, gateway));
+  refreshPanel();
+  return state;
+}
 async function startPublicTunnel(ctx){
   const data = ensureConfig(ctx,false);
   const port = Number(data.server.port || selectedPort);
   const result = await startTunnel(port);
   const publicUrl = result?.publicUrl || result?.record?.publicUrl || '';
-  if(!publicUrl) throw new Error(`Tunnel provider ${result?.record?.provider || configuredTunnelProvider()} did not publish a public URL.`);
+  const provider = result?.record?.provider || deploymentProvider(data);
+  if(!publicUrl) throw new Error(`Tunnel provider ${provider} did not publish a public URL.`);
   lastPublicUrl = publicUrl;
-  const provider = result?.record?.provider || configuredTunnelProvider();
   log(result.attached
     ? `Attached to shared ${provider} tunnel for port ${port}: ${publicUrl}`
     : `${provider} tunnel ready for port ${port}: ${publicUrl}`);
-  return {...result, publicUrl};
+  return {...result, publicUrl, provider};
 }
 async function stopPublicTunnel(){
   try{
@@ -502,26 +518,14 @@ async function stopPublicTunnel(){
     lastPublicUrl = '';
   }
 }
-async function mcpHandshakeTest(baseUrl, ctx=globalContext){
-  const mcp = mcpUrlFor(baseUrl);
-  const token = mcpToken(ctx);
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
-  const init = await postJson(mcp, { jsonrpc:'2.0', id:1, method:'initialize', params:{ protocolVersion:'2025-03-26', capabilities:{}, clientInfo:{name:'devmate-preflight', version:VERSION} } }, 8000, headers);
-  const serverName = init.json?.result?.serverInfo?.name;
-  if(!init.ok || serverName !== 'devmate'){
-    throw new Error(`MCP initialize failed via ${redactUrl(mcp)}. Expected DevMate server, got ${serverName || 'none'}. HTTP=${init.status||'none'} error=${init.error||''} body=${String(init.body||'').slice(0,300)}`);
-  }
-  const sessionId = String(init.headers?.['mcp-session-id'] || '').trim();
-  const toolsHeaders = {
-    ...headers,
-    'MCP-Protocol-Version': '2025-03-26',
-    ...(sessionId ? { 'MCP-Session-Id': sessionId } : {})
-  };
-  const tools = await postJson(mcp, { jsonrpc:'2.0', id:2, method:'tools/list', params:{} }, 8000, toolsHeaders);
-  if(!tools.ok || !Array.isArray(tools.json?.result?.tools)){
-    throw new Error(`MCP tools/list failed via ${redactUrl(mcp)}. HTTP=${tools.status||'none'} error=${tools.error||''} body=${String(tools.body||'').slice(0,300)}`);
-  }
-  return { mcp, toolCount: tools.json.result.tools.length, server: init.json.result.serverInfo };
+async function verifyPublicMcp(baseUrl, ctx=globalContext){
+  const data = ctx ? ensureConfig(ctx,false) : null;
+  return preflightPublicMcp({
+    publicUrl: baseUrl,
+    token: data?.auth?.required === false ? '' : String(data?.auth?.token || ''),
+    clientName: 'devmate-vscode-preflight',
+    clientVersion: VERSION
+  });
 }
 async function quickStart(ctx){
   try{
@@ -530,28 +534,22 @@ async function quickStart(ctx){
     const gateway = await startGateway(ctx);
     const tunnel = await startPublicTunnel(ctx);
     const publicUrl = tunnel.publicUrl;
-    log(`Running public MCP preflight through ${tunnel.record?.provider || configuredTunnelProvider()} before copying URL...`);
-    const test = await mcpHandshakeTest(publicUrl, ctx);
+    log(`Running public MCP preflight through ${tunnel.provider} before copying URL...`);
+    const test = await verifyPublicMcp(publicUrl, ctx);
     const stamp = new Date().toISOString();
-    if(cfg().get('autoCopyUrl')) await vscode.env.clipboard.writeText(test.mcp);
+    if(cfg().get('autoCopyUrl')) await vscode.env.clipboard.writeText(test.mcpUrl);
     updateConnectionSnapshot(ctx, {
-      lastPreflightAt: stamp,
-      lastCopiedAt: cfg().get('autoCopyUrl') ? stamp : undefined,
-      lastPublicHost: publicHost(publicUrl),
-      lastMcpPath: MCP_PATH,
-      lastToolCount: test.toolCount,
-      lastServerName: test.server?.name || 'devmate',
-      lastError: '',
-      lastErrorAt: null
+      ...successfulVerificationPatch(test, publicUrl, stamp),
+      lastCopiedAt: cfg().get('autoCopyUrl') ? stamp : undefined
     });
-    setStatus('DevMate: ready');
-    log(`Public MCP preflight OK: ${redactUrl(test.mcp)}, tools=${test.toolCount}`);
-    vscode.window.showInformationMessage(cfg().get('autoCopyUrl') ? `Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcp)}` : `Ready. Verified MCP URL: ${redactUrl(test.mcp)}`);
-    refreshPanel();
+    await syncPublicUiState(ctx);
+    log(`Public MCP preflight OK: ${redactUrl(test.mcpUrl)}, tools=${test.toolCount}`);
+    vscode.window.showInformationMessage(cfg().get('autoCopyUrl') ? `Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcpUrl)}` : `Ready. Verified MCP URL: ${redactUrl(test.mcpUrl)}`);
     return {ok:true,gateway,tunnel,publicUrl,toolCount:test.toolCount,server:test.server};
   }catch(e){
     const message = String(e.message || e);
     updateConnectionSnapshot(ctx,{lastError:message,lastErrorAt:new Date().toISOString()});
+    await syncPublicUiState(ctx);
     log(`ERROR: ${e.stack || e.message || e}`);
     vscode.window.showErrorMessage(`DevMate failed: ${message}`);
     return {ok:false,error:message,code:e.code || 'DEVMATE_START_FAILED'};
@@ -578,23 +576,22 @@ async function copyUrl(){
   }
   const url = status.publicUrl || '';
   if(!url) return vscode.window.showWarningMessage('No public tunnel URL for the current gateway port. Run DevMate: Start first.');
-  lastPublicUrl = url;
   try{
-    const test = await mcpHandshakeTest(url, globalContext);
+    const test = await verifyPublicMcp(url, globalContext);
     const stamp = new Date().toISOString();
-    await vscode.env.clipboard.writeText(test.mcp);
+    await vscode.env.clipboard.writeText(test.mcpUrl);
     updateConnectionSnapshot(globalContext, {
-      lastPreflightAt: stamp,
-      lastCopiedAt: stamp,
-      lastPublicHost: publicHost(url),
-      lastMcpPath: MCP_PATH,
-      lastToolCount: test.toolCount,
-      lastServerName: test.server?.name || 'devmate',
-      lastError: '',
-      lastErrorAt: null
+      ...successfulVerificationPatch(test, url, stamp),
+      lastCopiedAt: stamp
     });
-    vscode.window.showInformationMessage(`Copied verified MCP URL: ${redactUrl(test.mcp)}`);
-  }catch(e){ updateConnectionSnapshot(globalContext,{lastError:String(e.message || e),lastErrorAt:new Date().toISOString()}); log(`MCP URL verification failed: ${e.stack || e.message || e}`); vscode.window.showErrorMessage(`MCP URL is not healthy: ${e.message || e}`); }
+    await syncPublicUiState(globalContext);
+    vscode.window.showInformationMessage(`Copied verified MCP URL: ${redactUrl(test.mcpUrl)}`);
+  }catch(e){
+    updateConnectionSnapshot(globalContext,{lastError:String(e.message || e),lastErrorAt:new Date().toISOString()});
+    await syncPublicUiState(globalContext);
+    log(`MCP URL verification failed: ${e.stack || e.message || e}`);
+    vscode.window.showErrorMessage(`MCP URL is not healthy: ${e.message || e}`);
+  }
 }
 async function copyConnectionToken(ctx=globalContext){
   try{
@@ -815,12 +812,13 @@ async function saveReferencesJson(ctx, value){
 async function doctor(ctx){
   const checks=[];
   const data=ensureConfig(ctx,false);
-  const provider=configuredTunnelProvider();
+  const provider=deploymentProvider(data);
   checks.push(`Version: ${VERSION}`);
   checks.push(`VS Code workspace: ${currentRoot() || 'NONE'}`);
   checks.push(`Extension path: ${ctx.extensionPath}`);
   checks.push(`Config path: ${configPath(ctx)}`);
   checks.push(`Configured/current port: ${data.server.port}`);
+  checks.push(`Deployment mode/provider: ${data.deployment?.mode || 'personal'} / ${provider}`);
   checks.push(`Node: ${process.execPath}`);
   const git=spawnSync('git',['--version'],{encoding:'utf8',windowsHide:true}); checks.push(`git: ${git.error ? 'MISSING' : git.stdout.trim()}`);
   if(provider === 'ngrok'){
@@ -838,7 +836,7 @@ async function doctor(ctx){
   try{
     const tunnel=currentTunnelStatus(ctx);
     checks.push(`Tunnel: ${tunnel.running ? `${tunnel.provider} ${tunnel.publicUrl || 'starting'}` : `${provider} not running`}`);
-    if(tunnel.publicUrl){ try{ const test=await mcpHandshakeTest(tunnel.publicUrl,ctx); checks.push(`public MCP preflight: OK tools=${test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
+    if(tunnel.publicUrl){ try{ const test=await verifyPublicMcp(tunnel.publicUrl,ctx); checks.push(`public MCP preflight: OK tools=${test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
   }catch(e){ checks.push(`Tunnel: unavailable (${e.message || e})`); }
   output.show(true); checks.forEach(x=>log(`[doctor] ${x}`)); vscode.window.showInformationMessage('Doctor finished. See DevMate output.');
 }
@@ -851,7 +849,8 @@ async function setup(ctx){
   await doctor(ctx);
   const actions=[];
   if(!currentRoot()) actions.push('Open a project folder in VS Code.');
-  const provider=configuredTunnelProvider();
+  const data=ensureConfig(ctx,false);
+  const provider=deploymentProvider(data);
   if(provider === 'ngrok'){
     const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
     const result=spawnSync(command,['version'],{encoding:'utf8',windowsHide:true});
@@ -860,8 +859,8 @@ async function setup(ctx){
     const command=String(cfg().get('cloudflareCommandPath') || 'cloudflared');
     const result=spawnSync(command,['--version'],{encoding:'utf8',windowsHide:true});
     if(result.error) actions.push('Install cloudflared, then run DevMate: Start.');
-  } else if(provider === 'external' && !String(cfg().get('publicUrl') || '').trim()) {
-    actions.push('Configure devMate.publicUrl for the external ingress.');
+  } else if(provider === 'external' && !String(data.deployment?.publicUrl || '').trim()) {
+    actions.push('Configure a stable publicUrl for the shared external deployment.');
   }
   if(actions.length) vscode.window.showWarningMessage(`DevMate setup needs: ${actions.join(' ')}`);
   else vscode.window.showInformationMessage('DevMate setup looks ready. Run DevMate: Start.');
@@ -870,7 +869,19 @@ async function setup(ctx){
 function panelHtml(ctx, webview){
   const data=ensureConfig(ctx,false); const root=currentRoot();
   const n = nonce();
-  const mcpDisplay = lastPublicUrl ? redactUrl(mcpUrlFor(lastPublicUrl, ctx)) : 'not started';
+  const publicState = currentPublicUiState(data);
+  const mcpDisplay = publicState.verified
+    ? redactUrl(mcpUrlFor(publicState.publicUrl))
+    : publicState.state === 'failed'
+      ? 'verification failed'
+      : publicState.state === 'unverified'
+        ? 'verification pending'
+        : publicState.state === 'pending'
+          ? 'tunnel starting'
+          : 'not available';
+  const ingressDisplay = publicState.publicUrl
+    ? `${publicState.provider} ${redactUrl(publicState.publicUrl)} (${publicState.state})`
+    : `${publicState.provider} (${publicState.state})`;
   const references = (data.workspaces || []).filter(w => w.reference);
   const activeWorkspace = (data.workspaces || []).find(w => w.id === data.activeWorkspaceId) || (data.workspaces || []).find(w => !w.reference);
   const workspaceState = {
@@ -914,7 +925,8 @@ function panelHtml(ctx, webview){
   <div class="status-grid">
     <b>Active project</b><code>${esc(root || 'Open a VS Code folder first')}</code>
     <b>MCP</b><code>${esc(mcpDisplay)}</code>
-    <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp</code>
+    <b>Public ingress</b><code>${esc(ingressDisplay)}</code>
+    <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp · internal only</code>
     <b>Auth</b><code>${esc(data.auth?.required ? 'token required' : 'disabled')}</code>
     <b>Permissions</b><code>${esc(data.permissions?.profile || 'fullAccess')}</code>
     <b>Last preflight</b><code>${esc(data.connection?.lastPreflightAt ? `${data.connection.lastPreflightAt} ${data.connection.lastPublicHost || ''}` : 'not recorded')}</code>
@@ -1045,6 +1057,7 @@ function activate(context){
   register(context,'devMate.copyPrompt',()=>copyStarterPrompt());
   register(context,'devMate.copyContextBundle',()=>copyContextBundle(context));
   register(context,'devMate.openSettings',()=>openSettings());
+  register(context,'devMate.syncPublicState',()=>syncPublicUiState(context));
 
   log(`Activated DevMate ${VERSION}`);
 }
