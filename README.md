@@ -1,10 +1,10 @@
 # DevMate
 
-DevMate is a local-first MCP development gateway for ChatGPT. It can inspect, modify, run, test, and review controlled workspaces from VS Code, a standalone team Gateway, or a central control plane with external Runner hosts.
+DevMate is a local-first MCP development gateway for ChatGPT. It can inspect, modify, run, test, and review controlled workspaces from VS Code, Obsidian, standalone deployments, trusted team access, and central control planes with external Runner hosts.
 
 ## Fastest setup
 
-Choose one preset and bootstrap the complete starting configuration:
+Choose one bootstrap preset to compose a complete starting configuration:
 
 ```bash
 # One developer
@@ -32,7 +32,7 @@ npx devmate bootstrap \
   --config /var/lib/devmate-runner/config.json
 ```
 
-Each bootstrap response includes the config path, one-time credentials that were created, and the next action. Member and Runner plaintext tokens are never written to config.
+Presets compose the same capability-based instance schema; they are not runtime modes. Each bootstrap response includes the config path, one-time credentials that were created, and the next action. Member and Runner plaintext tokens are never written to config.
 
 Inspect a configuration without exposing tokens:
 
@@ -42,33 +42,39 @@ npx devmate status --config /srv/devmate/config.json
 
 See [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) for all presets and options.
 
-## VS Code personal setup
+## VS Code desktop setup
 
-1. Open a project and run `DevMate: Tunnel Setup`.
-2. Choose `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or an existing external HTTPS ingress.
-3. Configure only the credential or executable required by that provider. ngrok and managed Cloudflare credentials are stored in VS Code Secret Storage; external ingress requires no tunnel credential.
-4. Run `DevMate: Start`.
-5. Add the copied HTTPS `/mcp` endpoint to ChatGPT.
-6. Run `DevMate: Copy Bearer Token` and configure that value as the connector's Bearer credential.
+If ngrok is already installed and configured normally on the machine, the normal path is simply:
 
-The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL. See [`docs/TUNNELS.md`](docs/TUNNELS.md) for provider requirements and production guidance.
+1. Open a project.
+2. Run `DevMate: Start` — or leave the default auto-start enabled.
+3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, runs MCP `initialize` + `tools/list`, reaches Ready, and copies the verified HTTPS `/mcp` URL.
+4. Add that URL to ChatGPT and configure the bearer credential once with `DevMate: Copy Bearer Token` when the connector requires it.
+
+`DevMate: Connection Setup` is a **one-time provider/account configuration** action when the default machine ngrok configuration is not what you want. It supports `ngrok`, `cloudflare-quick`, `cloudflare-managed`, and an existing external HTTPS ingress. DevMate-managed ngrok and managed Cloudflare credentials are stored in VS Code Secret Storage; external ingress requires no tunnel credential.
+
+Routine Start never requires a separate tunnel-start or verification command. The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL. See [`docs/TUNNELS.md`](docs/TUNNELS.md).
 
 ## Obsidian setup
 
-DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins. The host provides incremental note queries, Property schema audits, public-API note mutations, and preview/apply/rollback Property batches while sharing one Gateway with VS Code.
+DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins.
 
-See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md) and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
+Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → MCP preflight → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
 
-## Deployment shapes
+The host also provides incremental note queries, Property schema audits, public-API note mutations, and preview/apply/rollback Property batches.
 
-| Shape | Identity | Execution | Best for |
+See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md), [`obsidian-plugin/README.md`](obsidian-plugin/README.md), and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
+
+## Capability presets
+
+| Preset | Identity | Execution | Best for |
 |---|---|---|---|
 | Personal | Owner token | Embedded Runner | One developer |
 | Team | Scoped `dmt_` members | Embedded Runner, optional external Runners | Trusted team |
 | Control plane | Owner + scoped members | External `dmr_` Runners | Production build/test hosts |
 | Runner host | Local owner token | Local toolchain through loopback MCP | Platform-specific execution |
 
-DevMate supports ngrok, Cloudflare Quick Tunnel for development, Cloudflare managed tunnels, and existing external HTTPS ingress.
+These presets compose connection, access, request policy and Runner capabilities. They do not create mutually exclusive runtime modes. DevMate supports ngrok, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress independently of access or Runner topology.
 
 ## Architecture
 
@@ -88,6 +94,8 @@ DevMate Gateway
 External Runner hosts
   └─ loopback DevMate Gateway + local toolchain
 ```
+
+Desktop hosts additionally coordinate one shared provider-native public connection. Ready is generation-scoped: if the provider restarts or ownership changes, previous MCP verification is stale even when the hostname is unchanged.
 
 DevMate uses one deterministic Capability Host for registration and initialization. `gateway/tool-policy.mjs` is the shared source of truth for team capability, workspace scope and durable Runner requirements. Plugins extend through a validated composition API rather than manually calling another plugin lifecycle.
 
@@ -112,7 +120,7 @@ Core protections include:
 - request, tool, approval, and Runner audit metadata;
 - bounded rate, request-size, timeout, and concurrency policies.
 
-Use team work sessions or acquire a workspace lease before shared mutations.
+Use team work sessions or acquire a workspace lease before shared mutations when lease policy is enabled.
 
 ## Durable jobs and Runners
 
@@ -235,6 +243,7 @@ npm run package:vsix
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md)
 - [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md)
 - [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)
 - [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md)
