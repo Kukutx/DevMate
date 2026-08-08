@@ -95,7 +95,7 @@ test('explicit Obsidian Public origin takes precedence over a live shared tunnel
   }
 });
 
-test('live shared tunnel is used when Obsidian has no explicit Public origin', () => {
+test('matching live shared tunnel is used when Obsidian has no explicit Public origin', () => {
   const stateDirectory = tempState();
   try {
     publishReadyTunnel(stateDirectory, {
@@ -106,10 +106,55 @@ test('live shared tunnel is used when Obsidian has no explicit Public origin', (
       stateDirectory,
       port: 8787,
       publicOrigin: '',
-      config: { deployment: { tunnelProvider: 'external', publicUrl: 'https://deployment.example.test' } }
+      config: { deployment: { tunnelProvider: 'ngrok', publicUrl: '' } }
     });
     assert.equal(connection.source, 'shared-tunnel');
     assert.equal(connection.publicOrigin, 'https://live.ngrok-free.app');
+  } finally {
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Obsidian ignores a stale shared tunnel after provider changes and falls back to the configured deployment URL', () => {
+  const stateDirectory = tempState();
+  const logs = [];
+  try {
+    publishReadyTunnel(stateDirectory, {
+      provider: 'ngrok',
+      publicUrl: 'https://old.ngrok-free.app'
+    });
+    const connection = resolvePublicConnection({
+      stateDirectory,
+      port: 8787,
+      publicOrigin: '',
+      config: { deployment: { tunnelProvider: 'external', publicUrl: 'https://deployment.example.test' } },
+      logger: message => logs.push(message)
+    });
+    assert.equal(connection.source, 'deployment-config');
+    assert.equal(connection.provider, 'external');
+    assert.equal(connection.publicOrigin, 'https://deployment.example.test');
+    assert.match(logs.join('\n'), /Ignoring stale shared tunnel record/);
+    assert.match(logs.join('\n'), /does not match configured provider external/);
+  } finally {
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Obsidian ignores a shared tunnel whose URL no longer matches the configured stable endpoint', () => {
+  const stateDirectory = tempState();
+  try {
+    publishReadyTunnel(stateDirectory, {
+      provider: 'cloudflare-managed',
+      publicUrl: 'https://old.example.test'
+    });
+    const connection = resolvePublicConnection({
+      stateDirectory,
+      port: 8787,
+      publicOrigin: '',
+      config: { deployment: { tunnelProvider: 'cloudflare-managed', publicUrl: 'https://new.example.test' } }
+    });
+    assert.equal(connection.source, 'deployment-config');
+    assert.equal(connection.publicOrigin, 'https://new.example.test');
   } finally {
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
