@@ -4,9 +4,10 @@ import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { activitySnapshot } from './request-guard.mjs';
 import {
   TEAM_ROLES,
+  TUNNEL_PROVIDERS,
   createTeamMember,
   memberPublic,
-  normalizeDeploymentConfig,
+  normalizeInstanceConfig,
   revokeTeamMember,
   rotateTeamMemberToken,
   updateTeamMember
@@ -24,43 +25,34 @@ import {
 const { normalizeAllowedHosts, reconcileAllowedHosts } = deploymentHosts;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
-  const config = normalizeDeploymentConfig(inputConfig);
-  const previousProvider = config.deployment.tunnelProvider;
-  const previousPublicUrl = config.deployment.publicUrl;
-  if (patch.mode) config.deployment.mode = patch.mode;
-  if (patch.tunnelProvider) config.deployment.tunnelProvider = patch.tunnelProvider;
+  const config = normalizeInstanceConfig(inputConfig);
+  const previousProvider = config.connection.provider;
+  const previousPublicUrl = config.connection.publicUrl;
+  if (patch.tunnelProvider) config.connection.provider = patch.tunnelProvider;
 
   const providerChanged = patch.tunnelProvider !== undefined && patch.tunnelProvider !== previousProvider;
   if (patch.publicUrl !== undefined) {
-    config.deployment.publicUrl = cleanOrigin(patch.publicUrl, false);
-  } else if (providerChanged || config.deployment.tunnelProvider === 'cloudflare-quick') {
-    config.deployment.publicUrl = '';
+    config.connection.publicUrl = cleanOrigin(patch.publicUrl, false);
+  } else if (providerChanged || config.connection.provider === 'cloudflare-quick') {
+    config.connection.publicUrl = '';
   }
 
-  const deploymentTouched = patch.mode !== undefined || patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
-  if (deploymentTouched) {
-    if (config.deployment.mode === 'production' && config.deployment.tunnelProvider === 'cloudflare-quick') {
-      throw new Error('Cloudflare Quick Tunnel cannot be used in production mode');
-    }
-    if (
-      (config.deployment.tunnelProvider === 'cloudflare-managed' || config.deployment.tunnelProvider === 'external') &&
-      !config.deployment.publicUrl
-    ) {
-      throw new Error(`${config.deployment.tunnelProvider} requires a stable public HTTPS URL`);
-    }
-    if (config.deployment.mode === 'production' && !config.deployment.publicUrl) {
-      throw new Error('Production deployment requires a stable public HTTPS URL');
-    }
+  const connectionTouched = patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
+  if (
+    connectionTouched &&
+    (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
+    !config.connection.publicUrl
+  ) {
+    throw new Error(`${config.connection.provider} requires a public HTTPS URL`);
   }
 
   if (patch.allowedHosts !== undefined) {
-    config.production.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
-  } else if (deploymentTouched) {
-    config.production.allowedHosts = reconcileAllowedHosts({
-      currentAllowedHosts: config.production.allowedHosts,
+    config.requestPolicy.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
+  } else if (connectionTouched) {
+    config.requestPolicy.allowedHosts = reconcileAllowedHosts({
+      currentAllowedHosts: config.requestPolicy.allowedHosts,
       previousPublicUrl,
-      nextPublicUrl: config.deployment.publicUrl,
-      nextMode: config.deployment.mode
+      nextPublicUrl: config.connection.publicUrl
     });
   }
 
@@ -74,9 +66,9 @@ export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
     'maxRequestBytes',
     'requestTimeoutMs'
   ]) {
-    if (patch[key] !== undefined) config.production[key] = patch[key];
+    if (patch[key] !== undefined) config.requestPolicy[key] = patch[key];
   }
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   return config;
 }
 
@@ -84,22 +76,22 @@ export function registerTeamManagementTools(register, annotations) {
   const { ro, rw } = annotations;
 
   register('deployment_status', {
-    title: 'DevMate deployment status',
-    description: 'Show deployment mode, current principal, ingress metadata, and production limits.',
+    title: 'DevMate instance status',
+    description: 'Show the current connection, access, Runner, request-policy, and authenticated-principal state.',
     inputSchema: {},
     annotations: ro
   }, async () => toolText(publicDeployment(readConfig())));
 
   register('deployment_readiness', {
-    title: 'DevMate deployment readiness',
-    description: 'Check personal, team, or production deployment readiness.',
+    title: 'DevMate readiness',
+    description: 'Check whether the capabilities currently configured on this DevMate instance are ready.',
     inputSchema: {},
     annotations: ro
   }, async () => toolText(readiness(readConfig())));
 
   register('deployment_policy_template', {
-    title: 'Tunnel policy template',
-    description: 'Return production-oriented ngrok or Cloudflare ingress templates without secrets.',
+    title: 'Connection policy template',
+    description: 'Return hardened ngrok or Cloudflare ingress templates without secrets.',
     inputSchema: { provider: z.enum(['ngrok', 'cloudflare-managed']).optional() },
     annotations: ro
   }, async ({ provider }) => toolText(provider
@@ -110,18 +102,17 @@ export function registerTeamManagementTools(register, annotations) {
       }));
 
   register('team_status', {
-    title: 'DevMate team status',
-    description: 'Show current team principal, members, leases, sessions, and readiness.',
+    title: 'DevMate access status',
+    description: 'Show current principal, members, leases, sessions, connection, Runners, and readiness.',
     inputSchema: {},
     annotations: ro
   }, async () => toolText(teamStatus()));
 
   register('team_configure', {
-    title: 'Configure DevMate team deployment',
-    description: 'Configure deployment mode, tunnel metadata, lease policy, and production limits. Requires owner.',
+    title: 'Configure DevMate capabilities',
+    description: 'Configure the public connection, workspace lease policy, and request policy. Requires owner.',
     inputSchema: {
-      mode: z.enum(['personal', 'team', 'production']).optional(),
-      tunnelProvider: z.enum(['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']).optional(),
+      tunnelProvider: z.enum(TUNNEL_PROVIDERS).optional(),
       publicUrl: z.string().max(2000).optional(),
       requireWorkspaceLeaseForWrites: z.boolean().optional(),
       requestsPerMinute: z.number().int().min(10).max(10000).optional(),
@@ -137,25 +128,25 @@ export function registerTeamManagementTools(register, annotations) {
     writeConfig(config);
     await audit('team_configure', {
       principalId: principalNow().id,
-      mode: config.deployment.mode,
-      tunnelProvider: config.deployment.tunnelProvider
+      connectionProvider: config.connection.provider,
+      memberCount: config.team.members.length
     });
-    return toolText({ configured: true, deployment: publicDeployment(config), readiness: readiness(config) });
+    return toolText({ configured: true, instance: publicDeployment(config), readiness: readiness(config) });
   });
 
   register('team_member_list', {
     title: 'List DevMate team members',
-    description: 'List team identities, roles, scopes, expiry, and token versions without exposing token hashes.',
+    description: 'List member identities, roles, scopes, expiry, and token versions without exposing token hashes.',
     inputSchema: {},
     annotations: ro
   }, async () => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     return toolText({ members: config.team.members.map(memberPublic) });
   });
 
   register('team_member_create', {
     title: 'Create DevMate team member',
-    description: 'Create a team identity with explicit workspace scope and return its token once. Requires owner.',
+    description: 'Create a member identity with explicit workspace scope and return its token once. Requires owner.',
     inputSchema: {
       id: z.string().max(120).optional(),
       name: z.string().min(1).max(200),
@@ -165,7 +156,7 @@ export function registerTeamManagementTools(register, annotations) {
     },
     annotations: rw
   }, async input => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const result = createTeamMember(config, {
       ...input,
       workspaceIds: workspaceIds(config, input.workspaceIds)
@@ -196,7 +187,7 @@ export function registerTeamManagementTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, ...patch }) => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     if (patch.workspaceIds !== undefined) patch.workspaceIds = workspaceIds(config, patch.workspaceIds);
     const member = updateTeamMember(config, id, patch);
     writeConfig(config);
@@ -210,11 +201,11 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_rotate', {
     title: 'Rotate DevMate team token',
-    description: 'Invalidate the old team token and return a new token once. Requires owner.',
+    description: 'Invalidate the old member token and return a new token once. Requires owner.',
     inputSchema: { id: z.string().min(1) },
     annotations: rw
   }, async ({ id }) => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const result = rotateTeamMemberToken(config, id);
     writeConfig(config);
     await audit('team_member_rotate', { principalId: principalNow().id, memberId: id });
@@ -226,11 +217,11 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_revoke', {
     title: 'Revoke DevMate team member',
-    description: 'Disable a team identity immediately. Requires owner.',
+    description: 'Disable a member identity immediately. Requires owner.',
     inputSchema: { id: z.string().min(1) },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id }) => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const member = revokeTeamMember(config, id);
     writeConfig(config);
     await audit('team_member_revoke', { principalId: principalNow().id, memberId: id });
