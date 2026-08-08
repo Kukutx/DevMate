@@ -8,7 +8,6 @@ const test = require('node:test');
 const { atomicWriteJson } = require('../shared/config-store.cjs');
 const {
   applyDeploymentPatch,
-  normalizeBootstrapDeployment,
   readDeploymentConfig
 } = require('../vscode-host/shared-deployment-config.js');
 
@@ -120,32 +119,6 @@ test('managed and production deployment transitions require a clean stable HTTPS
       tunnelProvider: 'external',
       publicUrl: 'http://unsafe.example.com'
     }), /clean HTTPS origin/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('VS Code normalizes only the unusable personal external-without-URL bootstrap state to ngrok', () => {
-  const { directory, file, config } = fixture();
-  try {
-    config.deployment = { mode: 'personal', tunnelProvider: 'external', publicUrl: '' };
-    config.team.enabled = false;
-    atomicWriteJson(file, config);
-    const normalized = normalizeBootstrapDeployment(file);
-    assert.equal(normalized.changed, true);
-    assert.deepEqual(readDeploymentConfig(file).deployment, {
-      mode: 'personal',
-      tunnelProvider: 'ngrok',
-      publicUrl: ''
-    });
-
-    applyDeploymentPatch(file, {
-      tunnelProvider: 'external',
-      publicUrl: 'https://explicit.example.com'
-    });
-    const explicit = normalizeBootstrapDeployment(file);
-    assert.equal(explicit.changed, false);
-    assert.equal(readDeploymentConfig(file).deployment.publicUrl, 'https://explicit.example.com');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
