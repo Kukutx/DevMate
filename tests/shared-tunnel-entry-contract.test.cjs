@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-test('VS Code entry initializes shared config before the provider-native tunnel controller', () => {
+test('VS Code entry initializes a new shared config before the provider-native tunnel controller without rewriting an existing deployment', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   assert.equal(fs.existsSync(path.join(root, 'extension-entry-host.js')), false);
@@ -19,7 +19,9 @@ test('VS Code entry initializes shared config before the provider-native tunnel 
   assert.match(source, /clearTunnelController/);
   assert.match(source, /settingsFromState/);
   assert.match(source, /ensureSharedDesktopConfig/);
-  assert.match(source, /normalizeBootstrapDeployment/);
+  assert.match(source, /const existed = fs\.statSync\(configFile, \{ throwIfNoEntry: false \}\)\?\.isFile\(\) === true/);
+  assert.match(source, /if \(!existed\) normalizeBootstrapDeployment\(configFile\)/);
+  assert.doesNotMatch(source, /\n\s*normalizeBootstrapDeployment\(configFile\);/);
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
 
   const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
