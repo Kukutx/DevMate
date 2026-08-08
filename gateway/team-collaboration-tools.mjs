@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText } from './local-shared.mjs';
-import { normalizeDeploymentConfig } from './team-access.mjs';
+import { normalizeInstanceConfig } from './team-access.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
 import {
   createPreviewShare,
@@ -41,7 +41,7 @@ export function registerTeamCollaborationTools(register, annotations) {
 
   register('work_session_start', {
     title: 'Start work session',
-    description: 'Start a principal-scoped work session and acquire its workspace lease. Available in personal, team, and production modes.',
+    description: 'Start a principal-scoped work session and acquire its workspace lease. The same session model is used for owner and member workflows.',
     inputSchema: {
       workspaceId: z.string().min(1),
       title: z.string().max(500).optional(),
@@ -51,7 +51,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     },
     annotations: rw
   }, async input => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const principal = principalNow();
     const workspace = resolveWorkspace(config, input.workspaceId);
     assertVisibleWorkspace(principal, workspace.id, 'start a session for');
@@ -82,7 +82,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: ro
   }, async ({ id, workspaceId, all = false }) => {
     const principal = principalNow();
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     if (id) {
       const item = workSession(id);
       if (!item) return toolText({ session: null });
@@ -129,7 +129,7 @@ export function registerTeamCollaborationTools(register, annotations) {
 
   register('work_session_rollback', {
     title: 'Rollback work session',
-    description: 'Rollback safe file mutations recorded in a work session. Team callers must hold the affected workspace lease; commands and Git history are never automatically reversed. Maintainers and owners must pass force=true to rollback another principal session.',
+    description: 'Rollback safe file mutations recorded in a work session. Non-owner callers must hold the affected workspace lease; commands and Git history are never automatically reversed. Maintainers and owners must pass force=true to rollback another principal session.',
     inputSchema: {
       workSessionId: z.string().min(1),
       dryRun: z.boolean().optional(),
@@ -152,14 +152,14 @@ export function registerTeamCollaborationTools(register, annotations) {
     },
     annotations: { ...rw, openWorldHint: true }
   }, async input => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const principal = principalNow();
     const preview = getPreview(input.previewId);
     assertVisibleWorkspace(principal, preview.workspaceId, 'publish');
     const result = createPreviewShare({
       ...input,
       principal,
-      publicUrl: config.deployment.publicUrl
+      publicUrl: config.connection.publicUrl
     });
     await audit('published_preview_share', {
       principalId: principal.id,
@@ -218,7 +218,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async input => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const principal = principalNow();
     const workspace = resolveWorkspace(config, input.workspaceId);
     assertVisibleWorkspace(principal, workspace.id, 'lease');
@@ -242,7 +242,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: ro
   }, async ({ workspaceId }) => {
     const principal = principalNow();
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;
     if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);
     let leases = resolvedWorkspaceId
@@ -263,7 +263,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     },
     annotations: { ...rw, idempotentHint: true }
   }, async input => {
-    const config = normalizeDeploymentConfig(readConfig());
+    const config = normalizeInstanceConfig(readConfig());
     const principal = principalNow();
     const workspace = resolveWorkspace(config, input.workspaceId);
     assertVisibleWorkspace(principal, workspace.id, 'release a lease for');
