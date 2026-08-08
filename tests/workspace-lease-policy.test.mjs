@@ -15,10 +15,7 @@ const {
 } = await import('../gateway/workspace-leases.mjs');
 
 const config = {
-  team: {
-    enabled: true,
-    requireWorkspaceLeaseForWrites: true
-  }
+  team: { requireWorkspaceLeaseForWrites: true }
 };
 
 const teamOwner = {
@@ -28,7 +25,7 @@ const teamOwner = {
   source: 'team-token',
   workspaceIds: ['app']
 };
-const personalOwner = {
+const ownerToken = {
   id: 'owner',
   name: 'Owner',
   role: 'owner',
@@ -45,30 +42,26 @@ const localOwner = {
 
 test.beforeEach(() => clearWorkspaceLeases());
 
-test('team owner token still requires the shared workspace lease', () => {
-  assert.throws(() => assertWorkspaceLease({
-    workspaceId: 'app',
-    principal: teamOwner,
-    capability: 'write',
-    config
-  }), /requires a lease/);
-
-  const lease = acquireWorkspaceLease({ workspaceId: 'app', principal: teamOwner, ttlSeconds: 1800 });
-  assert.equal(assertWorkspaceLease({
-    workspaceId: 'app',
-    principal: teamOwner,
-    capability: 'write',
-    config
-  })?.id, lease.id);
+test('explicit lease policy applies to remote owner identities as well as members', () => {
+  for (const principal of [teamOwner, ownerToken]) {
+    assert.throws(() => assertWorkspaceLease({
+      workspaceId: 'app',
+      principal,
+      capability: 'write',
+      config
+    }), /requires a lease/);
+    const lease = acquireWorkspaceLease({ workspaceId: 'app', principal, ttlSeconds: 1800, force: true });
+    assert.equal(assertWorkspaceLease({
+      workspaceId: 'app',
+      principal,
+      capability: 'write',
+      config
+    })?.id, lease.id);
+    clearWorkspaceLeases();
+  }
 });
 
-test('personal owner-token and local owner remain exempt from team lease enforcement', () => {
-  assert.equal(assertWorkspaceLease({
-    workspaceId: 'app',
-    principal: personalOwner,
-    capability: 'write',
-    config
-  }), null);
+test('local owner remains the recovery path when remote lease enforcement is enabled', () => {
   assert.equal(assertWorkspaceLease({
     workspaceId: 'app',
     principal: localOwner,
