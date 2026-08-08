@@ -26,6 +26,26 @@ function cleanHttpsOrigin(value) {
   }
 }
 
+function runtimeMatchesDeployment(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
+  const desiredProvider = String(config?.deployment?.tunnelProvider || '').trim().toLowerCase();
+  const actualProvider = String(record?.provider || '').trim().toLowerCase();
+  if (desiredProvider && actualProvider !== desiredProvider) {
+    return {
+      matches: false,
+      reason: `shared tunnel provider ${actualProvider || 'unknown'} does not match configured provider ${desiredProvider}`
+    };
+  }
+
+  const configuredUrl = cleanHttpsOrigin(config?.deployment?.publicUrl || '');
+  if (configuredUrl && publicUrl !== configuredUrl) {
+    return {
+      matches: false,
+      reason: `shared tunnel URL ${publicUrl || 'unavailable'} does not match configured stable URL ${configuredUrl}`
+    };
+  }
+  return { matches: true, reason: '' };
+}
+
 export function runtimePublicIngress(config, { stateDirectory } = {}) {
   const directory = stateDirectory || (CONFIG_PATH ? path.dirname(CONFIG_PATH) : '');
   if (!directory) {
@@ -39,6 +59,20 @@ export function runtimePublicIngress(config, { stateDirectory } = {}) {
     const publicUrl = cleanHttpsOrigin(record.publicUrl);
     if (!publicUrl) {
       return { available: false, verified: false, source: 'runtime', reason: 'shared tunnel URL is not a clean HTTPS origin' };
+    }
+    const deploymentMatch = runtimeMatchesDeployment(config, record, publicUrl);
+    if (!deploymentMatch.matches) {
+      return {
+        available: false,
+        verified: false,
+        source: 'runtime',
+        publicUrl: '',
+        provider: record.provider,
+        hostId: record.hostId || '',
+        readyAt: record.readyAt || null,
+        reason: deploymentMatch.reason,
+        stale: true
+      };
     }
     const verified = verifiedForCurrentRecord(config, record);
     return {
@@ -91,5 +125,6 @@ export function effectivePublicIngress(config, options = {}) {
 
 export const __test = {
   cleanHttpsOrigin,
+  runtimeMatchesDeployment,
   verifiedForCurrentRecord
 };
