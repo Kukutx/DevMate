@@ -21,6 +21,16 @@ function sameGeneration(a, b) {
   return !!a && a === b;
 }
 
+function stateKey(state, record, generation = '') {
+  const identity = generation || [
+    String(record?.ownerId || ''),
+    String(record?.provider || ''),
+    String(record?.port || ''),
+    String(record?.status || '')
+  ].join('|');
+  return `${state}|${identity}`;
+}
+
 class PublicTunnelVerifier {
   constructor({
     stateDirectory,
@@ -28,6 +38,7 @@ class PublicTunnelVerifier {
     appVersion = '0',
     logger = () => {},
     preflight = preflightPublicMcp,
+    onStateChange = () => {},
     onVerified = () => {},
     onError = () => {},
     pollMs = DEFAULT_POLL_MS,
@@ -44,6 +55,7 @@ class PublicTunnelVerifier {
     this.appVersion = String(appVersion || '0');
     this.logger = logger;
     this.preflight = preflight;
+    this.onStateChange = onStateChange;
     this.onVerified = onVerified;
     this.onError = onError;
     this.pollMs = Math.max(1000, Number(pollMs) || DEFAULT_POLL_MS);
@@ -55,6 +67,7 @@ class PublicTunnelVerifier {
     this.lastAttemptGeneration = '';
     this.nextAttemptAt = 0;
     this.lastErrorNoticeGeneration = '';
+    this.lastStateKey = '';
     this.disposed = false;
   }
 
@@ -62,11 +75,15 @@ class PublicTunnelVerifier {
     return readJson(this.configFile, null, { strict: true, supportedVersion: true });
   }
 
-  currentRecord(config) {
+  snapshot(config) {
     const port = Number(config?.server?.port || 0);
-    if (!Number.isInteger(port) || port <= 0) return null;
+    if (!Number.isInteger(port) || port <= 0) return { status: null, record: null };
     const status = this.tunnelStatus(port);
-    const record = status?.record || null;
+    return { status, record: status?.record || null };
+  }
+
+  currentRecord(config) {
+    const { record } = this.snapshot(config);
     return recordGeneration(record) ? record : null;
   }
 
@@ -75,6 +92,17 @@ class PublicTunnelVerifier {
       return sameGeneration(recordGeneration(this.currentRecord(config)), generation);
     } catch {
       return false;
+    }
+  }
+
+  async notifyState(state, { record = null, generation = '', error = null } = {}) {
+    const key = stateKey(state, record, generation);
+    if (key === this.lastStateKey) return;
+    this.lastStateKey = key;
+    try {
+      await this.onStateChange({ state, record, generation, error });
+    } catch (callbackError) {
+      this.logger(`Public MCP recovery state callback failed: ${callbackError.message || callbackError}`);
     }
   }
 
@@ -98,13 +126,20 @@ class PublicTunnelVerifier {
     if (this.disposed) return { checked: false, reason: 'disposed' };
     const config = this.readConfig();
     if (!config) return { checked: false, reason: 'missing-config' };
-    const record = this.currentRecord(config);
+    const snapshot = this.snapshot(config);
+    const record = snapshot.record;
     const generation = recordGeneration(record);
-    if (!generation) return { checked: false, reason: 'no-ready-tunnel' };
+    if (!generation) {
+      const state = record?.status === 'pending' || snapshot.status?.running ? 'pending' : 'absent';
+      await this.notifyState(state, { record });
+      return { checked: false, reason: state === 'pending' ? 'tunnel-pending' : 'no-ready-tunnel' };
+    }
     if (verifiedForCurrentRecord(config, record)) {
+      await this.notifyState('verified', { record, generation });
       return { checked: false, reason: 'already-verified', generation };
     }
 
+    await this.notifyState('unverified', { record, generation });
     const readyAt = Date.parse(record.readyAt || '');
     const now = this.now();
     if (!force && Number.isFinite(readyAt) && now - readyAt < this.readyGraceMs) {
@@ -207,9 +242,11 @@ class PublicTunnelVerifier {
     }
 
     if (success) {
+      await this.notifyState('verified', { record: success.record, generation });
       await this.notifyVerified(success);
       return success;
     }
+    if (failure && !failure.stale) await this.notifyState('failed', { record, generation, error: failure.error });
     if (failure?.notify) await this.notifyError({ error: failure.error, generation, record });
     return failure || { checked: true, verified: false, stale: true, generation };
   }
@@ -244,5 +281,6 @@ module.exports = {
   DEFAULT_READY_GRACE_MS,
   DEFAULT_RETRY_MS,
   PublicTunnelVerifier,
-  sameGeneration
+  sameGeneration,
+  stateKey
 };
