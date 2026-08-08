@@ -12,6 +12,7 @@ const {
   readDeploymentConfig
 } = require('./vscode-host/shared-deployment-config.js');
 const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
+const { assertTunnelSafeForCredentialChange } = require('./vscode-host/tunnel-stop-policy.js');
 const {
   strictInteger,
   tunnelMaxRestarts,
@@ -138,6 +139,15 @@ async function commitCloudflareDeployment(context, token, localUpdates, sharedPa
     }
     throw error;
   }
+}
+
+async function prepareDeploymentMutation() {
+  const stopResult = await stopTunnel();
+  const state = assertTunnelSafeForCredentialChange(stopResult, 'deployment configuration change');
+  if (state.remoteOwner) {
+    log('The current public ingress is managed by another host. New shared deployment settings may be saved, but that owner must stop its stale generation before the replacement provider can start.');
+  }
+  return state;
 }
 
 async function openExternal(url) {
@@ -330,9 +340,19 @@ async function configureDeployment(context) {
     sharedPatch.allowedHosts = productionHostsForUrl(state, stableUrl);
   }
 
+  const stopState = await prepareDeploymentMutation();
   if (cloudflareToken) await commitCloudflareDeployment(context, cloudflareToken, localUpdates, sharedPatch);
   else await commitDeploymentSettings(context, localUpdates, sharedPatch);
-  await vscode.commands.executeCommand('devMate.stop');
+
+  if (stopState.remoteOwner) {
+    const choice = await vscode.window.showWarningMessage(
+      'DevMate deployment settings were saved, but the previous public ingress is owned by another host. Wait for that host to stop its stale generation before starting the replacement provider.',
+      'Open DevMate'
+    );
+    if (choice === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
+    return;
+  }
+
   const start = await vscode.window.showInformationMessage(
     'DevMate deployment settings saved.',
     'Start Now',
@@ -506,10 +526,12 @@ async function activate(context) {
     if (token) await storeCloudflareToken(context, token);
   });
   register(context, 'devMate.cloudflareClearToken', async () => {
-    try { await stopTunnel(); } catch {}
+    const stopState = assertTunnelSafeForCredentialChange(await stopTunnel(), 'Cloudflare Tunnel token removal');
     await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
     cloudflareTunnelToken = '';
-    vscode.window.showInformationMessage('Cloudflare Tunnel token removed from VS Code Secret Storage.');
+    vscode.window.showInformationMessage(stopState.remoteOwner
+      ? 'Cloudflare Tunnel token removed from VS Code Secret Storage. A tunnel managed by another host was left running with its existing process environment.'
+      : 'Cloudflare Tunnel token removed from VS Code Secret Storage.');
   });
   register(context, 'devMate.openTunnelDocs', async () => {
     const provider = tunnelSettings(context).provider;
@@ -548,6 +570,7 @@ module.exports = {
   configureDeployment,
   deactivate,
   localTunnelSettings,
+  prepareDeploymentMutation,
   settingPatch,
   settingRollback,
   syncExplicitSettingChange,
