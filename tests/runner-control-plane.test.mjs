@@ -16,17 +16,16 @@ const baseConfig = {
   instanceId: 'runner-control-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
   permissions: { profile: 'fullAccess' },
-  deployment: { mode: 'team', publicUrl: 'https://devmate.example.com' },
+  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
   team: {
-    enabled: true,
     members: [],
     requireWorkspaceLeaseForWrites: false,
     approvals: { enabled: false }
   },
-  production: { allowedHosts: [] },
+  requestPolicy: { allowedHosts: [] },
   runnerControl: { enabled: true, credentials: [] },
   runtime: { maxConcurrentJobs: 1 },
-  jobs: {},
+  jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
   activeWorkspaceId: 'app',
   workspaces: [{
     id: 'app',
@@ -122,21 +121,16 @@ const runner = {
   labels: { hostname: 'runner-one' }
 };
 
-test('fails closed for public Runner Hosts when production allowlist is empty', () => {
-  const production = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
+test('Runner API Host restrictions follow the explicit request policy', () => {
   const publicRequest = host => ({ headers: { host }, socket: { remoteAddress: '203.0.113.10' } });
   const localRequest = host => ({ headers: { host }, socket: { remoteAddress: '127.0.0.1' } });
-  assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), production), false);
-  assert.equal(__test.hostAllowed(localRequest('127.0.0.1:8787'), production), true);
-  assert.equal(__test.hostAllowed(publicRequest('localhost:8787'), production), false);
-  const restricted = {
-    deployment: { mode: 'production' },
-    production: { allowedHosts: ['runner.example.com'] }
-  };
+  const unrestricted = { requestPolicy: { allowedHosts: [] } };
+  assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), unrestricted), true);
+  assert.equal(__test.hostAllowed(localRequest('127.0.0.1:8787'), unrestricted), true);
+  assert.equal(__test.hostAllowed(publicRequest('localhost:8787'), unrestricted), false);
+  const restricted = { requestPolicy: { allowedHosts: ['runner.example.com'] } };
   assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), restricted), true);
   assert.equal(__test.hostAllowed(publicRequest('evil.example.com'), restricted), false);
-  const team = { deployment: { mode: 'team' }, production: { allowedHosts: [] } };
-  assert.equal(__test.hostAllowed(publicRequest('runner.example.com'), team), true);
 });
 
 test('rejects invalid credentials, protocol versions, and malformed request bodies', async () => {
@@ -204,19 +198,9 @@ test('registers, claims, renews, and completes a strictly scoped remote job', as
     created.token,
     {
       ...proof(claimed.json.job),
-      result: {
-        ok: true,
-        token: 'must-not-persist',
-        text: 'Bearer abcdefghijklmnopqrstuvwxyz'
-      },
+      result: { ok: true, token: 'must-not-persist', text: 'Bearer abcdefghijklmnopqrstuvwxyz' },
       artifacts: [
-        {
-          workspaceId: 'other',
-          path: 'artifacts/report.json',
-          bytes: 12,
-          sha256: 'a'.repeat(64),
-          modifiedAt: new Date().toISOString()
-        },
+        { workspaceId: 'other', path: 'artifacts/report.json', bytes: 12, sha256: 'a'.repeat(64), modifiedAt: new Date().toISOString() },
         { path: '.env', bytes: 1 },
         { path: 'secrets/key.pem', bytes: 1 },
         { path: 'C:/absolute/file.txt', bytes: 1 },

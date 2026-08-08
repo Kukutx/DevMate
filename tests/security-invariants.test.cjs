@@ -10,19 +10,10 @@ const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
 test('authentication tokens are accepted only from request headers', async () => {
   const { extractRequestToken } = await import('../gateway/team-access.mjs');
-  const queryOnly = {
-    headers: {},
-    url: '/mcp?token=query-secret'
-  };
+  const queryOnly = { headers: {}, url: '/mcp?token=query-secret' };
   assert.equal(extractRequestToken(queryOnly), '');
-  assert.equal(
-    extractRequestToken({ headers: { authorization: 'Bearer bearer-secret' }, url: '/mcp?token=query-secret' }),
-    'bearer-secret'
-  );
-  assert.equal(
-    extractRequestToken({ headers: { 'x-devmate-token': 'header-secret' }, url: '/mcp?token=query-secret' }),
-    'header-secret'
-  );
+  assert.equal(extractRequestToken({ headers: { authorization: 'Bearer bearer-secret' }, url: '/mcp?token=query-secret' }), 'bearer-secret');
+  assert.equal(extractRequestToken({ headers: { 'x-devmate-token': 'header-secret' }, url: '/mcp?token=query-secret' }), 'header-secret');
 });
 
 test('credential rotation does not implicitly reactivate revoked identities', () => {
@@ -47,10 +38,7 @@ test('workspace resolution is ID-first and rejects ambiguous names', async () =>
     ]
   };
   assert.equal(resolveWorkspace(config, 'shared').id, 'shared');
-  assert.throws(
-    () => resolveWorkspace({ ...config, workspaces: config.workspaces.slice(0, 2) }, 'shared'),
-    error => error?.code === 'workspace_ambiguous'
-  );
+  assert.throws(() => resolveWorkspace({ ...config, workspaces: config.workspaces.slice(0, 2) }, 'shared'), error => error?.code === 'workspace_ambiguous');
 });
 
 test('Runner API matching is version-boundary safe', () => {
@@ -59,12 +47,16 @@ test('Runner API matching is version-boundary safe', () => {
   assert.doesNotMatch(source, /if \(!url\?\.pathname\.startsWith\(PREFIX\)\)/);
 });
 
-test('production Host policy fails closed when no allowlist exists', async () => {
+test('Host allowlisting is explicit and loopback spoofing always fails closed', async () => {
   const { hostAllowed } = await import('../gateway/http-host-policy.mjs');
-  const config = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
-  assert.equal(hostAllowed({ headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '203.0.113.10' } }, config), false);
-  assert.equal(hostAllowed({ headers: { host: '127.0.0.1:8787' }, socket: { remoteAddress: '127.0.0.1' } }, config), true);
-  assert.equal(hostAllowed({ headers: { host: 'localhost:8787' }, socket: { remoteAddress: '203.0.113.10' } }, config), false);
+  const publicRequest = host => ({ headers: { host }, socket: { remoteAddress: '203.0.113.10' } });
+  const localRequest = host => ({ headers: { host }, socket: { remoteAddress: '127.0.0.1' } });
+  assert.equal(hostAllowed(publicRequest('devmate.example.com'), { requestPolicy: { allowedHosts: [] } }), true);
+  const restricted = { requestPolicy: { allowedHosts: ['devmate.example.com'] } };
+  assert.equal(hostAllowed(publicRequest('devmate.example.com'), restricted), true);
+  assert.equal(hostAllowed(publicRequest('evil.example.com'), restricted), false);
+  assert.equal(hostAllowed(localRequest('127.0.0.1:8787'), restricted), true);
+  assert.equal(hostAllowed(publicRequest('localhost:8787'), restricted), false);
 });
 
 test('explicit invalid config and durable-state versions are rejected', () => {

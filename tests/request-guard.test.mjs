@@ -15,13 +15,9 @@ const config = {
   version: 11,
   auth: { required: true, token: 'owner-token-value-long-enough' },
   permissions: { profile: 'fullAccess' },
-  deployment: {
-    mode: 'team',
-    tunnelProvider: 'external',
-    publicUrl: 'https://devmate.example.com'
-  },
-  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: true },
-  production: {
+  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
+  team: { members: [], requireWorkspaceLeaseForWrites: true },
+  requestPolicy: {
     requestsPerMinute: 10,
     maxConcurrentRequests: 4,
     maxConcurrentPerPrincipal: 2,
@@ -29,10 +25,12 @@ const config = {
     requestTimeoutMs: 10000,
     allowedHosts: ['127.0.0.1']
   },
+  runtime: { maxConcurrentJobs: 2 },
+  jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
   activeWorkspaceId: 'workspace',
   workspaces: [{ id: 'workspace', root: temp }]
 };
-access.normalizeDeploymentConfig(config);
+access.normalizeInstanceConfig(config);
 const created = access.createTeamMember(config, {
   name: 'Alice', role: 'developer', workspaceIds: ['workspace']
 });
@@ -143,7 +141,7 @@ test('maintains a separate authentication-attempt limiter', () => {
 test('rate limits unauthenticated published preview traffic per remote address', () => {
   guard.resetRequestGuardState();
   const request = { socket: { remoteAddress: '203.0.113.10' } };
-  const previewConfig = { production: { requestsPerMinute: 10 } };
+  const previewConfig = { requestPolicy: { requestsPerMinute: 10 } };
   for (let index = 0; index < 240; index += 1) {
     assert.equal(guard.__test.consumePreviewRateLimit(request, previewConfig).allowed, true);
   }
@@ -151,19 +149,14 @@ test('rate limits unauthenticated published preview traffic per remote address',
   assert.equal(guard.__test.consumePreviewRateLimit({ socket: { remoteAddress: '203.0.113.11' } }, previewConfig).allowed, true);
 });
 
-test('fails closed for public Host values when production allowlist is empty', () => {
-  const production = { deployment: { mode: 'production' }, production: { allowedHosts: [] } };
+test('Host restrictions are explicit request policy rather than a deployment mode side effect', () => {
   const publicRequest = host => ({ headers: { host }, socket: { remoteAddress: '203.0.113.10' } });
   const localRequest = host => ({ headers: { host }, socket: { remoteAddress: '127.0.0.1' } });
-  assert.equal(guard.__test.hostAllowed(publicRequest('devmate.example.com'), production), false);
-  assert.equal(guard.__test.hostAllowed(localRequest('127.0.0.1:8787'), production), true);
-  assert.equal(guard.__test.hostAllowed(publicRequest('localhost:8787'), production), false);
-  const team = { deployment: { mode: 'team' }, production: { allowedHosts: [] } };
-  assert.equal(guard.__test.hostAllowed(publicRequest('devmate.example.com'), team), true);
-  const restricted = {
-    deployment: { mode: 'production' },
-    production: { allowedHosts: ['devmate.example.com'] }
-  };
+  const unrestricted = { requestPolicy: { allowedHosts: [] } };
+  assert.equal(guard.__test.hostAllowed(publicRequest('devmate.example.com'), unrestricted), true);
+  assert.equal(guard.__test.hostAllowed(localRequest('127.0.0.1:8787'), unrestricted), true);
+  assert.equal(guard.__test.hostAllowed(publicRequest('localhost:8787'), unrestricted), false);
+  const restricted = { requestPolicy: { allowedHosts: ['devmate.example.com'] } };
   assert.equal(guard.__test.hostAllowed(publicRequest('devmate.example.com'), restricted), true);
   assert.equal(guard.__test.hostAllowed(publicRequest('evil.example.com'), restricted), false);
 });

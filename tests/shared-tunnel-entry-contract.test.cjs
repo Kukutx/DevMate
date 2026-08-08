@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-test('VS Code entry initializes shared config before the provider-native tunnel controller without host-private deployment rewrites', () => {
+test('VS Code entry initializes shared instance config before the provider-native tunnel controller', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   assert.equal(fs.existsSync(path.join(root, 'extension-entry-host.js')), false);
@@ -22,22 +22,23 @@ test('VS Code entry initializes shared config before the provider-native tunnel 
   assert.match(source, /ensurePersonalConfig\(\{/);
   assert.match(source, /preferredPort: strictPort\(setting\(vscode, 'port', 8787\), \{ label: 'devMate\.port' \}\)/);
   assert.doesNotMatch(source, /normalizeBootstrapDeployment/);
-  assert.doesNotMatch(source, /const existed = fs\.statSync/);
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
 
   const sharedConfig = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
-  assert.match(sharedConfig, /deployment: \{ mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' \}/);
+  assert.match(sharedConfig, /connection: \{ provider: 'ngrok', publicUrl: '' \}/);
 
   const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
   assert.match(effective, /validateTunnelProvider/);
-  assert.match(effective, /validateDeploymentMode/);
+  assert.match(effective, /normalizeInstanceConfig/);
   assert.match(effective, /readSharedConfig/);
+  assert.match(effective, /sharedConnection/);
+  assert.doesNotMatch(effective, /validateDeploymentMode|deploymentMode|sharedDeployment/);
 
   const config = source.indexOf('ensureSharedDesktopConfig(runtimeStateDirectory)');
   const controller = source.indexOf('runtime = new TunnelController({');
   const registry = source.indexOf('setTunnelController(runtime)');
   const activation = source.indexOf('await lifecycle.activate(context)');
-  assert.ok(config >= 0 && controller > config, 'Shared deployment config must exist before controller creation');
+  assert.ok(config >= 0 && controller > config, 'Shared instance config must exist before controller creation');
   assert.ok(registry > controller && activation > registry, 'Tunnel runtime must be registered before platform activation');
 
   const deactivate = source.indexOf('await currentLifecycle?.deactivate()');

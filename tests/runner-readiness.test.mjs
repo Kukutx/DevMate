@@ -13,28 +13,13 @@ const config = {
   appVersion: '3.3.0',
   instanceId: 'runner-readiness-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
-  deployment: {
-    mode: 'production',
-    tunnelProvider: 'external',
-    publicUrl: 'https://devmate.example.com'
-  },
+  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
   team: {
-    enabled: true,
-    members: [{
-      id: 'developer',
-      name: 'Developer',
-      role: 'developer',
-      disabled: false,
-      workspaceIds: ['app']
-    }],
+    members: [{ id: 'developer', name: 'Developer', role: 'developer', disabled: false, workspaceIds: ['app'] }],
     requireWorkspaceLeaseForWrites: true,
-    approvals: {
-      enabled: true,
-      requiredCapabilities: ['publish', 'admin'],
-      separationOfDuties: true
-    }
+    approvals: { enabled: true, requiredCapabilities: ['publish', 'admin'], separationOfDuties: true }
   },
-  production: {
+  requestPolicy: {
     allowedHosts: ['devmate.example.com'],
     maxRequestBytes: 2097152,
     requestsPerMinute: 120,
@@ -42,17 +27,12 @@ const config = {
     maxConcurrentPerPrincipal: 4,
     requestTimeoutMs: 900000
   },
-  jobs: { embeddedRunnerEnabled: false },
+  runtime: { maxConcurrentJobs: 2 },
+  jobs: { embeddedRunnerEnabled: false, allowJobGitSave: true },
   runnerControl: { enabled: true, credentials: [] },
   maintenance: { auditRetentionDays: 90 },
   activeWorkspaceId: 'app',
-  workspaces: [{
-    id: 'app',
-    name: 'Application',
-    root: temp,
-    mode: 'workspace-write',
-    reference: false
-  }]
+  workspaces: [{ id: 'app', name: 'Application', root: temp, mode: 'workspace-write', reference: false }]
 };
 
 const { createRunnerCredential } = await import('../gateway/runner-access.mjs');
@@ -63,29 +43,19 @@ createRunnerCredential(config, {
 });
 await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
 
-const {
-  acquireGatewayInstanceLock,
-  releaseGatewayInstanceLock,
-  resetDurableStateForTests
-} = await import('../gateway/durable-state.mjs');
-const {
-  clearJobsForTests,
-  registerRunner
-} = await import('../gateway/job-queue.mjs');
+const { acquireGatewayInstanceLock, releaseGatewayInstanceLock, resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
+const { clearJobsForTests, registerRunner } = await import('../gateway/job-queue.mjs');
 const { readiness } = await import('../gateway/team-tool-data.mjs');
 
 resetDurableStateForTests();
 clearJobsForTests();
 acquireGatewayInstanceLock();
 
-test('control-plane-only production requires an online external Runner', () => {
+test('external-only execution requires an online external Runner', () => {
   const before = readiness(config);
   assert.equal(before.ready, false);
   assert.equal(before.checks.find(item => item.key === 'instance-lock').ok, true);
-  assert.equal(
-    before.checks.find(item => item.key === 'external-runners-online').ok,
-    false
-  );
+  assert.equal(before.checks.find(item => item.key === 'external-runners-online').ok, false);
 
   registerRunner({
     id: 'external-runner',
@@ -101,14 +71,8 @@ test('control-plane-only production requires an online external Runner', () => {
 
   const after = readiness(config);
   assert.equal(after.ready, true);
-  assert.equal(
-    after.checks.find(item => item.key === 'external-runners-online').ok,
-    true
-  );
-  assert.equal(
-    after.checks.find(item => item.key === 'runner-credentials').ok,
-    true
-  );
+  assert.equal(after.checks.find(item => item.key === 'external-runners-online').ok, true);
+  assert.equal(after.checks.find(item => item.key === 'runner-credentials').ok, true);
 });
 
 test.after(async () => {

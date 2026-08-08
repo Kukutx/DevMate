@@ -2,36 +2,36 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authenticateGatewayRequest, __test } from '../gateway/request-guard.mjs';
 
-function unauthenticatedPersonalConfig() {
+function unauthenticatedConfig() {
   return {
     auth: { required: false },
-    deployment: { mode: 'personal' },
-    team: {},
-    production: {},
+    connection: { provider: 'ngrok', publicUrl: '' },
+    team: { members: [] },
+    requestPolicy: {},
     runtime: {},
     jobs: {}
   };
 }
 
-test('unauthenticated personal owner access requires loopback Host and socket', () => {
+test('unauthenticated owner access requires loopback Host and socket', () => {
   const publicHost = authenticateGatewayRequest(
     { headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '127.0.0.1' } },
     new URL('http://localhost/mcp'),
-    unauthenticatedPersonalConfig()
+    unauthenticatedConfig()
   );
   assert.equal(publicHost, null);
 
   const spoofedLocalHost = authenticateGatewayRequest(
     { headers: { host: 'localhost:8787' }, socket: { remoteAddress: '203.0.113.10' } },
     new URL('http://localhost/mcp'),
-    unauthenticatedPersonalConfig()
+    unauthenticatedConfig()
   );
   assert.equal(spoofedLocalHost, null);
 
   const localPrincipal = authenticateGatewayRequest(
     { headers: { host: '127.0.0.1:8787' }, socket: { remoteAddress: '127.0.0.1' } },
     new URL('http://localhost/mcp'),
-    unauthenticatedPersonalConfig()
+    unauthenticatedConfig()
   );
   assert.equal(localPrincipal?.role, 'owner');
   assert.equal(localPrincipal?.source, 'local');
@@ -39,7 +39,7 @@ test('unauthenticated personal owner access requires loopback Host and socket', 
   const mappedIpv4Principal = authenticateGatewayRequest(
     { headers: { host: 'localhost:8787' }, socket: { remoteAddress: '::ffff:127.0.0.1' } },
     new URL('http://localhost/mcp'),
-    unauthenticatedPersonalConfig()
+    unauthenticatedConfig()
   );
   assert.equal(mappedIpv4Principal?.role, 'owner');
 });
