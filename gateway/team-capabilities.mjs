@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { audit, readConfig } from './local-shared.mjs';
 import { requestContext, runWithWorkSessionContext } from './request-context.mjs';
-import { authorizeToolCall, normalizeDeploymentConfig } from './team-access.mjs';
+import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
 import { activeWorkSession, touchWorkSession } from './work-sessions.mjs';
@@ -121,7 +121,7 @@ function filterResult(name, result, principal) {
 
 export function wrapAuthorizedTool(name, config, handler) {
   return async function authorizedToolHandler(args = {}, ...rest) {
-    const current = normalizeDeploymentConfig(readConfig());
+    const current = normalizeInstanceConfig(readConfig());
     const inferred = inferredWorkspace(name, args);
     const authorizationArgs = inferred && !args.workspaceId
       ? { ...args, workspaceId: inferred }
@@ -183,7 +183,7 @@ export function wrapAuthorizedTool(name, config, handler) {
       const workSessionId = session?.id || active?.id || null;
       incrementCounter('devmate_tool_calls_total', { ...labels, status: 'success' }, 1);
       observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
-      await audit('team_tool_call', {
+      await audit('tool_call', {
         requestId: requestContext()?.requestId || null,
         principalId: authorized.principal.id,
         principalRole: authorized.principal.role,
@@ -204,7 +204,7 @@ export function wrapAuthorizedTool(name, config, handler) {
       incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
       observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
       if (error?.code === 'approval_required') incrementCounter('devmate_approvals_total', { status: 'pending', tool: name }, 1);
-      await audit('team_tool_call', {
+      await audit('tool_call', {
         requestId: requestContext()?.requestId || null,
         principalId: authorized.principal.id,
         principalRole: authorized.principal.role,
@@ -223,7 +223,7 @@ export function wrapAuthorizedTool(name, config, handler) {
 
 export function installTeamCapabilities(McpServerClass) {
   registerToolDecorator(McpServerClass, {
-    id: 'devmate.team-authorization',
+    id: 'devmate.authorization',
     order: 10,
     decorate({ name, config, handler }) {
       const wrapped = wrapAuthorizedTool(name, config, handler);
@@ -232,7 +232,7 @@ export function installTeamCapabilities(McpServerClass) {
     }
   });
   registerServerInitializer(McpServerClass, {
-    id: 'devmate.team-tools',
+    id: 'devmate.collaboration-tools',
     order: 10,
     initialize: registerTeamTools
   });
