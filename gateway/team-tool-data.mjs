@@ -1,7 +1,7 @@
 import { readConfig } from './local-shared.mjs';
 import { requestContext, requestPrincipal } from './request-context.mjs';
 import { activitySnapshot } from './request-guard.mjs';
-import { fallbackLocalPrincipal, normalizeDeploymentConfig } from './team-access.mjs';
+import { fallbackLocalPrincipal, normalizeInstanceConfig } from './team-access.mjs';
 import { approvalPolicy } from './approvals.mjs';
 import { durableStateStatus } from './durable-state.mjs';
 import { listRunners } from './job-queue.mjs';
@@ -75,12 +75,10 @@ function runnerSummary(config) {
 }
 
 function allowedPublicHost(config, ingress = effectivePublicIngress(config)) {
-  const mode = config.deployment.mode;
-  if (mode === 'personal') return true;
-  const allowed = new Set((config.production.allowedHosts || [])
+  const allowed = new Set((config.requestPolicy.allowedHosts || [])
     .map(value => String(value || '').trim().toLowerCase())
     .filter(Boolean));
-  if (!allowed.size) return mode !== 'production';
+  if (!allowed.size) return true;
   if (!ingress?.publicUrl) return false;
   try {
     const url = new URL(ingress.publicUrl);
@@ -91,35 +89,27 @@ function allowedPublicHost(config, ingress = effectivePublicIngress(config)) {
 }
 
 export function publicDeployment(config = readConfig()) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   normalizeRunnerControlConfig(config);
   const context = requestContext();
   const runtimeIngress = runtimePublicIngress(config);
   const effectiveIngress = effectivePublicIngress(config);
   return {
-    mode: config.deployment.mode,
-    tunnelProvider: config.deployment.tunnelProvider,
-    publicUrl: config.deployment.publicUrl || null,
-    effectivePublicUrl: effectiveIngress.publicUrl || null,
-    publicIngress: {
+    connection: {
+      provider: config.connection.provider,
+      publicUrl: config.connection.publicUrl || null,
+      effectivePublicUrl: effectiveIngress.publicUrl || null,
       source: effectiveIngress.source,
-      provider: effectiveIngress.provider || null,
       verifiedRuntime: effectiveIngress.source === 'runtime' && effectiveIngress.verified,
       runtime: runtimeIngress
     },
-    teamEnabled: config.team.enabled,
-    requireWorkspaceLeaseForWrites: config.team.requireWorkspaceLeaseForWrites,
-    approvalPolicy: approvalPolicy(config),
-    memberCount: config.team.members.length,
-    runners: runnerSummary(config),
-    production: {
-      maxRequestBytes: config.production.maxRequestBytes,
-      requestsPerMinute: config.production.requestsPerMinute,
-      maxConcurrentRequests: config.production.maxConcurrentRequests,
-      maxConcurrentPerPrincipal: config.production.maxConcurrentPerPrincipal,
-      requestTimeoutMs: config.production.requestTimeoutMs,
-      allowedHosts: config.production.allowedHosts
+    access: {
+      memberCount: config.team.members.length,
+      requireWorkspaceLeaseForWrites: config.team.requireWorkspaceLeaseForWrites,
+      approvalPolicy: approvalPolicy(config)
     },
+    runners: runnerSummary(config),
+    requestPolicy: { ...config.requestPolicy },
     principal: principalNow(),
     request: context ? {
       requestId: context.requestId,
@@ -131,46 +121,53 @@ export function publicDeployment(config = readConfig()) {
 }
 
 export function readiness(config = readConfig()) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   normalizeRunnerControlConfig(config);
   const checks = [];
-  const add = (key, ok, detail) => checks.push({ key, ok: !!ok, detail });
+  const add = (key, ok, detail, { required = true } = {}) => checks.push({ key, ok: !!ok, required, detail });
   const activeMembers = config.team.members.filter(member =>
     !member.disabled && (!member.expiresAt || Date.parse(member.expiresAt) > Date.now())
   );
   const approvals = approvalPolicy(config);
   const durable = durableStateStatus();
   const runners = runnerSummary(config);
-  const sharedDeployment = config.deployment.mode !== 'personal';
   const publicIngress = effectivePublicIngress(config);
   const publicHostAllowed = allowedPublicHost(config, publicIngress);
-  const hostPolicyActive = config.deployment.mode === 'production' || config.production.allowedHosts.length > 0;
-  const publicIngressRequired = config.deployment.mode !== 'personal';
+  const hostPolicyActive = config.requestPolicy.allowedHosts.length > 0;
+  const membersConfigured = config.team.members.length > 0;
+  const leasesConfigured = config.team.requireWorkspaceLeaseForWrites;
+  const externalRunnersConfigured = config.runnerControl.enabled;
 
   add(
     'owner-token',
     !!config.auth?.token || config.auth?.required === false,
-    config.auth?.token ? 'configured' : 'missing'
+    config.auth?.token ? 'configured' : config.auth?.required === false ? 'local auth disabled' : 'missing'
   );
   add(
-    'public-url',
-    !publicIngressRequired || publicIngress.available,
-    !publicIngressRequired
-      ? 'not required in personal mode'
-      : publicIngress.available
-        ? `${publicIngress.source}: ${publicIngress.publicUrl}`
-        : publicIngress.reason || 'no effective public ingress'
+    'public-connection',
+    publicIngress.available,
+    publicIngress.available
+      ? `${publicIngress.provider || config.connection.provider}: ${publicIngress.publicUrl}`
+      : publicIngress.reason || 'no verified/effective public HTTPS connection'
   );
   add(
-    'tunnel-provider',
-    !!config.deployment.tunnelProvider &&
-      !(config.deployment.mode === 'production' && config.deployment.tunnelProvider === 'cloudflare-quick'),
-    config.deployment.tunnelProvider || 'missing'
+    'connection-provider',
+    !!config.connection.provider,
+    config.connection.provider || 'missing'
   );
   add(
-    'team-members',
-    !config.team.enabled || activeMembers.length > 0,
-    `${activeMembers.length} active member(s)`
+    'stable-public-url',
+    config.connection.provider === 'cloudflare-quick' || !!config.connection.publicUrl || publicIngress.available,
+    config.connection.provider === 'cloudflare-quick'
+      ? 'temporary provider; stable URL is not expected'
+      : config.connection.publicUrl || publicIngress.publicUrl || 'provider has not published a stable URL',
+    { required: false }
+  );
+  add(
+    'members',
+    !membersConfigured || activeMembers.length > 0,
+    membersConfigured ? `${activeMembers.length}/${config.team.members.length} active member(s)` : 'owner-only access',
+    { required: membersConfigured }
   );
   add(
     'allowed-hosts',
@@ -178,64 +175,59 @@ export function readiness(config = readConfig()) {
     !hostPolicyActive
       ? 'not restricted'
       : publicHostAllowed
-        ? config.production.allowedHosts.join(', ')
-        : `effective public URL host is not allowed by: ${config.production.allowedHosts.join(', ') || 'no configured hosts'}`
-  );
-  add(
-    'auth-required',
-    config.deployment.mode !== 'production' || config.auth?.required !== false,
-    config.auth?.required === false ? 'disabled' : 'required'
+        ? config.requestPolicy.allowedHosts.join(', ')
+        : `effective public URL host is not allowed by: ${config.requestPolicy.allowedHosts.join(', ')}`,
+    { required: hostPolicyActive }
   );
   add(
     'lease-policy',
-    !config.team.enabled || config.team.requireWorkspaceLeaseForWrites,
-    config.team.requireWorkspaceLeaseForWrites ? 'enabled' : 'disabled'
+    !leasesConfigured || membersConfigured,
+    leasesConfigured
+      ? membersConfigured ? 'enabled for non-owner write operations' : 'enabled but no members are configured'
+      : 'disabled',
+    { required: leasesConfigured }
   );
   add(
     'approval-policy',
-    config.deployment.mode !== 'production' || approvals.enabled,
+    !approvals.enabled || membersConfigured,
     approvals.enabled
       ? `enabled for ${approvals.requiredCapabilities.join(', ') || approvals.requiredTools.length + ' tool(s)'}`
-      : 'disabled'
+      : 'disabled',
+    { required: approvals.enabled }
   );
   add(
     'durable-state',
-    !sharedDeployment || (durable.enabled && !durable.recovery),
+    durable.enabled && !durable.recovery,
     durable.recovery
       ? `recovery warning: ${durable.recovery.error || 'state recovery occurred'}`
-      : durable.path || 'in-memory only'
-  );
-  add(
-    'instance-lock',
-    !sharedDeployment || !!durable.instanceLock,
-    durable.instanceLock
-      ? `held by pid ${durable.instanceLock.pid}`
-      : sharedDeployment ? 'no active Gateway instance lock' : 'not required'
+      : durable.path || 'durable state unavailable'
   );
   add(
     'runner-execution',
-    runners.embeddedRunnerRunning || runners.externalControlEnabled,
+    runners.embeddedRunnerRunning || externalRunnersConfigured,
     runners.embeddedRunnerRunning
       ? 'embedded Runner running'
       : runners.embeddedRunnerEnabled
-        ? 'embedded Runner configured but not running; restart the Gateway'
-        : runners.externalControlEnabled
-          ? 'external control enabled'
+        ? 'embedded Runner configured but not running; Gateway may be offline'
+        : externalRunnersConfigured
+          ? 'external Runner control enabled'
           : 'no Runner execution path enabled'
   );
   add(
     'runner-credentials',
-    !runners.externalControlEnabled || runners.activeCredentialCount > 0,
-    runners.externalControlEnabled
+    !externalRunnersConfigured || runners.activeCredentialCount > 0,
+    externalRunnersConfigured
       ? `${runners.activeCredentialCount} active external Runner credential(s)`
-      : 'external control disabled'
+      : 'external Runner control disabled',
+    { required: externalRunnersConfigured }
   );
   add(
     'external-runners-online',
-    runners.embeddedRunnerRunning || runners.onlineExternalRunners > 0,
-    runners.embeddedRunnerRunning
-      ? 'not required while embedded Runner is running'
-      : `${runners.onlineExternalRunners} online external Runner(s)`
+    !externalRunnersConfigured || runners.onlineExternalRunners > 0 || runners.embeddedRunnerRunning,
+    externalRunnersConfigured
+      ? `${runners.onlineExternalRunners} online external Runner(s)`
+      : 'not configured',
+    { required: externalRunnersConfigured && !runners.embeddedRunnerRunning }
   );
   add(
     'audit-retention',
@@ -243,7 +235,10 @@ export function readiness(config = readConfig()) {
     `${config.maintenance?.auditRetentionDays || 0} day(s)`
   );
 
-  return { ready: checks.every(item => item.ok), checks };
+  return {
+    ready: checks.filter(item => item.required).every(item => item.ok),
+    checks
+  };
 }
 
 export function policyTemplate(provider = 'ngrok') {
@@ -253,7 +248,7 @@ export function policyTemplate(provider = 'ngrok') {
       tunnelCommand: 'cloudflared tunnel run',
       tokenEnvironment: 'TUNNEL_TOKEN',
       accessHeaders: ['CF-Access-Client-Id', 'CF-Access-Client-Secret'],
-      note: 'Keep DevMate team and Runner tokens as the application authorization layer.'
+      note: 'Keep DevMate member and Runner tokens as the application authorization layer.'
     };
   }
   return {
@@ -282,7 +277,7 @@ export function policyTemplate(provider = 'ngrok') {
 }
 
 export function teamStatus(config = readConfig()) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   normalizeRunnerControlConfig(config);
   const principal = principalNow();
   let leases = listWorkspaceLeases();
@@ -293,14 +288,18 @@ export function teamStatus(config = readConfig()) {
     !member.disabled && (!member.expiresAt || Date.parse(member.expiresAt) > Date.now())
   );
   return {
-    enabled: config.team.enabled,
-    mode: config.deployment.mode,
     currentPrincipal: principal,
+    ownerOnly: config.team.members.length === 0,
     activeMembers: activeMembers.length,
     totalMembers: config.team.members.length,
     requireWorkspaceLeaseForWrites: config.team.requireWorkspaceLeaseForWrites,
     approvalPolicy: approvalPolicy(config),
     durableState: durableStateStatus(),
+    connection: {
+      provider: config.connection.provider,
+      publicUrl: config.connection.publicUrl || null
+    },
+    requestPolicy: { ...config.requestPolicy },
     runners: runnerSummary(config),
     activeLeases: leases,
     recentSessions: activitySnapshot({ activeWithinMinutes: 60 }).length,
