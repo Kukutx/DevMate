@@ -3,7 +3,9 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readGatewayInstanceLock } = require('../host/runtime/instance-lock-cleanup.js');
 const { atomicWriteJson } = require('../shared/config-store.cjs');
+const { gatewayGeneration } = require('../shared/public-ingress-verification.cjs');
 const { normalizeProvider, normalizePublicUrl } = require('../tunnel-provider.js');
 
 const RUNTIME_RECORD_VERSION = 1;
@@ -199,7 +201,11 @@ class SharedTunnelRecordStore {
     const normalized = version === RUNTIME_RECORD_VERSION ? normalizeRuntimeRecord(record) : null;
     if (!normalized) return this.quarantine('invalid-record', 'invalid');
 
-    const value = { ...normalized, mtimeMs: stat.mtimeMs };
+    const value = {
+      ...normalized,
+      mtimeMs: stat.mtimeMs,
+      gatewayGeneration: gatewayGeneration(readGatewayInstanceLock(this.stateDirectory))
+    };
     if (!includeStale && runtimeRecordStale(value, { leaseMs: this.leaseMs })) {
       try {
         fs.rmSync(this.recordFile, { force: true });
@@ -248,7 +254,10 @@ class SharedTunnelRecordStore {
       );
     }
     atomicWriteJson(this.recordFile, normalized);
-    return normalized;
+    return {
+      ...normalized,
+      gatewayGeneration: gatewayGeneration(readGatewayInstanceLock(this.stateDirectory))
+    };
   }
 
   remove(ownerId) {
