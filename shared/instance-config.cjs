@@ -59,7 +59,7 @@ function stringList(value, fallback, label) {
 }
 
 function cleanPublicUrl(value) {
-  if (value === undefined || value === null || value === '') return '';
+  if (value === undefined || value === '') return '';
   if (typeof value !== 'string') throw new TypeError('connection.publicUrl must be a string');
   return value.trim();
 }
