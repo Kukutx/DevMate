@@ -33,6 +33,36 @@ function discover(directory = testsRoot, output = []) {
   return output;
 }
 
+function run(files, stdio = 'inherit') {
+  return spawnSync(process.execPath, ['--test', ...files], {
+    cwd: root,
+    env: process.env,
+    stdio,
+    windowsHide: true,
+    encoding: stdio === 'pipe' ? 'utf8' : undefined
+  });
+}
+
+function diagnoseBatch(batch) {
+  const failures = [];
+  console.error(`Batch failed; isolating ${batch.length} test files...`);
+  for (const file of batch) {
+    const result = run([file], 'pipe');
+    if (result.error) throw result.error;
+    if (result.status === 0) continue;
+    failures.push(relative(file));
+    console.error(`\nFAIL: ${relative(file)}`);
+    if (result.stdout) process.stderr.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+  }
+  if (!failures.length) {
+    console.error('The batch failure was not reproducible file-by-file; this indicates an inter-test or concurrency interaction.');
+  } else {
+    console.error(`\nFailing test files: ${failures.join(', ')}`);
+  }
+  return failures;
+}
+
 const files = discover();
 if (!files.length) {
   console.error('No matching test files were discovered.');
@@ -42,14 +72,12 @@ if (!files.length) {
 for (let index = 0; index < files.length; index += batchSize) {
   const batch = files.slice(index, index + batchSize);
   console.log(`Running test batch ${Math.floor(index / batchSize) + 1}: ${batch.map(relative).join(', ')}`);
-  const result = spawnSync(process.execPath, ['--test', ...batch], {
-    cwd: root,
-    env: process.env,
-    stdio: 'inherit',
-    windowsHide: true
-  });
+  const result = run(batch);
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status || 1);
+  if (result.status !== 0) {
+    diagnoseBatch(batch);
+    process.exit(result.status || 1);
+  }
 }
 
 console.log(`Passed ${files.length} discovered test files.`);
