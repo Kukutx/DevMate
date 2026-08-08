@@ -6,6 +6,7 @@ let controller = null;
 let attachmentTimer = null;
 let attachmentPort = 0;
 let recoveringAttachment = false;
+let sessionRequested = false;
 
 function stopAttachmentWatcher() {
   if (attachmentTimer) clearInterval(attachmentTimer);
@@ -57,6 +58,7 @@ function clearTunnelController(value = null) {
   if (value && controller !== value) return false;
   stopAttachmentWatcher();
   controller = null;
+  sessionRequested = false;
   return true;
 }
 
@@ -71,18 +73,24 @@ function tunnelController() {
 
 async function startTunnel(port) {
   const result = await tunnelController().start(port);
+  sessionRequested = true;
   if (result?.attached) startAttachmentWatcher(port);
   else stopAttachmentWatcher();
   return result;
 }
 
 async function stopTunnel() {
+  sessionRequested = false;
   stopAttachmentWatcher();
   return tunnelController().stop();
 }
 
 function tunnelStatus(port) {
   return tunnelController().status(port);
+}
+
+function tunnelSessionRequested() {
+  return sessionRequested;
 }
 
 module.exports = {
@@ -93,5 +101,6 @@ module.exports = {
   stopAttachmentWatcher,
   stopTunnel,
   tunnelController,
+  tunnelSessionRequested,
   tunnelStatus
 };
