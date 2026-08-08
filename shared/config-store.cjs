@@ -4,9 +4,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
+const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
 const packageJson = require('../package.json');
-const DEFAULT_PORT = 8787;
 const DEFAULT_VERSION = packageJson.version;
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 const SUPPORTED_CONFIG_VERSION = 11;
@@ -365,11 +365,12 @@ function workspaceId(root) {
 function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
   const root = path.resolve(workspaceRoot);
   const id = workspaceId(root);
+  const serverPort = strictPort(port, { label: 'server.port' });
   return {
     version: SUPPORTED_CONFIG_VERSION,
     appVersion,
     instanceId: `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
-    server: { port, mcpPath: '/mcp' },
+    server: { port: serverPort, mcpPath: '/mcp' },
     runtime: {
       defaultCommandTimeoutMs: 180000,
       maxOutputChars: 120000,
@@ -391,7 +392,7 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       confirmBeforePush: false,
       allowDirectoryMutations: false
     },
-    deployment: { mode: 'personal', tunnelProvider: 'external', publicUrl: '' },
+    deployment: { mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' },
     team: {
       enabled: false,
       members: [],
@@ -437,11 +438,12 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   const file = path.resolve(configFile);
   const root = path.resolve(workspaceRoot);
   const rootKey = normalizedWorkspaceRoot(root);
+  const requestedPort = strictPort(preferredPort, { label: 'preferredPort' });
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`Workspace is not a directory: ${root}`);
   }
   return updateConfig(file, current => {
-    if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: preferredPort, appVersion });
+    if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: requestedPort, appVersion });
     const config = current;
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
@@ -455,7 +457,7 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
     }
     config.hostRuntime.workspaceRoot = rootKey;
     config.server ||= {};
-    config.server.port = Number(config.server.port || preferredPort || DEFAULT_PORT);
+    config.server.port = strictPort(config.server.port ?? requestedPort, { label: 'server.port' });
     config.server.mcpPath ||= '/mcp';
     config.auth ||= {};
     config.auth.required = config.auth.required !== false;
