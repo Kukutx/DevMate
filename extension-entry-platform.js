@@ -12,7 +12,10 @@ const {
   readDeploymentConfig
 } = require('./vscode-host/shared-deployment-config.js');
 const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
-const { assertTunnelSafeForCredentialChange } = require('./vscode-host/tunnel-stop-policy.js');
+const {
+  assertTunnelSafeForCredentialChange,
+  credentialProviderInUse
+} = require('./vscode-host/tunnel-stop-policy.js');
 const {
   strictInteger,
   tunnelMaxRestarts,
@@ -71,6 +74,32 @@ function tunnelSettings(context) {
     stateDirectory: context.globalStorageUri.fsPath,
     localSettings: localTunnelSettings()
   });
+}
+
+function currentTunnelRuntime() {
+  try { return tunnelStatus(); }
+  catch { return { running: false, provider: '', record: null }; }
+}
+
+function cloudflareCredentialInUse(context) {
+  const configured = tunnelSettings(context);
+  const runtime = currentTunnelRuntime();
+  return credentialProviderInUse('cloudflare-managed', {
+    configuredProvider: configured.provider,
+    runtimeProvider: runtime?.provider || '',
+    runtimeRunning: runtime?.running === true
+  });
+}
+
+async function prepareCloudflareCredentialMutation(context, operation) {
+  if (!cloudflareCredentialInUse(context)) {
+    return { safe: true, remoteOwner: false, reason: 'credential-dormant', tunnel: null };
+  }
+  const stopState = assertTunnelSafeForCredentialChange(await stopTunnel(), operation);
+  if (stopState.remoteOwner) {
+    log('Cloudflare managed credential is changing while the current tunnel is managed by another host; that process keeps its existing environment until its owner stops it.');
+  }
+  return stopState;
 }
 
 async function updateSetting(name, value) {
@@ -523,15 +552,27 @@ async function activate(context) {
   register(context, 'devMate.tunnelDoctor', () => tunnelDoctor(context));
   register(context, 'devMate.cloudflareSetToken', async () => {
     const token = await promptCloudflareTokenValue();
-    if (token) await storeCloudflareToken(context, token);
+    if (!token) return;
+    const stopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token change');
+    await storeCloudflareToken(context, token);
+    if (stopState.remoteOwner) {
+      vscode.window.showInformationMessage('Cloudflare Tunnel token saved locally. The tunnel managed by another host keeps its existing process token until that owner stops it.');
+    } else if (stopState.reason === 'stopped') {
+      const choice = await vscode.window.showInformationMessage('Cloudflare Tunnel token saved and the previous managed tunnel was stopped.', 'Start Now');
+      if (choice === 'Start Now') await vscode.commands.executeCommand('devMate.start');
+    } else {
+      vscode.window.showInformationMessage('Cloudflare Tunnel token saved in VS Code Secret Storage.');
+    }
   });
   register(context, 'devMate.cloudflareClearToken', async () => {
-    const stopState = assertTunnelSafeForCredentialChange(await stopTunnel(), 'Cloudflare Tunnel token removal');
+    const stopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token removal');
     await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
     cloudflareTunnelToken = '';
     vscode.window.showInformationMessage(stopState.remoteOwner
-      ? 'Cloudflare Tunnel token removed from VS Code Secret Storage. A tunnel managed by another host was left running with its existing process environment.'
-      : 'Cloudflare Tunnel token removed from VS Code Secret Storage.');
+      ? 'Cloudflare Tunnel token removed locally. The tunnel managed by another host keeps its existing process token until that owner stops it.'
+      : stopState.reason === 'stopped'
+        ? 'Cloudflare Tunnel token removed and the managed tunnel was stopped.'
+        : 'Cloudflare Tunnel token removed from VS Code Secret Storage.');
   });
   register(context, 'devMate.openTunnelDocs', async () => {
     const provider = tunnelSettings(context).provider;
@@ -566,10 +607,12 @@ async function deactivate() {
 
 module.exports = {
   activate,
+  cloudflareCredentialInUse,
   commitCloudflareDeployment,
   configureDeployment,
   deactivate,
   localTunnelSettings,
+  prepareCloudflareCredentialMutation,
   prepareDeploymentMutation,
   settingPatch,
   settingRollback,
