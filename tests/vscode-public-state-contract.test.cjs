@@ -19,7 +19,7 @@ test('VS Code explicit public MCP flows use the shared preflight helper only', (
   assert.doesNotMatch(extension, /method:'tools\/list'/);
 });
 
-test('VS Code Doctor, Setup, and public tunnel fallback use shared deployment provider state', () => {
+test('VS Code Doctor, Setup, and public tunnel flow use shared connection provider state', () => {
   const extension = source('extension.js');
   assert.match(extension, /const \{ deploymentProvider, publicUiState, statusLabel \} = require\('\.\/vscode-host\/public-ui-state\.js'\)/);
   assert.match(extension, /const provider=deploymentProvider\(data\)/);
@@ -28,7 +28,7 @@ test('VS Code Doctor, Setup, and public tunnel fallback use shared deployment pr
   assert.doesNotMatch(extension, /cfg\(\)\.get\('publicUrl'\).*external ingress/);
 });
 
-test('VS Code panel derives MCP readiness from the current generation and labels loopback as internal only', () => {
+test('VS Code panel derives MCP readiness from the current session generation and labels loopback as internal only', () => {
   const extension = source('extension.js');
   assert.match(extension, /const publicState = currentPublicUiState\(data\)/);
   assert.match(extension, /const mcpDisplay = publicState\.verified/);
@@ -37,7 +37,7 @@ test('VS Code panel derives MCP readiness from the current generation and labels
   assert.doesNotMatch(extension, /const mcpDisplay = lastPublicUrl \?/);
 });
 
-test('tunnel recovery state changes trigger a read-only base UI resynchronization', () => {
+test('tunnel and Gateway recovery state changes trigger a read-only base UI resynchronization', () => {
   const base = source('extension.js');
   const wrapper = source('extension-entry-shared-tunnel.js');
   const verifier = source('vscode-host/public-tunnel-verifier.js');
@@ -47,13 +47,15 @@ test('tunnel recovery state changes trigger a read-only base UI resynchronizatio
   assert.match(verifier, /notifyState\('unverified'/);
   assert.match(verifier, /notifyState\('verified'/);
   assert.match(verifier, /notifyState\('failed'/);
-  assert.match(verifier, /state === 'pending' \? 'tunnel-pending' : 'no-ready-tunnel'/);
+  assert.match(verifier, /'gateway-unavailable'/);
+  assert.match(verifier, /reason: 'no-ready-gateway'/);
 });
 
-test('explicit and automatic verification write the same connection evidence shape', () => {
+test('explicit and automatic verification persist the same generation-aware connection evidence shape', () => {
   const extension = source('extension.js');
   const verifier = source('vscode-host/public-tunnel-verifier.js');
-  assert.match(extension, /successfulVerificationPatch\(test, publicUrl, stamp\)/);
-  assert.match(extension, /successfulVerificationPatch\(test, url, stamp\)/);
-  assert.match(verifier, /successfulVerificationPatch\(test, record\.publicUrl, stamp\)/);
+  assert.match(extension, /successfulVerificationPatch\(test, publicUrl, stamp, expectedRecord\)/);
+  assert.match(verifier, /successfulVerificationPatch\(test, record\.publicUrl, stamp, record, snapshot\.gatewayLock\)/);
+  assert.match(extension, /verifiedForCurrentRecord\(persisted, currentRecord\)/);
+  assert.match(verifier, /verifiedForCurrentRecord\(persisted, persistedSession\.record, persistedSession\.gatewayLock\)/);
 });
