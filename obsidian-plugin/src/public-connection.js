@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizePublicOrigin } = require('../../host/public-mcp.js');
+const { runtimeMatchesDeployment } = require('../../shared/public-ingress-verification.cjs');
 const { SharedTunnelRecordStore } = require('../../vscode-host/shared-tunnel-record-store.js');
 
 function cleanOrigin(value) {
@@ -20,15 +21,21 @@ function explicitOrigin(publicOrigin = '') {
   };
 }
 
-function readySharedTunnel({ stateDirectory, port, logger = () => {} } = {}) {
+function readySharedTunnel({ stateDirectory, port, config = null, logger = () => {} } = {}) {
   const numericPort = Number(port);
   if (!stateDirectory || !Number.isInteger(numericPort) || numericPort <= 0) return null;
   const store = new SharedTunnelRecordStore({ stateDirectory, logger });
   const record = store.read();
   if (!record || record.status !== 'ready' || Number(record.port) !== numericPort || !record.publicUrl) return null;
+  const publicOrigin = cleanOrigin(record.publicUrl);
+  const deploymentMatch = runtimeMatchesDeployment(config, record, publicOrigin);
+  if (!deploymentMatch.matches) {
+    logger(`Ignoring stale shared tunnel record: ${deploymentMatch.reason}`);
+    return null;
+  }
   return {
     source: 'shared-tunnel',
-    publicOrigin: cleanOrigin(record.publicUrl),
+    publicOrigin,
     provider: record.provider,
     ownerHostId: record.hostId || '',
     record
@@ -52,7 +59,7 @@ function configuredOrigin({ publicOrigin = '', config = null } = {}) {
 
 function resolvePublicConnection({ stateDirectory, port, publicOrigin = '', config = null, logger = () => {} } = {}) {
   return explicitOrigin(publicOrigin) ||
-    readySharedTunnel({ stateDirectory, port, logger }) ||
+    readySharedTunnel({ stateDirectory, port, config, logger }) ||
     deploymentOrigin(config);
 }
 
