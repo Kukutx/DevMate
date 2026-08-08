@@ -1,5 +1,25 @@
 'use strict';
 
+function cleanHttpsOrigin(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== 'https:' ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      (url.pathname && url.pathname !== '/')
+    ) return '';
+    return `https://${url.host}`;
+  } catch {
+    return '';
+  }
+}
+
 function hostOf(value) {
   try { return new URL(String(value || '')).host.toLowerCase(); }
   catch { return ''; }
@@ -14,6 +34,26 @@ function recordGeneration(record) {
     String(record.readyAt || ''),
     String(record.publicUrl || '')
   ].join('|');
+}
+
+function runtimeMatchesDeployment(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
+  const desiredProvider = String(config?.deployment?.tunnelProvider || '').trim().toLowerCase();
+  const actualProvider = String(record?.provider || '').trim().toLowerCase();
+  if (desiredProvider && actualProvider !== desiredProvider) {
+    return {
+      matches: false,
+      reason: `shared tunnel provider ${actualProvider || 'unknown'} does not match configured provider ${desiredProvider}`
+    };
+  }
+
+  const configuredUrl = cleanHttpsOrigin(config?.deployment?.publicUrl || '');
+  if (configuredUrl && publicUrl !== configuredUrl) {
+    return {
+      matches: false,
+      reason: `shared tunnel URL ${publicUrl || 'unavailable'} does not match configured stable URL ${configuredUrl}`
+    };
+  }
+  return { matches: true, reason: '' };
 }
 
 function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
@@ -50,8 +90,10 @@ function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOSt
 }
 
 module.exports = {
+  cleanHttpsOrigin,
   hostOf,
   recordGeneration,
+  runtimeMatchesDeployment,
   successfulVerificationPatch,
   verifiedConnection,
   verifiedForCurrentRecord
