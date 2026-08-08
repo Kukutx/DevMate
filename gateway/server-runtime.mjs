@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { isMainThread, parentPort } from 'node:worker_threads';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import permissionConfig from '../shared/permission-config.cjs';
 import portConfig from '../shared/port.cjs';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { shutdownCommandProcesses } from './command-process.mjs';
@@ -15,8 +16,11 @@ import { shutdownTeamServices } from './team-capabilities.mjs';
 import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 
+const { validatePermissionConfig } = permissionConfig;
 const { strictPort } = portConfig;
-strictPort(readConfig().server?.port, { label: 'server.port' });
+const startupConfig = readConfig();
+strictPort(startupConfig.server?.port, { label: 'server.port' });
+validatePermissionConfig(startupConfig);
 acquireGatewayInstanceLock();
 
 const createdHttpServers = new Set();
