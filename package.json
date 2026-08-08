@@ -279,7 +279,7 @@
           "type": "number",
           "default": 2097152,
           "minimum": 65536,
-          "maximum": 16777216,
+          "maximum": 33554432,
           "scope": "machine",
           "description": "Maximum MCP request body size in team/production deployments."
         },
@@ -310,7 +310,7 @@
         "devMate.productionRequestTimeoutMs": {
           "type": "number",
           "default": 900000,
-          "minimum": 10000,
+          "minimum": 1000,
           "maximum": 3600000,
           "scope": "machine",
           "description": "HTTP request timeout for team/production deployments."
