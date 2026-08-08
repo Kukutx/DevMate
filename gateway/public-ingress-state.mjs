@@ -1,7 +1,9 @@
 import path from 'node:path';
+import verification from '../shared/public-ingress-verification.cjs';
 import tunnelRecordStore from '../vscode-host/shared-tunnel-record-store.js';
 import { CONFIG_PATH } from './local-shared.mjs';
 
+const { verifiedForCurrentRecord } = verification;
 const { SharedTunnelRecordStore } = tunnelRecordStore;
 
 function cleanHttpsOrigin(value) {
@@ -22,24 +24,6 @@ function cleanHttpsOrigin(value) {
   } catch {
     return '';
   }
-}
-
-function hostOf(value) {
-  try { return new URL(value).host.toLowerCase(); }
-  catch { return ''; }
-}
-
-function verifiedForCurrentRecord(config, record) {
-  const connection = config?.connection || {};
-  const preflightAt = Date.parse(connection.lastPreflightAt || '');
-  const readyAt = Date.parse(record?.readyAt || '');
-  if (!Number.isFinite(preflightAt) || !Number.isFinite(readyAt) || preflightAt < readyAt) return false;
-  if (String(connection.lastServerName || '').toLowerCase() !== 'devmate') return false;
-  if (String(connection.lastMcpPath || '') !== '/mcp') return false;
-  if (!Number.isInteger(Number(connection.lastToolCount)) || Number(connection.lastToolCount) <= 0) return false;
-  const publicHost = hostOf(record.publicUrl);
-  const verifiedHost = String(connection.lastPublicHost || '').trim().toLowerCase();
-  return !!publicHost && verifiedHost === publicHost;
 }
 
 export function runtimePublicIngress(config, { stateDirectory } = {}) {
@@ -107,6 +91,5 @@ export function effectivePublicIngress(config, options = {}) {
 
 export const __test = {
   cleanHttpsOrigin,
-  hostOf,
   verifiedForCurrentRecord
 };
