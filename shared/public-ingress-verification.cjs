@@ -69,8 +69,13 @@ function recordGeneration(record) {
 
 function sessionGeneration(record, gatewayLock) {
   const tunnel = recordGeneration(record);
-  const gateway = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
-  return tunnel && gateway ? `${tunnel}::${gateway}` : '';
+  if (!tunnel) return '';
+  const boundGateway = String(record?.gatewayGeneration || '').trim();
+  const liveGateway = gatewayGeneration(gatewayLock);
+  if (boundGateway && liveGateway && boundGateway !== liveGateway) return '';
+  const gateway = liveGateway || boundGateway;
+  if (!gateway) return '';
+  return boundGateway ? tunnel : `${tunnel}::${gateway}`;
 }
 
 function runtimeMatchesConnection(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
