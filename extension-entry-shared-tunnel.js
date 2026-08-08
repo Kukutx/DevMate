@@ -89,6 +89,26 @@ async function syncBasePublicState() {
   }
 }
 
+async function stopConfigurationConflict() {
+  if (!runtime) return { stopped: false, reason: 'runtime-unavailable' };
+  const result = await runtime.stop();
+  await syncBasePublicState();
+  if (result.stopped) {
+    const choice = await vscode.window.showWarningMessage(
+      'DevMate stopped the previous public ingress because the shared deployment configuration changed. Start DevMate to launch the newly configured provider.',
+      'Start Now',
+      'Open DevMate'
+    );
+    if (choice === 'Start Now') await vscode.commands.executeCommand('devMate.start');
+    if (choice === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
+  } else if (result.reason === 'managed-by-another-host') {
+    log('The mismatched public ingress is owned by another host; its owner must reconcile the shared configuration.');
+  } else if (result.reason && result.reason !== 'not-running') {
+    vscode.window.showWarningMessage(`DevMate could not stop the stale public ingress cleanly: ${result.reason}`);
+  }
+  return result;
+}
+
 function createPublicVerifier() {
   return new PublicTunnelVerifier({
     stateDirectory: runtimeStateDirectory,
@@ -98,6 +118,7 @@ function createPublicVerifier() {
     onStateChange: async () => {
       await syncBasePublicState();
     },
+    onConfigurationConflict: async () => stopConfigurationConflict(),
     onVerified: async result => {
       if (!result.changedHost) return;
       const choice = await vscode.window.showWarningMessage(
@@ -191,6 +212,7 @@ module.exports = {
   deactivate,
   ensureSharedDesktopConfig,
   localTunnelSettings,
+  stopConfigurationConflict,
   syncBasePublicState,
   tunnelSecrets,
   tunnelSettings
