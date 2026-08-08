@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import configStore from '../shared/config-store.cjs';
+import portConfig from '../shared/port.cjs';
 import {
   createTeamMember,
   memberPublic,
@@ -12,6 +13,7 @@ import {
 } from '../gateway/team-access.mjs';
 
 const { DEFAULT_VERSION, newPersonalConfig, readJson: readConfigJson, updateConfig } = configStore;
+const { parsePortOption } = portConfig;
 
 export function configFile(options = {}) {
   return path.resolve(String(options.config || process.env.DEVMATE_CONFIG || path.join(process.cwd(), '.devmate-server', 'config.json')));
@@ -65,7 +67,7 @@ export function initConfig(options = {}) {
 
   const mode = cleanMode(String(options.mode || 'team'));
   const provider = cleanProvider(String(options.provider || (mode === 'production' ? 'cloudflare-managed' : 'ngrok')), mode);
-  const port = Math.min(65535, Math.max(1024, Number(options.port) || 8787));
+  const port = parsePortOption(options.port, { label: '--port' });
   const rawPublicUrl = String(options['public-url'] || '').trim();
   const publicUrl = normalizeOrigin(rawPublicUrl, { httpsOnly: mode === 'production' || !!rawPublicUrl });
   validateStandaloneIngress({ mode, provider, publicUrl });
