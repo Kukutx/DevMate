@@ -29,7 +29,7 @@ import {
   touchRunnerCredential,
   verifyRunnerToken
 } from './runner-access.mjs';
-import { normalizeDeploymentConfig } from './team-access.mjs';
+import { normalizeInstanceConfig } from './team-access.mjs';
 
 const INSTALLED = Symbol.for('devmate.runnerControlPlaneInstalled');
 const rateWindows = new Map();
@@ -74,8 +74,8 @@ function consumeRate(id, limit) {
 function enterRequestConcurrency(principal, config) {
   return sharedHttpRequestConcurrency.enter(
     `runner:${principal.id}`,
-    config.production.maxConcurrentRequests,
-    config.production.maxConcurrentPerPrincipal
+    config.requestPolicy.maxConcurrentRequests,
+    config.requestPolicy.maxConcurrentPerPrincipal
   );
 }
 
@@ -446,7 +446,7 @@ export function runnerControlListener(listener) {
     const started = Date.now();
     const requestId = `runner-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     try {
-      const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readConfig()));
+      const config = normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig()));
       if (!config.runnerControl.enabled) {
         return json(res, 404, {
           error: 'External runner control plane is disabled',
@@ -471,7 +471,7 @@ export function runnerControlListener(listener) {
           code: 'host_not_allowed'
         }, requestId);
       }
-      req.setTimeout?.(config.production.requestTimeoutMs);
+      req.setTimeout?.(config.requestPolicy.requestTimeoutMs);
       const preauthKey = `preauth:${remoteAddress(req) || 'unknown'}`;
       if (!consumeRate(preauthKey, Math.max(120, config.runnerControl.requestsPerMinute * 2))) {
         return json(res, 429, {
