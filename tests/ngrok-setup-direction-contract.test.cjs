@@ -8,6 +8,18 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'extension-entry.js'), 'utf8');
 
+test('fresh VS Code installs use normal machine ngrok configuration until managed setup is chosen', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const setting = manifest.contributes.configuration.properties['devMate.ngrokUseManagedAccount'];
+  assert.equal(setting.default, false);
+  assert.match(setting.description, /normal ngrok configuration/i);
+
+  const recommendedStart = source.indexOf('async function recommendedSetup');
+  const recommendedEnd = source.indexOf('async function advancedSetup', recommendedStart);
+  const recommended = source.slice(recommendedStart, recommendedEnd);
+  assert.match(recommended, /useManagedAccount: true/);
+});
+
 test('ngrok setup reads the effective URL from shared connection state', () => {
   assert.match(source, /configuredNgrokUrl/);
   assert.match(source, /activeNgrokConnection/);
