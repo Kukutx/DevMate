@@ -36,8 +36,8 @@ function recordGeneration(record) {
   ].join('|');
 }
 
-function runtimeMatchesDeployment(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
-  const desiredProvider = String(config?.deployment?.tunnelProvider || '').trim().toLowerCase();
+function runtimeMatchesConnection(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
+  const desiredProvider = String(config?.connection?.provider || '').trim().toLowerCase();
   const actualProvider = String(record?.provider || '').trim().toLowerCase();
   if (desiredProvider && actualProvider !== desiredProvider) {
     return {
@@ -46,7 +46,7 @@ function runtimeMatchesDeployment(config, record, publicUrl = cleanHttpsOrigin(r
     };
   }
 
-  const configuredUrl = cleanHttpsOrigin(config?.deployment?.publicUrl || '');
+  const configuredUrl = cleanHttpsOrigin(config?.connection?.publicUrl || '');
   if (configuredUrl && publicUrl !== configuredUrl) {
     return {
       matches: false,
@@ -93,7 +93,7 @@ module.exports = {
   cleanHttpsOrigin,
   hostOf,
   recordGeneration,
-  runtimeMatchesDeployment,
+  runtimeMatchesConnection,
   successfulVerificationPatch,
   verifiedConnection,
   verifiedForCurrentRecord
