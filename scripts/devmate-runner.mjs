@@ -291,9 +291,6 @@ export async function runExternalRunner(options = parseRunnerArgs(process.argv.s
   if (!fs.statSync(configPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Runner config is not a file: ${configPath}`);
   process.env.DEVMATE_CONFIG = configPath;
   const config = loadConfig(configPath);
-  if (config.deployment?.mode !== 'personal') {
-    throw new Error('External Runner local config must use personal deployment mode. Central team policy belongs to the control-plane Gateway.');
-  }
   if (config.auth?.required === false) throw new Error('External Runner local Gateway must keep owner-token authentication enabled');
   const metadata = runnerMetadata(config, options);
   if (!metadata.workspaceIds.length) throw new Error('External Runner local config must contain at least one writable workspace');
