@@ -1,7 +1,7 @@
 import { readConfig } from './local-shared.mjs';
 import { ensureToolApproval } from './approvals.mjs';
 import { jobTarget } from './job-runtime.mjs';
-import { authorizeToolCall, normalizeDeploymentConfig } from './team-access.mjs';
+import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 
 export function preflightQueuedJob(job) {
@@ -11,7 +11,7 @@ export function preflightQueuedJob(job) {
     error.code = 'job_target_unavailable';
     throw error;
   }
-  const config = normalizeDeploymentConfig(readConfig());
+  const config = normalizeInstanceConfig(readConfig());
   const principal = job?.requestedBy || null;
   const args = job?.arguments || {};
   const authorized = authorizeToolCall({
