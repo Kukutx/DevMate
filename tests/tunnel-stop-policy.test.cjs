@@ -5,6 +5,7 @@ const test = require('node:test');
 const {
   assertTunnelSafeForCredentialChange,
   classifyTunnelStop,
+  credentialProviderInUse,
   tunnelStopResult
 } = require('../vscode-host/tunnel-stop-policy.js');
 
@@ -44,6 +45,35 @@ test('base DevMate stop result unwraps the tunnel result before applying policy'
   };
   assert.deepEqual(tunnelStopResult(baseResult), baseResult.tunnel);
   assert.equal(classifyTunnelStop(baseResult).remoteOwner, true);
+});
+
+test('credential stop is required only when the configured or actually running provider consumes that credential', () => {
+  assert.equal(credentialProviderInUse('ngrok', {
+    configuredProvider: 'ngrok',
+    runtimeProvider: '',
+    runtimeRunning: false
+  }), true);
+  assert.equal(credentialProviderInUse('ngrok', {
+    configuredProvider: 'cloudflare-managed',
+    runtimeProvider: 'ngrok',
+    runtimeRunning: true
+  }), true, 'a stale but still-running ngrok generation still consumes the credential');
+  assert.equal(credentialProviderInUse('cloudflare-managed', {
+    configuredProvider: 'ngrok',
+    runtimeProvider: 'cloudflare-managed',
+    runtimeRunning: true
+  }), true);
+  assert.equal(credentialProviderInUse('cloudflare-managed', {
+    configuredProvider: 'ngrok',
+    runtimeProvider: 'cloudflare-managed',
+    runtimeRunning: false
+  }), false, 'an offline stale record must not force an unrelated stop');
+  assert.equal(credentialProviderInUse('ngrok', {
+    configuredProvider: 'external',
+    runtimeProvider: 'external',
+    runtimeRunning: true
+  }), false);
+  assert.throws(() => credentialProviderInUse('', {}), /credentialProvider is required/);
 });
 
 test('unconfirmed local process stop fails closed', () => {
