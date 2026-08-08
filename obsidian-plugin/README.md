@@ -1,118 +1,162 @@
 # DevMate for Obsidian
 
-DevMate is a desktop-only Obsidian host for the shared DevMate MCP Gateway. Obsidian owns vault integration, host context, and the Gateway process it starts. Public HTTPS ingress remains a separate deployment concern.
+DevMate connects the current Obsidian vault to ChatGPT through the same shared MCP instance used by the VS Code host.
+
+The normal product flow is one action:
 
 ```text
-Obsidian vault -> shared loopback Gateway <- VS Code host
-                       |
-                       +-> public ingress managed by VS Code / external infrastructure -> /mcp -> ChatGPT
+DevMate: Start
+  → Obsidian bridge ready
+  → Gateway started or attached
+  → public connection started or attached
+  → MCP initialize + tools/list verified
+  → Ready
 ```
 
-`127.0.0.1` is an internal transport address. **Obsidian never starts, stops, reconfigures, or takes ownership of ngrok, Cloudflare, or external ingress.**
+`Ready` means the **current public connection generation** has passed MCP verification. A local Gateway or an HTTPS URL alone is not treated as Ready.
 
-## Core capabilities
+## What Start does
 
-- start or attach to the workspace-derived Gateway and shared state used by VS Code;
-- run the bundled Gateway in an isolated Node.js 24+ child process rather than inside the Obsidian renderer;
-- auto-detect a usable Node runtime and allow an explicit Node executable override;
-- discover a ready shared DevMate tunnel without taking ownership of it;
-- optionally use an explicitly configured clean HTTPS Public origin when ingress is managed outside VS Code;
-- verify a public `/mcp` endpoint with Bearer authentication, MCP session propagation, and `tools/list` before Copy MCP URL succeeds;
-- keep the DevMate panel DOM stable during health polling instead of rebuilding it periodically;
-- deduplicate unchanged host-context snapshots before writing shared state;
-- publish bounded active-note, selection, Property, link, heading, tag, and vault context;
-- incrementally index note metadata instead of rescanning the vault for each request;
-- query notes by folder, path, tags, Properties, metadata search, and modification dates;
-- search Markdown bodies with bounded candidate, file-size, concurrency, result, and snippet limits;
-- explore deterministic inbound and outbound note-link neighborhoods;
-- audit Property coverage/types, orphan notes, unresolved links, duplicate names, and required fields;
-- create, rename, move, trash, and update notes through public Obsidian APIs;
-- preview, apply, and roll back hash-bound batch Property plans;
-- retain bounded atomic operation evidence with conflict-aware rollback.
+`DevMate: Start` performs the complete lifecycle automatically:
 
-## Installation and runtime requirements
+1. Captures current Obsidian context.
+2. Starts or attaches to the shared DevMate Gateway.
+3. Starts or attaches to the configured provider-native public connection.
+4. Obtains the active public HTTPS origin.
+5. Runs authenticated MCP `initialize` and `tools/list`.
+6. Persists verification evidence for the current provider generation.
+7. Reports Ready and optionally copies the verified MCP URL.
 
-From the repository root:
+There is no separate user step for starting the public connection or verifying MCP.
 
-```powershell
-npm install
-npm run check
-npm run test:unit
-npm run build:obsidian
-```
+## Shared with VS Code
 
-Copy the contents of `obsidian-plugin/dist` into:
+For the same filesystem root, Obsidian and VS Code resolve the same DevMate state directory and share:
 
-```text
-<Vault>/.obsidian/plugins/devmate/
-```
+- one supported `config.json`,
+- one Gateway process/ownership record,
+- one provider-native public connection record,
+- public MCP verification evidence,
+- current workspace context and runtime state.
 
-Then enable **DevMate** under Community Plugins.
+Both hosts are first-class owners or attachers. If VS Code already owns a compatible Gateway or connection, Obsidian attaches. If Obsidian starts first, VS Code can attach later.
 
-The plugin bundle contains its own DevMate Gateway code and does not require the VS Code extension. The isolated Gateway process requires Node.js 24 or newer. DevMate first tries a configured executable, then a compatible Obsidian/Electron Node runtime, then `node` from `PATH`. If none is usable, startup fails with a diagnostic instead of falling back to Worker threads.
+Stopping one attached host does not kill a compatible shared resource owned by the other host.
 
-## Runtime and public connection contract
+## Connection providers
 
-`DevMate: Start` manages the Obsidian host runtime only:
+The shared connection capability supports:
 
-```text
-Obsidian bridge/context
--> Gateway start or attach
--> host running / attached
-```
+- `ngrok`
+- `cloudflare-quick`
+- `cloudflare-managed`
+- `external`
 
-Public ingress is resolved independently when available:
+Provider selection changes only the connection capability. It does not silently change access, permissions, request policy, Runner configuration or plugins.
 
-1. the explicit Obsidian **Public origin** setting, when the user has deliberately selected one;
-2. otherwise, a live shared tunnel record for the same Gateway port, regardless of provider;
-3. otherwise, a stable `deployment.publicUrl` already present in the shared DevMate configuration.
+### ngrok
 
-This preserves the original host contract: an explicit Obsidian Public origin is a user override, not a lower-priority hint. A temporary shared tunnel must not silently replace it.
+ngrok is the default provider. Obsidian can use the machine's normal ngrok configuration when no DevMate-managed credential is stored.
 
-`Copy MCP URL` never falls back to localhost. It requires a public HTTPS origin and then performs:
+Optionally, an ngrok Authtoken can be stored through Electron's OS-backed safe storage. When such a secret is configured, DevMate uses it for the provider process without writing it to the vault or shared `config.json`.
 
-```text
-POST /mcp initialize with Bearer authentication
--> preserve MCP session id when returned
--> POST /mcp tools/list with Bearer + protocol/session headers
--> copy verified https://.../mcp
-```
+A stable ngrok URL is optional. Leave it empty when the account/default endpoint is sufficient.
 
-If no public origin exists, start/configure ingress from VS Code or external infrastructure, or set Obsidian Public origin. Public verification failure does not redefine a healthy Obsidian/Gateway host as a failed local runtime.
+### Cloudflare Quick
 
-## Shared runtime
+Cloudflare Quick uses a native `cloudflared` quick tunnel. The public hostname is temporary and is discovered automatically.
 
-When VS Code and Obsidian resolve the same workspace root, both use the same state directory under `~/.devmate/hosts/`. Either host may start the shared Gateway; a later host attaches instead of creating a duplicate.
+### Cloudflare managed
 
-Tunnel ownership is different: the provider runtime is owned by the VS Code/deployment side. Obsidian only observes a ready shared tunnel record so it can display and verify the active public endpoint when no explicit Public origin overrides it. It does not stop or take over that tunnel when Obsidian starts, restarts, closes, or changes settings.
+Cloudflare managed requires a stable public HTTPS origin and a managed tunnel token. The token is stored locally using OS-backed safe storage and is not written to shared configuration.
 
-This preserves the DevMate provider model introduced for team and production use: `ngrok` remains the default personal provider, while Cloudflare Quick, Cloudflare managed, and external HTTPS ingress remain valid deployment choices.
+### External HTTPS ingress
 
-## Main MCP tools
+External is for an existing reverse proxy, load balancer, VPN endpoint or separately managed tunnel. DevMate does not spawn an ingress child process, but it still coordinates the shared connection record and verifies MCP before Ready.
 
-```text
-host_context
-host_context_list
-obsidian_status
-obsidian_note_query
-obsidian_content_search
-obsidian_note_graph
-obsidian_schema_audit
-obsidian_vault_audit
-obsidian_note_create
-obsidian_properties_update
-obsidian_properties_batch_preview
-obsidian_properties_batch_apply
-obsidian_properties_batch_rollback
-obsidian_properties_batch_list
-obsidian_note_move
-obsidian_note_trash
-obsidian_operation_list
-obsidian_operation_rollback
-```
+## Automatic recovery
 
-See `docs/OBSIDIAN_SEARCH_AND_GRAPH.md`, `docs/OBSIDIAN_DATA_WORKFLOWS.md`, and `docs/HOST_INTEGRATION.md` in the main repository.
+Provider processes can restart automatically after unexpected exit. A restarted provider creates a new connection generation, so DevMate immediately treats earlier verification as stale and re-runs MCP preflight.
 
-## Safety
+This also applies when the provider comes back on the same hostname. URL equality is not sufficient to retain Ready.
 
-The Gateway and Host Bridge remain loopback-bound. Public MCP credentials are never embedded in the URL and are accepted only through request headers. Workspace identity and root must match. Paths are vault-relative, `.obsidian` is blocked, note mutations use public Obsidian APIs, and batch mutations require a separate preview plan before application. Content search is read-only and bounded; local diagnostics do not persist note content or Bearer tokens.
+If a dynamic provider changes hostname, the ChatGPT connector may need its URL updated. DevMate surfaces that as a connection update, not as an additional runtime-start step.
+
+## Commands
+
+The plugin keeps the useful lifecycle and support commands:
+
+- **DevMate: Start** — complete Gateway → public connection → MCP verification → Ready lifecycle.
+- **DevMate: Stop** — release resources owned by this host without killing another host's shared ownership.
+- **DevMate: Restart** — restart the complete lifecycle and return only after Ready.
+- **DevMate: Copy MCP URL** — verify the current public connection generation and copy its `/mcp` URL.
+- **DevMate: Copy MCP bearer token** — copy the owner bearer token when connector credential setup is needed.
+- **DevMate: Copy active vault context** — copy the current bounded Obsidian context bundle.
+- **DevMate: Copy diagnostics** — copy sanitized runtime diagnostics.
+- **DevMate: Open panel** — open the compact DevMate status panel.
+
+The normal panel intentionally presents product state instead of forcing users to reason about internal Gateway, tunnel-record or preflight layers.
+
+## Status model
+
+Typical states are:
+
+- **Stopped** — no active local/shared session is available.
+- **Starting / Verifying** — Gateway and connection are converging or the current provider generation is awaiting MCP preflight.
+- **Ready** — the current public connection generation has passed `initialize` and `tools/list`.
+- **Error** — automatic startup or recovery cannot complete and user action is required.
+
+## Obsidian host bridge
+
+Some vault operations require Obsidian's public API. The plugin therefore runs an authenticated loopback bridge used by the shared Gateway.
+
+The bridge is internal. It is not the ChatGPT-facing MCP URL and is not a replacement for the public connection.
+
+## Context and vault capabilities
+
+The host publishes bounded context such as:
+
+- active note,
+- active selection when enabled,
+- vault identity,
+- host capability metadata.
+
+The bridge also supports DevMate's vault-aware search, graph, note and property workflows while enforcing vault path policy and bounded operations.
+
+## Settings
+
+Important user settings include:
+
+- **Enable DevMate**
+- **Start automatically**
+- **Connection provider**
+- provider-specific stable public URL where applicable
+- optional provider executable paths
+- optional encrypted provider credentials
+- **Restart connection after unexpected exit**
+- **Maximum connection restarts**
+- **Shared state directory override**
+- **Preferred local Gateway port**
+- **Node.js executable** override
+- **Copy verified MCP URL after Start**
+- **Capture active selection**
+
+Internal transport details are not required for routine use.
+
+## Runtime requirements
+
+- Obsidian desktop with a filesystem-backed vault.
+- Node.js 24+ for the isolated Gateway child process.
+- The selected provider executable when DevMate manages that provider process (`ngrok` or `cloudflared`).
+
+## Security
+
+- The Gateway defaults to loopback internally.
+- Public MCP authentication uses request headers.
+- Owner credentials are never embedded in MCP URLs.
+- Optional provider credentials use OS-backed encrypted storage when available.
+- Shared configuration is versioned, locked and atomically replaced.
+- Public Ready state requires a successful current-generation MCP preflight.
+- A host never terminates a compatible shared resource merely because another host owns it.
+
+For architecture details see `docs/HOST_INTEGRATION.md` and `docs/TUNNELS.md` in the repository.
