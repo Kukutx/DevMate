@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { preflightPublicMcp } = require('../host/public-mcp.js');
+const { readGatewayInstanceLock } = require('../host/runtime/instance-lock-cleanup.js');
 const {
   readJson,
   updateConfig
@@ -9,6 +10,7 @@ const {
 const {
   hostOf,
   recordGeneration,
+  sessionGeneration,
   successfulVerificationPatch,
   verifiedForCurrentRecord
 } = require('../shared/public-ingress-verification.cjs');
@@ -80,19 +82,28 @@ class PublicTunnelVerifier {
 
   snapshot(config) {
     const port = Number(config?.server?.port || 0);
-    if (!Number.isInteger(port) || port <= 0) return { status: null, record: null };
+    if (!Number.isInteger(port) || port <= 0) {
+      return { status: null, record: null, gatewayLock: readGatewayInstanceLock(this.stateDirectory) };
+    }
     const status = this.tunnelStatus(port);
-    return { status, record: status?.record || null };
+    return {
+      status,
+      record: status?.record || null,
+      gatewayLock: readGatewayInstanceLock(this.stateDirectory)
+    };
   }
 
-  currentRecord(config) {
-    const { record } = this.snapshot(config);
-    return recordGeneration(record) ? record : null;
+  currentSession(config) {
+    const snapshot = this.snapshot(config);
+    return {
+      ...snapshot,
+      generation: sessionGeneration(snapshot.record, snapshot.gatewayLock)
+    };
   }
 
   generationStillCurrent(config, generation) {
     try {
-      return sameGeneration(recordGeneration(this.currentRecord(config)), generation);
+      return sameGeneration(this.currentSession(config).generation, generation);
     } catch {
       return false;
     }
@@ -148,13 +159,19 @@ class PublicTunnelVerifier {
       return { checked: false, reason: 'configuration-conflict', error, cleanup };
     }
     const record = snapshot.record;
-    const generation = recordGeneration(record);
-    if (!generation) {
+    const tunnelGeneration = recordGeneration(record);
+    if (!tunnelGeneration) {
       const state = record?.status === 'pending' || snapshot.status?.running ? 'pending' : 'absent';
       await this.notifyState(state, { record });
       return { checked: false, reason: state === 'pending' ? 'tunnel-pending' : 'no-ready-tunnel' };
     }
-    if (verifiedForCurrentRecord(config, record)) {
+
+    const generation = sessionGeneration(record, snapshot.gatewayLock);
+    if (!generation) {
+      await this.notifyState('gateway-unavailable', { record });
+      return { checked: false, reason: 'no-ready-gateway' };
+    }
+    if (verifiedForCurrentRecord(config, record, snapshot.gatewayLock)) {
       await this.notifyState('verified', { record, generation });
       return { checked: false, reason: 'already-verified', generation };
     }
@@ -190,7 +207,7 @@ class PublicTunnelVerifier {
 
       const latest = this.readConfig();
       if (!latest || !this.generationStillCurrent(latest, generation)) {
-        this.logger('Discarded public MCP preflight result because the tunnel generation changed during verification.');
+        this.logger('Discarded public MCP preflight result because the Gateway or tunnel generation changed during verification.');
         return { checked: true, verified: false, stale: true, generation };
       }
 
@@ -199,19 +216,19 @@ class PublicTunnelVerifier {
         if (!this.generationStillCurrent(current, generation)) return current;
         current.connection = {
           ...(current.connection || {}),
-          ...successfulVerificationPatch(test, record.publicUrl, stamp, record)
+          ...successfulVerificationPatch(test, record.publicUrl, stamp, record, snapshot.gatewayLock)
         };
         return current;
       });
 
       const persisted = this.readConfig();
-      const persistedRecord = persisted ? this.currentRecord(persisted) : null;
+      const persistedSession = persisted ? this.currentSession(persisted) : null;
       if (
         !persisted ||
-        recordGeneration(persistedRecord) !== generation ||
-        !verifiedForCurrentRecord(persisted, persistedRecord)
+        persistedSession?.generation !== generation ||
+        !verifiedForCurrentRecord(persisted, persistedSession.record, persistedSession.gatewayLock)
       ) {
-        this.logger('Discarded public MCP recovery success because the tunnel generation changed during persistence.');
+        this.logger('Discarded public MCP recovery success because the Gateway or tunnel generation changed during persistence.');
         return { checked: true, verified: false, stale: true, generation };
       }
 
@@ -223,13 +240,14 @@ class PublicTunnelVerifier {
         verified: true,
         stale: false,
         generation,
-        record: persistedRecord,
+        record: persistedSession.record,
+        gatewayLock: persistedSession.gatewayLock,
         test,
         changedHost: !!previousHost && previousHost !== nextHost,
         previousHost,
         publicHost: nextHost
       };
-      this.logger(`Reverified public MCP after tunnel generation change: ${nextHost || record.publicUrl}, tools=${test.toolCount}.`);
+      this.logger(`Reverified public MCP for current Gateway+tunnel generation: ${nextHost || record.publicUrl}, tools=${test.toolCount}.`);
     } catch (error) {
       const latest = this.readConfig();
       let current = !!latest && this.generationStillCurrent(latest, generation);
