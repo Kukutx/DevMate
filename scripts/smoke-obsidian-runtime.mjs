@@ -38,6 +38,11 @@ const mainSource = fs.readFileSync(pluginMain, 'utf8');
 assert.doesNotMatch(mainSource, /node:worker_threads|createWorkerSpawn|new Worker\s*\(/, 'Obsidian bundle must not depend on Worker threads');
 assert.match(mainSource, /child_process/, 'Obsidian bundle must contain the child-process runtime');
 assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Node runtime diagnostics');
+assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the shared tunnel controller');
+assert.match(mainSource, /ngrok/, 'Obsidian bundle must contain the ngrok public tunnel runtime');
+assert.match(mainSource, /MCP-Session-Id|mcp-session-id/, 'Obsidian bundle must preserve MCP session-aware public preflight');
+assert.match(mainSource, /Verified public MCP|Verified public MCP URL copied|Verified public MCP through ngrok/, 'Obsidian bundle must contain public MCP verification flow');
+assert.doesNotMatch(mainSource, /ownerUrl\([^)]*publicOrigin|settings\.publicOrigin/, 'Obsidian bundle must not fall back to retired external publicOrigin flow');
 
 const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath });
 assert.match(nodeRuntime.nodeVersion, /^24\./);
@@ -72,7 +77,7 @@ try {
   assert.equal(secondStop.stopped, true);
   assert.equal(fs.existsSync(instanceLock), false, `Gateway instance lock remained after restart stop: ${instanceLock}`);
 
-  console.log(`Obsidian child-process bundle start/stop/restart smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
+  console.log(`Obsidian child-process + ngrok-public contract bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
 } finally {
   await controller.dispose({ stopOwned: true }).catch(() => {});
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
