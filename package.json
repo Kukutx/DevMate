@@ -48,7 +48,7 @@
         "devMate.sharedStateDirectory": { "type": "string", "default": "", "scope": "machine", "description": "Optional shared DevMate state directory override. Leave empty to use ~/.devmate/hosts/<workspace-id>." },
         "devMate.port": { "type": "number", "default": 8787, "minimum": 1024, "maximum": 65535, "description": "Preferred internal loopback Gateway port. An existing shared Gateway port remains authoritative." },
         "devMate.ngrokCommandPath": { "type": "string", "default": "", "scope": "machine", "description": "Optional ngrok executable path." },
-        "devMate.ngrokUseManagedAccount": { "type": "boolean", "default": true, "scope": "machine", "description": "Use the ngrok account saved in VS Code Secret Storage." },
+        "devMate.ngrokUseManagedAccount": { "type": "boolean", "default": false, "scope": "machine", "description": "Use the ngrok account saved in VS Code Secret Storage. Fresh installs use the machine's normal ngrok configuration until this is enabled by setup." },
         "devMate.ngrokUrl": { "type": "string", "default": "", "scope": "machine", "description": "Optional machine-local stable ngrok URL candidate used by Connection Setup. The active URL is workspace-scoped." },
         "devMate.ngrokPoolingEnabled": { "type": "boolean", "default": false, "scope": "machine", "description": "Allow ngrok endpoint pooling only when intentionally serving the same trusted DevMate instance from multiple agents." },
         "devMate.ngrokTrafficPolicyFile": { "type": "string", "default": "", "scope": "machine", "description": "Optional ngrok Traffic Policy file." },
