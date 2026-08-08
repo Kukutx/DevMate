@@ -14,6 +14,35 @@ function stopAttachmentWatcher() {
   recoveringAttachment = false;
 }
 
+function sharedReadyAttachment(current, port) {
+  if (!current?.store?.read || typeof current.match !== 'function') return null;
+  const numericPort = Number(port) || 0;
+  if (!numericPort) return null;
+  const match = current.match(numericPort);
+  const record = current.store.read();
+  if (
+    !record ||
+    record.status !== 'ready' ||
+    !record.publicUrl ||
+    Number(record.port) !== numericPort ||
+    record.provider !== match.provider ||
+    record.ownerId === current.ownerId
+  ) return null;
+  return {
+    running: true,
+    owned: false,
+    attached: true,
+    publicUrl: record.publicUrl,
+    provider: record.provider,
+    port: numericPort,
+    record
+  };
+}
+
+function runtimeStatus(current, port) {
+  return sharedReadyAttachment(current, port) || current.status(port);
+}
+
 function startAttachmentWatcher(port) {
   stopAttachmentWatcher();
   attachmentPort = Number(port) || 0;
@@ -23,7 +52,7 @@ function startAttachmentWatcher(port) {
     if (!current || recoveringAttachment) return;
     let status;
     try {
-      status = current.status(attachmentPort);
+      status = runtimeStatus(current, attachmentPort);
     } catch (error) {
       current.logger?.(`Tunnel attachment watch failed: ${error.message || error}`);
       return;
@@ -70,7 +99,11 @@ function tunnelController() {
 }
 
 async function startTunnel(port) {
-  const result = await tunnelController().start(port);
+  const current = tunnelController();
+  const existing = sharedReadyAttachment(current, port);
+  const result = existing
+    ? { attached: true, owned: false, publicUrl: existing.publicUrl, record: existing.record }
+    : await current.start(port);
   if (result?.attached) startAttachmentWatcher(port);
   else stopAttachmentWatcher();
   return result;
@@ -82,13 +115,16 @@ async function stopTunnel() {
 }
 
 function tunnelStatus(port) {
-  return tunnelController().status(port);
+  const current = tunnelController();
+  return runtimeStatus(current, port);
 }
 
 module.exports = {
   ATTACHMENT_POLL_MS,
   clearTunnelController,
+  runtimeStatus,
   setTunnelController,
+  sharedReadyAttachment,
   startTunnel,
   stopAttachmentWatcher,
   stopTunnel,
