@@ -1,25 +1,126 @@
 import crypto from 'node:crypto';
-import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
+import {
+  mutateDurableDocument,
+  readDurableNamespace
+} from './durable-state.mjs';
 
-const NAMESPACE = 'workspace-leases';
-const restored = readDurableNamespace(NAMESPACE, []);
-const leases = new Map((Array.isArray(restored) ? restored : [])
-  .filter(item => item?.workspaceId)
-  .map(item => [item.workspaceId, item]));
+export const WORKSPACE_LEASE_NAMESPACE = 'workspace-leases';
+const NAMESPACE = WORKSPACE_LEASE_NAMESPACE;
+const leases = new Map();
 
-function nowIso() { return new Date().toISOString(); }
+function nowIso(now = Date.now()) { return new Date(now).toISOString(); }
 function roleCanForce(role) { return role === 'owner' || role === 'maintainer'; }
-function persist() { writeDurableNamespace(NAMESPACE, [...leases.values()]); }
 
-export function pruneWorkspaceLeases(now = Date.now()) {
+function leaseMap(values) {
+  return new Map((Array.isArray(values) ? values : [])
+    .filter(item => item?.workspaceId)
+    .map(item => [item.workspaceId, item]));
+}
+
+function documentLeaseMap(document) {
+  return leaseMap(document?.namespaces?.[NAMESPACE]);
+}
+
+function writeDocumentLeases(document, values) {
+  document.namespaces ||= {};
+  document.namespaces[NAMESPACE] = [...values];
+}
+
+function pruneLeaseMap(values, now = Date.now()) {
   let changed = false;
-  for (const [workspaceId, lease] of leases) {
+  for (const [workspaceId, lease] of values) {
     if (Date.parse(lease.expiresAt) <= now) {
-      leases.delete(workspaceId);
+      values.delete(workspaceId);
       changed = true;
     }
   }
-  if (changed) persist();
+  return changed;
+}
+
+export function syncWorkspaceLeasesFromDurableState() {
+  const next = leaseMap(readDurableNamespace(NAMESPACE, []));
+  leases.clear();
+  for (const [workspaceId, lease] of next) leases.set(workspaceId, lease);
+  return leases;
+}
+
+export function workspaceLeaseInDocument(document, workspaceId, now = Date.now()) {
+  const values = documentLeaseMap(document);
+  pruneLeaseMap(values, now);
+  writeDocumentLeases(document, values.values());
+  const lease = values.get(String(workspaceId || ''));
+  return lease ? { ...lease } : null;
+}
+
+export function acquireWorkspaceLeaseInDocument(document, {
+  workspaceId,
+  principal,
+  ttlSeconds = 1800,
+  purpose = '',
+  force = false,
+  now = Date.now()
+}) {
+  const id = String(workspaceId || '').trim();
+  if (!id) throw new Error('workspaceId is required');
+  if (!principal?.id) throw new Error('Authenticated principal is required');
+  const values = documentLeaseMap(document);
+  pruneLeaseMap(values, now);
+  const current = values.get(id);
+  if (current && current.principalId !== principal.id && !(force && roleCanForce(principal.role))) {
+    throw new Error(`Workspace ${id} is leased by ${current.principalName || current.principalId} until ${current.expiresAt}`);
+  }
+  const ttl = Math.min(24 * 60 * 60, Math.max(60, Math.trunc(Number(ttlSeconds) || 1800)));
+  const samePrincipal = current?.principalId === principal.id;
+  const timestamp = nowIso(now);
+  const lease = {
+    id: samePrincipal ? current.id : `lease-${crypto.randomBytes(8).toString('hex')}`,
+    workspaceId: id,
+    principalId: principal.id,
+    principalName: principal.name || principal.id,
+    principalRole: principal.role,
+    purpose: String(purpose || '').trim().slice(0, 500),
+    acquiredAt: samePrincipal ? current.acquiredAt : timestamp,
+    renewedAt: timestamp,
+    expiresAt: new Date(now + ttl * 1000).toISOString()
+  };
+  values.set(id, lease);
+  writeDocumentLeases(document, values.values());
+  return { ...lease };
+}
+
+export function releaseWorkspaceLeaseInDocument(document, {
+  workspaceId,
+  principal,
+  force = false,
+  now = Date.now()
+}) {
+  const id = String(workspaceId || '').trim();
+  if (!id) throw new Error('workspaceId is required');
+  const values = documentLeaseMap(document);
+  pruneLeaseMap(values, now);
+  const current = values.get(id);
+  if (!current) {
+    writeDocumentLeases(document, values.values());
+    return { released: false, workspaceId: id, reason: 'not leased' };
+  }
+  if (current.principalId !== principal?.id && !(force && roleCanForce(principal?.role))) {
+    throw new Error(`Workspace ${id} is leased by ${current.principalName || current.principalId}`);
+  }
+  values.delete(id);
+  writeDocumentLeases(document, values.values());
+  return { released: true, lease: { ...current } };
+}
+
+syncWorkspaceLeasesFromDurableState();
+
+export function pruneWorkspaceLeases(now = Date.now()) {
+  mutateDurableDocument(document => {
+    const values = documentLeaseMap(document);
+    pruneLeaseMap(values, now);
+    writeDocumentLeases(document, values.values());
+    return document;
+  });
+  syncWorkspaceLeasesFromDurableState();
 }
 
 export function listWorkspaceLeases() {
@@ -33,46 +134,24 @@ export function workspaceLease(workspaceId) {
   return lease ? { ...lease } : null;
 }
 
-export function acquireWorkspaceLease({ workspaceId, principal, ttlSeconds = 1800, purpose = '', force = false }) {
-  const id = String(workspaceId || '').trim();
-  if (!id) throw new Error('workspaceId is required');
-  if (!principal?.id) throw new Error('Authenticated principal is required');
-  pruneWorkspaceLeases();
-  const current = leases.get(id);
-  if (current && current.principalId !== principal.id && !(force && roleCanForce(principal.role))) {
-    throw new Error(`Workspace ${id} is leased by ${current.principalName || current.principalId} until ${current.expiresAt}`);
-  }
-  const ttl = Math.min(24 * 60 * 60, Math.max(60, Math.trunc(Number(ttlSeconds) || 1800)));
-  const now = Date.now();
-  const samePrincipal = current?.principalId === principal.id;
-  const lease = {
-    id: samePrincipal ? current.id : `lease-${crypto.randomBytes(8).toString('hex')}`,
-    workspaceId: id,
-    principalId: principal.id,
-    principalName: principal.name || principal.id,
-    principalRole: principal.role,
-    purpose: String(purpose || '').trim().slice(0, 500),
-    acquiredAt: samePrincipal ? current.acquiredAt : nowIso(),
-    renewedAt: nowIso(),
-    expiresAt: new Date(now + ttl * 1000).toISOString()
-  };
-  leases.set(id, lease);
-  persist();
-  return { ...lease };
+export function acquireWorkspaceLease(options) {
+  let lease = null;
+  mutateDurableDocument(document => {
+    lease = acquireWorkspaceLeaseInDocument(document, options);
+    return document;
+  });
+  syncWorkspaceLeasesFromDurableState();
+  return lease;
 }
 
-export function releaseWorkspaceLease({ workspaceId, principal, force = false }) {
-  const id = String(workspaceId || '').trim();
-  if (!id) throw new Error('workspaceId is required');
-  pruneWorkspaceLeases();
-  const current = leases.get(id);
-  if (!current) return { released: false, workspaceId: id, reason: 'not leased' };
-  if (current.principalId !== principal?.id && !(force && roleCanForce(principal?.role))) {
-    throw new Error(`Workspace ${id} is leased by ${current.principalName || current.principalId}`);
-  }
-  leases.delete(id);
-  persist();
-  return { released: true, lease: current };
+export function releaseWorkspaceLease(options) {
+  let result = null;
+  mutateDurableDocument(document => {
+    result = releaseWorkspaceLeaseInDocument(document, options);
+    return document;
+  });
+  syncWorkspaceLeasesFromDurableState();
+  return result;
 }
 
 export function assertWorkspaceLease({ workspaceId, principal, capability, config }) {
@@ -89,8 +168,21 @@ export function assertWorkspaceLease({ workspaceId, principal, capability, confi
 }
 
 export function clearWorkspaceLeases() {
-  leases.clear();
-  persist();
+  mutateDurableDocument(document => {
+    document.namespaces ||= {};
+    document.namespaces[NAMESPACE] = [];
+    return document;
+  });
+  syncWorkspaceLeasesFromDurableState();
 }
 
-export const __test = { leases, persist, roleCanForce };
+export const __test = {
+  acquireWorkspaceLeaseInDocument,
+  documentLeaseMap,
+  leases,
+  pruneLeaseMap,
+  releaseWorkspaceLeaseInDocument,
+  roleCanForce,
+  syncWorkspaceLeasesFromDurableState,
+  writeDocumentLeases
+};
