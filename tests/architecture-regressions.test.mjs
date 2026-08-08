@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { __test, requiredCapabilityForTool } from '../gateway/tool-policy.mjs';
 
+const root = path.resolve(import.meta.dirname, '..');
+
 test('every process-spawning core command has execute capability', () => {
   for (const name of ['run_command', 'run_configured_command', 'run_project_script', 'start_process']) {
     assert.equal(requiredCapabilityForTool(name, { destructiveHint: true }), 'execute', name);
@@ -14,16 +16,31 @@ test('every process-spawning core command has execute capability', () => {
 });
 
 test('fullAccess does not silently enable directory mutations', () => {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'extension.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
   assert.match(source, /allowDirectoryMutations = cfg\(\)\.get\('allowDirectoryMutations'\) === true/);
   assert.doesNotMatch(source, /permissionProfile\(\) === 'fullAccess' \|\| .*allowDirectoryMutations/);
 });
 
 test('Gateway has no direct configuration writes or duplicate audit implementation', () => {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'gateway', 'server.mjs'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'gateway', 'server.mjs'), 'utf8');
   assert.doesNotMatch(source, /writeFileSync\(CONFIG_PATH|writeFile\(CONFIG_PATH|shared\.writeConfig|shared\.mutateConfig/);
   assert.match(source, /shared\.readConfig/);
   assert.match(source, /shared\.audit/);
+});
+
+test('current runtime paths never branch on retired deployment modes', () => {
+  for (const relative of [
+    'scripts/devmate-runner.mjs',
+    'host/runtime/process-controller.js',
+    'vscode-host/public-ui-state.js',
+    'vscode-host/effective-tunnel-settings.js'
+  ]) {
+    const source = fs.readFileSync(path.join(root, relative), 'utf8');
+    assert.doesNotMatch(source, /deployment\?*\.?mode|deployment\.mode|config\.deployment|config\.production|team\.enabled/, relative);
+  }
+  const migration = fs.readFileSync(path.join(root, 'shared', 'instance-config.cjs'), 'utf8');
+  assert.match(migration, /function upgradeLegacyInstanceShape/);
+  assert.match(migration, /error\.code = 'retired_instance_shape'/);
 });
 
 test('shared sanitizer redacts DevMate credentials and bounds circular payloads', async () => {
