@@ -17,15 +17,15 @@ function tempFile() {
   return path.join(directory, 'config.json');
 }
 
-test('merges host-owned fields without replacing Gateway-owned state', () => {
+test('merges host-owned fields without replacing shared capability state', () => {
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
     server: { port: 8788, mcpPath: '/mcp' },
     auth: { required: true, token: 'owner-token' },
-    deployment: { mode: 'team', tunnelProvider: 'cloudflare-managed', publicUrl: 'https://team.example.com' },
-    team: { enabled: true, requireWorkspaceLeaseForWrites: true, members: [{ id: 'alice' }] },
-    production: { allowedHosts: ['team.example.com'], requestsPerMinute: 120 },
+    connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com', lastPreflightAt: 'current' },
+    team: { requireWorkspaceLeaseForWrites: true, defaultMemberRole: 'developer', maxMembers: 100, members: [{ id: 'alice' }] },
+    requestPolicy: { allowedHosts: ['team.example.com'], requestsPerMinute: 120 },
     runnerControl: { enabled: true },
     trustedWritableRoots: [{ id: 'trusted' }],
     runtime: { maxConcurrentJobs: 4, defaultCommandTimeoutMs: 1000 },
@@ -36,9 +36,9 @@ test('merges host-owned fields without replacing Gateway-owned state', () => {
     instanceId: 'stale',
     server: { port: 9999, mcpPath: '/mcp' },
     auth: { required: false, token: 'stale-token' },
-    deployment: { mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' },
-    team: { enabled: false, requireWorkspaceLeaseForWrites: false, members: [] },
-    production: { allowedHosts: [], requestsPerMinute: 9999 },
+    connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
+    team: { requireWorkspaceLeaseForWrites: false, members: [] },
+    requestPolicy: { allowedHosts: [], requestsPerMinute: 9999 },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 },
     workspaces: [{ id: 'app' }]
   };
@@ -50,18 +50,18 @@ test('merges host-owned fields without replacing Gateway-owned state', () => {
   assert.equal(merged.runtime.maxConcurrentJobs, 4);
   assert.equal(merged.runtime.defaultCommandTimeoutMs, 2000);
   assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
-  assert.deepEqual(merged.deployment, current.deployment);
+  assert.deepEqual(merged.connection, current.connection);
   assert.deepEqual(merged.team, current.team);
-  assert.deepEqual(merged.production, current.production);
+  assert.deepEqual(merged.requestPolicy, current.requestPolicy);
 });
 
-test('partial extension updates preserve existing workspaces and shared business state', () => {
+test('partial extension updates preserve existing workspaces and shared connection', () => {
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
-    deployment: { mode: 'production', tunnelProvider: 'external', publicUrl: 'https://prod.example.com' },
-    team: { enabled: true, members: [{ id: 'maintainer' }] },
-    production: { allowedHosts: ['prod.example.com'] },
+    connection: { provider: 'external', publicUrl: 'https://prod.example.com', lastPreflightAt: 'verified' },
+    team: { members: [{ id: 'maintainer' }], requireWorkspaceLeaseForWrites: true },
+    requestPolicy: { allowedHosts: ['prod.example.com'] },
     workspaces: [
       { id: 'app', root: '/workspace/app' },
       { id: 'docs', root: '/workspace/docs', reference: true, mode: 'readonly' },
@@ -70,30 +70,26 @@ test('partial extension updates preserve existing workspaces and shared business
   };
   const merged = mergeExtensionConfig(current, {
     version: SUPPORTED_CONFIG_VERSION,
-    connection: { lastPreflightAt: 'now' }
+    connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale-candidate' },
+    vscodeContext: { capturedAt: 'now' }
   });
   assert.deepEqual(merged.workspaces, current.workspaces);
-  assert.equal(merged.connection.lastPreflightAt, 'now');
-  assert.deepEqual(merged.deployment, current.deployment);
+  assert.deepEqual(merged.connection, current.connection);
   assert.deepEqual(merged.team, current.team);
-  assert.deepEqual(merged.production, current.production);
+  assert.deepEqual(merged.requestPolicy, current.requestPolicy);
+  assert.deepEqual(merged.vscodeContext, { capturedAt: 'now' });
 });
 
-test('pure merge never manufactures Gateway-owned nested state', () => {
+test('pure merge never manufactures shared nested state', () => {
   const merged = mergeExtensionConfig({}, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { required: true, token: 'owner-token', forgedPolicy: true },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000, maxConcurrentJobs: 99 },
-    deployment: { mode: 'production', tunnelProvider: 'external', publicUrl: 'https://forged.example.com' },
-    team: {
-      enabled: true,
-      requireWorkspaceLeaseForWrites: true,
-      members: [{ id: 'forged-member' }],
-      forgedPolicy: true
-    },
-    production: { allowedHosts: ['forged.example.com'] },
+    connection: { provider: 'external', publicUrl: 'https://forged.example.com' },
+    team: { requireWorkspaceLeaseForWrites: true, members: [{ id: 'forged-member' }], forgedPolicy: true },
+    requestPolicy: { allowedHosts: ['forged.example.com'] },
     workspaces: [{ id: 'app' }, { id: 'forged', trusted: true, role: 'trusted' }],
     jobs: { embeddedRunnerEnabled: false },
     runnerControl: { enabled: true },
@@ -107,7 +103,7 @@ test('pure merge never manufactures Gateway-owned nested state', () => {
   assert.deepEqual(merged.runtime, { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 });
   assert.deepEqual(merged.workspaces, [{ id: 'app' }]);
   for (const key of [
-    'deployment', 'team', 'production', 'jobs', 'runnerControl', 'plugins',
+    'connection', 'team', 'requestPolicy', 'jobs', 'runnerControl', 'plugins',
     'trustedWritableRoots', 'hostRuntime'
   ]) {
     assert.equal(Object.hasOwn(merged, key), false, `${key} must remain shared/Gateway-owned`);
@@ -125,23 +121,26 @@ test('generic VS Code writer refuses to recreate a missing shared config', () =>
   assert.equal(fs.existsSync(file), false);
 });
 
-test('writes through the shared locked atomic store after shared initialization', () => {
+test('writes host context through the shared locked atomic store without replacing connection', () => {
   const file = tempFile();
   atomicWriteJson(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'one',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'secret' }
+    auth: { required: true, token: 'secret' },
+    connection: { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' }
   });
   writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
-    connection: { lastPreflightAt: 'now' }
+    connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
+    vscodeContext: { capturedAt: 'now' }
   });
   const config = readExtensionConfig(file);
   assert.equal(config.instanceId, 'one');
   assert.equal(config.auth.token, 'secret');
-  assert.equal(config.connection.lastPreflightAt, 'now');
+  assert.deepEqual(config.connection, { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' });
+  assert.deepEqual(config.vscodeContext, { capturedAt: 'now' });
 });
 
 test('rejects malformed and future configuration without replacement', () => {
