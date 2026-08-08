@@ -15,6 +15,14 @@ function classifyTunnelStop(result) {
   return { safe: false, remoteOwner: false, reason: reason || 'stop-not-confirmed', tunnel };
 }
 
+function credentialProviderInUse(credentialProvider, { configuredProvider = '', runtimeProvider = '', runtimeRunning = false } = {}) {
+  const target = String(credentialProvider || '').trim().toLowerCase();
+  if (!target) throw new Error('credentialProvider is required');
+  const configured = String(configuredProvider || '').trim().toLowerCase();
+  const runtime = String(runtimeProvider || '').trim().toLowerCase();
+  return configured === target || (runtimeRunning === true && runtime === target);
+}
+
 function assertTunnelSafeForCredentialChange(result, operation = 'provider credential change') {
   const state = classifyTunnelStop(result);
   if (state.safe) return state;
@@ -27,5 +35,6 @@ function assertTunnelSafeForCredentialChange(result, operation = 'provider crede
 module.exports = {
   assertTunnelSafeForCredentialChange,
   classifyTunnelStop,
+  credentialProviderInUse,
   tunnelStopResult
 };
