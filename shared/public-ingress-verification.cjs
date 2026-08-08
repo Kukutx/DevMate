@@ -36,6 +36,23 @@ function recordGeneration(record) {
   ].join('|');
 }
 
+function gatewayGeneration(lock) {
+  if (
+    !lock ||
+    !lock.runtimeOwnerId ||
+    !lock.acquiredAt ||
+    !lock.instanceId ||
+    !Number.isInteger(Number(lock.pid)) ||
+    Number(lock.pid) <= 0
+  ) return '';
+  return [
+    String(lock.runtimeOwnerId),
+    String(lock.pid),
+    String(lock.instanceId),
+    String(lock.acquiredAt)
+  ].join('|');
+}
+
 function runtimeMatchesConnection(config, record, publicUrl = cleanHttpsOrigin(record?.publicUrl || '')) {
   const desiredProvider = String(config?.connection?.provider || '').trim().toLowerCase();
   const actualProvider = String(record?.provider || '').trim().toLowerCase();
@@ -72,16 +89,30 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   return !!publicHost && verifiedHost === publicHost;
 }
 
-function verifiedForCurrentRecord(config, record) {
-  const generation = recordGeneration(record);
-  if (!generation) return false;
-  const persistedGeneration = String(config?.connection?.lastTunnelGeneration || '').trim();
-  if (persistedGeneration && persistedGeneration !== generation) return false;
+function verifiedForCurrentRecord(config, record, gatewayLock = null) {
+  const tunnelGeneration = recordGeneration(record);
+  if (!tunnelGeneration) return false;
+  const persistedTunnelGeneration = String(config?.connection?.lastTunnelGeneration || '').trim();
+  if (persistedTunnelGeneration && persistedTunnelGeneration !== tunnelGeneration) return false;
+
+  const persistedGatewayGeneration = String(config?.connection?.lastGatewayGeneration || '').trim();
+  if (persistedGatewayGeneration) {
+    const currentGatewayGeneration = gatewayGeneration(gatewayLock);
+    if (!currentGatewayGeneration || persistedGatewayGeneration !== currentGatewayGeneration) return false;
+  }
+
   return verifiedConnection(config, record.publicUrl, { notBefore: record.readyAt });
 }
 
-function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOString(), record = null) {
-  const generation = recordGeneration(record);
+function successfulVerificationPatch(
+  test,
+  publicUrl,
+  stamp = new Date().toISOString(),
+  record = null,
+  gatewayLock = null
+) {
+  const tunnelGeneration = recordGeneration(record);
+  const currentGatewayGeneration = gatewayGeneration(gatewayLock);
   return {
     lastPreflightAt: stamp,
     lastPublicOrigin: String(test?.publicOrigin || publicUrl || '').trim(),
@@ -89,7 +120,8 @@ function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOSt
     lastMcpPath: '/mcp',
     lastToolCount: Number(test?.toolCount || 0),
     lastServerName: String(test?.server?.name || 'devmate'),
-    ...(generation ? { lastTunnelGeneration: generation } : {}),
+    ...(tunnelGeneration ? { lastTunnelGeneration: tunnelGeneration } : {}),
+    ...(currentGatewayGeneration ? { lastGatewayGeneration: currentGatewayGeneration } : {}),
     lastError: '',
     lastErrorAt: null
   };
@@ -97,6 +129,7 @@ function successfulVerificationPatch(test, publicUrl, stamp = new Date().toISOSt
 
 module.exports = {
   cleanHttpsOrigin,
+  gatewayGeneration,
   hostOf,
   recordGeneration,
   runtimeMatchesConnection,
