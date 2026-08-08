@@ -1,17 +1,26 @@
 'use strict';
 
-const { PluginSettingTab, Setting } = require('obsidian');
+const { Notice, PluginSettingTab, Setting } = require('obsidian');
+const { normalizeNgrokUrl, validateAuthtoken } = require('../../ngrok-support.js');
 const { normalizePublicOrigin } = require('../../host/public-mcp.js');
+const { PROVIDERS, tunnelMaxRestarts, tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
+const { encryptSecret, encryptionAvailable } = require('./secret-store.js');
 
-const STARTUP_MODES = new Set(['auto', 'manual', 'disabled']);
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
-  startupMode: 'auto',
+  autoStart: true,
   sharedStateDirectory: '',
   preferredPort: 8787,
   nodeExecutable: '',
   captureSelection: true,
-  publicOrigin: ''
+  autoCopyUrl: true,
+  ngrokCommandPath: '',
+  ngrokPoolingEnabled: false,
+  tunnelAutoRestart: true,
+  tunnelMaxRestarts: 10,
+  cloudflareCommandPath: '',
+  ngrokAuthtokenEncrypted: '',
+  cloudflareTunnelTokenEncrypted: ''
 });
 
 function normalizeOrigin(value) {
@@ -23,17 +32,69 @@ function normalizeOrigin(value) {
 function normalizeSettings(value = {}) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const port = Number(input.preferredPort);
-  let publicOrigin = '';
-  try { publicOrigin = normalizeOrigin(input.publicOrigin); } catch {}
   return {
     enabled: input.enabled !== false,
-    startupMode: STARTUP_MODES.has(input.startupMode) ? input.startupMode : DEFAULT_SETTINGS.startupMode,
+    autoStart: input.autoStart !== false,
     sharedStateDirectory: String(input.sharedStateDirectory || '').trim(),
     preferredPort: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_SETTINGS.preferredPort,
     nodeExecutable: String(input.nodeExecutable || '').trim(),
     captureSelection: input.captureSelection !== false,
-    publicOrigin
+    autoCopyUrl: input.autoCopyUrl !== false,
+    ngrokCommandPath: String(input.ngrokCommandPath || '').trim(),
+    ngrokPoolingEnabled: input.ngrokPoolingEnabled === true,
+    tunnelAutoRestart: input.tunnelAutoRestart !== false,
+    tunnelMaxRestarts: tunnelMaxRestarts(input.tunnelMaxRestarts),
+    cloudflareCommandPath: String(input.cloudflareCommandPath || '').trim(),
+    ngrokAuthtokenEncrypted: String(input.ngrokAuthtokenEncrypted || '').trim(),
+    cloudflareTunnelTokenEncrypted: String(input.cloudflareTunnelTokenEncrypted || '').trim()
   };
+}
+
+function tokenSetting(containerEl, plugin, {
+  title,
+  description,
+  settingKey,
+  placeholder,
+  validate = value => String(value || '').trim()
+}) {
+  const configured = !!plugin.settings[settingKey];
+  const row = new Setting(containerEl)
+    .setName(title)
+    .setDesc(configured
+      ? `${description} A credential is configured and encrypted with the OS-backed Electron safe storage API.`
+      : `${description} Leave empty to use the provider's normal machine configuration when supported.`);
+  row.addText(text => {
+    text.inputEl.type = 'password';
+    text.setPlaceholder(configured ? 'Credential configured' : placeholder);
+    text.onChange(async value => {
+      const raw = String(value || '').trim();
+      if (!raw) return;
+      try {
+        const secret = validate(raw);
+        if (!encryptionAvailable()) throw new Error('OS-backed encryption is unavailable in this Obsidian environment.');
+        plugin.settings[settingKey] = encryptSecret(secret);
+        await plugin.saveSettings();
+        text.inputEl.value = '';
+        new Notice(`${title} saved securely.`);
+        plugin.invalidateTunnelSecrets();
+        plugin.scheduleReconfigure();
+        this?.display?.();
+      } catch (error) {
+        new Notice(`Could not save ${title}: ${error.message || error}`);
+      }
+    });
+    return text;
+  });
+  row.addButton(button => button
+    .setButtonText('Clear')
+    .setDisabled(!configured)
+    .onClick(async () => {
+      plugin.settings[settingKey] = '';
+      await plugin.saveSettings();
+      plugin.invalidateTunnelSecrets();
+      plugin.scheduleReconfigure();
+      new Notice(`${title} cleared.`);
+    }));
 }
 
 class DevMateSettingTab extends PluginSettingTab {
@@ -48,8 +109,8 @@ class DevMateSettingTab extends PluginSettingTab {
     containerEl.createEl('h2', { text: 'DevMate' });
 
     new Setting(containerEl)
-      .setName('Enable Obsidian host')
-      .setDesc('Expose this vault and Obsidian context through the shared DevMate Gateway.')
+      .setName('Enable DevMate')
+      .setDesc('Expose this vault and Obsidian context through the shared DevMate instance.')
       .addToggle(toggle => toggle
         .setValue(this.plugin.settings.enabled)
         .onChange(async value => {
@@ -59,22 +120,138 @@ class DevMateSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('Startup mode')
-      .setDesc('Auto starts or attaches the shared Gateway after the Obsidian layout is ready. Public ingress remains independently managed.')
-      .addDropdown(dropdown => dropdown
-        .addOption('auto', 'Auto start')
-        .addOption('manual', 'Manual start')
-        .addOption('disabled', 'Disabled')
-        .setValue(this.plugin.settings.startupMode)
+      .setName('Start automatically')
+      .setDesc('When enabled, opening Obsidian brings the complete DevMate connection to Ready automatically.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoStart)
         .onChange(async value => {
-          this.plugin.settings.startupMode = value;
+          this.plugin.settings.autoStart = value;
           await this.plugin.saveSettings();
-          await this.plugin.reconfigureRuntime();
+        }));
+
+    const connection = this.plugin.connectionConfiguration();
+    const provider = tunnelProvider(connection.provider || 'ngrok');
+
+    new Setting(containerEl)
+      .setName('Connection provider')
+      .setDesc('The shared HTTPS provider used by this DevMate instance. Changing it does not change DevMate features or access capabilities.')
+      .addDropdown(dropdown => {
+        for (const value of PROVIDERS) dropdown.addOption(value, value);
+        return dropdown
+          .setValue(provider)
+          .onChange(async value => {
+            await this.plugin.configureConnection({ provider: value });
+            this.display();
+          });
+      });
+
+    if (provider !== 'cloudflare-quick') {
+      new Setting(containerEl)
+        .setName(provider === 'ngrok' ? 'Stable ngrok URL' : 'Public HTTPS URL')
+        .setDesc(provider === 'external'
+          ? 'Required HTTPS origin for the external ingress.'
+          : 'Optional stable HTTPS origin. Leave empty when the provider can publish its own endpoint.')
+        .addText(text => text
+          .setPlaceholder('https://devmate.example.com')
+          .setValue(connection.publicUrl || '')
+          .onChange(async value => {
+            const raw = String(value || '').trim();
+            try {
+              const normalized = raw
+                ? provider === 'ngrok' ? normalizeNgrokUrl(raw) : normalizeOrigin(raw)
+                : '';
+              text.inputEl.removeClass('devmate-setting-invalid');
+              await this.plugin.configureConnection({ publicUrl: normalized });
+            } catch {
+              text.inputEl.addClass('devmate-setting-invalid');
+            }
+          }));
+    }
+
+    if (provider === 'ngrok') {
+      new Setting(containerEl)
+        .setName('ngrok executable')
+        .setDesc('Optional ngrok executable path. Leave empty to use ngrok from PATH.')
+        .addText(text => text
+          .setPlaceholder('ngrok')
+          .setValue(this.plugin.settings.ngrokCommandPath)
+          .onChange(async value => {
+            this.plugin.settings.ngrokCommandPath = String(value || '').trim();
+            await this.plugin.saveSettings();
+            this.plugin.scheduleReconfigure();
+          }));
+
+      tokenSetting(containerEl, this.plugin, {
+        title: 'ngrok Authtoken',
+        description: 'Optional DevMate-managed credential.',
+        settingKey: 'ngrokAuthtokenEncrypted',
+        placeholder: 'Paste ngrok Authtoken',
+        validate: validateAuthtoken
+      });
+
+      new Setting(containerEl)
+        .setName('ngrok endpoint pooling')
+        .setDesc('Off by default. Enable only when intentionally pooling the same endpoint across trusted agents.')
+        .addToggle(toggle => toggle
+          .setValue(this.plugin.settings.ngrokPoolingEnabled)
+          .onChange(async value => {
+            this.plugin.settings.ngrokPoolingEnabled = value;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleReconfigure();
+          }));
+    }
+
+    if (provider === 'cloudflare-quick' || provider === 'cloudflare-managed') {
+      new Setting(containerEl)
+        .setName('cloudflared executable')
+        .setDesc('Optional cloudflared executable path. Leave empty to use cloudflared from PATH.')
+        .addText(text => text
+          .setPlaceholder('cloudflared')
+          .setValue(this.plugin.settings.cloudflareCommandPath)
+          .onChange(async value => {
+            this.plugin.settings.cloudflareCommandPath = String(value || '').trim();
+            await this.plugin.saveSettings();
+            this.plugin.scheduleReconfigure();
+          }));
+    }
+
+    if (provider === 'cloudflare-managed') {
+      tokenSetting(containerEl, this.plugin, {
+        title: 'Cloudflare tunnel token',
+        description: 'Credential for the configured managed Cloudflare tunnel.',
+        settingKey: 'cloudflareTunnelTokenEncrypted',
+        placeholder: 'Paste Cloudflare tunnel token'
+      });
+    }
+
+    new Setting(containerEl)
+      .setName('Restart connection after unexpected exit')
+      .setDesc('Keep the ChatGPT-facing HTTPS connection alive after an unexpected provider exit.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.tunnelAutoRestart)
+        .onChange(async value => {
+          this.plugin.settings.tunnelAutoRestart = value;
+          await this.plugin.saveSettings();
+          this.plugin.scheduleReconfigure();
+        }));
+
+    new Setting(containerEl)
+      .setName('Maximum connection restarts')
+      .setDesc('Maximum automatic provider restarts after unexpected exits (0–100).')
+      .addText(text => text
+        .setValue(String(this.plugin.settings.tunnelMaxRestarts))
+        .onChange(async value => {
+          const parsed = Number(value);
+          if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 100) {
+            this.plugin.settings.tunnelMaxRestarts = parsed;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleReconfigure();
+          }
         }));
 
     new Setting(containerEl)
       .setName('Shared state directory override')
-      .setDesc('Optional absolute directory. Leave empty to use ~/.devmate/hosts/<workspace-id> and share Gateway state with VS Code for the same root.')
+      .setDesc('Optional absolute directory. Leave empty to use ~/.devmate/hosts/<workspace-id> and share one DevMate instance with VS Code for the same root.')
       .addText(text => text
         .setPlaceholder('C:\\Users\\you\\.devmate\\hosts\\my-vault')
         .setValue(this.plugin.settings.sharedStateDirectory)
@@ -86,7 +263,7 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Preferred local Gateway port')
-      .setDesc('Internal loopback port only. ChatGPT must use a separately managed or shared verified HTTPS endpoint.')
+      .setDesc('Internal loopback port. DevMate chooses another free port automatically when needed.')
       .addText(text => text
         .setValue(String(this.plugin.settings.preferredPort))
         .onChange(async value => {
@@ -100,7 +277,7 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Node.js executable')
-      .setDesc('Optional Node.js 24+ executable for the isolated Gateway process. Leave empty to auto-detect a usable runtime.')
+      .setDesc('Optional Node.js 24+ executable override. Leave empty to auto-detect a usable runtime.')
       .addText(text => text
         .setPlaceholder('C:\\Program Files\\nodejs\\node.exe')
         .setValue(this.plugin.settings.nodeExecutable)
@@ -112,21 +289,13 @@ class DevMateSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('Public origin')
-      .setDesc('Optional clean HTTPS origin managed outside Obsidian. When set, it is the explicit endpoint used for MCP verification; otherwise DevMate discovers the active shared tunnel or shared deployment URL.')
-      .addText(text => text
-        .setPlaceholder('https://devmate.example.com')
-        .setValue(this.plugin.settings.publicOrigin)
+      .setName('Copy verified MCP URL after Start')
+      .setDesc('Copy the MCP URL only after DevMate has completed initialize and tools/list successfully.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoCopyUrl)
         .onChange(async value => {
-          const raw = String(value || '').trim();
-          try {
-            this.plugin.settings.publicOrigin = raw ? normalizeOrigin(raw) : '';
-            text.inputEl.removeClass('devmate-setting-invalid');
-            await this.plugin.saveSettings();
-            await this.plugin.refreshStatus();
-          } catch {
-            text.inputEl.addClass('devmate-setting-invalid');
-          }
+          this.plugin.settings.autoCopyUrl = value;
+          await this.plugin.saveSettings();
         }));
 
     new Setting(containerEl)
@@ -145,7 +314,6 @@ class DevMateSettingTab extends PluginSettingTab {
 module.exports = {
   DEFAULT_SETTINGS,
   DevMateSettingTab,
-  STARTUP_MODES,
   normalizeOrigin,
   normalizeSettings
 };
