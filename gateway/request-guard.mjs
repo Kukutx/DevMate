@@ -5,7 +5,7 @@ import { hostAllowed, isLocalRequest, loopbackHost, loopbackSocket, remoteAddres
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
-import { extractRequestToken, fallbackLocalPrincipal, normalizeDeploymentConfig, verifyAccessToken } from './team-access.mjs';
+import { extractRequestToken, fallbackLocalPrincipal, normalizeInstanceConfig, verifyAccessToken } from './team-access.mjs';
 
 const rateWindows = new Map();
 const preAuthRateWindows = new Map();
@@ -44,10 +44,10 @@ function touchTeamMember(config, principal) {
 function touchTeamMemberBestEffort(principal) {
   if (principal?.source !== 'team-token') return false;
   try {
-    const preview = normalizeDeploymentConfig(readConfig());
+    const preview = normalizeInstanceConfig(readConfig());
     if (!touchTeamMember(preview, principal)) return false;
     mutateConfig(config => {
-      normalizeDeploymentConfig(config);
+      normalizeInstanceConfig(config);
       touchTeamMember(config, principal);
       return config;
     }, { retries: 4 });
@@ -58,14 +58,12 @@ function touchTeamMemberBestEffort(principal) {
 }
 
 export function authenticateGatewayRequest(req, url, config) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   const token = extractRequestToken(req, url);
-  if (!config.team.enabled && config.auth?.required === false && !token) {
+  if (config.auth?.required === false && !token) {
     return isLocalRequest(req) ? fallbackLocalPrincipal() : null;
   }
-  const principal = verifyAccessToken(token, config);
-  if (!principal) return null;
-  return principal;
+  return verifyAccessToken(token, config);
 }
 
 function normalizeInnerAuthorization(req, config) {
@@ -85,15 +83,15 @@ function consumeRateLimit(principalId, limit, store = rateWindows) {
 
 function consumePreviewRateLimit(req, config) {
   const key = `preview-ip:${remoteAddress(req) || 'unknown'}`;
-  const limit = Math.max(240, config.production.requestsPerMinute * 4);
+  const limit = Math.max(240, config.requestPolicy.requestsPerMinute * 4);
   return consumeRateLimit(key, limit, preAuthRateWindows);
 }
 
 function enterConcurrency(principalId, config) {
   return requestConcurrency.enter(
     `mcp:${principalId}`,
-    config.production.maxConcurrentRequests,
-    config.production.maxConcurrentPerPrincipal
+    config.requestPolicy.maxConcurrentRequests,
+    config.requestPolicy.maxConcurrentPerPrincipal
   );
 }
 
@@ -180,14 +178,14 @@ export function guardListener(listener) {
     const requestId = `req-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     let config;
     try {
-      config = normalizeDeploymentConfig(readConfig());
+      config = normalizeInstanceConfig(readConfig());
     } catch {
       jsonError(res, 500, 'DevMate configuration could not be loaded', 'config_error', requestId);
       return;
     }
 
     if (!hostAllowed(req, config)) {
-      jsonError(res, 421, 'Request host is not allowed by the DevMate production profile', 'host_not_allowed', requestId);
+      jsonError(res, 421, 'Request host is not allowed by the DevMate request policy', 'host_not_allowed', requestId);
       return;
     }
     res.setHeader('x-devmate-request-id', requestId);
@@ -207,13 +205,13 @@ export function guardListener(listener) {
     }
 
     const contentLength = Number(req.headers?.['content-length'] || 0);
-    if (Number.isFinite(contentLength) && contentLength > config.production.maxRequestBytes) {
-      jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: config.production.maxRequestBytes });
+    if (Number.isFinite(contentLength) && contentLength > config.requestPolicy.maxRequestBytes) {
+      jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: config.requestPolicy.maxRequestBytes });
       return;
     }
 
     const preAuthKey = `ip:${remoteAddress(req) || 'unknown'}`;
-    const preAuthLimit = Math.max(120, config.production.requestsPerMinute * 4);
+    const preAuthLimit = Math.max(120, config.requestPolicy.requestsPerMinute * 4);
     const preAuthRate = consumeRateLimit(preAuthKey, preAuthLimit, preAuthRateWindows);
     if (!preAuthRate.allowed) {
       jsonError(res, 429, 'DevMate authentication request rate limit exceeded', 'preauth_rate_limited', requestId, { resetAt: new Date(preAuthRate.resetAt).toISOString() });
@@ -226,7 +224,7 @@ export function guardListener(listener) {
       return;
     }
 
-    const rate = consumeRateLimit(principal.id, config.production.requestsPerMinute);
+    const rate = consumeRateLimit(principal.id, config.requestPolicy.requestsPerMinute);
     res.setHeader('x-devmate-rate-limit-remaining', String(rate.remaining));
     res.setHeader('x-devmate-rate-limit-reset', new Date(rate.resetAt).toISOString());
     if (!rate.allowed) {
@@ -249,7 +247,7 @@ export function guardListener(listener) {
       return;
     }
 
-    req.setTimeout?.(config.production.requestTimeoutMs);
+    req.setTimeout?.(config.requestPolicy.requestTimeoutMs);
     let released = false;
     const release = () => {
       if (released) return;
@@ -259,21 +257,21 @@ export function guardListener(listener) {
     res.once('finish', release);
     res.once('close', release);
 
-    const bodyLimit = installRequestBodyLimit(req, res, config.production.maxRequestBytes, requestId);
+    const bodyLimit = installRequestBodyLimit(req, res, config.requestPolicy.maxRequestBytes, requestId);
     const context = {
       requestId,
       principal,
       startedAt: nowIso(),
       remoteAddress: remoteAddress(req),
       userAgent: String(req.headers?.['user-agent'] || '').slice(0, 300),
-      deploymentMode: config.deployment.mode
+      connectionProvider: config.connection.provider
     };
     try {
       await runWithRequestContext(context, () => listener(req, res));
     } catch (error) {
       release();
       if (bodyLimit.overflowed) {
-        if (!res.headersSent) jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: config.production.maxRequestBytes });
+        if (!res.headersSent) jsonError(res, 413, 'MCP request body exceeds the configured limit', 'request_too_large', requestId, { maxRequestBytes: config.requestPolicy.maxRequestBytes });
       } else if (!res.headersSent) {
         jsonError(res, 500, 'DevMate request failed', 'request_failed', requestId);
       } else {
