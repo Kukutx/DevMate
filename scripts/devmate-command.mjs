@@ -64,7 +64,7 @@ function presetOptions(options = {}) {
     personal: { mode: 'personal', provider: 'ngrok', embeddedRunnerEnabled: true, runnerControlEnabled: false },
     team: { mode: 'team', provider: 'ngrok', embeddedRunnerEnabled: true, runnerControlEnabled: false },
     'control-plane': { mode: 'production', provider: 'external', embeddedRunnerEnabled: false, runnerControlEnabled: true },
-    runner: { mode: 'personal', provider: 'ngrok', embeddedRunnerEnabled: false, runnerControlEnabled: false }
+    runner: { mode: 'personal', provider: 'external', embeddedRunnerEnabled: false, runnerControlEnabled: false }
   }[preset];
   const publicUrl = String(options['public-url'] || '').trim();
   if (preset === 'control-plane' && !publicUrl) throw new Error('The control-plane preset requires --public-url');
