@@ -5,15 +5,18 @@ const vscode = require('vscode');
 const path = require('path');
 const { normalizeNgrokUrl } = require('./ngrok-support.js');
 const { normalizePublicUrl } = require('./tunnel-provider');
-const { allowedHosts, stablePublicUrl } = require('./vscode-host/deployment-public-url.js');
+const { allowedHosts, publicHost, stablePublicUrl } = require('./vscode-host/deployment-public-url.js');
+const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
+const {
+  applyDeploymentPatch,
+  readDeploymentConfig
+} = require('./vscode-host/shared-deployment-config.js');
 const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const {
-  deploymentMode: validateDeploymentMode,
   strictInteger,
   tunnelMaxRestarts,
   tunnelProvider: validateTunnelProvider
 } = require('./vscode-host/tunnel-settings.js');
-const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -36,12 +39,6 @@ function configPath(context) {
   return path.join(context.globalStorageUri.fsPath, 'config.json');
 }
 
-function readJson(file) { return readExtensionConfig(file); }
-
-function writeJson(file, value) {
-  writeExtensionConfig(file, value);
-}
-
 function setting(name, fallback) {
   const value = cfg().get(name);
   return value === undefined ? fallback : value;
@@ -52,90 +49,76 @@ function strictBoolean(value, label) {
   return value;
 }
 
-function tunnelSettings() {
-  const provider = validateTunnelProvider(String(setting('tunnelProvider', 'ngrok')).trim().toLowerCase());
+function localTunnelSettings() {
   return {
-    provider,
+    provider: validateTunnelProvider(String(setting('tunnelProvider', 'ngrok')).trim().toLowerCase()),
     publicUrl: String(setting('publicUrl', '') || '').trim(),
     ngrokUrl: String(setting('ngrokUrl', '') || '').trim(),
-    cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),
+    ngrokCommandPath: String(setting('ngrokCommandPath', '') || '').trim(),
+    ngrokUseManagedAccount: strictBoolean(setting('ngrokUseManagedAccount', true), 'ngrokUseManagedAccount'),
+    ngrokPoolingEnabled: strictBoolean(setting('ngrokPoolingEnabled', false), 'ngrokPoolingEnabled'),
     ngrokTrafficPolicyFile: String(setting('ngrokTrafficPolicyFile', '') || '').trim(),
+    cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),
     autoRestart: strictBoolean(setting('tunnelAutoRestart', true), 'tunnelAutoRestart'),
-    maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10))
+    maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10)),
+    deploymentMode: String(setting('deploymentMode', 'personal')).trim().toLowerCase()
   };
+}
+
+function tunnelSettings(context) {
+  return settingsFromState({
+    stateDirectory: context.globalStorageUri.fsPath,
+    localSettings: localTunnelSettings()
+  });
 }
 
 async function updateSetting(name, value) {
   await cfg().update(name, value, vscode.ConfigurationTarget.Global);
 }
 
-async function commitDeploymentSettings(context, updates) {
+async function commitLocalSettings(updates) {
+  const previous = new Map();
+  const applied = [];
   deploymentSettingsCommit = true;
   try {
-    for (const [name, value] of Object.entries(updates)) await updateSetting(name, value);
+    for (const [name, value] of Object.entries(updates)) {
+      previous.set(name, setting(name, undefined));
+      await updateSetting(name, value);
+      applied.push(name);
+    }
+  } catch (error) {
+    for (const name of applied.reverse()) {
+      try { await updateSetting(name, previous.get(name)); } catch {}
+    }
+    throw error;
   } finally {
     deploymentSettingsCommit = false;
   }
-  syncDeploymentConfig(context);
+}
+
+async function commitDeploymentSettings(context, localUpdates, sharedPatch) {
+  const previous = new Map();
+  const applied = [];
+  deploymentSettingsCommit = true;
+  try {
+    for (const [name, value] of Object.entries(localUpdates)) {
+      previous.set(name, setting(name, undefined));
+      await updateSetting(name, value);
+      applied.push(name);
+    }
+    applyDeploymentPatch(configPath(context), sharedPatch);
+  } catch (error) {
+    for (const name of applied.reverse()) {
+      try { await updateSetting(name, previous.get(name)); } catch {}
+    }
+    throw error;
+  } finally {
+    deploymentSettingsCommit = false;
+  }
 }
 
 async function openExternal(url) {
   await vscode.env.openExternal(vscode.Uri.parse(url));
-}
-
-function deploymentMode() {
-  return validateDeploymentMode(String(setting('deploymentMode', 'personal')).trim().toLowerCase());
-}
-
-function syncDeploymentConfig(context) {
-  const file = configPath(context);
-  const data = readJson(file);
-  if (!data) return false;
-  const mode = deploymentMode();
-  const settings = tunnelSettings();
-  const configuredPublicUrl = stablePublicUrl(settings);
-  data.deployment ||= {};
-  data.deployment.mode = mode;
-  data.deployment.tunnelProvider = settings.provider;
-  data.deployment.publicUrl = configuredPublicUrl;
-  data.team ||= {};
-  data.team.enabled = mode !== 'personal';
-  data.team.requireWorkspaceLeaseForWrites = strictBoolean(
-    setting('teamRequireWorkspaceLeaseForWrites', mode !== 'personal'),
-    'teamRequireWorkspaceLeaseForWrites'
-  );
-  data.production ||= {};
-  data.production.maxRequestBytes = strictInteger(
-    setting('productionMaxRequestBytes', 2097152), 2097152, 64 * 1024, 32 * 1024 * 1024, 'productionMaxRequestBytes'
-  );
-  data.production.requestsPerMinute = strictInteger(
-    setting('productionRequestsPerMinute', mode === 'production' ? 120 : 600),
-    mode === 'production' ? 120 : 600,
-    10,
-    10000,
-    'productionRequestsPerMinute'
-  );
-  data.production.maxConcurrentRequests = strictInteger(
-    setting('productionMaxConcurrentRequests', mode === 'production' ? 24 : 64),
-    mode === 'production' ? 24 : 64,
-    1,
-    256,
-    'productionMaxConcurrentRequests'
-  );
-  data.production.maxConcurrentPerPrincipal = strictInteger(
-    setting('productionMaxConcurrentPerPrincipal', mode === 'production' ? 4 : 16),
-    mode === 'production' ? 4 : 16,
-    1,
-    64,
-    'productionMaxConcurrentPerPrincipal'
-  );
-  data.production.requestTimeoutMs = strictInteger(
-    setting('productionRequestTimeoutMs', 900000), 900000, 1000, 60 * 60 * 1000, 'productionRequestTimeoutMs'
-  );
-  const configuredHosts = setting('allowedPublicHosts', []);
-  data.production.allowedHosts = allowedHosts(configuredHosts, configuredPublicUrl);
-  writeJson(file, data);
-  return true;
 }
 
 function checkCommand(command, args = ['--version']) {
@@ -186,7 +169,7 @@ async function promptStableNgrokUrl(current = '') {
   return value === undefined ? null : normalizeNgrokUrl(value);
 }
 
-async function promptCloudflareToken(context, title = 'DevMate · Cloudflare Tunnel Token') {
+async function promptCloudflareTokenValue(title = 'DevMate · Cloudflare Tunnel Token') {
   const value = await vscode.window.showInputBox({
     title,
     prompt: 'Paste the remotely managed Cloudflare Tunnel token. It is stored only in VS Code Secret Storage.',
@@ -196,31 +179,32 @@ async function promptCloudflareToken(context, title = 'DevMate · Cloudflare Tun
       ? 'Tunnel token looks incomplete.'
       : null
   });
-  if (value === undefined) return false;
-  cloudflareTunnelToken = String(value).trim();
-  await context.secrets.store(CLOUDFLARE_TOKEN_SECRET, cloudflareTunnelToken);
+  return value === undefined ? null : String(value).trim();
+}
+
+async function storeCloudflareToken(context, value) {
+  const token = String(value || '').trim();
+  if (!token) throw new Error('Cloudflare Tunnel token is required');
+  await context.secrets.store(CLOUDFLARE_TOKEN_SECRET, token);
+  cloudflareTunnelToken = token;
   log('Saved Cloudflare Tunnel token in VS Code Secret Storage.');
-  return true;
+}
+
+function productionHostsForUrl(state, nextUrl) {
+  const previousHost = publicHost(state?.deployment?.publicUrl || '');
+  const retained = (state?.allowedHosts || []).filter(host => host !== previousHost);
+  return allowedHosts(retained, nextUrl);
 }
 
 async function configureDeployment(context) {
   output.show(true);
+  const state = readDeploymentConfig(configPath(context));
+  if (!state) throw new Error('DevMate shared config is not initialized');
+
   const modeChoice = await vscode.window.showQuickPick([
-    {
-      label: '$(person) Personal',
-      description: 'Single owner token and local-first defaults',
-      value: 'personal'
-    },
-    {
-      label: '$(organization) Team',
-      description: 'Per-member tokens, roles, workspace scopes, and leases',
-      value: 'team'
-    },
-    {
-      label: '$(shield) Production',
-      description: 'Stable endpoint, team RBAC, rate limits, host allowlist, and restart policy',
-      value: 'production'
-    }
+    { label: '$(person) Personal', description: 'Single owner token and local-first defaults', value: 'personal' },
+    { label: '$(organization) Team', description: 'Per-member tokens, roles, workspace scopes, and leases', value: 'team' },
+    { label: '$(shield) Production', description: 'Stable endpoint, team RBAC, rate limits, host allowlist, and restart policy', value: 'production' }
   ], {
     title: 'DevMate · Deployment Mode',
     ignoreFocusOut: true
@@ -228,21 +212,9 @@ async function configureDeployment(context) {
   if (!modeChoice) return;
 
   const providerItems = [
-    {
-      label: '$(radio-tower) ngrok',
-      description: 'Development or stable reserved endpoint; supports Traffic Policy',
-      value: 'ngrok'
-    },
-    {
-      label: '$(cloud) Cloudflare managed tunnel',
-      description: 'Recommended Cloudflare option for stable team/production deployments',
-      value: 'cloudflare-managed'
-    },
-    {
-      label: '$(link) External reverse proxy',
-      description: 'Use an existing HTTPS ingress, load balancer, VPN, or tunnel',
-      value: 'external'
-    }
+    { label: '$(radio-tower) ngrok', description: 'Development or stable reserved endpoint; supports Traffic Policy', value: 'ngrok' },
+    { label: '$(cloud) Cloudflare managed tunnel', description: 'Stable managed team/production ingress', value: 'cloudflare-managed' },
+    { label: '$(link) External reverse proxy', description: 'Existing HTTPS ingress, load balancer, VPN, or tunnel', value: 'external' }
   ];
   if (modeChoice.value !== 'production') {
     providerItems.splice(1, 0, {
@@ -257,10 +229,12 @@ async function configureDeployment(context) {
   });
   if (!providerChoice) return;
 
-  const pendingSettings = {
+  const localUpdates = {
     deploymentMode: modeChoice.value,
     tunnelProvider: providerChoice.value
   };
+  let stableUrl = '';
+  let cloudflareToken = null;
 
   if (providerChoice.value === 'ngrok') {
     const policyChoice = await vscode.window.showQuickPick([
@@ -272,12 +246,19 @@ async function configureDeployment(context) {
     if (policyChoice.value === 'setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
     if (policyChoice.value === 'policy') await openExternal(NGROK_POLICY_DOCS);
     if (modeChoice.value === 'production') {
-      const url = await promptStableNgrokUrl(String(setting('ngrokUrl', '') || ''));
+      const current = state.deployment.tunnelProvider === 'ngrok'
+        ? state.deployment.publicUrl
+        : String(setting('ngrokUrl', '') || '');
+      const url = await promptStableNgrokUrl(current);
       if (!url) return;
-      pendingSettings.ngrokUrl = url;
+      stableUrl = url;
+      localUpdates.ngrokUrl = url;
+    } else {
+      stableUrl = state.deployment.tunnelProvider === 'ngrok'
+        ? state.deployment.publicUrl
+        : stablePublicUrl({ provider: 'ngrok', ngrokUrl: setting('ngrokUrl', '') });
     }
-  }
-  if (providerChoice.value === 'cloudflare-quick') {
+  } else if (providerChoice.value === 'cloudflare-quick') {
     const command = String(setting('cloudflareCommandPath', '') || 'cloudflared');
     const check = checkCommand(command);
     if (!check.ok) {
@@ -286,21 +267,40 @@ async function configureDeployment(context) {
         'Open Cloudflare Docs'
       ).then(choice => choice && openExternal(CLOUDFLARE_DOCS));
     }
-  }
-  if (providerChoice.value === 'cloudflare-managed') {
-    const url = await promptPublicUrl(String(setting('publicUrl', '') || ''));
+  } else if (providerChoice.value === 'cloudflare-managed') {
+    const current = state.deployment.tunnelProvider === 'cloudflare-managed'
+      ? state.deployment.publicUrl
+      : String(setting('publicUrl', '') || '');
+    const url = await promptPublicUrl(current);
     if (!url) return;
-    if (!await promptCloudflareToken(context)) return;
-    pendingSettings.publicUrl = url;
-  }
-  if (providerChoice.value === 'external') {
-    const url = await promptPublicUrl(String(setting('publicUrl', '') || ''));
+    cloudflareToken = await promptCloudflareTokenValue();
+    if (!cloudflareToken) return;
+    stableUrl = url;
+    localUpdates.publicUrl = url;
+  } else if (providerChoice.value === 'external') {
+    const current = state.deployment.tunnelProvider === 'external'
+      ? state.deployment.publicUrl
+      : String(setting('publicUrl', '') || '');
+    const url = await promptPublicUrl(current);
     if (!url) return;
-    pendingSettings.publicUrl = url;
+    stableUrl = url;
+    localUpdates.publicUrl = url;
   }
 
-  if (modeChoice.value !== 'personal') pendingSettings.teamRequireWorkspaceLeaseForWrites = true;
-  await commitDeploymentSettings(context, pendingSettings);
+  const sharedPatch = {
+    mode: modeChoice.value,
+    tunnelProvider: providerChoice.value,
+    publicUrl: stableUrl,
+    requireWorkspaceLeaseForWrites: modeChoice.value === 'personal'
+      ? state.leaseRequired
+      : true
+  };
+  if (modeChoice.value === 'production') {
+    sharedPatch.allowedHosts = productionHostsForUrl(state, stableUrl);
+  }
+
+  if (cloudflareToken) await storeCloudflareToken(context, cloudflareToken);
+  await commitDeploymentSettings(context, localUpdates, sharedPatch);
   await vscode.commands.executeCommand('devMate.stop');
   const start = await vscode.window.showInformationMessage(
     'DevMate deployment settings saved.',
@@ -311,15 +311,72 @@ async function configureDeployment(context) {
   if (start === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
 }
 
+function settingPatch(context, event) {
+  const state = readDeploymentConfig(configPath(context));
+  if (!state) return null;
+  const patch = {};
+
+  if (event.affectsConfiguration('devMate.deploymentMode')) {
+    patch.mode = String(setting('deploymentMode', state.deployment.mode)).trim().toLowerCase();
+  }
+  if (event.affectsConfiguration('devMate.tunnelProvider')) {
+    const provider = validateTunnelProvider(String(setting('tunnelProvider', state.deployment.tunnelProvider)).trim().toLowerCase());
+    patch.tunnelProvider = provider;
+    patch.publicUrl = stablePublicUrl({
+      provider,
+      ngrokUrl: setting('ngrokUrl', ''),
+      publicUrl: setting('publicUrl', '')
+    });
+  }
+  const provider = patch.tunnelProvider || state.deployment.tunnelProvider;
+  if (event.affectsConfiguration('devMate.ngrokUrl') && provider === 'ngrok') {
+    patch.publicUrl = stablePublicUrl({ provider, ngrokUrl: setting('ngrokUrl', '') });
+  }
+  if (event.affectsConfiguration('devMate.publicUrl') && (provider === 'cloudflare-managed' || provider === 'external')) {
+    patch.publicUrl = stablePublicUrl({ provider, publicUrl: setting('publicUrl', '') });
+  }
+  if (event.affectsConfiguration('devMate.teamRequireWorkspaceLeaseForWrites')) {
+    patch.requireWorkspaceLeaseForWrites = strictBoolean(
+      setting('teamRequireWorkspaceLeaseForWrites', state.leaseRequired),
+      'teamRequireWorkspaceLeaseForWrites'
+    );
+  }
+
+  const limits = {
+    productionMaxRequestBytes: ['maxRequestBytes', 2097152, 65536, 33554432],
+    productionRequestsPerMinute: ['requestsPerMinute', 120, 10, 10000],
+    productionMaxConcurrentRequests: ['maxConcurrentRequests', 24, 1, 256],
+    productionMaxConcurrentPerPrincipal: ['maxConcurrentPerPrincipal', 4, 1, 64],
+    productionRequestTimeoutMs: ['requestTimeoutMs', 900000, 1000, 3600000]
+  };
+  for (const [settingName, [key, fallback, min, max]] of Object.entries(limits)) {
+    if (!event.affectsConfiguration(`devMate.${settingName}`)) continue;
+    patch[key] = strictInteger(setting(settingName, fallback), fallback, min, max, settingName);
+  }
+  if (event.affectsConfiguration('devMate.allowedPublicHosts')) {
+    const values = setting('allowedPublicHosts', []);
+    if (!Array.isArray(values)) throw new TypeError('allowedPublicHosts must be an array');
+    patch.allowedHosts = values;
+  }
+  return Object.keys(patch).length ? patch : null;
+}
+
+async function syncExplicitSettingChange(context, event) {
+  if (deploymentSettingsCommit) return false;
+  const patch = settingPatch(context, event);
+  if (!patch) return false;
+  applyDeploymentPatch(configPath(context), patch);
+  log(`Applied explicit VS Code deployment setting change to shared config: ${Object.keys(patch).join(', ')}.`);
+  return true;
+}
+
 async function tunnelDoctor(context) {
   output.show(true);
-  syncDeploymentConfig(context);
-  const settings = tunnelSettings();
-  const configuredPublicUrl = stablePublicUrl(settings);
+  const settings = tunnelSettings(context);
   log('--- deployment/tunnel diagnostics ---');
-  log(`Deployment mode: ${deploymentMode()}`);
+  log(`Deployment mode: ${settings.deploymentMode}`);
   log(`Tunnel provider: ${settings.provider}`);
-  log(`Stable public URL for provider: ${configuredPublicUrl || 'not configured'}`);
+  log(`Stable public URL: ${settings.provider === 'ngrok' ? settings.ngrokUrl : settings.publicUrl || 'not configured'}`);
   log(`Auto restart: ${settings.autoRestart ? 'enabled' : 'disabled'}; max restarts=${settings.maxRestarts}`);
   if (settings.provider === 'ngrok') {
     log(`ngrok Traffic Policy: ${settings.ngrokTrafficPolicyFile || 'not configured'}`);
@@ -328,9 +385,11 @@ async function tunnelDoctor(context) {
     const command = settings.cloudflareCommandPath || 'cloudflared';
     const check = checkCommand(command);
     log(`cloudflared: ${check.ok ? check.output : `MISSING (${check.output})`}`);
-    log(`Managed tunnel token: ${cloudflareTunnelToken ? 'configured' : 'not configured'}`);
+    if (settings.provider === 'cloudflare-managed') {
+      log(`Managed tunnel token: ${cloudflareTunnelToken ? 'configured' : 'not configured'}`);
+    }
   } else {
-    log('External provider: DevMate verifies the configured URL and does not manage an ingress process.');
+    log('External provider: DevMate verifies the shared configured URL and does not manage an ingress process.');
   }
   try {
     const runtime = tunnelStatus();
@@ -360,7 +419,10 @@ async function activate(context) {
   register(context, 'devMate.deploymentSetup', () => configureDeployment(context));
   register(context, 'devMate.tunnelSetup', () => configureDeployment(context));
   register(context, 'devMate.tunnelDoctor', () => tunnelDoctor(context));
-  register(context, 'devMate.cloudflareSetToken', () => promptCloudflareToken(context));
+  register(context, 'devMate.cloudflareSetToken', async () => {
+    const token = await promptCloudflareTokenValue();
+    if (token) await storeCloudflareToken(context, token);
+  });
   register(context, 'devMate.cloudflareClearToken', async () => {
     try { await stopTunnel(); } catch {}
     await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
@@ -368,22 +430,25 @@ async function activate(context) {
     vscode.window.showInformationMessage('Cloudflare Tunnel token removed from VS Code Secret Storage.');
   });
   register(context, 'devMate.openTunnelDocs', async () => {
-    const provider = tunnelSettings().provider;
+    const provider = tunnelSettings(context).provider;
     await openExternal(provider.startsWith('cloudflare') ? CLOUDFLARE_DOCS : NGROK_POLICY_DOCS);
   });
 
   innerExtension = require('./extension-entry');
   await innerExtension.activate(context);
-  syncDeploymentConfig(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
     if (!event.affectsConfiguration('devMate') || deploymentSettingsCommit) return;
     try {
-      syncDeploymentConfig(context);
+      void syncExplicitSettingChange(context, event).catch(error => {
+        log(`Could not apply deployment setting change: ${error.message || error}`);
+        vscode.window.showErrorMessage(`DevMate deployment setting was not applied: ${error.message || error}`);
+      });
     } catch (error) {
-      log(`Could not synchronize deployment config: ${error.message || error}`);
+      log(`Could not apply deployment setting change: ${error.message || error}`);
     }
   }));
-  log(`Deployment integration ready: mode=${deploymentMode()} provider=${tunnelSettings().provider}.`);
+  const settings = tunnelSettings(context);
+  log(`Deployment integration ready: mode=${settings.deploymentMode} provider=${settings.provider}.`);
 }
 
 async function deactivate() {
@@ -394,4 +459,12 @@ async function deactivate() {
   }
 }
 
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  configureDeployment,
+  deactivate,
+  localTunnelSettings,
+  settingPatch,
+  syncExplicitSettingChange,
+  tunnelSettings
+};
