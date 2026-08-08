@@ -199,7 +199,7 @@ class PublicTunnelVerifier {
         if (!this.generationStillCurrent(current, generation)) return current;
         current.connection = {
           ...(current.connection || {}),
-          ...successfulVerificationPatch(test, record.publicUrl, stamp)
+          ...successfulVerificationPatch(test, record.publicUrl, stamp, record)
         };
         return current;
       });
