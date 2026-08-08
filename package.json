@@ -188,7 +188,9 @@
         "devMate.port": {
           "type": "number",
           "default": 8787,
-          "description": "Preferred local DevMate port."
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Preferred local DevMate port for new shared state. An existing shared Gateway port remains authoritative."
         },
         "devMate.ngrokCommandPath": {
           "type": "string",
