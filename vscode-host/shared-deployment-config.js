@@ -2,6 +2,10 @@
 
 const { readJson, updateConfig } = require('../shared/config-store.cjs');
 const {
+  normalizeAllowedHosts,
+  reconcileAllowedHosts
+} = require('../shared/deployment-hosts.cjs');
+const {
   deploymentMode: validateDeploymentMode,
   strictInteger,
   tunnelProvider: validateTunnelProvider
@@ -35,10 +39,7 @@ function cleanHttpsOrigin(value, { required = false } = {}) {
 }
 
 function normalizeHostList(values) {
-  if (!Array.isArray(values)) throw new TypeError('allowedHosts must be an array');
-  return [...new Set(values
-    .map(value => String(value || '').trim().toLowerCase())
-    .filter(Boolean))];
+  return normalizeAllowedHosts(values);
 }
 
 function deploymentState(config) {
@@ -94,6 +95,17 @@ function applyDeploymentPatch(file, patch = {}) {
     const deploymentTouched = patch.mode !== undefined || patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
     assertDeployableTransition({ mode, provider, publicUrl, touched: deploymentTouched });
 
+    if (patch.allowedHosts !== undefined) {
+      config.production.allowedHosts = normalizeHostList(patch.allowedHosts);
+    } else if (deploymentTouched) {
+      config.production.allowedHosts = reconcileAllowedHosts({
+        currentAllowedHosts: config.production.allowedHosts || [],
+        previousPublicUrl: current.publicUrl,
+        nextPublicUrl: publicUrl,
+        nextMode: mode
+      });
+    }
+
     config.deployment.mode = mode;
     config.deployment.tunnelProvider = provider;
     config.deployment.publicUrl = publicUrl;
@@ -110,7 +122,6 @@ function applyDeploymentPatch(file, patch = {}) {
       if (patch[key] === undefined) continue;
       config.production[key] = strictInteger(patch[key], config.production[key], min, max, key);
     }
-    if (patch.allowedHosts !== undefined) config.production.allowedHosts = normalizeHostList(patch.allowedHosts);
     return config;
   });
 }
