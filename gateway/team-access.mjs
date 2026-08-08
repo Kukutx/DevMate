@@ -1,22 +1,18 @@
 import crypto from 'node:crypto';
+import instanceConfig from '../shared/instance-config.cjs';
 import { uniqueCredentialId } from './credential-id.mjs';
 import {
   ownerOnlyTool,
   requiredCapabilityForTool,
   toolWorkspaceId
 } from './tool-policy.mjs';
-import {
-  defaultedArray,
-  defaultedBoolean,
-  defaultedEnum,
-  defaultedInteger
-} from './strict-config.mjs';
+import { defaultedBoolean, defaultedEnum } from './strict-config.mjs';
 
 export { requiredCapabilityForTool, toolWorkspaceId } from './tool-policy.mjs';
 
-export const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
-export const DEPLOYMENT_MODES = Object.freeze(['personal', 'team', 'production']);
-export const TUNNEL_PROVIDERS = Object.freeze(['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
+export const TEAM_ROLES = Object.freeze([...instanceConfig.TEAM_ROLES]);
+export const TUNNEL_PROVIDERS = Object.freeze([...instanceConfig.CONNECTION_PROVIDERS]);
+export const normalizeInstanceConfig = instanceConfig.normalizeInstanceConfig;
 
 const ROLE_CAPABILITIES = Object.freeze({
   observer: new Set(['read']),
@@ -44,17 +40,10 @@ function parseExpiry(value) {
   return new Date(time).toISOString();
 }
 
-function objectField(config, key) {
-  if (config[key] === undefined) config[key] = {};
-  if (!config[key] || typeof config[key] !== 'object' || Array.isArray(config[key])) {
-    throw new TypeError(`${key} must be an object`);
-  }
-  return config[key];
-}
-
 function stringList(value, label) {
-  const items = defaultedArray(value, [], label);
-  return [...new Set(items.map(item => {
+  const source = value === undefined ? [] : value;
+  if (!Array.isArray(source)) throw new TypeError(`${label} must be an array`);
+  return [...new Set(source.map(item => {
     if (typeof item !== 'string') throw new TypeError(`${label} must contain only strings`);
     return item.trim();
   }).filter(Boolean))];
@@ -64,49 +53,6 @@ function scopedWorkspaceIds(value, label = 'workspaceIds') {
   const ids = stringList(value, label);
   if (!ids.length) throw new Error(`${label} must contain at least one explicit workspace ID`);
   return ids;
-}
-
-export function normalizeDeploymentConfig(config) {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
-
-  const deployment = objectField(config, 'deployment');
-  const mode = defaultedEnum(deployment.mode, DEPLOYMENT_MODES, 'personal', 'deployment mode');
-  const provider = defaultedEnum(deployment.tunnelProvider, TUNNEL_PROVIDERS, 'ngrok', 'tunnel provider');
-  if (mode === 'production' && provider === 'cloudflare-quick') {
-    throw new Error('Cloudflare Quick Tunnels are development-only and cannot be used in production mode');
-  }
-  deployment.mode = mode;
-  deployment.tunnelProvider = provider;
-  if (deployment.publicUrl === undefined) deployment.publicUrl = '';
-  else if (typeof deployment.publicUrl !== 'string') throw new TypeError('deployment.publicUrl must be a string');
-  else deployment.publicUrl = deployment.publicUrl.trim();
-
-  const team = objectField(config, 'team');
-  team.enabled = mode !== 'personal';
-  team.members = defaultedArray(team.members, [], 'team.members');
-  team.requireWorkspaceLeaseForWrites = defaultedBoolean(
-    team.requireWorkspaceLeaseForWrites,
-    mode !== 'personal',
-    'team.requireWorkspaceLeaseForWrites'
-  );
-  team.defaultMemberRole = defaultedEnum(team.defaultMemberRole, TEAM_ROLES, 'developer', 'team role');
-  team.maxMembers = defaultedInteger(team.maxMembers, 100, 1, 500, 'team.maxMembers');
-
-  const runtime = objectField(config, 'runtime');
-  runtime.maxConcurrentJobs = defaultedInteger(runtime.maxConcurrentJobs, 2, 1, 8, 'runtime.maxConcurrentJobs');
-
-  const jobs = objectField(config, 'jobs');
-  jobs.allowJobGitSave = defaultedBoolean(jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
-  jobs.embeddedRunnerEnabled = defaultedBoolean(jobs.embeddedRunnerEnabled, true, 'jobs.embeddedRunnerEnabled');
-
-  const production = objectField(config, 'production');
-  production.maxRequestBytes = defaultedInteger(production.maxRequestBytes, 2 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024, 'production.maxRequestBytes');
-  production.requestsPerMinute = defaultedInteger(production.requestsPerMinute, mode === 'production' ? 120 : 600, 10, 10000, 'production.requestsPerMinute');
-  production.maxConcurrentRequests = defaultedInteger(production.maxConcurrentRequests, mode === 'production' ? 24 : 64, 1, 256, 'production.maxConcurrentRequests');
-  production.maxConcurrentPerPrincipal = defaultedInteger(production.maxConcurrentPerPrincipal, mode === 'production' ? 4 : 16, 1, 64, 'production.maxConcurrentPerPrincipal');
-  production.requestTimeoutMs = defaultedInteger(production.requestTimeoutMs, 15 * 60 * 1000, 1000, 60 * 60 * 1000, 'production.requestTimeoutMs');
-  production.allowedHosts = stringList(production.allowedHosts, 'production.allowedHosts').map(value => value.toLowerCase());
-  return config;
 }
 
 export function roleCapabilities(role) {
@@ -148,7 +94,7 @@ function uniqueMemberId(config, requested = '') {
 }
 
 export function createTeamMember(config, input = {}) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   if (config.team.members.length >= config.team.maxMembers) throw new Error(`Team member limit reached (${config.team.maxMembers})`);
   const role = defaultedEnum(input.role, TEAM_ROLES, config.team.defaultMemberRole, 'team role');
   const id = uniqueMemberId(config, input.id || input.name);
@@ -175,7 +121,7 @@ export function createTeamMember(config, input = {}) {
 }
 
 export function rotateTeamMemberToken(config, id) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   const secret = base64url(crypto.randomBytes(32));
@@ -188,7 +134,7 @@ export function rotateTeamMemberToken(config, id) {
 }
 
 export function updateTeamMember(config, id, patch = {}) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   if (patch.name !== undefined) member.name = String(patch.name || '').trim().slice(0, 200) || member.id;
@@ -201,7 +147,7 @@ export function updateTeamMember(config, id, patch = {}) {
 }
 
 export function revokeTeamMember(config, id) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   member.disabled = true;
@@ -215,19 +161,18 @@ function parseTeamToken(token) {
 }
 
 export function verifyAccessToken(token, config, { updateLastUsed = false } = {}) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   const raw = String(token || '').trim();
   if (config.auth?.token && timingSafeEqualText(raw, config.auth.token)) {
     return {
-      id: 'personal-owner',
-      name: 'Personal owner',
+      id: 'owner',
+      name: 'Owner',
       role: 'owner',
       workspaceIds: [],
-      source: 'personal-token',
+      source: 'owner-token',
       tokenVersion: 1
     };
   }
-  if (!config.team.enabled) return null;
   const parsed = parseTeamToken(raw);
   if (!parsed) return null;
   const member = config.team.members.find(item => item.id === parsed.id);
@@ -275,23 +220,23 @@ function assertTeamOperationSafety(name, args, principal) {
     throw new Error(`Team token ${principal.id} cannot run a high-risk command through ${name}`);
   }
   if (name === 'git_push' && (args?.force || args?.forceWithLease)) {
-    throw new Error('Force push is reserved for the local/personal owner token');
+    throw new Error('Force push is reserved for the owner token');
   }
   if (name === 'git_branch' && args?.action === 'delete' && args?.force) {
-    throw new Error('Forced branch deletion is reserved for the local/personal owner token');
+    throw new Error('Forced branch deletion is reserved for the owner token');
   }
   if (name === 'git_raw') {
     const values = (args?.args || []).map(value => String(value).toLowerCase());
     const joined = values.join(' ');
     if ((values[0] === 'reset' && values.includes('--hard')) || values[0] === 'clean' ||
       (values[0] === 'push' && /(?:^| )--force(?:-with-lease)?(?: |$)/.test(joined))) {
-      throw new Error('High-risk raw Git operations are reserved for the local/personal owner token');
+      throw new Error('High-risk raw Git operations are reserved for the owner token');
     }
   }
 }
 
 export function authorizeToolCall({ name, annotations, args, config, principal }) {
-  normalizeDeploymentConfig(config);
+  normalizeInstanceConfig(config);
   const effectivePrincipal = principal || fallbackLocalPrincipal();
   const capability = requiredCapabilityForTool(name, annotations, args);
   assertTeamOperationSafety(name, args, effectivePrincipal);
