@@ -31,7 +31,6 @@ function strictBoolean(value, label) {
 
 function localTunnelSettings() {
   return {
-    provider: String(setting(vscode, 'tunnelProvider', 'ngrok')).trim().toLowerCase(),
     publicUrl: setting(vscode, 'publicUrl', ''),
     ngrokUrl: setting(vscode, 'ngrokUrl', ''),
     ngrokCommandPath: setting(vscode, 'ngrokCommandPath', ''),
@@ -40,8 +39,7 @@ function localTunnelSettings() {
     ngrokTrafficPolicyFile: setting(vscode, 'ngrokTrafficPolicyFile', ''),
     cloudflareCommandPath: setting(vscode, 'cloudflareCommandPath', ''),
     autoRestart: strictBoolean(setting(vscode, 'tunnelAutoRestart', true), 'tunnelAutoRestart'),
-    maxRestarts: tunnelMaxRestarts(setting(vscode, 'tunnelMaxRestarts', 10)),
-    deploymentMode: String(setting(vscode, 'deploymentMode', 'personal')).trim().toLowerCase()
+    maxRestarts: tunnelMaxRestarts(setting(vscode, 'tunnelMaxRestarts', 10))
   };
 }
 
