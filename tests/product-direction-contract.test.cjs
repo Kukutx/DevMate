@@ -8,20 +8,29 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const json = relative => JSON.parse(source(relative));
+const REMOVED_GLOBAL_BUSINESS_SETTINGS = [
+  'devMate.tunnelProvider',
+  'devMate.deploymentMode',
+  'devMate.teamRequireWorkspaceLeaseForWrites',
+  'devMate.productionMaxRequestBytes',
+  'devMate.productionRequestsPerMinute',
+  'devMate.productionMaxConcurrentRequests',
+  'devMate.productionMaxConcurrentPerPrincipal',
+  'devMate.productionRequestTimeoutMs',
+  'devMate.allowedPublicHosts'
+];
 
-test('shared personal config and VS Code use one ngrok default while retaining all current deployment providers', () => {
-  const pkg = json('package.json');
-  const provider = pkg.contributes.configuration.properties['devMate.tunnelProvider'];
-  assert.equal(provider.default, 'ngrok');
-  assert.deepEqual(provider.enum, ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
-
+test('shared personal config owns the ngrok default while retaining all current deployment providers', () => {
   const sharedConfig = source('shared/config-store.cjs');
+  const settings = source('vscode-host/tunnel-settings.js');
   const entry = source('extension-entry-shared-tunnel.js');
   const editor = source('vscode-host/shared-deployment-config.js');
   assert.match(sharedConfig, /deployment: \{ mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' \}/);
-  assert.match(entry, /setting\(vscode, 'tunnelProvider', 'ngrok'\)/);
+  assert.match(settings, /\['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external'\]/);
   assert.match(entry, /settingsFromState/);
   assert.match(entry, /new TunnelController/);
+  assert.doesNotMatch(entry, /setting\(vscode, 'tunnelProvider'/);
+  assert.doesNotMatch(entry, /setting\(vscode, 'deploymentMode'/);
   assert.doesNotMatch(entry, /normalizeBootstrapDeployment/);
   assert.doesNotMatch(editor, /normalizeBootstrapDeployment/);
 });
@@ -36,6 +45,15 @@ test('shared workspace config is authoritative for tunnel mode, provider, and st
   assert.match(effective, /provider === 'ngrok' \? fallbackNgrokUrl/);
 });
 
+test('VS Code manifest does not expose machine-global deployment business controls', () => {
+  const properties = json('package.json').contributes.configuration.properties;
+  for (const key of REMOVED_GLOBAL_BUSINESS_SETTINGS) {
+    assert.equal(Object.hasOwn(properties, key), false, `${key} must stay workspace-scoped in shared config`);
+  }
+  assert.equal(Object.hasOwn(properties, 'devMate.ngrokUrl'), true);
+  assert.equal(Object.hasOwn(properties, 'devMate.publicUrl'), true);
+});
+
 test('generic VS Code context writes cannot overwrite shared deployment, team, production, or active server state', () => {
   const sync = source('vscode-host/config-sync.js');
   assert.match(sync, /'deployment', 'team', 'production'/);
@@ -43,36 +61,39 @@ test('generic VS Code context writes cannot overwrite shared deployment, team, p
   assert.doesNotMatch(sync, /'connection', 'vscodeContext', 'activeWorkspaceId', 'deployment', 'production'/);
 });
 
-test('deployment setup commits shared business state only after required provider input is complete', () => {
+test('deployment setup writes business state directly to the current shared config', () => {
   const platform = source('extension-entry-platform.js');
   const start = platform.indexOf('async function configureDeployment');
-  const end = platform.indexOf('function settingPatch', start);
+  const end = platform.indexOf('async function tunnelDoctor', start);
   assert.ok(start >= 0 && end > start);
   const block = platform.slice(start, end);
-  assert.match(block, /const localUpdates =/);
+  assert.match(block, /const localUpdates = \{\}/);
   assert.match(block, /const sharedPatch =/);
+  assert.match(block, /mode: modeChoice\.value/);
+  assert.match(block, /tunnelProvider: providerChoice\.value/);
   assert.match(block, /await commitDeploymentSettings\(context, localUpdates, sharedPatch\)/);
-  assert.doesNotMatch(block, /await updateSetting\('deploymentMode'/);
-  assert.doesNotMatch(block, /await updateSetting\('tunnelProvider'/);
+  assert.doesNotMatch(block, /localUpdates\.deploymentMode/);
+  assert.doesNotMatch(block, /localUpdates\.tunnelProvider/);
 });
 
-test('activation and Doctor never perform a whole deployment synchronization from machine settings', () => {
+test('platform has no Global Settings to shared deployment synchronization path', () => {
   const platform = source('extension-entry-platform.js');
-  assert.doesNotMatch(platform, /function syncDeploymentConfig/);
-  assert.doesNotMatch(platform, /syncDeploymentConfig\(context\)/);
-  assert.match(platform, /syncExplicitSettingChange/);
-  assert.match(platform, /settingPatch/);
+  assert.doesNotMatch(platform, /settingPatch/);
+  assert.doesNotMatch(platform, /settingRollback/);
+  assert.doesNotMatch(platform, /syncExplicitSettingChange/);
+  assert.doesNotMatch(platform, /onDidChangeConfiguration/);
 });
 
-test('stable deployment URL is selected by provider instead of leaking between providers', () => {
+test('stable deployment URL candidates remain provider-specific without becoming active business state', () => {
   const helper = source('vscode-host/deployment-public-url.js');
   const platform = source('extension-entry-platform.js');
   assert.match(helper, /provider === 'ngrok'/);
   assert.match(helper, /settings\.ngrokUrl/);
   assert.match(helper, /provider === 'cloudflare-managed' \|\| provider === 'external'/);
   assert.match(helper, /provider === 'cloudflare-quick'\) return ''/);
-  assert.match(platform, /stablePublicUrl/);
-  assert.match(platform, /patch\.publicUrl = stablePublicUrl/);
+  assert.match(platform, /localUpdates\.ngrokUrl = url/);
+  assert.match(platform, /localUpdates\.publicUrl = url/);
+  assert.match(platform, /sharedPatch =/);
 });
 
 test('Obsidian remains a shared Gateway host and never becomes a tunnel-provider owner', () => {
