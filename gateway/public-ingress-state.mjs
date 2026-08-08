@@ -6,6 +6,7 @@ import { CONFIG_PATH } from './local-shared.mjs';
 const {
   cleanHttpsOrigin,
   runtimeMatchesConnection,
+  verifiedConnection,
   verifiedForCurrentRecord
 } = verification;
 const { SharedTunnelRecordStore } = tunnelRecordStore;
@@ -62,18 +63,29 @@ export function runtimePublicIngress(config, { stateDirectory } = {}) {
 
 export function effectivePublicIngress(config, options = {}) {
   const runtime = runtimePublicIngress(config, options);
-  if (runtime.available) return runtime;
+  if (runtime.available && runtime.verified) return runtime;
 
   const configured = cleanHttpsOrigin(config?.connection?.publicUrl || '');
   if (configured) {
+    const verified = verifiedConnection(config, configured);
     return {
-      available: true,
-      verified: false,
+      available: verified,
+      verified,
       source: 'configured',
       publicUrl: configured,
       provider: config?.connection?.provider || null,
       runtime,
-      reason: 'configured HTTPS origin is available but no current runtime preflight is recorded'
+      reason: verified
+        ? 'configured HTTPS origin passed MCP preflight'
+        : 'configured HTTPS origin has not passed MCP preflight'
+    };
+  }
+
+  if (runtime.available) {
+    return {
+      ...runtime,
+      available: false,
+      reason: runtime.reason || 'current public connection has not passed MCP preflight'
     };
   }
 
@@ -91,5 +103,6 @@ export function effectivePublicIngress(config, options = {}) {
 export const __test = {
   cleanHttpsOrigin,
   runtimeMatchesConnection,
+  verifiedConnection,
   verifiedForCurrentRecord
 };
