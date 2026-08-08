@@ -20,11 +20,12 @@ test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle 
   assert.match(block, /state: 'ready'/);
   assert.match(block, /mcpUrl: preflight\.mcpUrl/);
   assert.match(block, /toolCount: preflight\.toolCount/);
+  assert.match(block, /this\.sessionRequested = true/);
   assert.match(block, /if \(tunnel\?\.owned\)[\s\S]*this\.tunnelController\.stop\(\)/);
   assert.match(block, /if \(gateway\?\.started && gateway\?\.owned\)[\s\S]*this\.controller\.stop\(\)/);
 });
 
-test('Obsidian Ready is tied to the current tunnel generation rather than URL equality', () => {
+test('Obsidian Ready is tied to the current complete Gateway+tunnel generation rather than URL equality', () => {
   const main = source('obsidian-plugin/src/main.js');
   assert.match(main, /recordGeneration/);
   assert.match(main, /verifiedForCurrentRecord/);
@@ -37,7 +38,7 @@ test('Obsidian Ready is tied to the current tunnel generation rather than URL eq
   assert.doesNotMatch(main, /lastVerifiedPublicUrl\s*===\s*tunnel\.publicUrl/);
 });
 
-test('Obsidian connection mutation fails closed unless the active provider stop is confirmed', () => {
+test('Obsidian connection mutation fails closed and only restarts an already requested session', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async configureConnection');
   const end = main.indexOf('updateConnectionSnapshot', start);
@@ -46,7 +47,25 @@ test('Obsidian connection mutation fails closed unless the active provider stop 
   assert.match(main, /assertTunnelSafeForCredentialChange/);
   assert.match(block, /const stopResult = await this\.tunnelController\.stop\(\)/);
   assert.match(block, /assertTunnelSafeForCredentialChange\(stopResult, 'Obsidian connection configuration change'\)/);
-  assert.match(block, /status\?\.state === 'running' && !stopState\.remoteOwner/);
+  assert.match(block, /this\.sessionRequested && status\?\.state === 'running' && !stopState\.remoteOwner/);
+});
+
+test('Obsidian requested session recovers through the complete Start lifecycle and explicit Stop cancels recovery intent', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  const refreshStart = main.indexOf('async refreshStatus()');
+  const startStart = main.indexOf('startRuntime(options', refreshStart);
+  assert.ok(refreshStart >= 0 && startStart > refreshStart);
+  const refresh = main.slice(refreshStart, startStart);
+  assert.match(refresh, /const needsFullRecovery = this\.sessionRequested && this\.settings\.enabled/);
+  assert.match(refresh, /status\.gateway\?\.state !== 'running' \|\| !status\.tunnel\?\.running/);
+  assert.match(refresh, /this\.startRuntime\(\{ quiet: true \}\)/);
+  assert.match(refresh, /!result\?\.mcpUrl \|\| Number\(result\?\.toolCount \|\| 0\) <= 0/);
+
+  const stopStart = main.indexOf('async stopRuntimeInternal');
+  const stopEnd = main.indexOf('restartRuntime()', stopStart);
+  const stop = main.slice(stopStart, stopEnd);
+  assert.match(stop, /this\.sessionRequested = false/);
+  assert.match(stop, /this\.recoveryNextAt = 0/);
 });
 
 test('Obsidian automatic URL copy is convenience after Ready, not a required Start stage', () => {
