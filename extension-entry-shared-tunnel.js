@@ -1,9 +1,13 @@
 'use strict';
 
+const path = require('node:path');
 const vscode = require('vscode');
+const { version: VERSION } = require('./package.json');
+const { ensurePersonalConfig } = require('./shared/config-store.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
-const { resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
+const { currentWorkspaceRoot, resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
+const { normalizeBootstrapDeployment } = require('./vscode-host/shared-deployment-config.js');
 const { TunnelController } = require('./vscode-host/tunnel-controller.js');
 const { clearTunnelController, setTunnelController } = require('./vscode-host/tunnel-runtime.js');
 const { tunnelMaxRestarts } = require('./vscode-host/tunnel-settings.js');
@@ -40,14 +44,25 @@ function localTunnelSettings() {
 }
 
 function tunnelSettings(stateDirectory = runtimeStateDirectory) {
-  return settingsFromState({
-    stateDirectory,
-    localSettings: localTunnelSettings()
-  });
+  return settingsFromState({ stateDirectory, localSettings: localTunnelSettings() });
 }
 
 function log(message) {
   output?.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
+}
+
+function ensureSharedDesktopConfig(stateDirectory) {
+  const workspaceRoot = currentWorkspaceRoot(vscode);
+  if (!workspaceRoot) return null;
+  const configFile = path.join(stateDirectory, 'config.json');
+  ensurePersonalConfig({
+    configFile,
+    workspaceRoot,
+    preferredPort: Number(setting(vscode, 'port', 8787)) || 8787,
+    appVersion: VERSION
+  });
+  normalizeBootstrapDeployment(configFile);
+  return configFile;
 }
 
 async function tunnelSecrets(context) {
@@ -71,6 +86,7 @@ async function activate(context) {
     try {
       runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
       localTunnelSettings();
+      ensureSharedDesktopConfig(runtimeStateDirectory);
       runtime = new TunnelController({
         stateDirectory: runtimeStateDirectory,
         settings: () => tunnelSettings(runtimeStateDirectory),
@@ -121,6 +137,7 @@ async function deactivate() {
 module.exports = {
   activate,
   deactivate,
+  ensureSharedDesktopConfig,
   localTunnelSettings,
   tunnelSecrets,
   tunnelSettings
