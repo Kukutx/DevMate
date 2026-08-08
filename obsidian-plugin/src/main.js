@@ -7,6 +7,7 @@ const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
 const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
 const { updateConfig } = require('../../shared/config-store.cjs');
+const { normalizeInstanceConfig } = require('../../shared/instance-config.cjs');
 const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
 const { TunnelController } = require('../../vscode-host/tunnel-controller.js');
 const { tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
@@ -194,10 +195,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   connectionConfiguration() {
     const config = this.controller?.readConfig?.() || null;
-    const deployment = config?.deployment && typeof config.deployment === 'object' ? config.deployment : {};
+    if (!config) return { provider: 'ngrok', publicUrl: '' };
+    normalizeInstanceConfig(config);
     return {
-      provider: deployment.tunnelProvider || 'ngrok',
-      publicUrl: String(deployment.publicUrl || '').trim()
+      provider: config.connection.provider,
+      publicUrl: String(config.connection.publicUrl || '').trim()
     };
   }
 
@@ -212,9 +214,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       }
     }
     const updated = updateConfig(this.controller.configFile, config => {
-      config.deployment ||= {};
-      if (requestedProvider !== null) config.deployment.tunnelProvider = requestedProvider;
-      if (requestedPublicUrl !== null) config.deployment.publicUrl = requestedPublicUrl;
+      normalizeInstanceConfig(config);
+      if (requestedProvider !== null) config.connection.provider = requestedProvider;
+      if (requestedPublicUrl !== null) config.connection.publicUrl = requestedPublicUrl;
       return config;
     });
     this.clearPublicVerification();
@@ -227,7 +229,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     if (!this.controller?.configFile) return;
     const cleanPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
     updateConfig(this.controller.configFile, config => {
-      config.connection = { ...(config.connection || {}), ...cleanPatch };
+      normalizeInstanceConfig(config);
+      config.connection = { ...config.connection, ...cleanPatch };
       return config;
     });
   }
