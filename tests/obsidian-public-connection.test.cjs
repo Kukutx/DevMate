@@ -71,7 +71,7 @@ test('Obsidian discovers a ready shared tunnel without assuming ngrok', () => {
   }
 });
 
-test('active shared tunnel takes precedence over Obsidian and deployment configured origins', () => {
+test('explicit Obsidian Public origin takes precedence over a live shared tunnel and shared deployment URL', () => {
   const stateDirectory = tempState();
   try {
     publishReadyTunnel(stateDirectory, {
@@ -84,28 +84,32 @@ test('active shared tunnel takes precedence over Obsidian and deployment configu
       publicOrigin: 'https://obsidian.example.test',
       config: { deployment: { tunnelProvider: 'external', publicUrl: 'https://deployment.example.test' } }
     });
-    assert.equal(connection.source, 'shared-tunnel');
-    assert.equal(connection.publicOrigin, 'https://live.ngrok-free.app');
-  } finally {
-    fs.rmSync(stateDirectory, { recursive: true, force: true });
-  }
-});
-
-test('explicit Obsidian public origin wins when no shared tunnel is active', () => {
-  const stateDirectory = tempState();
-  try {
-    const connection = resolvePublicConnection({
-      stateDirectory,
-      port: 8787,
-      publicOrigin: 'https://obsidian.example.test',
-      config: { deployment: { tunnelProvider: 'external', publicUrl: 'https://deployment.example.test' } }
-    });
     assert.deepEqual(connection, {
       source: 'obsidian-setting',
       publicOrigin: 'https://obsidian.example.test',
       provider: 'external',
       ownerHostId: ''
     });
+  } finally {
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('live shared tunnel is used when Obsidian has no explicit Public origin', () => {
+  const stateDirectory = tempState();
+  try {
+    publishReadyTunnel(stateDirectory, {
+      provider: 'ngrok',
+      publicUrl: 'https://live.ngrok-free.app'
+    });
+    const connection = resolvePublicConnection({
+      stateDirectory,
+      port: 8787,
+      publicOrigin: '',
+      config: { deployment: { tunnelProvider: 'external', publicUrl: 'https://deployment.example.test' } }
+    });
+    assert.equal(connection.source, 'shared-tunnel');
+    assert.equal(connection.publicOrigin, 'https://live.ngrok-free.app');
   } finally {
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
