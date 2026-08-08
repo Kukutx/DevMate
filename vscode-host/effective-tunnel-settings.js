@@ -2,32 +2,28 @@
 
 const path = require('node:path');
 const { readJson } = require('../shared/config-store.cjs');
-const {
-  deploymentMode: validateDeploymentMode,
-  tunnelProvider: validateTunnelProvider
-} = require('./tunnel-settings.js');
+const { normalizeInstanceConfig } = require('../shared/instance-config.cjs');
+const { tunnelProvider: validateTunnelProvider } = require('./tunnel-settings.js');
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function sharedDeployment(config) {
-  const deployment = object(config?.deployment);
-  if (!Object.keys(deployment).length) return null;
+function sharedConnection(config) {
+  if (!config || typeof config !== 'object') return null;
+  const normalized = normalizeInstanceConfig(config);
   return {
-    mode: validateDeploymentMode(String(deployment.mode || 'personal').trim().toLowerCase()),
-    provider: validateTunnelProvider(String(deployment.tunnelProvider || 'ngrok').trim().toLowerCase()),
-    publicUrl: String(deployment.publicUrl || '').trim()
+    provider: validateTunnelProvider(String(normalized.connection.provider || 'ngrok').trim().toLowerCase()),
+    publicUrl: String(normalized.connection.publicUrl || '').trim()
   };
 }
 
 function effectiveTunnelSettings({ sharedConfig = null, localSettings = {} } = {}) {
   const local = object(localSettings);
-  const deployment = sharedDeployment(sharedConfig);
-  const provider = deployment?.provider || validateTunnelProvider(String(local.provider || 'ngrok').trim().toLowerCase());
-  const mode = deployment?.mode || validateDeploymentMode(String(local.deploymentMode || 'personal').trim().toLowerCase());
-  const stablePublicUrl = deployment ? deployment.publicUrl : String(local.publicUrl || '').trim();
-  const fallbackNgrokUrl = deployment ? deployment.publicUrl : String(local.ngrokUrl || '').trim();
+  const connection = sharedConfig ? sharedConnection(sharedConfig) : null;
+  const provider = connection?.provider || validateTunnelProvider(String(local.provider || 'ngrok').trim().toLowerCase());
+  const stablePublicUrl = connection?.publicUrl ?? String(local.publicUrl || '').trim();
+  const fallbackNgrokUrl = connection?.publicUrl ?? String(local.ngrokUrl || '').trim();
 
   return {
     provider,
@@ -39,15 +35,15 @@ function effectiveTunnelSettings({ sharedConfig = null, localSettings = {} } = {
     ngrokTrafficPolicyFile: String(local.ngrokTrafficPolicyFile || '').trim(),
     cloudflareCommandPath: String(local.cloudflareCommandPath || '').trim(),
     autoRestart: local.autoRestart !== false,
-    maxRestarts: local.maxRestarts,
-    deploymentMode: mode
+    maxRestarts: local.maxRestarts
   };
 }
 
 function readSharedConfig(stateDirectory) {
   const directory = String(stateDirectory || '').trim();
   if (!directory) return null;
-  return readJson(path.join(directory, 'config.json'), null, { strict: true, supportedVersion: true });
+  const config = readJson(path.join(directory, 'config.json'), null, { strict: true, supportedVersion: true });
+  return config ? normalizeInstanceConfig(config) : null;
 }
 
 function settingsFromState({ stateDirectory, localSettings }) {
@@ -61,5 +57,5 @@ module.exports = {
   effectiveTunnelSettings,
   readSharedConfig,
   settingsFromState,
-  sharedDeployment
+  sharedConnection
 };
