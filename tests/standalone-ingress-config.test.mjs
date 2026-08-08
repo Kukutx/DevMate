@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  doctor,
   initConfig,
   validateStandaloneIngress
 } from '../scripts/standalone-runtime.mjs';
@@ -16,61 +17,54 @@ async function fixture() {
   return { directory, workspace, config };
 }
 
-test('standalone external and Cloudflare managed require stable HTTPS origins', () => {
-  assert.throws(() => validateStandaloneIngress({
-    mode: 'team',
+test('standalone personal and team modes may leave public ingress separately managed', () => {
+  for (const provider of ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']) {
+    assert.deepEqual(validateStandaloneIngress({
+      mode: 'team',
+      provider,
+      publicUrl: ''
+    }), { mode: 'team', provider, publicUrl: '' });
+  }
+  assert.deepEqual(validateStandaloneIngress({
+    mode: 'personal',
     provider: 'external',
     publicUrl: ''
-  }), /external requires --public-url/);
-  assert.throws(() => validateStandaloneIngress({
-    mode: 'team',
-    provider: 'cloudflare-managed',
-    publicUrl: ''
-  }), /cloudflare-managed requires --public-url/);
+  }), { mode: 'personal', provider: 'external', publicUrl: '' });
 });
 
-test('team ngrok and Cloudflare Quick may start without configured stable URLs', () => {
-  assert.deepEqual(validateStandaloneIngress({
-    mode: 'team',
-    provider: 'ngrok',
-    publicUrl: ''
-  }), { mode: 'team', provider: 'ngrok', publicUrl: '' });
-  assert.deepEqual(validateStandaloneIngress({
-    mode: 'team',
-    provider: 'cloudflare-quick',
-    publicUrl: ''
-  }), { mode: 'team', provider: 'cloudflare-quick', publicUrl: '' });
-});
-
-test('production rejects Quick Tunnel and requires stable URL for ngrok', () => {
+test('production rejects Quick Tunnel and requires stable URL for every provider', () => {
   assert.throws(() => validateStandaloneIngress({
     mode: 'production',
     provider: 'cloudflare-quick',
     publicUrl: ''
   }), /development-only/);
-  assert.throws(() => validateStandaloneIngress({
-    mode: 'production',
-    provider: 'ngrok',
-    publicUrl: ''
-  }), /Production mode requires --public-url/);
+  for (const provider of ['ngrok', 'cloudflare-managed', 'external']) {
+    assert.throws(() => validateStandaloneIngress({
+      mode: 'production',
+      provider,
+      publicUrl: ''
+    }), /Production mode requires --public-url/);
+  }
 });
 
-test('standalone init refuses incomplete external state without writing config', async () => {
+test('standalone team external without a known public URL remains a valid local or separately-ingressed Gateway config', async () => {
   const value = await fixture();
   try {
-    assert.throws(() => initConfig({
+    const result = initConfig({
       workspace: value.workspace,
       config: value.config,
       mode: 'team',
       provider: 'external'
-    }), /external requires --public-url/);
-    await assert.rejects(fsp.stat(value.config));
+    });
+    assert.equal(result.config.deployment.tunnelProvider, 'external');
+    assert.equal(result.config.deployment.publicUrl, '');
+    assert.deepEqual(result.config.production.allowedHosts, []);
   } finally {
     await fsp.rm(value.directory, { recursive: true, force: true });
   }
 });
 
-test('standalone init persists complete external state and Host allowlist', async () => {
+test('standalone team external may record a stable public URL and Host allowlist when known', async () => {
   const value = await fixture();
   try {
     const result = initConfig({
@@ -83,6 +77,22 @@ test('standalone init persists complete external state and Host allowlist', asyn
     assert.equal(result.config.deployment.tunnelProvider, 'external');
     assert.equal(result.config.deployment.publicUrl, 'https://standalone.example.test');
     assert.deepEqual(result.config.production.allowedHosts, ['standalone.example.test']);
+  } finally {
+    await fsp.rm(value.directory, { recursive: true, force: true });
+  }
+});
+
+test('standalone Doctor only makes public URL a hard requirement in production', async () => {
+  const value = await fixture();
+  try {
+    initConfig({
+      workspace: value.workspace,
+      config: value.config,
+      mode: 'team',
+      provider: 'external'
+    });
+    const report = doctor({ config: value.config });
+    assert.equal(report.checks.some(check => check.key === 'public-url'), false);
   } finally {
     await fsp.rm(value.directory, { recursive: true, force: true });
   }
