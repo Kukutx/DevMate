@@ -75,7 +75,7 @@ class DevMateView extends ItemView {
       return connectionList.createEl('dd');
     };
     const publicMcp = connectionDetail('Public MCP');
-    const publicIngress = connectionDetail('Public ingress');
+    const publicConnection = connectionDetail('Public connection');
     const internalGateway = connectionDetail('Internal Gateway');
     const verification = connectionDetail('Verification');
 
@@ -87,12 +87,12 @@ class DevMateView extends ItemView {
     };
     const vault = detail('Vault');
     const state = detail('State');
-    const startup = detail('Startup');
+    const startup = detail('Automatic start');
     const gatewayRuntime = detail('Gateway runtime');
     const nodeRuntime = detail('Node runtime');
 
     const failureSection = container.createDiv();
-    failureSection.createEl('h3', { text: 'Startup problem' });
+    failureSection.createEl('h3', { text: 'Problem' });
     const failureCard = failureSection.createDiv({ cls: 'devmate-status-card' });
     const failureMessage = failureCard.createEl('strong');
     failureCard.createEl('div', {
@@ -113,7 +113,7 @@ class DevMateView extends ItemView {
       statusLabel,
       statusDetail,
       publicMcp,
-      publicIngress,
+      publicConnection,
       internalGateway,
       verification,
       vault,
@@ -144,36 +144,31 @@ class DevMateView extends ItemView {
     const index = this.plugin.bridge?.index;
     const node = this.plugin.nodeRuntime;
     const gateway = resolvedStatus.gateway || {};
-    const connection = resolvedStatus.connection || null;
-    const publicMcp = connection?.publicOrigin
-      ? `${String(connection.publicOrigin).replace(/\/$/, '')}/mcp`
-      : 'Not available';
+    const connection = resolvedStatus.tunnel || resolvedStatus.connection || null;
+    const publicOrigin = resolvedStatus.publicUrl || connection?.publicUrl || '';
+    const publicMcp = publicOrigin ? `${String(publicOrigin).replace(/\/$/, '')}/mcp` : 'Not available';
 
     setText(this.ui.statusLabel, resolvedStatus.label);
     setText(this.ui.statusDetail, resolvedStatus.detail);
     setText(this.ui.publicMcp, publicMcp);
-    setText(this.ui.publicIngress,
+    setText(this.ui.publicConnection,
       resolvedStatus.connectionError
-        ? `State error · ${resolvedStatus.connectionError}`
-        : connection
-          ? connection.source === 'shared-tunnel'
-            ? `${connection.provider || 'tunnel'} · shared from ${connection.ownerHostId || 'another host'}`
-            : connection.source === 'obsidian-setting'
-              ? 'External · Obsidian Public origin'
-              : `${connection.provider || 'external'} · shared deployment config`
-          : 'Not configured or active');
+        ? `Error · ${resolvedStatus.connectionError}`
+        : connection?.running
+          ? `${connection.provider || 'provider'} · ${connection.owned ? 'owned here' : 'shared'} · ${publicOrigin ? 'HTTPS ready' : 'starting'}`
+          : `${connection?.provider || this.plugin.connectionConfiguration().provider || 'provider'} · not active`);
     setText(this.ui.internalGateway,
       gateway.state === 'running' || resolvedStatus.port
         ? `127.0.0.1:${gateway.port || resolvedStatus.port || this.plugin.settings.preferredPort} · internal only`
         : 'Not running');
     setText(this.ui.verification,
       resolvedStatus.verified
-        ? `${this.plugin.lastVerifiedAt || 'verified'} · ${this.plugin.lastVerifiedToolCount || 0} tools`
-        : connection?.publicOrigin ? 'Pending public MCP verification' : 'No public endpoint to verify');
+        ? `${this.plugin.lastVerifiedAt || 'verified'} · ${this.plugin.lastVerifiedToolCount || 0} tools · Ready`
+        : publicOrigin ? 'Pending MCP initialize + tools/list' : 'Waiting for public HTTPS endpoint');
 
     setText(this.ui.vault, this.plugin.vaultRoot || 'Unavailable');
     setText(this.ui.state, runtime?.stateDirectory || 'Unavailable');
-    setText(this.ui.startup, this.plugin.settings.startupMode);
+    setText(this.ui.startup, this.plugin.settings.autoStart ? 'On' : 'Off');
     setText(this.ui.gatewayRuntime, runtime?.lastLaunch?.mode || 'child_process');
     setText(this.ui.nodeRuntime, node ? `${node.nodeVersion} · ${node.executable}` : 'Auto-detect on start');
 
