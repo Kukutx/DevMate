@@ -65,18 +65,17 @@ class DevMateView extends ItemView {
     action('Restart', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
     action('Copy Bearer Token', () => this.plugin.copyConnectionToken());
-    action('ngrok Doctor', () => this.plugin.ngrokDoctor());
     action('Copy context', () => this.plugin.copyContextBundle());
     action('Copy diagnostics', () => this.plugin.copyDiagnostics());
 
     container.createEl('h3', { text: 'Connection' });
-    const connection = container.createEl('dl', { cls: 'devmate-details' });
+    const connectionList = container.createEl('dl', { cls: 'devmate-details' });
     const connectionDetail = name => {
-      connection.createEl('dt', { text: name });
-      return connection.createEl('dd');
+      connectionList.createEl('dt', { text: name });
+      return connectionList.createEl('dd');
     };
     const publicMcp = connectionDetail('Public MCP');
-    const tunnel = connectionDetail('ngrok');
+    const publicIngress = connectionDetail('Public ingress');
     const internalGateway = connectionDetail('Internal Gateway');
     const verification = connectionDetail('Verification');
 
@@ -97,7 +96,7 @@ class DevMateView extends ItemView {
     const failureCard = failureSection.createDiv({ cls: 'devmate-status-card' });
     const failureMessage = failureCard.createEl('strong');
     failureCard.createEl('div', {
-      text: 'Use Copy diagnostics when reporting this problem. Note content, bearer tokens, and ngrok Authtokens are not included.',
+      text: 'Use Copy diagnostics when reporting this problem. Note content and bearer tokens are not included.',
       cls: 'devmate-muted'
     });
 
@@ -114,7 +113,7 @@ class DevMateView extends ItemView {
       statusLabel,
       statusDetail,
       publicMcp,
-      tunnel,
+      publicIngress,
       internalGateway,
       verification,
       vault,
@@ -145,16 +144,24 @@ class DevMateView extends ItemView {
     const index = this.plugin.bridge?.index;
     const node = this.plugin.nodeRuntime;
     const gateway = resolvedStatus.gateway || {};
-    const tunnel = resolvedStatus.tunnel || {};
-    const publicMcp = tunnel.publicUrl ? `${String(tunnel.publicUrl).replace(/\/$/, '')}/mcp` : 'Not available';
+    const connection = resolvedStatus.connection || null;
+    const publicMcp = connection?.publicOrigin
+      ? `${String(connection.publicOrigin).replace(/\/$/, '')}/mcp`
+      : 'Not available';
 
     setText(this.ui.statusLabel, resolvedStatus.label);
     setText(this.ui.statusDetail, resolvedStatus.detail);
     setText(this.ui.publicMcp, publicMcp);
-    setText(this.ui.tunnel,
-      tunnel.running
-        ? `${tunnel.provider || 'ngrok'} · ${tunnel.owned ? 'owned by Obsidian' : tunnel.attached ? 'shared from another host' : 'active'}`
-        : 'Not running');
+    setText(this.ui.publicIngress,
+      resolvedStatus.connectionError
+        ? `State error · ${resolvedStatus.connectionError}`
+        : connection
+          ? connection.source === 'shared-tunnel'
+            ? `${connection.provider || 'tunnel'} · shared from ${connection.ownerHostId || 'another host'}`
+            : connection.source === 'obsidian-setting'
+              ? 'External · Obsidian Public origin'
+              : `${connection.provider || 'external'} · shared deployment config`
+          : 'Not configured or active');
     setText(this.ui.internalGateway,
       gateway.state === 'running' || resolvedStatus.port
         ? `127.0.0.1:${gateway.port || resolvedStatus.port || this.plugin.settings.preferredPort} · internal only`
@@ -162,7 +169,7 @@ class DevMateView extends ItemView {
     setText(this.ui.verification,
       resolvedStatus.verified
         ? `${this.plugin.lastVerifiedAt || 'verified'} · ${this.plugin.lastVerifiedToolCount || 0} tools`
-        : tunnel.publicUrl ? 'Pending public MCP verification' : 'Not verified');
+        : connection?.publicOrigin ? 'Pending public MCP verification' : 'No public endpoint to verify');
 
     setText(this.ui.vault, this.plugin.vaultRoot || 'Unavailable');
     setText(this.ui.state, runtime?.stateDirectory || 'Unavailable');
