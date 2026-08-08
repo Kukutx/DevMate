@@ -73,24 +73,28 @@ function fakeNgrokApi(publicUrl = 'https://devmate-test.ngrok-free.app') {
   };
 }
 
-test('Obsidian ngrok runtime starts a real provider lifecycle and publishes shared HTTPS state', async () => {
-  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-ngrok-'));
-  const childProcess = fakeChildProcess();
-  const plugin = {
+function pluginSettings(overrides = {}) {
+  return {
     settings: {
       ngrokCommandPath: 'ngrok',
       ngrokUrl: '',
       ngrokPoolingEnabled: false,
       ngrokAuthtokenEncrypted: '',
       tunnelAutoRestart: true,
-      tunnelMaxRestarts: 3
+      tunnelMaxRestarts: 3,
+      ...overrides
     },
     controller: {
       readConfig: () => ({ deployment: { mode: 'personal' } })
     }
   };
+}
+
+test('Obsidian ngrok runtime starts a real provider lifecycle and publishes shared HTTPS state', async () => {
+  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-ngrok-'));
+  const childProcess = fakeChildProcess();
   const runtime = new ObsidianNgrokRuntime({
-    plugin,
+    plugin: pluginSettings(),
     stateDirectory,
     childProcess,
     httpRequest: fakeNgrokApi(),
@@ -126,6 +130,54 @@ test('Obsidian ngrok runtime starts a real provider lifecycle and publishes shar
     assert.equal(runtime.status(8787).running, false);
   } finally {
     await runtime.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Obsidian safely attaches to a ready shared ngrok endpoint even when local endpoint settings differ', async () => {
+  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-ngrok-share-'));
+  const ownerProcess = fakeChildProcess();
+  const followerProcess = fakeChildProcess();
+  const owner = new ObsidianNgrokRuntime({
+    plugin: pluginSettings({ ngrokUrl: '' }),
+    stateDirectory,
+    childProcess: ownerProcess,
+    httpRequest: fakeNgrokApi(),
+    controllerOptions: { readyTimeoutMs: 1500, startTimeoutMs: 1500, stopTimeoutMs: 500, forceStopTimeoutMs: 250 }
+  });
+  const follower = new ObsidianNgrokRuntime({
+    plugin: pluginSettings({ ngrokUrl: 'https://different-local-setting.ngrok-free.app' }),
+    stateDirectory,
+    childProcess: followerProcess,
+    httpRequest: fakeNgrokApi('https://should-not-launch.ngrok-free.app'),
+    controllerOptions: { readyTimeoutMs: 1500, startTimeoutMs: 1500, stopTimeoutMs: 500, forceStopTimeoutMs: 250 }
+  });
+
+  try {
+    const first = await owner.start(8787);
+    assert.equal(first.owned, true);
+
+    const attached = await follower.start(8787);
+    assert.equal(attached.attached, true);
+    assert.equal(attached.owned, false);
+    assert.equal(attached.publicUrl, first.publicUrl);
+    assert.equal(followerProcess.launches.some(item => item.kind === 'spawn'), false, 'follower must not launch a competing ngrok process');
+
+    const followerStatus = follower.status(8787);
+    assert.equal(followerStatus.running, true);
+    assert.equal(followerStatus.attached, true);
+    assert.equal(followerStatus.publicUrl, first.publicUrl);
+
+    const followerStop = await follower.stop();
+    assert.equal(followerStop.stopped, false);
+    assert.equal(followerStop.reason, 'managed-by-another-host');
+    assert.equal(owner.status(8787).running, true);
+
+    const ownerStop = await owner.stop();
+    assert.equal(ownerStop.stopped, true);
+  } finally {
+    await follower.dispose({ stopOwned: true }).catch(() => {});
+    await owner.dispose({ stopOwned: true }).catch(() => {});
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
 });
