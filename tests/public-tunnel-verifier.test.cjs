@@ -6,13 +6,35 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { atomicWriteJson, readJson } = require('../shared/config-store.cjs');
+const { gatewayGeneration } = require('../shared/public-ingress-verification.cjs');
 const { PublicTunnelVerifier } = require('../vscode-host/public-tunnel-verifier.js');
+
+function writeGatewayLock(stateDirectory, overrides = {}) {
+  const state = path.join(stateDirectory, 'state');
+  fs.mkdirSync(state, { recursive: true });
+  const lock = {
+    version: 1,
+    runtimeOwnerId: 'gateway-a',
+    pid: process.pid,
+    parentPid: process.ppid || process.pid,
+    instanceId: 'instance-a',
+    configPath: path.join(stateDirectory, 'config.json'),
+    acquiredAt: '2026-08-08T00:59:00.000Z',
+    heartbeatAt: new Date().toISOString(),
+    leaseMs: 90000,
+    launchMode: 'child_process',
+    ...overrides
+  };
+  atomicWriteJson(path.join(state, 'gateway.lock'), lock);
+  return lock;
+}
 
 function fixture() {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-public-verifier-'));
   const configFile = path.join(stateDirectory, 'config.json');
   const config = {
     version: 11,
+    instanceId: 'instance-a',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { required: true, token: 'owner-token' },
     connection: {
@@ -24,6 +46,7 @@ function fixture() {
     }
   };
   atomicWriteJson(configFile, config);
+  writeGatewayLock(stateDirectory);
   let record = {
     ownerId: 'owner-a',
     hostId: 'vscode-a',
@@ -42,6 +65,7 @@ function fixture() {
       assert.equal(port, 8787);
       return { running: true, publicUrl: record.publicUrl, record };
     },
+    writeGateway(overrides = {}) { return writeGatewayLock(stateDirectory, overrides); },
     cleanup() { fs.rmSync(stateDirectory, { recursive: true, force: true }); }
   };
 }
@@ -55,7 +79,7 @@ function successfulTest(publicUrl, toolCount = 42) {
   };
 }
 
-test('new tunnel generation is authenticated and atomically becomes the current verified endpoint', async () => {
+test('new Gateway+tunnel generation is authenticated and atomically becomes the current verified endpoint', async () => {
   const fx = fixture();
   let call = null;
   let verifiedEvent = null;
@@ -88,6 +112,8 @@ test('new tunnel generation is authenticated and atomically becomes the current 
     assert.equal(config.connection.lastToolCount, 42);
     assert.equal(config.connection.lastServerName, 'devmate');
     assert.equal(config.connection.lastError, '');
+    assert.equal(config.connection.lastGatewayGeneration, gatewayGeneration(fx.writeGateway()));
+    assert.ok(config.connection.lastTunnelGeneration);
   } finally {
     fx.cleanup();
   }
@@ -120,6 +146,31 @@ test('preflight result is discarded if tunnel generation changes while verificat
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     assert.equal(config.connection.lastPublicHost, 'old.example.com');
     assert.equal(config.connection.lastPreflightAt, '2026-08-08T00:00:00.000Z');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('Gateway generation change during preflight discards otherwise successful evidence', async () => {
+  const fx = fixture();
+  let resolvePreflight;
+  try {
+    const verifier = new PublicTunnelVerifier({
+      stateDirectory: fx.stateDirectory,
+      tunnelStatus: port => fx.status(port),
+      readyGraceMs: 0,
+      now: () => Date.parse('2026-08-08T01:01:00.000Z'),
+      preflight: () => new Promise(resolve => { resolvePreflight = resolve; })
+    });
+    const pending = verifier.check();
+    await new Promise(resolve => setImmediate(resolve));
+    fx.writeGateway({ runtimeOwnerId: 'gateway-b', acquiredAt: '2026-08-08T01:00:30.000Z' });
+    resolvePreflight(successfulTest('https://new.example.com'));
+    const result = await pending;
+    assert.equal(result.stale, true);
+    assert.equal(result.verified, false);
+    const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(config.connection.lastPublicHost, 'old.example.com');
   } finally {
     fx.cleanup();
   }
@@ -160,7 +211,7 @@ test('generation change during persistence cannot be reported as a successful re
   }
 });
 
-test('failed verification is generation-scoped, persisted, and retried only after backoff', async () => {
+test('failed verification is session-generation scoped, persisted, and retried only after backoff', async () => {
   const fx = fixture();
   let now = Date.parse('2026-08-08T01:01:00.000Z');
   let calls = 0;
@@ -195,7 +246,7 @@ test('failed verification is generation-scoped, persisted, and retried only afte
     now += 5001;
     await verifier.check();
     assert.equal(calls, 2);
-    assert.equal(notices, 1, 'the same failing tunnel generation should notify only once');
+    assert.equal(notices, 1, 'the same failing session generation should notify only once');
 
     fx.record = {
       ...fx.record,
@@ -237,28 +288,27 @@ test('UI callback failures cannot invalidate a successful public MCP verificatio
   }
 });
 
-test('already verified current generation performs no duplicate network preflight', async () => {
+test('already verified current Gateway+tunnel generation performs no duplicate network preflight', async () => {
   const fx = fixture();
   try {
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
-    config.connection = {
-      lastPreflightAt: '2026-08-08T01:00:01.000Z',
-      lastPublicHost: 'new.example.com',
-      lastMcpPath: '/mcp',
-      lastToolCount: 42,
-      lastServerName: 'devmate'
-    };
-    atomicWriteJson(fx.configFile, config);
-    let calls = 0;
     const verifier = new PublicTunnelVerifier({
       stateDirectory: fx.stateDirectory,
       tunnelStatus: port => fx.status(port),
       readyGraceMs: 0,
-      preflight: async () => { calls += 1; return successfulTest(fx.record.publicUrl); }
+      preflight: async input => successfulTest(input.publicUrl)
     });
+    const first = await verifier.check({ force: true });
+    assert.equal(first.verified, true);
+    let calls = 0;
+    verifier.preflight = async () => { calls += 1; return successfulTest(fx.record.publicUrl); };
     const result = await verifier.check();
     assert.equal(result.reason, 'already-verified');
     assert.equal(calls, 0);
+    const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.ok(persisted.connection.lastGatewayGeneration);
+    assert.ok(persisted.connection.lastTunnelGeneration);
+    assert.equal(config.instanceId, persisted.instanceId);
   } finally {
     fx.cleanup();
   }
