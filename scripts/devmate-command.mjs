@@ -2,10 +2,8 @@
 import path from 'node:path';
 import configStore from '../shared/config-store.cjs';
 import { createRunnerCredential, normalizeRunnerControlConfig } from '../gateway/runner-access.mjs';
-import { normalizeDeploymentConfig } from '../gateway/team-access.mjs';
+import { normalizeInstanceConfig } from '../gateway/team-access.mjs';
 import {
-  cleanMode,
-  cleanProvider,
   configFile,
   doctor,
   initConfig,
@@ -13,14 +11,12 @@ import {
   memberList,
   memberRevoke,
   memberRotate,
-  normalizeOrigin,
   ownerUrl,
   readConfig,
   serve
 } from './standalone-runtime.mjs';
 
 const { DEFAULT_VERSION, SUPPORTED_CONFIG_VERSION, updateConfig } = configStore;
-const PRESETS = new Set(['personal', 'team', 'control-plane', 'runner']);
 
 function parseArgs(argv) {
   const [command = 'help', ...rest] = argv;
@@ -57,58 +53,36 @@ function csv(value, fallback = []) {
 
 function configPath(options = {}) { return configFile(options); }
 
-function presetOptions(options = {}) {
-  const preset = String(options.preset || 'team').trim().toLowerCase();
-  if (!PRESETS.has(preset)) throw new Error(`Unknown preset: ${preset}`);
-  const defaults = {
-    personal: { mode: 'personal', provider: 'ngrok', embeddedRunnerEnabled: true, runnerControlEnabled: false },
-    team: { mode: 'team', provider: 'ngrok', embeddedRunnerEnabled: true, runnerControlEnabled: false },
-    'control-plane': { mode: 'production', provider: 'external', embeddedRunnerEnabled: false, runnerControlEnabled: true },
-    runner: { mode: 'personal', provider: 'external', embeddedRunnerEnabled: false, runnerControlEnabled: false }
-  }[preset];
-  const publicUrl = String(options['public-url'] || '').trim();
-  if (preset === 'control-plane' && !publicUrl) throw new Error('The control-plane preset requires --public-url');
-  return { preset, ...defaults, provider: String(options.provider || defaults.provider), publicUrl };
-}
-
-function inferPreset(config) {
-  if ((config.deployment?.mode || 'personal') === 'personal' && config.jobs?.embeddedRunnerEnabled === false) return 'runner';
-  if (config.runnerControl?.enabled && config.jobs?.embeddedRunnerEnabled === false) return 'control-plane';
-  if ((config.deployment?.mode || 'personal') === 'personal') return 'personal';
-  return 'team';
-}
-
 function activeWorkspaceIds(config) {
-  return (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id);
+  return (config.workspaces || [])
+    .filter(item => !item.reference && item.mode !== 'readonly')
+    .map(item => item.id);
 }
 
 function bootstrap(options = {}) {
-  const preset = presetOptions(options);
   const memberName = String(options['member-name'] || '').trim();
-  if (memberName && !['team', 'control-plane'].includes(preset.preset)) throw new Error('--member-name requires team or control-plane');
   if (options['member-role'] && !memberName) throw new Error('--member-role requires --member-name');
   if (options['runner-concurrency'] !== undefined) {
     const value = Number(options['runner-concurrency']);
     if (!Number.isInteger(value) || value < 1 || value > 16) throw new Error('--runner-concurrency must be an integer from 1 to 16');
   }
 
-  const initialized = initConfig({ ...options, mode: preset.mode, provider: preset.provider, 'public-url': preset.publicUrl });
+  const initialized = initConfig(options);
   let config;
   let runner = null;
   updateConfig(initialized.file, current => {
-    config = normalizeRunnerControlConfig(normalizeDeploymentConfig(current));
+    config = normalizeRunnerControlConfig(normalizeInstanceConfig(current));
     config.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(config.version) || 0);
     config.appVersion = DEFAULT_VERSION;
-    config.jobs ||= {};
-    config.jobs.embeddedRunnerEnabled = preset.embeddedRunnerEnabled;
-    config.jobs.allowJobGitSave = config.jobs.allowJobGitSave !== false;
-    config.runnerControl.enabled = preset.runnerControlEnabled;
-    if (preset.preset === 'runner') {
-      config.permissions.blockDangerousOperations = true;
-      config.permissions.confirmBeforePush = true;
+
+    if (options['embedded-runner'] !== undefined) {
+      config.jobs.embeddedRunnerEnabled = bool(options['embedded-runner'], true);
     }
-    const createDefaultRunner = preset.preset === 'control-plane' && !bool(options['no-runner-credential']);
-    const runnerName = String(options['runner-name'] || (createDefaultRunner ? 'Default Runner' : '')).trim();
+    if (options['external-runner-control'] !== undefined) {
+      config.runnerControl.enabled = bool(options['external-runner-control']);
+    }
+
+    const runnerName = String(options['runner-name'] || '').trim();
     if (runnerName) {
       runner = createRunnerCredential(config, {
         name: runnerName,
@@ -130,64 +104,102 @@ function bootstrap(options = {}) {
     'expires-at': options['member-expires-at'] || null
   }) : null;
 
+  const finalConfig = normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig(initialized.file)));
   return {
     ok: true,
-    preset: preset.preset,
     config: initialized.file,
     ownerToken: initialized.token,
-    ownerUrl: ownerUrl({ config: initialized.file, url: preset.publicUrl || undefined }),
+    ownerUrl: ownerUrl({ config: initialized.file, url: finalConfig.connection.publicUrl || undefined }),
+    connection: { ...finalConfig.connection },
+    access: {
+      ownerOnly: finalConfig.team.members.length === 0,
+      memberCount: finalConfig.team.members.length,
+      workspaceLeasesRequired: finalConfig.team.requireWorkspaceLeaseForWrites
+    },
+    execution: {
+      embeddedRunnerEnabled: finalConfig.jobs.embeddedRunnerEnabled,
+      externalRunnerControlEnabled: finalConfig.runnerControl.enabled
+    },
     member,
     runner,
-    next: preset.preset === 'runner'
-      ? ['Set the Runner credential and start devmate-runner.']
-      : [`Start with: devmate serve --config ${initialized.file}`]
+    next: [`Start with: devmate serve --config ${initialized.file}`]
   };
 }
 
 function status(options = {}) {
   const file = configPath(options);
-  const config = normalizeRunnerControlConfig(normalizeDeploymentConfig(readConfig(file)));
-  const preset = inferPreset(config);
-  const activeMembers = (config.team.members || []).filter(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()));
-  const activeRunners = (config.runnerControl.credentials || []).filter(item =>
+  const config = normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig(file)));
+  const activeMembers = config.team.members.filter(item =>
+    !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+  );
+  const activeRunners = config.runnerControl.credentials.filter(item =>
     !item.disabled && item.salt && item.tokenHash && item.workspaceIds?.length && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
   );
   const workspaces = config.workspaces || [];
   const warnings = [];
   if (!config.auth?.token && config.auth?.required !== false) warnings.push('Owner token is missing.');
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
-  if (config.team.enabled && !activeMembers.length) warnings.push('Team mode has no active member credentials.');
-  if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control has no active credential.');
-  if (preset !== 'runner' && config.jobs?.embeddedRunnerEnabled === false && !config.runnerControl.enabled) warnings.push('No execution path is enabled.');
+  if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control is enabled but has no active credential.');
+  if (config.jobs.embeddedRunnerEnabled === false && !config.runnerControl.enabled) warnings.push('No Runner execution path is enabled.');
+  if (
+    (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
+    !config.connection.publicUrl
+  ) warnings.push(`${config.connection.provider} requires a public HTTPS URL.`);
+
   return {
     ok: warnings.length === 0,
     config: file,
-    preset,
-    deployment: { mode: config.deployment.mode, tunnelProvider: config.deployment.tunnelProvider, publicUrl: config.deployment.publicUrl || null },
-    workspaces: { total: workspaces.length, writable: workspaces.filter(item => !item.reference && item.mode !== 'readonly').length, activeWorkspaceId: config.activeWorkspaceId || null },
-    team: { enabled: config.team.enabled, activeMembers: activeMembers.length, totalMembers: config.team.members.length, workspaceLeasesRequired: config.team.requireWorkspaceLeaseForWrites },
-    execution: { embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false, externalRunnerControlEnabled: config.runnerControl.enabled, activeRunnerCredentials: activeRunners.length, enabledPlugins: config.plugins?.enabled || [] },
+    connection: { ...config.connection },
+    workspaces: {
+      total: workspaces.length,
+      writable: workspaces.filter(item => !item.reference && item.mode !== 'readonly').length,
+      activeWorkspaceId: config.activeWorkspaceId || null
+    },
+    access: {
+      ownerOnly: config.team.members.length === 0,
+      activeMembers: activeMembers.length,
+      totalMembers: config.team.members.length,
+      workspaceLeasesRequired: config.team.requireWorkspaceLeaseForWrites
+    },
+    execution: {
+      embeddedRunnerEnabled: config.jobs.embeddedRunnerEnabled,
+      externalRunnerControlEnabled: config.runnerControl.enabled,
+      activeRunnerCredentials: activeRunners.length,
+      enabledPlugins: config.plugins?.enabled || []
+    },
+    requestPolicy: { ...config.requestPolicy },
     warnings
   };
 }
 
 function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path>\n  devmate status --config <path>\n  devmate init --workspace <path> [--mode personal|team|production]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n`;
+  return `DevMate\n\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nBootstrap always creates one DevMate instance. Members, external Runners, request policies, and connection providers are composable capabilities rather than runtime modes.\n`;
 }
 
 async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
   if (command === 'bootstrap') return console.log(JSON.stringify(bootstrap(options), null, 2));
   if (command === 'status') {
-    const result = status(options); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; return;
+    const result = status(options);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
   }
   if (command === 'init') {
     const result = initConfig(options);
-    return console.log(JSON.stringify({ ok: true, config: result.file, ownerToken: result.token, ownerUrl: ownerUrl({ ...options, config: result.file }) }, null, 2));
+    return console.log(JSON.stringify({
+      ok: true,
+      config: result.file,
+      ownerToken: result.token,
+      ownerUrl: ownerUrl({ ...options, config: result.file })
+    }, null, 2));
   }
   if (command === 'serve') return serve(options);
   if (command === 'doctor') {
-    const result = doctor(options); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; return;
+    const result = doctor(options);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
   }
   if (command === 'owner-url') return console.log(ownerUrl(options));
   if (command === 'member-list') return console.log(JSON.stringify({ members: memberList(options) }, null, 2));
@@ -199,11 +211,25 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
-  main().catch(error => { console.error(`DevMate: ${error?.message || error}`); process.exitCode = 1; });
+  main().catch(error => {
+    console.error(`DevMate: ${error?.message || error}`);
+    process.exitCode = 1;
+  });
 }
 
 export const __test = {
-  PRESETS, activeWorkspaceIds, bool, bootstrap, cleanMode, cleanProvider, configPath, csv, doctor,
-  inferPreset, initConfig, memberCreate, memberList, memberRevoke, memberRotate, normalizeOrigin,
-  ownerUrl, parseArgs, presetOptions, status
+  activeWorkspaceIds,
+  bool,
+  bootstrap,
+  configPath,
+  csv,
+  doctor,
+  initConfig,
+  memberCreate,
+  memberList,
+  memberRevoke,
+  memberRotate,
+  ownerUrl,
+  parseArgs,
+  status
 };
