@@ -43,11 +43,11 @@ test('account switching collects token and domain decision before any mutation a
   assert.match(block, /stableNgrokUrlRequired\(sharedConfigFile\)/);
 });
 
-test('ngrok configuration commit stops the provider first and rolls local/shared state back on write failure', () => {
+test('ngrok configuration commit uses the provider-scoped stop gate and rolls local/shared state back on write failure', () => {
   const start = source.indexOf('async function commitNgrokConfiguration');
   const end = source.indexOf('function checkNgrokInstalled', start);
   const block = source.slice(start, end);
-  assert.match(block, /await vscode\.commands\.executeCommand\('devMate\.stop'\)/);
+  assert.match(block, /await prepareNgrokCredentialMutation\('ngrok configuration change'\)/);
   assert.match(block, /previous\.activeDeployment/);
   assert.match(block, /restoreSecret/);
   assert.match(block, /writeActiveNgrokUrl\(sharedConfigFile, previous\.activeDeployment\.publicUrl\)/);
