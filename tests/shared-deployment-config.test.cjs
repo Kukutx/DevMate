@@ -86,6 +86,56 @@ test('one production limit update does not rewrite unrelated production policy',
   }
 });
 
+test('deployment transition reconciles the previous active Host without deleting unrelated policy', () => {
+  const { directory, file, config } = fixture();
+  try {
+    config.deployment = {
+      mode: 'production',
+      tunnelProvider: 'external',
+      publicUrl: 'https://old.example.com'
+    };
+    config.production.allowedHosts = ['old.example.com', 'manual.example.com'];
+    atomicWriteJson(file, config);
+
+    const team = applyDeploymentPatch(file, {
+      mode: 'team',
+      tunnelProvider: 'cloudflare-quick',
+      publicUrl: ''
+    });
+    assert.equal(team.deployment.publicUrl, '');
+    assert.deepEqual(team.production.allowedHosts, ['manual.example.com']);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('stable URL replacement updates an active team Host policy automatically', () => {
+  const { directory, file, config } = fixture();
+  try {
+    config.production.allowedHosts = ['old.example.com', 'manual.example.com'];
+    atomicWriteJson(file, config);
+    const result = applyDeploymentPatch(file, { publicUrl: 'https://new.example.com' });
+    assert.deepEqual(result.production.allowedHosts, ['manual.example.com', 'new.example.com']);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('explicit Host policy patch wins over automatic deployment Host migration', () => {
+  const { directory, file, config } = fixture();
+  try {
+    config.production.allowedHosts = ['old.example.com'];
+    atomicWriteJson(file, config);
+    const result = applyDeploymentPatch(file, {
+      publicUrl: 'https://new.example.com',
+      allowedHosts: ['explicit.example.com']
+    });
+    assert.deepEqual(result.production.allowedHosts, ['explicit.example.com']);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('invalid production quick tunnel transition is rejected atomically', () => {
   const { directory, file } = fixture();
   try {
