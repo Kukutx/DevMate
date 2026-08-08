@@ -80,12 +80,24 @@ async function tunnelSecrets(context) {
   };
 }
 
+async function syncBasePublicState() {
+  try {
+    return await vscode.commands.executeCommand('devMate.syncPublicState');
+  } catch (error) {
+    log(`Could not synchronize base VS Code public state: ${error.message || error}`);
+    return null;
+  }
+}
+
 function createPublicVerifier() {
   return new PublicTunnelVerifier({
     stateDirectory: runtimeStateDirectory,
     tunnelStatus: port => runtime?.status(port),
     appVersion: VERSION,
     logger: log,
+    onStateChange: async () => {
+      await syncBasePublicState();
+    },
     onVerified: async result => {
       if (!result.changedHost) return;
       const choice = await vscode.window.showWarningMessage(
@@ -179,6 +191,7 @@ module.exports = {
   deactivate,
   ensureSharedDesktopConfig,
   localTunnelSettings,
+  syncBasePublicState,
   tunnelSecrets,
   tunnelSettings
 };
