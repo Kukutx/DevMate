@@ -11,9 +11,12 @@ WORKDIR /opt/devmate
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY config-file-lock.cjs ./
+COPY tunnel-provider.js ./
 COPY gateway ./gateway
 COPY shared ./shared
 COPY scripts ./scripts
+COPY vscode-host/shared-tunnel-record-store.js ./vscode-host/shared-tunnel-record-store.js
+COPY vscode-host/tunnel-settings.js ./vscode-host/tunnel-settings.js
 
 RUN mkdir -p /var/lib/devmate /srv/devmate-workspaces \
   && chown -R node:node /opt/devmate /var/lib/devmate /srv/devmate-workspaces
