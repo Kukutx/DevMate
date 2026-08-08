@@ -7,10 +7,13 @@ const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
 const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
 const { updateConfig } = require('../../shared/config-store.cjs');
+const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
+const { TunnelController } = require('../../vscode-host/tunnel-controller.js');
+const { tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
 const { ObsidianHostBridge } = require('./host-bridge.js');
 const { ObsidianContextProvider } = require('./context-provider.js');
-const { resolvePublicConnection } = require('./public-connection.js');
 const { RuntimeDiagnostics } = require('./runtime-diagnostics.js');
+const { decryptSecret } = require('./secret-store.js');
 const { DevMateSettingTab, normalizeSettings } = require('./settings.js');
 const { DevMateView, VIEW_TYPE } = require('./view.js');
 
@@ -27,17 +30,20 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.contextTimer = null;
     this.reconfigureTimer = null;
     this.controller = null;
+    this.tunnelController = null;
     this.bridge = null;
     this.contextProvider = null;
     this.runtimeDiagnostics = null;
     this.nodeRuntime = null;
     this.nodeRuntimeKey = '';
+    this.tunnelSecretsCache = null;
     this.lastStatusText = '';
     this.lastVerifiedPublicUrl = '';
     this.lastVerifiedAt = '';
     this.lastVerifiedToolCount = 0;
     this.lastPublicVerificationAttemptAt = 0;
     this.publicVerificationPromise = null;
+    this.recoveryPromise = null;
     this.vaultRoot = '';
     this.layoutReady = false;
     this.unloading = false;
@@ -85,7 +91,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }, STATUS_REFRESH_MS));
 
     await this.reconfigureRuntime({ startBridge: true, capture: true });
-    if (this.settings.enabled && this.settings.startupMode === 'auto') await this.startRuntime({ quiet: true });
+    if (this.settings.enabled && this.settings.autoStart) await this.startRuntime({ quiet: true });
     else await this.refreshStatus();
   }
 
@@ -98,6 +104,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     await this.hostOperations.run('unload', async () => {
       await this.bridge?.stop();
       this.bridge = null;
+      try { await this.tunnelController?.dispose({ stopOwned: true }); } catch (error) {
+        this.logRuntime(`Could not stop owned public connection during unload: ${error.message || error}`);
+      }
+      this.tunnelController = null;
       await this.controller?.dispose({ stopOwned: true });
       this.controller = null;
     });
@@ -130,6 +140,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.nodeRuntimeKey = '';
   }
 
+  invalidateTunnelSecrets() {
+    this.tunnelSecretsCache = null;
+  }
+
   ensureNodeRuntime() {
     if (!this.controller) throw new Error('DevMate runtime controller is unavailable');
     const key = `${this.settings.nodeExecutable || 'auto'}|${process.execPath}|${process.versions.node || ''}`;
@@ -140,6 +154,73 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.controller.nodeExecutable = runtime.executable;
     this.logRuntime(`Using Node ${runtime.nodeVersion} Gateway runtime from ${runtime.source}: ${runtime.executable}`);
     return runtime;
+  }
+
+  tunnelSecrets() {
+    if (this.tunnelSecretsCache) return this.tunnelSecretsCache;
+    const read = value => {
+      if (!value) return '';
+      try { return decryptSecret(value); }
+      catch (error) {
+        this.logRuntime(`Could not decrypt provider credential: ${error.message || error}`);
+        return '';
+      }
+    };
+    this.tunnelSecretsCache = {
+      ngrokAuthtoken: read(this.settings.ngrokAuthtokenEncrypted),
+      cloudflareTunnelToken: read(this.settings.cloudflareTunnelTokenEncrypted)
+    };
+    return this.tunnelSecretsCache;
+  }
+
+  localTunnelSettings() {
+    const secrets = this.tunnelSecrets();
+    return {
+      ngrokCommandPath: this.settings.ngrokCommandPath,
+      ngrokUseManagedAccount: !!secrets.ngrokAuthtoken,
+      ngrokPoolingEnabled: this.settings.ngrokPoolingEnabled,
+      cloudflareCommandPath: this.settings.cloudflareCommandPath,
+      autoRestart: this.settings.tunnelAutoRestart,
+      maxRestarts: this.settings.tunnelMaxRestarts
+    };
+  }
+
+  tunnelSettings() {
+    return settingsFromState({
+      stateDirectory: this.stateDirectory(),
+      localSettings: this.localTunnelSettings()
+    });
+  }
+
+  connectionConfiguration() {
+    const config = this.controller?.readConfig?.() || null;
+    const deployment = config?.deployment && typeof config.deployment === 'object' ? config.deployment : {};
+    return {
+      provider: deployment.tunnelProvider || 'ngrok',
+      publicUrl: String(deployment.publicUrl || '').trim()
+    };
+  }
+
+  async configureConnection(patch = {}) {
+    if (!this.controller?.configFile) return null;
+    const requestedProvider = patch.provider === undefined ? null : tunnelProvider(String(patch.provider));
+    const requestedPublicUrl = patch.publicUrl === undefined ? null : String(patch.publicUrl || '').trim();
+    const status = await this.controller.status().catch(() => null);
+    if (this.tunnelController) {
+      try { await this.tunnelController.stop(); } catch (error) {
+        this.logRuntime(`Connection reconfiguration stop reported: ${error.message || error}`);
+      }
+    }
+    const updated = updateConfig(this.controller.configFile, config => {
+      config.deployment ||= {};
+      if (requestedProvider !== null) config.deployment.tunnelProvider = requestedProvider;
+      if (requestedPublicUrl !== null) config.deployment.publicUrl = requestedPublicUrl;
+      return config;
+    });
+    this.clearPublicVerification();
+    if (status?.state === 'running') await this.startRuntime({ quiet: true });
+    else await this.refreshStatus();
+    return updated;
   }
 
   updateConnectionSnapshot(patch = {}) {
@@ -157,19 +238,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.lastVerifiedToolCount = 0;
   }
 
-  publicConnection(port) {
-    return resolvePublicConnection({
-      stateDirectory: this.stateDirectory(),
-      port,
-      publicOrigin: this.settings.publicOrigin,
-      config: this.controller?.readConfig?.() || null,
-      logger: message => this.logRuntime(message)
-    });
-  }
-
   async verifyPublicEndpoint(publicUrl) {
     const normalized = String(publicUrl || '').trim();
-    if (!normalized) throw new Error('A public HTTPS MCP origin is required');
+    if (!normalized) throw new Error('The public connection did not publish an HTTPS origin');
     if (this.publicVerificationPromise) return this.publicVerificationPromise;
     this.lastPublicVerificationAttemptAt = Date.now();
     this.publicVerificationPromise = (async () => {
@@ -222,7 +293,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     const stateDirectory = this.stateDirectory();
     const sameState = this.controller && path.resolve(this.controller.stateDirectory) === path.resolve(stateDirectory);
     this.invalidateNodeRuntime();
+    this.invalidateTunnelSecrets();
     if (!sameState) {
+      try { await this.tunnelController?.dispose({ stopOwned: true }); } catch {}
+      this.tunnelController = null;
       await this.controller?.dispose({ stopOwned: true });
       this.runtimeDiagnostics = new RuntimeDiagnostics({
         stateDirectory,
@@ -238,14 +312,30 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         hostId: HOST_ID,
         logger: message => this.logRuntime(message)
       });
-      this.logRuntime(`Configured isolated shared Gateway for ${this.vaultRoot}.`);
+      this.tunnelController = new TunnelController({
+        stateDirectory,
+        settings: () => this.tunnelSettings(),
+        getSecrets: async () => this.tunnelSecrets(),
+        hostId: `${HOST_ID}-${process.pid}`,
+        logger: message => this.logRuntime(message)
+      });
+      this.logRuntime(`Configured shared DevMate Gateway and public connection lifecycle for ${this.vaultRoot}.`);
     } else {
       this.controller.preferredPort = this.settings.preferredPort;
       this.runtimeDiagnostics?.setStateDirectory(stateDirectory);
+      if (!this.tunnelController) {
+        this.tunnelController = new TunnelController({
+          stateDirectory,
+          settings: () => this.tunnelSettings(),
+          getSecrets: async () => this.tunnelSecrets(),
+          hostId: `${HOST_ID}-${process.pid}`,
+          logger: message => this.logRuntime(message)
+        });
+      }
     }
     this.controller.ensureConfig();
 
-    if (startBridge && this.settings.enabled && this.settings.startupMode !== 'disabled') {
+    if (startBridge && this.settings.enabled) {
       const bridge = new ObsidianHostBridge(this, this.controller);
       try {
         await bridge.start();
@@ -290,52 +380,73 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async runtimeStatus() {
-    if (!this.settings.enabled || this.settings.startupMode === 'disabled') {
-      return { label: 'DevMate disabled', detail: 'Enable the Obsidian host in settings.', state: 'disabled' };
+    if (!this.settings.enabled) {
+      return { label: 'DevMate disabled', detail: 'Enable DevMate in settings.', state: 'disabled' };
     }
     try {
       const gateway = await this.controller.status();
-      let connection = null;
+      let tunnel = { running: false, owned: false, attached: false, publicUrl: '', provider: this.connectionConfiguration().provider, port: gateway.port || 0 };
       let connectionError = '';
-      try { connection = this.publicConnection(gateway.port); }
+      try { tunnel = this.tunnelController?.status(gateway.port) || tunnel; }
       catch (error) { connectionError = error.message || String(error); }
 
       if (gateway.state === 'running') {
-        const verified = !!connection && this.lastVerifiedPublicUrl === connection.publicOrigin;
-        const ownership = gateway.owned ? 'running' : 'attached';
-        const publicDetail = connectionError
-          ? `Public ingress state error: ${connectionError}`
-          : connection
-            ? verified
-              ? `Public MCP verified via ${connection.provider || connection.source}: ${redactUrl(`${connection.publicOrigin}/mcp`)}`
-              : `Public HTTPS origin available via ${connection.provider || connection.source}; MCP verification is pending.`
-            : 'No public HTTPS ingress is active or configured in Obsidian.';
+        const verified = !!tunnel.publicUrl && this.lastVerifiedPublicUrl === tunnel.publicUrl;
+        if (verified) {
+          return {
+            ...gateway,
+            gateway,
+            tunnel,
+            connection: tunnel,
+            verified: true,
+            publicUrl: tunnel.publicUrl,
+            state: 'ready',
+            label: 'DevMate ready',
+            detail: `Verified public MCP via ${tunnel.provider}: ${redactUrl(`${tunnel.publicUrl}/mcp`)}`
+          };
+        }
+        if (connectionError) {
+          return { ...gateway, gateway, tunnel, connectionError, state: 'error', label: 'DevMate connection error', detail: connectionError };
+        }
+        if (tunnel.running && tunnel.publicUrl) {
+          return {
+            ...gateway,
+            gateway,
+            tunnel,
+            connection: tunnel,
+            verified: false,
+            publicUrl: tunnel.publicUrl,
+            state: 'verifying',
+            label: 'DevMate verifying',
+            detail: `Public HTTPS endpoint is ready via ${tunnel.provider}; verifying MCP initialize and tools/list.`
+          };
+        }
         return {
           ...gateway,
           gateway,
-          connection,
-          connectionError,
-          verified,
-          publicUrl: connection?.publicOrigin || '',
-          label: gateway.owned ? 'DevMate running' : 'DevMate attached',
-          detail: `Gateway ${ownership} on 127.0.0.1:${gateway.port}. ${publicDetail}`
+          tunnel,
+          connection: tunnel,
+          verified: false,
+          state: 'starting',
+          label: 'DevMate starting',
+          detail: 'Gateway is healthy; DevMate is bringing the public MCP connection to Ready.'
         };
       }
       if (gateway.state === 'foreign') {
-        return { ...gateway, gateway, connection, connectionError, label: 'Port conflict', detail: `Another DevMate instance is using port ${gateway.port}.` };
+        return { ...gateway, gateway, tunnel, connectionError, label: 'Port conflict', detail: `Another DevMate instance is using port ${gateway.port}.` };
       }
       if (this.runtimeDiagnostics?.lastFailure) {
         return {
           ...gateway,
           gateway,
-          connection,
+          tunnel,
           connectionError,
           state: 'error',
           label: 'DevMate failed to start',
           detail: this.runtimeDiagnostics.lastFailure.message
         };
       }
-      return { ...gateway, gateway, connection, connectionError, label: 'DevMate stopped', detail: `Preferred internal port ${gateway.port}.` };
+      return { ...gateway, gateway, tunnel, connectionError, state: 'stopped', label: 'DevMate stopped', detail: `Preferred internal port ${gateway.port}.` };
     } catch (error) {
       return { label: 'DevMate error', detail: error.message || String(error), state: 'error' };
     }
@@ -344,9 +455,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async refreshStatus() {
     if (!this.statusBar || !this.controller || this.unloading) return;
     const status = await this.runtimeStatus();
-    const statusText = status.state === 'running'
-      ? status.owned ? `DevMate: on :${status.port}` : `DevMate: attached :${status.port}`
-      : status.label;
+    const statusText = status.state === 'ready'
+      ? 'DevMate: ready'
+      : status.state === 'starting' || status.state === 'verifying'
+        ? 'DevMate: starting'
+        : status.label;
     if (statusText !== this.lastStatusText) {
       this.statusBar.setText(statusText);
       this.lastStatusText = statusText;
@@ -357,14 +470,25 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
     if (
       status.gateway?.state === 'running' &&
-      status.connection?.publicOrigin &&
+      status.tunnel?.publicUrl &&
       !status.verified &&
       !this.publicVerificationPromise &&
       Date.now() - this.lastPublicVerificationAttemptAt >= PUBLIC_REVERIFY_BACKOFF_MS
     ) {
-      void this.verifyPublicEndpoint(status.connection.publicOrigin)
+      void this.verifyPublicEndpoint(status.tunnel.publicUrl)
         .then(() => this.refreshStatus())
         .catch(error => this.logRuntime(`Public MCP verification failed: ${error.message || error}`));
+    }
+
+    if (
+      this.settings.autoStart &&
+      status.gateway?.state === 'running' &&
+      !status.tunnel?.running &&
+      !this.recoveryPromise
+    ) {
+      this.recoveryPromise = this.startRuntime({ quiet: true })
+        .catch(error => this.logRuntime(`Automatic DevMate recovery failed: ${error.message || error}`))
+        .finally(() => { this.recoveryPromise = null; });
     }
   }
 
@@ -374,27 +498,59 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async startRuntimeInternal({ quiet = false } = {}) {
-    if (!this.settings.enabled || this.settings.startupMode === 'disabled') {
-      if (!quiet) new Notice('DevMate Obsidian host is disabled.');
+    if (!this.settings.enabled) {
+      if (!quiet) new Notice('DevMate is disabled in Obsidian settings.');
       return { ok: false, reason: 'disabled' };
     }
+    let gateway = null;
+    let tunnel = null;
     try {
       if (!this.bridge && this.layoutReady) await this.reconfigureRuntimeInternal({ startBridge: true, capture: true });
       this.ensureNodeRuntime();
       await this.captureContextInternal();
-      this.logRuntime('Starting or attaching to the shared DevMate Gateway.');
-      const result = await this.controller.start();
+
+      this.logRuntime('Starting DevMate: Gateway -> public connection -> MCP verification.');
+      gateway = await this.controller.start();
+      this.logRuntime(gateway.attached
+        ? `Attached to shared DevMate Gateway on port ${gateway.port}.`
+        : `DevMate Gateway started on internal port ${gateway.port}.`);
+
+      tunnel = await this.tunnelController.start(gateway.port);
+      const publicUrl = tunnel?.publicUrl || tunnel?.record?.publicUrl || '';
+      if (!publicUrl) throw new Error('The configured connection provider did not publish a public HTTPS URL');
+      this.logRuntime(tunnel.attached
+        ? `Attached to shared ${tunnel.record?.provider || 'public'} connection: ${redactUrl(publicUrl)}`
+        : `Public connection ready: ${redactUrl(publicUrl)}`);
+
+      const preflight = await this.verifyPublicEndpoint(publicUrl);
       this.runtimeDiagnostics?.clearFailure();
-      this.logRuntime(result.attached
-        ? `Attached to shared DevMate Gateway on port ${result.port}.`
-        : `DevMate Gateway started on internal port ${result.port}.`);
+      if (this.settings.autoCopyUrl) await navigator.clipboard.writeText(preflight.mcpUrl);
       if (!quiet) {
-        new Notice(result.attached
-          ? 'Attached to the existing DevMate Gateway.'
-          : 'DevMate Gateway started. Public ingress is managed separately.');
+        new Notice(this.settings.autoCopyUrl
+          ? `DevMate ready. Verified MCP URL copied: ${redactUrl(preflight.mcpUrl)}`
+          : `DevMate ready: ${redactUrl(preflight.mcpUrl)}`);
       }
-      return { ok: true, ...result };
+      return {
+        ok: true,
+        state: 'ready',
+        gateway,
+        tunnel,
+        publicUrl: preflight.publicOrigin,
+        mcpUrl: preflight.mcpUrl,
+        toolCount: preflight.toolCount,
+        server: preflight.server
+      };
     } catch (error) {
+      if (tunnel?.owned) {
+        try { await this.tunnelController.stop(); } catch (cleanupError) {
+          this.logRuntime(`Could not roll back owned public connection after failed Start: ${cleanupError.message || cleanupError}`);
+        }
+      }
+      if (gateway?.started && gateway?.owned) {
+        try { await this.controller.stop(); } catch (cleanupError) {
+          this.logRuntime(`Could not roll back owned Gateway after failed Start: ${cleanupError.message || cleanupError}`);
+        }
+      }
       this.runtimeDiagnostics?.recordFailure(error);
       console.error('[DevMate] Start failed', error);
       if (!quiet) new Notice(`DevMate start failed: ${error.message || error}`);
@@ -409,24 +565,25 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     return this.hostOperations.run('stop', () => this.stopRuntimeInternal());
   }
 
-  async stopRuntimeInternal() {
+  async stopRuntimeInternal({ quiet = false } = {}) {
+    let tunnel = { stopped: false, reason: 'not-running' };
+    let gateway = { stopped: false, reason: 'not-running' };
     try {
-      const result = await this.controller.stop();
-      if (result.stopped) {
-        this.clearPublicVerification();
-        this.runtimeDiagnostics?.clearFailure();
-        this.logRuntime('DevMate Gateway stopped by the user.');
-        new Notice('DevMate Gateway stopped. Public ingress was not modified.');
-      } else if (result.reason === 'managed-by-another-host') {
-        new Notice('Gateway is managed by another host and was left running. Public ingress was not modified.');
-      } else {
-        this.runtimeDiagnostics?.clearFailure();
-        new Notice('DevMate Gateway is not running.');
+      try { tunnel = await this.tunnelController?.stop() || tunnel; }
+      catch (error) { this.logRuntime(`Public connection stop reported: ${error.message || error}`); }
+      gateway = await this.controller.stop();
+      const sharedStillActive = tunnel.reason === 'managed-by-another-host' || gateway.reason === 'managed-by-another-host' || gateway.attached;
+      if (!sharedStillActive) this.clearPublicVerification();
+      this.runtimeDiagnostics?.clearFailure();
+      if (!quiet) {
+        if (sharedStillActive) new Notice('This host released its DevMate processes; the shared instance remains active under another host.');
+        else if (tunnel.stopped || gateway.stopped) new Notice('DevMate stopped.');
+        else new Notice('DevMate is not running.');
       }
-      return result;
+      return { stopped: !sharedStillActive, gateway, tunnel };
     } catch (error) {
-      new Notice(`DevMate stop failed: ${error.message || error}`);
-      return { stopped: false, reason: error.message || String(error) };
+      if (!quiet) new Notice(`DevMate stop failed: ${error.message || error}`);
+      return { stopped: false, reason: error.message || String(error), gateway, tunnel };
     } finally {
       await this.refreshStatus();
     }
@@ -440,13 +597,17 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async restartRuntimeInternal() {
     try {
       this.ensureNodeRuntime();
+      try { await this.tunnelController?.stop(); } catch (error) {
+        this.logRuntime(`Public connection stop before restart reported: ${error.message || error}`);
+      }
+      try { await this.controller.stop(); } catch (error) {
+        this.logRuntime(`Gateway stop before restart reported: ${error.message || error}`);
+      }
       this.clearPublicVerification();
-      this.logRuntime('Restarting the shared DevMate Gateway.');
-      const result = await this.controller.restart();
-      this.runtimeDiagnostics?.clearFailure();
-      if (result.attached) new Notice('Gateway is managed by another host; kept the shared instance attached.');
-      else new Notice('DevMate Gateway restarted. Public ingress was not modified.');
-      return result;
+      const result = await this.startRuntimeInternal({ quiet: true });
+      if (!result.ok) throw new Error(result.error || 'DevMate did not return to Ready');
+      new Notice(`DevMate restarted and Ready: ${redactUrl(result.mcpUrl)}`);
+      return { restarted: true, ...result };
     } catch (error) {
       this.runtimeDiagnostics?.recordFailure(error);
       new Notice(`DevMate restart failed: ${error.message || error}`);
@@ -459,12 +620,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async copyConnectionUrl() {
     try {
       const gateway = await this.controller.status();
-      if (gateway.state !== 'running') throw new Error('DevMate Gateway is not running. Run DevMate: Start first.');
-      const connection = this.publicConnection(gateway.port);
-      if (!connection?.publicOrigin) {
-        throw new Error('No public HTTPS origin is available. Start the tunnel from VS Code or configure Public origin in Obsidian settings.');
-      }
-      const test = await this.verifyPublicEndpoint(connection.publicOrigin);
+      if (gateway.state !== 'running') throw new Error('DevMate is not running. Run DevMate: Start first.');
+      const tunnel = this.tunnelController?.status(gateway.port);
+      const publicUrl = tunnel?.publicUrl || '';
+      if (!publicUrl) throw new Error('DevMate has no active public connection. Run DevMate: Start first.');
+      const test = await this.verifyPublicEndpoint(publicUrl);
       await navigator.clipboard.writeText(test.mcpUrl);
       this.updateConnectionSnapshot({ lastCopiedAt: new Date().toISOString() });
       new Notice(`Verified public MCP URL copied: ${redactUrl(test.mcpUrl)}`);
