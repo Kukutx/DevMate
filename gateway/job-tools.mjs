@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
-import { authorizeToolCall, normalizeDeploymentConfig } from './team-access.mjs';
+import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
 import {
@@ -28,7 +28,7 @@ const jobStatusSchema = z.enum([
 ]);
 
 function targetAuthorization(target, args, principal) {
-  const config = normalizeDeploymentConfig(readConfig());
+  const config = normalizeInstanceConfig(readConfig());
   const authorized = authorizeToolCall({
     name: target.name,
     annotations: target.config?.annotations || {},
@@ -71,13 +71,11 @@ function withWorkspace(args, workspaceId) {
 }
 
 function runtimePolicy(config = readConfig()) {
+  normalizeInstanceConfig(config);
   return {
-    maxConcurrentJobs: Math.min(
-      8,
-      Math.max(1, Math.trunc(Number(config.runtime?.maxConcurrentJobs) || 2))
-    ),
-    allowJobGitSave: config.jobs?.allowJobGitSave !== false,
-    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false
+    maxConcurrentJobs: config.runtime.maxConcurrentJobs,
+    allowJobGitSave: config.jobs.allowJobGitSave,
+    embeddedRunnerEnabled: config.jobs.embeddedRunnerEnabled
   };
 }
 
@@ -107,15 +105,9 @@ export function registerJobTools(register, annotations) {
   }, async patch => {
     const principal = principalNow();
     assertMaintainer(principal, 'Configuring the durable job runtime');
-    const config = readConfig();
-    config.runtime ||= {};
-    config.jobs ||= {};
-    if (patch.maxConcurrentJobs !== undefined) {
-      config.runtime.maxConcurrentJobs = patch.maxConcurrentJobs;
-    }
-    if (patch.allowJobGitSave !== undefined) {
-      config.jobs.allowJobGitSave = patch.allowJobGitSave;
-    }
+    const config = normalizeInstanceConfig(readConfig());
+    if (patch.maxConcurrentJobs !== undefined) config.runtime.maxConcurrentJobs = patch.maxConcurrentJobs;
+    if (patch.allowJobGitSave !== undefined) config.jobs.allowJobGitSave = patch.allowJobGitSave;
     writeConfig(config);
     const runner = refreshLocalRunner();
     await audit('job_runtime_configure', {
@@ -156,9 +148,7 @@ export function registerJobTools(register, annotations) {
       throw new Error(`Tool is not allowed by the durable job policy: ${tool}`);
     }
     const target = jobTarget(tool);
-    if (!target) {
-      throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
-    }
+    if (!target) throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
     const args = withWorkspace(rawArgs, workspaceId);
     if (tool === 'git_save' && args.push) {
       throw new Error('Durable git_save jobs cannot push. Review and publish synchronously through the approval flow.');
@@ -167,9 +157,7 @@ export function registerJobTools(register, annotations) {
     const authorized = targetAuthorization(target, args, principal);
     const capabilities = [...new Set([
       ...target.requiredCapabilities,
-      ...requiredCapabilities
-        .map(value => String(value).trim().toLowerCase())
-        .filter(Boolean)
+      ...requiredCapabilities.map(value => String(value).trim().toLowerCase()).filter(Boolean)
     ])];
     const job = createJob({
       principal,
@@ -220,9 +208,7 @@ export function registerJobTools(register, annotations) {
     annotations: ro
   }, async ({ id, includeArguments = false, includeResult = true }) => {
     const principal = principalNow();
-    return toolText({
-      job: ensureVisible(getJob(id, { includeArguments, includeResult }), principal)
-    });
+    return toolText({ job: ensureVisible(getJob(id, { includeArguments, includeResult }), principal) });
   });
 
   register('job_artifacts', {
@@ -249,12 +235,7 @@ export function registerJobTools(register, annotations) {
     const principal = principalNow();
     ensureVisible(getJob(id), principal);
     const result = cancelJob({ id, principal, force });
-    await audit('job_cancel', {
-      principalId: principal.id,
-      jobId: id,
-      force,
-      cancelled: result.cancelled
-    });
+    await audit('job_cancel', { principalId: principal.id, jobId: id, force, cancelled: result.cancelled });
     return toolText(result);
   });
 
@@ -267,17 +248,10 @@ export function registerJobTools(register, annotations) {
     const principal = principalNow();
     const existing = ensureVisible(getJob(id, { includeArguments: true }), principal);
     const target = jobTarget(existing.tool);
-    if (!target) {
-      throw new Error(`Job target is not currently available: ${existing.tool}`);
-    }
+    if (!target) throw new Error(`Job target is not currently available: ${existing.tool}`);
     targetAuthorization(target, existing.arguments || {}, principal);
     const job = retryJob({ id, principal });
-    await audit('job_retry', {
-      principalId: principal.id,
-      jobId: id,
-      tool: job.tool,
-      workspace: job.workspaceId
-    });
+    await audit('job_retry', { principalId: principal.id, jobId: id, tool: job.tool, workspace: job.workspaceId });
     return toolText({ job });
   });
 
@@ -289,28 +263,24 @@ export function registerJobTools(register, annotations) {
   }, async () => {
     const principal = principalNow();
     assertMaintainer(principal, 'Viewing Runner topology');
-    return toolText({
-      policy: runtimePolicy(),
-      runners: listRunners(),
-      runtime: jobRuntimeStatus()
-    });
+    return toolText({ policy: runtimePolicy(), runners: listRunners(), runtime: jobRuntimeStatus() });
   });
 
   register('deployment_drain_status', {
     title: 'DevMate drain status',
-    description: 'Show whether the gateway is draining before maintenance or upgrade.',
+    description: 'Show whether the instance is draining before maintenance or upgrade.',
     inputSchema: {},
     annotations: ro
   }, async () => toolText({ drain: drainStatus(), runtime: jobRuntimeStatus() }));
 
   register('deployment_drain_start', {
     title: 'Start DevMate drain',
-    description: 'Stop accepting new team mutations and stop embedded/external Runners from receiving queued jobs while allowing current jobs to finish. Requires maintainer or owner.',
+    description: 'Stop accepting new mutations and stop embedded/external Runners from receiving queued jobs while allowing current jobs to finish. Requires maintainer or owner.',
     inputSchema: { reason: z.string().max(1000).optional() },
     annotations: { ...rw, idempotentHint: true }
   }, async ({ reason = '' }) => {
     const principal = principalNow();
-    assertMaintainer(principal, 'Starting deployment drain');
+    assertMaintainer(principal, 'Starting DevMate drain');
     const drain = startDrain({ principal, reason });
     await audit('deployment_drain_start', { principalId: principal.id, reason });
     return toolText({ drain, runtime: jobRuntimeStatus() });
@@ -318,17 +288,14 @@ export function registerJobTools(register, annotations) {
 
   register('deployment_drain_cancel', {
     title: 'Cancel DevMate drain',
-    description: 'Resume team mutations and durable job delivery after maintenance. Requires maintainer or owner.',
+    description: 'Resume mutations and durable job delivery after maintenance. Requires maintainer or owner.',
     inputSchema: {},
     annotations: { ...rw, idempotentHint: true }
   }, async () => {
     const principal = principalNow();
-    assertMaintainer(principal, 'Cancelling deployment drain');
+    assertMaintainer(principal, 'Cancelling DevMate drain');
     const result = cancelDrain({ principal });
-    await audit('deployment_drain_cancel', {
-      principalId: principal.id,
-      cancelled: result.cancelled
-    });
+    await audit('deployment_drain_cancel', { principalId: principal.id, cancelled: result.cancelled });
     return toolText(result);
   });
 }
