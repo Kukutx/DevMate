@@ -69,6 +69,7 @@ try {
     'vscode-host/shared-tunnel-record-store.js',
     'vscode-host/tunnel-controller.js',
     'vscode-host/tunnel-runtime.js',
+    'host/public-mcp.js',
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
     'shared/config-store.cjs',
@@ -94,14 +95,18 @@ try {
   }
 
   const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
-  const handshakeStart = extensionSource.indexOf('async function mcpHandshakeTest');
-  const handshakeEnd = extensionSource.indexOf('async function quickStart', handshakeStart);
-  assert.ok(handshakeStart >= 0 && handshakeEnd > handshakeStart, 'VSIX must package the public MCP preflight');
-  const handshake = extensionSource.slice(handshakeStart, handshakeEnd);
-  assert.match(handshake, /Authorization: `Bearer \$\{token\}`/, 'VSIX initialize preflight must use the bearer token');
-  assert.match(handshake, /MCP-Protocol-Version/, 'VSIX tools/list must send the negotiated MCP protocol version');
-  assert.match(handshake, /MCP-Session-Id/, 'VSIX tools/list must propagate the MCP session id when present');
-  assert.match(handshake, /tools\/list[\s\S]*toolsHeaders/, 'VSIX tools/list must use the authenticated session headers');
+  assert.match(extensionSource, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/, 'VSIX must link VS Code to the shared public MCP preflight');
+  const verifyStart = extensionSource.indexOf('async function verifyPublicMcp');
+  const verifyEnd = extensionSource.indexOf('async function quickStart', verifyStart);
+  assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
+  const verify = extensionSource.slice(verifyStart, verifyEnd);
+  assert.match(verify, /return preflightPublicMcp\(\{/, 'VSIX verification must delegate to the shared preflight helper');
+  assert.match(verify, /token: data\?\.auth\?\.required === false \? '' : String\(data\?\.auth\?\.token \|\| ''\)/, 'VSIX verification must pass the current owner bearer token');
+
+  const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
+  assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must authenticate requests');
+  assert.match(publicMcpSource, /'mcp-session-id'/, 'VSIX shared preflight must carry MCP session state');
+  assert.match(publicMcpSource, /method: 'tools\/list'/, 'VSIX shared preflight must verify tools/list');
 
   const requireFromVsix = createRequire(packageFile);
   const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
