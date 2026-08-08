@@ -15,7 +15,7 @@ const {
 
 const DEFAULT_POLL_MS = 5000;
 const DEFAULT_RETRY_MS = 30000;
-const DEFAULT_READY_GRACE_MS = 8000;
+const DEFAULT_READY_GRACE_MS = 20000;
 
 function sameGeneration(a, b) {
   return !!a && a === b;
@@ -78,6 +78,22 @@ class PublicTunnelVerifier {
     }
   }
 
+  async notifyVerified(result) {
+    try {
+      await this.onVerified(result);
+    } catch (error) {
+      this.logger(`Public MCP recovery notification failed after successful verification: ${error.message || error}`);
+    }
+  }
+
+  async notifyError(payload) {
+    try {
+      await this.onError(payload);
+    } catch (error) {
+      this.logger(`Public MCP recovery error notification failed: ${error.message || error}`);
+    }
+  }
+
   async check({ force = false } = {}) {
     if (this.disposed) return { checked: false, reason: 'disposed' };
     const config = this.readConfig();
@@ -106,6 +122,8 @@ class PublicTunnelVerifier {
     this.lastAttemptGeneration = generation;
     this.nextAttemptAt = now + this.retryMs;
 
+    let success = null;
+    let failure = null;
     try {
       const token = config.auth?.required === false ? '' : String(config.auth?.token || '');
       const test = await this.preflight({
@@ -131,27 +149,35 @@ class PublicTunnelVerifier {
         return current;
       });
 
+      const persisted = this.readConfig();
+      const persistedRecord = persisted ? this.currentRecord(persisted) : null;
+      if (
+        !persisted ||
+        recordGeneration(persistedRecord) !== generation ||
+        !verifiedForCurrentRecord(persisted, persistedRecord)
+      ) {
+        this.logger('Discarded public MCP recovery success because the tunnel generation changed during persistence.');
+        return { checked: true, verified: false, stale: true, generation };
+      }
+
       this.nextAttemptAt = 0;
       this.lastErrorNoticeGeneration = '';
       const nextHost = hostOf(test.publicOrigin || record.publicUrl);
-      const changedHost = !!previousHost && previousHost !== nextHost;
-      const result = {
+      success = {
         checked: true,
         verified: true,
         stale: false,
         generation,
-        record,
+        record: persistedRecord,
         test,
-        changedHost,
+        changedHost: !!previousHost && previousHost !== nextHost,
         previousHost,
         publicHost: nextHost
       };
       this.logger(`Reverified public MCP after tunnel generation change: ${nextHost || record.publicUrl}, tools=${test.toolCount}.`);
-      await this.onVerified(result);
-      return result;
     } catch (error) {
       const latest = this.readConfig();
-      const current = !!latest && this.generationStillCurrent(latest, generation);
+      let current = !!latest && this.generationStillCurrent(latest, generation);
       if (current) {
         updateConfig(this.configFile, value => {
           if (!this.generationStillCurrent(value, generation)) return value;
@@ -162,16 +188,30 @@ class PublicTunnelVerifier {
           };
           return value;
         });
+        const afterFailureWrite = this.readConfig();
+        current = !!afterFailureWrite && this.generationStillCurrent(afterFailureWrite, generation);
       }
       this.logger(`Public MCP recovery verification failed: ${error.message || error}`);
-      if (current && this.lastErrorNoticeGeneration !== generation) {
-        this.lastErrorNoticeGeneration = generation;
-        await this.onError({ error, generation, record });
-      }
-      return { checked: true, verified: false, stale: !current, generation, error };
+      failure = {
+        checked: true,
+        verified: false,
+        stale: !current,
+        generation,
+        record,
+        error,
+        notify: current && this.lastErrorNoticeGeneration !== generation
+      };
+      if (failure.notify) this.lastErrorNoticeGeneration = generation;
     } finally {
       if (this.inFlightGeneration === generation) this.inFlightGeneration = '';
     }
+
+    if (success) {
+      await this.notifyVerified(success);
+      return success;
+    }
+    if (failure?.notify) await this.notifyError({ error: failure.error, generation, record });
+    return failure || { checked: true, verified: false, stale: true, generation };
   }
 
   start() {
