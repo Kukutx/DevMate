@@ -252,10 +252,10 @@ async function configureConnection(context) {
     ], { title: 'DevMate · ngrok Connection' });
     if (!action) return;
     if (action.value === 'setup') {
-      if (typeof innerExtension?.setupForDeployment !== 'function') {
+      if (typeof innerExtension?.setupForConnection !== 'function') {
         throw new Error('Embedded ngrok account setup is unavailable');
       }
-      const configured = await innerExtension.setupForDeployment(context);
+      const configured = await innerExtension.setupForConnection(context);
       if (!configured) return;
       state = readInstanceConfig(configPath(context));
       if (!state) throw new Error('DevMate shared config disappeared during ngrok setup');
@@ -324,7 +324,7 @@ async function configureConnection(context) {
   if (start === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
 }
 
-async function tunnelDoctor(context) {
+async function connectionDoctor(context) {
   output.show(true);
   const settings = tunnelSettings(context);
   log('--- connection diagnostics ---');
@@ -369,9 +369,8 @@ async function activate(context) {
   context.subscriptions.push(output);
   cloudflareTunnelToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
 
-  register(context, 'devMate.deploymentSetup', () => configureConnection(context));
-  register(context, 'devMate.tunnelSetup', () => configureConnection(context));
-  register(context, 'devMate.tunnelDoctor', () => tunnelDoctor(context));
+  register(context, 'devMate.connectionSetup', () => configureConnection(context));
+  register(context, 'devMate.connectionDoctor', () => connectionDoctor(context));
   register(context, 'devMate.cloudflareSetToken', async () => {
     const token = await promptCloudflareTokenValue();
     if (!token) return;
@@ -394,7 +393,7 @@ async function activate(context) {
       ? 'Cloudflare Tunnel token removed and the managed connection was stopped.'
       : 'Cloudflare Tunnel token removed from VS Code Secret Storage.');
   });
-  register(context, 'devMate.openTunnelDocs', async () => {
+  register(context, 'devMate.openConnectionDocs', async () => {
     const provider = tunnelSettings(context).provider;
     await openExternal(provider.startsWith('cloudflare') ? CLOUDFLARE_DOCS : NGROK_POLICY_DOCS);
   });
@@ -418,6 +417,7 @@ module.exports = {
   cloudflareCredentialInUse,
   commitCloudflareConnection,
   configureConnection,
+  connectionDoctor,
   deactivate,
   localTunnelSettings,
   prepareCloudflareCredentialMutation,
