@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
+const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
 const packageJson = require('../package.json');
@@ -168,7 +169,7 @@ function replacementCandidates(file) {
       return stat ? { file: candidate, mtimeMs: stat.mtimeMs } : null;
     })
     .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.file.localeCompare(b.file));
 }
 
 function validateReplacement(file) {
@@ -377,12 +378,7 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       maxPersistentProcesses: 16,
       persistentProcessOutputBytes: 2097152
     },
-    maintenance: {
-      backupRetentionDays: 30,
-      auditRetentionDays: 30,
-      maxBackupBytes: 1073741824,
-      maxAuditBytes: 20971520
-    },
+    maintenance: { ...DEFAULT_MAINTENANCE },
     connection: {},
     auth: { required: true, token: randomToken() },
     permissions: {
