@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   recordGeneration,
+  successfulVerificationPatch,
   verifiedForCurrentRecord
 } = require('../shared/public-ingress-verification.cjs');
 
@@ -45,6 +46,23 @@ test('ownership takeover creates a distinct generation even when URL and ready t
   const first = record('2026-08-08T01:00:00.000Z');
   const takeover = record('2026-08-08T01:00:00.000Z', { ownerId: 'owner-b' });
   assert.notEqual(recordGeneration(first), recordGeneration(takeover));
+});
+
+test('new verification evidence binds to the exact tunnel generation', () => {
+  const first = record('2026-08-08T01:00:00.000Z');
+  const testResult = {
+    publicOrigin: first.publicUrl,
+    toolCount: 25,
+    server: { name: 'devmate' }
+  };
+  const current = {
+    connection: successfulVerificationPatch(testResult, first.publicUrl, '2026-08-08T01:00:01.000Z', first)
+  };
+  assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
+  assert.equal(verifiedForCurrentRecord(current, first), true);
+
+  const takeover = record('2026-08-08T01:00:00.000Z', { ownerId: 'owner-b' });
+  assert.equal(verifiedForCurrentRecord(current, takeover), false);
 });
 
 test('matching host alone can never validate malformed or empty MCP evidence', () => {
