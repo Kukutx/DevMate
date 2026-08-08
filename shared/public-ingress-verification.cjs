@@ -25,15 +25,16 @@ function hostOf(value) {
   catch { return ''; }
 }
 
-function recordGeneration(record) {
-  if (!record || record.status !== 'ready' || !record.publicUrl || !record.readyAt) return '';
-  return [
-    String(record.ownerId || ''),
-    String(record.provider || ''),
-    String(record.port || ''),
-    String(record.readyAt || ''),
-    String(record.publicUrl || '')
-  ].join('|');
+function processAlive(pid) {
+  const numeric = Number(pid);
+  if (!Number.isInteger(numeric) || numeric <= 0) return false;
+  if (numeric === process.pid) return true;
+  try {
+    process.kill(numeric, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
 }
 
 function gatewayGeneration(lock) {
@@ -42,14 +43,27 @@ function gatewayGeneration(lock) {
     !lock.runtimeOwnerId ||
     !lock.acquiredAt ||
     !lock.instanceId ||
-    !Number.isInteger(Number(lock.pid)) ||
-    Number(lock.pid) <= 0
+    !processAlive(lock.pid)
   ) return '';
   return [
     String(lock.runtimeOwnerId),
     String(lock.pid),
     String(lock.instanceId),
     String(lock.acquiredAt)
+  ].join('|');
+}
+
+function recordGeneration(record) {
+  if (!record || record.status !== 'ready' || !record.publicUrl || !record.readyAt) return '';
+  const hasGatewayGeneration = Object.hasOwn(record, 'gatewayGeneration');
+  if (hasGatewayGeneration && !String(record.gatewayGeneration || '').trim()) return '';
+  return [
+    String(record.ownerId || ''),
+    String(record.provider || ''),
+    String(record.port || ''),
+    String(record.readyAt || ''),
+    String(record.publicUrl || ''),
+    ...(hasGatewayGeneration ? [String(record.gatewayGeneration)] : [])
   ].join('|');
 }
 
@@ -137,6 +151,7 @@ module.exports = {
   cleanHttpsOrigin,
   gatewayGeneration,
   hostOf,
+  processAlive,
   recordGeneration,
   runtimeMatchesConnection,
   sessionGeneration,
