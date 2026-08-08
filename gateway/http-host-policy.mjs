@@ -51,9 +51,9 @@ export function hostAllowed(req, config) {
   const localHost = loopbackHost(req);
   if (localHost) return loopbackSocket(req);
 
-  const allowed = Array.isArray(config?.production?.allowedHosts)
-    ? config.production.allowedHosts
+  const allowed = Array.isArray(config?.requestPolicy?.allowedHosts)
+    ? config.requestPolicy.allowedHosts
     : [];
-  if (!allowed.length) return config?.deployment?.mode !== 'production';
+  if (!allowed.length) return true;
   return allowed.some(item => candidates.includes(String(item || '').trim().toLowerCase()));
 }
