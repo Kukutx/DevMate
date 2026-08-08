@@ -16,10 +16,10 @@ test('Obsidian Start closes Gateway, ngrok, public preflight and verified-copy l
   assert.match(main, /await navigator\.clipboard\.writeText\(preflight\.mcpUrl\)/);
   assert.match(main, /state: verified \? 'ready' : 'public-unverified'/);
   assert.doesNotMatch(main, /ownerUrl\(this\.settings\.publicOrigin\)/);
-  assert.doesNotMatch(main, /publicOrigin/);
+  assert.doesNotMatch(main, /this\.settings\.publicOrigin|settings\.publicOrigin/);
 });
 
-test('Obsidian Copy MCP URL never falls back to localhost or an unverified origin', () => {
+test('Obsidian Copy MCP URL never falls back to localhost or an unverified configured origin', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async copyConnectionUrl()');
   const end = main.indexOf('async copyConnectionToken()', start);
@@ -28,7 +28,7 @@ test('Obsidian Copy MCP URL never falls back to localhost or an unverified origi
   assert.match(block, /this\.ngrokRuntime\?\.status\(gateway\.port\)/);
   assert.match(block, /await this\.verifyPublicEndpoint\(publicUrl\)/);
   assert.match(block, /writeText\(test\.mcpUrl\)/);
-  assert.doesNotMatch(block, /127\.0\.0\.1|ownerUrl|publicOrigin/);
+  assert.doesNotMatch(block, /127\.0\.0\.1|ownerUrl|this\.settings\.publicOrigin|settings\.publicOrigin/);
 });
 
 test('Obsidian UI labels loopback as internal and surfaces public ngrok MCP separately', () => {
