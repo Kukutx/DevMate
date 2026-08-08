@@ -8,6 +8,11 @@ const { OperationCoordinator } = require('../../host/runtime/operation-coordinat
 const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
 const { updateConfig } = require('../../shared/config-store.cjs');
 const { normalizeInstanceConfig } = require('../../shared/instance-config.cjs');
+const {
+  recordGeneration,
+  successfulVerificationPatch,
+  verifiedForCurrentRecord
+} = require('../../shared/public-ingress-verification.cjs');
 const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
 const { TunnelController } = require('../../vscode-host/tunnel-controller.js');
 const { tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
@@ -39,11 +44,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.nodeRuntimeKey = '';
     this.tunnelSecretsCache = null;
     this.lastStatusText = '';
-    this.lastVerifiedPublicUrl = '';
     this.lastVerifiedAt = '';
     this.lastVerifiedToolCount = 0;
     this.lastPublicVerificationAttemptAt = 0;
     this.publicVerificationPromise = null;
+    this.publicVerificationGeneration = '';
     this.recoveryPromise = null;
     this.vaultRoot = '';
     this.layoutReady = false;
@@ -236,16 +241,34 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   clearPublicVerification() {
-    this.lastVerifiedPublicUrl = '';
     this.lastVerifiedAt = '';
     this.lastVerifiedToolCount = 0;
   }
 
-  async verifyPublicEndpoint(publicUrl) {
+  currentTunnelRecord(port) {
+    try { return this.tunnelController?.status(port)?.record || null; }
+    catch { return null; }
+  }
+
+  async verifyPublicEndpoint(publicUrl, expectedRecord = null) {
     const normalized = String(publicUrl || '').trim();
     if (!normalized) throw new Error('The public connection did not publish an HTTPS origin');
-    if (this.publicVerificationPromise) return this.publicVerificationPromise;
+    const initialRecord = expectedRecord || this.currentTunnelRecord();
+    const generation = recordGeneration(initialRecord);
+    if (!generation) {
+      const error = new Error('The public connection is not a current ready tunnel generation');
+      error.code = 'DEVMATE_PUBLIC_MCP_GENERATION_UNAVAILABLE';
+      throw error;
+    }
+    if (this.publicVerificationPromise) {
+      if (this.publicVerificationGeneration === generation) return this.publicVerificationPromise;
+      await this.publicVerificationPromise.catch(() => {});
+      const latestRecord = this.currentTunnelRecord(initialRecord.port);
+      return this.verifyPublicEndpoint(latestRecord?.publicUrl || normalized, latestRecord);
+    }
+
     this.lastPublicVerificationAttemptAt = Date.now();
+    this.publicVerificationGeneration = generation;
     this.publicVerificationPromise = (async () => {
       try {
         const test = await preflightPublicMcp({
@@ -254,31 +277,53 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           clientName: 'devmate-obsidian-preflight',
           clientVersion: this.manifest.version
         });
+        const currentRecord = this.currentTunnelRecord(initialRecord.port);
+        if (recordGeneration(currentRecord) !== generation) {
+          const error = new Error('Public MCP verification became stale because the connection generation changed');
+          error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
+          throw error;
+        }
+
         const stamp = new Date().toISOString();
-        this.lastVerifiedPublicUrl = test.publicOrigin;
+        updateConfig(this.controller.configFile, config => {
+          normalizeInstanceConfig(config);
+          if (recordGeneration(this.currentTunnelRecord(initialRecord.port)) !== generation) return config;
+          config.connection = {
+            ...config.connection,
+            ...successfulVerificationPatch(test, normalized, stamp)
+          };
+          return config;
+        });
+
+        const persisted = this.controller.readConfig();
+        const persistedRecord = this.currentTunnelRecord(initialRecord.port);
+        if (
+          recordGeneration(persistedRecord) !== generation ||
+          !verifiedForCurrentRecord(persisted, persistedRecord)
+        ) {
+          const error = new Error('Public MCP verification could not be committed for the current connection generation');
+          error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
+          throw error;
+        }
+
         this.lastVerifiedAt = stamp;
         this.lastVerifiedToolCount = test.toolCount;
-        this.updateConnectionSnapshot({
-          lastPreflightAt: stamp,
-          lastPublicOrigin: test.publicOrigin,
-          lastPublicHost: new URL(test.publicOrigin).host,
-          lastMcpPath: '/mcp',
-          lastToolCount: test.toolCount,
-          lastServerName: test.server?.name || 'devmate',
-          lastError: '',
-          lastErrorAt: null
-        });
         this.logRuntime(`Verified public MCP endpoint: ${redactUrl(test.mcpUrl)} tools=${test.toolCount}`);
         return test;
       } catch (error) {
         this.clearPublicVerification();
-        this.updateConnectionSnapshot({
-          lastError: String(error.message || error),
-          lastErrorAt: new Date().toISOString()
-        });
+        if (recordGeneration(this.currentTunnelRecord(initialRecord.port)) === generation) {
+          this.updateConnectionSnapshot({
+            lastError: String(error.message || error),
+            lastErrorAt: new Date().toISOString()
+          });
+        }
         throw error;
       } finally {
-        this.publicVerificationPromise = null;
+        if (this.publicVerificationGeneration === generation) {
+          this.publicVerificationPromise = null;
+          this.publicVerificationGeneration = '';
+        }
       }
     })();
     return this.publicVerificationPromise;
@@ -394,7 +439,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       catch (error) { connectionError = error.message || String(error); }
 
       if (gateway.state === 'running') {
-        const verified = !!tunnel.publicUrl && this.lastVerifiedPublicUrl === tunnel.publicUrl;
+        const config = this.controller.readConfig();
+        const verified = !!tunnel.record && verifiedForCurrentRecord(config, tunnel.record);
         if (verified) {
           return {
             ...gateway,
@@ -474,11 +520,12 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     if (
       status.gateway?.state === 'running' &&
       status.tunnel?.publicUrl &&
+      status.tunnel?.record &&
       !status.verified &&
       !this.publicVerificationPromise &&
       Date.now() - this.lastPublicVerificationAttemptAt >= PUBLIC_REVERIFY_BACKOFF_MS
     ) {
-      void this.verifyPublicEndpoint(status.tunnel.publicUrl)
+      void this.verifyPublicEndpoint(status.tunnel.publicUrl, status.tunnel.record)
         .then(() => this.refreshStatus())
         .catch(error => this.logRuntime(`Public MCP verification failed: ${error.message || error}`));
     }
@@ -525,7 +572,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         ? `Attached to shared ${tunnel.record?.provider || 'public'} connection: ${redactUrl(publicUrl)}`
         : `Public connection ready: ${redactUrl(publicUrl)}`);
 
-      const preflight = await this.verifyPublicEndpoint(publicUrl);
+      const preflight = await this.verifyPublicEndpoint(publicUrl, tunnel.record);
       this.runtimeDiagnostics?.clearFailure();
       if (this.settings.autoCopyUrl) await navigator.clipboard.writeText(preflight.mcpUrl);
       if (!quiet) {
@@ -627,7 +674,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       const tunnel = this.tunnelController?.status(gateway.port);
       const publicUrl = tunnel?.publicUrl || '';
       if (!publicUrl) throw new Error('DevMate has no active public connection. Run DevMate: Start first.');
-      const test = await this.verifyPublicEndpoint(publicUrl);
+      const test = await this.verifyPublicEndpoint(publicUrl, tunnel.record);
       await navigator.clipboard.writeText(test.mcpUrl);
       this.updateConnectionSnapshot({ lastCopiedAt: new Date().toISOString() });
       new Notice(`Verified public MCP URL copied: ${redactUrl(test.mcpUrl)}`);
