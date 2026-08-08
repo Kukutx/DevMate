@@ -9,16 +9,21 @@ const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const json = relative => JSON.parse(source(relative));
 
-test('VS Code keeps ngrok as default while retaining all current deployment providers', () => {
+test('shared personal config and VS Code use one ngrok default while retaining all current deployment providers', () => {
   const pkg = json('package.json');
   const provider = pkg.contributes.configuration.properties['devMate.tunnelProvider'];
   assert.equal(provider.default, 'ngrok');
   assert.deepEqual(provider.enum, ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
 
+  const sharedConfig = source('shared/config-store.cjs');
   const entry = source('extension-entry-shared-tunnel.js');
+  const editor = source('vscode-host/shared-deployment-config.js');
+  assert.match(sharedConfig, /deployment: \{ mode: 'personal', tunnelProvider: 'ngrok', publicUrl: '' \}/);
   assert.match(entry, /setting\(vscode, 'tunnelProvider', 'ngrok'\)/);
   assert.match(entry, /settingsFromState/);
   assert.match(entry, /new TunnelController/);
+  assert.doesNotMatch(entry, /normalizeBootstrapDeployment/);
+  assert.doesNotMatch(editor, /normalizeBootstrapDeployment/);
 });
 
 test('shared workspace config is authoritative for tunnel mode, provider, and stable public URL', () => {
