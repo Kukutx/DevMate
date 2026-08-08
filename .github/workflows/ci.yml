@@ -148,7 +148,7 @@ jobs:
             --config /var/lib/devmate/config.json \
             --provider external \
             --public-url https://standalone-ci.example.test >/dev/null
-          docker run --detach --rm \
+          docker run --detach \
             --name devmate-ci-runtime \
             --publish 127.0.0.1:18787:8787 \
             --volume "$state:/var/lib/devmate" \
@@ -159,9 +159,13 @@ jobs:
             if curl --fail --silent --header 'Host: standalone-ci.example.test' http://127.0.0.1:18787/health >/dev/null; then
               exit 0
             fi
+            if [ "$(docker inspect --format '{{.State.Running}}' devmate-ci-runtime 2>/dev/null || true)" != "true" ]; then
+              docker logs devmate-ci-runtime || true
+              exit 1
+            fi
             sleep 1
           done
-          docker logs devmate-ci-runtime
+          docker logs devmate-ci-runtime || true
           exit 1
 
       - name: Install virtual display
