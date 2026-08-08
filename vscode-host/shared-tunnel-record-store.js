@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('../shared/config-store.cjs');
 const { normalizeProvider, normalizePublicUrl } = require('../tunnel-provider.js');
-const { deploymentMode: validateDeploymentMode } = require('./tunnel-settings.js');
 
 const RUNTIME_RECORD_VERSION = 1;
 const RUNTIME_RECORD_NAME = 'tunnel.runtime.json';
@@ -42,9 +41,6 @@ function runtimeRecordError(message, code, recordFile) {
 
 function stableConfiguration(settings = {}, port = 0) {
   const providerValue = settings.provider !== undefined ? settings.provider : settings.tunnelProvider;
-  const modeValue = settings.deploymentMode === undefined
-    ? 'personal'
-    : String(settings.deploymentMode).trim().toLowerCase();
   return {
     port: Number(port) || 0,
     provider: normalizeProvider(providerValue),
@@ -54,8 +50,7 @@ function stableConfiguration(settings = {}, port = 0) {
     ngrokUseManagedAccount: settings.ngrokUseManagedAccount !== false,
     ngrokPoolingEnabled: settings.ngrokPoolingEnabled === true,
     ngrokTrafficPolicyFile: String(settings.ngrokTrafficPolicyFile || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
-    cloudflareCommandPath: String(settings.cloudflareCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
-    deploymentMode: validateDeploymentMode(modeValue)
+    cloudflareCommandPath: String(settings.cloudflareCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT)
   };
 }
 
@@ -231,7 +226,7 @@ class SharedTunnelRecordStore {
     const record = {
       version: RUNTIME_RECORD_VERSION,
       ownerId,
-      hostId: String(patch.hostId || current?.hostId || 'vscode'),
+      hostId: String(patch.hostId || current?.hostId || 'desktop'),
       hostPid: process.pid,
       childPid: patch.childPid ?? current?.childPid ?? null,
       port: Number(patch.port ?? current?.port ?? 0),
