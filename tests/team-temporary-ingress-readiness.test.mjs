@@ -112,6 +112,48 @@ test('stale or mismatched preflight cannot validate a newly ready temporary tunn
   assert.equal(runtimePublicIngress(config, { stateDirectory: temp }).verified, false);
 });
 
+test('old verified runtime is rejected immediately when shared deployment switches provider', () => {
+  const store = new SharedTunnelRecordStore({ stateDirectory: temp });
+  store.remove(store.read()?.ownerId || 'none');
+  const config = baseConfig('team');
+  const record = publishTemporaryTunnel('https://old.trycloudflare.com');
+  markPreflight(config, record);
+  assert.equal(runtimePublicIngress(config, { stateDirectory: temp }).verified, true);
+
+  config.deployment.tunnelProvider = 'ngrok';
+  config.deployment.publicUrl = '';
+  const stale = runtimePublicIngress(config, { stateDirectory: temp });
+  assert.equal(stale.available, false);
+  assert.equal(stale.verified, false);
+  assert.equal(stale.stale, true);
+  assert.equal(stale.publicUrl, '');
+  assert.match(stale.reason, /does not match configured provider ngrok/);
+
+  const effective = effectivePublicIngress(config, { stateDirectory: temp });
+  assert.equal(effective.available, false);
+  assert.equal(effective.source, 'none');
+});
+
+test('runtime URL cannot stand in for a different configured stable endpoint even under the same provider', () => {
+  const store = new SharedTunnelRecordStore({ stateDirectory: temp });
+  store.remove(store.read()?.ownerId || 'none');
+  const config = baseConfig('team');
+  const record = publishTemporaryTunnel('https://runtime.trycloudflare.com');
+  markPreflight(config, record);
+
+  config.deployment.publicUrl = 'https://configured.example.com';
+  const runtime = runtimePublicIngress(config, { stateDirectory: temp });
+  assert.equal(runtime.available, false);
+  assert.equal(runtime.stale, true);
+  assert.match(runtime.reason, /does not match configured stable URL/);
+
+  const effective = effectivePublicIngress(config, { stateDirectory: temp });
+  assert.equal(effective.available, true);
+  assert.equal(effective.source, 'configured');
+  assert.equal(effective.publicUrl, 'https://configured.example.com');
+  assert.equal(effective.runtime.stale, true);
+});
+
 test('team Host allowlist validates the verified effective runtime URL', () => {
   const store = new SharedTunnelRecordStore({ stateDirectory: temp });
   store.remove(store.read()?.ownerId || 'none');
@@ -145,6 +187,7 @@ test('production never substitutes a temporary runtime tunnel for its required s
   assert.equal(stable.available, true);
   assert.equal(stable.source, 'configured');
   assert.equal(stable.publicUrl, 'https://prod.example.com');
+  assert.equal(stable.runtime.stale, true);
 });
 
 test.after(async () => fsp.rm(temp, { recursive: true, force: true }));
