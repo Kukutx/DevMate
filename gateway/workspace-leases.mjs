@@ -157,7 +157,7 @@ export function releaseWorkspaceLease(options) {
 export function assertWorkspaceLease({ workspaceId, principal, capability, config }) {
   if (!workspaceId || !config?.team?.requireWorkspaceLeaseForWrites) return null;
   if (!['write', 'execute', 'git', 'publish'].includes(capability)) return null;
-  if (principal?.role === 'owner' || principal?.source === 'local') return null;
+  if (principal?.source === 'local') return null;
   pruneWorkspaceLeases();
   const current = leases.get(workspaceId);
   if (!current) throw new Error(`Workspace ${workspaceId} requires a lease before ${capability} operations`);
