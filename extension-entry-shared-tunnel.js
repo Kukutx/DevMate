@@ -7,6 +7,7 @@ const { version: VERSION } = require('./package.json');
 const { ensurePersonalConfig } = require('./shared/config-store.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
+const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
 const { currentWorkspaceRoot, resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
 const { normalizeBootstrapDeployment } = require('./vscode-host/shared-deployment-config.js');
 const { TunnelController } = require('./vscode-host/tunnel-controller.js');
@@ -18,6 +19,7 @@ const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 
 let lifecycle = null;
 let runtime = null;
+let publicVerifier = null;
 let output = null;
 let activation = null;
 let deactivation = null;
@@ -78,10 +80,38 @@ async function tunnelSecrets(context) {
   };
 }
 
+function createPublicVerifier() {
+  return new PublicTunnelVerifier({
+    stateDirectory: runtimeStateDirectory,
+    tunnelStatus: port => runtime?.status(port),
+    appVersion: VERSION,
+    logger: log,
+    onVerified: async result => {
+      if (!result.changedHost) return;
+      const choice = await vscode.window.showWarningMessage(
+        `DevMate recovered a new verified public endpoint (${result.publicHost}). Update the ChatGPT MCP connection to the new URL.`,
+        'Copy MCP URL',
+        'Open DevMate'
+      );
+      if (choice === 'Copy MCP URL') await vscode.commands.executeCommand('devMate.copyUrl');
+      if (choice === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
+    },
+    onError: async ({ error }) => {
+      const choice = await vscode.window.showWarningMessage(
+        `DevMate tunnel recovered, but public MCP verification failed: ${error.message || error}`,
+        'Open DevMate',
+        'Copy diagnostics'
+      );
+      if (choice === 'Open DevMate') await vscode.commands.executeCommand('devMate.open');
+      if (choice === 'Copy diagnostics') await vscode.commands.executeCommand('devMate.copyHostDiagnostics');
+    }
+  });
+}
+
 async function activate(context) {
   if (activation) return activation;
   activation = (async () => {
-    if (runtime || lifecycle) await deactivate();
+    if (runtime || lifecycle || publicVerifier) await deactivate();
     output = vscode.window.createOutputChannel('DevMate Tunnel');
     context.subscriptions.push(output);
     lifecycle = new VscodeHostLifecycle({ vscode });
@@ -98,13 +128,17 @@ async function activate(context) {
       });
       setTunnelController(runtime);
       await lifecycle.activate(context);
+      publicVerifier = createPublicVerifier().start();
       log(`Provider-native shared tunnel runtime ready in ${runtimeStateDirectory}.`);
     } catch (error) {
+      const currentVerifier = publicVerifier;
       const currentRuntime = runtime;
       const currentLifecycle = lifecycle;
+      publicVerifier = null;
       runtime = null;
       lifecycle = null;
       runtimeStateDirectory = '';
+      currentVerifier?.dispose();
       clearTunnelController(currentRuntime);
       try { await currentLifecycle?.deactivate(); } catch {}
       try { await currentRuntime?.dispose({ stopOwned: true }); } catch {}
@@ -119,11 +153,14 @@ async function activate(context) {
 async function deactivate() {
   if (deactivation) return deactivation;
   deactivation = (async () => {
+    const currentVerifier = publicVerifier;
     const currentRuntime = runtime;
     const currentLifecycle = lifecycle;
+    publicVerifier = null;
     runtime = null;
     lifecycle = null;
     runtimeStateDirectory = '';
+    currentVerifier?.dispose();
     try {
       await currentLifecycle?.deactivate();
     } finally {
@@ -138,6 +175,7 @@ async function deactivate() {
 
 module.exports = {
   activate,
+  createPublicVerifier,
   deactivate,
   ensureSharedDesktopConfig,
   localTunnelSettings,
