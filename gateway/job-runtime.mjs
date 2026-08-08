@@ -15,6 +15,7 @@ import { incrementCounter, observeDuration, setGauge } from './observability.mjs
 import { builtinPlugins } from './plugins/builtins.mjs';
 import { enabledSet, expandDependencies, pluginMap } from './plugins/plugin-config.mjs';
 import { jobTargetNames, jobTargetPolicy } from './tool-policy.mjs';
+import { normalizeInstanceConfig } from './team-access.mjs';
 
 const targets = new Map();
 const inflight = new Map();
@@ -152,15 +153,15 @@ function localRunnerId() {
 }
 
 function runnerSettings() {
-  const config = readConfig();
+  const config = normalizeInstanceConfig(readConfig());
   return {
     id: localRunnerId(),
     name: `DevMate ${config.instanceId || 'local'}`,
     capabilities: localRunnerCapabilities(),
-    workspaceIds: (config.workspaces || []).filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id),
-    maxConcurrent: Math.min(8, Math.max(1, Math.trunc(Number(config.runtime?.maxConcurrentJobs) || 2))),
+    workspaceIds: config.workspaces.filter(item => !item.reference && item.mode !== 'readonly').map(item => item.id),
+    maxConcurrent: config.runtime.maxConcurrentJobs,
     version: config.appVersion || '',
-    labels: { deploymentMode: config.deployment?.mode || 'personal', kind: 'embedded' }
+    labels: { kind: 'embedded' }
   };
 }
 
@@ -184,13 +185,14 @@ async function executeClaimedJob(job) {
   }, 30000);
   leaseTimer.unref?.();
   try {
+    const config = normalizeInstanceConfig(readConfig());
     const context = {
       requestId: `job-${job.id}`,
       principal: clone(job.requestedBy),
       startedAt: new Date().toISOString(),
       remoteAddress: 'local-job-runner',
       userAgent: 'DevMate embedded job runner',
-      deploymentMode: readConfig()?.deployment?.mode || 'personal',
+      connectionProvider: config.connection.provider,
       jobId: job.id
     };
     const result = await withTimeout(
