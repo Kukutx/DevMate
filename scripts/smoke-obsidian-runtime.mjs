@@ -43,6 +43,8 @@ assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the p
 assert.match(mainSource, /Starting DevMate: Gateway -> public connection -> MCP verification/, 'Obsidian Start must package the complete one-click lifecycle');
 assert.match(mainSource, /MCP-Session-Id|mcp-session-id/, 'Obsidian bundle must preserve MCP session-aware public preflight');
 assert.match(mainSource, /Verified public MCP URL copied|Verified public MCP endpoint/, 'Obsidian bundle must contain public MCP verification flow');
+assert.match(mainSource, /recordGeneration/, 'Obsidian bundle must bind public verification to provider generations');
+assert.match(mainSource, /verifiedForCurrentRecord/, 'Obsidian bundle must derive Ready from current-generation verification evidence');
 assert.match(mainSource, /Connection provider/, 'Obsidian bundle must expose the shared connection capability');
 assert.match(mainSource, /ngrokAuthtokenEncrypted/, 'Obsidian bundle must support an optional encrypted ngrok credential');
 assert.match(mainSource, /cloudflareTunnelTokenEncrypted/, 'Obsidian bundle must support an optional encrypted Cloudflare credential');
@@ -81,7 +83,7 @@ try {
   assert.equal(secondStop.stopped, true);
   assert.equal(fs.existsSync(instanceLock), false, `Gateway instance lock remained after restart stop: ${instanceLock}`);
 
-  console.log(`Obsidian child-process + provider-native one-click connection bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
+  console.log(`Obsidian child-process + provider-native generation-aware connection bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
 } finally {
   await controller.dispose({ stopOwned: true }).catch(() => {});
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
