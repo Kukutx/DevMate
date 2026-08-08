@@ -3,10 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
-import { normalizeDeploymentConfig } from '../gateway/team-access.mjs';
 
 const require = createRequire(import.meta.url);
-const { PRODUCTION_LIMITS } = require('../vscode-host/shared-deployment-config.js');
+const { REQUEST_POLICY_LIMITS, normalizeInstanceConfig } = require('../shared/instance-config.cjs');
 const root = path.resolve(import.meta.dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -33,31 +32,23 @@ test('VS Code manifest exposes host diagnostics and self-check commands', () => 
   }
 });
 
-test('deployment business state is not exposed as machine-global VS Code settings', () => {
+test('instance business state is not exposed as machine-global VS Code settings', () => {
   for (const settingName of REMOVED_GLOBAL_BUSINESS_SETTINGS) {
-    assert.equal(Object.hasOwn(properties, settingName), false, `${settingName} must remain in shared workspace config, not Global Settings`);
+    assert.equal(Object.hasOwn(properties, settingName), false, `${settingName} must remain in shared instance config, not Global Settings`);
   }
   assert.match(properties['devMate.ngrokUrl']?.description || '', /machine-local.*candidate/i);
-  assert.match(properties['devMate.ngrokUrl']?.description || '', /shared DevMate config/i);
   assert.match(properties['devMate.publicUrl']?.description || '', /machine-local.*candidate/i);
-  assert.match(properties['devMate.publicUrl']?.description || '', /shared DevMate config/i);
 });
 
-test('shared production limits match Gateway runtime without a second VS Code business schema', () => {
-  for (const [field, [minimum, maximum]] of Object.entries(PRODUCTION_LIMITS)) {
+test('canonical request-policy limits are enforced by the shared instance schema', () => {
+  for (const [field, [minimum, maximum]] of Object.entries(REQUEST_POLICY_LIMITS)) {
     for (const value of [minimum, maximum]) {
-      const config = {
-        deployment: { mode: 'production', tunnelProvider: 'ngrok', publicUrl: 'https://devmate.example.test' },
-        production: { [field]: value }
-      };
-      assert.doesNotThrow(() => normalizeDeploymentConfig(config), `${field}=${value} must be accepted by Gateway runtime`);
+      const config = { requestPolicy: { [field]: value } };
+      assert.doesNotThrow(() => normalizeInstanceConfig(config), `${field}=${value} must be accepted`);
     }
     for (const value of [minimum - 1, maximum + 1]) {
-      const config = {
-        deployment: { mode: 'production', tunnelProvider: 'ngrok', publicUrl: 'https://devmate.example.test' },
-        production: { [field]: value }
-      };
-      assert.throws(() => normalizeDeploymentConfig(config), `${field}=${value} must be rejected by Gateway runtime`);
+      const config = { requestPolicy: { [field]: value } };
+      assert.throws(() => normalizeInstanceConfig(config), `${field}=${value} must be rejected`);
     }
   }
 });

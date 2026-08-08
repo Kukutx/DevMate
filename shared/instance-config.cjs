@@ -4,6 +4,14 @@ const CONNECTION_PROVIDERS = Object.freeze(['ngrok', 'cloudflare-quick', 'cloudf
 const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
 const LIFECYCLE_STATES = Object.freeze(['running', 'stopped']);
 
+const REQUEST_POLICY_LIMITS = Object.freeze({
+  maxRequestBytes: Object.freeze([64 * 1024, 32 * 1024 * 1024]),
+  requestsPerMinute: Object.freeze([10, 10000]),
+  maxConcurrentRequests: Object.freeze([1, 256]),
+  maxConcurrentPerPrincipal: Object.freeze([1, 64]),
+  requestTimeoutMs: Object.freeze([1000, 60 * 60 * 1000])
+});
+
 const DEFAULT_REQUEST_POLICY = Object.freeze({
   maxRequestBytes: 2 * 1024 * 1024,
   requestsPerMinute: 600,
@@ -117,36 +125,31 @@ function normalizeInstanceConfig(config) {
     maxRequestBytes: strictInteger(
       policy.maxRequestBytes === undefined ? oldPolicy.maxRequestBytes : policy.maxRequestBytes,
       DEFAULT_REQUEST_POLICY.maxRequestBytes,
-      64 * 1024,
-      32 * 1024 * 1024,
+      ...REQUEST_POLICY_LIMITS.maxRequestBytes,
       'requestPolicy.maxRequestBytes'
     ),
     requestsPerMinute: strictInteger(
       policy.requestsPerMinute === undefined ? oldPolicy.requestsPerMinute : policy.requestsPerMinute,
       DEFAULT_REQUEST_POLICY.requestsPerMinute,
-      10,
-      10000,
+      ...REQUEST_POLICY_LIMITS.requestsPerMinute,
       'requestPolicy.requestsPerMinute'
     ),
     maxConcurrentRequests: strictInteger(
       policy.maxConcurrentRequests === undefined ? oldPolicy.maxConcurrentRequests : policy.maxConcurrentRequests,
       DEFAULT_REQUEST_POLICY.maxConcurrentRequests,
-      1,
-      256,
+      ...REQUEST_POLICY_LIMITS.maxConcurrentRequests,
       'requestPolicy.maxConcurrentRequests'
     ),
     maxConcurrentPerPrincipal: strictInteger(
       policy.maxConcurrentPerPrincipal === undefined ? oldPolicy.maxConcurrentPerPrincipal : policy.maxConcurrentPerPrincipal,
       DEFAULT_REQUEST_POLICY.maxConcurrentPerPrincipal,
-      1,
-      64,
+      ...REQUEST_POLICY_LIMITS.maxConcurrentPerPrincipal,
       'requestPolicy.maxConcurrentPerPrincipal'
     ),
     requestTimeoutMs: strictInteger(
       policy.requestTimeoutMs === undefined ? oldPolicy.requestTimeoutMs : policy.requestTimeoutMs,
       DEFAULT_REQUEST_POLICY.requestTimeoutMs,
-      1000,
-      60 * 60 * 1000,
+      ...REQUEST_POLICY_LIMITS.requestTimeoutMs,
       'requestPolicy.requestTimeoutMs'
     ),
     allowedHosts: stringList(
@@ -192,6 +195,7 @@ module.exports = {
   CONNECTION_PROVIDERS,
   DEFAULT_REQUEST_POLICY,
   LIFECYCLE_STATES,
+  REQUEST_POLICY_LIMITS,
   TEAM_ROLES,
   accessState,
   connectionState,
