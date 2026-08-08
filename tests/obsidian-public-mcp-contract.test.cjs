@@ -31,9 +31,35 @@ test('Obsidian Ready is tied to the current tunnel generation rather than URL eq
   assert.match(main, /successfulVerificationPatch/);
   assert.match(main, /const generation = recordGeneration\(initialRecord\)/);
   assert.match(main, /recordGeneration\(currentRecord\) !== generation/);
+  assert.match(main, /successfulVerificationPatch\(test, normalized, stamp, initialRecord\)/);
   assert.match(main, /verifiedForCurrentRecord\(persisted, persistedRecord\)/);
   assert.match(main, /const verified = !!tunnel\.record && verifiedForCurrentRecord\(config, tunnel\.record\)/);
   assert.doesNotMatch(main, /lastVerifiedPublicUrl\s*===\s*tunnel\.publicUrl/);
+});
+
+test('Obsidian connection mutation fails closed unless the active provider stop is confirmed', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  const start = main.indexOf('async configureConnection');
+  const end = main.indexOf('updateConnectionSnapshot', start);
+  assert.ok(start >= 0 && end > start);
+  const block = main.slice(start, end);
+  assert.match(main, /assertTunnelSafeForCredentialChange/);
+  assert.match(block, /const stopResult = await this\.tunnelController\.stop\(\)/);
+  assert.match(block, /assertTunnelSafeForCredentialChange\(stopResult, 'Obsidian connection configuration change'\)/);
+  assert.match(block, /status\?\.state === 'running' && !stopState\.remoteOwner/);
+});
+
+test('Obsidian automatic URL copy is convenience after Ready, not a required Start stage', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  const start = main.indexOf('async startRuntimeInternal');
+  const end = main.indexOf('stopRuntime()', start);
+  const block = main.slice(start, end);
+  const verify = block.indexOf('await this.verifyPublicEndpoint(publicUrl, tunnel.record)');
+  const copy = block.indexOf('await navigator.clipboard.writeText(preflight.mcpUrl)');
+  const success = block.indexOf('ok: true');
+  assert.ok(verify >= 0 && copy > verify && success > copy);
+  assert.match(block, /copyError = error\.message \|\| String\(error\)/);
+  assert.match(block, /DevMate reached Ready but automatic MCP URL copy failed/);
 });
 
 test('Obsidian Copy MCP URL verifies the active public endpoint generation before copying it', () => {
