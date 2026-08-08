@@ -4,13 +4,30 @@ DevMate is a local-first development gateway. Workspace and platform runtimes st
 
 ## Deployment modes
 
-| Mode | Intended use | Identity | Coordination | Ingress defaults |
+| Mode | Intended use | Identity | Coordination | Ingress contract |
 |---|---|---|---|---|
-| `personal` | One developer and one ChatGPT connection | Owner token | Work sessions and local workspace state | Local or configured tunnel |
-| `team` | Several developers, reviewers, or agents | Per-member hashed tokens and roles | Workspace scopes, leases, work sessions | Stable or temporary tunnel |
-| `production` | Long-lived shared gateway | Per-member tokens plus hardened request guard | Leases, work sessions, approvals, bounded concurrency, durable jobs | Stable managed tunnel or external HTTPS ingress |
+| `personal` | One developer and one ChatGPT connection | Owner token | Work sessions and local workspace state | `ngrok` is the desktop default; other current providers remain supported |
+| `team` | Several developers, reviewers, or agents | Per-member hashed tokens and roles | Workspace scopes, leases, work sessions | Stable URL or the current temporary tunnel after real MCP preflight |
+| `production` | Long-lived shared gateway | Per-member tokens plus hardened request guard | Leases, work sessions, approvals, bounded concurrency, durable jobs | Stable managed tunnel or external HTTPS ingress only |
 
 All modes use the same work-session API and core file/command/Git surface. Team and production modes add authorization and coordination; they do not broaden filesystem access.
+
+## Configuration ownership
+
+The workspace-derived shared `config.json` is the business source of truth for:
+
+- deployment mode;
+- selected ingress provider;
+- stable public URL when the provider has one;
+- team membership and lease policy;
+- production Host allowlist and request limits;
+- jobs, Runner control, approvals, and plugin state.
+
+VS Code machine settings and Secret Storage contain host-local execution details such as executable paths, ngrok account mode, tunnel restart settings, and provider credentials. They are not a second deployment database.
+
+`DevMate: Configure Deployment` edits the shared workspace configuration transactionally. MCP administration through `team_configure` edits the same shared configuration. Normal editor-context refreshes, activation, Doctor, and unrelated VS Code setting changes do not rewrite deployment/team/production state.
+
+The actual `TunnelController` reads mode, provider, and stable public URL from the shared workspace configuration at runtime. This prevents a stale machine-level provider selection from launching a different provider than the one reported by deployment tools.
 
 ## Recommended topology
 
@@ -31,7 +48,33 @@ DevMate gateway
         +-- backups, audit, jobs, leases, and work-session state
 ```
 
-For a desktop host, keep the Gateway on loopback and let the tunnel or reverse proxy provide ingress. The supported Docker deployment binds inside its container and should be exposed only through deliberate container/network configuration.
+For a desktop host, keep the Gateway on loopback and let the selected tunnel or reverse proxy provide ingress. The supported Docker deployment binds inside its container and should be exposed only through deliberate container/network configuration.
+
+## Ingress providers
+
+Current providers are product modes, not compatibility shims:
+
+- `ngrok` — default personal workflow; stable reserved URLs are valid for team/production;
+- `cloudflare-quick` — temporary development/team testing only;
+- `cloudflare-managed` — stable managed ingress;
+- `external` — an existing HTTPS reverse proxy, VPN, ingress, or service manager.
+
+Provider transitions are complete-state transitions. A stale URL from a previous provider is never inherited automatically. `cloudflare-managed` and `external` require a stable HTTPS URL. Production rejects `cloudflare-quick` and requires a stable HTTPS URL for every provider, including ngrok.
+
+## Team temporary ingress
+
+Team mode intentionally supports a temporary tunnel, but a provider-ready HTTPS address is not enough to make the deployment Ready.
+
+A temporary runtime endpoint becomes an effective team public ingress only when all of the following are true:
+
+1. the shared tunnel record is Ready for the current Gateway port;
+2. the public origin is clean HTTPS;
+3. a DevMate MCP preflight occurred after the current tunnel `readyAt`;
+4. the preflight Host matches the current public endpoint;
+5. the returned server is `devmate`;
+6. authenticated `tools/list` succeeded with at least one tool.
+
+If the provider restarts, the shared tunnel receives a new `readyAt`. Any older preflight immediately becomes stale, so team readiness fails closed until the current endpoint is verified again. Production never substitutes this temporary runtime state for its required configured stable URL.
 
 ## Roles
 
@@ -94,15 +137,15 @@ Leases prevent two agents from editing the same checkout at once. For genuine pa
 
 The production guard applies before the MCP transport:
 
-- owner or team bearer authentication
-- authentication-attempt throttling by remote address
-- per-principal request limits
-- global and per-principal concurrency limits
-- request-size limits
-- request IDs in responses and audit entries
-- public Host allowlist
-- bounded request timeout
-- active client/session summaries
+- owner or team bearer authentication;
+- authentication-attempt throttling by remote address;
+- per-principal request limits;
+- global and per-principal concurrency limits;
+- request-size limits;
+- request IDs in responses and audit entries;
+- public Host allowlist;
+- bounded request timeout;
+- active client/session summaries.
 
 Configuration tools:
 
@@ -112,7 +155,7 @@ Configuration tools:
 - `team_configure`
 - `team_activity_status`
 
-For production, `deployment_readiness` requires the configured public URL to be permitted by the Host allowlist, healthy durable state, an active Gateway instance lock, and a live execution path. If team mode has an explicit Host allowlist, readiness validates it against the public URL there as well.
+For production, `deployment_readiness` requires a configured stable public URL permitted by the Host allowlist, healthy durable state, an active Gateway instance lock, and a live execution path. If team mode has an explicit Host allowlist, readiness validates it against the effective verified public endpoint as well.
 
 ## Published review previews
 
@@ -131,7 +174,7 @@ Published previews are for review builds, not for hosting production application
 Before production use:
 
 1. Run `DevMate: Configure Deployment` and select `production`.
-2. Configure a stable managed tunnel or existing HTTPS ingress.
+2. Configure a stable managed tunnel, stable ngrok endpoint, or existing HTTPS ingress.
 3. Keep DevMate authentication enabled even when the edge also authenticates users.
 4. Set the public URL and Host allowlist.
 5. Create scoped member tokens; stop distributing the owner token.
