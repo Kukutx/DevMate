@@ -13,10 +13,7 @@ const {
   setting
 } = require('./runtime-context.js');
 
-const RELOAD_SETTINGS = [
-  'devMate.vscodeHostEnabled',
-  'devMate.sharedStateDirectory'
-];
+const RELOAD_SETTINGS = ['devMate.sharedStateDirectory'];
 
 class VscodeHostLifecycle {
   constructor({ vscode, platformExtension = null }) {
@@ -34,10 +31,6 @@ class VscodeHostLifecycle {
     this.platformActivationAttempted = false;
     this.platformActivated = false;
     this.workspaceRootAtActivation = '';
-  }
-
-  enabled() {
-    return setting(this.vscode, 'vscodeHostEnabled', true) !== false;
   }
 
   autoStart() {
@@ -59,8 +52,6 @@ class VscodeHostLifecycle {
 
   async activateInternal(context) {
     this.context = context;
-    if (!this.enabled()) return;
-
     this.runtimeContext = createRuntimeContext(this.vscode, context);
     this.workspaceRootAtActivation = currentWorkspaceRoot(this.vscode);
     if (this.workspaceRootAtActivation) {
@@ -82,12 +73,8 @@ class VscodeHostLifecycle {
     });
     this.diagnostics.append(`Activating DevMate VS Code host ${context.extension?.packageJSON?.version || APP_VERSION}.`);
 
-    context.subscriptions.push(this.vscode.commands.registerCommand('devMate.copyHostDiagnostics', () =>
-      this.copyDiagnostics()
-    ));
-    context.subscriptions.push(this.vscode.commands.registerCommand('devMate.hostSelfCheck', () =>
-      this.runSelfCheck(true)
-    ));
+    context.subscriptions.push(this.vscode.commands.registerCommand('devMate.copyHostDiagnostics', () => this.copyDiagnostics()));
+    context.subscriptions.push(this.vscode.commands.registerCommand('devMate.hostSelfCheck', () => this.runSelfCheck(true)));
 
     try {
       this.platformActivationAttempted = true;
@@ -217,10 +204,7 @@ class VscodeHostLifecycle {
 
   async copyDiagnostics() {
     if (!this.diagnostics) return '';
-    const report = await this.diagnostics.copy({
-      enabled: this.enabled(),
-      autoStart: this.autoStart()
-    });
+    const report = await this.diagnostics.copy({ autoStart: this.autoStart() });
     this.vscode.window.showInformationMessage('DevMate VS Code host diagnostics copied.');
     return report;
   }
@@ -260,7 +244,4 @@ class VscodeHostLifecycle {
   }
 }
 
-module.exports = {
-  RELOAD_SETTINGS,
-  VscodeHostLifecycle
-};
+module.exports = { RELOAD_SETTINGS, VscodeHostLifecycle };

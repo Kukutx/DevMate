@@ -64,20 +64,8 @@ class DevMateView extends ItemView {
     action('Stop', () => this.plugin.stopRuntime());
     action('Restart', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
-    action('Copy Bearer Token', () => this.plugin.copyConnectionToken());
     action('Copy context', () => this.plugin.copyContextBundle());
     action('Copy diagnostics', () => this.plugin.copyDiagnostics());
-
-    container.createEl('h3', { text: 'Connection' });
-    const connectionList = container.createEl('dl', { cls: 'devmate-details' });
-    const connectionDetail = name => {
-      connectionList.createEl('dt', { text: name });
-      return connectionList.createEl('dd');
-    };
-    const publicMcp = connectionDetail('Public MCP');
-    const publicConnection = connectionDetail('Public connection');
-    const internalGateway = connectionDetail('Internal Gateway');
-    const verification = connectionDetail('Verification');
 
     container.createEl('h3', { text: 'Workspace' });
     const list = container.createEl('dl', { cls: 'devmate-details' });
@@ -86,10 +74,7 @@ class DevMateView extends ItemView {
       return list.createEl('dd');
     };
     const vault = detail('Vault');
-    const state = detail('State');
     const startup = detail('Automatic start');
-    const gatewayRuntime = detail('Gateway runtime');
-    const nodeRuntime = detail('Node runtime');
 
     const failureSection = container.createDiv();
     failureSection.createEl('h3', { text: 'Problem' });
@@ -112,15 +97,8 @@ class DevMateView extends ItemView {
     this.ui = {
       statusLabel,
       statusDetail,
-      publicMcp,
-      publicConnection,
-      internalGateway,
-      verification,
       vault,
-      state,
       startup,
-      gatewayRuntime,
-      nodeRuntime,
       failureSection,
       failureMessage,
       activeNote,
@@ -138,45 +116,19 @@ class DevMateView extends ItemView {
     const resolvedStatus = status || await this.plugin.runtimeStatus();
     if (generation !== this.refreshGeneration || !this.ui) return;
 
-    const runtime = this.plugin.controller;
     const failure = this.plugin.runtimeDiagnostics?.lastFailure;
     const note = this.plugin.app.workspace.getActiveFile();
     const index = this.plugin.bridge?.index;
-    const node = this.plugin.nodeRuntime;
-    const gateway = resolvedStatus.gateway || {};
-    const connection = resolvedStatus.tunnel || resolvedStatus.connection || null;
-    const publicOrigin = resolvedStatus.publicUrl || connection?.publicUrl || '';
-    const publicMcp = publicOrigin ? `${String(publicOrigin).replace(/\/$/, '')}/mcp` : 'Not available';
 
     setText(this.ui.statusLabel, resolvedStatus.label);
     setText(this.ui.statusDetail, resolvedStatus.detail);
-    setText(this.ui.publicMcp, publicMcp);
-    setText(this.ui.publicConnection,
-      resolvedStatus.connectionError
-        ? `Error · ${resolvedStatus.connectionError}`
-        : connection?.running
-          ? `${connection.provider || 'provider'} · ${connection.owned ? 'owned here' : 'shared'} · ${publicOrigin ? 'HTTPS ready' : 'starting'}`
-          : `${connection?.provider || this.plugin.connectionConfiguration().provider || 'provider'} · not active`);
-    setText(this.ui.internalGateway,
-      gateway.state === 'running' || resolvedStatus.port
-        ? `127.0.0.1:${gateway.port || resolvedStatus.port || this.plugin.settings.preferredPort} · internal only`
-        : 'Not running');
-    setText(this.ui.verification,
-      resolvedStatus.verified
-        ? `${this.plugin.lastVerifiedAt || 'verified'} · ${this.plugin.lastVerifiedToolCount || 0} tools · Ready`
-        : publicOrigin ? 'Pending MCP initialize + tools/list' : 'Waiting for public HTTPS endpoint');
-
     setText(this.ui.vault, this.plugin.vaultRoot || 'Unavailable');
-    setText(this.ui.state, runtime?.stateDirectory || 'Unavailable');
     setText(this.ui.startup, this.plugin.settings.autoStart ? 'On' : 'Off');
-    setText(this.ui.gatewayRuntime, runtime?.lastLaunch?.mode || 'child_process');
-    setText(this.ui.nodeRuntime, node ? `${node.nodeVersion} · ${node.executable}` : 'Auto-detect on start');
 
     setVisible(this.ui.failureSection, !!failure);
     if (failure) setText(this.ui.failureMessage, failure.message);
 
     setText(this.ui.activeNote, note?.path || 'No active note');
-
     setVisible(this.ui.indexSection, !!index);
     if (index) {
       setText(this.ui.indexCount, `${index.records.size} Markdown notes`);
@@ -189,9 +141,4 @@ class DevMateView extends ItemView {
   }
 }
 
-module.exports = {
-  DevMateView,
-  VIEW_TYPE,
-  setText,
-  setVisible
-};
+module.exports = { DevMateView, VIEW_TYPE, setText, setVisible };

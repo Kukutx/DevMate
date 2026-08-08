@@ -5,45 +5,11 @@
   "version": "3.3.0",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Kukutx/DevMate.git"
-  },
-  "engines": {
-    "vscode": "^1.132.0",
-    "node": ">=24"
-  },
-  "categories": [
-    "Machine Learning",
-    "Other"
-  ],
+  "repository": { "type": "git", "url": "https://github.com/Kukutx/DevMate.git" },
+  "engines": { "vscode": "^1.132.0", "node": ">=24" },
+  "categories": ["Machine Learning", "Other"],
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:devMate.start",
-    "onCommand:devMate.open",
-    "onCommand:devMate.stop",
-    "onCommand:devMate.restart",
-    "onCommand:devMate.copyUrl",
-    "onCommand:devMate.copyToken",
-    "onCommand:devMate.addReference",
-    "onCommand:devMate.clearReferences",
-    "onCommand:devMate.doctor",
-    "onCommand:devMate.logs",
-    "onCommand:devMate.exportSource",
-    "onCommand:devMate.copyPrompt",
-    "onCommand:devMate.copyContextBundle",
-    "onCommand:devMate.openSettings",
-    "onCommand:devMate.ngrokSetup",
-    "onCommand:devMate.ngrokSwitchAccount",
-    "onCommand:devMate.ngrokClearAccount",
-    "onCommand:devMate.openNgrokDashboard",
-    "onCommand:devMate.connectionSetup",
-    "onCommand:devMate.connectionDoctor",
-    "onCommand:devMate.cloudflareSetToken",
-    "onCommand:devMate.cloudflareClearToken",
-    "onCommand:devMate.openConnectionDocs",
-    "onCommand:devMate.copyHostDiagnostics",
-    "onCommand:devMate.hostSelfCheck"
+    "onStartupFinished", "onCommand:devMate.start", "onCommand:devMate.open", "onCommand:devMate.stop", "onCommand:devMate.restart", "onCommand:devMate.copyUrl", "onCommand:devMate.copyToken", "onCommand:devMate.addReference", "onCommand:devMate.clearReferences", "onCommand:devMate.doctor", "onCommand:devMate.logs", "onCommand:devMate.exportSource", "onCommand:devMate.copyPrompt", "onCommand:devMate.copyContextBundle", "onCommand:devMate.openSettings", "onCommand:devMate.ngrokSetup", "onCommand:devMate.ngrokSwitchAccount", "onCommand:devMate.ngrokClearAccount", "onCommand:devMate.openNgrokDashboard", "onCommand:devMate.connectionSetup", "onCommand:devMate.connectionDoctor", "onCommand:devMate.cloudflareSetToken", "onCommand:devMate.cloudflareClearToken", "onCommand:devMate.openConnectionDocs", "onCommand:devMate.copyHostDiagnostics", "onCommand:devMate.hostSelfCheck"
   ],
   "main": "./extension-entry-shared-tunnel.js",
   "contributes": {
@@ -78,173 +44,33 @@
       "title": "DevMate",
       "type": "object",
       "properties": {
-        "devMate.vscodeHostEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable the VS Code host for DevMate."
-        },
-        "devMate.autoStart": {
-          "type": "boolean",
-          "default": true,
-          "description": "Bring the complete DevMate connection to Ready automatically after VS Code opens a workspace."
-        },
-        "devMate.sharedStateDirectory": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional shared DevMate state directory override. Leave empty to use ~/.devmate/hosts/<workspace-id>."
-        },
-        "devMate.port": {
-          "type": "number",
-          "default": 8787,
-          "minimum": 1024,
-          "maximum": 65535,
-          "description": "Preferred internal loopback Gateway port. An existing shared Gateway port remains authoritative."
-        },
-        "devMate.ngrokCommandPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional ngrok executable path."
-        },
-        "devMate.ngrokUseManagedAccount": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "description": "Use the ngrok account saved in VS Code Secret Storage."
-        },
-        "devMate.ngrokUrl": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional machine-local stable ngrok URL candidate used by Connection Setup. The active URL is workspace-scoped."
-        },
-        "devMate.ngrokPoolingEnabled": {
-          "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "description": "Allow ngrok endpoint pooling only when intentionally serving the same trusted DevMate instance from multiple agents."
-        },
-        "devMate.ngrokTrafficPolicyFile": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional ngrok Traffic Policy file."
-        },
-        "devMate.cloudflareCommandPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional cloudflared executable path."
-        },
-        "devMate.publicUrl": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional machine-local stable HTTPS URL candidate for managed Cloudflare or external ingress. The active URL is workspace-scoped."
-        },
-        "devMate.tunnelAutoRestart": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "description": "Restart an owned public connection process after unexpected exit."
-        },
-        "devMate.tunnelMaxRestarts": {
-          "type": "number",
-          "default": 10,
-          "minimum": 0,
-          "maximum": 100,
-          "scope": "machine",
-          "description": "Maximum automatic public connection restarts after unexpected exits."
-        },
-        "devMate.autoCopyUrl": {
-          "type": "boolean",
-          "default": true,
-          "description": "Copy the public MCP URL only after DevMate reaches verified Ready state."
-        },
-        "devMate.autoUseCurrentWorkspace": {
-          "type": "boolean",
-          "default": true,
-          "description": "Use the current VS Code folder as the active writable workspace."
-        },
-        "devMate.requireAuthToken": {
-          "type": "boolean",
-          "default": true,
-          "description": "Require bearer authentication for MCP requests."
-        },
-        "devMate.permissionProfile": {
-          "type": "string",
-          "default": "fullAccess",
-          "enum": ["readOnly", "balanced", "fullAccess"],
-          "description": "Permission preset. readOnly blocks mutation; balanced adds destructive-operation guards; fullAccess enables advanced local development operations."
-        },
-        "devMate.blockDangerousOperations": {
-          "type": "boolean",
-          "default": true,
-          "description": "Block destructive shell and Git patterns."
-        },
-        "devMate.confirmBeforePush": {
-          "type": "boolean",
-          "default": false,
-          "description": "Require confirmation before Git push."
-        },
-        "devMate.allowDirectoryMutations": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow directory move/delete operations."
-        },
-        "devMate.defaultCommandTimeoutMs": {
-          "type": "number",
-          "default": 180000,
-          "minimum": 1000,
-          "maximum": 1800000,
-          "description": "Default command timeout."
-        },
-        "devMate.maxOutputChars": {
-          "type": "number",
-          "default": 120000,
-          "minimum": 1000,
-          "maximum": 500000,
-          "description": "Maximum returned command output."
-        },
-        "devMate.backupRetentionDays": {
-          "type": "number",
-          "default": 30,
-          "minimum": 1,
-          "maximum": 3650,
-          "description": "Backup retention period."
-        },
-        "devMate.auditRetentionDays": {
-          "type": "number",
-          "default": 30,
-          "minimum": 1,
-          "maximum": 3650,
-          "description": "Audit retention period."
-        },
-        "devMate.maxBackupBytes": {
-          "type": "number",
-          "default": 268435456,
-          "minimum": 1048576,
-          "maximum": 10737418240,
-          "description": "Maximum retained backup bytes."
-        },
-        "devMate.maxAuditBytes": {
-          "type": "number",
-          "default": 5242880,
-          "minimum": 262144,
-          "maximum": 104857600,
-          "description": "Maximum audit log bytes."
-        },
-        "devMate.defaultStartCommand": {
-          "type": "string",
-          "default": "",
-          "description": "Optional project command started after the local Gateway is ready."
-        },
-        "devMate.publicHealthDetails": {
-          "type": "boolean",
-          "default": false,
-          "description": "Expose detailed public health information."
-        }
+        "devMate.autoStart": { "type": "boolean", "default": true, "description": "Bring the complete DevMate connection to Ready automatically after VS Code opens a workspace." },
+        "devMate.sharedStateDirectory": { "type": "string", "default": "", "scope": "machine", "description": "Optional shared DevMate state directory override. Leave empty to use ~/.devmate/hosts/<workspace-id>." },
+        "devMate.port": { "type": "number", "default": 8787, "minimum": 1024, "maximum": 65535, "description": "Preferred internal loopback Gateway port. An existing shared Gateway port remains authoritative." },
+        "devMate.ngrokCommandPath": { "type": "string", "default": "", "scope": "machine", "description": "Optional ngrok executable path." },
+        "devMate.ngrokUseManagedAccount": { "type": "boolean", "default": true, "scope": "machine", "description": "Use the ngrok account saved in VS Code Secret Storage." },
+        "devMate.ngrokUrl": { "type": "string", "default": "", "scope": "machine", "description": "Optional machine-local stable ngrok URL candidate used by Connection Setup. The active URL is workspace-scoped." },
+        "devMate.ngrokPoolingEnabled": { "type": "boolean", "default": false, "scope": "machine", "description": "Allow ngrok endpoint pooling only when intentionally serving the same trusted DevMate instance from multiple agents." },
+        "devMate.ngrokTrafficPolicyFile": { "type": "string", "default": "", "scope": "machine", "description": "Optional ngrok Traffic Policy file." },
+        "devMate.cloudflareCommandPath": { "type": "string", "default": "", "scope": "machine", "description": "Optional cloudflared executable path." },
+        "devMate.publicUrl": { "type": "string", "default": "", "scope": "machine", "description": "Optional machine-local stable HTTPS URL candidate for managed Cloudflare or external ingress. The active URL is workspace-scoped." },
+        "devMate.tunnelAutoRestart": { "type": "boolean", "default": true, "scope": "machine", "description": "Restart an owned public connection process after unexpected exit." },
+        "devMate.tunnelMaxRestarts": { "type": "number", "default": 10, "minimum": 0, "maximum": 100, "scope": "machine", "description": "Maximum automatic public connection restarts after unexpected exits." },
+        "devMate.autoCopyUrl": { "type": "boolean", "default": true, "description": "Copy the public MCP URL only after DevMate reaches verified Ready state." },
+        "devMate.autoUseCurrentWorkspace": { "type": "boolean", "default": true, "description": "Use the current VS Code folder as the active writable workspace." },
+        "devMate.requireAuthToken": { "type": "boolean", "default": true, "description": "Require bearer authentication for MCP requests." },
+        "devMate.permissionProfile": { "type": "string", "default": "fullAccess", "enum": ["readOnly", "balanced", "fullAccess"], "description": "Permission preset. readOnly blocks mutation; balanced adds destructive-operation guards; fullAccess enables advanced local development operations." },
+        "devMate.blockDangerousOperations": { "type": "boolean", "default": true, "description": "Block destructive shell and Git patterns." },
+        "devMate.confirmBeforePush": { "type": "boolean", "default": false, "description": "Require confirmation before Git push." },
+        "devMate.allowDirectoryMutations": { "type": "boolean", "default": false, "description": "Allow directory move/delete operations." },
+        "devMate.defaultCommandTimeoutMs": { "type": "number", "default": 180000, "minimum": 1000, "maximum": 1800000, "description": "Default command timeout." },
+        "devMate.maxOutputChars": { "type": "number", "default": 120000, "minimum": 1000, "maximum": 500000, "description": "Maximum returned command output." },
+        "devMate.backupRetentionDays": { "type": "number", "default": 30, "minimum": 1, "maximum": 3650, "description": "Backup retention period." },
+        "devMate.auditRetentionDays": { "type": "number", "default": 30, "minimum": 1, "maximum": 3650, "description": "Audit retention period." },
+        "devMate.maxBackupBytes": { "type": "number", "default": 268435456, "minimum": 1048576, "maximum": 10737418240, "description": "Maximum retained backup bytes." },
+        "devMate.maxAuditBytes": { "type": "number", "default": 5242880, "minimum": 262144, "maximum": 104857600, "description": "Maximum audit log bytes." },
+        "devMate.defaultStartCommand": { "type": "string", "default": "", "description": "Optional project command started after the local Gateway is ready." },
+        "devMate.publicHealthDetails": { "type": "boolean", "default": false, "description": "Expose detailed public health information." }
       }
     }
   },
@@ -264,21 +90,9 @@
     "devmate": "node scripts/devmate-command.mjs",
     "runner": "node scripts/devmate-runner.mjs"
   },
-  "bin": {
-    "devmate": "./scripts/devmate-command.mjs",
-    "devmate-runner": "./scripts/devmate-runner.mjs"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.28.1",
-    "js-yaml": "^4.3.1"
-  },
+  "bin": { "devmate": "./scripts/devmate-command.mjs", "devmate-runner": "./scripts/devmate-runner.mjs" },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.30.0", "zod": "^4.4.3" },
+  "devDependencies": { "@vscode/vsce": "^3.9.2", "esbuild": "^0.28.1", "js-yaml": "^4.3.1" },
   "license": "MIT",
-  "overrides": {
-    "@hono/node-server": "2.0.10"
-  }
+  "overrides": { "@hono/node-server": "2.0.10" }
 }

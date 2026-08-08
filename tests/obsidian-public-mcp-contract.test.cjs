@@ -8,52 +8,56 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('Obsidian Start manages the shared Gateway only and never owns public ingress', () => {
+test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle as VS Code', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async startRuntimeInternal');
   const end = main.indexOf('stopRuntime()', start);
   assert.ok(start >= 0 && end > start);
   const block = main.slice(start, end);
-  assert.match(block, /const result = await this\.controller\.start\(\)/);
-  assert.doesNotMatch(block, /TunnelController|ngrokRuntime|startTunnel|cloudflared|NGROK_AUTHTOKEN/);
-  assert.doesNotMatch(main, /deployment\.tunnelProvider\s*=|deployment\.publicUrl\s*=/);
-  assert.doesNotMatch(main, /ObsidianNgrokRuntime|ngrokDoctor|ngrok-runtime|secret-store/);
+  assert.match(block, /gateway = await this\.controller\.start\(\)/);
+  assert.match(block, /tunnel = await this\.tunnelController\.start\(gateway\.port\)/);
+  assert.match(block, /const preflight = await this\.verifyPublicEndpoint\(publicUrl\)/);
+  assert.match(block, /state: 'ready'/);
+  assert.match(block, /mcpUrl: preflight\.mcpUrl/);
+  assert.match(block, /toolCount: preflight\.toolCount/);
+  assert.match(block, /if \(tunnel\?\.owned\)[\s\S]*this\.tunnelController\.stop\(\)/);
+  assert.match(block, /if \(gateway\?\.started && gateway\?\.owned\)[\s\S]*this\.controller\.stop\(\)/);
 });
 
-test('Obsidian resolves public ingress read-only and verifies before Copy MCP URL', () => {
+test('Obsidian Copy MCP URL verifies the active public endpoint before copying it', () => {
   const main = source('obsidian-plugin/src/main.js');
-  const resolver = source('obsidian-plugin/src/public-connection.js');
   const start = main.indexOf('async copyConnectionUrl()');
   const end = main.indexOf('async copyConnectionToken()', start);
   assert.ok(start >= 0 && end > start);
   const block = main.slice(start, end);
-  assert.match(block, /const connection = this\.publicConnection\(gateway\.port\)/);
-  assert.match(block, /await this\.verifyPublicEndpoint\(connection\.publicOrigin\)/);
-  assert.match(block, /writeText\(test\.mcpUrl\)/);
+  assert.match(block, /await this\.verifyPublicEndpoint/);
+  assert.match(block, /navigator\.clipboard\.writeText/);
   assert.doesNotMatch(block, /127\.0\.0\.1|ownerUrl\(/);
-  assert.match(resolver, /SharedTunnelRecordStore/);
-  assert.match(resolver, /source: 'shared-tunnel'/);
-  assert.match(resolver, /source: 'obsidian-setting'/);
-  assert.match(resolver, /source: 'deployment-config'/);
-  assert.doesNotMatch(resolver, /\.start\(|\.stop\(|TunnelController/);
+  assert.equal(fs.existsSync(path.join(root, 'obsidian-plugin/src/public-connection.js')), false);
 });
 
-test('Obsidian settings expose an external public origin but no tunnel-provider ownership settings', () => {
+test('Obsidian uses provider-native shared connection ownership with secure optional credentials', () => {
+  const main = source('obsidian-plugin/src/main.js');
   const settings = source('obsidian-plugin/src/settings.js');
   const build = source('obsidian-plugin/esbuild.config.mjs');
-  assert.match(settings, /publicOrigin: ''/);
-  assert.match(settings, /setName\('Public origin'\)/);
-  assert.doesNotMatch(settings, /ngrokCommandPath|ngrokAuthtokenEncrypted|ngrokPoolingEnabled|tunnelAutoRestart|autoCopyUrl/);
+  assert.match(main, /TunnelController/);
+  assert.match(settings, /Connection provider/);
+  assert.match(settings, /ngrokAuthtokenEncrypted/);
+  assert.match(settings, /cloudflareTunnelTokenEncrypted/);
+  assert.match(settings, /OS-backed Electron safe storage API/);
+  assert.doesNotMatch(settings, /publicOrigin/);
   assert.match(build, /target: 'node24'/);
   assert.doesNotMatch(build, /target: 'node18'/);
 });
 
-test('Obsidian UI keeps Gateway and public ingress as separate concepts', () => {
+test('Obsidian normal panel exposes one user-facing Ready state, not internal transport layers', () => {
   const view = source('obsidian-plugin/src/view.js');
-  assert.match(view, /connectionDetail\('Public MCP'\)/);
-  assert.match(view, /connectionDetail\('Public ingress'\)/);
-  assert.match(view, /connectionDetail\('Internal Gateway'\)/);
-  assert.match(view, /internal only/);
-  assert.doesNotMatch(view, /connectionDetail\('ngrok'\)/);
-  assert.doesNotMatch(view, /ngrok Doctor/);
+  assert.match(view, /action\('Start'/);
+  assert.match(view, /action\('Stop'/);
+  assert.match(view, /action\('Restart'/);
+  assert.match(view, /action\('Copy MCP URL'/);
+  assert.doesNotMatch(view, /Public MCP|Public connection|Public ingress|Internal Gateway|Verification|internal only/);
+  assert.doesNotMatch(view, /Copy Bearer Token/);
+  assert.match(view, /setText\(this\.ui\.statusLabel, resolvedStatus\.label\)/);
+  assert.match(view, /setText\(this\.ui\.statusDetail, resolvedStatus\.detail\)/);
 });
