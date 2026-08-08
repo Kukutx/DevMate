@@ -31,7 +31,7 @@ test('machine-global settings cannot mutate workspace deployment business state'
   assert.doesNotMatch(platform, /onDidChangeConfiguration/);
 });
 
-test('Deployment Setup writes mode, provider, URL and lease policy to the current shared config transaction', () => {
+test('Deployment Setup sends mode, provider, URL and lease policy through the shared-config transaction helper', () => {
   const start = platform.indexOf('async function configureDeployment');
   const end = platform.indexOf('async function tunnelDoctor', start);
   assert.ok(start >= 0 && end > start);
@@ -41,9 +41,15 @@ test('Deployment Setup writes mode, provider, URL and lease policy to the curren
   assert.match(block, /tunnelProvider: providerChoice\.value/);
   assert.match(block, /publicUrl: stableUrl/);
   assert.match(block, /requireWorkspaceLeaseForWrites:/);
-  assert.match(block, /applyDeploymentPatch\(configPath\(context\), sharedPatch\)/);
+  assert.match(block, /await commitDeploymentSettings\(context, localUpdates, sharedPatch\)/);
   assert.doesNotMatch(block, /localUpdates\.deploymentMode/);
   assert.doesNotMatch(block, /localUpdates\.tunnelProvider/);
+
+  const helperStart = platform.indexOf('async function commitDeploymentSettings');
+  const helperEnd = platform.indexOf('async function restoreCloudflareToken', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = platform.slice(helperStart, helperEnd);
+  assert.match(helper, /applyDeploymentPatch\(configPath\(context\), sharedPatch\)/);
 });
 
 test('local settings retained by Deployment Setup are execution details or remembered URL candidates only', () => {
