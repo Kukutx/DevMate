@@ -17,7 +17,7 @@ await build({
   bundle: true,
   platform: 'node',
   format: 'cjs',
-  target: 'node18',
+  target: 'node24',
   external: ['obsidian', 'electron'],
   sourcemap: false,
   logLevel: 'info'
