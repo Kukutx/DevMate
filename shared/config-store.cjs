@@ -169,7 +169,7 @@ function replacementCandidates(file) {
       return stat ? { file: candidate, mtimeMs: stat.mtimeMs } : null;
     })
     .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.file.localeCompare(b.file));
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
 function validateReplacement(file) {
