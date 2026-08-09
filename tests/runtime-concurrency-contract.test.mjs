@@ -34,12 +34,12 @@ test('desktop host lifecycles serialize state transitions', () => {
   assert.match(obsidian, /hostOperations\.run\('unload'/);
 });
 
-test('VS Code creates configuration from the shared store before platform activation', () => {
+test('VS Code creates instance configuration from the shared store before platform activation', () => {
   const lifecycle = source('vscode-host/lifecycle.js');
-  assert.match(lifecycle, /ensurePersonalConfig/);
-  const ensure = lifecycle.indexOf('ensurePersonalConfig({');
+  assert.match(lifecycle, /ensureInstanceConfig/);
+  const ensure = lifecycle.indexOf('ensureInstanceConfig({');
   const platform = lifecycle.indexOf('await this.platformExtension.activate(this.runtimeContext)');
-  assert.ok(ensure >= 0 && platform > ensure, 'shared personal config must exist before extension activation');
+  assert.ok(ensure >= 0 && platform > ensure, 'shared instance config must exist before extension activation');
 
   const store = source('shared/config-store.cjs');
   assert.match(store, /commands:\s*\[\]/);
