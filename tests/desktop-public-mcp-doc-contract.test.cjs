@@ -22,13 +22,15 @@ test('desktop documentation describes one complete provider-neutral session life
   assert.match(host, /Start is Gateway → public connection → MCP preflight → Ready/i);
   assert.match(host, /Ready is complete-session generation scoped, never URL-only or tunnel-only/i);
   assert.match(host, /Gateway restarts[\s\S]*provider restarts/i);
-  assert.match(host, /ngrok/);
-  assert.match(host, /cloudflare-quick/);
-  assert.match(host, /cloudflare-managed/);
-  assert.match(host, /external/);
+  for (const provider of ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']) {
+    assert.match(host, new RegExp(provider.replace('-', '\\-')));
+  }
 
-  assert.match(tunnels, /Provider selection is a \*\*connection capability\*\*, not a runtime mode and not a compatibility shim/i);
+  assert.match(tunnels, /one shared public connection capability/i);
+  assert.match(tunnels, /shared instance selects exactly one provider/i);
   assert.match(tunnels, /Both desktop hosts can own or attach/i);
   assert.match(tunnels, /complete.*session generation/i);
   assert.match(tunnels, /Gateway.*provider.*generation/is);
+  assert.match(tunnels, /current local Agent endpoint API/i);
+  assert.match(tunnels, /web_addr/);
 });
