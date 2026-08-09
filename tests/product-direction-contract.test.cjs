@@ -23,11 +23,12 @@ test('shared instance connection is authoritative for provider and stable public
   const entry = source('extension-entry-shared-tunnel.js');
   const effective = source('vscode-host/effective-tunnel-settings.js');
   assert.match(entry, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
-  assert.match(effective, /sharedConnection\(sharedConfig\)/);
+  assert.match(effective, /const connection = sharedConnection\(sharedConfig\)/);
   assert.match(effective, /normalized\.connection\.provider/);
   assert.match(effective, /normalized\.connection\.publicUrl/);
-  assert.match(effective, /provider === 'ngrok' \? fallbackNgrokUrl/);
-  assert.doesNotMatch(effective, /deploymentMode|sharedDeployment|config\.deployment/);
+  assert.match(effective, /provider === 'ngrok' \? stablePublicUrl : ''/);
+  assert.match(effective, /DEVMATE_SHARED_CONFIG_MISSING/);
+  assert.doesNotMatch(effective, /deploymentMode|sharedDeployment|config\.deployment|fallbackNgrokUrl/);
 });
 
 test('VS Code manifest keeps lifecycle preference and machine-local provider execution settings only', () => {
@@ -55,7 +56,8 @@ test('Connection Setup writes only the shared connection capability', () => {
 test('provider-specific endpoint candidates are resolved only inside effective tunnel settings', () => {
   const effective = source('vscode-host/effective-tunnel-settings.js');
   assert.match(effective, /provider === 'cloudflare-managed' \|\| provider === 'external' \? stablePublicUrl : ''/);
-  assert.match(effective, /provider === 'ngrok' \? fallbackNgrokUrl : ''/);
+  assert.match(effective, /provider === 'ngrok' \? stablePublicUrl : ''/);
+  assert.doesNotMatch(effective, /local\.publicUrl|local\.ngrokUrl|fallbackNgrokUrl/);
   assert.equal(fs.existsSync(path.join(root, 'vscode-host', 'deployment-public-url.js')), false);
 });
 
