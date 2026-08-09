@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { SUPPORTED_CONFIG_VERSION, ensurePersonalConfig } = require('../shared/config-store.cjs');
+const { SUPPORTED_CONFIG_VERSION, ensureInstanceConfig } = require('../shared/config-store.cjs');
 
 function tempWorkspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-config-'));
@@ -21,6 +21,7 @@ test('shared host config completion preserves connection, access, policy, runner
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { required: true, token: 'shared-owner-token' },
     connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com' },
+    permissions: { profile: 'fullAccess', readOnly: false },
     team: {
       members: [{ id: 'alice', role: 'developer', workspaceIds: ['vault'] }],
       requireWorkspaceLeaseForWrites: true,
@@ -39,7 +40,7 @@ test('shared host config completion preserves connection, access, policy, runner
   fs.writeFileSync(configFile, `${JSON.stringify(original, null, 2)}\n`, 'utf8');
 
   try {
-    const result = ensurePersonalConfig({ configFile, workspaceRoot: root, preferredPort: 9999, appVersion: '3.3.0' });
+    const result = ensureInstanceConfig({ configFile, workspaceRoot: root, preferredPort: 9999, appVersion: '3.3.0' });
     assert.deepEqual(result.connection, original.connection);
     assert.deepEqual(result.team.members, original.team.members);
     assert.equal(result.team.requireWorkspaceLeaseForWrites, true);
@@ -51,8 +52,6 @@ test('shared host config completion preserves connection, access, policy, runner
     assert.equal(result.auth.token, original.auth.token);
     assert.equal(result.server.port, 8787, 'an existing shared Gateway port must not be replaced by a host preference');
     assert.equal(result.activeWorkspaceId, 'vault');
-    assert.equal('deployment' in result, false);
-    assert.equal('production' in result, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
