@@ -28,7 +28,7 @@ test('Gateway has no direct configuration writes or duplicate audit implementati
   assert.match(source, /shared\.audit/);
 });
 
-test('current runtime paths never branch on retired deployment modes', () => {
+test('current runtime paths use capability state and the schema has no compatibility migration path', () => {
   for (const relative of [
     'scripts/devmate-runner.mjs',
     'host/runtime/process-controller.js',
@@ -38,9 +38,11 @@ test('current runtime paths never branch on retired deployment modes', () => {
     const source = fs.readFileSync(path.join(root, relative), 'utf8');
     assert.doesNotMatch(source, /deployment\?*\.?mode|deployment\.mode|config\.deployment|config\.production|team\.enabled/, relative);
   }
-  const migration = fs.readFileSync(path.join(root, 'shared', 'instance-config.cjs'), 'utf8');
-  assert.match(migration, /function upgradeLegacyInstanceShape/);
-  assert.match(migration, /error\.code = 'retired_instance_shape'/);
+  const schema = fs.readFileSync(path.join(root, 'shared', 'instance-config.cjs'), 'utf8');
+  const store = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
+  assert.doesNotMatch(schema, /upgradeLegacyInstanceShape|one-time.*upgrade/i);
+  assert.doesNotMatch(store, /upgradeLegacyInstanceShape|shape upgrade/i);
+  assert.match(schema, /error\.code = 'unsupported_instance_shape'/);
 });
 
 test('shared sanitizer redacts DevMate credentials and bounds circular payloads', async () => {
