@@ -13,7 +13,7 @@ DevMate: Start
   → Ready
 ```
 
-`Ready` means the **current public connection generation** has passed MCP verification. A local Gateway or an HTTPS URL alone is not treated as Ready.
+`Ready` means the **current complete Gateway + public-connection session generation** has passed MCP verification. A local Gateway or an HTTPS URL alone is not treated as Ready.
 
 ## What Start does
 
@@ -24,7 +24,7 @@ DevMate: Start
 3. Starts or attaches to the configured provider-native public connection.
 4. Obtains the active public HTTPS origin.
 5. Runs authenticated MCP `initialize` and `tools/list`.
-6. Persists verification evidence for the current provider generation.
+6. Persists verification evidence for the current complete session generation.
 7. Reports Ready and optionally copies the verified MCP URL.
 
 There is no separate user step for starting the public connection or verifying MCP.
@@ -41,7 +41,7 @@ For the same filesystem root, Obsidian and VS Code resolve the same DevMate stat
 
 Both hosts are first-class owners or attachers. If VS Code already owns a compatible Gateway or connection, Obsidian attaches. If Obsidian starts first, VS Code can attach later.
 
-Stopping one attached host does not kill a compatible shared resource owned by the other host.
+Stopping one attached host does not kill a compatible shared resource owned by the other host. A host also does not intentionally leave a locally owned Gateway process alive merely because the public connection is owned elsewhere; another host that still requests the session recovers through the complete Start lifecycle.
 
 ## Connection providers
 
@@ -76,7 +76,7 @@ External is for an existing reverse proxy, load balancer, VPN endpoint or separa
 
 ## Automatic recovery
 
-Provider processes can restart automatically after unexpected exit. A restarted provider creates a new connection generation, so DevMate immediately treats earlier verification as stale and re-runs MCP preflight.
+Gateway and provider processes can change independently. A Gateway restart, provider restart, ownership transfer, or new provider `readyAt` produces a different complete session generation, so DevMate immediately treats earlier verification as stale and re-runs MCP preflight.
 
 This also applies when the provider comes back on the same hostname. URL equality is not sufficient to retain Ready.
 
@@ -89,7 +89,7 @@ The plugin keeps the useful lifecycle and support commands:
 - **DevMate: Start** — complete Gateway → public connection → MCP verification → Ready lifecycle.
 - **DevMate: Stop** — release resources owned by this host without killing another host's shared ownership.
 - **DevMate: Restart** — restart the complete lifecycle and return only after Ready.
-- **DevMate: Copy MCP URL** — verify the current public connection generation and copy its `/mcp` URL.
+- **DevMate: Copy MCP URL** — verify the current complete session generation and copy its `/mcp` URL.
 - **DevMate: Copy MCP bearer token** — copy the owner bearer token when connector credential setup is needed.
 - **DevMate: Copy active vault context** — copy the current bounded Obsidian context bundle.
 - **DevMate: Copy diagnostics** — copy sanitized runtime diagnostics.
@@ -102,8 +102,8 @@ The normal panel intentionally presents product state instead of forcing users t
 Typical states are:
 
 - **Stopped** — no active local/shared session is available.
-- **Starting / Verifying** — Gateway and connection are converging or the current provider generation is awaiting MCP preflight.
-- **Ready** — the current public connection generation has passed `initialize` and `tools/list`.
+- **Starting / Verifying** — Gateway and connection are converging or the current complete session generation is awaiting MCP preflight.
+- **Ready** — the current complete session generation has passed `initialize` and `tools/list`.
 - **Error** — automatic startup or recovery cannot complete and user action is required.
 
 ## Obsidian host bridge
@@ -156,7 +156,7 @@ Internal transport details are not required for routine use.
 - Owner credentials are never embedded in MCP URLs.
 - Optional provider credentials use OS-backed encrypted storage when available.
 - Shared configuration is versioned, locked and atomically replaced.
-- Public Ready state requires a successful current-generation MCP preflight.
+- Public Ready state requires a successful MCP preflight for the current complete session generation.
 - A host never terminates a compatible shared resource merely because another host owns it.
 
 For architecture details see `docs/HOST_INTEGRATION.md` and `docs/TUNNELS.md` in the repository.
