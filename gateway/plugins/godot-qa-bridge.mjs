@@ -282,13 +282,14 @@ async function atomicWrite(file, content) {
 
 async function backupFiles(project, files) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const root = resolveProjectChild(project.root, path.join('.godot', 'devmate-backups', stamp));
+  const canonicalProjectRoot = fs.realpathSync.native(project.root);
+  const root = resolveProjectChild(canonicalProjectRoot, path.join('.godot', 'devmate-backups', stamp));
   const copied = [];
   for (const file of files) {
     const stat = fs.statSync(file, { throwIfNoEntry: false });
     if (!stat?.isFile()) continue;
-    const relative = path.relative(project.root, file);
-    const target = resolveProjectChild(project.root, path.relative(project.root, path.join(root, relative)));
+    const relative = path.relative(canonicalProjectRoot, file);
+    const target = resolveProjectChild(canonicalProjectRoot, path.relative(canonicalProjectRoot, path.join(root, relative)));
     await fsp.mkdir(path.dirname(target), { recursive: true });
     await fsp.copyFile(file, target);
     copied.push(path.relative(project.workspace.root, target).replace(/\\/g, '/'));
