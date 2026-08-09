@@ -143,6 +143,21 @@ test('writes host context through the shared locked atomic store without replaci
   assert.deepEqual(config.vscodeContext, { capturedAt: 'now' });
 });
 
+test('VS Code config boundary rejects unsupported instance fields instead of preserving them', () => {
+  const file = tempFile();
+  atomicWriteJson(file, {
+    version: SUPPORTED_CONFIG_VERSION,
+    instanceId: 'old-shape',
+    deployment: { mode: 'team' },
+    connection: { provider: 'ngrok', publicUrl: '' }
+  });
+  assert.throws(() => readExtensionConfig(file), error => error?.code === 'unsupported_instance_shape');
+  assert.throws(() => writeExtensionConfig(file, {
+    version: SUPPORTED_CONFIG_VERSION,
+    vscodeContext: { capturedAt: 'now' }
+  }), error => error?.code === 'unsupported_instance_shape');
+});
+
 test('rejects malformed and future configuration without replacement', () => {
   const malformed = tempFile();
   fs.writeFileSync(malformed, '{broken', 'utf8');
