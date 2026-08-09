@@ -28,10 +28,8 @@ function validatePermissionConfig(config = {}) {
     }
   }
 
-  let profile = permissions.profile;
-  if (profile === undefined || profile === null || profile === '') {
-    profile = permissions.readOnly === true ? 'readOnly' : 'fullAccess';
-  } else if (typeof profile !== 'string' || !PERMISSION_PROFILES.includes(profile)) {
+  const profile = permissions.profile;
+  if (typeof profile !== 'string' || !PERMISSION_PROFILES.includes(profile)) {
     throw invalidPermission(
       `permissions.profile must be one of: ${PERMISSION_PROFILES.join(', ')}`,
       'permissions.profile'
