@@ -11,6 +11,11 @@ export function runWithWorkSessionContext(workSessionId, fn) {
   return storage.run(Object.freeze({ ...current, workSessionId: workSessionId || null }), fn);
 }
 
+export function runWithRequestSignal(signal, fn) {
+  const current = requestContext() || {};
+  return storage.run(Object.freeze({ ...current, signal: signal || current.signal || null }), fn);
+}
+
 export function requestContext() {
   return storage.getStore() || null;
 }
