@@ -10,7 +10,7 @@ const {
   DEFAULT_VERSION,
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
-const { ensurePersonalConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
+const { ensureInstanceConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
 const { cleanupOwnedGatewayInstanceLock } = require('./instance-lock-cleanup.js');
 const { choosePort, healthAt, healthMatches } = require('./network.js');
 const { OperationCoordinator } = require('./operation-coordinator.js');
@@ -130,7 +130,7 @@ class RuntimeController {
   }
 
   ensureConfig() {
-    return ensurePersonalConfig({
+    return ensureInstanceConfig({
       configFile: this.configFile,
       workspaceRoot: this.workspaceRoot,
       preferredPort: this.preferredPort,
