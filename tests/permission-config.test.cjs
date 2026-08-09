@@ -22,14 +22,19 @@ test('accepts only the current explicit permission profiles', () => {
   );
 });
 
-test('missing optional profile keeps the current legacy readOnly fallback without coercion', () => {
+test('missing permissions uses the current default but a provided policy requires an explicit profile', () => {
   assert.deepEqual(validatePermissionConfig({}), { profile: 'fullAccess' });
-  assert.deepEqual(validatePermissionConfig({ permissions: {} }), { profile: 'fullAccess' });
-  assert.deepEqual(validatePermissionConfig({ permissions: { readOnly: true } }), { profile: 'readOnly' });
-  assert.deepEqual(validatePermissionConfig({ permissions: { readOnly: false } }), { profile: 'fullAccess' });
   assert.throws(
-    () => validatePermissionConfig({ permissions: { readOnly: 'false' } }),
-    error => error?.code === 'DEVMATE_PERMISSION_CONFIG_INVALID'
+    () => validatePermissionConfig({ permissions: {} }),
+    error => error?.code === 'DEVMATE_PERMISSION_CONFIG_INVALID' && error.field === 'permissions.profile'
+  );
+  assert.throws(
+    () => validatePermissionConfig({ permissions: { readOnly: true } }),
+    error => error?.code === 'DEVMATE_PERMISSION_CONFIG_INVALID' && error.field === 'permissions.profile'
+  );
+  assert.throws(
+    () => validatePermissionConfig({ permissions: { readOnly: false } }),
+    error => error?.code === 'DEVMATE_PERMISSION_CONFIG_INVALID' && error.field === 'permissions.profile'
   );
 });
 
