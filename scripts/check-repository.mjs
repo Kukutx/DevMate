@@ -68,6 +68,18 @@ function localModuleExists(file, specifier) {
   return candidates.some(candidate => fs.statSync(candidate, { throwIfNoEntry: false })?.isFile());
 }
 
+const retiredSymbols = [
+  { value: ['ensure', 'Personal', 'Config'].join(''), label: 'retired personal-config initializer' }
+];
+const retiredRuntimeTerms = [
+  { value: ['native', 'Ngrok', 'Public', 'Url'].join(''), label: 'retired ngrok tunnel discovery helper' },
+  { value: ['/api', '/tunnels'].join(''), label: 'deprecated ngrok Agent tunnels API' },
+  { value: ['deployment', 'Mode'].join(''), label: 'retired deployment mode runtime state' },
+  { value: ['normalize', 'Bootstrap', 'Deployment'].join(''), label: 'retired deployment bootstrap normalization' },
+  { value: ['Public ingress is managed ', 'separately'].join(''), label: 'retired split public-ingress lifecycle' },
+  { value: ['Start the tunnel from ', 'VS Code'].join(''), label: 'retired VS Code-owned ingress instruction' }
+];
+
 const files = discover();
 const failures = [];
 for (const file of files) {
@@ -85,11 +97,23 @@ for (const file of files) {
   }
 
   const source = fs.readFileSync(file, 'utf8');
+  const fileName = relative(file);
+  if (fileName !== 'scripts/check-repository.mjs') {
+    for (const term of retiredSymbols) {
+      if (source.includes(term.value)) failures.push({ file: fileName, output: term.label });
+    }
+    if (!fileName.startsWith('tests/')) {
+      for (const term of retiredRuntimeTerms) {
+        if (source.includes(term.value)) failures.push({ file: fileName, output: term.label });
+      }
+    }
+  }
+
   for (const entry of localModuleSpecifiers(source)) {
     if (localModuleExists(file, entry.specifier)) continue;
     const line = source.slice(0, entry.index).split(/\r?\n/).length;
     failures.push({
-      file: relative(file),
+      file: fileName,
       output: `missing local module ${entry.specifier} at line ${line}`
     });
   }
