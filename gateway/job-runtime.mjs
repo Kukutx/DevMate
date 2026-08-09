@@ -6,6 +6,7 @@ import {
   completeJob,
   deferJob,
   failJob,
+  getJob,
   heartbeatRunner,
   listRunners,
   registerRunner,
@@ -19,6 +20,7 @@ import { normalizeInstanceConfig } from './team-access.mjs';
 
 const targets = new Map();
 const inflight = new Map();
+const inflightControllers = new Map();
 let workerTimer = null;
 let heartbeatTimer = null;
 let runnerId = null;
@@ -65,20 +67,29 @@ function resultError(result) {
   return error;
 }
 
-async function withTimeout(promise, timeoutMs) {
+function codedError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function withTimeout(promise, timeoutMs, onTimeout = null) {
   let timer = null;
+  let timeoutError = null;
   try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          const error = new Error(`Job timed out after ${timeoutMs}ms`);
-          error.code = 'job_timeout';
-          reject(error);
-        }, timeoutMs);
-        timer.unref?.();
-      })
-    ]);
+    timer = setTimeout(() => {
+      timeoutError = codedError(`Job timed out after ${timeoutMs}ms`, 'job_timeout');
+      try { onTimeout?.(timeoutError); } catch {}
+    }, timeoutMs);
+    timer.unref?.();
+    try {
+      const result = await promise;
+      if (timeoutError) throw timeoutError;
+      return result;
+    } catch (error) {
+      if (timeoutError) throw timeoutError;
+      throw error;
+    }
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -173,17 +184,43 @@ export function refreshLocalRunner() {
     : registerRunner(settings);
 }
 
-async function executeClaimedJob(job) {
+async function executeClaimedJob(job, abort) {
   const target = jobTarget(job.tool);
   if (!target) {
-    failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently enabled, allowed, or registered: ${job.tool}`, retryable: true });
+    try {
+      failJob({ id: job.id, runnerId: localRunnerId(), error: `Job target is not currently enabled, allowed, or registered: ${job.tool}`, retryable: true });
+    } catch {}
     return;
   }
   const started = Date.now();
+  let ownershipLost = false;
+  const abortOwnership = () => {
+    if (abort.signal.aborted) return;
+    ownershipLost = true;
+    abort.abort(codedError(`Embedded runner no longer owns job ${job.id}`, 'job_ownership_lost'));
+  };
+  const checkCancellation = () => {
+    try {
+      const current = getJob(job.id);
+      if (current.status !== 'running' || current.runnerId !== localRunnerId()) {
+        abortOwnership();
+        return;
+      }
+      if (current.cancelRequestedAt && !abort.signal.aborted) {
+        abort.abort(codedError(`Cancellation requested for job ${job.id}`, 'job_cancelled'));
+      }
+    } catch {}
+  };
   const leaseTimer = setInterval(() => {
-    try { renewJobLease({ id: job.id, runnerId: localRunnerId(), leaseSeconds: 90 }); } catch {}
+    try {
+      const renewed = renewJobLease({ id: job.id, runnerId: localRunnerId(), leaseSeconds: 90 });
+      if (!renewed) abortOwnership();
+      else checkCancellation();
+    } catch {}
   }, 30000);
   leaseTimer.unref?.();
+  const cancelTimer = setInterval(checkCancellation, 2000);
+  cancelTimer.unref?.();
   try {
     const config = normalizeInstanceConfig(readConfig());
     const context = {
@@ -193,12 +230,18 @@ async function executeClaimedJob(job) {
       remoteAddress: 'local-job-runner',
       userAgent: 'DevMate embedded job runner',
       connectionProvider: config.connection.provider,
-      jobId: job.id
+      jobId: job.id,
+      signal: abort.signal
     };
     const result = await withTimeout(
       runWithRequestContext(context, () => target.handler(job.arguments || {})),
-      job.timeoutMs
+      job.timeoutMs,
+      error => { if (!abort.signal.aborted) abort.abort(error); }
     );
+    if (ownershipLost) return;
+    checkCancellation();
+    if (ownershipLost) return;
+    if (abort.signal.aborted) throw abort.signal.reason instanceof Error ? abort.signal.reason : codedError('Job cancelled', 'job_cancelled');
     const returnedError = resultError(result);
     if (returnedError) throw returnedError;
     const artifacts = await indexJobArtifacts(job, result);
@@ -207,22 +250,30 @@ async function executeClaimedJob(job) {
     observeDuration('devmate_job_duration_ms', { tool: job.tool }, Date.now() - started);
   } catch (error) {
     const message = String(error?.message || error);
-    if (error?.code === 'approval_required') {
-      deferJob({ id: job.id, runnerId: localRunnerId(), status: 'waiting_approval', error: message, delayMs: 5000 });
-      incrementCounter('devmate_jobs_total', { status: 'waiting_approval', tool: job.tool }, 1);
-    } else if (/requires a lease|is leased by/i.test(message)) {
-      deferJob({ id: job.id, runnerId: localRunnerId(), status: 'blocked_lease', error: message, delayMs: 5000 });
-      incrementCounter('devmate_jobs_total', { status: 'blocked_lease', tool: job.tool }, 1);
+    if (ownershipLost || error?.code === 'job_ownership_lost' || error?.code === 'job_runtime_shutdown') {
+      incrementCounter('devmate_jobs_total', { status: ownershipLost ? 'ownership_lost' : 'interrupted', tool: job.tool }, 1);
     } else {
-      const retryable = error?.code !== 'job_timeout' && !/not allowed|requires the owner role|cannot use/i.test(message);
-      failJob({ id: job.id, runnerId: localRunnerId(), error: message, retryable });
-      incrementCounter('devmate_jobs_total', { status: error?.code === 'job_timeout' ? 'timed_out' : 'failed_attempt', tool: job.tool }, 1);
+      try {
+        if (error?.code === 'approval_required') {
+          deferJob({ id: job.id, runnerId: localRunnerId(), status: 'waiting_approval', error: message, delayMs: 5000 });
+          incrementCounter('devmate_jobs_total', { status: 'waiting_approval', tool: job.tool }, 1);
+        } else if (/requires a lease|is leased by/i.test(message)) {
+          deferJob({ id: job.id, runnerId: localRunnerId(), status: 'blocked_lease', error: message, delayMs: 5000 });
+          incrementCounter('devmate_jobs_total', { status: 'blocked_lease', tool: job.tool }, 1);
+        } else {
+          const retryable = !['job_timeout', 'job_cancelled'].includes(error?.code) && !/not allowed|requires the owner role|cannot use/i.test(message);
+          failJob({ id: job.id, runnerId: localRunnerId(), error: message, retryable });
+          const status = error?.code === 'job_timeout' ? 'timed_out' : error?.code === 'job_cancelled' ? 'cancelled' : 'failed_attempt';
+          incrementCounter('devmate_jobs_total', { status, tool: job.tool }, 1);
+        }
+      } catch (reportError) {
+        if (/does not own running job/i.test(String(reportError?.message || reportError))) ownershipLost = true;
+      }
     }
     observeDuration('devmate_job_duration_ms', { tool: job.tool }, Date.now() - started);
   } finally {
     clearInterval(leaseTimer);
-    inflight.delete(job.id);
-    setGauge('devmate_jobs_inflight', {}, inflight.size);
+    clearInterval(cancelTimer);
   }
 }
 
@@ -233,10 +284,17 @@ export async function runJobWorkerOnce() {
   if (inflight.size >= settings.maxConcurrent) return null;
   const job = claimJob({ runnerId: settings.id, leaseSeconds: 90 });
   if (!job) return null;
-  const promise = executeClaimedJob(job);
-  inflight.set(job.id, promise);
+  const abort = new AbortController();
+  let tracked;
+  tracked = executeClaimedJob(job, abort).finally(() => {
+    if (inflight.get(job.id) === tracked) inflight.delete(job.id);
+    if (inflightControllers.get(job.id) === abort) inflightControllers.delete(job.id);
+    setGauge('devmate_jobs_inflight', {}, inflight.size);
+  });
+  inflight.set(job.id, tracked);
+  inflightControllers.set(job.id, abort);
   setGauge('devmate_jobs_inflight', {}, inflight.size);
-  void promise;
+  void tracked.catch(() => {});
   return job;
 }
 
@@ -261,11 +319,16 @@ export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   workerTimer = null;
   heartbeatTimer = null;
+  const shutdownError = codedError('Embedded Job runtime is shutting down', 'job_runtime_shutdown');
+  for (const abort of inflightControllers.values()) {
+    if (!abort.signal.aborted) abort.abort(shutdownError);
+  }
   const pending = Promise.allSettled([...inflight.values()]);
   let timer = null;
+  let drained = false;
   try {
     await Promise.race([
-      pending,
+      pending.then(() => { drained = true; }),
       new Promise(resolve => {
         timer = setTimeout(resolve, Math.min(60000, Math.max(0, Number(graceMs) || 15000)));
         timer.unref?.();
@@ -274,8 +337,8 @@ export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {
   } finally {
     if (timer) clearTimeout(timer);
   }
-  inflight.clear();
-  setGauge('devmate_jobs_inflight', {}, 0);
+  setGauge('devmate_jobs_inflight', {}, inflight.size);
+  return { drained, inflight: [...inflight.keys()] };
 }
 
 export function jobRuntimeStatus() {
@@ -289,6 +352,9 @@ export function jobRuntimeStatus() {
 }
 
 export const __test = {
+  codedError,
+  inflight,
+  inflightControllers,
   jobTargetNames,
   resultError,
   resultSummary,
