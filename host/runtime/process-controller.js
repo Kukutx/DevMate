@@ -60,32 +60,36 @@ function childActive(child) {
   return !!child && child.exitCode == null && child.signalCode == null;
 }
 
-function waitForChildExit(child, timeoutMs) {
-  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve(true);
+function waitForChildExit(child, timeoutMs, { signalCodeConfirmsExit = true } = {}) {
+  if (!child || child.exitCode != null || (signalCodeConfirmsExit && child.signalCode != null)) return Promise.resolve(true);
   return Promise.race([
     new Promise(resolve => child.once('exit', () => resolve(true))),
+    new Promise(resolve => child.once?.('close', () => resolve(true))),
     new Promise(resolve => setTimeout(() => resolve(false), Math.max(100, Number(timeoutMs) || CHILD_EXIT_TIMEOUT_MS)))
   ]);
 }
 
 async function terminateChild(child, {
   timeoutMs = CHILD_EXIT_TIMEOUT_MS,
-  forceTimeoutMs = CHILD_FORCE_EXIT_TIMEOUT_MS
+  forceTimeoutMs = CHILD_FORCE_EXIT_TIMEOUT_MS,
+  signalCodeConfirmsExit = true
 } = {}) {
-  if (!child || child.exitCode != null) return { exited: true, forced: false };
+  if (!child || child.exitCode != null || (signalCodeConfirmsExit && child.signalCode != null)) return { exited: true, forced: false };
+  const gracefulExit = waitForChildExit(child, timeoutMs, { signalCodeConfirmsExit });
   try {
     if (!child.killed && !child.terminating) child.kill();
   } catch (error) {
     return { exited: false, forced: false, error: error.message || String(error) };
   }
-  if (await waitForChildExit(child, timeoutMs)) {
+  if (await gracefulExit) {
     return { exited: true, forced: !!child.forceTerminated };
   }
+  const forcedExit = waitForChildExit(child, forceTimeoutMs, { signalCodeConfirmsExit });
   try {
     if (typeof child.forceTerminate === 'function') child.forceTerminate();
     else child.kill('SIGKILL');
   } catch {}
-  const exited = await waitForChildExit(child, forceTimeoutMs);
+  const exited = await forcedExit;
   return { exited, forced: true };
 }
 

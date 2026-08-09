@@ -433,7 +433,8 @@ class TunnelController {
         try {
           cleanup = await terminateChild(child, {
             timeoutMs: Math.min(2000, this.stopTimeoutMs),
-            forceTimeoutMs: Math.min(1000, this.forceStopTimeoutMs)
+            forceTimeoutMs: Math.min(1000, this.forceStopTimeoutMs),
+            signalCodeConfirmsExit: false
           });
         } catch (cleanupError) {
           cleanup = { exited: false, forced: false, error: cleanupError?.message || String(cleanupError) };
@@ -534,7 +535,8 @@ class TunnelController {
     if (!childActive(this.child)) return { exited: true, forced: false };
     return terminateChild(this.child, {
       timeoutMs: this.stopTimeoutMs,
-      forceTimeoutMs: this.forceStopTimeoutMs
+      forceTimeoutMs: this.forceStopTimeoutMs,
+      signalCodeConfirmsExit: false
     });
   }
 
