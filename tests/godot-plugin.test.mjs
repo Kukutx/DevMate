@@ -67,7 +67,8 @@ test('Godot project child paths cannot escape through symlink or reparse points'
       () => resolveProjectChild(project, 'escape/secret.gd', { mustExist: true }),
       /symlink|reparse/i
     );
-    assert.equal(resolveProjectChild(project, 'safe/new.gd'), path.join(project, 'safe', 'new.gd'));
+    const canonicalProject = fs.realpathSync.native(project);
+    assert.equal(resolveProjectChild(project, 'safe/new.gd'), path.join(canonicalProject, 'safe', 'new.gd'));
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
