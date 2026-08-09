@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { __test as godotTest, parseExportPresets, parseGodotConfig, parseGodotDiagnostics } from '../gateway/plugins/godot.mjs';
+import { resolveProjectChild } from '../gateway/plugins/godot-project.mjs';
 
 test('parses Godot project configuration sections', () => {
   const parsed = parseGodotConfig(`
@@ -42,4 +46,30 @@ test('extracts Godot errors and warnings', () => {
 test('rejects Godot scenes outside the project', () => {
   assert.throws(() => godotTest.normalizeScene('../outside.tscn'), /inside the project/);
   assert.equal(godotTest.normalizeScene('res://levels/arena.tscn'), 'res://levels/arena.tscn');
+});
+
+test('Godot project child paths cannot escape through symlink or reparse points', t => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-godot-project-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-godot-outside-'));
+  const link = path.join(project, 'escape');
+  try {
+    fs.writeFileSync(path.join(outside, 'secret.gd'), 'extends Node\n');
+    try {
+      fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+        t.skip(`symlink creation unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+    assert.throws(
+      () => resolveProjectChild(project, 'escape/secret.gd', { mustExist: true }),
+      /symlink|reparse/i
+    );
+    assert.equal(resolveProjectChild(project, 'safe/new.gd'), path.join(project, 'safe', 'new.gd'));
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
