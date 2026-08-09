@@ -1,43 +1,64 @@
 # VS Code host runtime
 
-DevMate's VS Code host is a thin lifecycle layer around the shared Gateway. Normal use requires only installing the VSIX and opening a workspace; the extension owns the Gateway lifecycle.
+DevMate's VS Code host is a lifecycle layer around the shared desktop Gateway and provider-native public connection. Normal runtime use is one action: `DevMate: Start` converges the complete session and returns only after MCP verification reaches Ready.
 
 ## Architecture
 
 ```text
 extension-entry-shared-tunnel.js
-└─ vscode-host/lifecycle.js
-   ├─ runtime-context.js
-   ├─ context-mirror.js
-   ├─ runtime-diagnostics.js
-   └─ shared RuntimeController
-      └─ isolated Node child process
-         └─ gateway/server.bundle.mjs
+├─ vscode-host/lifecycle.js
+│  ├─ runtime-context.js
+│  ├─ context-mirror.js
+│  ├─ runtime-diagnostics.js
+│  └─ shared RuntimeController
+│     └─ isolated Node child process
+│        └─ gateway/server.bundle.mjs
+└─ shared TunnelController
+   └─ ngrok / Cloudflare / external provider runtime
 ```
 
-The public extension entry owns host lifecycle and shared-tunnel coordination directly. Platform commands and VS Code integration remain in `extension-entry-platform.js` and the extension modules below it; there is no forwarding entry or Gateway Worker router.
+The public extension entry coordinates host lifecycle and the shared public connection. Platform/setup commands remain in `extension-entry-platform.js` and `extension-entry.js`. There is no forwarding entry, embedded Gateway Worker, or second Gateway startup implementation.
 
 ## Isolated Gateway process
 
-The Gateway runs as a separate Node process through the shared `RuntimeController`. This keeps Gateway failures and long-running work isolated from the VS Code Extension Host and uses the same ownership, startup lease, health check, stop, restart, and instance-lock semantics as other DevMate hosts.
+The Gateway runs as a separate Node process through the shared `RuntimeController`. This isolates Gateway failures and long-running work from the VS Code Extension Host and uses the same startup lease, health check, ownership, stop, restart, and instance-lock semantics as other desktop hosts.
 
 The Gateway bundle is self-contained. The installed VSIX does not depend on a repository-level `node_modules` directory.
+
+## Complete Start and Ready
+
+VS Code Start performs:
+
+```text
+Gateway start/attach
+→ provider-native public connection start/attach
+→ authenticated MCP initialize
+→ tools/list
+→ Ready
+```
+
+Ready is bound to the current **Gateway + provider complete-session generation**. A Gateway restart, provider restart, ownership transfer, or new provider generation invalidates previous verification even when the public hostname is unchanged.
+
+Automatic URL copy happens after Ready and is not a required lifecycle stage.
 
 ## Graceful shutdown
 
 Stopping or reloading the extension:
 
-1. deactivates the host lifecycle;
-2. stops the owned Gateway and tunnel runtime;
-3. drains embedded jobs, plugins and persistent processes;
-4. releases instance/startup locks;
-5. restores the port for immediate restart.
+1. stops/detaches the public connection according to provider ownership;
+2. stops the locally owned Gateway through the ownership-aware `RuntimeController`;
+3. stops the optional default start command owned by this VS Code host;
+4. drains Gateway-owned jobs/plugins/persistent processes through Gateway shutdown;
+5. releases local ownership/startup records after confirmed termination;
+6. disposes the local controllers.
 
-Unresponsive child processes are force-terminated only after the bounded shutdown timeout.
+A remotely owned compatible resource is not killed. Conversely, VS Code does not intentionally leave its own Gateway child alive solely because another host owns the public provider. A remaining host with requested-session intent recovers the missing side through the complete Start lifecycle.
+
+If provider shutdown cannot be confirmed, cleanup fails closed instead of blindly tearing down the dependent local Gateway.
 
 ## Shared state
 
-VS Code and other supported hosts always resolve the same workspace-derived state directory unless an explicit shared-state override is configured:
+VS Code and Obsidian resolve the same workspace-derived state directory unless an explicit shared-state override is configured:
 
 ```text
 ~/.devmate/hosts/<workspace-name>-<path-hash>/
@@ -45,15 +66,27 @@ VS Code and other supported hosts always resolve the same workspace-derived stat
 
 Changing the primary workspace or shared-state location while active requires a VS Code window reload rather than continuing against stale state.
 
+The shared current-schema `config.json` owns connection/access/request/Runner capability state. Generic VS Code context synchronization cannot overwrite the shared `connection` capability and rejects unsupported historical instance fields.
+
 ## Diagnostics
 
-The command palette exposes:
+The command palette exposes host and connection diagnostics, including:
 
 - `DevMate: Host Self-Check`
 - `DevMate: Copy Host Diagnostics`
+- `DevMate: Connection Doctor`
+- `DevMate: Doctor`
 
-Diagnostics include runtime versions, paths, `child_process` launch mode, workspace folders, the latest failure, a redacted config snapshot and a bounded host-log tail. Plaintext credentials are excluded.
+Diagnostics include bounded runtime versions/paths, child-process launch details, workspace information, current public-session state, the latest failure, a redacted config snapshot, and bounded log tails. Plaintext owner/member/provider credentials are excluded.
 
 ## Installed-artifact verification
 
-CI packages the real VSIX, extracts it to a clean directory, verifies required runtime modules, starts two packaged host controllers against shared state, verifies exactly one isolated Gateway child process while the second host attaches, tests follower/owner shutdown semantics, confirms lock cleanup, and restarts on the same port. The Obsidian package runs an equivalent child-process start/stop/restart smoke.
+CI packages the real VSIX and validates the installed artifact rather than source files alone. Packaged smoke coverage checks:
+
+- self-contained Gateway/runtime modules;
+- two host controllers converging on one shared Gateway;
+- provider owner/follower behavior;
+- current connection settings rather than retired deployment fields;
+- ownership-aware Stop/cleanup;
+- restart on the same state/port;
+- Obsidian packaged runtime compatibility with the same desktop ownership model.
