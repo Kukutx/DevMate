@@ -40,13 +40,14 @@ test('reads v2 and v3 web_addr without treating other YAML keys as agent setting
   assert.equal(ngrokWebAddrFromConfig('version: 3\nagent:\n  web_addr: false\n'), 'false');
 });
 
-test('normalizes only local Agent API addresses and honors disabled web_addr', () => {
+test('normalizes only local Agent API addresses and fails closed for disabled or nonlocal bindings', () => {
   assert.equal(loopbackAgentApiBase(null), DEFAULT_NGROK_AGENT_API_BASE);
   assert.equal(loopbackAgentApiBase('127.0.0.1:4141'), 'http://127.0.0.1:4141/api');
   assert.equal(loopbackAgentApiBase('localhost:4242'), 'http://127.0.0.1:4242/api');
   assert.equal(loopbackAgentApiBase('0.0.0.0:4343'), 'http://127.0.0.1:4343/api');
   assert.equal(loopbackAgentApiBase('false'), '');
-  assert.equal(loopbackAgentApiBase('https://remote.example.com:4040'), DEFAULT_NGROK_AGENT_API_BASE);
+  assert.equal(loopbackAgentApiBase('https://remote.example.com:4040'), '');
+  assert.equal(loopbackAgentApiBase('remote.example.com:4040'), '');
 });
 
 test('config check output resolves the active config and web_addr without changing ngrok config', () => {
