@@ -1,0 +1,36 @@
+name: One-time branch cleanup
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete every branch except master
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t branches < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --jq '.[].name')
+          for branch in "${branches[@]}"; do
+            if [ "$branch" = "master" ]; then
+              continue
+            fi
+            echo "Deleting branch: $branch"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+          done
+
+          remaining=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --jq '.[].name')
+          if [ "$remaining" != "master" ]; then
+            echo "Unexpected remaining branches:" >&2
+            printf '%s\n' "$remaining" >&2
+            exit 1
+          fi
+          echo "Only master remains."
