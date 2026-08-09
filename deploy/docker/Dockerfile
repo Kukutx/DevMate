@@ -13,6 +13,7 @@ RUN npm ci --omit=dev
 COPY config-file-lock.cjs ./
 COPY tunnel-provider.js ./
 COPY gateway ./gateway
+COPY host ./host
 COPY shared ./shared
 COPY scripts ./scripts
 COPY vscode-host/shared-tunnel-record-store.js ./vscode-host/shared-tunnel-record-store.js
