@@ -39,7 +39,6 @@ function externalSettings() {
   return {
     provider: 'external',
     publicUrl: 'https://devmate.example.com',
-    deploymentMode: 'production',
     autoRestart: true,
     maxRestarts: 3
   };
@@ -59,7 +58,7 @@ test('alternate providers build native launches instead of ngrok compatibility c
   assert.equal(external.publicUrl, 'https://devmate.example.com');
 });
 
-test('two hosts share one provider-native tunnel record without a virtual ngrok API', async () => {
+test('two hosts share one provider-native tunnel record', async () => {
   const stateDirectory = temporaryDirectory('devmate-provider-native-tunnel-');
   const first = new TunnelController({
     stateDirectory,
