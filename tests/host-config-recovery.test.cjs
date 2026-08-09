@@ -7,7 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { MAX_CONFIG_BYTES, SUPPORTED_CONFIG_VERSION } = require('../host/runtime/constants.js');
 const {
-  ensurePersonalConfig,
+  ensureInstanceConfig,
   readJson,
   recoverConfigReplacement
 } = require('../shared/config-store.cjs');
@@ -24,13 +24,13 @@ function workspaceAndConfig(prefix) {
 
 test('recovers the newest valid Windows replacement instead of resetting identity and token', () => {
   const { workspaceRoot, configFile } = workspaceAndConfig('devmate-config-recover');
-  const original = ensurePersonalConfig({ configFile, workspaceRoot, preferredPort: 9234 });
+  const original = ensureInstanceConfig({ configFile, workspaceRoot, preferredPort: 9234 });
   original.custom = { preserved: true };
   const replacement = `${configFile}.replace-123-456`;
   fs.writeFileSync(replacement, `${JSON.stringify(original, null, 2)}\n`, 'utf8');
   fs.writeFileSync(configFile, '{broken json', 'utf8');
 
-  const recovered = ensurePersonalConfig({ configFile, workspaceRoot, preferredPort: 9999 });
+  const recovered = ensureInstanceConfig({ configFile, workspaceRoot, preferredPort: 9999 });
   assert.equal(recovered.instanceId, original.instanceId);
   assert.equal(recovered.auth.token, original.auth.token);
   assert.deepEqual(recovered.custom, { preserved: true });
@@ -43,7 +43,7 @@ test('quarantines unrecoverable malformed config and refuses to silently generat
   const { workspaceRoot, configFile } = workspaceAndConfig('devmate-config-corrupt');
   fs.writeFileSync(configFile, '{bad', 'utf8');
   assert.throws(
-    () => ensurePersonalConfig({ configFile, workspaceRoot }),
+    () => ensureInstanceConfig({ configFile, workspaceRoot }),
     error => {
       assert.equal(error.code, 'config_invalid_json');
       assert.equal(error.configFile, configFile);
@@ -71,7 +71,7 @@ test('rejects future config versions without quarantine, downgrade, or replaceme
   fs.writeFileSync(olderReplacement, `${JSON.stringify(old, null, 2)}\n`, 'utf8');
 
   assert.throws(
-    () => ensurePersonalConfig({ configFile, workspaceRoot }),
+    () => ensureInstanceConfig({ configFile, workspaceRoot }),
     error => {
       assert.equal(error.code, 'unsupported_config_version');
       assert.equal(error.configVersion, SUPPORTED_CONFIG_VERSION + 1);
@@ -89,7 +89,7 @@ test('rejects oversized config without allocating or overwriting it', () => {
   fs.closeSync(fd);
 
   assert.throws(
-    () => ensurePersonalConfig({ configFile, workspaceRoot }),
+    () => ensureInstanceConfig({ configFile, workspaceRoot }),
     error => {
       assert.equal(error.code, 'config_too_large');
       assert.equal(error.bytes, MAX_CONFIG_BYTES + 1);
@@ -102,7 +102,7 @@ test('rejects oversized config without allocating or overwriting it', () => {
 
 test('keeps a valid main config and removes obsolete replacement files', () => {
   const { workspaceRoot, configFile } = workspaceAndConfig('devmate-config-clean');
-  const config = ensurePersonalConfig({ configFile, workspaceRoot });
+  const config = ensureInstanceConfig({ configFile, workspaceRoot });
   const replacement = `${configFile}.replace-stale`;
   fs.writeFileSync(replacement, `${JSON.stringify(config)}\n`, 'utf8');
   const result = recoverConfigReplacement(configFile);
