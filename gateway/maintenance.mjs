@@ -6,6 +6,17 @@ import maintenanceConfig from '../shared/maintenance-config.cjs';
 
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const auditPruneQueues = new Map();
+
+function withAuditPruneQueue(auditLog, fn) {
+  const key = path.resolve(auditLog);
+  const previous = auditPruneQueues.get(key) || Promise.resolve();
+  const run = previous.catch(() => {}).then(fn);
+  auditPruneQueues.set(key, run);
+  return run.finally(() => {
+    if (auditPruneQueues.get(key) === run) auditPruneQueues.delete(key);
+  });
+}
 
 export { DEFAULT_MAINTENANCE };
 
@@ -155,7 +166,7 @@ export async function pruneBackups(backupRoot, options = {}, nowMs = Date.now())
   };
 }
 
-export async function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {
+async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now()) {
   const opts = maintenanceOptions(options);
   const stat = await statOrNull(auditLog);
   if (!stat) return { beforeEntries: 0, afterEntries: 0, beforeBytes: 0, afterBytes: 0, removedEntries: 0, changed: false };
@@ -195,6 +206,10 @@ export async function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) 
     removedEntries: lines.length - kept.length,
     changed
   };
+}
+
+export function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {
+  return withAuditPruneQueue(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs));
 }
 
 export async function pruneState(paths, options = {}, nowMs = Date.now()) {
