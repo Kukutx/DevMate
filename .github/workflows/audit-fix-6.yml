@@ -1,0 +1,118 @@
+name: One-time loopback URL normalization fix
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Patch loopback URL handling and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-6]'; then
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(file, old, new, count=None):
+              p = Path(file)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing expected pattern in {file}: {old!r}')
+              p.write_text(text.replace(old, new) if count is None else text.replace(old, new, count))
+
+          replace(
+              'gateway/http-host-policy.mjs',
+              "export function remoteAddress(req) {",
+              "export function isLoopbackHostname(value) {\n  const hostname = normalizedAddress(value).replace(/^\\[|\\]$/g, '');\n  return hostname === 'localhost' || isLoopbackAddress(hostname);\n}\n\nexport function remoteAddress(req) {"
+          )
+
+          replace(
+              'gateway/published-previews.mjs',
+              "import { getPreview } from './plugins/preview-manager.mjs';",
+              "import { getPreview } from './plugins/preview-manager.mjs';\nimport { isLoopbackHostname } from './http-host-policy.mjs';"
+          )
+          replace(
+              'gateway/published-previews.mjs',
+              "  const local = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);",
+              "  const local = isLoopbackHostname(url.hostname);"
+          )
+
+          replace(
+              'gateway/plugins/browser-runner.mjs',
+              "import { pathToFileURL } from 'node:url';",
+              "import { pathToFileURL } from 'node:url';\nimport { isLoopbackHostname } from '../http-host-policy.mjs';"
+          )
+          replace(
+              'gateway/plugins/browser-runner.mjs',
+              "  const local = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname);",
+              "  const local = isLoopbackHostname(url.hostname);"
+          )
+
+          replace(
+              'scripts/devmate-runner.mjs',
+              "import { terminateProcessTree } from '../gateway/command-process.mjs';",
+              "import { terminateProcessTree } from '../gateway/command-process.mjs';\nimport { isLoopbackHostname } from '../gateway/http-host-policy.mjs';"
+          )
+          replace(
+              'scripts/devmate-runner.mjs',
+              "  const local = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);",
+              "  const local = isLoopbackHostname(url.hostname);"
+          )
+
+          replace(
+              'tests/http-host-policy.test.mjs',
+              "  isLoopbackAddress,\n  loopbackHost,",
+              "  isLoopbackAddress,\n  isLoopbackHostname,\n  loopbackHost,"
+          )
+          replace(
+              'tests/http-host-policy.test.mjs',
+              "test('local request requires both loopback Host and loopback socket', () => {",
+              "test('normalizes URL loopback hostnames including IPv6 brackets and the full 127/8 range', () => {\n  for (const value of ['localhost', '127.0.0.1', '127.9.8.7', '::1', '[::1]', '[::ffff:127.0.0.1]']) assert.equal(isLoopbackHostname(value), true, value);\n  for (const value of ['example.com', '192.168.1.2', '[2001:db8::1]']) assert.equal(isLoopbackHostname(value), false, value);\n});\n\ntest('local request requires both loopback Host and loopback socket', () => {"
+          )
+
+          replace(
+              'tests/published-preview-safety.test.mjs',
+              "  assert.equal(__test.normalizeShareOrigin('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');",
+              "  assert.equal(__test.normalizeShareOrigin('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');\n  assert.equal(__test.normalizeShareOrigin('http://127.1.2.3:8787'), 'http://127.1.2.3:8787');\n  assert.equal(__test.normalizeShareOrigin('http://[::1]:8787'), 'http://[::1]:8787');"
+          )
+
+          replace(
+              'tests/browser-runner.test.mjs',
+              "  assert.equal(__test.assertAllowedUrl('http://127.0.0.1:3000', false).hostname, '127.0.0.1');",
+              "  assert.equal(__test.assertAllowedUrl('http://127.0.0.1:3000', false).hostname, '127.0.0.1');\n  assert.equal(__test.assertAllowedUrl('http://127.2.3.4:3000', false).hostname, '127.2.3.4');\n  assert.doesNotThrow(() => __test.assertAllowedUrl('http://[::1]:3000', false));"
+          )
+
+          replace(
+              'tests/external-runner-agent.test.mjs',
+              "  assert.equal(__test.normalizeControlUrl('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');",
+              "  assert.equal(__test.normalizeControlUrl('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');\n  assert.equal(__test.normalizeControlUrl('http://127.4.5.6:8787'), 'http://127.4.5.6:8787');\n  assert.equal(__test.normalizeControlUrl('http://[::1]:8787'), 'http://[::1]:8787');"
+          )
+          PY
+          git diff --check
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-6]'; then
+            exit 0
+          fi
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git add gateway scripts tests
+          git commit -m 'Unify loopback URL handling [audit-fix-6]'
+          git push origin HEAD:master
