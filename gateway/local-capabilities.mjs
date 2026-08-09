@@ -112,16 +112,23 @@ export function registerLocalTools(server) {
     if (attached.length && !stopProcesses) {
       throw new Error(`Trusted root has running processes: ${attached.map(item => item.id).join(', ')}. Stop them or pass stopProcesses=true.`);
     }
-    if (attached.length) await Promise.all(attached.map(record => stopPersistentProcess(record.id, false, false)));
+    const stopResults = attached.length
+      ? await Promise.all(attached.map(record => stopPersistentProcess(record.id, false, false)))
+      : [];
+    const unconfirmed = stopResults.filter(result => result.stopped !== true || result.exitConfirmed !== true);
+    if (unconfirmed.length) {
+      throw new Error(`Trusted root cannot be revoked because process exit was not confirmed: ${unconfirmed.map(result => result.process?.id || 'unknown').join(', ')}`);
+    }
     config.trustedWritableRoots = trusted
       .filter(item => item.id !== target.id)
       .map(({ id, name, root }) => ({ id, name, root }));
     writeConfig(config);
     syncTrustedRootsIntoConfig();
+    const stoppedProcesses = attached.map(item => item.id);
     await audit('remove_trusted_root', {
-      root: target.root, workspace: target.id, stoppedProcesses: attached.map(item => item.id)
+      root: target.root, workspace: target.id, stoppedProcesses
     });
-    return toolText({ removed: true, root: publicTrustedRoot(target), stoppedProcesses: attached.map(item => item.id) });
+    return toolText({ removed: true, root: publicTrustedRoot(target), stoppedProcesses });
   });
 
   registerTool(server, 'start_process', {
