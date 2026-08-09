@@ -1,7 +1,6 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
-const net = require('net');
 const crypto = require('crypto');
 const childProcess = require('./vscode-host/runtime-io.js');
 const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
@@ -15,7 +14,7 @@ const {
   successfulVerificationPatch,
   verifiedForCurrentRecord
 } = require('./shared/public-ingress-verification.cjs');
-const { deploymentProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
+const { connectionProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const { classifyTunnelStop } = require('./vscode-host/tunnel-stop-policy.js');
 
@@ -361,29 +360,6 @@ function healthMatches(r, ctx){
   const cfgData = readJson(configPath(ctx));
   return !!(r.ok && r.json && r.json.name === 'devmate' && r.json.version === VERSION && (!cfgData?.instanceId || r.json.instanceId === cfgData.instanceId));
 }
-function isPortFree(port){
-  return new Promise(resolve=>{
-    const srv = net.createServer();
-    srv.once('error',()=>resolve(false));
-    srv.once('listening',()=>srv.close(()=>resolve(true)));
-    srv.listen(port,'127.0.0.1');
-  });
-}
-async function choosePort(ctx){
-  const base = configuredPort() || BASE_PORT;
-  for(let p=base; p<base+20; p++){
-    const health = await healthAt(p);
-    if(healthMatches(health, ctx)) return p;
-    if(!health.ok && await isPortFree(p)) return p;
-    log(`Port ${p} is busy or occupied by a different service; trying next port.`);
-  }
-  throw new Error(`No free port found from ${base} to ${base+19}. Close old gateway/tunnel/node processes and try again.`);
-}
-async function isCurrentGatewayUp(ctx){
-  const data = ensureConfig(ctx,false);
-  const r = await healthAt(Number(data.server.port || selectedPort));
-  return healthMatches(r, ctx);
-}
 function waitForProcessExit(child, timeoutMs=8000){
   if(!child || child.exitCode != null) return Promise.resolve(true);
   return Promise.race([
@@ -486,8 +462,8 @@ function currentTunnelRecord(port){
   try { return tunnelStatus(Number(port || selectedPort))?.record || null; }
   catch { return null; }
 }
-function staleTunnelGenerationError(){
-  const error = new Error('Public MCP verification became stale because the connection generation changed');
+function staleSessionGenerationError(){
+  const error = new Error('Public MCP verification became stale because the complete session generation changed');
   error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
   return error;
 }
@@ -519,7 +495,7 @@ async function startPublicTunnel(ctx){
   const port = Number(data.server.port || selectedPort);
   const result = await startTunnel(port);
   const publicUrl = result?.publicUrl || result?.record?.publicUrl || '';
-  const provider = result?.record?.provider || deploymentProvider(data);
+  const provider = result?.record?.provider || connectionProvider(data);
   if(!publicUrl) throw new Error(`Tunnel provider ${provider} did not publish a public URL.`);
   lastPublicUrl = publicUrl;
   log(result.attached
@@ -546,19 +522,19 @@ async function verifyPublicMcp(baseUrl, ctx=globalContext){
 async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext){
   const generation = recordGeneration(expectedRecord);
   if(!generation){
-    const error = new Error('The public connection is not a current ready tunnel generation');
+    const error = new Error('The public connection is not bound to a current complete session generation');
     error.code = 'DEVMATE_PUBLIC_MCP_GENERATION_UNAVAILABLE';
     throw error;
   }
   const test = await verifyPublicMcp(publicUrl, ctx);
   let currentRecord = currentTunnelRecord(expectedRecord.port);
-  if(recordGeneration(currentRecord) !== generation) throw staleTunnelGenerationError();
+  if(recordGeneration(currentRecord) !== generation) throw staleSessionGenerationError();
   const stamp = new Date().toISOString();
   updateConnectionSnapshot(ctx, successfulVerificationPatch(test, publicUrl, stamp, expectedRecord));
   const persisted = readJson(configPath(ctx));
   currentRecord = currentTunnelRecord(expectedRecord.port);
   if(recordGeneration(currentRecord) !== generation || !verifiedForCurrentRecord(persisted, currentRecord)){
-    throw staleTunnelGenerationError();
+    throw staleSessionGenerationError();
   }
   return {test,stamp,generation,record:currentRecord};
 }
@@ -575,22 +551,24 @@ function recordConnectionFailure(ctx, error, expectedRecord=null){
   }
 }
 async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning}){
+  let publicConnectionSafeToReleaseGateway = true;
   if(tunnel?.owned && !tunnelWasRunning){
-    try { await stopPublicTunnel(); }
-    catch(error){ log(`Could not roll back owned public tunnel after failed Start: ${error.message || error}`); }
-  }
-  let sharedTunnelActive = tunnel?.attached === true;
-  if(!sharedTunnelActive && gateway?.port){
-    try{
-      const active = tunnelStatus(gateway.port);
-      sharedTunnelActive = active?.running === true && active?.owned !== true;
-    }catch(error){
-      if(error?.code === 'DEVMATE_TUNNEL_CONFIGURATION_CONFLICT') sharedTunnelActive = true;
+    try {
+      const stopped = await stopPublicTunnel();
+      publicConnectionSafeToReleaseGateway = classifyTunnelStop(stopped).safe;
+      if(!publicConnectionSafeToReleaseGateway){
+        log(`Could not confirm public connection rollback after failed Start: ${stopped?.reason || 'stop not confirmed'}`);
+      }
+    } catch(error) {
+      publicConnectionSafeToReleaseGateway = false;
+      log(`Could not roll back owned public connection after failed Start: ${error.message || error}`);
     }
   }
-  if(gateway?.started && gateway?.owned && !sharedTunnelActive){
+  if(gateway?.started && gateway?.owned && publicConnectionSafeToReleaseGateway){
     try { await stopGatewayProcess(); }
     catch(error){ log(`Could not roll back owned Gateway after failed Start: ${error.message || error}`); }
+  }else if(gateway?.started && gateway?.owned && !publicConnectionSafeToReleaseGateway){
+    log('Preserving the newly owned Gateway because public connection shutdown was not confirmed.');
   }
   if(!startCommandWasRunning && startCommandProcess){
     const stopped = await stopStartCommand();
@@ -647,7 +625,7 @@ async function stopAll(){
   try{
     tunnel = await stopPublicTunnel();
   }catch(e){
-    log(`Could not stop public tunnel cleanly: ${e.message || e}`);
+    log(`Could not stop public connection cleanly: ${e.message || e}`);
     tunnel = {stopped:false,reason:e.message || String(e),error:e};
   }
   const tunnelState = classifyTunnelStop(tunnel);
@@ -655,19 +633,16 @@ async function stopAll(){
   if(!tunnelState.safe){
     setStatus('DevMate: stop failed');
     refreshPanel();
-    return {ok:false,sharedStillActive:true,gateway:{stopped:false,reason:'preserved-after-tunnel-stop-failure'},tunnel,startCommand};
+    return {ok:false,sharedStillActive:true,gateway:{stopped:false,reason:'preserved-after-public-connection-stop-failure'},tunnel,startCommand};
   }
 
   let gateway;
-  if(tunnelState.remoteOwner){
-    gateway = {stopped:false,reason:'preserved-for-shared-connection'};
-  }else{
-    try { gateway = await stopGatewayProcess(); }
-    catch(e){ gateway = {stopped:false,reason:e.message || String(e),error:e}; }
-  }
-  const gatewaySafe = gateway.stopped === true || ['not-running','preserved-for-shared-connection'].includes(String(gateway.reason || '')) || gateway.attached === true;
+  try { gateway = await stopGatewayProcess(); }
+  catch(e){ gateway = {stopped:false,reason:e.message || String(e),error:e}; }
+
+  const gatewaySafe = gateway.stopped === true || ['not-running','managed-by-another-host'].includes(String(gateway.reason || '')) || gateway.attached === true;
   const startCommandSafe = startCommand.stopped === true || startCommand.reason === 'not-running';
-  const sharedStillActive = tunnelState.remoteOwner || gateway.reason === 'preserved-for-shared-connection' || gateway.attached === true;
+  const sharedStillActive = tunnelState.remoteOwner || gateway.reason === 'managed-by-another-host' || gateway.attached === true;
   lastPublicUrl='';
   if(globalContext) await syncPublicUiState(globalContext);
   else refreshPanel();
@@ -922,7 +897,7 @@ async function saveReferencesJson(ctx, value){
 async function doctor(ctx){
   const checks=[];
   const data=ensureConfig(ctx,false);
-  const provider=deploymentProvider(data);
+  const provider=connectionProvider(data);
   checks.push(`Version: ${VERSION}`);
   checks.push(`VS Code workspace: ${currentRoot() || 'NONE'}`);
   checks.push(`Extension path: ${ctx.extensionPath}`);
@@ -945,9 +920,9 @@ async function doctor(ctx){
   const h=await healthAt(Number(data.server.port||selectedPort)); checks.push(`Gateway health: ${healthMatches(h,ctx) ? 'OK' : `not current/failed (${h.status||h.error||'no response'})`}`);
   try{
     const tunnel=currentTunnelStatus(ctx);
-    checks.push(`Tunnel: ${tunnel.running ? `${tunnel.provider} ${tunnel.publicUrl || 'starting'}` : `${provider} not running`}`);
+    checks.push(`Public connection: ${tunnel.running ? `${tunnel.provider} ${tunnel.publicUrl || 'starting'}` : `${provider} not running`}`);
     if(tunnel.publicUrl){ try{ const test=await verifyPublicMcp(tunnel.publicUrl,ctx); checks.push(`public MCP preflight: OK tools=${test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
-  }catch(e){ checks.push(`Tunnel: unavailable (${e.message || e})`); }
+  }catch(e){ checks.push(`Public connection: unavailable (${e.message || e})`); }
   output.show(true); checks.forEach(x=>log(`[doctor] ${x}`)); vscode.window.showInformationMessage('Doctor finished. See DevMate output.');
 }
 
@@ -960,7 +935,7 @@ async function setup(ctx){
   const actions=[];
   if(!currentRoot()) actions.push('Open a project folder in VS Code.');
   const data=ensureConfig(ctx,false);
-  const provider=deploymentProvider(data);
+  const provider=connectionProvider(data);
   if(provider === 'ngrok'){
     const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
     const result=spawnSync(command,['version'],{encoding:'utf8',windowsHide:true});
@@ -987,7 +962,7 @@ function panelHtml(ctx, webview){
       : publicState.state === 'unverified'
         ? 'verification pending'
         : publicState.state === 'pending'
-          ? 'tunnel starting'
+          ? 'connection starting'
           : 'not available';
   const ingressDisplay = publicState.publicUrl
     ? `${publicState.provider} ${redactUrl(publicState.publicUrl)} (${publicState.state})`
@@ -1035,7 +1010,7 @@ function panelHtml(ctx, webview){
   <div class="status-grid">
     <b>Active project</b><code>${esc(root || 'Open a VS Code folder first')}</code>
     <b>MCP</b><code>${esc(mcpDisplay)}</code>
-    <b>Public ingress</b><code>${esc(ingressDisplay)}</code>
+    <b>Connection</b><code>${esc(ingressDisplay)}</code>
     <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp · internal only</code>
     <b>Auth</b><code>${esc(data.auth?.required ? 'token required' : 'disabled')}</code>
     <b>Permissions</b><code>${esc(data.permissions?.profile || 'fullAccess')}</code>
@@ -1176,7 +1151,10 @@ function deactivate(){
   contextWriteTimer=null;
   return lifecycleOperations.run('deactivate',async()=>{
     const stopped = await stopAll();
-    if(!stopped.sharedStillActive) await gatewayController?.dispose({stopOwned:true});
+    const disposed = await gatewayController?.dispose({stopOwned:true});
+    if(disposed?.disposed === false){
+      log(`Gateway controller could not be disposed cleanly: ${disposed.reason || 'unknown error'}`);
+    }
     gatewayController = null;
     gatewayControllerKey = '';
     gatewayProcess = null;
