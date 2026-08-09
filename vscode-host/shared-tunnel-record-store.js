@@ -42,10 +42,9 @@ function runtimeRecordError(message, code, recordFile) {
 }
 
 function stableConfiguration(settings = {}, port = 0) {
-  const providerValue = settings.provider !== undefined ? settings.provider : settings.tunnelProvider;
   return {
     port: Number(port) || 0,
-    provider: normalizeProvider(providerValue),
+    provider: normalizeProvider(settings.provider),
     publicUrl: configurationUrl(settings.publicUrl),
     ngrokUrl: configurationUrl(settings.ngrokUrl),
     ngrokCommandPath: String(settings.ngrokCommandPath || '').trim().slice(0, MAX_CONFIGURATION_TEXT),
