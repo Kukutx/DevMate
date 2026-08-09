@@ -28,7 +28,7 @@ process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const { installTeamCapabilities } = await import('../gateway/team-capabilities.mjs');
 const { getJob, clearJobsForTests } = await import('../gateway/job-queue.mjs');
-const { jobTargetEnabled, runJobWorkerOnce, shutdownJobRuntime } = await import('../gateway/job-runtime.mjs');
+const { __test, jobTargetEnabled, runJobWorkerOnce, shutdownJobRuntime } = await import('../gateway/job-runtime.mjs');
 const { resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
 
 class MockServer {
@@ -79,7 +79,55 @@ test('executes a reviewed target and indexes generated artifact directories', as
   const artifactPaths = job.artifacts.map(item => item.path);
   assert.deepEqual(artifactPaths, ['artifacts/checks.json', 'artifacts/screenshot.png']);
   assert.match(job.artifacts[0].sha256, /^[a-f0-9]{64}$/);
-  await shutdownJobRuntime();
+});
+
+test('timeout aborts cooperatively but does not settle before the handler', async () => {
+  const controller = new AbortController();
+  let settled = false;
+  const lateHandler = new Promise(resolve => setTimeout(() => {
+    settled = true;
+    resolve('late result');
+  }, 40));
+  const started = Date.now();
+  await assert.rejects(
+    __test.withTimeout(lateHandler, 5, error => controller.abort(error)),
+    error => error.code === 'job_timeout'
+  );
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(settled, true);
+  assert.ok(Date.now() - started >= 30);
+});
+
+test('a target disabled after claim does not leak an inflight slot', async () => {
+  resetDurableStateForTests();
+  clearJobsForTests();
+  const server = new MockServer();
+  server.registerTool('run_smart_checks', {
+    title: 'Run smart checks',
+    description: 'temporary target',
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: {}
+  }, async () => ({ content: [{ type: 'text', text: 'unused' }], structuredContent: { ok: true } }));
+  await server.connect();
+  const submitted = await server.tools.get('job_submit').handler({
+    workspaceId: 'app',
+    tool: 'run_smart_checks',
+    arguments: { workspaceId: 'app' }
+  });
+  const id = submitted.structuredContent.job.id;
+  const savedTarget = __test.targets.get('run_smart_checks');
+  try {
+    __test.targets.delete('run_smart_checks');
+    const claimed = await runJobWorkerOnce();
+    assert.equal(claimed.id, id);
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(__test.inflight.has(id), false);
+    assert.equal(getJob(id).status, 'queued');
+  } finally {
+    if (savedTarget) __test.targets.set('run_smart_checks', savedTarget);
+    clearJobsForTests();
+  }
 });
 
 test('plugin job targets require the plugin to remain enabled', () => {
@@ -89,4 +137,7 @@ test('plugin job targets require the plugin to remain enabled', () => {
   assert.equal(jobTargetEnabled('run_smart_checks', { plugins: { enabled: [] } }), true);
 });
 
-test.after(async () => fsp.rm(root, { recursive: true, force: true }));
+test.after(async () => {
+  await shutdownJobRuntime();
+  await fsp.rm(root, { recursive: true, force: true });
+});
