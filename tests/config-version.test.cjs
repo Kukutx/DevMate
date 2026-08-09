@@ -8,7 +8,7 @@ const test = require('node:test');
 const {
   SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
-  ensurePersonalConfig,
+  ensureInstanceConfig,
   readJson
 } = require('../shared/config-store.cjs');
 
@@ -64,7 +64,7 @@ test('unsupported config versions are refused without rewriting the file', () =>
   }
 });
 
-test('personal config setup does not silently migrate an old schema', () => {
+test('instance config initialization does not silently migrate an old schema', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-config-no-migration-'));
   const workspace = path.join(directory, 'workspace');
   const file = path.join(directory, 'state', 'config.json');
@@ -74,7 +74,7 @@ test('personal config setup does not silently migrate an old schema', () => {
   fs.writeFileSync(file, original, 'utf8');
   try {
     assert.throws(
-      () => ensurePersonalConfig({ configFile: file, workspaceRoot: workspace }),
+      () => ensureInstanceConfig({ configFile: file, workspaceRoot: workspace }),
       error => error?.code === 'unsupported_config_version'
     );
     assert.equal(fs.readFileSync(file, 'utf8'), original);
