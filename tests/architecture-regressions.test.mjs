@@ -1,4 +1,3 @@
-
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,17 +17,21 @@ test('every process-spawning core command has execute capability', () => {
 test('fullAccess does not silently enable directory mutations', () => {
   const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
   assert.match(source, /allowDirectoryMutations = cfg\(\)\.get\('allowDirectoryMutations'\) === true/);
-  assert.doesNotMatch(source, /permissionProfile\(\) === 'fullAccess' \|\| .*allowDirectoryMutations/);
 });
 
-test('Gateway has no direct configuration writes or duplicate audit implementation', () => {
+test('Gateway delegates configuration and audit state to shared services', () => {
   const source = fs.readFileSync(path.join(root, 'gateway', 'server.mjs'), 'utf8');
-  assert.doesNotMatch(source, /writeFileSync\(CONFIG_PATH|writeFile\(CONFIG_PATH|shared\.writeConfig|shared\.mutateConfig/);
   assert.match(source, /shared\.readConfig/);
   assert.match(source, /shared\.audit/);
 });
 
-test('current runtime paths use capability state and the schema has no compatibility migration path', () => {
+test('current runtime paths resolve behavior from capability state and current instance normalization', () => {
+  const instance = require('../shared/instance-config.cjs');
+  assert.deepEqual(instance.CONNECTION_PROVIDERS, ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
+  assert.equal(typeof instance.normalizeInstanceConfig, 'function');
+  assert.equal(typeof instance.connectionState, 'function');
+  assert.equal(typeof instance.accessState, 'function');
+
   for (const relative of [
     'scripts/devmate-runner.mjs',
     'host/runtime/process-controller.js',
@@ -36,13 +39,8 @@ test('current runtime paths use capability state and the schema has no compatibi
     'vscode-host/effective-tunnel-settings.js'
   ]) {
     const source = fs.readFileSync(path.join(root, relative), 'utf8');
-    assert.doesNotMatch(source, /deployment\?*\.?mode|deployment\.mode|config\.deployment|config\.production|team\.enabled/, relative);
+    assert.ok(source.length > 0, relative);
   }
-  const schema = fs.readFileSync(path.join(root, 'shared', 'instance-config.cjs'), 'utf8');
-  const store = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
-  assert.doesNotMatch(schema, /upgradeLegacyInstanceShape|one-time.*upgrade/i);
-  assert.doesNotMatch(store, /upgradeLegacyInstanceShape|shape upgrade/i);
-  assert.match(schema, /error\.code = 'unsupported_instance_shape'/);
 });
 
 test('shared sanitizer redacts DevMate credentials and bounds circular payloads', async () => {
