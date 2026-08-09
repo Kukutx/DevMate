@@ -3,8 +3,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  connectionProvider,
   currentFailure,
-  deploymentProvider,
   publicUiState,
   statusLabel
 } = require('../vscode-host/public-ui-state.js');
@@ -43,8 +43,8 @@ function verifiedConfig() {
 }
 
 test('shared connection provider is the UI provider source of truth', () => {
-  assert.equal(deploymentProvider(config(), 'ngrok'), 'cloudflare-quick');
-  assert.throws(() => deploymentProvider(config({ connection: { provider: 'automatic' } })), /Unknown connection provider/);
+  assert.equal(connectionProvider(config(), 'ngrok'), 'cloudflare-quick');
+  assert.throws(() => connectionProvider(config({ connection: { provider: 'automatic' } })), /Unknown connection provider/);
 });
 
 test('only the current verified generation is presented as ready', () => {
