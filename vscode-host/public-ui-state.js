@@ -3,7 +3,7 @@
 const { verifiedForCurrentRecord } = require('../shared/public-ingress-verification.cjs');
 const { tunnelProvider: validateTunnelProvider } = require('./tunnel-settings.js');
 
-function deploymentProvider(config, fallback = 'ngrok') {
+function connectionProvider(config, fallback = 'ngrok') {
   const value = config?.connection?.provider;
   return validateTunnelProvider(String(value === undefined ? fallback : value).trim().toLowerCase());
 }
@@ -17,7 +17,7 @@ function currentFailure(config, record) {
 }
 
 function publicUiState(config, tunnelStatus = null, { runtimeError = '', gatewayLock = null } = {}) {
-  const provider = deploymentProvider(config);
+  const provider = connectionProvider(config);
   const record = tunnelStatus?.record || null;
   const publicUrl = String(record?.publicUrl || tunnelStatus?.publicUrl || '').trim();
   const verified = !!record && verifiedForCurrentRecord(config, record, gatewayLock);
@@ -56,4 +56,4 @@ function statusLabel(state, gateway = null) {
   return 'DevMate: stopped';
 }
 
-module.exports = { currentFailure, deploymentProvider, publicUiState, statusLabel };
+module.exports = { connectionProvider, currentFailure, publicUiState, statusLabel };
