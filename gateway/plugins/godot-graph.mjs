@@ -79,7 +79,7 @@ function fullPath(projectRoot, resourcePath) {
   if (!normalized) throw new Error(`Invalid Godot resource path: ${resourcePath}`);
   const candidate = path.resolve(projectRoot, normalized.slice(6));
   const relative = path.relative(projectRoot, candidate);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`Godot resource escapes project: ${resourcePath}`);
+  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(`Godot resource escapes project: ${resourcePath}`);
   return candidate;
 }
 

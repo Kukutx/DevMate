@@ -171,7 +171,9 @@ async function fetchJson(url, options = {}) {
 async function waitGateway(port, child, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child && child.exitCode !== null) throw new Error(`Local Gateway exited before becoming ready with code ${child.exitCode}`);
+    if (child && (child.exitCode !== null || child.signalCode !== null)) {
+      throw new Error(`Local Gateway exited before becoming ready with code ${child.exitCode ?? 'null'}${child.signalCode ? ` signal ${child.signalCode}` : ''}`);
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/control/health`);
       if (response.ok) return;

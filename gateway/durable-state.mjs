@@ -378,7 +378,7 @@ export function configuredGatewayInstanceLeaseMs(config, requestedLeaseMs = null
     return Math.max(5000, Number(requestedLeaseMs) || INSTANCE_LOCK_LEASE_MS);
   }
   const configuredRequestMs = Math.max(
-    Number(config?.production?.requestTimeoutMs) || 0,
+    Number(config?.requestPolicy?.requestTimeoutMs) || 0,
     Number(config?.runtime?.defaultCommandTimeoutMs) || 0
   );
   return Math.max(

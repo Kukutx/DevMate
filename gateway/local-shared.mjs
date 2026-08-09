@@ -230,7 +230,7 @@ function assertInside(root, candidate) {
   const existingReal = fs.realpathSync.native(existing);
   const resolved = path.resolve(existingReal, path.relative(existing, candidate));
   const relative = path.relative(rootReal, resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
     throw new Error(`Path escapes workspace root: ${normalizeSlash(path.relative(root, candidate))}`);
   }
   return candidate;
@@ -239,7 +239,7 @@ export function resolveWorkspaceCwd(workspace, cwd = '.') {
   const root = path.resolve(workspace.root);
   const full = path.resolve(root, cwd || '.');
   const relative = path.relative(root, full);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`cwd escapes workspace root: ${cwd}`);
+  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(`cwd escapes workspace root: ${cwd}`);
   assertInside(root, full);
   const stat = fs.statSync(full, { throwIfNoEntry: false });
   if (!stat?.isDirectory()) throw new Error(`cwd is not a directory: ${cwd}`);

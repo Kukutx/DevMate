@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 const activeProcesses = new Set();
 
 function waitForExit(child) {
-  if (child.exitCode != null) return Promise.resolve({ code: child.exitCode, signal: child.signalCode || null });
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ code: child.exitCode ?? null, signal: child.signalCode || null });
   return new Promise(resolve => {
     child.once('close', (code, signal) => resolve({ code, signal: signal || null }));
     child.once('error', error => resolve({ code: null, signal: null, error: error.message }));
@@ -35,7 +35,7 @@ async function runTaskkill(pid) {
 }
 
 export async function terminateProcessTree(child, { graceMs = 1500, forceMs = 2500 } = {}) {
-  if (!child || child.exitCode != null) return { terminated: false, forced: false, exitConfirmed: true };
+  if (!child || child.exitCode != null || child.signalCode != null) return { terminated: false, forced: false, exitConfirmed: true };
 
   if (process.platform === 'win32') {
     await runTaskkill(child.pid);

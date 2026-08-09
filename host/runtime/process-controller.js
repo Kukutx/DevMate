@@ -57,11 +57,11 @@ function startupFailureDetail(launch, child) {
 }
 
 function childActive(child) {
-  return !!child && child.exitCode == null;
+  return !!child && child.exitCode == null && child.signalCode == null;
 }
 
 function waitForChildExit(child, timeoutMs) {
-  if (!child || child.exitCode != null) return Promise.resolve(true);
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve(true);
   return Promise.race([
     new Promise(resolve => child.once('exit', () => resolve(true))),
     new Promise(resolve => setTimeout(() => resolve(false), Math.max(100, Number(timeoutMs) || CHILD_EXIT_TIMEOUT_MS)))

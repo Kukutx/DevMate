@@ -60,7 +60,7 @@ async function scanReferences(root, maxFiles = 3000, maxMissing = 200) {
         seen.add(relative);
         const target = path.resolve(root, relative);
         const inside = path.relative(root, target);
-        const exists = !inside.startsWith('..') && !path.isAbsolute(inside) && !!fs.statSync(target, { throwIfNoEntry: false });
+        const exists = inside !== '..' && !inside.startsWith('..' + path.sep) && !path.isAbsolute(inside) && !!fs.statSync(target, { throwIfNoEntry: false });
         references.set(relative, (references.get(relative) || 0) + 1);
         if (!exists) missing.push({ source, reference: `res://${relative}` });
       }

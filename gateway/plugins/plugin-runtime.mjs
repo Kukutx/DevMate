@@ -22,7 +22,7 @@ function clamp(value, fallback, min, max) {
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
 export function resolveWorkspacePath(workspace, subpath = '.', { mustExist = false, directory = false } = {}) {

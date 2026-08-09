@@ -41,7 +41,7 @@ function delay(ms) {
 }
 
 function childActive(child) {
-  return !!child && child.exitCode == null;
+  return !!child && child.exitCode == null && child.signalCode == null;
 }
 
 function strictAutoRestart(value) {

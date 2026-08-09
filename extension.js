@@ -112,7 +112,7 @@ function relToRoot(fsPath){
   const root = currentRoot();
   if(!root || !fsPath) return '';
   const rel = path.relative(root, fsPath);
-  if(rel.startsWith('..') || path.isAbsolute(rel)) return '';
+  if(rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return '';
   return rel.replace(/\\/g,'/');
 }
 function isProtectedName(filePath){

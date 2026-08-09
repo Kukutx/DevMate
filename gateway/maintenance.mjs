@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import maintenanceConfig from '../shared/maintenance-config.cjs';
 
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
@@ -29,7 +30,7 @@ export function maintenanceOptions(input = {}) {
 
 function isInside(root, target) {
   const rel = path.relative(root, target);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 }
 
 async function statOrNull(file) {
@@ -176,9 +177,15 @@ export async function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) 
   const changed = next !== original;
   if (changed) {
     await fsp.mkdir(path.dirname(auditLog), { recursive: true });
-    const tmp = `${auditLog}.${process.pid}.tmp`;
-    await fsp.writeFile(tmp, next, 'utf8');
-    await fsp.rename(tmp, auditLog);
+    const tmp = `${auditLog}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await fsp.writeFile(tmp, next, { encoding: 'utf8', mode: 0o600 });
+      try { await fsp.chmod(tmp, 0o600); } catch {}
+      await fsp.rename(tmp, auditLog);
+      try { await fsp.chmod(auditLog, 0o600); } catch {}
+    } finally {
+      try { await fsp.rm(tmp, { force: true }); } catch {}
+    }
   }
   return {
     beforeEntries: lines.length,

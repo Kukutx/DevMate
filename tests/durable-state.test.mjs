@@ -70,7 +70,7 @@ test('derives a request-aware instance lock lease while allowing explicit test l
     durable.INSTANCE_LOCK_LEASE_MS
   );
   assert.equal(
-    durable.configuredGatewayInstanceLeaseMs({ production: { requestTimeoutMs: 60 * 60 * 1000 } }),
+    durable.configuredGatewayInstanceLeaseMs({ requestPolicy: { requestTimeoutMs: 60 * 60 * 1000 } }),
     61 * 60 * 1000
   );
   assert.equal(durable.configuredGatewayInstanceLeaseMs({}, 5000), 5000);

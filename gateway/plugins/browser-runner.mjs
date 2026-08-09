@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
 function safeWorkspaceOutput(workspaceRoot, relativePath, label) {

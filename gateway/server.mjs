@@ -47,7 +47,7 @@ function isEnvFile(base){ const b=base.toLowerCase(); return b === '.env' || b.s
 function isEnvExample(base){ const b=base.toLowerCase(); return b === '.env.example' || b === '.env.sample' || b.endsWith('.env.example') || b.endsWith('.env.sample'); }
 function isBinaryOrSecret(rel){ const base=path.basename(rel); if(isHidden(rel)) return true; if(isEnvFile(base) && !isEnvExample(base)) return true; const ext=path.extname(base).toLowerCase(); return BLOCKED_EXT.has(ext); }
 function isTextAllowed(rel){ if(isBinaryOrSecret(rel)) return false; const base=path.basename(rel); if(ALLOW_BASENAME.has(base)) return true; if(base.startsWith('.env') && isEnvExample(base)) return true; const ext=path.extname(base).toLowerCase(); return TEXT_EXT.has(ext); }
-function isInside(root, target){ const rel=path.relative(root, target); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); }
+function isInside(root, target){ const rel=path.relative(root, target); return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel)); }
 function safeResolve(root, sub='.'){ const rootPath=path.resolve(root); const target=path.resolve(rootPath, sub || '.'); if(!isInside(rootPath,target)) throw new Error(`Path escapes workspace root: ${sub}`); return target; }
 function pathKey(p){ return shared.pathKey(p); }
 function realPathInside(root, full){ try{ const rootReal=fs.realpathSync.native(root); const fullReal=fs.realpathSync.native(full); return isInside(rootReal, fullReal) ? fullReal : null; }catch{ return null; } }
@@ -187,7 +187,7 @@ async function backupPath(full, rel){
     return dst;
   }catch(e){ return `backup_failed:${e.message}`; }
 }
-async function withLock(file, fn){ const key=path.resolve(file).toLowerCase(); if(writeLocks.has(key)) throw new Error(`Path locked by another write: ${file}`); writeLocks.add(key); try{return await fn();} finally{writeLocks.delete(key);} }
+async function withLock(file, fn){ const key=pathKey(file); if(writeLocks.has(key)) throw new Error(`Path locked by another write: ${file}`); writeLocks.add(key); try{return await fn();} finally{writeLocks.delete(key);} }
 async function walk(dir, root, depth, max, out, visited=new Set()){
   if(out.length>=max) return;
   const dirReal = realPathInside(root, dir);

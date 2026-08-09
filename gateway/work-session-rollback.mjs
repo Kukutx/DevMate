@@ -19,7 +19,7 @@ const SESSION_ACTIONS = new Set(['work_session_start', 'work_session_finish', 'w
 function normalizeSlash(value) { return String(value || '').replace(/\\/g, '/'); }
 function isInside(root, target) {
   const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
 function assertWorkspaceTarget(config, workspace, rel) {
