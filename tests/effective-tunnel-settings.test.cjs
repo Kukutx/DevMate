@@ -6,9 +6,6 @@ const { effectiveTunnelSettings } = require('../vscode-host/effective-tunnel-set
 
 function local(overrides = {}) {
   return {
-    provider: 'ngrok',
-    publicUrl: 'https://machine-external.example.com',
-    ngrokUrl: 'https://machine.ngrok-free.app',
     ngrokCommandPath: 'C:\\Tools\\ngrok.exe',
     ngrokUseManagedAccount: false,
     ngrokPoolingEnabled: true,
@@ -20,7 +17,7 @@ function local(overrides = {}) {
   };
 }
 
-test('shared instance connection overrides stale machine connection candidates', () => {
+test('shared instance connection is authoritative while execution details remain machine-local', () => {
   const result = effectiveTunnelSettings({
     sharedConfig: {
       connection: { provider: 'cloudflare-managed', publicUrl: 'https://prod.example.com' }
@@ -34,7 +31,6 @@ test('shared instance connection overrides stale machine connection candidates',
   assert.equal(result.ngrokCommandPath, 'C:\\Tools\\ngrok.exe');
   assert.equal(result.autoRestart, true);
   assert.equal(result.maxRestarts, 7);
-  assert.equal('deploymentMode' in result, false);
 });
 
 test('shared ngrok URL is authoritative while account execution details remain machine-local', () => {
@@ -42,7 +38,7 @@ test('shared ngrok URL is authoritative while account execution details remain m
     sharedConfig: {
       connection: { provider: 'ngrok', publicUrl: 'https://shared.ngrok-free.app' }
     },
-    localSettings: local({ ngrokUrl: 'https://stale-machine.ngrok-free.app' })
+    localSettings: local()
   });
   assert.equal(result.provider, 'ngrok');
   assert.equal(result.ngrokUrl, 'https://shared.ngrok-free.app');
@@ -51,7 +47,7 @@ test('shared ngrok URL is authoritative while account execution details remain m
   assert.equal(result.ngrokPoolingEnabled, true);
 });
 
-test('Cloudflare Quick never inherits a stable URL from any machine setting', () => {
+test('Cloudflare Quick never receives a stable URL', () => {
   const result = effectiveTunnelSettings({
     sharedConfig: { connection: { provider: 'cloudflare-quick', publicUrl: '' } },
     localSettings: local()
@@ -61,11 +57,11 @@ test('Cloudflare Quick never inherits a stable URL from any machine setting', ()
   assert.equal(result.ngrokUrl, '');
 });
 
-test('machine connection candidates are used only before shared instance config exists', () => {
-  const result = effectiveTunnelSettings({ sharedConfig: null, localSettings: local() });
-  assert.equal(result.provider, 'ngrok');
-  assert.equal(result.ngrokUrl, 'https://machine.ngrok-free.app');
-  assert.equal('deploymentMode' in result, false);
+test('missing shared connection state fails closed instead of falling back to machine settings', () => {
+  assert.throws(
+    () => effectiveTunnelSettings({ sharedConfig: null, localSettings: local() }),
+    error => error?.code === 'DEVMATE_SHARED_CONFIG_MISSING'
+  );
 });
 
 test('invalid shared connection never silently falls back to machine settings', () => {
