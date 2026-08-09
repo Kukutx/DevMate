@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import instance from '../shared/instance-config.cjs';
 import { __test, requiredCapabilityForTool } from '../gateway/tool-policy.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -26,7 +27,6 @@ test('Gateway delegates configuration and audit state to shared services', () =>
 });
 
 test('current runtime paths resolve behavior from capability state and current instance normalization', () => {
-  const instance = require('../shared/instance-config.cjs');
   assert.deepEqual(instance.CONNECTION_PROVIDERS, ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
   assert.equal(typeof instance.normalizeInstanceConfig, 'function');
   assert.equal(typeof instance.connectionState, 'function');
