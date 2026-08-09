@@ -78,6 +78,19 @@ test('retries a synchronous config mutation after a detected concurrent writer',
   assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: SUPPORTED_CONFIG_VERSION, external: 1, local: 1 });
 });
 
+test('forwards an explicit config mutation retry budget', async t => {
+  const { configPath, shared } = await withConfig(t, 'devmate-config-retry-budget-', { version: SUPPORTED_CONFIG_VERSION, external: 0, local: 0 });
+  let attempts = 0;
+  assert.throws(() => shared.mutateConfig(config => {
+    attempts += 1;
+    config.local += 1;
+    fs.writeFileSync(configPath, `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, external: attempts, local: 0 })}\n`, 'utf8');
+    return config;
+  }, { retries: 1 }), error => error.code === 'config_conflict');
+  assert.equal(attempts, 1);
+  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), { version: SUPPORTED_CONFIG_VERSION, external: 1, local: 0 });
+});
+
 test('recovers an interrupted Windows-style replacement backup', async t => {
   const { directory, configPath, shared } = await withConfig(t, 'devmate-config-recovery-');
   await fsp.rm(configPath);
