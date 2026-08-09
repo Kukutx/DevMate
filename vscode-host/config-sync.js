@@ -6,6 +6,7 @@ const {
   readJson,
   updateConfig
 } = require('../shared/config-store.cjs');
+const { assertSupportedInstanceShape } = require('../shared/instance-config.cjs');
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -41,6 +42,8 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   const initializing = Object.keys(current).length === 0;
   if (!initializing) assertSupportedConfigVersion(current);
   assertSupportedConfigVersion(candidate);
+  assertSupportedInstanceShape(current);
+  assertSupportedInstanceShape(candidate);
 
   const merged = { ...current };
   for (const key of [
@@ -76,7 +79,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
 
   for (const key of [
-    'connection', 'deployment', 'team', 'production', 'requestPolicy', 'hostRuntime', 'plugins',
+    'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
     'jobs', 'runnerControl', 'trustedWritableRoots'
   ]) {
     preserveCurrentObject(merged, current, key);
@@ -90,7 +93,9 @@ function mergeExtensionConfig(currentValue, candidateValue) {
 }
 
 function readExtensionConfig(file) {
-  return readJson(file, null, { strict: true, supportedVersion: true });
+  const config = readJson(file, null, { strict: true, supportedVersion: true });
+  if (config) assertSupportedInstanceShape(config);
+  return config;
 }
 
 function writeExtensionConfig(file, candidate) {
