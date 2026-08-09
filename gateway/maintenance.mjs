@@ -3,20 +3,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import maintenanceConfig from '../shared/maintenance-config.cjs';
+import { withAuditLogLock } from './audit-log-coordinator.mjs';
 
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const auditPruneQueues = new Map();
-
-function withAuditPruneQueue(auditLog, fn) {
-  const key = path.resolve(auditLog);
-  const previous = auditPruneQueues.get(key) || Promise.resolve();
-  const run = previous.catch(() => {}).then(fn);
-  auditPruneQueues.set(key, run);
-  return run.finally(() => {
-    if (auditPruneQueues.get(key) === run) auditPruneQueues.delete(key);
-  });
-}
 
 export { DEFAULT_MAINTENANCE };
 
@@ -209,7 +199,7 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
 }
 
 export function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {
-  return withAuditPruneQueue(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs));
+  return withAuditLogLock(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs));
 }
 
 export async function pruneState(paths, options = {}, nowMs = Date.now()) {
