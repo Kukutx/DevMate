@@ -58,8 +58,8 @@ jobs:
           pos = re.compile(r"([A-Za-z_$][A-Za-z0-9_$]*)\.startsWith\('\.\.'\)")
           for p in path_files:
               text = read(p)
-              text, n1 = neg.subn(lambda m: f"{m.group(1)} !== '..' && !{m.group(1)}.startsWith(`..${{path.sep}}`)", text)
-              text, n2 = pos.subn(lambda m: f"{m.group(1)} === '..' || {m.group(1)}.startsWith(`..${{path.sep}}`)", text)
+              text, n1 = neg.subn(lambda m: f"{m.group(1)} !== '..' && !{m.group(1)}.startsWith('..' + path.sep)", text)
+              text, n2 = pos.subn(lambda m: f"{m.group(1)} === '..' || {m.group(1)}.startsWith('..' + path.sep)", text)
               if not (n1 or n2):
                   raise SystemExit(f'no unsafe path containment expression found in {p}')
               write(p, text)
