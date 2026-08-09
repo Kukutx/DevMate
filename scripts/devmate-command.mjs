@@ -85,14 +85,15 @@ function activeWorkspaceIds(config) {
 }
 
 function bootstrapPreset(value) {
-  const preset = String(value || 'personal').trim().toLowerCase();
-  if (!Object.hasOwn(BOOTSTRAP_PRESETS, preset)) {
+  const preset = String(value || '').trim().toLowerCase();
+  if (!preset || !Object.hasOwn(BOOTSTRAP_PRESETS, preset)) {
     throw new Error(`Unknown bootstrap preset: ${String(value)}`);
   }
   return preset;
 }
 
 function presetOptions(options = {}) {
+  if (options.preset === undefined) return { preset: '', options: { ...options } };
   const preset = bootstrapPreset(options.preset);
   return {
     preset,
@@ -149,7 +150,7 @@ function bootstrap(options = {}) {
   const finalConfig = normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig(initialized.file)));
   return {
     ok: true,
-    preset: resolved.preset,
+    ...(resolved.preset ? { preset: resolved.preset } : {}),
     config: initialized.file,
     ownerToken: initialized.token,
     ownerUrl: ownerUrl({ config: initialized.file, url: finalConfig.connection.publicUrl || undefined }),
@@ -216,7 +217,7 @@ function status(options = {}) {
 }
 
 function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nBootstrap always creates one current-schema DevMate instance. Presets supply capability defaults only; explicit options override them. Members, external Runners, request policies, and connection providers remain composable capabilities rather than runtime modes.\n`;
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nBootstrap always creates one current-schema DevMate instance. Presets supply capability defaults only when explicitly selected; explicit options override them. Members, external Runners, request policies, and connection providers remain composable capabilities rather than runtime modes.\n`;
 }
 
 async function main(argv = process.argv.slice(2)) {
