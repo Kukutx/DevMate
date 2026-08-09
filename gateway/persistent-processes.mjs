@@ -13,17 +13,21 @@ export const MAX_READ_CHARS = 500000;
 const registry = new Map();
 let nextNumber = 1;
 
+function processOwned(record) {
+  return record?.status === 'running' || record?.status === 'stopping';
+}
+
 export function runningProcesses() {
-  return [...registry.values()].filter(record => record.status === 'running' || record.status === 'stopping');
+  return [...registry.values()].filter(processOwned);
 }
 export function pruneProcessRegistry() {
   const cutoff = Date.now() - PROCESS_RETENTION_MS;
   for (const [id, record] of registry) {
-    if (record.status !== 'running' && record.status !== 'stopping' && Date.parse(record.finishedAt || 0) < cutoff) registry.delete(id);
+    if (!processOwned(record) && Date.parse(record.finishedAt || 0) < cutoff) registry.delete(id);
   }
   if (registry.size <= PROCESS_REGISTRY_LIMIT) return;
   const finished = [...registry.values()]
-    .filter(record => record.status !== 'running' && record.status !== 'stopping')
+    .filter(record => !processOwned(record))
     .sort((a, b) => Date.parse(a.finishedAt || 0) - Date.parse(b.finishedAt || 0));
   while (registry.size > PROCESS_REGISTRY_LIMIT && finished.length) registry.delete(finished.shift().id);
 }
@@ -58,7 +62,7 @@ export function processRecord(id) {
   return record;
 }
 function waitForExit(record, timeoutMs) {
-  if (record.status !== 'running' && record.status !== 'stopping') return Promise.resolve(true);
+  if (!processOwned(record)) return Promise.resolve(true);
   return new Promise(resolve => {
     const timer = setTimeout(() => { cleanup(); resolve(false); }, timeoutMs);
     const onExit = () => { cleanup(); resolve(true); };
@@ -66,8 +70,12 @@ function waitForExit(record, timeoutMs) {
     record.child?.once('close', onExit);
   });
 }
-export async function killProcessTree(record, force = false) {
-  if (!record.child || (record.status !== 'running' && record.status !== 'stopping')) return true;
+export async function killProcessTree(record, force = false, {
+  gracefulWaitMs = 3000,
+  forceWaitMs = 4000,
+  finalWaitMs = 1500
+} = {}) {
+  if (!record.child || !processOwned(record)) return true;
   record.status = 'stopping';
   const pid = record.child.pid;
   if (process.platform === 'win32' && pid) {
@@ -87,16 +95,15 @@ export async function killProcessTree(record, force = false) {
     try { record.child.kill(force ? 'SIGKILL' : 'SIGTERM'); } catch {}
   }
 
-  if (await waitForExit(record, force ? 4000 : 3000)) return true;
-  if (!force) return killProcessTree(record, true);
+  if (await waitForExit(record, force ? forceWaitMs : gracefulWaitMs)) return true;
+  if (!force) return killProcessTree(record, true, { gracefulWaitMs, forceWaitMs, finalWaitMs });
 
   try { record.child.kill('SIGKILL'); } catch {}
-  if (await waitForExit(record, 1500)) return true;
+  if (await waitForExit(record, finalWaitMs)) return true;
 
-  record.status = 'terminated';
-  record.finishedAt = now();
-  record.signal = record.signal || 'forced';
-  appendOutput(record, 'system', 'Process tree was force-terminated.\n');
+  record.status = 'stopping';
+  record.error = 'Process tree termination could not be confirmed';
+  appendOutput(record, 'system', 'Process tree termination was requested but exit could not be confirmed; ownership is retained.\n');
   return false;
 }
 export async function shutdownPersistentProcesses() {
@@ -148,7 +155,7 @@ export async function startPersistentProcess({ workspaceId, command, cwd = '.', 
 export function listPersistentProcesses(includeFinished = true) {
   pruneProcessRegistry();
   return [...registry.values()]
-    .filter(record => includeFinished || record.status === 'running' || record.status === 'stopping')
+    .filter(record => includeFinished || processOwned(record))
     .map(processPublic);
 }
 export function readPersistentOutput(id, afterSequence = 0, maxChars = DEFAULT_READ_CHARS) {
@@ -178,16 +185,18 @@ export async function sendPersistentInput(id, input, appendNewline = true) {
   await audit('send_process_input', { processId: id, chars: input.length, appendNewline });
   return processPublic(record);
 }
-export async function stopPersistentProcess(id, force = false, forget = false) {
+export async function stopPersistentProcess(id, force = false, forget = false, terminationOptions = {}) {
   const config = readConfig();
   assertCanMutate(config, 'Stopping a persistent process');
   const record = processRecord(id);
-  await killProcessTree(record, force);
-  if (forget && record.status !== 'running' && record.status !== 'stopping') registry.delete(id);
-  await audit('stop_process', { processId: id, force, forget });
+  const exitConfirmed = await killProcessTree(record, force, terminationOptions);
+  const stopped = exitConfirmed && !processOwned(record);
+  if (forget && stopped) registry.delete(id);
+  await audit('stop_process', { processId: id, force, forget, stopped, exitConfirmed });
   return {
-    stopped: record.status !== 'running' && record.status !== 'stopping',
+    stopped,
+    exitConfirmed,
     forgotten: !registry.has(id), process: registry.has(id) ? processPublic(record) : null
   };
 }
-export const __test = { registry };
+export const __test = { processOwned, registry };
