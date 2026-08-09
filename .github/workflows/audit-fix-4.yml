@@ -1,0 +1,166 @@
+name: One-time Godot symlink boundary fix
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Patch Godot project path boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-4]'; then
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(file, old, new, count=None):
+              p = Path(file)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing expected pattern in {file}: {old!r}')
+              if count is None:
+                  p.write_text(text.replace(old, new))
+              else:
+                  p.write_text(text.replace(old, new, count))
+
+          # Central Godot child-path resolver reuses the plugin runtime's realpath/symlink policy.
+          replace(
+              'gateway/plugins/godot-project.mjs',
+              "import path from 'node:path';\n",
+              "import path from 'node:path';\nimport { resolveWorkspacePath } from './plugin-runtime.mjs';\n\nexport function resolveProjectChild(projectRoot, relativePath = '.', options = {}) {\n  return resolveWorkspacePath({ root: projectRoot }, relativePath, options);\n}\n"
+          )
+          replace(
+              'gateway/plugins/godot-project.mjs',
+              "  const projectFile = path.join(root, 'project.godot');\n  if (!fs.statSync(projectFile, { throwIfNoEntry: false })?.isFile()) throw new Error(`project.godot not found under ${subpath}`);",
+              "  const projectFile = resolveProjectChild(root, 'project.godot', { mustExist: true });\n  if (!fs.statSync(projectFile, { throwIfNoEntry: false })?.isFile()) throw new Error(`project.godot not found under ${subpath}`);"
+          )
+          replace(
+              'gateway/plugins/godot-project.mjs',
+              "  const presetFile = path.join(projectRoot, 'export_presets.cfg');",
+              "  const presetFile = resolveProjectChild(projectRoot, 'export_presets.cfg');"
+          )
+
+          # Dependency graph must not read res:// files through an escaping symlink.
+          replace(
+              'gateway/plugins/godot-graph.mjs',
+              "import { projectMetadata, resolveProject, scanProject } from './godot-project.mjs';",
+              "import { projectMetadata, resolveProject, resolveProjectChild, scanProject } from './godot-project.mjs';"
+          )
+          replace(
+              'gateway/plugins/godot-graph.mjs',
+              "  const candidate = path.resolve(projectRoot, normalized.slice(6));\n  const relative = path.relative(projectRoot, candidate);\n  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(`Godot resource escapes project: ${resourcePath}`);\n  return candidate;",
+              "  return resolveProjectChild(projectRoot, normalized.slice(6));"
+          )
+
+          # Static audit references, main scene, autoloads, and icon use the same realpath policy.
+          replace(
+              'gateway/plugins/godot-audit.mjs',
+              "import { parseGodotConfig, projectMetadata, readExportPresets, resolveProject, scanProject } from './godot-project.mjs';",
+              "import { parseGodotConfig, projectMetadata, readExportPresets, resolveProject, resolveProjectChild, scanProject } from './godot-project.mjs';"
+          )
+          replace(
+              'gateway/plugins/godot-audit.mjs',
+              "        const target = path.resolve(root, relative);\n        const inside = path.relative(root, target);\n        const exists = inside !== '..' && !inside.startsWith('..' + path.sep) && !path.isAbsolute(inside) && !!fs.statSync(target, { throwIfNoEntry: false });",
+              "        let target = null;\n        try { target = resolveProjectChild(root, relative); } catch {}\n        const exists = !!target && !!fs.statSync(target, { throwIfNoEntry: false });"
+          )
+          replace(
+              'gateway/plugins/godot-audit.mjs',
+              "      const mainFile = path.join(project.root, mainRelative);",
+              "      const mainFile = resolveProjectChild(project.root, mainRelative);"
+          )
+          replace(
+              'gateway/plugins/godot-audit.mjs',
+              "    if (!fs.statSync(path.join(project.root, relative), { throwIfNoEntry: false })?.isFile()) {",
+              "    if (!fs.statSync(resolveProjectChild(project.root, relative), { throwIfNoEntry: false })?.isFile()) {",
+              1
+          )
+          replace(
+              'gateway/plugins/godot-audit.mjs',
+              "    if (iconRelative && !fs.statSync(path.join(project.root, iconRelative), { throwIfNoEntry: false })?.isFile()) {",
+              "    if (iconRelative && !fs.statSync(resolveProjectChild(project.root, iconRelative), { throwIfNoEntry: false })?.isFile()) {"
+          )
+
+          # QA bridge must not inspect, back up, install, or remove files through project symlinks.
+          replace(
+              'gateway/plugins/godot-qa-bridge.mjs',
+              "import { resolveProject } from './godot-project.mjs';",
+              "import { resolveProject, resolveProjectChild } from './godot-project.mjs';"
+          )
+          replace(
+              'gateway/plugins/godot-qa-bridge.mjs',
+              "  const root = path.join(project.root, '.godot', 'devmate-backups', stamp);",
+              "  const root = resolveProjectChild(project.root, path.join('.godot', 'devmate-backups', stamp));"
+          )
+          replace(
+              'gateway/plugins/godot-qa-bridge.mjs',
+              "    const target = path.join(root, relative);",
+              "    const target = resolveProjectChild(project.root, path.relative(project.root, path.join(root, relative)));"
+          )
+          replace(
+              'gateway/plugins/godot-qa-bridge.mjs',
+              "  const projectFile = path.join(projectRoot, 'project.godot');\n  const scriptFile = path.join(projectRoot, QA_BRIDGE_SCRIPT_PATH);",
+              "  const projectFile = resolveProjectChild(projectRoot, 'project.godot', { mustExist: true });\n  const scriptFile = resolveProjectChild(projectRoot, QA_BRIDGE_SCRIPT_PATH);"
+          )
+          replace(
+              'gateway/plugins/godot-qa-bridge.mjs',
+              "  const scriptFile = path.join(project.root, QA_BRIDGE_SCRIPT_PATH);",
+              "  const scriptFile = resolveProjectChild(project.root, QA_BRIDGE_SCRIPT_PATH);"
+          )
+
+          # Native QA runtime plan directory must also stay inside the real project tree.
+          replace(
+              'gateway/plugins/godot-native-qa.mjs',
+              "import { normalizeScene, parseGodotDiagnostics, projectMetadata, resolveGodotExecutable, resolveProject } from './godot-project.mjs';",
+              "import { normalizeScene, parseGodotDiagnostics, projectMetadata, resolveGodotExecutable, resolveProject, resolveProjectChild } from './godot-project.mjs';"
+          )
+          replace(
+              'gateway/plugins/godot-native-qa.mjs',
+              "  const runtimeDirectory = path.join(project.root, '.godot', 'devmate-qa');",
+              "  const runtimeDirectory = resolveProjectChild(project.root, path.join('.godot', 'devmate-qa'));"
+          )
+
+          # Test framework discovery/version reads must not execute/read scripts outside through addons symlinks.
+          replace(
+              'gateway/plugins/godot-tests.mjs',
+              "import { parseGodotDiagnostics, resolveGodotExecutable, resolveProject } from './godot-project.mjs';",
+              "import { parseGodotDiagnostics, resolveGodotExecutable, resolveProject, resolveProjectChild } from './godot-project.mjs';"
+          )
+          replace(
+              'gateway/plugins/godot-tests.mjs',
+              "  const text = await fsp.readFile(path.join(root, pluginPath), 'utf8').catch(() => '');",
+              "  const text = await fsp.readFile(resolveProjectChild(root, pluginPath), 'utf8').catch(() => '');"
+          )
+          replace(
+              'gateway/plugins/godot-tests.mjs',
+              "  const gutScript = path.join(project.root, FRAMEWORKS.gut.script);\n  const gdunitScript = path.join(project.root, FRAMEWORKS.gdunit4.script);",
+              "  const gutScript = resolveProjectChild(project.root, FRAMEWORKS.gut.script);\n  const gdunitScript = resolveProjectChild(project.root, FRAMEWORKS.gdunit4.script);"
+          )
+          PY
+          git diff --check
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-4]'; then
+            exit 0
+          fi
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git add gateway/plugins tests/godot-plugin.test.mjs
+          git commit -m 'Enforce Godot project realpath boundaries [audit-fix-4]'
+          git push origin HEAD:master
