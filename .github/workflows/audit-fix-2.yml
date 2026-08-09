@@ -1,0 +1,89 @@
+name: One-time repository audit patch 2
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Patch audited defects
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-2]'; then
+            echo 'Second audit fixes already applied.'
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing expected pattern in {path}: {old!r}')
+              p.write_text(text.replace(old, new))
+
+          replace(
+              'vscode-host/tunnel-controller.js',
+              '  return !!child && child.exitCode == null && child.signalCode == null;',
+              '  return !!child && child.exitCode == null;'
+          )
+
+          replace(
+              'gateway/server.mjs',
+              "import { executeCommand } from './command-process.mjs';\n",
+              "import { executeCommand } from './command-process.mjs';\nimport { assertGitRawWorkspaceBound } from './git-raw-policy.mjs';\n"
+          )
+          replace(
+              'gateway/server.mjs',
+              "  }catch(e){ return `backup_failed:${e.message}`; }\n}",
+              "  }catch(e){ throw new Error(`Backup failed before mutation: ${e.message || e}`); }\n}"
+          )
+          replace(
+              'gateway/server.mjs',
+              "assertGitAllowed(cfg,args,'Git raw'); const limits=commandLimits(cfg,timeoutMs,maxOutputChars);",
+              "assertGitRawWorkspaceBound(args); assertGitAllowed(cfg,args,'Git raw'); const limits=commandLimits(cfg,timeoutMs,maxOutputChars);"
+          )
+
+          replace(
+              'gateway/plugins/browser-runner.mjs',
+              "function safeWorkspaceOutput(workspaceRoot, relativePath, label) {\n  const value = String(relativePath || '').trim();\n  if (!value) return null;\n  const target = path.resolve(workspaceRoot, value);\n  if (!isInside(workspaceRoot, target)) throw new Error(`${label} path escapes workspace root`);\n  return target;\n}",
+              "function resolveContainedWorkspacePath(workspaceRoot, candidatePath, label, { mustExist = false } = {}) {\n  const root = fs.realpathSync.native(workspaceRoot);\n  const candidate = path.isAbsolute(candidatePath) ? path.resolve(candidatePath) : path.resolve(root, candidatePath || '.');\n  if (!isInside(root, candidate)) throw new Error(`${label} path escapes workspace root`);\n  let existing = candidate;\n  while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);\n  const existingReal = fs.realpathSync.native(existing);\n  const resolved = path.resolve(existingReal, path.relative(existing, candidate));\n  if (!isInside(root, resolved)) throw new Error(`${label} path escapes workspace root through symlink/reparse point`);\n  const stat = fs.statSync(resolved, { throwIfNoEntry: false });\n  if (mustExist && !stat) throw new Error(`${label} path not found: ${candidatePath}`);\n  return resolved;\n}\n\nfunction safeWorkspaceOutput(workspaceRoot, relativePath, label) {\n  const value = String(relativePath || '').trim();\n  if (!value) return null;\n  return resolveContainedWorkspacePath(workspaceRoot, value, label);\n}"
+          )
+          replace(
+              'gateway/plugins/browser-runner.mjs',
+              "    const target = path.isAbsolute(configuredPath) ? path.resolve(configuredPath) : path.resolve(root, configuredPath);\n    if (!isInside(root, target)) throw new Error('Configured Playwright module path must stay inside the workspace');\n    const stat = fs.statSync(target, { throwIfNoEntry: false });\n    if (!stat) throw new Error(`Configured Playwright module path not found: ${configuredPath}`);\n    return target;",
+              "    return resolveContainedWorkspacePath(root, configuredPath, 'Configured Playwright module', { mustExist: true });"
+          )
+          replace(
+              'gateway/plugins/browser-runner.mjs',
+              "    try { return requireFromWorkspace.resolve(name); } catch {}",
+              "    try {\n      const resolved = requireFromWorkspace.resolve(name);\n      return resolveContainedWorkspacePath(root, resolved, `Resolved ${name} module`, { mustExist: true });\n    } catch {}"
+          )
+          PY
+          git diff --check
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-2]'; then
+            exit 0
+          fi
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git add gateway vscode-host tests
+          git commit -m 'Fix remaining repository audit findings [audit-fix-2]'
+          git push origin HEAD:master
