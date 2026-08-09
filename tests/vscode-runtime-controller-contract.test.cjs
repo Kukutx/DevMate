@@ -12,7 +12,8 @@ const tunnelEntry = fs.readFileSync(path.join(root, 'extension-entry-shared-tunn
 const tunnelController = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
 
 test('actual VS Code Start and Stop use the shared RuntimeController', () => {
-  assert.match(source, /const \{ RuntimeController, SUPPORTED_CONFIG_VERSION \} = require\('\.\/host\/runtime-controller\.js'\)/);
+  assert.match(source, /const \{ RuntimeController \} = require\('\.\/host\/runtime-controller\.js'\)/);
+  assert.doesNotMatch(source, /SUPPORTED_CONFIG_VERSION/);
   assert.match(source, /gatewayController = new RuntimeController\(/);
   assert.match(source, /const result = await controller\.start\(\{timeoutMs:20000\}\)/);
   assert.match(source, /const result = await gatewayController\.stop\(\)/);
