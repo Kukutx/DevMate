@@ -1,0 +1,100 @@
+name: One-time repository audit patch
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Patch audited defects
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix]'; then
+            echo 'Audit fixes already applied.'
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(p):
+              return Path(p).read_text()
+
+          def write(p, text):
+              Path(p).write_text(text)
+
+          def replace(p, old, new):
+              text = read(p)
+              if old not in text:
+                  raise SystemExit(f'missing expected pattern in {p}: {old!r}')
+              write(p, text.replace(old, new))
+
+          path_files = [
+              'gateway/local-shared.mjs',
+              'gateway/job-artifacts.mjs',
+              'gateway/maintenance.mjs',
+              'extension.js',
+              'gateway/server.mjs',
+              'gateway/plugins/godot-audit.mjs',
+              'gateway/plugins/godot-graph.mjs',
+              'gateway/work-session-rollback.mjs',
+              'gateway/plugins/plugin-runtime.mjs',
+              'gateway/plugins/preview-manager.mjs',
+              'gateway/plugins/browser-runner.mjs',
+          ]
+          neg = re.compile(r"!([A-Za-z_$][A-Za-z0-9_$]*)\.startsWith\('\.\.'\)")
+          pos = re.compile(r"([A-Za-z_$][A-Za-z0-9_$]*)\.startsWith\('\.\.'\)")
+          for p in path_files:
+              text = read(p)
+              text, n1 = neg.subn(lambda m: f"{m.group(1)} !== '..' && !{m.group(1)}.startsWith(`..${{path.sep}}`)", text)
+              text, n2 = pos.subn(lambda m: f"{m.group(1)} === '..' || {m.group(1)}.startsWith(`..${{path.sep}}`)", text)
+              if not (n1 or n2):
+                  raise SystemExit(f'no unsafe path containment expression found in {p}')
+              write(p, text)
+
+          replace('gateway/maintenance.mjs', "import path from 'node:path';\n", "import path from 'node:path';\nimport crypto from 'node:crypto';\n")
+          replace(
+              'gateway/maintenance.mjs',
+              "    const tmp = `${auditLog}.${process.pid}.tmp`;\n    await fsp.writeFile(tmp, next, 'utf8');\n    await fsp.rename(tmp, auditLog);",
+              "    const tmp = `${auditLog}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;\n    try {\n      await fsp.writeFile(tmp, next, { encoding: 'utf8', mode: 0o600 });\n      try { await fsp.chmod(tmp, 0o600); } catch {}\n      await fsp.rename(tmp, auditLog);\n      try { await fsp.chmod(auditLog, 0o600); } catch {}\n    } finally {\n      try { await fsp.rm(tmp, { force: true }); } catch {}\n    }"
+          )
+          replace('gateway/command-process.mjs', "  if (child.exitCode != null) return Promise.resolve({ code: child.exitCode, signal: child.signalCode || null });", "  if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ code: child.exitCode ?? null, signal: child.signalCode || null });")
+          replace('gateway/command-process.mjs', "  if (!child || child.exitCode != null) return { terminated: false, forced: false, exitConfirmed: true };", "  if (!child || child.exitCode != null || child.signalCode != null) return { terminated: false, forced: false, exitConfirmed: true };")
+          replace('host/runtime/process-controller.js', "  return !!child && child.exitCode == null;", "  return !!child && child.exitCode == null && child.signalCode == null;")
+          replace('host/runtime/process-controller.js', "  if (!child || child.exitCode != null) return Promise.resolve(true);", "  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve(true);")
+          replace('vscode-host/tunnel-controller.js', "  return !!child && child.exitCode == null;", "  return !!child && child.exitCode == null && child.signalCode == null;")
+          replace('scripts/devmate-runner.mjs', "    if (child && child.exitCode !== null) throw new Error(`Local Gateway exited before becoming ready with code ${child.exitCode}`);", "    if (child && (child.exitCode !== null || child.signalCode !== null)) {\n      throw new Error(`Local Gateway exited before becoming ready with code ${child.exitCode ?? 'null'}${child.signalCode ? ` signal ${child.signalCode}` : ''}`);\n    }")
+          replace('gateway/durable-state.mjs', "    Number(config?.production?.requestTimeoutMs) || 0,", "    Number(config?.requestPolicy?.requestTimeoutMs) || 0,")
+          replace('tests/durable-state.test.mjs', "    durable.configuredGatewayInstanceLeaseMs({ production: { requestTimeoutMs: 60 * 60 * 1000 } }),", "    durable.configuredGatewayInstanceLeaseMs({ requestPolicy: { requestTimeoutMs: 60 * 60 * 1000 } }),")
+          replace('gateway/server.mjs', "async function withLock(file, fn){ const key=path.resolve(file).toLowerCase();", "async function withLock(file, fn){ const key=pathKey(file);")
+
+          for p in path_files:
+              if re.search(r"[A-Za-z_$][A-Za-z0-9_$]*\.startsWith\('\.\.'\)", read(p)):
+                  raise SystemExit(f'unsafe path containment prefix check survived in {p}')
+          PY
+          git diff --check
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix]'; then
+            exit 0
+          fi
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git add gateway host vscode-host scripts extension.js tests
+          git commit -m 'Fix repository audit findings [audit-fix]'
+          git push origin HEAD:master
