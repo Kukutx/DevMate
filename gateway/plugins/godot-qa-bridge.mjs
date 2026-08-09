@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { resolveProject } from './godot-project.mjs';
+import { resolveProject, resolveProjectChild } from './godot-project.mjs';
 
 export const QA_BRIDGE_SCRIPT_PATH = 'addons/devmate_qa/devmate_qa.gd';
 export const QA_BRIDGE_AUTOLOAD_NAME = 'DevMateQA';
@@ -282,13 +282,13 @@ async function atomicWrite(file, content) {
 
 async function backupFiles(project, files) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const root = path.join(project.root, '.godot', 'devmate-backups', stamp);
+  const root = resolveProjectChild(project.root, path.join('.godot', 'devmate-backups', stamp));
   const copied = [];
   for (const file of files) {
     const stat = fs.statSync(file, { throwIfNoEntry: false });
     if (!stat?.isFile()) continue;
     const relative = path.relative(project.root, file);
-    const target = path.join(root, relative);
+    const target = resolveProjectChild(project.root, path.relative(project.root, path.join(root, relative)));
     await fsp.mkdir(path.dirname(target), { recursive: true });
     await fsp.copyFile(file, target);
     copied.push(path.relative(project.workspace.root, target).replace(/\\/g, '/'));
@@ -314,8 +314,8 @@ export function qaBridgeTemplate() {
 }
 
 export async function inspectQaBridge(projectRoot) {
-  const projectFile = path.join(projectRoot, 'project.godot');
-  const scriptFile = path.join(projectRoot, QA_BRIDGE_SCRIPT_PATH);
+  const projectFile = resolveProjectChild(projectRoot, 'project.godot', { mustExist: true });
+  const scriptFile = resolveProjectChild(projectRoot, QA_BRIDGE_SCRIPT_PATH);
   const projectText = await fsp.readFile(projectFile, 'utf8');
   const scriptStat = fs.statSync(scriptFile, { throwIfNoEntry: false });
   let scriptVersion = null;
@@ -338,7 +338,7 @@ export async function installQaBridge(context, { workspaceId, projectSubpath, fo
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: true });
   const before = await inspectQaBridge(project.root);
   if (before.current && !force) return { changed: false, before, after: before, backups: [] };
-  const scriptFile = path.join(project.root, QA_BRIDGE_SCRIPT_PATH);
+  const scriptFile = resolveProjectChild(project.root, QA_BRIDGE_SCRIPT_PATH);
   const backups = await backupFiles(project, [project.projectFile, scriptFile]);
   const projectText = await fsp.readFile(project.projectFile, 'utf8');
   await atomicWrite(scriptFile, QA_BRIDGE_SCRIPT);
@@ -357,7 +357,7 @@ export async function installQaBridge(context, { workspaceId, projectSubpath, fo
 export async function removeQaBridge(context, { workspaceId, projectSubpath, removeScript = true } = {}) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: true });
   const before = await inspectQaBridge(project.root);
-  const scriptFile = path.join(project.root, QA_BRIDGE_SCRIPT_PATH);
+  const scriptFile = resolveProjectChild(project.root, QA_BRIDGE_SCRIPT_PATH);
   const backups = await backupFiles(project, [project.projectFile, scriptFile]);
   const projectText = await fsp.readFile(project.projectFile, 'utf8');
   await atomicWrite(project.projectFile, `${removeAutoload(projectText).replace(/\s*$/, '')}\n`);

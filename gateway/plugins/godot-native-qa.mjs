@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { compareQaValue, stateValueAtPath } from './browser-runner.mjs';
 import { inspectQaBridge } from './godot-qa-bridge.mjs';
-import { normalizeScene, parseGodotDiagnostics, projectMetadata, resolveGodotExecutable, resolveProject } from './godot-project.mjs';
+import { normalizeScene, parseGodotDiagnostics, projectMetadata, resolveGodotExecutable, resolveProject, resolveProjectChild } from './godot-project.mjs';
 
 function safeRelative(value, fallback) {
   const relative = String(value || fallback || '').trim().replace(/\\/g, '/');
@@ -113,7 +113,7 @@ export async function runNativeQa(context, {
     await fsp.rm(capturePlan.file, { force: true });
   }
 
-  const runtimeDirectory = path.join(project.root, '.godot', 'devmate-qa');
+  const runtimeDirectory = resolveProjectChild(project.root, path.join('.godot', 'devmate-qa'));
   const planFile = path.join(runtimeDirectory, `plan-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.json`);
   const planPayload = { version: 2, actions: plan, performance: performancePlan || { enabled: false } };
   const planRequired = plan.length > 0 || !!performancePlan;

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { projectMetadata, resolveProject, scanProject } from './godot-project.mjs';
+import { projectMetadata, resolveProject, resolveProjectChild, scanProject } from './godot-project.mjs';
 
 const TEXT_RESOURCE_EXTENSIONS = new Set([
   '.tscn', '.tres', '.gd', '.cs', '.gdshader', '.shader', '.godot', '.cfg', '.json', '.xml'
@@ -77,10 +77,7 @@ function resourceType(resourcePath) {
 function fullPath(projectRoot, resourcePath) {
   const normalized = normalizeResourcePath(resourcePath);
   if (!normalized) throw new Error(`Invalid Godot resource path: ${resourcePath}`);
-  const candidate = path.resolve(projectRoot, normalized.slice(6));
-  const relative = path.relative(projectRoot, candidate);
-  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error(`Godot resource escapes project: ${resourcePath}`);
-  return candidate;
+  return resolveProjectChild(projectRoot, normalized.slice(6));
 }
 
 async function readTextResource(projectRoot, resourcePath) {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { inspectQaBridge } from './godot-qa-bridge.mjs';
-import { parseGodotConfig, projectMetadata, readExportPresets, resolveProject, scanProject } from './godot-project.mjs';
+import { parseGodotConfig, projectMetadata, readExportPresets, resolveProject, resolveProjectChild, scanProject } from './godot-project.mjs';
 
 const TEXT_REFERENCE_EXTENSIONS = new Set(['.tscn', '.tres', '.gd', '.gdshader', '.shader', '.cfg']);
 const SKIP_DIRECTORIES = new Set(['.git', '.godot', '.import', 'build', 'dist', 'node_modules']);
@@ -58,9 +58,9 @@ async function scanReferences(root, maxFiles = 3000, maxMissing = 200) {
         const relative = resourceRelative(raw);
         if (!relative || seen.has(relative)) continue;
         seen.add(relative);
-        const target = path.resolve(root, relative);
-        const inside = path.relative(root, target);
-        const exists = inside !== '..' && !inside.startsWith('..' + path.sep) && !path.isAbsolute(inside) && !!fs.statSync(target, { throwIfNoEntry: false });
+        let target = null;
+        try { target = resolveProjectChild(root, relative); } catch {}
+        const exists = !!target && !!fs.statSync(target, { throwIfNoEntry: false });
         references.set(relative, (references.get(relative) || 0) + 1);
         if (!exists) missing.push({ source, reference: `res://${relative}` });
       }
@@ -91,7 +91,7 @@ export async function auditGodotProject(context, { workspaceId, projectSubpath, 
   } else {
     const mainRelative = resourceRelative(metadata.mainScene);
     if (mainRelative) {
-      const mainFile = path.join(project.root, mainRelative);
+      const mainFile = resolveProjectChild(project.root, mainRelative);
       if (!fs.statSync(mainFile, { throwIfNoEntry: false })?.isFile()) {
         findings.push(finding('error', 'main_scene_not_found', `Configured main scene does not exist: ${metadata.mainScene}`, { path: metadata.mainScene }));
       }
@@ -106,14 +106,14 @@ export async function auditGodotProject(context, { workspaceId, projectSubpath, 
       findings.push(finding('warning', 'autoload_unresolved', `Autoload ${autoload.name} does not use a resolvable res:// path.`, { autoload }));
       continue;
     }
-    if (!fs.statSync(path.join(project.root, relative), { throwIfNoEntry: false })?.isFile()) {
+    if (!fs.statSync(resolveProjectChild(project.root, relative), { throwIfNoEntry: false })?.isFile()) {
       findings.push(finding('error', 'autoload_not_found', `Autoload ${autoload.name} points to a missing file: ${autoload.path}`, { autoload }));
     }
   }
 
   if (metadata.icon) {
     const iconRelative = resourceRelative(metadata.icon);
-    if (iconRelative && !fs.statSync(path.join(project.root, iconRelative), { throwIfNoEntry: false })?.isFile()) {
+    if (iconRelative && !fs.statSync(resolveProjectChild(project.root, iconRelative), { throwIfNoEntry: false })?.isFile()) {
       findings.push(finding('warning', 'icon_not_found', `Configured project icon does not exist: ${metadata.icon}`, { path: metadata.icon }));
     }
   }

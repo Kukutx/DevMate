@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { parseGodotDiagnostics, resolveGodotExecutable, resolveProject } from './godot-project.mjs';
+import { parseGodotDiagnostics, resolveGodotExecutable, resolveProject, resolveProjectChild } from './godot-project.mjs';
 
 const FRAMEWORKS = Object.freeze({
   gut: {
@@ -28,7 +28,7 @@ function toResourcePath(value) {
 }
 
 async function readPluginVersion(root, pluginPath) {
-  const text = await fsp.readFile(path.join(root, pluginPath), 'utf8').catch(() => '');
+  const text = await fsp.readFile(resolveProjectChild(root, pluginPath), 'utf8').catch(() => '');
   return text.match(/^version\s*=\s*"([^"]+)"/m)?.[1] || null;
 }
 
@@ -75,8 +75,8 @@ async function findNewestNamedFile(root, filename, { maxFiles = 500, maxDepth = 
 
 export async function inspectGodotTests(context, { workspaceId, projectSubpath, maxFiles = 2000 } = {}) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: false });
-  const gutScript = path.join(project.root, FRAMEWORKS.gut.script);
-  const gdunitScript = path.join(project.root, FRAMEWORKS.gdunit4.script);
+  const gutScript = resolveProjectChild(project.root, FRAMEWORKS.gut.script);
+  const gdunitScript = resolveProjectChild(project.root, FRAMEWORKS.gdunit4.script);
   const testFiles = await scanTestFiles(project.root, Math.min(10000, Math.max(100, Number(maxFiles) || 2000)));
   const detected = [];
   if (fs.statSync(gutScript, { throwIfNoEntry: false })?.isFile()) detected.push('gut');

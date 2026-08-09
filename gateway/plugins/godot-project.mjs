@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { resolveWorkspacePath } from './plugin-runtime.mjs';
+
+export function resolveProjectChild(projectRoot, relativePath = '.', options = {}) {
+  return resolveWorkspacePath({ root: projectRoot }, relativePath, options);
+}
 
 function unquote(value) {
   const text = String(value ?? '').trim();
@@ -155,13 +160,13 @@ export function resolveProject(context, workspaceId, projectSubpath, { writable 
   const workspace = context.workspace.get(workspaceId, { writable });
   const subpath = projectSubpath || context.settings.defaultProjectSubpath || '.';
   const root = context.workspace.resolve(workspace, subpath, { mustExist: true, directory: true });
-  const projectFile = path.join(root, 'project.godot');
+  const projectFile = resolveProjectChild(root, 'project.godot', { mustExist: true });
   if (!fs.statSync(projectFile, { throwIfNoEntry: false })?.isFile()) throw new Error(`project.godot not found under ${subpath}`);
   return { workspace, root, subpath, projectFile };
 }
 
 export async function readExportPresets(projectRoot) {
-  const presetFile = path.join(projectRoot, 'export_presets.cfg');
+  const presetFile = resolveProjectChild(projectRoot, 'export_presets.cfg');
   return fs.statSync(presetFile, { throwIfNoEntry: false })?.isFile()
     ? parseExportPresets(await fsp.readFile(presetFile, 'utf8'))
     : [];
