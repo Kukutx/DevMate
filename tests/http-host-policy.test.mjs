@@ -4,6 +4,7 @@ import {
   hostAllowed,
   isLocalRequest,
   isLoopbackAddress,
+  isLoopbackHostname,
   loopbackHost,
   loopbackSocket
 } from '../gateway/http-host-policy.mjs';
@@ -15,6 +16,11 @@ function request(host, remoteAddress) {
 test('recognizes only actual loopback socket addresses', () => {
   for (const value of ['127.0.0.1', '127.1.2.3', '::1', '::ffff:127.0.0.1']) assert.equal(isLoopbackAddress(value), true, value);
   for (const value of ['', '0.0.0.0', '192.168.1.10', '203.0.113.10', '::ffff:203.0.113.10']) assert.equal(isLoopbackAddress(value), false, value);
+});
+
+test('normalizes URL loopback hostnames including IPv6 brackets and the full 127/8 range', () => {
+  for (const value of ['localhost', '127.0.0.1', '127.9.8.7', '::1', '[::1]', '[::ffff:127.0.0.1]']) assert.equal(isLoopbackHostname(value), true, value);
+  for (const value of ['example.com', '192.168.1.2', '[2001:db8::1]']) assert.equal(isLoopbackHostname(value), false, value);
 });
 
 test('local request requires both loopback Host and loopback socket', () => {

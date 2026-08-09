@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { isLoopbackHostname } from '../http-host-policy.mjs';
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -32,7 +33,7 @@ function safeWorkspaceOutput(workspaceRoot, relativePath, label) {
 function assertAllowedUrl(rawUrl, allowRemoteUrls) {
   const url = new URL(String(rawUrl || ''));
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error(`Unsupported browser URL protocol: ${url.protocol}`);
-  const local = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname);
+  const local = isLoopbackHostname(url.hostname);
   if (!local && !allowRemoteUrls) throw new Error('Remote browser URLs are disabled. Use a DevMate local preview or explicitly enable allowRemoteUrls.');
   return url;
 }

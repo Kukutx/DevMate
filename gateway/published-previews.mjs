@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { getPreview } from './plugins/preview-manager.mjs';
+import { isLoopbackHostname } from './http-host-policy.mjs';
 import { defaultedInteger } from './strict-config.mjs';
 
 export const MAX_PREVIEW_SHARES = 1000;
@@ -26,7 +27,7 @@ function tokenHash(token) {
 function normalizeShareOrigin(value) {
   if (typeof value !== 'string' || !value.trim()) throw new Error('A stable deployment publicUrl is required to publish previews');
   const url = new URL(value.trim());
-  const local = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+  const local = isLoopbackHostname(url.hostname);
   if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) {
     throw new Error('Published preview publicUrl must use HTTPS; HTTP is allowed only for loopback');
   }

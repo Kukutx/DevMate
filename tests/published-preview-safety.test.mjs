@@ -43,6 +43,8 @@ test.after(async () => fsp.rm(root, { recursive: true, force: true }));
 test('requires a clean HTTPS public origin while allowing loopback HTTP', () => {
   assert.equal(__test.normalizeShareOrigin('https://devmate.example.com/'), 'https://devmate.example.com');
   assert.equal(__test.normalizeShareOrigin('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');
+  assert.equal(__test.normalizeShareOrigin('http://127.1.2.3:8787'), 'http://127.1.2.3:8787');
+  assert.equal(__test.normalizeShareOrigin('http://[::1]:8787'), 'http://[::1]:8787');
   assert.throws(() => __test.normalizeShareOrigin('http://devmate.example.com'), /must use HTTPS/);
   assert.throws(() => __test.normalizeShareOrigin('https://user:pass@devmate.example.com'), /clean origin/);
   assert.throws(() => __test.normalizeShareOrigin('https://devmate.example.com/path'), /clean origin/);

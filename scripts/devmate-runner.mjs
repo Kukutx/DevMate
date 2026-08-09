@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import configStore from '../shared/config-store.cjs';
 import { terminateProcessTree } from '../gateway/command-process.mjs';
+import { isLoopbackHostname } from '../gateway/http-host-policy.mjs';
 import {
   booleanFlag,
   integerOption,
@@ -43,7 +44,7 @@ function normalizeControlUrl(value, allowHttp = false) {
   const raw = value.trim();
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
   const url = new URL(candidate);
-  const local = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+  const local = isLoopbackHostname(url.hostname);
   if (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:') && !(local && url.protocol === 'http:')) {
     throw new Error('External Runner control URL must use HTTPS; HTTP is allowed only for loopback or with --allow-http');
   }

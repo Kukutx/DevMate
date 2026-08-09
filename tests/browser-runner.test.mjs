@@ -15,6 +15,8 @@ test('Browser QA accepts only browser-shaped executable names', () => {
 test('Browser QA blocks remote URLs by default', () => {
   assert.throws(() => __test.assertAllowedUrl('https://example.com', false), /Remote browser URLs are disabled/);
   assert.equal(__test.assertAllowedUrl('http://127.0.0.1:3000', false).hostname, '127.0.0.1');
+  assert.equal(__test.assertAllowedUrl('http://127.2.3.4:3000', false).hostname, '127.2.3.4');
+  assert.doesNotThrow(() => __test.assertAllowedUrl('http://[::1]:3000', false));
 });
 
 test('Browser QA output and configured modules cannot escape through workspace symlinks', t => {

@@ -2,6 +2,11 @@ function normalizedAddress(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+export function isLoopbackHostname(value) {
+  const hostname = normalizedAddress(value).replace(/^\[|\]$/g, '');
+  return hostname === 'localhost' || isLoopbackAddress(hostname);
+}
+
 export function remoteAddress(req) {
   return normalizedAddress(req?.socket?.remoteAddress);
 }

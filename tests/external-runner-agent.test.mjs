@@ -5,6 +5,8 @@ import { __test } from '../scripts/devmate-runner.mjs';
 test('normalizes secure control-plane origins', () => {
   assert.equal(__test.normalizeControlUrl('runner.example.com'), 'https://runner.example.com');
   assert.equal(__test.normalizeControlUrl('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');
+  assert.equal(__test.normalizeControlUrl('http://127.4.5.6:8787'), 'http://127.4.5.6:8787');
+  assert.equal(__test.normalizeControlUrl('http://[::1]:8787'), 'http://[::1]:8787');
   assert.throws(() => __test.normalizeControlUrl('http://runner.example.com'), /must use HTTPS/);
   assert.throws(() => __test.normalizeControlUrl('https://user:pass@runner.example.com'), /must not include credentials/);
 });
