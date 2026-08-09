@@ -13,7 +13,7 @@ import {
   rotateTeamMemberToken
 } from '../gateway/team-access.mjs';
 
-const { DEFAULT_VERSION, newPersonalConfig, readJson: readConfigJson, updateConfig } = configStore;
+const { DEFAULT_VERSION, newInstanceConfig, readJson: readConfigJson, updateConfig } = configStore;
 const { CONNECTION_PROVIDERS } = instanceConfig;
 const { parsePortOption } = portConfig;
 
@@ -85,7 +85,7 @@ export function initConfig(options = {}) {
   const rawPublicUrl = String(options['public-url'] || '').trim();
   const publicUrl = rawPublicUrl ? normalizeOrigin(rawPublicUrl, { httpsOnly: true }) : '';
   validateStandaloneIngress({ provider, publicUrl });
-  const config = newPersonalConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
+  const config = newInstanceConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
 
   config.instanceId = `standalone-${Date.now().toString(36)}`;
   config.activeWorkspaceId = 'workspace';
