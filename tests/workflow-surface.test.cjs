@@ -14,6 +14,11 @@ test('repository keeps only continuous CI and release workflows', () => {
   assert.deepEqual(files, ['ci.yml', 'release.yml']);
 });
 
+test('continuous CI also validates documentation-only contract changes', () => {
+  const ci = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.doesNotMatch(ci, /paths-ignore:/);
+});
+
 test('package and lock file require current production host baselines', () => {
   const packageJson = require('../package.json');
   const packageLock = require('../package-lock.json');
