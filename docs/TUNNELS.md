@@ -1,6 +1,6 @@
 # Public connections
 
-DevMate exposes the local Gateway to ChatGPT through one shared public connection capability. Provider selection is a **connection capability**, not a runtime mode and not a compatibility shim.
+DevMate exposes the local Gateway to ChatGPT through one shared public connection capability. The shared instance selects exactly one provider and owns its stable public URL when that provider requires one.
 
 Current providers:
 
@@ -36,7 +36,7 @@ Start
   → Ready
 ```
 
-Both desktop hosts can own or attach to the provider-native connection. Neither editor is permanently designated as the ingress owner.
+Both desktop hosts can own or attach to the provider-native connection.
 
 A loopback Gateway without a verified public MCP endpoint is not Ready.
 
@@ -62,9 +62,9 @@ Owners heartbeat their shared runtime records. Loss of ownership triggers fail-c
 
 ## Configuration identity
 
-Connection ownership is strict. The provider configuration identity includes endpoint-affecting provider settings and the Gateway port. A running generation with a different provider or incompatible endpoint configuration is not silently reused.
+Connection ownership is strict. The provider configuration identity includes endpoint-affecting provider settings and the Gateway port. A running generation with a different provider or incompatible endpoint configuration is not reused.
 
-Configuration conflicts are reconciled explicitly. DevMate does not create fallback chains that stitch together unrelated provider settings or stale URLs.
+The shared connection capability is the single provider-selection authority for every desktop host.
 
 ## Complete-session verification
 
@@ -89,11 +89,13 @@ DevMate supports two account strategies:
 - **Machine/global ngrok configuration**: ngrok uses its normal local configuration.
 - **DevMate-managed account**: the host stores the Authtoken in secure host storage and injects it only into the provider process environment.
 
-Managed-account mode never silently falls back to global credentials when its configured secret is missing. This prevents accidental use of the wrong account.
+The DevMate-managed account strategy requires its configured secret and never substitutes a different credential source. This prevents accidental use of the wrong account.
 
 A stable ngrok URL is optional. When no stable URL is configured, ngrok may publish its account/default development endpoint. A configured stable URL must be a clean HTTPS origin owned by the selected account.
 
 Endpoint pooling is disabled by default and should be enabled only when intentionally sharing the same endpoint across trusted agents.
+
+DevMate discovers dynamic ngrok endpoints through the current local Agent endpoint API and honors the Agent `web_addr` configuration. If that local API is disabled, a configured stable ngrok URL is required.
 
 ## Cloudflare Quick
 
