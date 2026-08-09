@@ -50,7 +50,7 @@ function strictAutoRestart(value) {
 function normalizeSettings(raw = {}) {
   return {
     ...raw,
-    provider: normalizeProvider(raw.provider !== undefined ? raw.provider : raw.tunnelProvider),
+    provider: normalizeProvider(raw.provider),
     autoRestart: strictAutoRestart(raw.autoRestart),
     maxRestarts: tunnelMaxRestarts(raw.maxRestarts)
   };
