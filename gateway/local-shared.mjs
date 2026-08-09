@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import configStore from '../shared/config-store.cjs';
+import { withAuditLogLock } from './audit-log-coordinator.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 import { requestWorkSessionId } from './request-context.mjs';
 
@@ -39,14 +40,14 @@ export function writeConfig(config) {
   return configStore.replaceConfig(CONFIG_PATH, config);
 }
 
-export function mutateConfig(mutator) {
+export function mutateConfig(mutator, options = {}) {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
   return configStore.updateConfig(CONFIG_PATH, current => {
     const changed = mutator(current);
     if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
     if (changed === false) return current;
     return changed === undefined ? current : changed;
-  });
+  }, options);
 }
 
 export function clampInt(value, fallback, min, max) {
@@ -137,18 +138,20 @@ function boundedAuditLine(entry) {
 export async function audit(action, payload = {}, options = {}) {
   if (!AUDIT_LOG) return;
   try {
-    await fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true, mode: 0o700 });
-    const config = readConfig();
-    const safe = redactSensitiveValue(payload);
-    const system = {
-      time: now(),
-      action: redactSensitiveString(action).slice(0, 200),
-      workSessionId: options.workSessionId ?? requestWorkSessionId(),
-      permissionProfile: permissionProfile(config)
-    };
-    const line = boundedAuditLine({ ...(safe && typeof safe === 'object' && !Array.isArray(safe) ? safe : { detail: safe }), ...system });
-    await fsp.appendFile(AUDIT_LOG, `${line}\n`, { encoding: 'utf8', mode: 0o600 });
-    try { await fsp.chmod(AUDIT_LOG, 0o600); } catch {}
+    await withAuditLogLock(AUDIT_LOG, async () => {
+      await fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true, mode: 0o700 });
+      const config = readConfig();
+      const safe = redactSensitiveValue(payload);
+      const system = {
+        time: now(),
+        action: redactSensitiveString(action).slice(0, 200),
+        workSessionId: options.workSessionId ?? requestWorkSessionId(),
+        permissionProfile: permissionProfile(config)
+      };
+      const line = boundedAuditLine({ ...(safe && typeof safe === 'object' && !Array.isArray(safe) ? safe : { detail: safe }), ...system });
+      await fsp.appendFile(AUDIT_LOG, `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+      try { await fsp.chmod(AUDIT_LOG, 0o600); } catch {}
+    });
   } catch {}
 }
 
