@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import deploymentHosts from '../shared/deployment-hosts.cjs';
+import publicHostPolicy from '../shared/public-host-policy.cjs';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { activitySnapshot } from './request-guard.mjs';
 import {
@@ -22,7 +22,7 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
-const { normalizeAllowedHosts } = deploymentHosts;
+const { normalizeAllowedHosts } = publicHostPolicy;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   const config = normalizeInstanceConfig(inputConfig);
