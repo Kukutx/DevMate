@@ -21,6 +21,29 @@ test('actual VS Code Start and Stop use the shared RuntimeController', () => {
   assert.doesNotMatch(source, /gatewayProcess\s*=\s*spawnNode\(/);
 });
 
+test('safe VS Code Stop releases locally owned Gateway even when provider ownership is remote', () => {
+  const start = source.indexOf('async function stopAll()');
+  const end = source.indexOf('async function copyUrl()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  const unsafeReturn = block.indexOf('if(!tunnelState.safe)');
+  const gatewayStop = block.indexOf('gateway = await stopGatewayProcess()');
+  assert.ok(unsafeReturn >= 0 && gatewayStop > unsafeReturn);
+  assert.doesNotMatch(block, /preserved-for-shared-connection/);
+  assert.match(block, /const sharedStillActive = tunnelState\.remoteOwner \|\| gateway\.reason === 'managed-by-another-host' \|\| gateway\.attached === true/);
+});
+
+test('failed Start preserves a newly owned Gateway only when public connection shutdown is unconfirmed', () => {
+  const start = source.indexOf('async function rollbackFailedStart');
+  const end = source.indexOf('async function quickStart', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /publicConnectionSafeToReleaseGateway = classifyTunnelStop\(stopped\)\.safe/);
+  assert.match(block, /gateway\?\.started && gateway\?\.owned && publicConnectionSafeToReleaseGateway/);
+  assert.match(block, /Preserving the newly owned Gateway because public connection shutdown was not confirmed/);
+  assert.doesNotMatch(block, /sharedTunnelActive/);
+});
+
 test('actual VS Code process calls resolve the private active spawn chain at call time', () => {
   assert.match(source, /const childProcess = require\('\.\/vscode-host\/runtime-io\.js'\)/);
   assert.match(source, /function spawn\(\.\.\.args\)\{ return childProcess\.spawn\(\.\.\.args\); \}/);
