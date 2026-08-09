@@ -1,23 +1,27 @@
 # DevMate bootstrap
 
-`devmate bootstrap` is the fastest standalone setup path. All standalone commands use the same `devmate` CLI entry point and the same atomic configuration store.
+`devmate bootstrap` is the fastest standalone setup path. It always creates one current-schema DevMate instance. Presets are convenience templates that provide **capability defaults**; they are not runtime modes, and explicit CLI options override preset defaults.
 
 ## Presets
 
-| Preset | Use | Gateway mode | Embedded Runner | External Runner API |
-|---|---|---|---:|---:|
-| `personal` | One developer | personal | on | off |
-| `team` | Trusted team on one host | team | on | off |
-| `control-plane` | Central production Gateway | production | off | on |
-| `runner` | External Runner host | personal/loopback | off | off |
+| Preset | Use | Embedded Runner | External Runner API | Workspace lease default | Connection default |
+|---|---|---:|---:|---:|---|
+| `personal` | One developer | on | off | off | ngrok |
+| `team` | Trusted team on one host | on | off | on | ngrok |
+| `control-plane` | Hardened central build/test Gateway | off | on | on | external HTTPS |
+| `runner` | External Runner host local config | off | off | off | ngrok/default local config |
 
-## Personal
+No preset writes `mode`, `deployment`, or `production` fields.
+
+## Personal preset
 
 ```bash
 npx devmate bootstrap --preset personal --workspace /srv/project
 ```
 
-## Team
+This creates one owner-only instance with embedded execution enabled.
+
+## Team preset
 
 ```bash
 npx devmate bootstrap \
@@ -27,9 +31,9 @@ npx devmate bootstrap \
   --member-role developer
 ```
 
-The response returns the owner endpoint and credentials separately. Member and Runner tokens are shown once; only salted hashes are persisted. MCP credentials are sent with `Authorization: Bearer <token>` and are never embedded in the URL.
+The preset enables workspace-lease enforcement by default and keeps embedded execution enabled. Member creation is optional; when supplied, the member token is returned once and only a salted hash is persisted.
 
-## Production control plane
+## Control-plane preset
 
 ```bash
 npx devmate bootstrap \
@@ -43,9 +47,19 @@ npx devmate bootstrap \
   --runner-concurrency 2
 ```
 
-This disables the embedded Runner, enables `/runner/v1`, and creates a scoped Runner credential unless `--no-runner-credential` is supplied.
+Defaults:
 
-## External Runner host
+- external HTTPS connection;
+- embedded Runner disabled;
+- external Runner control enabled;
+- workspace-lease enforcement enabled;
+- public Host restricted to the configured stable origin.
+
+Because the default provider is `external`, `--public-url` is required unless you explicitly override the provider with another valid current provider.
+
+Creating a Runner credential also enables external Runner control. The plaintext `dmr_` token is returned once.
+
+## Runner-host preset
 
 ```bash
 npx devmate bootstrap \
@@ -60,6 +74,37 @@ devmate-runner \
   --capabilities linux-x64 \
   --concurrency 2
 ```
+
+The Runner-host preset disables both the local embedded queue and external Runner-control API. The external Agent still uses the local Gateway as its loopback execution surface.
+
+## Override preset defaults
+
+Explicit options win over preset defaults. For example:
+
+```bash
+npx devmate bootstrap \
+  --preset team \
+  --workspace /srv/project \
+  --require-workspace-lease-for-writes false \
+  --external-runner-control true
+```
+
+This remains one instance with a different capability composition; it does not create or switch a runtime mode.
+
+Unknown preset names fail explicitly.
+
+## Returned credentials and endpoint
+
+The response returns:
+
+- config path;
+- owner token;
+- owner MCP endpoint URL;
+- connection/access/execution summary;
+- optional member/Runner credentials created by the command;
+- next start command.
+
+The owner endpoint URL contains **no credential**. MCP credentials are configured separately and sent with `Authorization: Bearer <token>`.
 
 ## Inspect configuration
 
