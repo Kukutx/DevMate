@@ -15,6 +15,14 @@ export async function withAuditLogLock(auditLog, operation) {
   }
 }
 
+export function drainAuditLog(auditLog) {
+  return withAuditLogLock(auditLog, async () => {});
+}
+
+export async function drainAllAuditLogs() {
+  while (queues.size) await Promise.allSettled([...queues.values()]);
+}
+
 export function auditLogQueueSize() {
   return queues.size;
 }
