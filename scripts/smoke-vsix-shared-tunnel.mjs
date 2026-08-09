@@ -58,7 +58,6 @@ try {
   const settings = () => ({
     provider: 'external',
     publicUrl,
-    deploymentMode: 'production',
     autoRestart: true,
     maxRestarts: 3
   });
