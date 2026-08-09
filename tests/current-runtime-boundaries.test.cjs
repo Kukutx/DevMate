@@ -20,9 +20,13 @@ test('desktop hosts use the shared child-process Gateway controller', () => {
 });
 
 test('Gateway uses the current DEVMATE_CONFIG instance contract', () => {
+  const store = source('shared/config-store.cjs');
   assert.match(source('gateway/local-shared.mjs'), /DEVMATE_CONFIG/);
   assert.match(source('gateway/server.mjs'), /DEVMATE_CONFIG/);
-  assert.match(source('shared/config-store.cjs'), /SUPPORTED_CONFIG_VERSION/);
+  assert.match(store, /SUPPORTED_CONFIG_VERSION/);
+  assert.match(store, /function newInstanceConfig/);
+  assert.match(store, /function ensureInstanceConfig/);
+  assert.doesNotMatch(store, /newPersonalConfig|ensurePersonalConfig/);
 });
 
 test('one work-session model is shared across local and member workflows', () => {
