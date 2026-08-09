@@ -48,7 +48,15 @@ function gatewayPath(ctx){
 }
 function esc(v){ return String(v ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch])); }
 function currentRoot(){ return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''; }
-function readJson(p){ return readExtensionConfig(p); }
+function readConfig(p){ return readExtensionConfig(p); }
+function readJsonFile(p){
+  try {
+    const value = JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,''));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
 function writeJson(p,data){ return writeExtensionConfig(p,data); }
 function makeId(root){ return path.basename(root).replace(/[^a-zA-Z0-9_-]+/g,'-').toLowerCase() || 'workspace'; }
 function pathKey(p){ const resolved = path.resolve(p); return process.platform === 'win32' ? resolved.toLowerCase() : resolved; }
@@ -198,38 +206,15 @@ function mcpToken(ctx=globalContext){
   return data?.auth?.required === false ? '' : String(data?.auth?.token || '');
 }
 
-function defaultConfig(ctx){
-  const root = currentRoot();
-  return {
-    version: SUPPORTED_CONFIG_VERSION,
-    appVersion: VERSION,
-    instanceId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
-    server: { port: configuredPort(), mcpPath: MCP_PATH },
-    runtime: { defaultCommandTimeoutMs: Number(cfg().get('defaultCommandTimeoutMs') || 180000), maxOutputChars: Number(cfg().get('maxOutputChars') || 120000) },
-    connection: {},
-    vscodeContext: collectVsCodeContext(),
-    auth: { required: authRequired(), token: newAuthToken() },
-    permissions: {
-      profile: permissionProfile(),
-      readOnly: permissionProfile() === 'readOnly',
-      blockDangerousOperations: permissionProfile() !== 'fullAccess' && cfg().get('blockDangerousOperations') !== false,
-      confirmBeforePush: !!cfg().get('confirmBeforePush'),
-      allowDirectoryMutations: !!cfg().get('allowDirectoryMutations')
-    },
-    activeWorkspaceId: root ? makeId(root) : '',
-    workspaces: root ? [{ id: makeId(root), name: path.basename(root), root, mode:'workspace-write', reference:false, role:'active' }] : [],
-    commands: [
-      { key: 'pnpm-lint', label: 'pnpm lint', command: 'pnpm lint', readOnly: true },
-      { key: 'pnpm-test', label: 'pnpm test', command: 'pnpm test', readOnly: true },
-      { key: 'dotnet-build-api', label: 'dotnet build backend/api', command: 'cd backend/api && dotnet build', readOnly: true },
-      { key: 'flutter-analyze', label: 'flutter analyze app', command: 'cd frontend/app && flutter analyze', readOnly: true }
-    ]
-  };
-}
 function ensureConfig(ctx, forceCurrent=false, portOverride=null){
   const p = configPath(ctx);
-  let data = readJson(p) || defaultConfig(ctx);
-  data.version = Math.max(SUPPORTED_CONFIG_VERSION, Number(data.version) || 0);
+  const data = readConfig(p);
+  if(!data){
+    const error = new Error('DevMate shared config is missing; restart the host runtime to initialize it safely');
+    error.code = 'DEVMATE_SHARED_CONFIG_MISSING';
+    error.configFile = p;
+    throw error;
+  }
   data.appVersion = VERSION;
   data.instanceId ||= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
   data.server ||= {};
@@ -280,7 +265,7 @@ function gitSync(root, args, max=12000){
   return shortText((r.stdout || '').trim(), max);
 }
 function packageScripts(root){
-  const pkg = readJson(path.join(root,'package.json'));
+  const pkg = readJsonFile(path.join(root,'package.json'));
   if(!pkg?.scripts) return [];
   return Object.entries(pkg.scripts).slice(0,80).map(([name, command]) => `${name}: ${command}`);
 }
@@ -357,7 +342,7 @@ function httpRequestRaw(url, options={}, body=null, timeoutMs=4000){
 function httpGet(url, timeoutMs=1500){ return httpRequestRaw(url, {method:'GET'}, null, timeoutMs); }
 async function healthAt(port){ return httpGet(`http://127.0.0.1:${port}/control/health`,1200); }
 function healthMatches(r, ctx){
-  const cfgData = readJson(configPath(ctx));
+  const cfgData = readConfig(configPath(ctx));
   return !!(r.ok && r.json && r.json.name === 'devmate' && r.json.version === VERSION && (!cfgData?.instanceId || r.json.instanceId === cfgData.instanceId));
 }
 function waitForProcessExit(child, timeoutMs=8000){
@@ -531,7 +516,7 @@ async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext)
   if(recordGeneration(currentRecord) !== generation) throw staleSessionGenerationError();
   const stamp = new Date().toISOString();
   updateConnectionSnapshot(ctx, successfulVerificationPatch(test, publicUrl, stamp, expectedRecord));
-  const persisted = readJson(configPath(ctx));
+  const persisted = readConfig(configPath(ctx));
   currentRecord = currentTunnelRecord(expectedRecord.port);
   if(recordGeneration(currentRecord) !== generation || !verifiedForCurrentRecord(persisted, currentRecord)){
     throw staleSessionGenerationError();
