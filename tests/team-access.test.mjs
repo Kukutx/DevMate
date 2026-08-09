@@ -55,6 +55,17 @@ test('enforces role capabilities and workspace scopes', () => {
   assert.throws(() => authorizeToolCall({ name: 'read_file', annotations: { readOnlyHint: true }, args: { workspaceId: 'other' }, config: current, principal: reviewer }), /not allowed to access workspace other/);
 });
 
+test('configured and project commands require execute authorization', () => {
+  const current = normalizeInstanceConfig(config());
+  const reviewer = { id: 'r', name: 'Reviewer', role: 'reviewer', workspaceIds: ['app'], source: 'team-token' };
+  const developer = { id: 'd', name: 'Developer', role: 'developer', workspaceIds: ['app'], source: 'team-token' };
+  for (const name of ['run_configured_command', 'run_project_script']) {
+    const request = { name, annotations: { destructiveHint: true }, args: { workspaceId: 'app' }, config: current };
+    assert.throws(() => authorizeToolCall({ ...request, principal: reviewer }), /required capability: execute/, name);
+    assert.equal(authorizeToolCall({ ...request, principal: developer }).capability, 'execute', name);
+  }
+});
+
 test('owner token remains unrestricted by member workspace scopes', () => {
   const current = normalizeInstanceConfig(config());
   current.workspaces.push({ id: 'other', name: 'Other', reference: false, mode: 'workspace-write' });
