@@ -10,7 +10,9 @@ export const PREVIEW_REQUEST_TIMEOUT_MS = 30000;
 
 const previews = new Map();
 let pendingPreviewStarts = 0;
+let previewShutdownInProgress = false;
 const pendingWorkspaceStarts = new Map();
+const pendingStartCompletions = new Set();
 const BLOCKED_SEGMENTS = new Set(['.git', '.env', 'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys', 'service-account', 'service_accounts']);
 const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3', '.log']);
 
@@ -124,6 +126,11 @@ function workspacePreviewCount(workspaceId) {
 }
 
 function reservePreviewCapacity(workspaceId) {
+  if (previewShutdownInProgress) {
+    const error = new Error('Preview manager is shutting down');
+    error.code = 'preview_shutting_down';
+    throw error;
+  }
   if (previews.size + pendingPreviewStarts >= MAX_ACTIVE_PREVIEWS) {
     throw capacityError(`Active preview limit reached (${MAX_ACTIVE_PREVIEWS})`);
   }
@@ -134,6 +141,9 @@ function reservePreviewCapacity(workspaceId) {
   pendingPreviewStarts += 1;
   pendingWorkspaceStarts.set(workspaceId, workspacePending + 1);
   let released = false;
+  let finishCompletion;
+  const completion = new Promise(resolve => { finishCompletion = resolve; });
+  pendingStartCompletions.add(completion);
   return () => {
     if (released) return;
     released = true;
@@ -141,6 +151,8 @@ function reservePreviewCapacity(workspaceId) {
     const remaining = Math.max(0, (pendingWorkspaceStarts.get(workspaceId) || 1) - 1);
     if (remaining) pendingWorkspaceStarts.set(workspaceId, remaining);
     else pendingWorkspaceStarts.delete(workspaceId);
+    pendingStartCompletions.delete(completion);
+    finishCompletion();
   };
 }
 
@@ -255,7 +267,15 @@ export async function stopWorkspacePreviews(workspaceId) {
 }
 
 export async function shutdownPreviews() {
-  await Promise.allSettled([...previews.keys()].map(stopPreview));
+  previewShutdownInProgress = true;
+  try {
+    while (pendingStartCompletions.size) {
+      await Promise.allSettled([...pendingStartCompletions]);
+    }
+    await Promise.allSettled([...previews.keys()].map(stopPreview));
+  } finally {
+    previewShutdownInProgress = false;
+  }
 }
 
 export function previewCapacityStatus() {
@@ -281,6 +301,7 @@ export const __test = {
   containedExistingPath,
   isInside,
   parseRange,
+  pendingStartCompletions,
   pendingWorkspaceStarts,
   previews,
   reservePreviewCapacity,
