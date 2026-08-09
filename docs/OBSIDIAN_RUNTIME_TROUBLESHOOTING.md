@@ -1,51 +1,98 @@
 # Obsidian runtime troubleshooting
 
-DevMate for Obsidian is self-contained. A normal desktop user does not need to install Node.js, VS Code, a terminal, or a separate Gateway service. The distributed `gateway/server.mjs` includes its runtime locking dependency and is tested directly after packaging on Windows and Linux.
+DevMate for Obsidian uses the same shared desktop architecture as VS Code: an isolated Node child Gateway, a provider-native public connection, and generation-aware MCP verification.
 
-## Expected first start
+There is no embedded Gateway Worker path.
 
-After the plugin is enabled and the Obsidian layout is ready, the panel should move through these states:
+## Runtime requirement
 
-1. `DevMate loading`
-2. `DevMate stopped` for a brief initialization period
-3. `DevMate running` or `DevMate attached`
+The Gateway requires a usable Node.js 24+ runtime. Obsidian resolves it in this order:
 
-`running` means this Obsidian window owns an embedded Node Worker. `attached` means another trusted DevMate host already owns the matching workspace Gateway.
+1. explicitly configured Node executable;
+2. the Obsidian/Electron executable when its embedded Node runtime is current and can run as Node;
+3. `node` from `PATH`.
+
+Every candidate is probed before launch. If no current runtime is usable, Start fails with diagnostics instead of falling back to a renderer Worker or an older compatibility runtime.
+
+## Expected Start lifecycle
+
+`DevMate: Start` should converge through:
+
+```text
+Obsidian bridge/context
+→ shared Gateway start/attach
+→ configured public connection start/attach
+→ authenticated MCP initialize
+→ tools/list
+→ Ready
+```
+
+`Ready` means the current **Gateway + provider session generation** has passed MCP preflight. `Gateway running`, `attached`, or an HTTPS URL by itself is not Ready.
 
 ## Startup problem
 
-Version 3.0.1 and later shows the underlying Worker, bundle, port, or configuration error in the panel instead of only reporting that the Gateway did not become ready.
-
-Use **Copy diagnostics** from the DevMate panel or command palette. The report contains:
+Use **Copy diagnostics** before repeatedly changing settings. The report includes bounded/redacted runtime information such as:
 
 - DevMate, Node, Electron, platform, and architecture versions;
-- selected port and launch mode;
-- bounded stdout and stderr tails;
-- the most recent startup failure;
-- the local runtime-log path.
+- selected Gateway port and child-process launch information;
+- provider/connection status;
+- bounded stdout/stderr/runtime-log tails;
+- the most recent startup/recovery failure;
+- shared state/config paths.
 
-The report does not include note bodies or the MCP authentication token.
+Diagnostics do not include note bodies, owner bearer tokens, or provider credentials.
 
 ## Local log
 
-The plugin keeps a rotating log at:
+The plugin keeps a bounded rotating runtime log under the shared DevMate state directory:
 
 ```text
 <DevMate state directory>/logs/obsidian-runtime.log
 ```
 
-The log is bounded to 512 KiB, rotates once, and redacts URL, structured, and Bearer-token credentials.
+Credential-shaped values are redacted before persistence.
 
 ## Safe recovery order
 
-1. Press **Start** once and wait for the status refresh.
-2. If startup fails, press **Copy diagnostics** before changing settings.
-3. Confirm that the plugin folder still contains `gateway/server.mjs`.
-4. Reinstall the complete plugin ZIP when the bundled Gateway is missing or incomplete.
-5. Change the preferred port only when the panel specifically reports a port conflict.
+1. Press **Start** once.
+2. If Start fails, copy diagnostics before changing settings.
+3. Confirm a usable Node.js 24+ runtime is available.
+4. Confirm the plugin package contains the expected Gateway bundle/runtime files.
+5. Run connection diagnostics and verify the configured provider/executable/credential requirements.
+6. Change the preferred Gateway port only when diagnostics report a real port conflict.
+7. If VS Code is using the same workspace state, verify whether Obsidian should attach rather than spawn duplicate resources.
 
-Repeatedly pressing Restart does not repair a missing or invalid bundle and is not required.
+Repeated Restart is not a repair strategy for a missing bundle, invalid current config, missing Node runtime, provider credential failure, or incompatible shared provider configuration.
 
-## Lifecycle
+## Gateway is healthy but DevMate is not Ready
 
-An embedded Worker is terminated when the plugin unloads or Obsidian closes. A Gateway owned by VS Code or another host is never terminated by the Obsidian plugin.
+This is a public-session problem, not evidence that Start succeeded.
+
+Check:
+
+1. the selected provider has a current compatible runtime record;
+2. the public HTTPS origin matches shared connection configuration;
+3. the live Gateway lock is present and current;
+4. MCP `initialize` and `tools/list` succeed for the complete current session generation.
+
+If the Gateway restarted while the provider stayed on the same hostname, old verification is intentionally stale. DevMate must preflight the new Gateway generation before Ready returns.
+
+## Shared VS Code / Obsidian ownership
+
+Both desktop hosts can own or attach to the same Gateway and provider connection.
+
+- An attached Obsidian host does not terminate another host's owned compatible resource.
+- An Obsidian-owned Gateway is stopped on unload/Stop even if the public provider is owned elsewhere; another host that still requests the session recovers the missing Gateway through the normal Start lifecycle.
+- A provider stop that cannot be confirmed fails closed rather than tearing down a dependent local side blindly.
+
+If ownership appears inconsistent, compare the shared state directory and current owner records in diagnostics rather than manually killing arbitrary Node/provider processes first.
+
+## Plugin package is incomplete
+
+Reinstall the complete current plugin artifact when the bundled Gateway/runtime files are missing or damaged. Do not copy individual files from older plugin versions into a current install; mixed-version runtime files are unsupported.
+
+## Config is rejected
+
+Current hosts accept the current supported instance schema only. Unsupported versions or historical instance fields fail closed rather than being translated during startup.
+
+Restore/replace the config through a supported bootstrap/current-version path. Do not hand-add historical `deployment`, `production`, or `team.enabled` fields to make an old guide work.
