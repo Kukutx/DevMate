@@ -1,23 +1,23 @@
 # MCP Tools
 
-DevMate exposes one development tool surface in personal, team, and production modes. Team authorization is applied to core, plugin, job, and Runner-administration tools.
+DevMate exposes one development tool surface. Owner access, scoped team identities, request hardening, approvals, durable jobs and Runner execution are composable capabilities; they do not create separate personal/team/production tool modes.
 
 ## Work sessions
 
-All deployment modes use the same work-session model:
+Every current instance uses the same work-session model:
 
 - `work_session_start`
 - `work_session_status`
 - `work_session_finish`
 - `work_session_rollback`
 
-`work_session_start` binds the caller to one workspace and acquires that workspace lease. Core file, command, validation, and Git calls made while the session is active are associated with its `workSessionId` in the audit log.
+`work_session_start` binds the caller to one workspace and acquires that workspace lease when required by policy. Core file, command, validation and Git calls made while the session is active are associated with its `workSessionId` in the audit log.
 
-`work_session_rollback` safely reverses recorded file mutations such as create, write, patch, delete, move, and backup restore. It does not automatically reverse shell commands or Git history. In team and production modes, the caller must hold the affected workspace lease when performing a rollback. A finished session can therefore be rolled back later after reacquiring the workspace lease.
+`work_session_rollback` safely reverses recorded file mutations such as create, write, patch, delete, move and backup restore. It does not automatically reverse shell commands or Git history. When workspace-lease policy applies to the caller, the caller must hold the affected workspace lease before rollback. A finished session can therefore be rolled back later after reacquiring the lease.
 
-## Deployment and team operations
+## Instance, connection and team operations
 
-Always available:
+Always available subject to the caller's authorization:
 
 - `deployment_status`
 - `deployment_readiness`
@@ -39,7 +39,7 @@ Always available:
 - `published_preview_list`
 - `published_preview_revoke`
 
-Member management and deployment configuration require the Owner role. Publishing, cross-team activity, and administrative operations require Maintainer or Owner capability. Workspace-scoped results are filtered for restricted principals.
+The existing `deployment_*` tool prefix denotes operational instance/deployment status; it is not a runtime-mode selector. Member management and instance configuration require Owner capability. Publishing, cross-team activity and administrative operations require the capability declared by the central tool policy. Workspace-scoped results are filtered for restricted principals.
 
 ## Durable jobs and runners
 
@@ -58,11 +58,11 @@ The persistent queue and capability-aware runners expose:
 - `deployment_drain_start`
 - `deployment_drain_cancel`
 
-`job_submit` accepts only reviewed target tools. It re-evaluates the target tool's RBAC, workspace scope, lease, and approval requirements before creating the job. Credential-shaped arguments and arbitrary shell commands are rejected. Durable `git_save` may commit but cannot push.
+`job_submit` accepts only reviewed target tools. It re-evaluates the target tool's RBAC, workspace scope, lease, approval and plugin/Runner requirements before creating the job. Credential-shaped arguments and arbitrary shell commands are rejected. Durable `git_save` may commit but cannot push.
 
-Jobs persist across central Gateway restarts and may enter `waiting_approval` or `blocked_lease`. Embedded and external Runners renew ownership leases, recover abandoned work within the configured attempt budget, and return bounded result and artifact metadata. Use drain mode before upgrades so all Runners stop receiving queued work while current jobs settle.
+Jobs persist across central Gateway restarts and may enter states such as `waiting_approval` or `blocked_lease`. Embedded and external Runners renew ownership leases, recover abandoned work within the configured attempt budget, and return bounded result/artifact metadata. Use drain controls before upgrades so Runners stop receiving new queued work while current work settles.
 
-See `JOBS.md` for target eligibility, states, retries, cooperative cancellation, artifacts, routing, and drain behavior.
+See `JOBS.md` for target eligibility, states, retries, cooperative cancellation, artifacts, routing and drain behavior.
 
 ## External Runner control plane
 
@@ -76,17 +76,17 @@ Owner-managed Runner control tools:
 - `runner_credential_rotate`
 - `runner_credential_revoke`
 
-`runner_control_status` reports configured and live embedded Runner state separately, external control API state, bounded API limits, credential counts, and the durable Runner registry.
+`runner_control_status` reports configured and live embedded Runner state separately, external control API state, bounded API limits, credential counts and the durable Runner registry.
 
-`runner_control_configure` can enable or disable `/runner/v1`, control the embedded Runner lifecycle, and change bounded API limits. An embedded Runner lifecycle change may require a Gateway restart; readiness uses the live runtime state rather than configuration alone.
+`runner_control_configure` can enable or disable `/runner/v1`, control the embedded Runner lifecycle and change bounded API limits. An embedded Runner lifecycle change may require a Gateway restart; readiness uses live runtime state rather than configuration alone.
 
-Every `dmr_` credential has explicit workspace scopes, capabilities, concurrency, expiry, rotation, disable, and revocation. Runner tokens cannot call MCP tools.
+Every `dmr_` credential has explicit workspace scopes, capabilities, concurrency, expiry, rotation, disable and revocation. Runner tokens cannot call MCP tools.
 
-See `EXTERNAL_RUNNERS.md` for the Agent, protocol, central preflight, routing, security boundary, and deployment templates.
+See `EXTERNAL_RUNNERS.md` for the Agent, protocol, central preflight, routing, security boundary and deployment templates.
 
 ## Approval workflow
 
-Production mode requires dual-control approval for `publish` and `admin` capabilities by default:
+Dual-control approval is an explicit policy capability rather than a deployment-mode side effect:
 
 - `team_approval_policy_status`
 - `team_approval_configure`
@@ -95,7 +95,7 @@ Production mode requires dual-control approval for `publish` and `admin` capabil
 - `team_approval_decide`
 - `team_approval_cancel`
 
-A protected tool call creates a pending approval and fails without executing. A different Maintainer or Owner approves it, then the original requester retries the identical call.
+When a protected capability is configured to require approval, the tool call creates a pending approval and fails without executing. A different authorized Maintainer or Owner approves it, then the original requester retries the identical call.
 
 ## Workspace context
 
@@ -209,9 +209,9 @@ Version-controlled advanced workflows:
 - `godot_advanced_run_saved`
 - `godot_advanced_suite`
 
-Runtime status, dependency graph, automation planning, project audit, test-framework discovery, and manifest reads are read-only. Validation, export, native/Web acceptance, performance, capture, framework execution, and advanced suites are `validate` operations. QA Bridge lifecycle, quick setup, and quality-report generation require write permission plus a lease where configured.
+Runtime status, dependency graph, automation planning, project audit, test-framework discovery and manifest reads are read-only. Validation, export, native/Web acceptance, performance, capture, framework execution and advanced suites are `validate` operations. QA Bridge lifecycle, quick setup and quality-report generation require write permission plus a lease where configured.
 
-Approved durable Godot targets include audit, export, acceptance, quality report, performance, movie capture, framework tests, and saved advanced scenarios/suites. All require a Runner with `core` and `godot`; Web acceptance additionally needs Browser QA. Movie capture requires a usable display server on the selected Runner.
+Approved durable Godot targets include audit, export, acceptance, quality report, performance, movie capture, framework tests and saved advanced scenarios/suites. All require a Runner with `core` and `godot`; Web acceptance additionally needs Browser QA. Movie capture requires a usable display server on the selected Runner.
 
 ## Trusted local capabilities
 
@@ -232,7 +232,7 @@ Process and preview identifiers are resolved back to their workspace before team
 - `list_configured_commands`, `run_configured_command`, `run_command`
 - `detect_validation`, `run_smart_checks`
 
-Reviewers can run bounded validation tools. General scripts, arbitrary commands, and persistent processes require Developer-level write/execute capability.
+Reviewers can run bounded validation tools. General scripts, arbitrary commands and persistent processes require Developer-level write/execute capability.
 
 ## Git
 
@@ -240,7 +240,7 @@ Reviewers can run bounded validation tools. General scripts, arbitrary commands,
 - `git_add`, `git_stage`, `git_commit`, `git_save`
 - `git_push`, `git_pull`, `git_branch`, `git_checkout`, `git_stash`, `git_raw`
 
-Publishing requires Maintainer capability and, in production, normally requires a second-person approval.
+Publishing requires the capability declared by policy and may additionally require dual-control approval when that policy is enabled.
 
 ## Reporting and metrics
 
@@ -251,4 +251,4 @@ Publishing requires Maintainer capability and, in production, normally requires 
 
 Use `show_changes` for the final review of source changes before finishing a work session. Prometheus-compatible metrics are available from loopback only at `/control/metrics`.
 
-See `TEAM_DEPLOYMENT.md`, `JOBS.md`, `EXTERNAL_RUNNERS.md`, `GODOT_AUTOMATION.md`, `GODOT_RUNTIME_QUALITY.md`, `GODOT_TEST_PERFORMANCE.md`, `OPERATIONS.md`, `TUNNELS.md`, and `SECURITY.md` for detailed behavior and trust boundaries.
+See `TEAM_DEPLOYMENT.md`, `JOBS.md`, `EXTERNAL_RUNNERS.md`, `GODOT_AUTOMATION.md`, `GODOT_RUNTIME_QUALITY.md`, `GODOT_TEST_PERFORMANCE.md`, `OPERATIONS.md`, `TUNNELS.md` and `SECURITY.md` for detailed behavior and trust boundaries.
