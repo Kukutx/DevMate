@@ -7,7 +7,7 @@ const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/con
 const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-http-client.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { preflightPublicMcp } = require('./host/public-mcp.js');
-const { RuntimeController, SUPPORTED_CONFIG_VERSION } = require('./host/runtime-controller.js');
+const { RuntimeController } = require('./host/runtime-controller.js');
 const { updateConfig } = require('./shared/config-store.cjs');
 const {
   recordGeneration,
@@ -634,6 +634,11 @@ async function stopAll(){
   if(!gatewaySafe || !startCommandSafe) setStatus('DevMate: stop failed');
   return {ok:tunnelState.safe && gatewaySafe && startCommandSafe,sharedStillActive,gateway,tunnel,startCommand};
 }
+async function restartAll(ctx){
+  const stopped = await stopAll();
+  if(!stopped.ok) return stopped;
+  return quickStart(ctx);
+}
 async function copyUrl(){
   let status;
   try{
@@ -1004,8 +1009,9 @@ function panelHtml(ctx, webview){
   </div>
   <div class="toolbar">
     <button data-cmd="quickStart">Start</button>
-    <button data-cmd="copyUrl">Copy URL</button>
     <button class="secondary" data-cmd="stop">Stop</button>
+    <button class="secondary" data-cmd="restart">Restart</button>
+    <button data-cmd="copyUrl">Copy MCP URL</button>
     <button class="secondary" data-cmd="doctor">Doctor</button>
     <button class="secondary" data-cmd="starter">Copy Prompt</button>
     <button class="secondary" data-cmd="copyContext">Copy Context</button>
@@ -1063,6 +1069,7 @@ function openPanel(ctx){
     if(m.cmd==='quickStart') await lifecycleOperations.run('start',()=>quickStart(ctx));
     if(m.cmd==='copyUrl') await copyUrl();
     if(m.cmd==='stop') await lifecycleOperations.run('stop',()=>stopAll());
+    if(m.cmd==='restart') await lifecycleOperations.run('restart',()=>restartAll(ctx));
     if(m.cmd==='doctor') await doctor(ctx);
     if(m.cmd==='addReference') await addReference(ctx);
     if(m.cmd==='addReferenceInput') await addReferenceInput(ctx, m.value);
@@ -1115,7 +1122,7 @@ function activate(context){
   register(context,'devMate.start',()=>lifecycleOperations.run('start',()=>quickStart(context)));
   register(context,'devMate.open',()=>openPanel(context));
   register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
-  register(context,'devMate.restart',()=>lifecycleOperations.run('restart',async()=>{const stopped=await stopAll(); if(!stopped.ok) return stopped; return quickStart(context);}));
+  register(context,'devMate.restart',()=>lifecycleOperations.run('restart',()=>restartAll(context)));
   register(context,'devMate.copyUrl',()=>copyUrl());
   register(context,'devMate.copyToken',()=>copyConnectionToken(context));
   register(context,'devMate.addReference',()=>addReference(context));
