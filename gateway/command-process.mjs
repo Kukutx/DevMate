@@ -1,5 +1,5 @@
-
 import { spawn } from 'node:child_process';
+import { requestSignal } from './request-context.mjs';
 
 const activeProcesses = new Set();
 
@@ -24,6 +24,13 @@ function waitWithTimeout(promise, timeoutMs) {
 function appendBounded(current, chunk, limit) {
   const value = current + String(chunk || '');
   return value.length <= limit ? value : value.slice(-limit);
+}
+
+function cancellationError(signal) {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const error = new Error(signal?.reason ? String(signal.reason) : 'Command cancelled');
+  error.code = 'request_cancelled';
+  return error;
 }
 
 async function runTaskkill(pid) {
@@ -64,8 +71,10 @@ export async function executeCommand(command, args = [], {
   timeoutMs = 180000,
   maxOutputChars = 120000,
   shell = false,
-  environment
+  environment,
+  signal = requestSignal()
 } = {}) {
+  if (signal?.aborted) throw cancellationError(signal);
   const child = spawn(command, args, {
     cwd,
     env: environment || process.env,
@@ -83,22 +92,36 @@ export async function executeCommand(command, args = [], {
   child.stderr?.on('data', chunk => { stderr = appendBounded(stderr, chunk, captureLimit); });
 
   const exitPromise = waitForExit(child);
+  void exitPromise.then(() => activeProcesses.delete(child));
   const winner = await new Promise(resolve => {
-    const timer = setTimeout(() => resolve({ type: 'timeout' }), timeoutMs);
-    exitPromise.then(exit => {
+    let settled = false;
+    let abortListener = null;
+    const timer = setTimeout(() => finish({ type: 'timeout' }), timeoutMs);
+    const finish = value => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolve({ type: 'exit', exit });
-    });
+      if (abortListener && signal) signal.removeEventListener('abort', abortListener);
+      resolve(value);
+    };
+    if (signal) {
+      abortListener = () => finish({ type: 'aborted', error: cancellationError(signal) });
+      signal.addEventListener('abort', abortListener, { once: true });
+      if (signal.aborted) abortListener();
+    }
+    exitPromise.then(exit => finish({ type: 'exit', exit }));
   });
 
   let exit = winner.exit || null;
   let termination = { terminated: false, forced: false, exitConfirmed: true };
-  if (winner.type === 'timeout') {
+  if (winner.type === 'timeout' || winner.type === 'aborted') {
     termination = await terminateProcessTree(child);
     exit = await waitWithTimeout(exitPromise, 100);
+    if (!termination.exitConfirmed && !exit) exit = await exitPromise;
   }
 
   activeProcesses.delete(child);
+  if (winner.type === 'aborted') throw winner.error;
   return {
     command: shell ? String(command) : [command, ...args].join(' '),
     cwd,
@@ -118,7 +141,7 @@ export async function shutdownCommandProcesses() {
   const results = [];
   for (const child of [...activeProcesses]) {
     results.push(await terminateProcessTree(child));
-    activeProcesses.delete(child);
+    if (child.exitCode != null || child.signalCode != null) activeProcesses.delete(child);
   }
   return results;
 }
