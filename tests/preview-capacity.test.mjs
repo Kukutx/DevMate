@@ -42,6 +42,19 @@ test('reserves per-workspace capacity across concurrent preview starts', async (
   assert.equal(__test.pendingWorkspaceStarts.size, 0);
 });
 
+test('shutdown waits for pending preview starts to release their reservation', async () => {
+  const release = __test.reservePreviewCapacity('pending-shutdown');
+  let finished = false;
+  const shutdown = shutdownPreviews().then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  assert.equal(__test.pendingStartCompletions.size, 1);
+  release();
+  await shutdown;
+  assert.equal(finished, true);
+  assert.equal(__test.pendingStartCompletions.size, 0);
+});
+
 test('enforces the global preview capacity', async () => {
   for (let index = 0; index < MAX_ACTIVE_PREVIEWS; index += 1) {
     await startPreview({ workspaceId: `workspace-${index}`, root });
