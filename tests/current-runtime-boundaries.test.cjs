@@ -10,12 +10,12 @@ const source = file => fs.readFileSync(path.join(root, file), 'utf8');
 
 test('desktop hosts use the shared child-process Gateway controller', () => {
   const processController = source('host/runtime/process-controller.js');
-  const vscodeLifecycle = source('vscode-host/lifecycle.js');
+  const vscode = source('extension.js');
   const obsidian = source('obsidian-plugin/src/main.js');
-  assert.match(processController, /class RuntimeController|class ProcessController/);
+  assert.match(processController, /class RuntimeController/);
   assert.match(processController, /spawnImpl = spawn/);
-  assert.match(vscodeLifecycle, /child-process runtime diagnostics|child_process/);
-  assert.match(obsidian, /new RuntimeController/);
+  assert.match(vscode, /new RuntimeController\(\{/);
+  assert.match(obsidian, /new RuntimeController\(\{/);
   assert.match(obsidian, /resolveNodeRuntime/);
 });
 
@@ -41,6 +41,6 @@ test('desktop public connection lifecycle is provider-native and shared', () => 
   const obsidian = source('obsidian-plugin/src/main.js');
   assert.match(controller, /class TunnelController/);
   assert.match(runtime, /tunnelController\(\)\.start\(port\)/);
-  assert.match(obsidian, /new TunnelController/);
+  assert.match(obsidian, /new TunnelController\(\{/);
   assert.match(obsidian, /this\.tunnelController\.start\(gateway\.port\)/);
 });
