@@ -20,7 +20,15 @@ export function drainAuditLog(auditLog) {
 }
 
 export async function drainAllAuditLogs() {
-  while (queues.size) await Promise.allSettled([...queues.values()]);
+  for (;;) {
+    const active = [...queues.values()];
+    if (active.length) {
+      await Promise.allSettled(active);
+      continue;
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    if (!queues.size) return;
+  }
 }
 
 export function auditLogQueueSize() {
