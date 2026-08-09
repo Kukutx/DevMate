@@ -1,6 +1,6 @@
 # Maintainability contracts
 
-This document defines the rules for extending DevMate without recreating duplicated policy, hidden lifecycle chains or manual CI drift.
+This document defines the rules for extending DevMate without recreating duplicated policy, hidden lifecycle chains, retired compatibility layers, or manual CI drift.
 
 ## Core invariants
 
@@ -14,6 +14,7 @@ This document defines the rules for extending DevMate without recreating duplica
 8. Config and durable state writes are atomic.
 9. Future durable-state versions are never silently normalized backwards.
 10. Source and test discovery is automatic; adding a file must not require editing a CI filename list.
+11. Current product contracts are preserved during refactors; retired implementation entry points are removed rather than kept as indefinite compatibility shims.
 
 ## Adding an MCP tool
 
@@ -120,21 +121,24 @@ A new decorator or initializer needs an explicit order and an explanation in `AR
 
 ### Config
 
-Use `readConfig()` and `writeConfig()`. `writeConfig()` performs an atomic restrictive replacement. Do not write `config.json` directly from Gateway modules.
+Use the shared config-store/read-write boundary. Do not write `config.json` directly from Gateway or host modules.
 
-Keep plaintext credentials out of config. Hash scoped team/Runner tokens; store VS Code-managed provider tokens in Secret Storage.
+The current instance schema is current-only: unsupported historical instance fields fail closed instead of being translated during ordinary startup. Do not add same-version shape adapters, old field aliases, or fallback readers merely to keep retired implementation shapes alive.
+
+Keep plaintext credentials out of config. Hash scoped team/Runner tokens; store host-managed provider tokens in the host's secure credential store.
 
 ### Durable state
 
-When the durable document shape becomes incompatible:
+When a durable document version genuinely changes across a release boundary:
 
-1. increment `DOCUMENT_VERSION`;
-2. add an explicit migration from the previous version;
-3. test forward migration;
-4. retain rejection of unknown future versions;
-5. document downgrade behavior.
+1. increment the durable document version;
+2. decide explicitly whether that release owns a bounded one-way migration from the immediately previous supported version;
+3. if a migration is required, isolate it at the version boundary and test it directly;
+4. never retain the migration as a permanent alternate runtime path after the supported transition window;
+5. retain rejection of unknown future versions;
+6. document downgrade behavior.
 
-Never reinterpret a future-version document as the current version. Never quarantine a syntactically valid future document as corruption.
+Never reinterpret a future-version document as the current version. Never quarantine a syntactically valid future document as corruption. A durable-state migration is a release/version transition mechanism, not permission to maintain indefinite compatibility shims throughout runtime code.
 
 ## Filesystem changes
 
@@ -169,7 +173,9 @@ For a new capability, cover at least:
 - containment/security failure;
 - permission classification;
 - restart/persistence behavior when stateful;
-- old interface compatibility when replacing an implementation.
+- preservation of the current public/product contract when replacing an implementation.
+
+When replacing an implementation, tests should assert the intended current behavior and safety invariants. Do not keep tests whose only purpose is proving that a retired internal interface, field alias, file path, or implementation name is still understood.
 
 Avoid tests whose success depends on random token characters or host-specific path aliases.
 
@@ -181,22 +187,24 @@ Avoid tests whose success depends on random token characters or host-specific pa
 - `MCP_TOOLS.md`: public tool surface.
 - `SECURITY.md`: threat/trust boundary.
 - focused workflow documents: detailed operational use.
-- `CHANGELOG.md`: release-visible behavior, migrations and compatibility.
+- `CHANGELOG.md`: historical release-visible behavior, migrations and compatibility.
 
-When implementation changes an architectural statement, update the architecture document in the same PR.
+Current architecture/workflow documents describe only current supported behavior. Historical terminology belongs in `CHANGELOG.md`, not in current operational guidance.
+
+When implementation changes an architectural statement, update the architecture document in the same change.
 
 ## Release checklist
 
-Before merge:
+Before release/merge:
 
-1. review the branch diff for unexpected whole-file rewrites;
+1. review the diff for unexpected whole-file rewrites and accidental compatibility paths;
 2. run `npm run check`;
 3. run `npm run test:unit`;
 4. run Gateway smoke tests;
-5. package the VSIX;
+5. package and smoke-test the VSIX and Obsidian artifacts;
 6. run real Godot CI when Godot code or generated GDScript changes;
-7. verify the PR head SHA matches the successful workflow;
-8. merge only after all required jobs succeed.
+7. verify the exact head SHA matches the successful workflow;
+8. publish only artifacts built from that verified head.
 
 ## Deliberate non-goals
 
