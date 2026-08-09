@@ -19,25 +19,26 @@ test('VS Code explicit public MCP flows use the shared preflight helper only', (
   assert.doesNotMatch(extension, /method:'tools\/list'/);
 });
 
-test('VS Code Doctor, Setup, and public tunnel flow use shared connection provider state', () => {
+test('VS Code Doctor, Setup, and public connection flow use shared connection provider state', () => {
   const extension = source('extension.js');
-  assert.match(extension, /const \{ deploymentProvider, publicUiState, statusLabel \} = require\('\.\/vscode-host\/public-ui-state\.js'\)/);
-  assert.match(extension, /const provider=deploymentProvider\(data\)/);
-  assert.match(extension, /const provider = result\?\.record\?\.provider \|\| deploymentProvider\(data\)/);
+  assert.match(extension, /const \{ connectionProvider, publicUiState, statusLabel \} = require\('\.\/vscode-host\/public-ui-state\.js'\)/);
+  assert.match(extension, /const provider=connectionProvider\(data\)/);
+  assert.match(extension, /const provider = result\?\.record\?\.provider \|\| connectionProvider\(data\)/);
+  assert.doesNotMatch(extension, /deploymentProvider/);
   assert.doesNotMatch(extension, /function configuredTunnelProvider\(/);
-  assert.doesNotMatch(extension, /cfg\(\)\.get\('publicUrl'\).*external ingress/);
 });
 
-test('VS Code panel derives MCP readiness from the current session generation and labels loopback as internal only', () => {
+test('VS Code panel derives MCP readiness from the current complete session and keeps transport detail subordinate', () => {
   const extension = source('extension.js');
   assert.match(extension, /const publicState = currentPublicUiState\(data\)/);
   assert.match(extension, /const mcpDisplay = publicState\.verified/);
-  assert.match(extension, /<b>Public ingress<\/b>/);
+  assert.match(extension, /<b>Connection<\/b>/);
   assert.match(extension, /internal only/);
+  assert.doesNotMatch(extension, /<b>Public ingress<\/b>/);
   assert.doesNotMatch(extension, /const mcpDisplay = lastPublicUrl \?/);
 });
 
-test('tunnel and Gateway recovery state changes trigger a read-only base UI resynchronization', () => {
+test('connection and Gateway recovery state changes trigger a read-only base UI resynchronization', () => {
   const base = source('extension.js');
   const wrapper = source('extension-entry-shared-tunnel.js');
   const verifier = source('vscode-host/public-tunnel-verifier.js');
@@ -51,7 +52,7 @@ test('tunnel and Gateway recovery state changes trigger a read-only base UI resy
   assert.match(verifier, /reason: 'no-ready-gateway'/);
 });
 
-test('explicit and automatic verification persist the same generation-aware connection evidence shape', () => {
+test('explicit and automatic verification persist the same complete-generation connection evidence shape', () => {
   const extension = source('extension.js');
   const verifier = source('vscode-host/public-tunnel-verifier.js');
   assert.match(extension, /successfulVerificationPatch\(test, publicUrl, stamp, expectedRecord\)/);
