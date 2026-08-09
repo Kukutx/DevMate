@@ -5,7 +5,7 @@ const { normalizeInstanceConfig } = require('../shared/instance-config.cjs');
 const {
   normalizeAllowedHosts,
   reconcileAllowedHosts
-} = require('../shared/deployment-hosts.cjs');
+} = require('../shared/public-host-policy.cjs');
 const { strictInteger, tunnelProvider: validateTunnelProvider } = require('./tunnel-settings.js');
 
 const REQUEST_POLICY_LIMITS = Object.freeze({
