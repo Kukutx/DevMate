@@ -26,3 +26,7 @@ export function requestId() {
 export function requestWorkSessionId() {
   return requestContext()?.workSessionId || null;
 }
+
+export function requestSignal() {
+  return requestContext()?.signal || null;
+}
