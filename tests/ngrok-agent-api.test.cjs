@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const path = require('node:path');
 const test = require('node:test');
 const {
   DEFAULT_NGROK_AGENT_API_BASE,
@@ -53,13 +54,14 @@ test('normalizes only local Agent API addresses and fails closed for disabled or
 test('config check output resolves the active config and web_addr without changing ngrok config', () => {
   assert.equal(configPathFromCheckOutput('Valid configuration file at C:\\Users\\Dev\\AppData\\Local\\ngrok\\ngrok.yml\n'), 'C:\\Users\\Dev\\AppData\\Local\\ngrok\\ngrok.yml');
   const calls = [];
+  const configFile = path.resolve('fixtures', 'ngrok', 'ngrok.yml');
   const api = resolveNgrokAgentApiBase('ngrok', {
     spawnSync(command, args) {
       calls.push([command, args]);
-      return { status: 0, stdout: 'Valid configuration file at /home/dev/.config/ngrok/ngrok.yml\n', stderr: '' };
+      return { status: 0, stdout: `Valid configuration file at ${configFile}\n`, stderr: '' };
     },
     readFile(file) {
-      assert.equal(file, '/home/dev/.config/ngrok/ngrok.yml');
+      assert.equal(file, configFile);
       return 'version: 3\nagent:\n  web_addr: 127.0.0.1:4545\n';
     }
   });
