@@ -38,14 +38,14 @@ test('path containment accepts dot-dot-prefixed names but still blocks parent pa
   assert.equal(artifacts.__test.isInside(base, path.resolve(base, '..')), false);
 });
 
-test('signal-terminated children are terminal lifecycle states', async () => {
+test('signal termination semantics preserve ownership until the owning lifecycle confirms exit', async () => {
   const child = {
     exitCode: null,
     signalCode: 'SIGTERM',
     once() { throw new Error('must not attach after terminal signal state'); }
   };
   assert.equal(childActive(child), false);
-  assert.equal(tunnelChildActive(child), false);
+  assert.equal(tunnelChildActive(child), true);
   assert.equal(await waitForChildExit(child, 10), true);
   assert.match(source('gateway/command-process.mjs'), /exitCode != null \|\| child\.signalCode != null/);
   assert.match(source('scripts/devmate-runner.mjs'), /exitCode !== null \|\| child\.signalCode !== null/);
@@ -85,4 +85,28 @@ test('instance lock lease uses current requestPolicy timeout', () => {
   const durable = source('gateway/durable-state.mjs');
   assert.match(durable, /config\?\.requestPolicy\?\.requestTimeoutMs/);
   assert.doesNotMatch(durable, /config\?\.production\?\.requestTimeoutMs/);
+});
+
+test('git_raw cannot relocate Git or target filesystem state outside the workspace', async () => {
+  const { assertGitRawWorkspaceBound } = await import('../gateway/git-raw-policy.mjs');
+  assert.deepEqual(assertGitRawWorkspaceBound(['status', '--short']), ['status', '--short']);
+  assert.deepEqual(assertGitRawWorkspaceBound(['log', '-1']), ['log', '-1']);
+  for (const args of [
+    ['-C', os.tmpdir(), 'status'],
+    [`--git-dir=${path.join(os.tmpdir(), 'repo.git')}`, 'status'],
+    [`--work-tree=${os.tmpdir()}`, 'status'],
+    ['-c', 'alias.escape=!echo nope', 'escape'],
+    ['config', '--global', 'user.name', 'x'],
+    ['init', os.tmpdir()],
+    ['status', path.resolve(os.tmpdir(), 'outside')],
+    ['status', '../outside']
+  ]) {
+    assert.throws(() => assertGitRawWorkspaceBound(args), /git_raw/);
+  }
+});
+
+test('automatic backups fail closed before destructive file mutations', () => {
+  const server = source('gateway/server.mjs');
+  assert.match(server, /Backup failed before mutation/);
+  assert.doesNotMatch(server, /return `backup_failed:/);
 });
