@@ -9,12 +9,24 @@ function isInside(root, candidate) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
+function resolveContainedWorkspacePath(workspaceRoot, candidatePath, label, { mustExist = false } = {}) {
+  const root = fs.realpathSync.native(workspaceRoot);
+  const candidate = path.isAbsolute(candidatePath) ? path.resolve(candidatePath) : path.resolve(root, candidatePath || '.');
+  if (!isInside(root, candidate)) throw new Error(`${label} path escapes workspace root`);
+  let existing = candidate;
+  while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);
+  const existingReal = fs.realpathSync.native(existing);
+  const resolved = path.resolve(existingReal, path.relative(existing, candidate));
+  if (!isInside(root, resolved)) throw new Error(`${label} path escapes workspace root through symlink/reparse point`);
+  const stat = fs.statSync(resolved, { throwIfNoEntry: false });
+  if (mustExist && !stat) throw new Error(`${label} path not found: ${candidatePath}`);
+  return resolved;
+}
+
 function safeWorkspaceOutput(workspaceRoot, relativePath, label) {
   const value = String(relativePath || '').trim();
   if (!value) return null;
-  const target = path.resolve(workspaceRoot, value);
-  if (!isInside(workspaceRoot, target)) throw new Error(`${label} path escapes workspace root`);
-  return target;
+  return resolveContainedWorkspacePath(workspaceRoot, value, label);
 }
 
 function assertAllowedUrl(rawUrl, allowRemoteUrls) {
@@ -34,15 +46,14 @@ function browserExecutableAllowed(value) {
 function resolveModuleFromWorkspace(workspaceRoot, configuredPath = '') {
   const root = fs.realpathSync.native(workspaceRoot);
   if (configuredPath) {
-    const target = path.isAbsolute(configuredPath) ? path.resolve(configuredPath) : path.resolve(root, configuredPath);
-    if (!isInside(root, target)) throw new Error('Configured Playwright module path must stay inside the workspace');
-    const stat = fs.statSync(target, { throwIfNoEntry: false });
-    if (!stat) throw new Error(`Configured Playwright module path not found: ${configuredPath}`);
-    return target;
+    return resolveContainedWorkspacePath(root, configuredPath, 'Configured Playwright module', { mustExist: true });
   }
   const requireFromWorkspace = createRequire(path.join(root, 'package.json'));
   for (const name of ['playwright', 'playwright-core']) {
-    try { return requireFromWorkspace.resolve(name); } catch {}
+    try {
+      const resolved = requireFromWorkspace.resolve(name);
+      return resolveContainedWorkspacePath(root, resolved, `Resolved ${name} module`, { mustExist: true });
+    } catch {}
   }
   return null;
 }
