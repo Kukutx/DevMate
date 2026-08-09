@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { executeCommand } from '../gateway/command-process.mjs';
+import { activeCommandProcessCount, executeCommand } from '../gateway/command-process.mjs';
 
 test('normal commands preserve bounded output and exit metadata', async () => {
   const result = await executeCommand(process.execPath, ['-e', "process.stdout.write('abcdef')"], {
@@ -43,4 +43,17 @@ test('timeout force-stops a command that ignores graceful termination', async ()
   assert.equal(result.terminated, true);
   assert.equal(result.forced, true);
   assert.equal(result.exitConfirmed, true);
+});
+
+test('AbortSignal terminates the owned command tree before rejecting', async () => {
+  const controller = new AbortController();
+  const reason = Object.assign(new Error('cancel command test'), { code: 'test_cancelled' });
+  const running = executeCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+    timeoutMs: 10000,
+    maxOutputChars: 2000,
+    signal: controller.signal
+  });
+  setTimeout(() => controller.abort(reason), 100);
+  await assert.rejects(running, error => error.code === 'test_cancelled');
+  assert.equal(activeCommandProcessCount(), 0);
 });
