@@ -64,49 +64,14 @@ function cleanPublicUrl(value) {
   return value.trim();
 }
 
-function retiredShapePresent(config) {
-  return Object.hasOwn(config, 'deployment')
+function assertSupportedInstanceShape(config) {
+  const team = config?.team;
+  const unsupported = Object.hasOwn(config, 'deployment')
     || Object.hasOwn(config, 'production')
-    || Object.hasOwn(object(config.team, 'team'), 'enabled');
-}
-
-function upgradeLegacyInstanceShape(config) {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
-  if (!retiredShapePresent(config)) return config;
-
-  const deployment = object(config.deployment, 'deployment');
-  const production = object(config.production, 'production');
-  const connection = object(config.connection, 'connection');
-  const requestPolicy = object(config.requestPolicy, 'requestPolicy');
-  const team = object(config.team, 'team');
-
-  config.connection = {
-    ...connection,
-    provider: connection.provider === undefined ? deployment.tunnelProvider : connection.provider,
-    publicUrl: connection.publicUrl === undefined ? deployment.publicUrl : connection.publicUrl
-  };
-
-  config.requestPolicy = {
-    ...requestPolicy,
-    maxRequestBytes: requestPolicy.maxRequestBytes === undefined ? production.maxRequestBytes : requestPolicy.maxRequestBytes,
-    requestsPerMinute: requestPolicy.requestsPerMinute === undefined ? production.requestsPerMinute : requestPolicy.requestsPerMinute,
-    maxConcurrentRequests: requestPolicy.maxConcurrentRequests === undefined ? production.maxConcurrentRequests : requestPolicy.maxConcurrentRequests,
-    maxConcurrentPerPrincipal: requestPolicy.maxConcurrentPerPrincipal === undefined ? production.maxConcurrentPerPrincipal : requestPolicy.maxConcurrentPerPrincipal,
-    requestTimeoutMs: requestPolicy.requestTimeoutMs === undefined ? production.requestTimeoutMs : requestPolicy.requestTimeoutMs,
-    allowedHosts: requestPolicy.allowedHosts === undefined ? production.allowedHosts : requestPolicy.allowedHosts
-  };
-
-  delete team.enabled;
-  config.team = team;
-  delete config.deployment;
-  delete config.production;
-  return config;
-}
-
-function assertCurrentInstanceShape(config) {
-  if (retiredShapePresent(config)) {
-    const error = new Error('Retired deployment-mode fields must be upgraded before runtime normalization');
-    error.code = 'retired_instance_shape';
+    || !!(team && typeof team === 'object' && !Array.isArray(team) && Object.hasOwn(team, 'enabled'));
+  if (unsupported) {
+    const error = new Error('Unsupported instance fields are not accepted by the current DevMate schema');
+    error.code = 'unsupported_instance_shape';
     throw error;
   }
   return config;
@@ -125,7 +90,7 @@ function normalizeLifecycle(config) {
 
 function normalizeInstanceConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
-  assertCurrentInstanceShape(config);
+  assertSupportedInstanceShape(config);
   normalizeLifecycle(config);
 
   const previousConnection = object(config.connection, 'connection');
@@ -189,14 +154,12 @@ module.exports = {
   REQUEST_POLICY_LIMITS,
   TEAM_ROLES,
   accessState,
-  assertCurrentInstanceShape,
+  assertSupportedInstanceShape,
   connectionState,
   normalizeInstanceConfig,
   normalizeLifecycle,
-  retiredShapePresent,
   strictBoolean,
   strictEnum,
   strictInteger,
-  stringList,
-  upgradeLegacyInstanceShape
+  stringList
 };
