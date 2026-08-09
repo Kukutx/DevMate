@@ -18,6 +18,10 @@ const {
 } = require('../tunnel-provider.js');
 const { tunnelMaxRestarts } = require('./tunnel-settings.js');
 const {
+  discoverNgrokPublicUrl,
+  resolveNgrokAgentApiBase
+} = require('./ngrok-agent-api.js');
+const {
   DEFAULT_RUNTIME_LEASE_MS,
   SharedTunnelRecordStore,
   configurationKey,
@@ -30,7 +34,6 @@ const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
 const DEFAULT_FORCE_STOP_TIMEOUT_MS = 2000;
-const NATIVE_NGROK_API = 'http://127.0.0.1:4040/api/tunnels';
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 
 function delay(ms) {
@@ -56,57 +59,6 @@ function normalizeSettings(raw = {}) {
   };
 }
 
-function nativeNgrokPublicUrl(port, { request = http.request, timeoutMs = 1000 } = {}) {
-  return new Promise(resolve => {
-    let settled = false;
-    const finish = value => {
-      if (settled) return;
-      settled = true;
-      resolve(value || '');
-    };
-    let req;
-    try {
-      req = request(NATIVE_NGROK_API, { method: 'GET' }, response => {
-        const chunks = [];
-        let bytes = 0;
-        response.on('data', chunk => {
-          if (settled) return;
-          const buffer = Buffer.from(chunk);
-          bytes += buffer.length;
-          if (bytes > MAX_PROVIDER_RESPONSE_BYTES) {
-            response.destroy();
-            finish('');
-            return;
-          }
-          chunks.push(buffer);
-        });
-        response.on('end', () => {
-          if (settled || response.statusCode !== 200) return finish('');
-          try {
-            const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            const match = (payload?.tunnels || []).find(item => {
-              const address = String(item?.config?.addr || item?.config?.addr_url || '');
-              const matchPort = Number(address.match(/:(\d+)(?:\/)?$/)?.[1]);
-              return matchPort === Number(port) && String(item?.public_url || '').startsWith('https://');
-            });
-            finish(match?.public_url || '');
-          } catch {
-            finish('');
-          }
-        });
-      });
-      req.on('error', () => finish(''));
-      req.setTimeout(Math.max(250, Number(timeoutMs) || 1000), () => {
-        req.destroy();
-        finish('');
-      });
-      req.end();
-    } catch {
-      finish('');
-    }
-  });
-}
-
 function buildNgrokLaunch(port, settings, secrets) {
   const command = String(settings.ngrokCommandPath || 'ngrok').trim() || 'ngrok';
   let args = buildNgrokArgs(['http', String(port)], {
@@ -118,7 +70,15 @@ function buildNgrokLaunch(port, settings, secrets) {
     authtoken: secrets.ngrokAuthtoken || '',
     useManagedAccount: settings.ngrokUseManagedAccount !== false
   });
-  return { command, args, options, publicUrl: '', readyPattern: null, provider: 'ngrok' };
+  return {
+    command,
+    args,
+    options,
+    publicUrl: normalizePublicUrl(settings.ngrokUrl || ''),
+    agentApiBase: null,
+    readyPattern: null,
+    provider: 'ngrok'
+  };
 }
 
 function buildProviderLaunch(port, settings, secrets) {
@@ -329,7 +289,8 @@ class TunnelController {
 
   async providerReadyUrl(launch, match, child, timeoutMs) {
     if (launch.provider === 'external') return launch.publicUrl;
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
     let discovered = '';
     let output = '';
     const inspect = chunk => {
@@ -350,7 +311,14 @@ class TunnelController {
         throw error;
       }
       if (launch.provider === 'ngrok') {
-        discovered = await nativeNgrokPublicUrl(match.port, { request: this.httpRequest, timeoutMs: 750 });
+        discovered = await discoverNgrokPublicUrl(match.port, {
+          apiBase: launch.agentApiBase,
+          request: this.httpRequest,
+          timeoutMs: 750
+        });
+        if (!discovered && !launch.agentApiBase && launch.publicUrl && Date.now() - startedAt >= 1500) {
+          discovered = launch.publicUrl;
+        }
       }
       if (discovered) return normalizePublicUrl(discovered);
       await delay(200);
@@ -424,6 +392,17 @@ class TunnelController {
       });
       if (check.error || check.status !== 0) {
         throw new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
+      }
+      if (launch.provider === 'ngrok') {
+        launch.agentApiBase = resolveNgrokAgentApiBase(launch.command, {
+          spawnSync: this.childProcess.spawnSync,
+          env: launch.options?.env || process.env
+        });
+        if (!launch.agentApiBase && !launch.publicUrl) {
+          const error = new Error('ngrok local Agent API is disabled; configure a stable ngrok URL or enable agent web_addr');
+          error.code = 'DEVMATE_NGROK_AGENT_API_DISABLED';
+          throw error;
+        }
       }
 
       child = this.childProcess.spawn(launch.command, launch.args, launch.options);
@@ -622,13 +601,11 @@ module.exports = {
   DEFAULT_START_TIMEOUT_MS,
   DEFAULT_STOP_TIMEOUT_MS,
   MAX_PROVIDER_RESPONSE_BYTES,
-  NATIVE_NGROK_API,
   STARTUP_LOCK_NAME,
   TunnelController,
   buildNgrokLaunch,
   buildProviderLaunch,
   childActive,
-  nativeNgrokPublicUrl,
   normalizeSettings,
   strictAutoRestart
 };
