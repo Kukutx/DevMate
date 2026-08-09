@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { audit, readConfig } from './local-shared.mjs';
-import { requestContext, runWithWorkSessionContext } from './request-context.mjs';
+import { requestContext, runWithRequestSignal, runWithWorkSessionContext } from './request-context.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
@@ -172,9 +172,12 @@ export function wrapAuthorizedTool(name, config, handler) {
       });
       if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
+      const invocationSignal = rest[0]?.signal || requestContext()?.signal || null;
       const result = filterResult(
         name,
-        await runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest)),
+        await runWithRequestSignal(invocationSignal, () =>
+          runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest))
+        ),
         authorized.principal
       );
       const session = authorized.workspaceId
