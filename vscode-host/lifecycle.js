@@ -1,7 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
-const { ensurePersonalConfig, readJson } = require('../shared/config-store.cjs');
+const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { VscodeContextMirror } = require('./context-mirror.js');
@@ -55,7 +55,7 @@ class VscodeHostLifecycle {
     this.runtimeContext = createRuntimeContext(this.vscode, context);
     this.workspaceRootAtActivation = currentWorkspaceRoot(this.vscode);
     if (this.workspaceRootAtActivation) {
-      ensurePersonalConfig({
+      ensureInstanceConfig({
         configFile: runtimeConfigPath(this.runtimeContext),
         workspaceRoot: this.workspaceRootAtActivation,
         preferredPort: Number(setting(this.vscode, 'port', 8787)),
