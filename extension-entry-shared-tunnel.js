@@ -3,7 +3,7 @@
 const path = require('node:path');
 const vscode = require('vscode');
 const { version: VERSION } = require('./package.json');
-const { ensurePersonalConfig, readJson } = require('./shared/config-store.cjs');
+const { ensureInstanceConfig, readJson } = require('./shared/config-store.cjs');
 const { strictPort } = require('./shared/port.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
@@ -64,7 +64,7 @@ function ensureSharedDesktopConfig(stateDirectory) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
   if (!workspaceRoot) return null;
   const configFile = path.join(stateDirectory, 'config.json');
-  ensurePersonalConfig({
+  ensureInstanceConfig({
     configFile,
     workspaceRoot,
     preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
