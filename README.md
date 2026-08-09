@@ -16,7 +16,7 @@ npx devmate bootstrap \
   --workspace /srv/project \
   --member-name Alice
 
-# Production control plane with a first member and Runner credential
+# Hardened control plane with a first member and Runner credential
 npx devmate bootstrap \
   --preset control-plane \
   --workspace /srv/project \
@@ -71,7 +71,7 @@ See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md), [`obsidian-plugin/RE
 |---|---|---|---|
 | Personal | Owner token | Embedded Runner | One developer |
 | Team | Scoped `dmt_` members | Embedded Runner, optional external Runners | Trusted team |
-| Control plane | Owner + scoped members | External `dmr_` Runners | Production build/test hosts |
+| Control plane | Owner + scoped members | External `dmr_` Runners | Long-lived build/test hosts |
 | Runner host | Local owner token | Local toolchain through loopback MCP | Platform-specific execution |
 
 These presets compose connection, access, request policy and Runner capabilities. They do not create mutually exclusive runtime modes. DevMate supports ngrok, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress independently of access or Runner topology.
@@ -85,7 +85,7 @@ ChatGPT / team members
 DevMate Gateway
   ├─ Capability Host and tool contracts
   ├─ centralized RBAC/workspace/Job policy
-  ├─ leases and dual-control approvals
+  ├─ leases and optional dual-control approvals
   ├─ durable job queue
   ├─ audit, metrics, backups, and previews
   └─ optional Browser QA / Godot plugins
@@ -95,7 +95,7 @@ External Runner hosts
   └─ loopback DevMate Gateway + local toolchain
 ```
 
-Desktop hosts additionally coordinate one shared provider-native public connection. Ready is generation-scoped: if the provider restarts or ownership changes, previous MCP verification is stale even when the hostname is unchanged.
+Desktop hosts additionally coordinate one shared provider-native public connection. Ready is bound to the **current complete Gateway + provider session generation**: a Gateway restart, provider restart, ownership transfer, or endpoint generation change makes previous MCP verification stale even when the public hostname is unchanged.
 
 DevMate uses one deterministic Capability Host for registration and initialization. `gateway/tool-policy.mjs` is the shared source of truth for team capability, workspace scope and durable Runner requirements. Plugins extend through a validated composition API rather than manually calling another plugin lifecycle.
 
@@ -114,13 +114,13 @@ Core protections include:
 - salted member and Runner token hashes;
 - explicit workspace scopes;
 - token expiry, rotation, disable, and revocation;
-- exclusive workspace leases for mutations;
-- production approval for `publish` and `admin`;
+- optional exclusive workspace leases for shared mutations;
+- optional dual-control approval for configured capabilities or tools;
 - high-risk shell and Git guards;
 - request, tool, approval, and Runner audit metadata;
 - bounded rate, request-size, timeout, and concurrency policies.
 
-Use team work sessions or acquire a workspace lease before shared mutations when lease policy is enabled.
+Use work sessions or acquire a workspace lease before shared mutations when lease policy is enabled.
 
 ## Durable jobs and Runners
 
@@ -154,7 +154,7 @@ Repeatable scenarios, performance budgets, capture plans, framework tests, and e
 
 ## Godot development loop
 
-DevMate can run a production-oriented Godot workflow:
+DevMate can run a mature Godot workflow:
 
 ```text
 godot_quick_setup
@@ -213,7 +213,7 @@ Deployment templates:
 - external Runner Docker: `deploy/docker/runner.compose.example.yml`
 - reverse proxy: `deploy/caddy/Caddyfile.example`
 
-Use drain mode before upgrades so new mutations and job claims stop while in-flight work settles.
+Use drain controls before upgrades so new mutations and job claims stop while in-flight work settles.
 
 ## Safety boundary
 
