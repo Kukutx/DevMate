@@ -1,0 +1,64 @@
+name: One-time audit prune serialization fix
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Patch audit prune serialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-7]'; then
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('gateway/maintenance.mjs')
+          text = p.read_text()
+          old = "const DAY_MS = 24 * 60 * 60 * 1000;\n\nexport { DEFAULT_MAINTENANCE };"
+          new = "const DAY_MS = 24 * 60 * 60 * 1000;\nconst auditPruneQueues = new Map();\n\nfunction withAuditPruneQueue(auditLog, fn) {\n  const key = path.resolve(auditLog);\n  const previous = auditPruneQueues.get(key) || Promise.resolve();\n  const run = previous.catch(() => {}).then(fn);\n  auditPruneQueues.set(key, run);\n  return run.finally(() => {\n    if (auditPruneQueues.get(key) === run) auditPruneQueues.delete(key);\n  });\n}\n\nexport { DEFAULT_MAINTENANCE };"
+          if old not in text:
+              raise SystemExit('missing maintenance header anchor')
+          text = text.replace(old, new, 1)
+
+          old2 = "export async function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {\n  const opts = maintenanceOptions(options);"
+          new2 = "async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now()) {\n  const opts = maintenanceOptions(options);"
+          if old2 not in text:
+              raise SystemExit('missing pruneAuditLog function anchor')
+          text = text.replace(old2, new2, 1)
+
+          old3 = "}\n\nexport async function pruneState(paths, options = {}, nowMs = Date.now()) {"
+          new3 = "}\n\nexport function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {\n  return withAuditPruneQueue(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs));\n}\n\nexport async function pruneState(paths, options = {}, nowMs = Date.now()) {"
+          if old3 not in text:
+              raise SystemExit('missing pruneState anchor')
+          text = text.replace(old3, new3, 1)
+          p.write_text(text)
+          PY
+          git diff --check
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git log -1 --pretty=%B | grep -Fq '[audit-fix-7]'; then
+            exit 0
+          fi
+          git config user.name kukutx
+          git config user.email 61358650+Kukutx@users.noreply.github.com
+          git add gateway/maintenance.mjs
+          git commit -m 'Serialize concurrent audit pruning [audit-fix-7]'
+          git push origin HEAD:master
