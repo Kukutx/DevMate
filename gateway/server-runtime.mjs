@@ -5,6 +5,7 @@ import permissionConfig from '../shared/permission-config.cjs';
 import portConfig from '../shared/port.cjs';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { shutdownCommandProcesses } from './command-process.mjs';
+import { drainAllAuditLogs } from './audit-log-coordinator.mjs';
 import { readConfig } from './local-shared.mjs';
 import { installPlatformCapabilities } from './platform-capabilities.mjs';
 import { shutdownPluginServices } from './plugins/plugin-host.mjs';
@@ -66,6 +67,7 @@ async function shutdown(reason = '') {
   if (shutdownPromise) return shutdownPromise;
   shutdownPromise = (async () => {
     try { await Promise.all([...createdHttpServers].map(server => closeHttpServer(server))); } catch {}
+    try { await drainAllAuditLogs(); } catch {}
     try { await shutdownJobRuntime(); } catch {}
     try { await shutdownPluginServices(); } catch {}
     try { await shutdownTeamServices(); } catch {}

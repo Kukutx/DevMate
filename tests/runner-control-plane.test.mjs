@@ -55,6 +55,7 @@ const {
   listRunners
 } = await import('../gateway/job-queue.mjs');
 const { registerJobTarget } = await import('../gateway/job-runtime.mjs');
+const { drainAllAuditLogs } = await import('../gateway/audit-log-coordinator.mjs');
 const {
   __test,
   runnerControlListener,
@@ -296,5 +297,6 @@ test('sanitizes empty results safely and rejects malformed artifact metadata', (
 test.after(async () => {
   resetRunnerControlState();
   await new Promise(resolve => server.close(resolve));
+  await drainAllAuditLogs();
   await fsp.rm(temp, { recursive: true, force: true });
 });
