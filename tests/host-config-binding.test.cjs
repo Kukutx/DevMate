@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { ensurePersonalConfig } = require('../shared/config-store.cjs');
+const { ensureInstanceConfig } = require('../shared/config-store.cjs');
 const { normalizedWorkspaceRoot } = require('../host/runtime/state-paths.js');
 
 function temporaryDirectory(prefix) {
@@ -20,7 +20,7 @@ test('refuses to initialize when an invalid interrupted replacement is the only 
   fs.writeFileSync(replacement, '{incomplete', 'utf8');
 
   assert.throws(
-    () => ensurePersonalConfig({ configFile, workspaceRoot }),
+    () => ensureInstanceConfig({ configFile, workspaceRoot }),
     error => {
       assert.equal(error.code, 'config_recovery_failed');
       assert.deepEqual(error.replacementCandidates, [replacement]);
@@ -39,7 +39,7 @@ test('does not rename or overwrite a directory accidentally placed at config.jso
   fs.writeFileSync(path.join(configFile, 'keep.txt'), 'preserve');
 
   assert.throws(
-    () => ensurePersonalConfig({ configFile, workspaceRoot }),
+    () => ensureInstanceConfig({ configFile, workspaceRoot }),
     error => error.code === 'config_not_file'
   );
   assert.equal(fs.statSync(configFile).isDirectory(), true);
@@ -52,11 +52,11 @@ test('binds a shared state directory to one normalized workspace root', () => {
   const secondRoot = temporaryDirectory('devmate-binding-second-');
   const state = temporaryDirectory('devmate-binding-state-');
   const configFile = path.join(state, 'config.json');
-  const first = ensurePersonalConfig({ configFile, workspaceRoot: firstRoot });
+  const first = ensureInstanceConfig({ configFile, workspaceRoot: firstRoot });
   assert.equal(first.hostRuntime.workspaceRoot, normalizedWorkspaceRoot(firstRoot));
 
   assert.throws(
-    () => ensurePersonalConfig({ configFile, workspaceRoot: secondRoot }),
+    () => ensureInstanceConfig({ configFile, workspaceRoot: secondRoot }),
     error => {
       assert.equal(error.code, 'config_workspace_mismatch');
       assert.equal(error.boundWorkspaceRoot, normalizedWorkspaceRoot(firstRoot));
