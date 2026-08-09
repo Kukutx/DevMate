@@ -47,8 +47,6 @@ Either desktop host can own or attach to the shared resources.
 - `gateway/server-entry.mjs` acquires runtime infrastructure and imports the MCP server.
 - `gateway/server.mjs` contains the core file, command, Git, context and reporting tools built with the official MCP SDK.
 
-There is no standalone compatibility subprocess, no retired VS Code lifecycle forwarding layer and no ngrok-only compatibility runtime.
-
 ## Capability-based instance configuration
 
 `shared/instance-config.cjs` defines the current instance shape. Major capabilities include:
@@ -63,7 +61,7 @@ There is no standalone compatibility subprocess, no retired VS Code lifecycle fo
 
 Capabilities compose independently. Changing the connection provider must not implicitly enable Team access, alter Host policy or change Runner topology.
 
-Retired deployment-mode fields are handled only by the explicit one-time host shape upgrade. Current runtime normalization rejects them so old branching cannot leak back into active logic.
+The current schema is strict. Unsupported instance fields fail closed; host initialization does not translate an older control-plane shape into current capabilities.
 
 ## Capability Host
 
@@ -108,13 +106,13 @@ Start
   → Ready
 ```
 
-Ready is **generation-scoped**. `shared/public-ingress-verification.cjs` ties verification evidence to the current provider record using owner, provider, port, readiness timestamp and public URL. A provider restart or ownership transfer invalidates prior Ready evidence even if the hostname is unchanged.
+Ready is **complete-session generation scoped**. The current session identity combines the live Gateway generation with the provider runtime generation. `shared/public-ingress-verification.cjs` binds verification evidence to both sides of that session. A Gateway restart, provider restart, ownership transfer or endpoint generation change invalidates prior Ready evidence even if the public hostname is unchanged.
 
 VS Code uses `vscode-host/public-tunnel-verifier.js` for automatic generation-aware re-verification. Obsidian consumes the same shared generation/verification primitives in its lifecycle. Both persist the same connection evidence shape.
 
 ## Public connection runtime
 
-`vscode-host/tunnel-controller.js` is the current provider-native shared connection controller used by desktop hosts. It supports ngrok, Cloudflare Quick, Cloudflare managed and external HTTPS ingress.
+`vscode-host/tunnel-controller.js` is the provider-native shared connection controller used by desktop hosts. It supports ngrok, Cloudflare Quick, Cloudflare managed and external HTTPS ingress.
 
 The controller provides:
 
@@ -127,7 +125,7 @@ The controller provides:
 - bounded auto-restart,
 - ownership-aware stop/dispose semantics.
 
-The path name reflects implementation history; the runtime contract itself is provider-neutral and shared by both desktop hosts. There is no virtual ngrok API or fallback stitching layer.
+The runtime contract is provider-neutral and shared by both desktop hosts. Public connection selection has one authoritative capability path through shared instance configuration.
 
 ## Workspaces and filesystem boundary
 
@@ -137,13 +135,13 @@ Workspace resolution is ID-first through `gateway/workspace-resolver.mjs`; displ
 
 Work sessions and their matching workspace leases are persisted atomically. A failed start cannot leave only a lease; a failed finish cannot drop only one half of an active session.
 
-Workspace lease enforcement is an explicit policy capability. Remote owner/member identities are subject to it when enabled, while the local owner remains a recovery path. Approval policy is likewise explicit and does not depend on a deployment mode.
+Workspace lease enforcement is an explicit policy capability. Remote owner/member identities are subject to it when enabled, while the local owner remains a recovery path. Approval policy is likewise explicit and does not depend on a runtime mode.
 
 ## Processes
 
 Transient commands run through `gateway/command-process.mjs`, which owns and terminates the complete process tree on timeout and Gateway shutdown. Persistent processes and previews use bounded registries with explicit workspace ownership.
 
-Desktop Gateway processes are isolated child processes; desktop hosts do not use Worker-thread runtime compatibility layers.
+Desktop Gateway processes are isolated child processes. Each host releases only processes it owns; another host that still requests a desktop session recovers through the complete Start lifecycle instead of relying on an orphan process.
 
 ## Durable jobs and Runners
 
@@ -165,7 +163,7 @@ Repository verification is discovery-based:
 
 - `scripts/check-repository.mjs` syntax-checks JavaScript modules and architecture contracts.
 - `scripts/check-workflows.mjs` parses permanent GitHub Actions workflows.
-- `scripts/run-tests.mjs` discovers normal tests.
+- `scripts/run-tests.mjs` discovers normal tests and isolates exact failing files when a batch fails.
 - Windows CI validates dependencies, contracts, tests, Gateway smoke, VSIX packaging, packaged VSIX runtime/tunnel smokes and Obsidian package smoke.
 - Linux CI adds Docker network smoke and verified real Godot validation, performance sampling and deterministic capture.
 
