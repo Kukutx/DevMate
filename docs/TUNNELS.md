@@ -42,7 +42,7 @@ A loopback Gateway without a verified public MCP endpoint is not Ready.
 
 ## Shared ownership
 
-The provider runtime stores one bounded shared ownership record under the workspace-derived state directory. The record includes the information required to prove compatibility and identify the current generation, including:
+The provider runtime stores one bounded shared ownership record under the workspace-derived state directory. The record includes the information required to prove compatibility and identify the provider generation, including:
 
 - owner identity,
 - host identity,
@@ -54,17 +54,19 @@ The provider runtime stores one bounded shared ownership record under the worksp
 - readiness timestamp,
 - child PID when DevMate owns a provider process.
 
-Startup uses a shared lease so simultaneous desktop Start operations converge on one provider process. Compatible later hosts attach instead of spawning duplicates.
+The live Gateway ownership record independently identifies the current Gateway generation. Runtime reads combine the live Gateway identity with the provider record to form the **complete desktop session generation**; the Gateway identity is not copied into a second persistent control-plane record.
 
-Owners heartbeat the shared record. Loss of ownership triggers fail-closed cleanup of the local provider process. An attached host can take ownership after the previous owner disappears when the shared configuration still matches.
+Startup uses shared leases so simultaneous desktop Start operations converge instead of creating duplicate processes. Compatible later hosts attach instead of spawning duplicates.
+
+Owners heartbeat their shared runtime records. Loss of ownership triggers fail-closed cleanup of locally owned processes. An attached provider host can take ownership after the previous provider owner disappears when the shared configuration still matches.
 
 ## Configuration identity
 
-Connection ownership is strict. The configuration identity includes endpoint-affecting provider settings and the Gateway port. A running generation with a different provider or incompatible endpoint configuration is not silently reused.
+Connection ownership is strict. The provider configuration identity includes endpoint-affecting provider settings and the Gateway port. A running generation with a different provider or incompatible endpoint configuration is not silently reused.
 
 Configuration conflicts are reconciled explicitly. DevMate does not create fallback chains that stitch together unrelated provider settings or stale URLs.
 
-## Generation-scoped verification
+## Complete-session verification
 
 A public URL is necessary but insufficient for Ready.
 
@@ -74,9 +76,9 @@ After a provider publishes an HTTPS endpoint, DevMate performs authenticated MCP
 2. Validate that the server identifies itself as `devmate`.
 3. Preserve the MCP session ID when supplied.
 4. Call `tools/list` in the same session.
-5. Persist successful evidence for the current provider generation.
+5. Persist successful evidence for the current complete session generation.
 
-Verification is tied to the provider record generation. If the provider restarts, ownership changes or a new `readyAt` is published, previous verification is stale even when the hostname is identical. The host returns to Verifying until the new generation passes preflight.
+Verification is tied to both the current Gateway generation and the current provider generation. If the Gateway restarts, the provider restarts, ownership changes, or a new provider `readyAt` is published, previous verification is stale even when the hostname is identical. The host returns to recovery/verifying until the new complete session passes preflight.
 
 ## ngrok
 
@@ -113,7 +115,7 @@ The token is supplied through the provider process environment, not command-line
 
 `external` is a first-class provider for an existing reverse proxy, load balancer, VPN gateway or externally managed tunnel.
 
-DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and still requires current-generation MCP preflight before Ready.
+DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and still requires current complete-session MCP preflight before Ready.
 
 The configured origin must be a clean HTTPS origin without credentials, path, query string or fragment.
 
@@ -121,7 +123,7 @@ The configured origin must be a clean HTTPS origin without credentials, path, qu
 
 Managed provider processes can restart automatically after unexpected exit using bounded backoff and a bounded restart count. Settings are re-evaluated before restart so stale provider configuration is not resurrected.
 
-A recovering provider publishes a new generation. The public MCP verifier automatically re-runs preflight; the user does not need to run a separate verification action.
+A Gateway or provider generation change makes the previous complete session stale. A desktop host that still requests the session recovers through the complete Start lifecycle and re-runs preflight; the user does not need to run a separate verification action.
 
 If a dynamic endpoint changes host, DevMate can notify the user to update the ChatGPT connector URL.
 
@@ -129,19 +131,14 @@ If a dynamic endpoint changes host, DevMate can notify the user to update the Ch
 
 Stop is ownership-aware:
 
-- An owning host terminates its provider process and removes its ownership record after confirmed exit.
-- An attached host does not kill a provider owned by another desktop process.
-- A failed process termination leaves ownership fail-closed so another provider cannot be started concurrently.
-- External ingress has no child process, but shared ownership still follows the same record discipline.
+- An owning host terminates the processes it owns and releases their ownership records after confirmed exit.
+- An attached host does not kill a compatible resource owned by another desktop process.
+- A host does not intentionally keep its own Gateway child alive merely because the provider is remotely owned; a different host that still requests the session recovers the Gateway through the complete lifecycle.
+- A failed process termination leaves ownership fail-closed so incompatible replacement processes cannot start concurrently.
+- External ingress has no provider child process, but shared provider ownership still follows the same record discipline.
 
 ## Credentials and URLs
 
 DevMate never places owner or provider credentials in public MCP URLs. MCP authentication uses request headers.
 
 Provider credentials stay in host-local secure storage or the provider's normal machine configuration. Shared `config.json` stores business configuration such as provider and stable URL, not plaintext provider secrets.
-
-## No compatibility runtime
-
-The current tunnel implementation launches each provider natively. There is no virtual ngrok API, ngrok-only wrapper, or retired provider compatibility layer.
-
-This is intentional: ngrok, Cloudflare and external ingress are separate provider implementations behind one shared connection lifecycle, not behaviors emulated through one legacy provider.
