@@ -73,6 +73,7 @@ try {
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
     'shared/config-store.cjs',
+    'shared/public-ingress-verification.cjs',
     'host/runtime/diagnostics-store.js',
     'host/runtime/instance-lock-cleanup.js',
     'host/runtime/network.js',
@@ -85,17 +86,11 @@ try {
     const file = path.join(extensionPath, relative);
     assert.equal(fs.statSync(file, { throwIfNoEntry: false })?.isFile(), true, `VSIX is missing ${relative}`);
   }
-  for (const retired of [
-    'vscode-host/gateway-spawn-router.js',
-    'host/runtime/worker-process.js',
-    'vscode-host/shared-tunnel-process.js',
-    'vscode-host/shared-tunnel-runtime.js'
-  ]) {
-    assert.equal(fs.existsSync(path.join(extensionPath, retired)), false, `VSIX must not package retired ${retired}`);
-  }
 
   const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
   assert.match(extensionSource, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/, 'VSIX must link VS Code to the shared public MCP preflight');
+  assert.match(extensionSource, /recordGeneration\(expectedRecord\)/, 'VSIX must bind explicit verification to the current complete session generation');
+  assert.match(extensionSource, /verifiedForCurrentRecord\(persisted, currentRecord\)/, 'VSIX must validate persisted Ready evidence against the current session');
   const verifyStart = extensionSource.indexOf('async function verifyPublicMcp');
   const verifyEnd = extensionSource.indexOf('async function quickStart', verifyStart);
   assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
@@ -165,14 +160,13 @@ try {
     version: manifest.version,
     launchMode: lock.launchMode,
     gateway: path.relative(extensionPath, gatewayEntry),
-    concurrentHostsVerified: true,
+    sharedGatewayOwnershipVerified: true,
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
     publicMcpAuthContractVerified: true,
-    providerNativeTunnelRuntimePackaged: true,
-    retiredWorkerRuntimeExcluded: true,
-    retiredTunnelRuntimeExcluded: true
+    completeSessionVerificationPackaged: true,
+    providerNativeConnectionRuntimePackaged: true
   }));
 } finally {
   await vscodeController?.dispose({ stopOwned: true }).catch(() => {});
