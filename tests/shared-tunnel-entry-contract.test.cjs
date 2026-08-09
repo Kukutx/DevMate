@@ -64,7 +64,7 @@ test('VS Code HTTP calls use the bounded client', () => {
   assert.doesNotMatch(source, /res\.on\('data',\s*d=>chunks\.push\(Buffer\.from\(d\)\)\)/);
 });
 
-test('VSIX smoke contract includes the provider-native tunnel runtime', () => {
+test('VSIX smoke contract includes the provider-native tunnel runtime and current ngrok Agent API', () => {
   const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-runtime.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
   assert.doesNotMatch(smoke, /extension-entry-host\.js/);
@@ -72,9 +72,14 @@ test('VSIX smoke contract includes the provider-native tunnel runtime', () => {
   assert.match(smoke, /launchMode, 'child_process'/);
 
   const controller = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
+  const agentApi = fs.readFileSync(path.join(root, 'vscode-host', 'ngrok-agent-api.js'), 'utf8');
   assert.match(controller, /class TunnelController/);
   assert.match(controller, /cloudflareLaunch/);
-  assert.match(controller, /nativeNgrokPublicUrl/);
+  assert.match(controller, /discoverNgrokPublicUrl/);
+  assert.match(controller, /resolveNgrokAgentApiBase/);
+  assert.doesNotMatch(controller, /nativeNgrokPublicUrl|\/api\/tunnels/);
+  assert.match(agentApi, /\/endpoints/);
+  assert.match(agentApi, /ngrokWebAddrFromConfig/);
 });
 
 test('Windows and Linux CI execute tunnel runtime validation', () => {
