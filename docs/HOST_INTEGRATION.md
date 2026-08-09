@@ -13,7 +13,7 @@ Start
   → Ready
 ```
 
-A running loopback Gateway is not Ready. A public HTTPS URL by itself is not Ready. **Ready means the current public connection generation has passed MCP preflight.**
+A running loopback Gateway is not Ready. A public HTTPS URL by itself is not Ready. **Ready means the current complete Gateway + public-connection session generation has passed MCP preflight.**
 
 ## Shared desktop topology
 
@@ -57,7 +57,7 @@ Access control, request policy, Runner configuration, plugins and maintenance re
 
 Machine-local execution details such as executable paths and securely stored provider credentials do not become a second source of instance business state.
 
-Retired deployment-mode fields are accepted only by the explicit one-time host shape upgrade. Current runtime normalization rejects them.
+The host accepts only the current supported instance schema. Unsupported fields fail closed instead of being translated into current capabilities during startup.
 
 ## Start lifecycle
 
@@ -70,19 +70,21 @@ Both desktop hosts implement the same complete Start semantics:
 5. Obtain the active HTTPS origin from that connection generation.
 6. Run authenticated MCP `initialize` against `/mcp`.
 7. Carry the returned MCP session into `tools/list`.
-8. Persist verification evidence for the current connection generation.
+8. Persist verification evidence for the current complete session generation.
 9. Enter `Ready` and, when enabled, copy the verified MCP URL.
 
 No normal Start requires the user to manually start a tunnel, copy an internal Gateway URL, or run a separate verification command.
 
 ## Generation-scoped Ready
 
-Provider recovery can reuse the same hostname. URL equality therefore cannot prove that the current process generation is usable.
+Provider recovery can reuse the same hostname, and a Gateway can restart behind an unchanged provider process. URL equality therefore cannot prove that the current session is usable.
 
-The shared verification contract combines the provider record with:
+The shared verification contract combines:
 
+- Gateway runtime owner identity,
+- Gateway process identity and acquisition generation,
 - provider identity,
-- owner identity,
+- provider owner identity,
 - Gateway port,
 - provider `readyAt`,
 - public HTTPS origin,
@@ -91,7 +93,7 @@ The shared verification contract combines the provider record with:
 - `/mcp` path,
 - a non-empty `tools/list` result.
 
-If a provider restarts, ownership transfers, configuration changes, or a new `readyAt` is published, the previous verification becomes stale immediately. The desktop host reports Starting/Verifying until the new generation passes preflight.
+If the Gateway restarts, the provider restarts, ownership transfers, configuration changes, or a new provider `readyAt` is published, the previous verification becomes stale immediately. The desktop host returns to recovery/verifying until the new complete session passes preflight.
 
 This rule applies even when the hostname did not change.
 
@@ -99,19 +101,19 @@ This rule applies even when the hostname did not change.
 
 The provider-native tunnel controller handles shared startup leases, ownership heartbeats, process exit detection, bounded restart, ownership transfer and fail-closed cleanup.
 
-After a new provider generation becomes ready, DevMate automatically re-verifies MCP. Recovery does not require the user to press a second button.
+A desktop host that has successfully requested a session keeps that intent until explicit Stop. If an owned Gateway disappears or the complete session generation changes, recovery runs the same complete Start lifecycle and re-verifies MCP. Recovery does not require the user to press a second button.
 
 If a dynamic provider publishes a different hostname, DevMate can notify the user that the ChatGPT connector URL must be updated. That is an external connector consequence, not a reason to split DevMate startup into manual steps.
 
 ## Stop and Restart
 
-`Stop` is ownership-aware. A desktop host stops resources it owns and releases its local attachment, but it does not kill a compatible shared resource owned by another host.
+`Stop` is ownership-aware. A desktop host releases resources it owns and detaches from resources owned by another host. It does not keep an owned Gateway alive merely because another host owns the public connection; another requested desktop session recovers the Gateway through the normal complete lifecycle.
 
-`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current public connection generation has passed MCP preflight.
+`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current complete session generation has passed MCP preflight.
 
 ## Copy MCP URL
 
-`Copy MCP URL` never copies the internal loopback Gateway URL. It uses the active public connection and verifies the current generation before copying the `/mcp` endpoint.
+`Copy MCP URL` never copies the internal loopback Gateway URL. It uses the active public connection and verifies the current complete session generation before copying the `/mcp` endpoint.
 
 The bearer credential is a separate secret. DevMate does not put owner credentials in the URL or query string.
 
@@ -146,7 +148,7 @@ Normal host UI is product-oriented:
 - Ready
 - Recovering or Error when action is required
 
-Necessary actions such as Start, Stop, Restart, Copy MCP URL, context and diagnostics remain available. Internal concepts such as provider ownership records, loopback Gateway ports and verification generations belong in diagnostics rather than becoming mandatory user steps.
+Necessary actions such as Start, Stop, Restart, Copy MCP URL, context and diagnostics remain available in the same interface. Internal concepts such as provider ownership records, loopback Gateway ports and verification generations are diagnostic information, not mandatory user steps or separate product modes.
 
 ## Configuration changes
 
@@ -162,8 +164,8 @@ The desktop integration must preserve these invariants:
 2. One compatible provider-native public connection per state directory.
 3. Both VS Code and Obsidian may own or attach to those shared resources.
 4. Start is Gateway → public connection → MCP preflight → Ready.
-5. Ready is generation-scoped, never URL-only.
-6. Stop never destroys a resource owned by another host merely because the local host is detaching.
+5. Ready is complete-session generation scoped, never URL-only or tunnel-only.
+6. Stop never destroys a resource owned by another host and never intentionally leaves a locally owned orphan process.
 7. Connection, access, request policy, Runner and plugin capabilities remain orthogonal.
 8. Credentials stay out of URLs and shared project configuration.
 9. No refactor may turn an automatic lifecycle step into a required manual user step.
