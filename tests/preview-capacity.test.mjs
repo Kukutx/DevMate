@@ -28,6 +28,20 @@ test('enforces per-workspace preview capacity without leaking servers', async ()
   assert.equal(previewCapacityStatus().active, 0);
 });
 
+test('reserves per-workspace capacity across concurrent preview starts', async () => {
+  const attempts = Array.from({ length: MAX_WORKSPACE_PREVIEWS + 4 }, () =>
+    startPreview({ workspaceId: 'concurrent', root })
+  );
+  const results = await Promise.allSettled(attempts);
+  const fulfilled = results.filter(result => result.status === 'fulfilled');
+  const rejected = results.filter(result => result.status === 'rejected');
+  assert.equal(fulfilled.length, MAX_WORKSPACE_PREVIEWS);
+  assert.equal(rejected.length, 4);
+  for (const result of rejected) assert.match(String(result.reason?.message || result.reason), /Workspace preview limit/);
+  assert.equal(previewCapacityStatus().active, MAX_WORKSPACE_PREVIEWS);
+  assert.equal(__test.pendingWorkspaceStarts.size, 0);
+});
+
 test('enforces the global preview capacity', async () => {
   for (let index = 0; index < MAX_ACTIVE_PREVIEWS; index += 1) {
     await startPreview({ workspaceId: `workspace-${index}`, root });
