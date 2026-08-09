@@ -8,7 +8,7 @@ import { maintenanceOptions } from '../gateway/maintenance.mjs';
 
 const require = createRequire(import.meta.url);
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = require('../shared/maintenance-config.cjs');
-const { newPersonalConfig } = require('../shared/config-store.cjs');
+const { newInstanceConfig } = require('../shared/config-store.cjs');
 const root = path.resolve(import.meta.dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -19,10 +19,10 @@ const SETTINGS = Object.freeze({
   maxAuditBytes: 'devMate.maxAuditBytes'
 });
 
-test('fresh shared config uses the same maintenance defaults regardless of desktop host', () => {
+test('fresh shared instance uses the same maintenance defaults regardless of desktop host', () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-maintenance-defaults-'));
   try {
-    const config = newPersonalConfig({ workspaceRoot, appVersion: '3.3.0' });
+    const config = newInstanceConfig({ workspaceRoot, appVersion: '3.3.0' });
     assert.deepEqual(config.maintenance, DEFAULT_MAINTENANCE);
     assert.deepEqual(maintenanceOptions({}), DEFAULT_MAINTENANCE);
   } finally {
