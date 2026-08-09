@@ -8,7 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   RuntimeController,
-  ensurePersonalConfig,
+  ensureInstanceConfig,
   readJson,
   resolveStateDirectory,
   workspaceRuntimeId
@@ -71,16 +71,16 @@ test('shared state resolves below the configured home directory', () => {
   assert.match(path.basename(state), /^[a-z0-9_.-]+-[a-f0-9]{12}$/);
 });
 
-test('personal config creation preserves unrelated fields on later updates', () => {
+test('instance config creation preserves unrelated fields on later updates', () => {
   const root = temporaryDirectory('devmate-config-root-');
   const state = temporaryDirectory('devmate-config-state-');
   const file = path.join(state, 'config.json');
-  const created = ensurePersonalConfig({ configFile: file, workspaceRoot: root, preferredPort: 9123 });
+  const created = ensureInstanceConfig({ configFile: file, workspaceRoot: root, preferredPort: 9123 });
   assert.equal(created.server.port, 9123);
   assert.equal(created.workspaces[0].root, root);
   created.custom = { keep: true };
   fs.writeFileSync(file, `${JSON.stringify(created, null, 2)}\n`, 'utf8');
-  const updated = ensurePersonalConfig({ configFile: file, workspaceRoot: root, preferredPort: 9999 });
+  const updated = ensureInstanceConfig({ configFile: file, workspaceRoot: root, preferredPort: 9999 });
   assert.deepEqual(updated.custom, { keep: true });
   assert.equal(updated.server.port, 9123);
 });
