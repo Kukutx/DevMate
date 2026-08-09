@@ -53,11 +53,11 @@ function loopbackAgentApiBase(webAddr) {
   } catch {
     return DEFAULT_NGROK_AGENT_API_BASE;
   }
-  if (parsed.protocol !== 'http:') return DEFAULT_NGROK_AGENT_API_BASE;
+  if (parsed.protocol !== 'http:') return '';
   const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
   const wildcard = hostname === '0.0.0.0' || hostname === '::';
-  if (!loopback && !wildcard) return DEFAULT_NGROK_AGENT_API_BASE;
+  if (!loopback && !wildcard) return '';
   const host = hostname.includes(':') ? '[::1]' : '127.0.0.1';
   const port = parsed.port || '4040';
   return `http://${host}:${port}/api`;
