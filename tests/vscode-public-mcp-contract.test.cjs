@@ -23,7 +23,7 @@ test('VS Code Start remains Gateway -> tunnel -> current-generation MCP verifica
   assert.match(block, /rollbackFailedStart/);
 });
 
-test('VS Code explicit verification binds evidence to the exact current session generation', () => {
+test('VS Code explicit verification binds evidence to the exact current complete session generation', () => {
   const start = extension.indexOf('async function verifyCurrentTunnel');
   const end = extension.indexOf('function recordConnectionFailure', start);
   assert.ok(start >= 0 && end > start);
@@ -33,7 +33,8 @@ test('VS Code explicit verification binds evidence to the exact current session 
   assert.match(block, /recordGeneration\(currentRecord\) !== generation/);
   assert.match(block, /successfulVerificationPatch\(test, publicUrl, stamp, expectedRecord\)/);
   assert.match(block, /verifiedForCurrentRecord\(persisted, currentRecord\)/);
-  assert.match(block, /throw staleTunnelGenerationError\(\)/);
+  assert.match(block, /throw staleSessionGenerationError\(\)/);
+  assert.doesNotMatch(block, /staleTunnelGenerationError/);
 });
 
 test('VS Code delegates authenticated public MCP protocol handling to the shared helper', () => {
