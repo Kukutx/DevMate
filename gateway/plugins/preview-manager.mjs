@@ -9,6 +9,8 @@ export const MAX_WORKSPACE_PREVIEWS = 8;
 export const PREVIEW_REQUEST_TIMEOUT_MS = 30000;
 
 const previews = new Map();
+let pendingPreviewStarts = 0;
+const pendingWorkspaceStarts = new Map();
 const BLOCKED_SEGMENTS = new Set(['.git', '.env', 'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys', 'service-account', 'service_accounts']);
 const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3', '.log']);
 
@@ -121,75 +123,96 @@ function workspacePreviewCount(workspaceId) {
   return [...previews.values()].filter(item => item.workspaceId === workspaceId).length;
 }
 
-export async function startPreview({ workspaceId, root, entryPath = 'index.html', port = 0, crossOriginIsolation = false, spaFallback = false }) {
-  if (previews.size >= MAX_ACTIVE_PREVIEWS) throw capacityError(`Active preview limit reached (${MAX_ACTIVE_PREVIEWS})`);
-  if (workspacePreviewCount(workspaceId) >= MAX_WORKSPACE_PREVIEWS) {
+function reservePreviewCapacity(workspaceId) {
+  if (previews.size + pendingPreviewStarts >= MAX_ACTIVE_PREVIEWS) {
+    throw capacityError(`Active preview limit reached (${MAX_ACTIVE_PREVIEWS})`);
+  }
+  const workspacePending = pendingWorkspaceStarts.get(workspaceId) || 0;
+  if (workspacePreviewCount(workspaceId) + workspacePending >= MAX_WORKSPACE_PREVIEWS) {
     throw capacityError(`Workspace preview limit reached (${MAX_WORKSPACE_PREVIEWS}) for ${workspaceId}`);
   }
-  const realRoot = fs.realpathSync.native(root);
-  const entry = String(entryPath || 'index.html').replace(/^[/\\]+/, '').replace(/\\/g, '/');
-  const entryFull = path.resolve(realRoot, entry);
-  const resolvedEntry = containedExistingPath(realRoot, entryFull);
-  if (!resolvedEntry?.stat.isFile()) throw new Error(`Preview entry not found or escapes preview root: ${entry}`);
-  const id = `preview-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-  const record = {
-    id, workspaceId, root: realRoot, entryPath: entry, host: '127.0.0.1', port: 0, url: '',
-    crossOriginIsolation: !!crossOriginIsolation, spaFallback: !!spaFallback,
-    startedAt: new Date().toISOString(), requests: 0, lastRequestAt: null, server: null
+  pendingPreviewStarts += 1;
+  pendingWorkspaceStarts.set(workspaceId, workspacePending + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    pendingPreviewStarts = Math.max(0, pendingPreviewStarts - 1);
+    const remaining = Math.max(0, (pendingWorkspaceStarts.get(workspaceId) || 1) - 1);
+    if (remaining) pendingWorkspaceStarts.set(workspaceId, remaining);
+    else pendingWorkspaceStarts.delete(workspaceId);
   };
-  const server = http.createServer((req, res) => {
-    record.requests += 1;
-    record.lastRequestAt = new Date().toISOString();
-    const method = String(req.method || 'GET').toUpperCase();
-    if (method !== 'GET' && method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Method Not Allowed');
-      return;
-    }
-    let url;
-    try { url = new URL(req.url || '/', 'http://127.0.0.1'); }
-    catch { res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Bad Request'); return; }
-    const target = safeFile(realRoot, url.pathname, entry, record.spaFallback);
-    if (!target) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end('Not Found');
-      return;
-    }
-    const range = parseRange(req.headers.range, target.stat.size);
-    if (req.headers.range && !range) {
-      res.writeHead(416, { 'Content-Range': `bytes */${target.stat.size}` });
-      res.end();
-      return;
-    }
-    writeHeaders(res, record, target.file, target.stat, range);
-    if (method === 'HEAD') { res.end(); return; }
-    const stream = fs.createReadStream(target.file, range ? { start: range.start, end: range.end } : undefined);
-    stream.on('error', error => {
-      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(`Preview read failed: ${error.message}`);
-    });
-    res.on('close', () => stream.destroy());
-    stream.pipe(res);
-  });
-  server.requestTimeout = PREVIEW_REQUEST_TIMEOUT_MS;
-  server.headersTimeout = Math.min(PREVIEW_REQUEST_TIMEOUT_MS, 15000);
-  server.keepAliveTimeout = 5000;
-  server.maxRequestsPerSocket = 1000;
-  server.maxConnections = 128;
+}
+
+export async function startPreview({ workspaceId, root, entryPath = 'index.html', port = 0, crossOriginIsolation = false, spaFallback = false }) {
+  const releaseCapacity = reservePreviewCapacity(workspaceId);
+  let server = null;
   try {
+    const realRoot = fs.realpathSync.native(root);
+    const entry = String(entryPath || 'index.html').replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    const entryFull = path.resolve(realRoot, entry);
+    const resolvedEntry = containedExistingPath(realRoot, entryFull);
+    if (!resolvedEntry?.stat.isFile()) throw new Error(`Preview entry not found or escapes preview root: ${entry}`);
+    const id = `preview-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+    const record = {
+      id, workspaceId, root: realRoot, entryPath: entry, host: '127.0.0.1', port: 0, url: '',
+      crossOriginIsolation: !!crossOriginIsolation, spaFallback: !!spaFallback,
+      startedAt: new Date().toISOString(), requests: 0, lastRequestAt: null, server: null
+    };
+    server = http.createServer((req, res) => {
+      record.requests += 1;
+      record.lastRequestAt = new Date().toISOString();
+      const method = String(req.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Method Not Allowed');
+        return;
+      }
+      let url;
+      try { url = new URL(req.url || '/', 'http://127.0.0.1'); }
+      catch { res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Bad Request'); return; }
+      const target = safeFile(realRoot, url.pathname, entry, record.spaFallback);
+      if (!target) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+        res.end('Not Found');
+        return;
+      }
+      const range = parseRange(req.headers.range, target.stat.size);
+      if (req.headers.range && !range) {
+        res.writeHead(416, { 'Content-Range': `bytes */${target.stat.size}` });
+        res.end();
+        return;
+      }
+      writeHeaders(res, record, target.file, target.stat, range);
+      if (method === 'HEAD') { res.end(); return; }
+      const stream = fs.createReadStream(target.file, range ? { start: range.start, end: range.end } : undefined);
+      stream.on('error', error => {
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(`Preview read failed: ${error.message}`);
+      });
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+    });
+    server.requestTimeout = PREVIEW_REQUEST_TIMEOUT_MS;
+    server.headersTimeout = Math.min(PREVIEW_REQUEST_TIMEOUT_MS, 15000);
+    server.keepAliveTimeout = 5000;
+    server.maxRequestsPerSocket = 1000;
+    server.maxConnections = 128;
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(Number(port) || 0, record.host, () => resolve());
     });
+    record.server = server;
+    record.port = server.address().port;
+    record.url = `http://${record.host}:${record.port}/${entry}`;
+    previews.set(id, record);
+    return publicPreview(record);
   } catch (error) {
-    try { server.close(); } catch {}
+    try { server?.close(); } catch {}
     throw error;
+  } finally {
+    releaseCapacity();
   }
-  record.server = server;
-  record.port = server.address().port;
-  record.url = `http://${record.host}:${record.port}/${entry}`;
-  previews.set(id, record);
-  return publicPreview(record);
 }
 
 export function listPreviews({ workspaceId } = {}) {
@@ -258,7 +281,9 @@ export const __test = {
   containedExistingPath,
   isInside,
   parseRange,
+  pendingWorkspaceStarts,
   previews,
+  reservePreviewCapacity,
   safeFile,
   workspacePreviewCount
 };
