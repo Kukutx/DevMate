@@ -32,3 +32,15 @@ test('timeout terminates the complete owned process tree', async () => {
   await new Promise(resolve => setTimeout(resolve, 1600));
   assert.equal(fs.existsSync(marker), false);
 });
+
+test('timeout force-stops a command that ignores graceful termination', async () => {
+  const source = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+  const result = await executeCommand(process.execPath, ['-e', source], {
+    timeoutMs: 250,
+    maxOutputChars: 2000
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminated, true);
+  assert.equal(result.forced, true);
+  assert.equal(result.exitConfirmed, true);
+});
