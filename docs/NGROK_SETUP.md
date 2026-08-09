@@ -1,56 +1,34 @@
 # ngrok setup and account switching
 
-DevMate supports a one-prompt recommended setup and an explicit developer setup.
+ngrok is DevMate's default desktop public-connection provider. Fresh VS Code installs use the machine's normal ngrok configuration unless the user explicitly chooses a DevMate-managed account.
 
-## Recommended: quick setup
+For a machine where ngrok is already installed and configured, no ngrok setup action is required: open the project and run `DevMate: Start`.
 
-Run `DevMate: Configure ngrok (Recommended)` and choose **Quick setup**.
+## Optional DevMate-managed account
+
+Run `DevMate: Configure ngrok` when you want DevMate to store and use a specific ngrok account independently of the machine's global `ngrok.yml`.
+
+The quick setup path:
 
 1. Paste the complete ngrok Authtoken.
-2. Select **Start Now**.
+2. Use the account's default development domain unless a specific stable URL is required.
+3. Start DevMate when prompted, or run `DevMate: Start` later.
 
 DevMate then:
 
-- stores the Authtoken in VS Code Secret Storage
-- supplies it only to the ngrok child process through `NGROK_AUTHTOKEN`
-- leaves the global `ngrok.yml` unchanged
-- clears any stable URL left from another account
-- uses the selected account's default development domain
-- disables endpoint pooling
+- stores the Authtoken in VS Code Secret Storage;
+- supplies it only to the ngrok child process through `NGROK_AUTHTOKEN`;
+- leaves the global `ngrok.yml` unchanged;
+- uses the selected account's default development endpoint when no stable URL is configured;
+- disables endpoint pooling unless the user deliberately enables it.
 
-After initial setup, the normal workflow is only:
+A DevMate-managed account fails closed when its saved Authtoken is unavailable. It does not silently fall back to the global ngrok account.
 
-1. Open the project.
-2. Run `DevMate: Start`.
-3. Paste the copied MCP URL into ChatGPT when the connector URL changes.
+## Use the machine's normal ngrok configuration
 
-Managed-account mode refuses to start without a saved Authtoken. It never silently falls back to an old or shared global ngrok account.
+This is the fresh-install default. It is appropriate when the developer already manages ngrok on the machine.
 
-## Switch to a new ngrok account
-
-1. Run `DevMate: Switch ngrok Account`.
-2. Paste the complete Authtoken from the new account.
-3. Choose **Use the new account default domain** unless the new account explicitly owns the current stable URL.
-4. Select **Start Now**.
-
-The new token takes effect for the next ngrok process. The old token in the global `ngrok.yml` does not affect DevMate while managed-account mode is enabled.
-
-## Use the account default domain
-
-For the lowest-friction setup, leave `devMate.ngrokUrl` empty. ngrok will use the development domain assigned to the selected account.
-
-This is the recommended choice when moving from a shared account to a new account. The old account domain cannot be transferred merely by changing the Authtoken.
-
-## Developer setup
-
-Choose **Developer setup** when you intentionally need either:
-
-- the global `ngrok.yml`
-- a stable URL owned by the selected account
-
-### Use the global ngrok configuration
-
-Choose **Use the global ngrok configuration**, or set:
+The corresponding machine-local setting is:
 
 ```json
 {
@@ -58,53 +36,64 @@ Choose **Use the global ngrok configuration**, or set:
 }
 ```
 
-This mode is intended for developers who already maintain `ngrok.yml`, multiple endpoints, services, or external automation. Run `ngrok config check` to see which global configuration file ngrok uses.
+Run `ngrok config check` when you need to inspect which ngrok configuration file the installed ngrok executable uses.
 
-### Configure a stable URL
+## Switch a managed ngrok account
 
-Set `devMate.ngrokUrl` to a URL or hostname owned by the selected ngrok account, for example:
+Run `DevMate: Switch ngrok Account`.
+
+1. Paste the complete Authtoken for the new account.
+2. Use the new account's default domain unless that account explicitly owns the configured stable URL.
+3. Start DevMate when prompted or later through the normal one-click Start flow.
+
+The credential change is provider-scoped and ownership-aware. DevMate first ensures it is safe to mutate the credential; it never overwrites a credential underneath a locally owned active ngrok process.
+
+## Stable ngrok URL
+
+A stable ngrok URL is optional. When needed, configure a clean HTTPS URL/hostname owned by the selected account, for example:
 
 ```text
 https://your-name.ngrok-free.app
 ```
 
-Do not append `/mcp`; DevMate adds that path and its own access token automatically.
+Do not append `/mcp`; DevMate adds the MCP path when presenting the verified connector URL. **DevMate never appends the bearer credential to the URL.** MCP authentication remains a separate `Authorization: Bearer ...` request header.
 
-If ngrok reports that the URL does not belong to the account, choose **Use Account Default Domain** from the DevMate error action, or fix ownership in the ngrok dashboard.
+The shared instance connection remains authoritative for the active endpoint. `devMate.ngrokUrl` is a machine-local setup candidate, not a second business-state source.
 
-## ERR_NGROK_334: endpoint already online
+## Endpoint already active
 
-This error means the same endpoint URL is already active in another ngrok session.
+If ngrok reports that the same endpoint is already active in another Agent/session, first determine whether that Agent is intentionally serving the same DevMate instance.
 
-DevMate provides three direct recovery actions:
+Useful actions include:
 
-- **Switch ngrok Account** — save a different account and use its default domain
-- **Use Account Default Domain** — clear the previous custom URL and restart safely
-- **View Active Agents** — open the dashboard and stop the old Agent or endpoint
+- switch to the intended ngrok account;
+- clear an obsolete stable URL and use the selected account's default endpoint;
+- inspect active ngrok Agents/endpoints and stop the stale process when appropriate.
 
-Do not enable `devMate.ngrokPoolingEnabled` as a routine workaround. Pooling load-balances requests across agents, which can send ChatGPT requests to the wrong machine or workspace. It is exposed only for deliberate advanced deployments where every pooled agent is equivalent and trusted.
-
-## Manual fallback for older DevMate builds
-
-Before the managed-account workflow is installed, switch the global ngrok account manually:
-
-```powershell
-ngrok config add-authtoken "<NEW_AUTHTOKEN>"
-ngrok config check
-```
-
-Then stop any old ngrok process or dashboard Agent and run `DevMate: Start` again. Never commit or paste the Authtoken into project files.
+Do not enable `devMate.ngrokPoolingEnabled` as a routine workaround. Pooling is only appropriate when all participating Agents deliberately serve an equivalent trusted instance; otherwise requests can reach the wrong machine/workspace.
 
 ## Diagnostics
 
-Run `DevMate: ngrok Diagnostics` to report:
+Use `DevMate: Connection Doctor` for the generic public-connection view. For ngrok-specific account/executable diagnostics, the registered `devMate.ngrokDoctor` command reports:
 
-- ngrok executable and version
-- DevMate-managed versus global account mode
-- whether a managed token exists
-- whether DevMate is ready to launch
-- configured URL
-- pooling state
-- `ngrok config check` output using the effective managed environment when applicable
+- ngrok executable and version;
+- machine/global versus DevMate-managed account source;
+- whether a managed credential exists;
+- whether the provider is ready to launch;
+- effective configured URL;
+- pooling state;
+- `ngrok config check` output using the effective managed environment when applicable.
 
-The diagnostic output never prints the saved Authtoken.
+Diagnostic output does not print the saved Authtoken.
+
+## Runtime contract
+
+ngrok setup owns only account/settings/credential concerns. The provider process itself is owned by the shared `TunnelController`, which participates in the same desktop ownership, recovery and complete-session verification model as the other providers.
+
+Normal use remains:
+
+```text
+Open project → Start → Ready
+```
+
+There is no separate manual ngrok-start or MCP-verification step in the normal lifecycle.
