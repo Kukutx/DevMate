@@ -1,98 +1,63 @@
-# DevMate team and production deployment
+# Team access and hardened deployments
 
-DevMate is a local-first development gateway. Workspace and platform runtimes stay on a controlled development machine, container, or build host, while authenticated MCP clients reach the gateway through an HTTPS ingress when remote access is needed.
+DevMate is a local-first development gateway. A single instance can combine owner access, scoped team members, public connection providers, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
 
-## Deployment modes
+## Capability composition
 
-| Mode | Intended use | Identity | Coordination | Ingress contract |
-|---|---|---|---|---|
-| `personal` | One developer and one ChatGPT connection | Owner token | Work sessions and local workspace state | `ngrok` is the desktop default; other current providers remain supported |
-| `team` | Several developers, reviewers, or agents | Per-member hashed tokens and roles | Workspace scopes, leases, work sessions | Stable URL or the current temporary tunnel after real MCP preflight |
-| `production` | Long-lived shared gateway | Per-member tokens plus hardened request guard | Leases, work sessions, approvals, bounded concurrency, durable jobs | Stable managed tunnel or external HTTPS ingress only |
+A current instance can compose:
 
-All modes use the same work-session API and core file/command/Git surface. Team and production modes add authorization and coordination; they do not broaden filesystem access.
+- **Connection** — `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or `external` HTTPS ingress.
+- **Access** — the owner credential plus optional scoped `dmt_` members.
+- **Coordination** — work sessions and optional workspace-lease enforcement for shared mutations.
+- **Approval** — optional dual-control policy for selected high-risk capabilities.
+- **Request policy** — Host restrictions, request-size, rate, concurrency and timeout limits.
+- **Execution** — embedded execution and/or scoped external `dmr_` Runners.
+- **Operations** — durable jobs, audit, metrics, maintenance and drain controls.
+
+Adding team members does not change the connection provider. Hardening request policy does not create a second runtime. Moving execution to external Runners does not change MCP identity or workspace authorization.
 
 ## Configuration ownership
 
-The workspace-derived shared `config.json` is the business source of truth for:
+The workspace-derived shared `config.json` is the business source of truth for current capabilities, including:
 
-- deployment mode;
-- selected ingress provider;
-- stable public URL when the provider has one;
-- team membership and lease policy;
-- production Host allowlist and request limits;
-- jobs, Runner control, approvals, and plugin state.
+- `connection.provider` and `connection.publicUrl`;
+- `team.members`, default role, member limit and lease policy;
+- `requestPolicy` limits and optional Host allowlist;
+- Runner control and credentials metadata;
+- approval, jobs, plugins, permissions and maintenance state.
 
-VS Code machine settings and Secret Storage contain host-local execution details such as executable paths, ngrok account mode, tunnel restart settings, and provider credentials. They are not a second deployment database.
+Desktop machine settings and secure host storage contain only machine-local execution details such as executable paths, restart preferences and provider credentials. They are not a second instance database.
 
-`DevMate: Configure Deployment` edits the shared workspace configuration transactionally. MCP administration through `team_configure` edits the same shared configuration. Normal editor-context refreshes, activation, Doctor, and unrelated VS Code setting changes do not rewrite deployment/team/production state.
+Unsupported historical instance fields fail closed. Current hosts do not translate a previous deployment-mode shape into current capabilities at startup.
 
-The actual `TunnelController` reads mode, provider, and stable public URL from the shared workspace configuration at runtime. This prevents a stale machine-level provider selection from launching a different provider than the one reported by deployment tools.
+## Public connection
 
-## Recommended topology
+The public connection remains independent of access topology.
+
+Current providers:
+
+- `ngrok` — default desktop provider; can use normal machine configuration or a DevMate-managed account.
+- `cloudflare-quick` — dynamic development endpoint.
+- `cloudflare-managed` — managed tunnel with a stable HTTPS origin.
+- `external` — an existing HTTPS reverse proxy, VPN, ingress or service-managed endpoint.
+
+`cloudflare-managed` and `external` require an explicit clean HTTPS origin. Dynamic providers may publish their runtime origin automatically.
+
+For desktop hosts, Ready is not derived from provider status alone. The active **Gateway + provider complete-session generation** must pass authenticated MCP `initialize` and `tools/list`. A Gateway restart, provider restart or ownership transfer invalidates old verification even when the hostname is unchanged.
+
+See `TUNNELS.md` and `HOST_INTEGRATION.md`.
+
+## Team identities
+
+Roles are cumulative:
 
 ```text
-ChatGPT / MCP clients
-        |
-        | HTTPS
-        v
-ngrok Traffic Policy, Cloudflare Tunnel/Access,
-or an existing reverse proxy
-        |
-        v
-DevMate gateway
-        |
-        +-- explicitly configured workspaces
-        +-- supervised local processes
-        +-- optional Godot / Browser QA plugins
-        +-- backups, audit, jobs, leases, and work-session state
+observer → reviewer → developer → maintainer → owner
 ```
 
-For a desktop host, keep the Gateway on loopback and let the selected tunnel or reverse proxy provide ingress. The supported Docker deployment binds inside its container and should be exposed only through deliberate container/network configuration.
+The per-instance owner token remains the recovery credential. Team tokens use the `dmt_` credential family and are stored only as salted hashes; plaintext is returned only when a credential is created or rotated.
 
-## Ingress providers
-
-Current providers are product modes, not compatibility shims:
-
-- `ngrok` — default personal workflow; stable reserved URLs are valid for team/production;
-- `cloudflare-quick` — temporary development/team testing only;
-- `cloudflare-managed` — stable managed ingress;
-- `external` — an existing HTTPS reverse proxy, VPN, ingress, or service manager.
-
-Provider transitions are complete-state transitions. A stale URL from a previous provider is never inherited automatically. `cloudflare-managed` and `external` require a stable HTTPS URL. Production rejects `cloudflare-quick` and requires a stable HTTPS URL for every provider, including ngrok.
-
-## Team temporary ingress
-
-Team mode intentionally supports a temporary tunnel, but a provider-ready HTTPS address is not enough to make the deployment Ready.
-
-A temporary runtime endpoint becomes an effective team public ingress only when all of the following are true:
-
-1. the shared tunnel record is Ready for the current Gateway port;
-2. the public origin is clean HTTPS;
-3. a DevMate MCP preflight occurred after the current tunnel `readyAt`;
-4. the preflight Host matches the current public endpoint;
-5. the returned server is `devmate`;
-6. authenticated `tools/list` succeeded with at least one tool.
-
-If the provider restarts, the shared tunnel receives a new `readyAt`. Any older preflight immediately becomes stale, so team readiness fails closed until the current endpoint is verified again. Production never substitutes this temporary runtime state for its required configured stable URL.
-
-## Roles
-
-| Role | Read | Validate | Write | Execute | Git | Publish | Admin |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| `observer` | yes | | | | | | |
-| `reviewer` | yes | yes | | | | | |
-| `developer` | yes | yes | yes | yes | yes | | |
-| `maintainer` | yes | yes | yes | yes | yes | yes | yes |
-| `owner` | all capabilities | | | | | | |
-
-The per-install token is the owner credential. Team tokens use the form `dmt_<member>_<secret>`. DevMate stores only a salted scrypt hash; the plaintext token is returned once.
-
-Team tokens cannot perform force pushes, hard resets, Git clean, forced branch deletion, recursive destructive shell commands, or machine shutdown operations. Use the local owner credential for an exceptional recovery operation.
-
-## Member lifecycle
-
-Use the owner credential with:
+Member administration:
 
 - `team_member_create`
 - `team_member_update`
@@ -100,91 +65,146 @@ Use the owner credential with:
 - `team_member_revoke`
 - `team_member_list`
 
-A member can be restricted to one or more `workspaceId` values and can have an expiry time. Rotation invalidates the previous token immediately.
-
 Recommended practice:
 
-1. Create a separate principal for each human, bot, or ChatGPT connector.
-2. Assign the minimum role and workspace set.
-3. Use expiry for contractors and temporary automations.
+1. Create a separate principal for each human, bot or connector.
+2. Assign the minimum role and explicit workspace scope.
+3. Use expiry for temporary access.
 4. Rotate immediately after suspected exposure.
-5. Never reuse the owner token for routine team access.
+5. Keep the owner token out of routine shared workflows.
 
-## Workspace leases and work sessions
+Team credentials do not bypass the tool policy. High-risk Git, shell, publish and administrative operations remain capability-gated.
 
-The single work-session API is available in personal, team, and production modes:
+## Work sessions and workspace leases
+
+Every instance uses the same work-session API:
 
 - `work_session_start`
 - `work_session_status`
 - `work_session_finish`
 - `work_session_rollback`
 
-Explicit lease tools remain available:
+Explicit lease operations remain available:
 
 - `workspace_lease_acquire`
 - `workspace_lease_status`
 - `workspace_lease_release`
 
-`work_session_start` resolves one workspace, checks the caller's workspace scope, and acquires or renews its lease. File, command, validation, and Git calls performed in that active session are associated with its `workSessionId` in the audit log.
+When `team.requireWorkspaceLeaseForWrites` is enabled, scoped remote principals must own the required workspace lease before mutations covered by policy. The local owner remains a recovery path.
 
-When `teamRequireWorkspaceLeaseForWrites` is enabled, team principals must own an exclusive lease before write, execution, Git, publish, or work-session rollback operations. A session finish releases only the exact lease tenure created for that session; it cannot release a lease that was later taken over by another principal.
+`work_session_start` resolves one workspace, validates the caller's scope and creates or renews the matching lease atomically. `work_session_finish` releases only the exact lease tenure belonging to that session. `work_session_rollback` reverses recorded file mutations, not arbitrary shell effects or Git history.
 
-`work_session_rollback` can safely reverse recorded file mutations. Commands and Git history are not automatically reversed. After a team session has been finished, reacquire the affected workspace lease before rolling it back.
+For genuine parallel implementation, use separate worktrees/clones as separate writable workspace IDs instead of weakening lease policy.
 
-Leases prevent two agents from editing the same checkout at once. For genuine parallel implementation, create separate Git worktrees or clones, add each as an explicit writable workspace, and scope each principal to its own workspace ID. Merge through normal Git review rather than disabling the lease policy.
+## Request hardening
 
-## Production request guard
+`requestPolicy` is explicit instance policy, not a side effect of a deployment mode. It can define:
 
-The production guard applies before the MCP transport:
+- `allowedHosts`;
+- maximum request bytes;
+- requests per minute;
+- global concurrency;
+- per-principal concurrency;
+- request timeout.
 
-- owner or team bearer authentication;
-- authentication-attempt throttling by remote address;
-- per-principal request limits;
-- global and per-principal concurrency limits;
-- request-size limits;
-- request IDs in responses and audit entries;
-- public Host allowlist;
-- bounded request timeout;
-- active client/session summaries.
+The Gateway also enforces authentication-attempt throttling, request IDs, bounded observability and credential redaction.
 
-Configuration tools:
+An empty Host allowlist does not turn spoofed localhost requests into local traffic. Loopback trust additionally requires the actual socket peer to be loopback.
 
-- `deployment_status`
-- `deployment_readiness`
-- `deployment_policy_template`
-- `team_configure`
-- `team_activity_status`
+## Approval policy
 
-For production, `deployment_readiness` requires a configured stable public URL permitted by the Host allowlist, healthy durable state, an active Gateway instance lock, and a live execution path. If team mode has an explicit Host allowlist, readiness validates it against the effective verified public endpoint as well.
+Dual-control approval is an explicit access capability. When enabled for a protected capability, the original call creates a pending approval without executing. A different authorized Maintainer or Owner approves it, then the requester retries the identical operation.
+
+Approval tools:
+
+- `team_approval_policy_status`
+- `team_approval_configure`
+- `team_approval_list`
+- `team_approval_status`
+- `team_approval_decide`
+- `team_approval_cancel`
+
+Approval is independent of connection provider and Runner topology.
+
+## Durable jobs and external Runners
+
+Durable jobs use the same central authorization policy as direct MCP tools. `job_submit` accepts reviewed targets only and rechecks role, workspace scope, lease, approval, plugin state and Runner requirements before execution.
+
+External Runners authenticate to `/runner/v1` using scoped `dmr_` credentials. Every Runner credential has explicit workspace scope and bounded concurrency. Reported Runner capabilities are scheduling metadata, not an operating-system security boundary.
+
+Use drain controls before maintenance when queued work should stop being claimed while in-flight work settles.
+
+See `JOBS.md` and `EXTERNAL_RUNNERS.md`.
 
 ## Published review previews
 
-A maintainer or owner can convert a running local Browser QA or Godot preview into a time-limited public review link:
+A Maintainer or Owner can expose an already running local preview through a bounded, time-limited review share:
 
 - `published_preview_share`
 - `published_preview_list`
 - `published_preview_revoke`
 
-The URL contains a scoped one-time session token. The initial request exchanges it for an `HttpOnly`, `SameSite=Strict` cookie limited to that preview path. Only a SHA-256 token hash is retained. Shares have a maximum lifetime of 24 hours and can optionally limit the number of browser sessions.
+The initial share token is exchanged for a path-scoped `HttpOnly`, `SameSite=Strict` browser session. Only token hashes are retained. Published previews are review infrastructure, not general-purpose production hosting.
 
-Published previews are for review builds, not for hosting production applications. Revoke them after review and avoid embedding credentials or private data in the exported application.
+## Long-lived deployment topology
 
-## Operational checklist
+A hardened long-lived installation commonly looks like:
 
-Before production use:
+```text
+ChatGPT / trusted MCP clients
+        │ HTTPS + bearer identity
+        ▼
+managed tunnel / reverse proxy / VPN ingress
+        │
+        ▼
+DevMate Gateway
+  ├─ explicit workspaces
+  ├─ member and owner authorization
+  ├─ request policy
+  ├─ leases / approvals
+  ├─ durable jobs / audit / metrics
+  └─ embedded or external execution
+        │ /runner/v1 + scoped dmr_ credential
+        ▼
+optional external Runner hosts
+```
 
-1. Run `DevMate: Configure Deployment` and select `production`.
-2. Configure a stable managed tunnel, stable ngrok endpoint, or existing HTTPS ingress.
-3. Keep DevMate authentication enabled even when the edge also authenticates users.
-4. Set the public URL and Host allowlist.
-5. Create scoped member tokens; stop distributing the owner token.
-6. Require workspace leases.
-7. Set at least 90 days of audit retention if organizational policy permits.
-8. Keep `publicHealthDetails` disabled.
-9. Run `deployment_readiness`, `DevMate: Deployment / Tunnel Diagnostics`, and `gateway_self_test`.
-10. Confirm the intended embedded or external Runner is actually live, not only configured.
-11. Back up the DevMate config and state directory with access controls appropriate for development credentials.
+The Gateway remains a controlled development boundary. External Runners distribute execution but do not make the central durable state horizontally replicated.
+
+## Operational tools
+
+Current operational tools retain their existing names:
+
+- `deployment_status`
+- `deployment_readiness`
+- `deployment_policy_template`
+- `deployment_metrics`
+- `deployment_runtime_state`
+- `team_status`
+- `team_configure`
+- `team_activity_status`
+
+The `deployment_*` prefix identifies operational status APIs; it does **not** imply a runtime-mode selector.
+
+`team_configure` updates current connection/request/lease capabilities through the shared configuration. It does not switch the instance between personal, team and production modes.
+
+## Hardened deployment checklist
+
+Before exposing a long-lived instance remotely:
+
+1. Choose and verify the intended public connection provider.
+2. Keep DevMate authentication enabled even when the edge also authenticates users.
+3. Configure explicit Host policy when your deployment requires it.
+4. Create scoped member credentials instead of distributing the owner token.
+5. Enable workspace-lease enforcement when multiple remote principals can mutate the same checkout.
+6. Configure dual-control approval where organizational policy requires it.
+7. Set bounded request, concurrency and timeout policy appropriate to the host.
+8. Keep detailed public health output disabled.
+9. Run `deployment_readiness`, `connection_diagnostics` and `gateway_self_test`.
+10. Confirm the intended embedded or external Runner is actually live.
+11. Back up DevMate config/state with controls appropriate for development credentials.
+12. Use drain controls before upgrades that affect running work.
 
 ## Trust boundary
 
-DevMate is not a multi-tenant remote code-execution SaaS. It is a controlled gateway into machines and workspaces that you own. Team mode separates authenticated principals and coordinates work, but every permitted command still runs as the operating-system account hosting DevMate. For hostile or unrelated tenants, use separate OS accounts, virtual machines, containers, or independent DevMate instances.
+DevMate is not a hostile multi-tenant remote-code-execution service. Permitted commands execute as the operating-system identity hosting the relevant Gateway or Runner. Use separate OS accounts, containers, VMs, machines or DevMate instances for unrelated trust domains.
