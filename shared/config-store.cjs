@@ -364,7 +364,7 @@ function workspaceId(root) {
     .toLowerCase() || 'workspace';
 }
 
-function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
+function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
   const root = path.resolve(workspaceRoot);
   const id = workspaceId(root);
   const serverPort = strictPort(port, { label: 'server.port' });
@@ -430,7 +430,7 @@ function newPersonalConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
   };
 }
 
-function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
+function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
   const file = path.resolve(configFile);
   const root = path.resolve(workspaceRoot);
   const rootKey = normalizedWorkspaceRoot(root);
@@ -439,7 +439,7 @@ function ensurePersonalConfig({ configFile, workspaceRoot, preferredPort = DEFAU
     throw new Error(`Workspace is not a directory: ${root}`);
   }
   return updateConfig(file, current => {
-    if (!Object.keys(current).length) return newPersonalConfig({ workspaceRoot: root, port: requestedPort, appVersion });
+    if (!Object.keys(current).length) return newInstanceConfig({ workspaceRoot: root, port: requestedPort, appVersion });
     const config = normalizeInstanceConfig(current);
     config.appVersion = appVersion;
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
@@ -496,9 +496,9 @@ module.exports = {
   atomicWriteJson,
   cleanupReplacementCandidates,
   configError,
-  ensurePersonalConfig,
+  ensureInstanceConfig,
   fsyncDirectory,
-  newPersonalConfig,
+  newInstanceConfig,
   parseJsonObjectFile,
   quarantineConfig,
   randomToken,
