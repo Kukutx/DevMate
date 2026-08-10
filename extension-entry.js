@@ -42,9 +42,7 @@ function ngrokCommand() {
   return String(preferenceValue('ngrokCommandPath', '') || 'ngrok').trim() || 'ngrok';
 }
 
-function usesManagedAccount() {
-  return preferenceValue('ngrokUseManagedAccount', true) !== false;
-}
+function usesManagedAccount() { return preferenceValue('ngrokUseManagedAccount', true) !== false; }
 
 function machineConfiguredUrl() {
   return String(preferenceValue('ngrokUrl', '') || '').trim();
