@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.1
+
+- Hardened VS Code Gateway runtime selection around one verified Node.js 24+ resolver and removed the unsupported private Electron Node flag and mutable runtime adapter layer.
+- Made VS Code Host Self-Check probe the actual Gateway runtime, made installed VSIX execution bundle-only, and made shared Gateway health matching version-aware.
+- Preserved Gateway ownership when failed-start cleanup cannot confirm process exit, and serialized tunnel follower recovery against explicit Stop.
+- Aligned fresh-install ngrok managed-account behavior to explicit opt-in and strengthened packaged VSIX smoke tests with transitive local dependency closure and forbidden-runtime-flag scans.
+
+
 ## 3.3.0
 
 - Added one owner-aware public tunnel per shared VS Code state directory, so simultaneous ngrok, Cloudflare, or external-provider starts converge instead of creating duplicate provider processes.
