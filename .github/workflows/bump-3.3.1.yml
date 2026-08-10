@@ -1,0 +1,76 @@
+name: One-time DevMate 3.3.1 version sync
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Set version and changelog
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($package.version -ne '3.3.0') { throw "Expected 3.3.0 before patch release, found $($package.version)" }
+          $package.version = '3.3.1'
+          $package | ConvertTo-Json -Depth 100 | Set-Content package.json
+
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $anchor = "## 3.3.0"
+          if (-not $changelog.Contains($anchor)) { throw '3.3.0 changelog anchor not found' }
+          $release = @"
+## 3.3.1
+
+- Hardened VS Code Gateway runtime selection around one verified Node.js 24+ resolver and removed the unsupported private Electron Node flag and mutable runtime adapter layer.
+- Made VS Code Host Self-Check probe the actual Gateway runtime, made installed VSIX execution bundle-only, and made shared Gateway health matching version-aware.
+- Preserved Gateway ownership when failed-start cleanup cannot confirm process exit, and serialized tunnel follower recovery against explicit Stop.
+- Aligned fresh-install ngrok managed-account behavior to explicit opt-in and strengthened packaged VSIX smoke tests with transitive local dependency closure and forbidden-runtime-flag scans.
+
+
+"@
+          $changelog = $changelog.Replace($anchor, $release + $anchor)
+          Set-Content CHANGELOG.md -Value $changelog -NoNewline
+
+      - name: Synchronize version contract
+        run: npm run version:sync
+
+      - name: Verify version and repository contracts
+        shell: pwsh
+        run: |
+          npm run version:check
+          npm run check
+          npm run test:unit
+          npm run smoke:gateway
+          npm run package:vsix
+          node scripts/smoke-vsix-runtime.mjs
+          node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Remove one-time workflow and commit
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/bump-3.3.1.yml -Force
+          git config user.name "kukutx"
+          git config user.email "61358650+Kukutx@users.noreply.github.com"
+          git add -A
+          git commit -m "Release DevMate 3.3.1 runtime hardening"
+          git push origin master
