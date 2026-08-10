@@ -31,7 +31,7 @@ jobs:
       - name: Decode and validate complete patch
         shell: pwsh
         run: |
-          node -e "const fs=require('fs'),z=require('zlib');fs.writeFileSync(process.env.RUNNER_TEMP+'\\devmate-3.3.2.patch',z.gunzipSync(Buffer.from(fs.readFileSync('scripts/one-time-3.3.2.patch.gz.b64','utf8').trim(),'base64')))"
+          node -e "const fs=require('fs'),z=require('zlib');const names=[1,2,3,4,5].map(i=>'scripts/one-time-3.3.2.patch.part'+i);const b64=names.map(n=>fs.readFileSync(n,'utf8').trim()).join('');fs.writeFileSync(process.env.RUNNER_TEMP+'\\devmate-3.3.2.patch',z.gunzipSync(Buffer.from(b64,'base64')))"
           git apply --check "$env:RUNNER_TEMP\devmate-3.3.2.patch"
 
       - name: Apply complete patch
@@ -41,7 +41,8 @@ jobs:
       - name: Remove one-time machinery before validation
         shell: pwsh
         run: |
-          Remove-Item scripts/one-time-3.3.2.patch.gz.b64 -Force
+          Remove-Item scripts/one-time-3.3.2.patch.gz.b64 -Force -ErrorAction SilentlyContinue
+          Remove-Item scripts/one-time-3.3.2.patch.part* -Force
           Remove-Item .github/workflows/one-time-3.3.2.yml -Force
 
       - name: Synchronize version contract
