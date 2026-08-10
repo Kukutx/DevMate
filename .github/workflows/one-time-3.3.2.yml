@@ -38,6 +38,9 @@ jobs:
         shell: pwsh
         run: |
           git apply "$env:RUNNER_TEMP\devmate-3.3.2.patch"
+          $fix = Get-Content scripts/one-time-3.3.2-fix.patch -Raw
+          $fix = $fix.Replace('@@ -8,7 +8,7 @@', '@@ -8,6 +8,6 @@')
+          Set-Content scripts/one-time-3.3.2-fix.patch -Value $fix -NoNewline
           git apply --check scripts/one-time-3.3.2-fix.patch
           git apply scripts/one-time-3.3.2-fix.patch
 
