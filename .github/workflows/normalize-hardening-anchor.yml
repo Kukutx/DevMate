@@ -1,0 +1,36 @@
+name: One-time hardening anchor normalization
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Normalize source anchor and remove this workflow
+        shell: pwsh
+        run: |
+          $path = 'extension-entry.js'
+          $text = Get-Content $path -Raw
+          $pattern = "function usesManagedAccount\(\)\s*\{\s*return preferenceValue\('ngrokUseManagedAccount', true\) !== false;\s*\}"
+          $replacement = "function usesManagedAccount() { return preferenceValue('ngrokUseManagedAccount', true) !== false; }"
+          $updated = [regex]::Replace($text, $pattern, $replacement, 1)
+          if ($updated -eq $text) { throw 'usesManagedAccount normalization anchor not found' }
+          Set-Content -Path $path -Value $updated -NoNewline
+          Remove-Item .github/workflows/normalize-hardening-anchor.yml -Force
+
+          git config user.name "kukutx"
+          git config user.email "61358650+Kukutx@users.noreply.github.com"
+          git add extension-entry.js .github/workflows/normalize-hardening-anchor.yml
+          git commit -m "Normalize ngrok runtime source formatting"
+          git push origin master
