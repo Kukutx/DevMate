@@ -8,6 +8,7 @@ const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-htt
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { RuntimeController } = require('./host/runtime-controller.js');
+const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
 const { updateConfig } = require('./shared/config-store.cjs');
 const {
   recordGeneration,
@@ -27,6 +28,8 @@ const MCP_PATH = '/mcp';
 let gatewayProcess = null;
 let gatewayController = null;
 let gatewayControllerKey = '';
+let gatewayNodeRuntime = null;
+let gatewayNodeRuntimeKey = '';
 let output = null;
 let statusBar = null;
 let panel = null;
@@ -352,6 +355,16 @@ function waitForProcessExit(child, timeoutMs=8000){
     new Promise(resolve=>setTimeout(()=>resolve(false), Math.max(250, Number(timeoutMs) || 8000)))
   ]);
 }
+function ensureGatewayNodeRuntime(){
+  const key = process.execPath + '|' + (process.versions.node || '');
+  if(gatewayNodeRuntime && gatewayNodeRuntimeKey === key) return gatewayNodeRuntime;
+  const runtime = resolveNodeRuntime({spawnSyncImpl:spawnSync});
+  gatewayNodeRuntime = runtime;
+  gatewayNodeRuntimeKey = key;
+  log('Using Node ' + runtime.nodeVersion + ' Gateway runtime from ' + runtime.source + ': ' + runtime.executable);
+  return runtime;
+}
+
 async function ensureGatewayController(ctx){
   const root = currentRoot();
   if(!root) throw new Error('Open a VS Code project folder first.');
@@ -360,12 +373,14 @@ async function ensureGatewayController(ctx){
   if(gatewayController && gatewayControllerKey === key){
     gatewayController.preferredPort = configuredPort();
     gatewayController.gatewayEntry = gatewayPath(ctx);
+    gatewayController.nodeExecutable = ensureGatewayNodeRuntime().executable;
     return gatewayController;
   }
   if(gatewayController){
     const disposed = await gatewayController.dispose({stopOwned:true});
     if(disposed?.disposed === false) throw new Error(`Previous Gateway controller could not be disposed: ${disposed.reason || 'unknown error'}`);
   }
+  const nodeRuntime = ensureGatewayNodeRuntime();
   gatewayController = new RuntimeController({
     workspaceRoot: root,
     stateDirectory,
@@ -373,7 +388,7 @@ async function ensureGatewayController(ctx){
     preferredPort: configuredPort(),
     appVersion: VERSION,
     hostId: 'vscode',
-    nodeExecutable: process.execPath,
+    nodeExecutable: nodeRuntime.executable,
     spawnImpl: spawn,
     logger: message => log(message)
   });

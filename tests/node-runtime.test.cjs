@@ -44,6 +44,7 @@ test('probes Electron-as-Node with bounded current environment', () => {
   assert.equal(result.executable, '/runtime/node');
   assert.equal(result.nodeVersion, '24.18.0');
   assert.equal(spawnSyncImpl.calls[0].options.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.equal(spawnSyncImpl.calls[0].args.includes('--ms-enable-electron-run-as-node'), false);
   assert.ok(spawnSyncImpl.calls[0].options.timeout <= 5000);
 });
 

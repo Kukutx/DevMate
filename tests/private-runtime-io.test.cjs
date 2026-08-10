@@ -42,38 +42,10 @@ test('runtime adapter wrappers never mutate Node process-global modules', () => 
   assert.equal(runtimeIo.isNative(), false);
 });
 
-test('VS Code Electron gets its required Node-mode flag only for the Gateway entry', () => {
-  const executable = process.platform === 'win32' ? 'C:\\Program Files\\Microsoft VS Code\\Code.exe' : '/opt/vscode/code';
-  const gateway = process.platform === 'win32'
-    ? 'C:\\extensions\\devmate\\gateway\\server.bundle.mjs'
-    : '/extensions/devmate/gateway/server.bundle.mjs';
-  const ordinary = process.platform === 'win32' ? 'C:\\workspace\\script.mjs' : '/workspace/script.mjs';
-  const options = { electronVersion: '39.2.3', processExecutable: executable };
-
-  assert.deepEqual(
-    runtimeIo.decorateGatewaySpawnArgs(executable, [gateway], options),
-    [runtimeIo.VSCODE_ELECTRON_NODE_FLAG, gateway]
-  );
-  assert.deepEqual(
-    runtimeIo.decorateGatewaySpawnArgs(executable, [runtimeIo.VSCODE_ELECTRON_NODE_FLAG, gateway], options),
-    [runtimeIo.VSCODE_ELECTRON_NODE_FLAG, gateway],
-    'flag must never be duplicated'
-  );
-  assert.deepEqual(
-    runtimeIo.decorateGatewaySpawnArgs(executable, [ordinary], options),
-    [ordinary],
-    'unrelated VS Code child processes must not be decorated'
-  );
-  assert.deepEqual(
-    runtimeIo.decorateGatewaySpawnArgs(executable, [gateway], { ...options, electronVersion: '' }),
-    [gateway],
-    'normal Node must not receive a VS Code-only Electron flag'
-  );
-  assert.deepEqual(
-    runtimeIo.decorateGatewaySpawnArgs('node', [gateway], options),
-    [gateway],
-    'an explicit system Node executable must remain unchanged'
-  );
+test('VS Code runtime IO never injects private Electron Node flags', () => {
+  const runtimeSource = source('vscode-host/runtime-io.js');
+  assert.doesNotMatch(runtimeSource, /--ms-enable-electron-run-as-node/);
+  assert.doesNotMatch(runtimeSource, /decorateGatewaySpawnArgs|VSCODE_ELECTRON_NODE_FLAG/);
 });
 
 test('SpawnLayer composes on the private adapter without touching global child_process', () => {
@@ -133,8 +105,8 @@ test('VS Code runtime IO is explicit and setup layers never monkey patch adapter
 
   assert.match(source('extension.js'), /require\('\.\/vscode-host\/runtime-io\.js'\)/);
   assert.match(source('vscode-host/bounded-http-client.js'), /require\('\.\/runtime-io\.js'\)/);
-  assert.match(source('vscode-host/runtime-io.js'), /--ms-enable-electron-run-as-node/);
-  assert.match(source('vscode-host/runtime-io.js'), /isGatewayEntry/);
+  assert.doesNotMatch(source('vscode-host/runtime-io.js'), /--ms-enable-electron-run-as-node|decorateGatewaySpawnArgs|VSCODE_ELECTRON_NODE_FLAG/);
+  assert.match(source('extension.js'), /resolveNodeRuntime/);
 
   assert.doesNotMatch(source('extension-entry.js'), /runtime-io\.js|SpawnLayer|installManagedSpawnLayer/);
   assert.doesNotMatch(source('extension-entry-platform.js'), /runtime-io\.js|installProcessWrappers|TunnelCompatibilityManager/);

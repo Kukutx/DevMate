@@ -88,6 +88,9 @@ try {
   }
 
   const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
+  const runtimeIoSource = fs.readFileSync(path.join(extensionPath, 'vscode-host', 'runtime-io.js'), 'utf8');
+  assert.match(extensionSource, /resolveNodeRuntime/, 'VSIX must resolve a verified Node runtime before launching the Gateway');
+  assert.doesNotMatch(runtimeIoSource, /--ms-enable-electron-run-as-node/, 'VSIX must not inject unsupported Electron Node flags');
   assert.match(extensionSource, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/, 'VSIX must link VS Code to the shared public MCP preflight');
   assert.match(extensionSource, /recordGeneration\(expectedRecord\)/, 'VSIX must bind explicit verification to the current complete session generation');
   assert.match(extensionSource, /verifiedForCurrentRecord\(persisted, currentRecord\)/, 'VSIX must validate persisted Ready evidence against the current session');
@@ -105,6 +108,8 @@ try {
 
   const requireFromVsix = createRequire(packageFile);
   const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
+  const { resolveNodeRuntime } = requireFromVsix('./host/runtime/node-runtime.js');
+  const nodeRuntime = resolveNodeRuntime();
   const port = await freePort();
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
   const controllerOptions = {
@@ -113,7 +118,7 @@ try {
     gatewayEntry,
     preferredPort: port,
     appVersion: manifest.version,
-    nodeExecutable: process.execPath
+    nodeExecutable: nodeRuntime.executable
   };
   vscodeController = new RuntimeController({ ...controllerOptions, hostId: 'vscode-artifact' });
   secondController = new RuntimeController({ ...controllerOptions, hostId: 'second-artifact-host' });
