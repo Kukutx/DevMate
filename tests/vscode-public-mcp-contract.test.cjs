@@ -8,7 +8,7 @@ const test = require('node:test');
 const extension = fs.readFileSync(path.resolve(__dirname, '..', 'extension.js'), 'utf8');
 
 test('VS Code Start remains Gateway -> tunnel -> current-generation MCP verification -> Ready', () => {
-  const start = extension.indexOf('async function quickStart(ctx)');
+  const start = extension.indexOf('async function quickStart(ctx');
   const end = extension.indexOf('async function stopAll()', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
@@ -66,7 +66,7 @@ test('VS Code Copy URL verifies and commits current generation before clipboard 
 });
 
 test('clipboard convenience cannot turn a verified Start into a failed lifecycle', () => {
-  const start = extension.indexOf('async function quickStart(ctx)');
+  const start = extension.indexOf('async function quickStart(ctx');
   const end = extension.indexOf('async function stopAll()', start);
   const block = extension.slice(start, end);
   const verify = block.indexOf('await verifyCurrentTunnel(publicUrl, tunnel.record, ctx)');

@@ -9,6 +9,9 @@ const {
   classifyNgrokError,
   isNgrokExecutable,
   normalizeNgrokUrl,
+  parseNgrokVersion,
+  redactNgrokOutput,
+  supportsNgrokEndpointsApi,
   validateAuthtoken
 } = require('../ngrok-support.js');
 
@@ -55,9 +58,26 @@ test('managed account mode never silently falls back to global ngrok config', ()
   );
 });
 
-test('does not inject token in global config mode', () => {
-  const options = buildNgrokSpawnOptions({ env: {} }, { authtoken: 'abcdefghijklmnopqrstuvwxyz', useManagedAccount: false });
-  assert.equal(options.env.NGROK_AUTHTOKEN, undefined);
+test('machine ngrok mode preserves machine environment credentials without injecting the DevMate secret', () => {
+  const options = buildNgrokSpawnOptions(
+    { env: { NGROK_AUTHTOKEN: 'machine-token-abcdefghijklmnopqrstuvwxyz', EXISTING: '1' } },
+    { authtoken: 'managed-token-abcdefghijklmnopqrstuvwxyz', useManagedAccount: false }
+  );
+  assert.equal(options.env.NGROK_AUTHTOKEN, 'machine-token-abcdefghijklmnopqrstuvwxyz');
+  assert.equal(options.env.EXISTING, '1');
+});
+
+test('recognizes the current ngrok endpoint API generation and redacts authentication output', () => {
+  assert.deepEqual(parseNgrokVersion('ngrok version 3.37.6'), { major: 3, minor: 37, patch: 6, version: '3.37.6' });
+  assert.equal(supportsNgrokEndpointsApi('ngrok version 3.29.0'), false);
+  assert.equal(supportsNgrokEndpointsApi('ngrok version 3.30.0'), true);
+  assert.equal(supportsNgrokEndpointsApi('ngrok version 4.0.0'), true);
+
+  const secret = 'machine-token-abcdefghijklmnopqrstuvwxyz';
+  const redacted = redactNgrokOutput(`ERROR ERR_NGROK_107 Your authtoken: ${secret}`, [secret]);
+  assert.doesNotMatch(redacted, new RegExp(secret));
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.equal(classifyNgrokError(redacted)?.kind, 'authentication');
 });
 
 test('classifies endpoint, authentication, and domain errors', () => {

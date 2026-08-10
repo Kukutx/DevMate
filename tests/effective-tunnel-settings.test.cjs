@@ -47,6 +47,16 @@ test('shared ngrok URL is authoritative while account execution details remain m
   assert.equal(result.ngrokPoolingEnabled, true);
 });
 
+test('managed ngrok account mode is opt-in when the local setting is omitted', () => {
+  const result = effectiveTunnelSettings({
+    sharedConfig: {
+      connection: { provider: 'ngrok', publicUrl: '' }
+    },
+    localSettings: {}
+  });
+  assert.equal(result.ngrokUseManagedAccount, false);
+});
+
 test('Cloudflare Quick never receives a stable URL', () => {
   const result = effectiveTunnelSettings({
     sharedConfig: { connection: { provider: 'cloudflare-quick', publicUrl: '' } },

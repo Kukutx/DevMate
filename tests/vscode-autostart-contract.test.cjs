@@ -11,13 +11,14 @@ const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 test('real VS Code Start returns the Ready evidence required by automatic lifecycle', () => {
   const extension = source('extension.js');
   const lifecycle = source('vscode-host/lifecycle.js');
-  const start = extension.indexOf('async function quickStart(ctx)');
+  const start = extension.indexOf('async function quickStart(ctx,{quiet=false}={})');
   const end = extension.indexOf('async function stopAll()', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
 
   assert.match(block, /return \{ok:true,[^\n]*mcpUrl:test\.mcpUrl,[^\n]*toolCount:test\.toolCount/);
-  assert.match(lifecycle, /commandResult = await this\.vscode\.commands\.executeCommand\('devMate\.start'/);
+  assert.match(block, /if\(!quiet\) vscode\.window\.showErrorMessage/);
+  assert.match(lifecycle, /commandResult = await this\.vscode\.commands\.executeCommand\('devMate\.start', \{ quiet: true \}\)/);
   assert.match(lifecycle, /!commandResult\?\.mcpUrl/);
   assert.match(lifecycle, /!Number\.isInteger\(Number\(commandResult\?\.toolCount\)\)/);
   assert.match(lifecycle, /Number\(commandResult\.toolCount\) <= 0/);

@@ -387,7 +387,6 @@ function trackGatewayProcess(child){
   child.once('exit',(code,signal)=>{
     if(gatewayProcess !== child) return;
     gatewayProcess = null;
-    log(`Gateway exited code=${code} signal=${signal}`);
     setStatus('DevMate: stopped');
     refreshPanel();
   });
@@ -561,7 +560,7 @@ async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommand
     if(!stopped.stopped && stopped.reason !== 'not-running') log(`Could not roll back default start command: ${stopped.reason}`);
   }
 }
-async function quickStart(ctx){
+async function quickStart(ctx,{quiet=false}={}){
   let gateway = null;
   let tunnel = null;
   let tunnelWasRunning = false;
@@ -592,9 +591,11 @@ async function quickStart(ctx){
     }
 
     log(`Public MCP preflight OK: ${redactUrl(test.mcpUrl)}, tools=${test.toolCount}`);
-    if(copied) vscode.window.showInformationMessage(`Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcpUrl)}`);
-    else if(cfg().get('autoCopyUrl') && copyError) vscode.window.showWarningMessage('DevMate is Ready, but automatic MCP URL copy failed. Use DevMate: Copy MCP URL if needed.');
-    else vscode.window.showInformationMessage(`Ready. Verified MCP URL: ${redactUrl(test.mcpUrl)}`);
+    if(!quiet){
+      if(copied) vscode.window.showInformationMessage(`Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcpUrl)}`);
+      else if(cfg().get('autoCopyUrl') && copyError) vscode.window.showWarningMessage('DevMate is Ready, but automatic MCP URL copy failed. Use DevMate: Copy MCP URL if needed.');
+      else vscode.window.showInformationMessage(`Ready. Verified MCP URL: ${redactUrl(test.mcpUrl)}`);
+    }
     return {ok:true,gateway,tunnel,publicUrl,mcpUrl:test.mcpUrl,toolCount:test.toolCount,server:test.server,copied,copyError};
   }catch(e){
     await rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning});
@@ -602,7 +603,7 @@ async function quickStart(ctx){
     await syncPublicUiState(ctx);
     const message = String(e.message || e);
     log(`ERROR: ${e.stack || e.message || e}`);
-    vscode.window.showErrorMessage(`DevMate failed: ${message}`);
+    if(!quiet) vscode.window.showErrorMessage(`DevMate failed: ${message}`);
     return {ok:false,error:message,code:e.code || 'DEVMATE_START_FAILED'};
   }
 }
@@ -1125,7 +1126,7 @@ function activate(context){
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(()=>scheduleContextRefresh(context)));
-  register(context,'devMate.start',()=>lifecycleOperations.run('start',()=>quickStart(context)));
+  register(context,'devMate.start',(options={})=>lifecycleOperations.run('start',()=>quickStart(context,options)));
   register(context,'devMate.open',()=>openPanel(context));
   register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
   register(context,'devMate.restart',()=>lifecycleOperations.run('restart',()=>restartAll(context)));

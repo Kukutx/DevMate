@@ -65,14 +65,48 @@ function copyEnvWithoutKey(env, name) {
 function buildNgrokSpawnOptions(options, { authtoken = '', useManagedAccount = true } = {}) {
   const next = { ...(options || {}) };
   const baseEnv = options?.env || process.env;
-  next.env = copyEnvWithoutKey(baseEnv, 'NGROK_AUTHTOKEN');
 
-  if (useManagedAccount) {
-    const token = String(authtoken || '').trim();
-    if (!token) throw new Error('DevMate-managed ngrok account requires an Authtoken.');
-    next.env.NGROK_AUTHTOKEN = token;
+  if (!useManagedAccount) {
+    // Machine mode means exactly that: inherit the user's normal ngrok environment,
+    // including NGROK_AUTHTOKEN when they configured ngrok that way.
+    next.env = { ...baseEnv };
+    return next;
   }
+
+  next.env = copyEnvWithoutKey(baseEnv, 'NGROK_AUTHTOKEN');
+  const token = String(authtoken || '').trim();
+  if (!token) throw new Error('DevMate-managed ngrok account requires an Authtoken.');
+  next.env.NGROK_AUTHTOKEN = token;
   return next;
+}
+
+function parseNgrokVersion(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/\bngrok(?:\s+version)?\s+v?(\d+)\.(\d+)\.(\d+)/i) ||
+    text.match(/(?:^|\s)v?(\d+)\.(\d+)\.(\d+)(?:[-+\s]|$)/);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  return { major, minor, patch, version: `${major}.${minor}.${patch}` };
+}
+
+function supportsNgrokEndpointsApi(value) {
+  const version = typeof value === 'object' && value ? value : parseNgrokVersion(value);
+  if (!version) return false;
+  return version.major > 3 || (version.major === 3 && version.minor >= 30);
+}
+
+function redactNgrokOutput(value, secrets = []) {
+  let text = String(value || '');
+  for (const secret of secrets) {
+    const token = String(secret || '');
+    if (token.length >= 4) text = text.split(token).join('[REDACTED]');
+  }
+  return text
+    .replace(/(NGROK_AUTHTOKEN\s*=\s*)[^\s]+/ig, '$1[REDACTED]')
+    .replace(/((?:your\s+)?authtoken\s*:\s*)[^\s,;]+/ig, '$1[REDACTED]')
+    .replace(/(authtoken\s+(?:is|was)\s+)[^\s,;]+/ig, '$1[REDACTED]');
 }
 
 function classifyNgrokError(text) {
@@ -82,7 +116,7 @@ function classifyNgrokError(text) {
   if (code === 'ERR_NGROK_334' || /endpoint.+already online/i.test(value)) {
     return { kind: 'endpoint-conflict', code: code || 'ERR_NGROK_334' };
   }
-  if (/authtoken|authentication failed|not authorized|unauthori[sz]ed/i.test(value) || /^ERR_NGROK_10(?:5|8)$/i.test(code)) {
+  if (/authtoken|authentication failed|not authorized|unauthori[sz]ed/i.test(value) || /^ERR_NGROK_10[5-9]$/i.test(code)) {
     return { kind: 'authentication', code };
   }
   if (/domain.+(?:not found|not reserved|not available|does not belong)|failed to bind/i.test(value)) {
@@ -107,5 +141,8 @@ module.exports = {
   isNgrokExecutable,
   isNgrokHttpArgs,
   normalizeNgrokUrl,
+  parseNgrokVersion,
+  redactNgrokOutput,
+  supportsNgrokEndpointsApi,
   validateAuthtoken
 };

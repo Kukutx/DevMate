@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.2
+
+- Fixed machine ngrok account mode so VS Code and Obsidian preserve the user's normal `NGROK_AUTHTOKEN` environment instead of deleting it before provider launch.
+- Replaced opaque provider readiness failures with bounded, credential-redacted ngrok diagnostics and actionable authentication, endpoint-conflict, domain, version, and process-exit errors.
+- Required ngrok 3.30.0+ for the current `/api/endpoints` Agent API path, made managed-account selection explicitly opt-in across shared settings, and removed duplicate VS Code failure and Gateway-exit reporting.
+- Made Obsidian encrypted provider credentials fail closed on decryption failure and extended packaged VSIX/Obsidian regression coverage over the shared ngrok lifecycle.
+
+
 ## 3.3.1
 
 - Hardened VS Code Gateway runtime selection around one verified Node.js 24+ resolver and removed the unsupported private Electron Node flag and mutable runtime adapter layer.

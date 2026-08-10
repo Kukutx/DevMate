@@ -456,3 +456,91 @@ test('configuration conflict is rejected before a second provider can own the tu
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
 });
+
+test('ngrok machine mode preserves NGROK_AUTHTOKEN and surfaces a redacted authentication failure', async () => {
+  const stateDirectory = tempState();
+  const child = new FakeChild();
+  const token = 'machine-token-abcdefghijklmnopqrstuvwxyz';
+  const previous = process.env.NGROK_AUTHTOKEN;
+  const logs = [];
+  let spawnedToken = '';
+  process.env.NGROK_AUTHTOKEN = token;
+  const childProcess = {
+    spawn(command, args, options) {
+      spawnedToken = String(options?.env?.NGROK_AUTHTOKEN || '');
+      child.stderr.write(`ERROR: authentication failed ERR_NGROK_107 Your authtoken: ${token}\n`);
+      child.exitCode = 1;
+      queueMicrotask(() => {
+        child.emit('exit', 1, null);
+        child.emit('close', 1, null);
+      });
+      return child;
+    },
+    spawnSync(command, args) {
+      if (args[0] === 'version') return { status: 0, stdout: 'ngrok version 3.37.6\n', stderr: '', error: null };
+      if (args[0] === 'config' && args[1] === 'check') {
+        return { status: 0, stdout: 'Valid configuration file at C:\\Users\\test\\AppData\\Local\\ngrok\\ngrok.yml\n', stderr: '', error: null };
+      }
+      throw new Error(`Unexpected ngrok preflight: ${args.join(' ')}`);
+    }
+  };
+  const controller = new TunnelController({
+    stateDirectory,
+    settings: () => ({
+      provider: 'ngrok',
+      ngrokUseManagedAccount: false,
+      ngrokUrl: 'https://devmate-test.ngrok-free.app',
+      autoRestart: false,
+      maxRestarts: 0
+    }),
+    getSecrets: async () => ({}),
+    childProcess,
+    logger: message => logs.push(String(message)),
+    readyTimeoutMs: 1500
+  });
+  try {
+    await assert.rejects(controller.start(8787), error => {
+      assert.equal(error?.code, 'DEVMATE_NGROK_AUTHENTICATION');
+      assert.match(error.message, /ERR_NGROK_107/);
+      assert.doesNotMatch(error.message, new RegExp(token));
+      assert.doesNotMatch(String(error.providerOutput || ''), new RegExp(token));
+      return true;
+    });
+    assert.equal(spawnedToken, token);
+    assert.equal(logs.some(line => line.includes(token)), false);
+    assert.doesNotMatch(controller.childOutput(child), new RegExp(token));
+  } finally {
+    if (previous === undefined) delete process.env.NGROK_AUTHTOKEN;
+    else process.env.NGROK_AUTHTOKEN = previous;
+    await controller.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('ngrok before 3.30 fails before launch instead of timing out on the current endpoint API', async () => {
+  const stateDirectory = tempState();
+  let spawnCount = 0;
+  const childProcess = {
+    spawn() { spawnCount += 1; return new FakeChild(); },
+    spawnSync(command, args) {
+      if (args[0] === 'version') return { status: 0, stdout: 'ngrok version 3.29.0\n', stderr: '', error: null };
+      throw new Error(`Unexpected ngrok preflight: ${args.join(' ')}`);
+    }
+  };
+  const controller = new TunnelController({
+    stateDirectory,
+    settings: () => ({ provider: 'ngrok', ngrokUseManagedAccount: false, autoRestart: false, maxRestarts: 0 }),
+    getSecrets: async () => ({}),
+    childProcess
+  });
+  try {
+    await assert.rejects(
+      controller.start(8787),
+      error => error?.code === 'DEVMATE_NGROK_VERSION_UNSUPPORTED' && /3\.30\.0\+/.test(error.message)
+    );
+    assert.equal(spawnCount, 0);
+  } finally {
+    await controller.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});

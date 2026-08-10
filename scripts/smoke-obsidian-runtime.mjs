@@ -48,6 +48,10 @@ assert.match(mainSource, /verifiedForCurrentRecord/, 'Obsidian bundle must deriv
 assert.match(mainSource, /Connection provider/, 'Obsidian bundle must expose the shared connection capability');
 assert.match(mainSource, /ngrokAuthtokenEncrypted/, 'Obsidian bundle must support an optional encrypted ngrok credential');
 assert.match(mainSource, /cloudflareTunnelTokenEncrypted/, 'Obsidian bundle must support an optional encrypted Cloudflare credential');
+assert.match(mainSource, /DEVMATE_NGROK_AUTHENTICATION/, 'Obsidian bundle must contain actionable ngrok authentication diagnostics');
+assert.match(mainSource, /DevMate requires ngrok 3\.30\.0\+/, 'Obsidian bundle must contain the current ngrok Agent API version gate');
+assert.match(mainSource, /DEVMATE_OBSIDIAN_CREDENTIAL_DECRYPT_FAILED/, 'Obsidian bundle must fail closed when an encrypted provider credential cannot be decrypted');
+assert.match(mainSource, /NGROK_AUTHTOKEN/, 'Obsidian bundle must preserve the shared ngrok environment/account path');
 assert.doesNotMatch(mainSource, /ObsidianNgrokRuntime/, 'Obsidian bundle must not restore the retired ngrok-only runtime wrapper');
 
 const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath });

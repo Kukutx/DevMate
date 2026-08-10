@@ -171,7 +171,7 @@ async function recoverRequestedSession() {
   if (!runtime || !lifecycle || !tunnelSessionRequested()) return { recovered: false, reason: 'not-requested' };
   if (!requestedSessionNeedsRecovery()) return { recovered: false, reason: 'healthy-or-verifier-owned' };
   log('Recovering requested DevMate desktop session through the complete Start lifecycle.');
-  const result = await vscode.commands.executeCommand('devMate.start');
+  const result = await vscode.commands.executeCommand('devMate.start', { quiet: true });
   if (result?.ok === false || !result?.mcpUrl || Number(result?.toolCount || 0) <= 0) {
     const error = new Error(result?.error || 'DevMate recovery Start did not reach verified Ready state');
     error.code = result?.code || 'DEVMATE_SESSION_RECOVERY_NOT_READY';

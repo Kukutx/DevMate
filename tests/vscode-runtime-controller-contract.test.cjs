@@ -81,3 +81,13 @@ test('auxiliary process and tunnel ownership cannot clear newer handles', () => 
   assert.match(tunnelController, /this\.clearLocalOwnership\(ownerId\)/);
   assert.match(tunnelController, /record\.ownerId !== this\.ownerId/);
 });
+
+test('Gateway process termination has one runtime log owner while the VS Code observer only refreshes UI', () => {
+  const start = source.indexOf('function trackGatewayProcess(child)');
+  const end = source.indexOf('async function stopGatewayProcess()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.doesNotMatch(block, /Gateway exited code=/);
+  assert.match(block, /setStatus\('DevMate: stopped'\)/);
+  assert.match(block, /refreshPanel\(\)/);
+});

@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -19,6 +21,7 @@ const extractRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-tunnel-'
 const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-tunnel-state-'));
 let runtimeA = null;
 let runtimeB = null;
+let runtimeAuth = null;
 
 function extractArchive() {
   const tar = spawnSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', vsix, '-C', extractRoot], {
@@ -101,6 +104,66 @@ try {
   assert.equal(runtimeA.status(port).running, false);
   assert.equal(fs.existsSync(path.join(stateDirectory, 'tunnel.start.lock')), false);
 
+  class FailingNgrokChild extends EventEmitter {
+    constructor(output) {
+      super();
+      this.stdout = new PassThrough();
+      this.stderr = new PassThrough();
+      this.pid = 24001;
+      this.exitCode = 1;
+      this.signalCode = null;
+      this.stderr.write(output);
+      queueMicrotask(() => {
+        this.emit('exit', 1, null);
+        this.emit('close', 1, null);
+      });
+    }
+    kill() { return true; }
+  }
+
+  const machineToken = 'packaged-machine-token-abcdefghijklmnopqrstuvwxyz';
+  const previousMachineToken = process.env.NGROK_AUTHTOKEN;
+  let spawnedMachineToken = '';
+  process.env.NGROK_AUTHTOKEN = machineToken;
+  const childProcess = {
+    spawn(command, args, options) {
+      spawnedMachineToken = String(options?.env?.NGROK_AUTHTOKEN || '');
+      return new FailingNgrokChild(`ERROR: authentication failed ERR_NGROK_107 Your authtoken: ${machineToken}\n`);
+    },
+    spawnSync(command, args) {
+      if (args[0] === 'version') return { status: 0, stdout: 'ngrok version 3.37.6\n', stderr: '', error: null };
+      if (args[0] === 'config' && args[1] === 'check') {
+        return { status: 0, stdout: 'Valid configuration file at C:\\Users\\test\\AppData\\Local\\ngrok\\ngrok.yml\n', stderr: '', error: null };
+      }
+      throw new Error(`Unexpected packaged ngrok preflight: ${args.join(' ')}`);
+    }
+  };
+  runtimeAuth = new TunnelController({
+    stateDirectory,
+    settings: () => ({
+      provider: 'ngrok',
+      ngrokUseManagedAccount: false,
+      ngrokUrl: 'https://packaged-auth.ngrok-free.app',
+      autoRestart: false,
+      maxRestarts: 0
+    }),
+    getSecrets: async () => ({}),
+    childProcess,
+    hostId: 'packaged-vscode-auth'
+  });
+  try {
+    await assert.rejects(runtimeAuth.start(port), error => {
+      assert.equal(error?.code, 'DEVMATE_NGROK_AUTHENTICATION');
+      assert.match(error.message, /ERR_NGROK_107/);
+      assert.doesNotMatch(error.message, new RegExp(machineToken));
+      return true;
+    });
+    assert.equal(spawnedMachineToken, machineToken);
+  } finally {
+    if (previousMachineToken === undefined) delete process.env.NGROK_AUTHTOKEN;
+    else process.env.NGROK_AUTHTOKEN = previousMachineToken;
+  }
+
   console.log(JSON.stringify({
     ok: true,
     vsix: path.basename(vsix),
@@ -109,10 +172,13 @@ try {
     concurrentTunnelHostsVerified: true,
     followerOwnershipVerified: true,
     ownerCleanupVerified: true,
-    virtualNgrokApiRequired: false
+    virtualNgrokApiRequired: false,
+    ngrokMachineEnvironmentVerified: true,
+    ngrokFailureDiagnosticsVerified: true
   }));
 } finally {
   try { clearTunnelController(); } catch {}
+  await runtimeAuth?.dispose({ stopOwned: true }).catch(() => {});
   await runtimeA?.dispose({ stopOwned: true }).catch(() => {});
   await runtimeB?.dispose({ stopOwned: false }).catch(() => {});
   fs.rmSync(extractRoot, { recursive: true, force: true });

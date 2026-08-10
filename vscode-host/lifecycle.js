@@ -173,7 +173,7 @@ class VscodeHostLifecycle {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
     this.diagnostics?.append('Starting DevMate automatically and waiting for verified public MCP Ready state.');
-    const commandResult = await this.vscode.commands.executeCommand('devMate.start');
+    const commandResult = await this.vscode.commands.executeCommand('devMate.start', { quiet: true });
     if (commandResult?.ok === false) {
       const error = new Error(commandResult.error || 'DevMate start command reported failure');
       error.code = commandResult.code || 'DEVMATE_VSCODE_START_COMMAND_FAILED';

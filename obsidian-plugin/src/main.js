@@ -170,17 +170,18 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   tunnelSecrets() {
     if (this.tunnelSecretsCache) return this.tunnelSecretsCache;
-    const read = value => {
+    const read = (value, provider) => {
       if (!value) return '';
       try { return decryptSecret(value); }
       catch (error) {
-        this.logRuntime(`Could not decrypt provider credential: ${error.message || error}`);
-        return '';
+        const wrapped = new Error(`${provider} credential is configured but could not be decrypted: ${error.message || error}`);
+        wrapped.code = 'DEVMATE_OBSIDIAN_CREDENTIAL_DECRYPT_FAILED';
+        throw wrapped;
       }
     };
     this.tunnelSecretsCache = {
-      ngrokAuthtoken: read(this.settings.ngrokAuthtokenEncrypted),
-      cloudflareTunnelToken: read(this.settings.cloudflareTunnelTokenEncrypted)
+      ngrokAuthtoken: read(this.settings.ngrokAuthtokenEncrypted, 'ngrok'),
+      cloudflareTunnelToken: read(this.settings.cloudflareTunnelTokenEncrypted, 'Cloudflare')
     };
     return this.tunnelSecretsCache;
   }

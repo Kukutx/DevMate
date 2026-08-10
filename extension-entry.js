@@ -409,8 +409,9 @@ async function ngrokDoctor() {
   log('--- ngrok diagnostics ---');
   log(`Executable: ${ngrokCommand()}`);
   log(`Installed: ${installed.ok ? installed.version : `NO (${installed.message})`}`);
-  log(`Account source: ${managed ? 'DevMate-managed Secret Storage' : 'global ngrok config'}`);
+  log(`Account source: ${managed ? 'DevMate-managed Secret Storage' : 'machine ngrok config/environment'}`);
   log(`Managed token present: ${managedAuthtoken ? 'yes' : 'no'}`);
+  log(`Machine NGROK_AUTHTOKEN present: ${process.env.NGROK_AUTHTOKEN ? 'yes' : 'no'}`);
   log(`Ready to launch: ${installed.ok && (!managed || !!managedAuthtoken) ? 'yes' : 'no'}`);
   log(`Connection: ${connection ? 'ngrok is the active shared provider' : 'ngrok is not the active shared provider'}`);
   log(`Effective configured URL: ${configuredUrl() || 'account default / dynamic'}`);
@@ -464,7 +465,7 @@ async function activate(context) {
     baseExtension = loadBaseExtension();
     await baseExtension.activate(context);
     activated = true;
-    log(`ngrok setup integration ready. Account source: ${usesManagedAccount() ? 'managed' : 'global'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
+    log(`ngrok setup integration ready. Account source: ${usesManagedAccount() ? 'managed' : 'machine'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
     void maybePromptForNgrokSetup(context);
   } catch (error) {
     try { if (baseExtension?.deactivate) await baseExtension.deactivate(); } catch {}

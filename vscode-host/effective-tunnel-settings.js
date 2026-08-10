@@ -36,7 +36,7 @@ function effectiveTunnelSettings({ sharedConfig, localSettings = {} } = {}) {
     publicUrl: provider === 'cloudflare-managed' || provider === 'external' ? stablePublicUrl : '',
     ngrokUrl: provider === 'ngrok' ? stablePublicUrl : '',
     ngrokCommandPath: String(local.ngrokCommandPath || '').trim(),
-    ngrokUseManagedAccount: local.ngrokUseManagedAccount !== false,
+    ngrokUseManagedAccount: local.ngrokUseManagedAccount === true,
     ngrokPoolingEnabled: local.ngrokPoolingEnabled === true,
     ngrokTrafficPolicyFile: String(local.ngrokTrafficPolicyFile || '').trim(),
     cloudflareCommandPath: String(local.cloudflareCommandPath || '').trim(),

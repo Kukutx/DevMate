@@ -7,7 +7,11 @@ const { terminateChild } = require('../host/runtime/process-controller.js');
 const { StartupLease, waitForStartupLease } = require('../host/runtime/startup-lease.js');
 const {
   buildNgrokArgs,
-  buildNgrokSpawnOptions
+  buildNgrokSpawnOptions,
+  classifyNgrokError,
+  parseNgrokVersion,
+  redactNgrokOutput,
+  supportsNgrokEndpointsApi
 } = require('../ngrok-support.js');
 const {
   cloudflareLaunch,
@@ -57,6 +61,63 @@ function normalizeSettings(raw = {}) {
     autoRestart: strictAutoRestart(raw.autoRestart),
     maxRestarts: tunnelMaxRestarts(raw.maxRestarts)
   };
+}
+
+function redactExactSecrets(value, secrets = []) {
+  let text = String(value || '');
+  for (const secret of secrets) {
+    const token = String(secret || '');
+    if (token.length >= 4) text = text.split(token).join('[REDACTED]');
+  }
+  return text;
+}
+
+function safeProviderOutput(provider, value, secrets = []) {
+  const exact = redactExactSecrets(value, secrets);
+  return provider === 'ngrok' ? redactNgrokOutput(exact, secrets) : exact;
+}
+
+function outputTail(value, maxChars = 2048) {
+  const lines = String(value || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  return lines.slice(-6).join(' | ').slice(-maxChars);
+}
+
+function providerStartupError(provider, rawOutput, child, { timeoutMs = 0, secrets = [] } = {}) {
+  const safeOutput = safeProviderOutput(provider, rawOutput, secrets);
+  const detail = outputTail(safeOutput);
+  const exit = child && child.exitCode != null ? ` exit=${child.exitCode}` : '';
+  const signal = child?.signalCode ? ` signal=${child.signalCode}` : '';
+  let code = timeoutMs ? 'DEVMATE_TUNNEL_READY_TIMEOUT' : 'DEVMATE_TUNNEL_PROVIDER_EXITED';
+  let message = timeoutMs
+    ? `Tunnel provider ${provider} did not publish a valid HTTPS URL within ${timeoutMs}ms`
+    : `Tunnel provider ${provider} exited before readiness${exit}${signal}`;
+
+  if (provider === 'ngrok') {
+    const classified = classifyNgrokError(safeOutput);
+    if (classified?.kind === 'authentication') {
+      code = 'DEVMATE_NGROK_AUTHENTICATION';
+      message = `ngrok authentication failed${classified.code ? ` (${classified.code})` : ''}. Configure DevMate ngrok credentials or fix the machine ngrok configuration/environment.`;
+    } else if (classified?.kind === 'endpoint-conflict') {
+      code = 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
+      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}. Stop the conflicting ngrok session or enable pooling only when intentional.`;
+    } else if (classified?.kind === 'domain') {
+      code = 'DEVMATE_NGROK_DOMAIN';
+      message = `ngrok could not use the configured stable URL/domain${classified.code ? ` (${classified.code})` : ''}. Verify that the URL belongs to the active ngrok account.`;
+    }
+  }
+
+  if (detail) message += ` Provider output: ${detail}`;
+  const error = new Error(message);
+  error.code = code;
+  error.provider = provider;
+  error.providerOutput = detail;
+  error.exitCode = child?.exitCode ?? null;
+  error.signalCode = child?.signalCode || null;
+  return error;
 }
 
 function buildNgrokLaunch(port, settings, secrets) {
@@ -133,6 +194,9 @@ class TunnelController {
     this.heartbeat = null;
     this.ownershipFailureCount = 0;
     this.ownershipCleanup = null;
+    this.providerOutput = new WeakMap();
+    this.providerSecrets = new WeakMap();
+    this.providerClosed = new WeakMap();
     this.stopping = false;
     this.disposed = false;
   }
@@ -287,28 +351,36 @@ class TunnelController {
     this.clearLocalOwnership(ownerId);
   }
 
+  childOutput(child) {
+    return this.providerOutput.get(child) || '';
+  }
+
+  childSecrets(child) {
+    return this.providerSecrets.get(child) || [];
+  }
+
+  async waitForProviderOutput(child, timeoutMs = 250) {
+    const closed = this.providerClosed.get(child);
+    if (!closed) return;
+    await Promise.race([closed, delay(timeoutMs)]);
+  }
+
   async providerReadyUrl(launch, match, child, timeoutMs) {
     if (launch.provider === 'external') return launch.publicUrl;
     const startedAt = Date.now();
     const deadline = startedAt + timeoutMs;
     let discovered = '';
-    let output = '';
-    const inspect = chunk => {
-      output = `${output}${String(chunk)}`.slice(-MAX_PROVIDER_RESPONSE_BYTES);
-      if (launch.provider === 'cloudflare-quick') {
-        discovered = parseTryCloudflareUrl(output) || discovered;
-      } else if (launch.publicUrl && launch.readyPattern?.test(String(chunk))) {
-        discovered = launch.publicUrl;
-      }
-    };
-    child.stdout?.on('data', inspect);
-    child.stderr?.on('data', inspect);
 
     while (Date.now() <= deadline) {
+      const output = this.childOutput(child);
       if (!childActive(child)) {
-        const error = new Error(`Tunnel provider ${match.provider} exited before readiness`);
-        error.code = 'DEVMATE_TUNNEL_PROVIDER_EXITED';
-        throw error;
+        await this.waitForProviderOutput(child);
+        throw providerStartupError(match.provider, this.childOutput(child), child, { secrets: this.childSecrets(child) });
+      }
+      if (launch.provider === 'cloudflare-quick') {
+        discovered = parseTryCloudflareUrl(output) || discovered;
+      } else if (launch.publicUrl && launch.readyPattern?.test(output)) {
+        discovered = launch.publicUrl;
       }
       if (launch.provider === 'ngrok') {
         discovered = await discoverNgrokPublicUrl(match.port, {
@@ -323,24 +395,47 @@ class TunnelController {
       if (discovered) return normalizePublicUrl(discovered);
       await delay(200);
     }
-    const error = new Error(`Tunnel provider ${match.provider} did not publish a valid HTTPS URL within ${timeoutMs}ms`);
-    error.code = 'DEVMATE_TUNNEL_READY_TIMEOUT';
-    throw error;
+    throw providerStartupError(match.provider, this.childOutput(child), child, {
+      timeoutMs,
+      secrets: this.childSecrets(child)
+    });
   }
 
-  attachChild(child, match) {
+  attachChild(child, match, { sensitiveValues = [] } = {}) {
     this.child = child;
     this.childReady = false;
+    this.providerOutput.set(child, '');
+    this.providerSecrets.set(child, sensitiveValues.filter(Boolean));
+    let resolveClosed;
+    this.providerClosed.set(child, new Promise(resolve => { resolveClosed = resolve; }));
+    const capture = chunk => {
+      const previous = this.providerOutput.get(child) || '';
+      const safeChunk = safeProviderOutput(match.provider, chunk, this.childSecrets(child));
+      this.providerOutput.set(child, `${previous}${safeChunk}`.slice(-MAX_PROVIDER_RESPONSE_BYTES));
+    };
+    const attachStream = stream => {
+      if (!stream) return;
+      if (typeof stream.read === 'function') {
+        let buffered;
+        while ((buffered = stream.read()) !== null) capture(buffered);
+      }
+      stream.on?.('data', capture);
+    };
+    attachStream(child.stdout);
+    attachStream(child.stderr);
+
     let terminal = false;
     const finish = (code, signal) => {
+      resolveClosed?.();
       if (terminal) return;
       terminal = true;
       if (this.child !== child) return;
       const wasReady = this.childReady;
+      const detail = outputTail(safeProviderOutput(match.provider, this.childOutput(child), this.childSecrets(child)));
       this.child = null;
       this.childReady = false;
       if (this.stopping || this.disposed) return;
-      this.logger(`Tunnel provider ended code=${code ?? 'none'} signal=${signal || 'none'}.`);
+      this.logger(`Tunnel provider ended code=${code ?? 'none'} signal=${signal || 'none'}${detail ? `: ${detail}` : ''}.`);
       if (!wasReady) {
         this.resetOwnership();
         return;
@@ -350,10 +445,11 @@ class TunnelController {
         this.resetOwnership();
       });
     };
-    child.stdout?.on('data', chunk => this.logger(`[${match.provider}] ${String(chunk).trimEnd()}`));
-    child.stderr?.on('data', chunk => this.logger(`[${match.provider}:err] ${String(chunk).trimEnd()}`));
-    child.on?.('error', error => this.logger(`Tunnel process error: ${error.message || error}`));
-    child.once?.('exit', finish);
+    child.on?.('error', error => {
+      capture(`process error: ${error.message || error}\n`);
+      const detail = outputTail(safeProviderOutput(match.provider, error.message || error, this.childSecrets(child)));
+      this.logger(`Tunnel process error${detail ? `: ${detail}` : ''}`);
+    });
     child.once?.('close', finish);
   }
 
@@ -393,7 +489,26 @@ class TunnelController {
       if (check.error || check.status !== 0) {
         throw new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
       }
+      const sensitiveValues = [
+        secrets?.ngrokAuthtoken,
+        secrets?.cloudflareTunnelToken,
+        launch.options?.env?.NGROK_AUTHTOKEN,
+        launch.options?.env?.TUNNEL_TOKEN
+      ].map(value => String(value || '')).filter(Boolean);
       if (launch.provider === 'ngrok') {
+        const version = parseNgrokVersion(`${check.stdout || ''}\n${check.stderr || ''}`);
+        if (!version) {
+          const error = new Error(`Could not determine the installed ngrok version from: ${outputTail(safeProviderOutput('ngrok', `${check.stdout || ''}\n${check.stderr || ''}`, sensitiveValues)) || 'empty output'}`);
+          error.code = 'DEVMATE_NGROK_VERSION_UNKNOWN';
+          throw error;
+        }
+        if (!supportsNgrokEndpointsApi(version)) {
+          const error = new Error(`DevMate requires ngrok 3.30.0+ for current Agent API endpoint discovery; found ${version.version}. Upgrade ngrok.`);
+          error.code = 'DEVMATE_NGROK_VERSION_UNSUPPORTED';
+          error.ngrokVersion = version.version;
+          throw error;
+        }
+
         launch.agentApiBase = resolveNgrokAgentApiBase(launch.command, {
           spawnSync: this.childProcess.spawnSync,
           env: launch.options?.env || process.env
@@ -407,7 +522,7 @@ class TunnelController {
 
       child = this.childProcess.spawn(launch.command, launch.args, launch.options);
       if (!child || typeof child.on !== 'function') throw new Error('Tunnel provider did not return a process-like handle');
-      this.attachChild(child, match);
+      this.attachChild(child, match, { sensitiveValues });
       this.store.write(ownerId, {
         hostId: this.hostId,
         childPid: child.pid || null,
