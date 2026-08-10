@@ -1,0 +1,60 @@
+name: One-time DevMate 3.3.1 version sync
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Prepare 3.3.1
+        run: node scripts/bump-3.3.1.mjs
+
+      - name: Synchronize version contract
+        run: npm run version:sync
+
+      - name: Verify version and runtime contracts
+        run: npm run version:check
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Full unit and policy suite
+        run: npm run test:unit
+
+      - name: Gateway smoke
+        run: npm run smoke:gateway
+
+      - name: Package and smoke VSIX runtime
+        run: npm run package:vsix && node scripts/smoke-vsix-runtime.mjs && node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Remove one-time machinery and commit
+        shell: pwsh
+        run: |
+          Remove-Item scripts/bump-3.3.1.mjs -Force
+          Remove-Item .github/workflows/bump-3.3.1.yml -Force
+          git config user.name "kukutx"
+          git config user.email "61358650+Kukutx@users.noreply.github.com"
+          git add -A
+          git commit -m "Release DevMate 3.3.1 runtime hardening"
+          git push origin master
