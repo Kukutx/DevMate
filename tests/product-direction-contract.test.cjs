@@ -77,7 +77,11 @@ test('normal Obsidian UI presents Ready as one product state', () => {
 test('shared provider ownership identity includes current provider execution details', () => {
   const runtime = source('vscode-host/tunnel-runtime.js');
   const store = source('vscode-host/shared-tunnel-record-store.js');
-  assert.match(runtime, /const result = await tunnelController\(\)\.start\(port\)/);
+  assert.match(runtime, /const current = tunnelController\(\)/);
+  assert.match(runtime, /const result = await current\.start\(port\)/);
+  assert.match(runtime, /attachmentRecoveryPromise/);
+  assert.match(runtime, /if \(pendingRecovery\) await pendingRecovery\.catch\(\(\) => null\)/);
+  assert.match(runtime, /return current\.stop\(\)/);
   assert.match(store, /ngrokCommandPath/);
   assert.match(store, /ngrokUseManagedAccount/);
   assert.match(store, /cloudflareCommandPath/);
