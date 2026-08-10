@@ -43,7 +43,11 @@ test('desktop public connection lifecycle is provider-native and shared', () => 
   const runtime = source('vscode-host/tunnel-runtime.js');
   const obsidian = source('obsidian-plugin/src/main.js');
   assert.match(controller, /class TunnelController/);
-  assert.match(runtime, /tunnelController\(\)\.start\(port\)/);
+  assert.match(runtime, /const current = tunnelController\(\)/);
+  assert.match(runtime, /await current\.start\(port\)/);
+  assert.match(runtime, /attachmentRecoveryPromise/);
+  assert.match(runtime, /if \(pendingRecovery\) await pendingRecovery\.catch\(\(\) => null\)/);
+  assert.match(runtime, /return current\.stop\(\)/);
   assert.match(obsidian, /new TunnelController\(\{/);
   assert.match(obsidian, /this\.tunnelController\.start\(gateway\.port\)/);
 });
