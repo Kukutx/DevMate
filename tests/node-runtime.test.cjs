@@ -48,6 +48,31 @@ test('probes Electron-as-Node with bounded current environment', () => {
   assert.ok(spawnSyncImpl.calls[0].options.timeout <= 5000);
 });
 
+test('VS Code host runtime is probed with environment-only Node mode and falls back cleanly', () => {
+  const code = 'A:\\Software Development\\Microsoft VS Code\\Code.exe';
+  const host = fakeSpawn({ [code]: success('24.18.0', code, '39.2.3') });
+  const selected = resolveNodeRuntime({
+    processExecutable: code,
+    processNodeVersion: '24.18.0',
+    spawnSyncImpl: host
+  });
+  assert.equal(selected.source, 'host');
+  assert.equal(host.calls[0].options.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.equal(host.calls[0].args.some(arg => String(arg).includes('ms-enable-electron')), false);
+
+  const fallback = fakeSpawn({
+    [code]: { status: 9, stdout: '', stderr: 'bad option' },
+    node: success('24.18.0', 'C:\\Program Files\\nodejs\\node.exe')
+  });
+  const fallbackSelected = resolveNodeRuntime({
+    processExecutable: code,
+    processNodeVersion: '24.18.0',
+    spawnSyncImpl: fallback
+  });
+  assert.equal(fallbackSelected.source, 'path');
+  assert.deepEqual(fallback.calls.map(call => call.command), [code, 'node']);
+});
+
 test('auto resolution skips an old embedded Node and uses system Node 24', () => {
   const spawnSyncImpl = fakeSpawn({
     node: success('24.18.0', 'C:\\Program Files\\nodejs\\node.exe')

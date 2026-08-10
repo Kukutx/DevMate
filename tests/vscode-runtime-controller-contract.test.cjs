@@ -45,12 +45,12 @@ test('failed Start preserves a newly owned Gateway only when public connection s
   assert.doesNotMatch(block, /sharedTunnelActive/);
 });
 
-test('actual VS Code process calls resolve the private active spawn chain at call time', () => {
-  assert.match(source, /const childProcess = require\('\.\/vscode-host\/runtime-io\.js'\)/);
-  assert.match(source, /function spawn\(\.\.\.args\)\{ return childProcess\.spawn\(\.\.\.args\); \}/);
-  assert.match(source, /function spawnSync\(\.\.\.args\)\{ return childProcess\.spawnSync\(\.\.\.args\); \}/);
-  assert.doesNotMatch(source, /const childProcess = require\('child_process'\)/);
-  assert.doesNotMatch(source, /const \{ spawn, spawnSync \} = require\('child_process'\)/);
+test('actual VS Code process calls use native child_process and the shared runtime network', () => {
+  assert.match(source, /const \{ spawn, spawnSync \} = require\('node:child_process'\)/);
+  assert.match(source, /const \{ healthAt, healthMatches \} = require\('\.\/host\/runtime\/network\.js'\)/);
+  assert.match(source, /resolveNodeRuntime/);
+  assert.doesNotMatch(source, /runtime-io\.js|bounded-http-client\.js|SpawnLayer/);
+  assert.doesNotMatch(source, /ms-enable-electron-run-as-node/);
   assert.doesNotMatch(source, /version:\s*9\b/);
   assert.doesNotMatch(source, /data\.version\s*=\s*9\b/);
 });

@@ -5,14 +5,33 @@ const ATTACHMENT_POLL_MS = 1000;
 let controller = null;
 let attachmentTimer = null;
 let attachmentPort = 0;
-let recoveringAttachment = false;
+let attachmentRecoveryPromise = null;
 let sessionRequested = false;
 
 function stopAttachmentWatcher() {
   if (attachmentTimer) clearInterval(attachmentTimer);
   attachmentTimer = null;
   attachmentPort = 0;
-  recoveringAttachment = false;
+}
+
+function recoverAttachment(current, port) {
+  if (attachmentRecoveryPromise) return attachmentRecoveryPromise;
+  let recovery;
+  recovery = Promise.resolve()
+    .then(() => current.start(port))
+    .then(result => {
+      if (controller === current && sessionRequested && result?.owned) stopAttachmentWatcher();
+      return result;
+    })
+    .catch(error => {
+      current.logger?.(`Tunnel follower recovery failed: ${error.message || error}`);
+      return null;
+    })
+    .finally(() => {
+      if (attachmentRecoveryPromise === recovery) attachmentRecoveryPromise = null;
+    });
+  attachmentRecoveryPromise = recovery;
+  return recovery;
 }
 
 function startAttachmentWatcher(port) {
@@ -21,7 +40,7 @@ function startAttachmentWatcher(port) {
   if (!attachmentPort || !controller) return;
   attachmentTimer = setInterval(() => {
     const current = controller;
-    if (!current || recoveringAttachment) return;
+    if (!current || attachmentRecoveryPromise || !sessionRequested) return;
     let status;
     try {
       status = current.status(attachmentPort);
@@ -34,13 +53,7 @@ function startAttachmentWatcher(port) {
       return;
     }
     if (status.running) return;
-    recoveringAttachment = true;
-    Promise.resolve(current.start(attachmentPort))
-      .then(result => {
-        if (controller === current && result?.owned) stopAttachmentWatcher();
-      })
-      .catch(error => current.logger?.(`Tunnel follower recovery failed: ${error.message || error}`))
-      .finally(() => { recoveringAttachment = false; });
+    void recoverAttachment(current, attachmentPort);
   }, ATTACHMENT_POLL_MS);
   attachmentTimer.unref?.();
 }
@@ -72,17 +85,27 @@ function tunnelController() {
 }
 
 async function startTunnel(port) {
-  const result = await tunnelController().start(port);
-  sessionRequested = true;
-  if (result?.attached) startAttachmentWatcher(port);
-  else stopAttachmentWatcher();
-  return result;
+  const current = tunnelController();
+  try {
+    const result = await current.start(port);
+    sessionRequested = true;
+    if (result?.attached) startAttachmentWatcher(port);
+    else stopAttachmentWatcher();
+    return result;
+  } catch (error) {
+    sessionRequested = false;
+    stopAttachmentWatcher();
+    throw error;
+  }
 }
 
 async function stopTunnel() {
+  const current = tunnelController();
   sessionRequested = false;
   stopAttachmentWatcher();
-  return tunnelController().stop();
+  const pendingRecovery = attachmentRecoveryPromise;
+  if (pendingRecovery) await pendingRecovery.catch(() => null);
+  return current.stop();
 }
 
 function tunnelStatus(port) {

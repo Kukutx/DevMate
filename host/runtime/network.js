@@ -70,10 +70,12 @@ function healthAt(port, timeoutMs = 1500) {
 }
 
 function healthMatches(health, config) {
+  const expectedVersion = String(config?.appVersion || '').trim();
   return !!(
     health?.ok &&
     health.json?.name === 'devmate' &&
-    (!config?.instanceId || health.json.instanceId === config.instanceId)
+    (!config?.instanceId || health.json.instanceId === config.instanceId) &&
+    (!expectedVersion || health.json.version === expectedVersion)
   );
 }
 

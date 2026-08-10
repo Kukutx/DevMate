@@ -23,7 +23,7 @@ function createHarness({ platform }) {
   fs.writeFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'x'.repeat(120000));
 
   const settings = {
-    vscodeStartupMode: 'manual',
+    autoStart: false,
     sharedStateDirectory: stateDirectory
   };
   const registered = [];
@@ -94,6 +94,7 @@ test('activates in manual mode with child-process runtime diagnostics and cleans
   const check = harness.lifecycle.runSelfCheck(false);
   assert.equal(check.ok, true);
   assert.equal(check.checks.find(item => item.id === 'gateway-launch-mode')?.detail, 'child_process');
+  assert.equal(check.checks.find(item => item.id === 'gateway-node-runtime')?.ok, true);
   await harness.lifecycle.deactivate();
   assert.equal(deactivateCalls, 1);
   assert.equal(harness.lifecycle.active, false);

@@ -13,6 +13,11 @@ test('fresh VS Code installs use normal machine ngrok configuration until manage
   const setting = manifest.contributes.configuration.properties['devMate.ngrokUseManagedAccount'];
   assert.equal(setting.default, false);
   assert.match(setting.description, /normal ngrok configuration/i);
+  assert.match(source, /preferenceValue\('ngrokUseManagedAccount', false\) === true/);
+  const platform = fs.readFileSync(path.join(root, 'extension-entry-platform.js'), 'utf8');
+  const controller = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
+  assert.match(platform, /setting\('ngrokUseManagedAccount', false\)/);
+  assert.match(controller, /useManagedAccount: settings\.ngrokUseManagedAccount === true/);
 
   const recommendedStart = source.indexOf('async function recommendedSetup');
   const recommendedEnd = source.indexOf('async function advancedSetup', recommendedStart);

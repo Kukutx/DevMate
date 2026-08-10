@@ -52,7 +52,7 @@ function localTunnelSettings() {
     publicUrl: String(setting('publicUrl', '') || '').trim(),
     ngrokUrl: String(setting('ngrokUrl', '') || '').trim(),
     ngrokCommandPath: String(setting('ngrokCommandPath', '') || '').trim(),
-    ngrokUseManagedAccount: strictBoolean(setting('ngrokUseManagedAccount', true), 'devMate.ngrokUseManagedAccount'),
+    ngrokUseManagedAccount: strictBoolean(setting('ngrokUseManagedAccount', false), 'devMate.ngrokUseManagedAccount'),
     ngrokPoolingEnabled: strictBoolean(setting('ngrokPoolingEnabled', false), 'ngrokPoolingEnabled'),
     ngrokTrafficPolicyFile: String(setting('ngrokTrafficPolicyFile', '') || '').trim(),
     cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),

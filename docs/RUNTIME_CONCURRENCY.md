@@ -102,15 +102,11 @@ VS Code uses the same shared `RuntimeController` Gateway lifecycle as Obsidian. 
 
 VS Code's generic config sync writes host-owned context/settings fields only. It cannot overwrite the shared `connection` capability and rejects unsupported historical instance fields.
 
-## Obsidian Node runtime
+## Desktop Node runtime
 
-The Gateway requires Node.js 24 or newer. Obsidian resolves a verified Gateway runtime in this order:
+The Gateway requires Node.js 24 or newer. Desktop hosts resolve a verified Gateway runtime before launch. VS Code probes its host runtime and then `node` from `PATH`; Obsidian additionally allows an explicitly configured Node executable. Electron hosts use `ELECTRON_RUN_AS_NODE=1` for the probe and launch and never rely on private Electron command-line flags.
 
-1. explicitly configured Node executable;
-2. the Obsidian/Electron executable when its embedded Node runtime is current and can run as Node;
-3. `node` from `PATH`.
-
-Each candidate is probed before launch. If no Node 24+ runtime is usable, startup fails with diagnostics rather than falling back to an incompatible renderer/Worker path.
+Each candidate is probed before launch. If no Node 24+ runtime is usable, host self-check fails and automatic startup is suppressed instead of attempting a known-broken Gateway launch.
 
 ## Bounded local probes
 

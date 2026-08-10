@@ -2,12 +2,12 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const childProcess = require('./vscode-host/runtime-io.js');
+const { spawn, spawnSync } = require('node:child_process');
 const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
-const { requestRaw: boundedHttpRequestRaw } = require('./vscode-host/bounded-http-client.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { RuntimeController } = require('./host/runtime-controller.js');
+const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
 const { updateConfig } = require('./shared/config-store.cjs');
 const {
@@ -19,8 +19,6 @@ const { connectionProvider, publicUiState, statusLabel } = require('./vscode-hos
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const { classifyTunnelStop } = require('./vscode-host/tunnel-stop-policy.js');
 
-function spawn(...args){ return childProcess.spawn(...args); }
-function spawnSync(...args){ return childProcess.spawnSync(...args); }
 
 const { version: VERSION } = require('./package.json');
 const BASE_PORT = 8787;
@@ -45,10 +43,7 @@ function configuredPort(){ return Number(cfg().get('port') || BASE_PORT); }
 function log(s){ if(output) output.appendLine(`[${new Date().toLocaleTimeString()}] ${s}`); }
 function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
 function configPath(ctx){ return path.join(ctx.globalStorageUri.fsPath,'config.json'); }
-function gatewayPath(ctx){
-  const bundled = path.join(ctx.extensionPath,'gateway','server.bundle.mjs');
-  return fs.existsSync(bundled) ? bundled : path.join(ctx.extensionPath,'gateway','server.mjs');
-}
+function gatewayPath(ctx){ return path.join(ctx.extensionPath,'gateway','server.bundle.mjs'); }
 function esc(v){ return String(v ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch])); }
 function currentRoot(){ return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''; }
 function readConfig(p){ return readExtensionConfig(p); }
@@ -339,15 +334,6 @@ async function copyContextBundle(ctx){
   }
 }
 
-function httpRequestRaw(url, options={}, body=null, timeoutMs=4000){
-  return boundedHttpRequestRaw(url, options, body, timeoutMs);
-}
-function httpGet(url, timeoutMs=1500){ return httpRequestRaw(url, {method:'GET'}, null, timeoutMs); }
-async function healthAt(port){ return httpGet(`http://127.0.0.1:${port}/control/health`,1200); }
-function healthMatches(r, ctx){
-  const cfgData = readConfig(configPath(ctx));
-  return !!(r.ok && r.json && r.json.name === 'devmate' && r.json.version === VERSION && (!cfgData?.instanceId || r.json.instanceId === cfgData.instanceId));
-}
 function waitForProcessExit(child, timeoutMs=8000){
   if(!child || child.exitCode != null) return Promise.resolve(true);
   return Promise.race([
@@ -909,7 +895,12 @@ async function doctor(ctx){
   checks.push(`Config path: ${configPath(ctx)}`);
   checks.push(`Configured/current port: ${data.server.port}`);
   checks.push(`Connection provider: ${provider}`);
-  checks.push(`Node: ${process.execPath}`);
+  try{
+    const runtime=ensureGatewayNodeRuntime();
+    checks.push(`Gateway Node: ${runtime.nodeVersion} (${runtime.source}) ${runtime.executable}`);
+  }catch(e){
+    checks.push(`Gateway Node: UNAVAILABLE (${e.message || e})`);
+  }
   const git=spawnSync('git',['--version'],{encoding:'utf8',windowsHide:true}); checks.push(`git: ${git.error ? 'MISSING' : git.stdout.trim()}`);
   if(provider === 'ngrok'){
     const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
@@ -922,7 +913,7 @@ async function doctor(ctx){
   } else {
     checks.push('tunnel executable: external ingress');
   }
-  const h=await healthAt(Number(data.server.port||selectedPort)); checks.push(`Gateway health: ${healthMatches(h,ctx) ? 'OK' : `not current/failed (${h.status||h.error||'no response'})`}`);
+  const h=await healthAt(Number(data.server.port||selectedPort)); checks.push(`Gateway health: ${healthMatches(h,data) ? 'OK' : `not current/failed (${h.status||h.error||'no response'})`}`);
   try{
     const tunnel=currentTunnelStatus(ctx);
     checks.push(`Public connection: ${tunnel.running ? `${tunnel.provider} ${tunnel.publicUrl || 'starting'}` : `${provider} not running`}`);
@@ -1164,6 +1155,8 @@ function deactivate(){
     }
     gatewayController = null;
     gatewayControllerKey = '';
+    gatewayNodeRuntime = null;
+    gatewayNodeRuntimeKey = '';
     gatewayProcess = null;
     return stopped;
   });

@@ -52,6 +52,52 @@ function freePort() {
   });
 }
 
+function localModuleSpecifiers(source) {
+  const found = [];
+  const patterns = [
+    /\b(?:import|export)\s+(?:[^'"\x60]*?\s+from\s+)?['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) if (match[1]?.startsWith('.')) found.push(match[1]);
+  }
+  return found;
+}
+
+function resolveLocalModule(file, specifier) {
+  const resolved = path.resolve(path.dirname(file), specifier);
+  const candidates = path.extname(resolved)
+    ? [resolved]
+    : [resolved, `${resolved}.js`, `${resolved}.mjs`, `${resolved}.cjs`, `${resolved}.json`, path.join(resolved, 'index.js'), path.join(resolved, 'index.mjs'), path.join(resolved, 'index.cjs')];
+  return candidates.find(candidate => fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) || '';
+}
+
+function assertDependencyClosure(entryFile, extensionPath) {
+  const queue = [entryFile];
+  const visited = new Set();
+  while (queue.length) {
+    const file = queue.pop();
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const source = fs.readFileSync(file, 'utf8');
+    for (const specifier of localModuleSpecifiers(source)) {
+      const resolved = resolveLocalModule(file, specifier);
+      assert.ok(resolved, `Packaged module missing: ${path.relative(extensionPath, file)} -> ${specifier}`);
+      if (/\.(?:js|mjs|cjs)$/i.test(resolved)) queue.push(resolved);
+    }
+  }
+  return visited;
+}
+
+function assertNoPrivateElectronNodeFlags(files) {
+  const forbidden = ['--ms-enable-electron', 'run-as-node'].join('-');
+  for (const file of files) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.equal(source.includes(forbidden), false, `Unsupported private Electron Node flag packaged in ${file}`);
+  }
+}
+
 try {
   extractArchive();
   const extensionPath = path.join(extractRoot, 'extension');
@@ -65,7 +111,6 @@ try {
     'extension-entry-shared-tunnel.js',
     'vscode-host/lifecycle.js',
     'vscode-host/runtime-diagnostics.js',
-    'vscode-host/bounded-http-client.js',
     'vscode-host/shared-tunnel-record-store.js',
     'vscode-host/tunnel-controller.js',
     'vscode-host/tunnel-runtime.js',
@@ -88,9 +133,12 @@ try {
   }
 
   const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
-  const runtimeIoSource = fs.readFileSync(path.join(extensionPath, 'vscode-host', 'runtime-io.js'), 'utf8');
+  const entryFile = path.join(extensionPath, manifest.main.replace(/^\.\//, ''));
+  const dependencyFiles = assertDependencyClosure(entryFile, extensionPath);
+  assertNoPrivateElectronNodeFlags(dependencyFiles);
   assert.match(extensionSource, /resolveNodeRuntime/, 'VSIX must resolve a verified Node runtime before launching the Gateway');
-  assert.doesNotMatch(runtimeIoSource, /--ms-enable-electron-run-as-node/, 'VSIX must not inject unsupported Electron Node flags');
+  assert.match(extensionSource, /host\/runtime\/network\.js/, 'VSIX must use the shared Gateway health contract');
+  assert.doesNotMatch(extensionSource, /runtime-io\.js|bounded-http-client\.js/, 'VSIX must not package retired private runtime adapters');
   assert.match(extensionSource, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/, 'VSIX must link VS Code to the shared public MCP preflight');
   assert.match(extensionSource, /recordGeneration\(expectedRecord\)/, 'VSIX must bind explicit verification to the current complete session generation');
   assert.match(extensionSource, /verifiedForCurrentRecord\(persisted, currentRecord\)/, 'VSIX must validate persisted Ready evidence against the current session');
@@ -171,7 +219,9 @@ try {
     ownerLockVerified: true,
     publicMcpAuthContractVerified: true,
     completeSessionVerificationPackaged: true,
-    providerNativeConnectionRuntimePackaged: true
+    providerNativeConnectionRuntimePackaged: true,
+    packagedDependencyClosureVerified: true,
+    privateElectronFlagsAbsent: true
   }));
 } finally {
   await vscodeController?.dispose({ stopOwned: true }).catch(() => {});

@@ -68,7 +68,7 @@ function buildNgrokLaunch(port, settings, secrets) {
   args = decorateNgrokArgs(args, settings);
   const options = buildNgrokSpawnOptions({ windowsHide: true }, {
     authtoken: secrets.ngrokAuthtoken || '',
-    useManagedAccount: settings.ngrokUseManagedAccount !== false
+    useManagedAccount: settings.ngrokUseManagedAccount === true
   });
   return {
     command,

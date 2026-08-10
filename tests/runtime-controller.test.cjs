@@ -3,12 +3,15 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const {
   RuntimeController,
   ensureInstanceConfig,
+  healthMatches,
   readJson,
   resolveStateDirectory,
   workspaceRuntimeId
@@ -38,7 +41,7 @@ const config = JSON.parse(fs.readFileSync(process.env.DEVMATE_CONFIG, 'utf8'));
 const server = http.createServer((request, response) => {
   if (request.url === '/control/health') {
     response.writeHead(200, {'content-type':'application/json'});
-    response.end(JSON.stringify({name:'devmate', instanceId:config.instanceId}));
+    response.end(JSON.stringify({name:'devmate', version:config.appVersion, instanceId:config.instanceId}));
     return;
   }
   response.writeHead(404); response.end();
@@ -83,6 +86,12 @@ test('instance config creation preserves unrelated fields on later updates', () 
   const updated = ensureInstanceConfig({ configFile: file, workspaceRoot: root, preferredPort: 9999 });
   assert.deepEqual(updated.custom, { keep: true });
   assert.equal(updated.server.port, 9123);
+});
+
+test('Gateway health rejects stale DevMate versions even when instance identity matches', () => {
+  const config = { appVersion: '3.3.0', instanceId: 'same-instance' };
+  assert.equal(healthMatches({ ok: true, json: { name: 'devmate', version: '3.2.0', instanceId: 'same-instance' } }, config), false);
+  assert.equal(healthMatches({ ok: true, json: { name: 'devmate', version: '3.3.0', instanceId: 'same-instance' } }, config), true);
 });
 
 test('runtime controller publishes a bounded generic host context', () => {
@@ -235,6 +244,54 @@ test('failed startup waits for process cleanup before returning an error', async
   assert.equal(controller.owned, false);
   assert.equal(controller.phase, 'idle');
   assert.equal(fs.existsSync(path.join(state, 'gateway.start.lock')), false);
+});
+
+class StubbornGatewayChild extends EventEmitter {
+  constructor() {
+    super();
+    this.stdout = new PassThrough();
+    this.stderr = new PassThrough();
+    this.pid = 987654;
+    this.exitCode = null;
+    this.signalCode = null;
+    this.killed = false;
+  }
+
+  kill() {
+    this.killed = true;
+    return true;
+  }
+}
+
+test('failed startup keeps ownership until a stubborn Gateway actually exits', async () => {
+  const root = temporaryDirectory('devmate-stubborn-start-root-');
+  const state = temporaryDirectory('devmate-stubborn-start-state-');
+  const gateway = writeTestGateway(root, { neverListen: true });
+  const child = new StubbornGatewayChild();
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: await freePort(),
+    spawnImpl: () => child,
+    childExitTimeoutMs: 100,
+    childForceExitTimeoutMs: 100
+  });
+
+  await assert.rejects(
+    controller.start({ timeoutMs: 2000 }),
+    error => error.code === 'DEVMATE_GATEWAY_START_CLEANUP_PENDING' && error.cleanupPending === true
+  );
+  assert.equal(controller.child, child);
+  assert.equal(controller.owned, true);
+  assert.equal(controller.phase, 'stopping');
+
+  child.exitCode = 0;
+  child.emit('exit', 0, 'SIGKILL');
+  child.emit('close', 0, 'SIGKILL');
+  assert.equal(controller.child, null);
+  assert.equal(controller.owned, false);
+  assert.equal(controller.phase, 'idle');
 });
 
 test('dispose refuses to orphan an owned process unless stopOwned is requested', async () => {

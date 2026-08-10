@@ -2,15 +2,19 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const { DiagnosticsStore, redactValue } = require('../host/runtime/diagnostics-store.js');
 const { gatewayCandidates, runtimeConfigPath, workspaceFolders } = require('./runtime-context.js');
 
 class VscodeRuntimeDiagnostics {
-  constructor({ vscode, context, runtimeContext, output }) {
+  constructor({ vscode, context, runtimeContext, output, resolveNodeRuntimeImpl = resolveNodeRuntime }) {
     this.vscode = vscode;
     this.context = context;
     this.runtimeContext = runtimeContext;
     this.output = output;
+    this.resolveNodeRuntime = resolveNodeRuntimeImpl;
+    this.gatewayRuntime = null;
+    this.gatewayRuntimeError = '';
     this.store = new DiagnosticsStore({
       stateDirectory: runtimeContext.globalStorageUri.fsPath,
       fileName: 'vscode-host.log'
@@ -48,14 +52,29 @@ class VscodeRuntimeDiagnostics {
     add('gateway-launch-mode', true, 'child_process');
     add('config-file', fs.statSync(configFile, { throwIfNoEntry: false })?.isFile(), configFile);
     add('workspace', workspaceFolders(this.vscode).length > 0, `${workspaceFolders(this.vscode).length} folder(s)`);
-    add('node-runtime', !!process.versions.node, process.versions.node || 'missing');
+
+    try {
+      const runtime = this.resolveNodeRuntime();
+      this.gatewayRuntime = {
+        source: runtime.source,
+        executable: runtime.executable,
+        nodeVersion: runtime.nodeVersion,
+        electronVersion: runtime.electronVersion || null
+      };
+      this.gatewayRuntimeError = '';
+      add('gateway-node-runtime', true, `Node ${runtime.nodeVersion} via ${runtime.source}: ${runtime.executable}`);
+    } catch (error) {
+      this.gatewayRuntime = null;
+      this.gatewayRuntimeError = String(error.message || error);
+      add('gateway-node-runtime', false, this.gatewayRuntimeError);
+    }
     add('electron-runtime', !!process.versions.electron, process.versions.electron || 'not reported');
 
     const informational = new Set(['workspace', 'config-file', 'electron-runtime']);
     const ok = checks.every(check => check.ok || informational.has(check.id));
     this.append(`VS Code host self-check ${ok ? 'passed' : 'failed'}: ${checks.map(c => `${c.id}=${c.ok ? 'ok' : 'fail'}`).join(', ')}`,
       ok ? 'info' : 'error');
-    return { ok, checks, gateway, stateDirectory, configFile };
+    return { ok, checks, gateway, gatewayRuntime: this.gatewayRuntime, stateDirectory, configFile };
   }
 
   snapshot({ startupMode, enabled } = {}) {
@@ -79,7 +98,9 @@ class VscodeRuntimeDiagnostics {
         node: process.versions.node || null,
         electron: process.versions.electron || null,
         chrome: process.versions.chrome || null,
-        execPath: process.execPath
+        execPath: process.execPath,
+        gatewayRuntime: this.gatewayRuntime,
+        gatewayRuntimeError: this.gatewayRuntimeError || null
       },
       workspace: {
         folders: workspaceFolders(this.vscode),

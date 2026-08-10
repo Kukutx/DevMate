@@ -55,11 +55,8 @@ test('uses extension storage only when no workspace is open', () => {
   assert.equal(resolveVscodeStateDirectory(fakeVscode('', {}), context), local);
 });
 
-test('orders packaged Gateway candidates with the bundle first', () => {
+test('uses only the packaged Gateway bundle at runtime', () => {
   const extensionPath = temporaryDirectory('devmate-vscode-extension-');
   const context = { extensionPath };
-  assert.deepEqual(gatewayCandidates(context), [
-    path.join(extensionPath, 'gateway', 'server.bundle.mjs'),
-    path.join(extensionPath, 'gateway', 'server.mjs')
-  ]);
+  assert.deepEqual(gatewayCandidates(context), [path.join(extensionPath, 'gateway', 'server.bundle.mjs')]);
 });

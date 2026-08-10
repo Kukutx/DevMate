@@ -109,7 +109,9 @@ class RuntimeController {
     hostId = 'host',
     logger = () => {},
     nodeExecutable = process.execPath,
-    spawnImpl = spawn
+    spawnImpl = spawn,
+    childExitTimeoutMs = CHILD_EXIT_TIMEOUT_MS,
+    childForceExitTimeoutMs = CHILD_FORCE_EXIT_TIMEOUT_MS
   }) {
     this.workspaceRoot = requiredPath(workspaceRoot, 'workspaceRoot');
     this.stateDirectory = requiredPath(stateDirectory, 'stateDirectory');
@@ -120,6 +122,8 @@ class RuntimeController {
     this.logger = logger;
     this.nodeExecutable = nodeExecutable;
     this.spawnImpl = spawnImpl;
+    this.childExitTimeoutMs = Math.max(100, Number(childExitTimeoutMs) || CHILD_EXIT_TIMEOUT_MS);
+    this.childForceExitTimeoutMs = Math.max(100, Number(childForceExitTimeoutMs) || CHILD_FORCE_EXIT_TIMEOUT_MS);
     this.child = null;
     this.owned = false;
     this.phase = 'idle';
@@ -148,6 +152,13 @@ class RuntimeController {
 
   activeOwnedChild() {
     return this.owned && childActive(this.child) ? this.child : null;
+  }
+
+  terminateOwnedChild(child) {
+    return terminateChild(child, {
+      timeoutMs: this.childExitTimeoutMs,
+      forceTimeoutMs: this.childForceExitTimeoutMs
+    });
   }
 
   diagnosticSnapshot() {
@@ -286,7 +297,7 @@ class RuntimeController {
       }
 
       if (childActive(this.child)) {
-        const terminated = await terminateChild(this.child);
+        const terminated = await this.terminateOwnedChild(this.child);
         if (!terminated.exited) {
           const error = new Error('Previous DevMate Gateway process did not exit before restart');
           error.code = 'DEVMATE_PREVIOUS_GATEWAY_STUCK';
@@ -372,7 +383,7 @@ class RuntimeController {
         if (this.child === child) {
           this.child = null;
           this.owned = false;
-          if (this.phase === 'running') this.phase = 'idle';
+          if (this.phase === 'running' || this.phase === 'stopping' || this.phase === 'error') this.phase = 'idle';
         }
       });
 
@@ -388,9 +399,20 @@ class RuntimeController {
         if (child.exitCode != null) break;
       }
 
-      const terminated = await terminateChild(child);
+      const terminated = await this.terminateOwnedChild(child);
       launch.forcedTermination = terminated.forced || !!child.forceTerminated;
-      if (this.child === child && terminated.exited) this.child = null;
+      if (!terminated.exited) {
+        if (this.child === child && childActive(child)) this.owned = true;
+        this.phase = 'stopping';
+        const detail = startupFailureDetail(launch, child);
+        const error = new Error(`DevMate Gateway startup failed and cleanup could not confirm process exit${detail ? `: ${detail}` : ''}`);
+        error.code = 'DEVMATE_GATEWAY_START_CLEANUP_PENDING';
+        error.cleanupPending = true;
+        error.cleanup = terminated;
+        error.diagnostics = this.diagnosticSnapshot();
+        throw error;
+      }
+      if (this.child === child) this.child = null;
       this.owned = false;
       launch.endedAt ||= now();
 
@@ -438,7 +460,7 @@ class RuntimeController {
     }
 
     this.phase = 'stopping';
-    const completed = await terminateChild(child);
+    const completed = await this.terminateOwnedChild(child);
     if (!completed.exited) {
       this.phase = 'error';
       return { stopped: false, reason: completed.error || 'process-exit-timeout', forced: completed.forced };

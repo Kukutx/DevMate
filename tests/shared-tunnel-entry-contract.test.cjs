@@ -57,18 +57,19 @@ test('VS Code tunnel actions call the explicit provider-native runtime', () => {
   assert.doesNotMatch(source, /127\.0\.0\.1:4040\/api\/tunnels/);
 });
 
-test('VS Code HTTP calls use the bounded client', () => {
+test('VS Code Gateway health uses the shared bounded runtime network', () => {
   const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
-  assert.match(source, /requestRaw: boundedHttpRequestRaw/);
-  assert.match(source, /return boundedHttpRequestRaw\(url, options, body, timeoutMs\)/);
-  assert.doesNotMatch(source, /res\.on\('data',\s*d=>chunks\.push\(Buffer\.from\(d\)\)\)/);
+  const network = fs.readFileSync(path.join(root, 'host', 'runtime', 'network.js'), 'utf8');
+  assert.match(source, /require\('\.\/host\/runtime\/network\.js'\)/);
+  assert.doesNotMatch(source, /bounded-http-client\.js|runtime-io\.js/);
+  assert.match(network, /MAX_HTTP_JSON_BYTES/);
+  assert.match(network, /response-too-large/);
 });
 
 test('VSIX smoke contract includes the provider-native tunnel runtime and current ngrok Agent API', () => {
   const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-runtime.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
   assert.doesNotMatch(smoke, /extension-entry-host\.js/);
-  assert.match(smoke, /vscode-host\/bounded-http-client\.js/);
   assert.match(smoke, /launchMode, 'child_process'/);
 
   const controller = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');

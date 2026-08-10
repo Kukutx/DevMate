@@ -51,10 +51,7 @@ function runtimeConfigPath(context) {
 }
 
 function gatewayCandidates(context) {
-  return [
-    path.join(context.extensionPath, 'gateway', 'server.bundle.mjs'),
-    path.join(context.extensionPath, 'gateway', 'server.mjs')
-  ];
+  return [path.join(context.extensionPath, 'gateway', 'server.bundle.mjs')];
 }
 
 function existingGatewayEntry(context) {

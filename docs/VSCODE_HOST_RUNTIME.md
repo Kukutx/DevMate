@@ -21,9 +21,9 @@ The public extension entry coordinates host lifecycle and the shared public conn
 
 ## Isolated Gateway process
 
-The Gateway runs as a separate Node process through the shared `RuntimeController`. This isolates Gateway failures and long-running work from the VS Code Extension Host and uses the same startup lease, health check, ownership, stop, restart, and instance-lock semantics as other desktop hosts.
+The Gateway runs as a separate Node process through the shared `RuntimeController`. Before Start, VS Code probes the same shared Node-runtime resolver used by the desktop host contract and requires a usable Node.js 24+ runtime. Unsupported private Electron CLI flags are not used. This isolates Gateway failures and long-running work from the VS Code Extension Host and uses the same startup lease, version-aware health check, ownership, stop, restart, and instance-lock semantics as other desktop hosts.
 
-The Gateway bundle is self-contained. The installed VSIX does not depend on a repository-level `node_modules` directory.
+The Gateway bundle is self-contained. The installed VSIX accepts only `gateway/server.bundle.mjs` as its runtime Gateway entry; the raw source server is a build input, not a fallback execution path. The installed VSIX does not depend on a repository-level `node_modules` directory.
 
 ## Complete Start and Ready
 
