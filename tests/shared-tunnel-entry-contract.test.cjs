@@ -41,11 +41,27 @@ test('VS Code entry initializes shared instance config before the provider-nativ
   assert.ok(config >= 0 && controller > config, 'Shared instance config must exist before controller creation');
   assert.ok(registry > controller && activation > registry, 'Tunnel runtime must be registered before platform activation');
 
-  const deactivate = source.indexOf('await currentLifecycle?.deactivate()');
-  const clear = source.indexOf('clearTunnelController(currentRuntime)', deactivate);
-  const dispose = source.indexOf('await currentRuntime?.dispose({ stopOwned: true })', clear);
-  assert.ok(deactivate >= 0 && clear > deactivate, 'Tunnel registry must remain available during extension teardown');
-  assert.ok(dispose > clear, 'Tunnel controller must be disposed after the inner lifecycle stops');
+  const deactivate = source.indexOf('lifecycleResult = await currentLifecycle.deactivate()');
+  const dispose = source.indexOf('await currentRuntime?.dispose({ stopOwned: false })', deactivate);
+  const preserve = source.indexOf('if (disposed?.disposed === false)', dispose);
+  const preserveRegistry = source.indexOf('setTunnelController(currentRuntime)', preserve);
+  const clear = source.indexOf('clearTunnelController(currentRuntime)', preserveRegistry);
+  assert.ok(deactivate >= 0 && dispose > deactivate, 'Outer teardown must keep the tunnel registry available while the inner lifecycle decides shutdown safety');
+  assert.ok(preserve > dispose && preserveRegistry > preserve, 'Incomplete teardown must restore the shared tunnel registry instead of dropping the active controller');
+  assert.ok(clear > preserveRegistry, 'Tunnel registry may be cleared only after the controller is confirmed disposable');
+});
+
+test('shared desktop lifecycle serializes activation and fences stale recovery work', () => {
+  const source = fs.readFileSync(path.join(root, 'extension-entry-shared-tunnel.js'), 'utf8');
+  assert.match(source, /OperationCoordinator/);
+  assert.match(source, /shared-tunnel-host-lifecycle/);
+  assert.match(source, /hostLifecycleOperations\.run\('activate'/);
+  assert.match(source, /hostLifecycleOperations\.run\('deactivate'/);
+  assert.match(source, /sessionRecoveryEpoch/);
+  assert.match(source, /expectedEpoch !== sessionRecoveryEpoch/);
+  assert.doesNotMatch(source, /let activation = null/);
+  assert.doesNotMatch(source, /let deactivation = null/);
+  assert.match(source, /dispose\(\{ stopOwned: false \}\)/);
 });
 
 test('VS Code tunnel actions call the explicit provider-native runtime', () => {

@@ -19,18 +19,24 @@ test('normal commands preserve bounded output and exit metadata', async () => {
 
 test('timeout terminates the complete owned process tree', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-command-tree-'));
-  const marker = path.join(directory, 'grandchild-survived');
-  const childSource = "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'alive'), 1200); setInterval(() => {}, 1000);";
+  const marker = path.join(directory, 'grandchild-heartbeat');
+  const childSource = "const fs=require('node:fs'); setInterval(() => fs.appendFileSync(process.argv[1], 'x'), 50);";
   const parentSource = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childSource)}, process.argv[1]], { stdio: 'ignore' }); setInterval(() => {}, 1000);`;
-  const result = await executeCommand(process.execPath, ['-e', parentSource, marker], {
-    timeoutMs: 250,
-    maxOutputChars: 2000
-  });
-  assert.equal(result.timedOut, true);
-  assert.equal(result.terminated, true);
-  assert.equal(result.exitConfirmed, true);
-  await new Promise(resolve => setTimeout(resolve, 1600));
-  assert.equal(fs.existsSync(marker), false);
+  try {
+    const result = await executeCommand(process.execPath, ['-e', parentSource, marker], {
+      timeoutMs: 250,
+      maxOutputChars: 2000
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.terminated, true);
+    assert.equal(result.exitConfirmed, true);
+    const sizeAfterReturn = fs.statSync(marker, { throwIfNoEntry: false })?.size || 0;
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const sizeAfterSettling = fs.statSync(marker, { throwIfNoEntry: false })?.size || 0;
+    assert.equal(sizeAfterSettling, sizeAfterReturn, 'grandchild activity continued after executeCommand returned');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('timeout force-stops a command that ignores graceful termination', async () => {

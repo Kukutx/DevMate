@@ -151,6 +151,40 @@ test('preflight result is discarded if tunnel generation changes while verificat
   }
 });
 
+test('disposing the verifier fences an in-flight preflight from persisting or notifying after teardown', async () => {
+  const fx = fixture();
+  let resolvePreflight;
+  let verifiedNotices = 0;
+  let errorNotices = 0;
+  try {
+    const verifier = new PublicTunnelVerifier({
+      stateDirectory: fx.stateDirectory,
+      tunnelStatus: port => fx.status(port),
+      readyGraceMs: 0,
+      now: () => Date.parse('2026-08-08T01:01:00.000Z'),
+      preflight: () => new Promise(resolve => { resolvePreflight = resolve; }),
+      onVerified: async () => { verifiedNotices += 1; },
+      onError: async () => { errorNotices += 1; }
+    });
+    const pending = verifier.check();
+    await new Promise(resolve => setImmediate(resolve));
+    verifier.dispose();
+    resolvePreflight(successfulTest('https://new.example.com'));
+    const result = await pending;
+    assert.equal(result.verified, false);
+    assert.equal(result.stale, true);
+    assert.equal(result.reason, 'verifier-stopped');
+    assert.equal(verifiedNotices, 0);
+    assert.equal(errorNotices, 0);
+
+    const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(config.connection.lastPublicHost, 'old.example.com');
+    assert.equal(config.connection.lastPreflightAt, '2026-08-08T00:00:00.000Z');
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('Gateway generation change during preflight discards otherwise successful evidence', async () => {
   const fx = fixture();
   let resolvePreflight;

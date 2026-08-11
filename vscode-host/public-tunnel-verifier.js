@@ -69,11 +69,21 @@ class PublicTunnelVerifier {
     this.now = now;
     this.timer = null;
     this.inFlightGeneration = '';
+    this.inFlightEpoch = -1;
+    this.lifecycleEpoch = 0;
     this.lastAttemptGeneration = '';
     this.nextAttemptAt = 0;
     this.lastErrorNoticeGeneration = '';
     this.lastStateKey = '';
     this.disposed = false;
+  }
+
+  lifecycleCurrent(epoch) {
+    return !this.disposed && epoch === this.lifecycleEpoch;
+  }
+
+  stoppedResult(generation = '') {
+    return { checked: true, verified: false, stale: true, reason: 'verifier-stopped', generation };
   }
 
   readConfig() {
@@ -110,6 +120,7 @@ class PublicTunnelVerifier {
   }
 
   async notifyState(state, { record = null, generation = '', error = null } = {}) {
+    if (this.disposed) return;
     const key = stateKey(state, record, generation);
     if (key === this.lastStateKey) return;
     this.lastStateKey = key;
@@ -131,6 +142,7 @@ class PublicTunnelVerifier {
   }
 
   async notifyVerified(result) {
+    if (this.disposed) return;
     try {
       await this.onVerified(result);
     } catch (error) {
@@ -139,6 +151,7 @@ class PublicTunnelVerifier {
   }
 
   async notifyError(payload) {
+    if (this.disposed) return;
     try {
       await this.onError(payload);
     } catch (error) {
@@ -148,6 +161,7 @@ class PublicTunnelVerifier {
 
   async check({ force = false } = {}) {
     if (this.disposed) return { checked: false, reason: 'disposed' };
+    const epoch = this.lifecycleEpoch;
     const config = this.readConfig();
     if (!config) return { checked: false, reason: 'missing-config' };
     let snapshot;
@@ -182,7 +196,7 @@ class PublicTunnelVerifier {
     if (!force && Number.isFinite(readyAt) && now - readyAt < this.readyGraceMs) {
       return { checked: false, reason: 'ready-grace', generation };
     }
-    if (this.inFlightGeneration === generation) {
+    if (this.inFlightGeneration === generation && this.inFlightEpoch === epoch) {
       return { checked: false, reason: 'in-flight', generation };
     }
     if (!force && this.lastAttemptGeneration === generation && now < this.nextAttemptAt) {
@@ -191,6 +205,7 @@ class PublicTunnelVerifier {
 
     const previousHost = String(config.connection?.lastPublicHost || '').trim().toLowerCase();
     this.inFlightGeneration = generation;
+    this.inFlightEpoch = epoch;
     this.lastAttemptGeneration = generation;
     this.nextAttemptAt = now + this.retryMs;
 
@@ -205,6 +220,7 @@ class PublicTunnelVerifier {
         clientVersion: this.appVersion
       });
 
+      if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       const latest = this.readConfig();
       if (!latest || !this.generationStillCurrent(latest, generation)) {
         this.logger('Discarded public MCP preflight result because the Gateway or tunnel generation changed during verification.');
@@ -212,7 +228,9 @@ class PublicTunnelVerifier {
       }
 
       const stamp = new Date(this.now()).toISOString();
+      if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       updateConfig(this.configFile, current => {
+        if (!this.lifecycleCurrent(epoch)) return current;
         if (!this.generationStillCurrent(current, generation)) return current;
         current.connection = {
           ...(current.connection || {}),
@@ -221,6 +239,7 @@ class PublicTunnelVerifier {
         return current;
       });
 
+      if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       const persisted = this.readConfig();
       const persistedSession = persisted ? this.currentSession(persisted) : null;
       if (
@@ -249,10 +268,12 @@ class PublicTunnelVerifier {
       };
       this.logger(`Reverified public MCP for current Gateway+tunnel generation: ${nextHost || record.publicUrl}, tools=${test.toolCount}.`);
     } catch (error) {
+      if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       const latest = this.readConfig();
       let current = !!latest && this.generationStillCurrent(latest, generation);
       if (current) {
         updateConfig(this.configFile, value => {
+          if (!this.lifecycleCurrent(epoch)) return value;
           if (!this.generationStillCurrent(value, generation)) return value;
           value.connection = {
             ...(value.connection || {}),
@@ -276,9 +297,13 @@ class PublicTunnelVerifier {
       };
       if (failure.notify) this.lastErrorNoticeGeneration = generation;
     } finally {
-      if (this.inFlightGeneration === generation) this.inFlightGeneration = '';
+      if (this.inFlightGeneration === generation && this.inFlightEpoch === epoch) {
+        this.inFlightGeneration = '';
+        this.inFlightEpoch = -1;
+      }
     }
 
+    if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
     if (success) {
       await this.notifyState('verified', { record: success.record, generation });
       await this.notifyVerified(success);
@@ -292,6 +317,7 @@ class PublicTunnelVerifier {
   start() {
     if (this.disposed) throw new Error('PublicTunnelVerifier is disposed');
     if (this.timer) return this;
+    this.lifecycleEpoch += 1;
     this.timer = setInterval(() => {
       void this.check().catch(error => this.logger(`Public tunnel verifier failed: ${error.message || error}`));
     }, this.pollMs);
@@ -302,7 +328,9 @@ class PublicTunnelVerifier {
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.lifecycleEpoch += 1;
     this.inFlightGeneration = '';
+    this.inFlightEpoch = -1;
     return this;
   }
 

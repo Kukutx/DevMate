@@ -26,6 +26,7 @@ class VscodeHostLifecycle {
     this.mirror = null;
     this.startupTimer = null;
     this.active = false;
+    this.lifecycleGeneration = 0;
     this.activating = null;
     this.deactivating = null;
     this.platformActivationAttempted = false;
@@ -88,6 +89,7 @@ class VscodeHostLifecycle {
       context.subscriptions.push({ dispose: () => this.mirror?.dispose() });
       this.registerHostListeners(context);
       this.active = true;
+      this.lifecycleGeneration += 1;
       const check = this.runSelfCheck(false);
       if (!check.ok) this.diagnostics.append('Host activated with self-check failures; automatic Start is suppressed.', 'error');
       else this.scheduleAutomaticStart();
@@ -141,9 +143,11 @@ class VscodeHostLifecycle {
   scheduleAutomaticStart() {
     if (!this.autoStart() || !currentWorkspaceRoot(this.vscode)) return;
     if (this.startupTimer) clearTimeout(this.startupTimer);
+    const generation = this.lifecycleGeneration;
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null;
-      this.startAutomatically().catch(error => this.handleStartupFailure(error));
+      if (!this.active || generation !== this.lifecycleGeneration) return;
+      this.startAutomatically(generation).catch(error => this.handleStartupFailure(error, generation));
     }, 0);
   }
 
@@ -167,13 +171,19 @@ class VscodeHostLifecycle {
     throw error;
   }
 
-  async startAutomatically() {
+  async startAutomatically(generation = this.lifecycleGeneration) {
+    if (!this.active || generation !== this.lifecycleGeneration) {
+      return { cancelled: true, reason: 'host-deactivating' };
+    }
     const check = this.runSelfCheck(false);
     if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before DevMate Start'), {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
     this.diagnostics?.append('Starting DevMate automatically and waiting for verified public MCP Ready state.');
     const commandResult = await this.vscode.commands.executeCommand('devMate.start', { quiet: true });
+    if (!this.active || generation !== this.lifecycleGeneration) {
+      return { cancelled: true, reason: 'host-deactivating' };
+    }
     if (commandResult?.ok === false) {
       const error = new Error(commandResult.error || 'DevMate start command reported failure');
       error.code = commandResult.code || 'DEVMATE_VSCODE_START_COMMAND_FAILED';
@@ -185,12 +195,16 @@ class VscodeHostLifecycle {
       throw error;
     }
     const ready = await this.verifyGatewayReady();
+    if (!this.active || generation !== this.lifecycleGeneration) {
+      return { cancelled: true, reason: 'host-deactivating' };
+    }
     this.diagnostics?.clearFailure();
     this.diagnostics?.append(`Automatic DevMate Start verified on port ${ready.port}; tools=${commandResult.toolCount}.`);
     return { ...ready, mcpUrl: commandResult.mcpUrl, toolCount: commandResult.toolCount };
   }
 
-  async handleStartupFailure(error) {
+  async handleStartupFailure(error, generation = this.lifecycleGeneration) {
+    if (!this.active || generation !== this.lifecycleGeneration || this.deactivating) return;
     this.diagnostics?.recordFailure(error, { phase: 'automatic-start' });
     const detail = error?.message || String(error);
     const choice = await this.vscode.window.showErrorMessage(
@@ -222,22 +236,25 @@ class VscodeHostLifecycle {
   async deactivate() {
     if (this.deactivating) return this.deactivating;
     this.deactivating = (async () => {
+      this.active = false;
+      this.lifecycleGeneration += 1;
       if (this.startupTimer) clearTimeout(this.startupTimer);
       this.startupTimer = null;
       this.mirror?.dispose();
       this.mirror = null;
+      let platformResult = null;
       try {
-        if (this.platformActivationAttempted) await this.platformExtension.deactivate();
+        if (this.platformActivationAttempted) platformResult = await this.platformExtension.deactivate();
       } finally {
         this.platformActivationAttempted = false;
         this.platformActivated = false;
         this.diagnostics?.append('DevMate VS Code host deactivated.');
-        this.active = false;
         this.runtimeContext = null;
         this.context = null;
         this.output = null;
         this.diagnostics = null;
       }
+      return platformResult;
     })();
     try { return await this.deactivating; }
     finally { this.deactivating = null; }

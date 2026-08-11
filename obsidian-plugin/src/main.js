@@ -15,7 +15,11 @@ const {
 } = require('../../shared/public-ingress-verification.cjs');
 const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
 const { TunnelController } = require('../../vscode-host/tunnel-controller.js');
-const { assertTunnelSafeForCredentialChange } = require('../../vscode-host/tunnel-stop-policy.js');
+const {
+  assertTunnelSafeForCredentialChange,
+  classifyTunnelStop,
+  tunnelAllowsGatewayShutdown
+} = require('../../vscode-host/tunnel-stop-policy.js');
 const { tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
 const { ObsidianHostBridge } = require('./host-bridge.js');
 const { ObsidianContextProvider } = require('./context-provider.js');
@@ -116,11 +120,22 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     await this.hostOperations.run('unload', async () => {
       await this.bridge?.stop();
       this.bridge = null;
-      try { await this.tunnelController?.dispose({ stopOwned: true }); } catch (error) {
+      let tunnel = { stopped: false, reason: 'not-running' };
+      try { tunnel = await this.tunnelController?.stop() || tunnel; }
+      catch (error) {
+        tunnel = { stopped: false, reason: error.message || String(error), error };
         this.logRuntime(`Could not stop owned public connection during unload: ${error.message || error}`);
       }
+      const releaseGateway = tunnelAllowsGatewayShutdown(tunnel);
+      const tunnelDisposed = await this.tunnelController?.dispose({ stopOwned: false }).catch(error => ({ disposed: false, reason: error.message || String(error) }));
+      if (tunnelDisposed?.disposed === false) {
+        this.logRuntime(`Public connection controller remains active after unload: ${tunnelDisposed.reason || 'stop not confirmed'}.`);
+      }
       this.tunnelController = null;
-      await this.controller?.dispose({ stopOwned: true });
+      const gatewayDisposed = await this.controller?.dispose({ stopOwned: releaseGateway });
+      if (gatewayDisposed?.disposed === false) {
+        this.logRuntime(`Gateway is preserved because public connection shutdown was not confirmed: ${gatewayDisposed.reason || 'owned process still running'}.`);
+      }
       this.controller = null;
     });
   }
@@ -198,9 +213,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     };
   }
 
-  tunnelSettings() {
+  tunnelSettings(stateDirectory = this.stateDirectory()) {
     return settingsFromState({
-      stateDirectory: this.stateDirectory(),
+      stateDirectory,
       localSettings: this.localTunnelSettings()
     });
   }
@@ -345,17 +360,41 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async reconfigureRuntimeInternal({ startBridge = this.layoutReady, capture = this.layoutReady } = {}) {
-    await this.bridge?.stop();
-    this.bridge = null;
     const pluginDirectory = this.pluginDirectory();
     const stateDirectory = this.stateDirectory();
     const sameState = this.controller && path.resolve(this.controller.stateDirectory) === path.resolve(stateDirectory);
     this.invalidateNodeRuntime();
     this.invalidateTunnelSecrets();
     if (!sameState) {
-      try { await this.tunnelController?.dispose({ stopOwned: true }); } catch {}
+      let previousTunnel = { stopped: false, reason: 'not-running' };
+      try {
+        previousTunnel = await this.tunnelController?.stop() || previousTunnel;
+      } catch (error) {
+        previousTunnel = { stopped: false, reason: error.message || String(error), error };
+      }
+      const previousTunnelState = classifyTunnelStop(previousTunnel);
+      if (!tunnelAllowsGatewayShutdown(previousTunnel)) {
+        const error = new Error(previousTunnelState.remoteOwner
+          ? 'Cannot switch DevMate state directory while another host still owns the public connection for the current Gateway.'
+          : `Cannot switch DevMate state directory because public connection shutdown was not confirmed (${previousTunnelState.reason}).`);
+        error.code = 'DEVMATE_OBSIDIAN_RECONFIGURE_BLOCKED';
+        throw error;
+      }
+      await this.bridge?.stop();
+      this.bridge = null;
+      const tunnelDisposed = await this.tunnelController?.dispose({ stopOwned: false });
+      if (tunnelDisposed?.disposed === false) {
+        const error = new Error(`Cannot switch DevMate state directory because the previous public connection controller is still active (${tunnelDisposed.reason || 'unknown'}).`);
+        error.code = 'DEVMATE_OBSIDIAN_RECONFIGURE_BLOCKED';
+        throw error;
+      }
       this.tunnelController = null;
-      await this.controller?.dispose({ stopOwned: true });
+      const gatewayDisposed = await this.controller?.dispose({ stopOwned: true });
+      if (gatewayDisposed?.disposed === false) {
+        const error = new Error(`Cannot switch DevMate state directory because the previous Gateway could not be released (${gatewayDisposed.reason || 'unknown'}).`);
+        error.code = 'DEVMATE_OBSIDIAN_RECONFIGURE_BLOCKED';
+        throw error;
+      }
       this.runtimeDiagnostics = new RuntimeDiagnostics({
         stateDirectory,
         pluginVersion: this.manifest.version,
@@ -372,19 +411,21 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       });
       this.tunnelController = new TunnelController({
         stateDirectory,
-        settings: () => this.tunnelSettings(),
+        settings: () => this.tunnelSettings(stateDirectory),
         getSecrets: async () => this.tunnelSecrets(),
         hostId: `${HOST_ID}-${process.pid}`,
         logger: message => this.logRuntime(message)
       });
       this.logRuntime(`Configured shared DevMate Gateway and public connection lifecycle for ${this.vaultRoot}.`);
     } else {
+      await this.bridge?.stop();
+      this.bridge = null;
       this.controller.preferredPort = this.settings.preferredPort;
       this.runtimeDiagnostics?.setStateDirectory(stateDirectory);
       if (!this.tunnelController) {
         this.tunnelController = new TunnelController({
           stateDirectory,
-          settings: () => this.tunnelSettings(),
+          settings: () => this.tunnelSettings(stateDirectory),
           getSecrets: async () => this.tunnelSecrets(),
           hostId: `${HOST_ID}-${process.pid}`,
           logger: message => this.logRuntime(message)
@@ -396,11 +437,22 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     if (!this.settings.enabled) {
       this.sessionRequested = false;
       this.recoveryNextAt = 0;
-      try { await this.tunnelController?.stop(); } catch (error) {
+      let stoppedTunnel = { stopped: false, reason: 'not-running' };
+      try {
+        stoppedTunnel = await this.tunnelController?.stop() || stoppedTunnel;
+      } catch (error) {
+        stoppedTunnel = { stopped: false, reason: error.message || String(error), error };
         this.logRuntime(`Could not release public connection while disabling DevMate: ${error.message || error}`);
       }
-      try { await this.controller?.stop(); } catch (error) {
-        this.logRuntime(`Could not release Gateway while disabling DevMate: ${error.message || error}`);
+      if (tunnelAllowsGatewayShutdown(stoppedTunnel)) {
+        try { await this.controller?.stop(); } catch (error) {
+          this.logRuntime(`Could not release Gateway while disabling DevMate: ${error.message || error}`);
+        }
+      } else {
+        const stoppedState = classifyTunnelStop(stoppedTunnel);
+        this.logRuntime(stoppedState.remoteOwner
+          ? 'DevMate is disabled locally, but the Gateway is preserved because another host still owns the public connection.'
+          : `DevMate is disabled locally, but the Gateway is preserved because public connection shutdown was not confirmed (${stoppedState.reason}).`);
       }
       await this.refreshStatus();
       return { configured: true, stateDirectory, disabled: true };
@@ -643,15 +695,22 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       };
     } catch (error) {
       if (this.sessionRequested) this.recoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
+      let publicConnectionSafeToReleaseGateway = !(tunnel?.attached && !tunnel?.owned);
       if (tunnel?.owned) {
-        try { await this.tunnelController.stop(); } catch (cleanupError) {
+        try {
+          const stopped = await this.tunnelController.stop();
+          publicConnectionSafeToReleaseGateway = tunnelAllowsGatewayShutdown(stopped);
+        } catch (cleanupError) {
+          publicConnectionSafeToReleaseGateway = false;
           this.logRuntime(`Could not roll back owned public connection after failed Start: ${cleanupError.message || cleanupError}`);
         }
       }
-      if (gateway?.started && gateway?.owned) {
+      if (gateway?.started && gateway?.owned && publicConnectionSafeToReleaseGateway) {
         try { await this.controller.stop(); } catch (cleanupError) {
           this.logRuntime(`Could not roll back owned Gateway after failed Start: ${cleanupError.message || cleanupError}`);
         }
+      } else if (gateway?.started && gateway?.owned && !publicConnectionSafeToReleaseGateway) {
+        this.logRuntime('Preserving the newly owned Gateway because the public connection is still active or its shutdown was not confirmed.');
       }
       this.runtimeDiagnostics?.recordFailure(error);
       console.error('[DevMate] Start failed', error);
@@ -674,9 +733,22 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     let gateway = { stopped: false, reason: 'not-running' };
     try {
       try { tunnel = await this.tunnelController?.stop() || tunnel; }
-      catch (error) { this.logRuntime(`Public connection stop reported: ${error.message || error}`); }
+      catch (error) {
+        tunnel = { stopped: false, reason: error.message || String(error), error };
+        this.logRuntime(`Public connection stop reported: ${error.message || error}`);
+      }
+      const tunnelState = classifyTunnelStop(tunnel);
+      if (!tunnelAllowsGatewayShutdown(tunnel)) {
+        const reason = tunnelState.remoteOwner
+          ? 'preserved-for-remote-public-connection'
+          : 'preserved-after-public-connection-stop-failure';
+        if (!quiet) new Notice(tunnelState.remoteOwner
+          ? 'DevMate remains shared under another host; this Gateway was preserved.'
+          : 'DevMate could not confirm public connection shutdown, so the Gateway was preserved.');
+        return { stopped: false, sharedStillActive: true, reason, gateway, tunnel };
+      }
       gateway = await this.controller.stop();
-      const sharedStillActive = tunnel.reason === 'managed-by-another-host' || gateway.reason === 'managed-by-another-host' || gateway.attached;
+      const sharedStillActive = gateway.reason === 'managed-by-another-host' || gateway.attached;
       if (!sharedStillActive) this.clearPublicVerification();
       this.runtimeDiagnostics?.clearFailure();
       if (!quiet) {
@@ -701,8 +773,15 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   async restartRuntimeInternal() {
     try {
       this.ensureNodeRuntime();
-      try { await this.tunnelController?.stop(); } catch (error) {
+      let tunnel = { stopped: false, reason: 'not-running' };
+      try { tunnel = await this.tunnelController?.stop() || tunnel; } catch (error) {
+        tunnel = { stopped: false, reason: error.message || String(error), error };
         this.logRuntime(`Public connection stop before restart reported: ${error.message || error}`);
+      }
+      const tunnelState = classifyTunnelStop(tunnel);
+      if (!tunnelAllowsGatewayShutdown(tunnel)) {
+        const reason = tunnelState.remoteOwner ? 'public connection is managed by another host' : `public connection stop was not confirmed (${tunnelState.reason})`;
+        throw new Error(`DevMate restart is blocked because ${reason}; the Gateway was preserved.`);
       }
       try { await this.controller.stop(); } catch (error) {
         this.logRuntime(`Gateway stop before restart reported: ${error.message || error}`);

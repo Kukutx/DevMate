@@ -22,7 +22,8 @@ test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle 
   assert.match(block, /toolCount: preflight\.toolCount/);
   assert.match(block, /this\.sessionRequested = true/);
   assert.match(block, /if \(tunnel\?\.owned\)[\s\S]*this\.tunnelController\.stop\(\)/);
-  assert.match(block, /if \(gateway\?\.started && gateway\?\.owned\)[\s\S]*this\.controller\.stop\(\)/);
+  assert.match(block, /if \(gateway\?\.started && gateway\?\.owned && publicConnectionSafeToReleaseGateway\)[\s\S]*this\.controller\.stop\(\)/);
+  assert.match(block, /gateway\?\.owned && !publicConnectionSafeToReleaseGateway[\s\S]*Preserving the newly owned Gateway/);
 });
 
 test('Obsidian Ready is tied to the current complete Gateway+tunnel generation rather than URL equality', () => {
@@ -66,6 +67,25 @@ test('Obsidian requested session recovers through the complete Start lifecycle a
   const stop = main.slice(stopStart, stopEnd);
   assert.match(stop, /this\.sessionRequested = false/);
   assert.match(stop, /this\.recoveryNextAt = 0/);
+});
+
+test('Obsidian never shuts down the Gateway while public connection shutdown is remote-owned or unconfirmed', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  assert.match(main, /tunnelAllowsGatewayShutdown/);
+  assert.match(main, /classifyTunnelStop/);
+
+  const stopStart = main.indexOf('async stopRuntimeInternal');
+  const stopEnd = main.indexOf('restartRuntime()', stopStart);
+  const stop = main.slice(stopStart, stopEnd);
+  const gate = stop.indexOf('if (!tunnelAllowsGatewayShutdown(tunnel))');
+  const gatewayStop = stop.indexOf('gateway = await this.controller.stop()');
+  assert.ok(gate >= 0 && gatewayStop > gate, 'Gateway stop must remain behind the public-connection shutdown gate');
+
+  const unloadStart = main.indexOf('async onunload()');
+  const unloadEnd = main.indexOf('async saveSettings()', unloadStart);
+  const unload = main.slice(unloadStart, unloadEnd);
+  assert.match(unload, /const releaseGateway = tunnelAllowsGatewayShutdown\(tunnel\)/);
+  assert.match(unload, /dispose\(\{ stopOwned: releaseGateway \}\)/);
 });
 
 test('Obsidian automatic URL copy is convenience after Ready, not a required Start stage', () => {

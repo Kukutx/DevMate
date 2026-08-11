@@ -7,6 +7,7 @@ const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/con
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { RuntimeController } = require('./host/runtime-controller.js');
+const { childExited, terminateProcessTree } = require('./host/runtime/process-tree.js');
 const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
 const { updateConfig } = require('./shared/config-store.cjs');
@@ -17,7 +18,7 @@ const {
 } = require('./shared/public-ingress-verification.cjs');
 const { connectionProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
-const { classifyTunnelStop } = require('./vscode-host/tunnel-stop-policy.js');
+const { classifyTunnelStop, tunnelAllowsGatewayShutdown } = require('./vscode-host/tunnel-stop-policy.js');
 
 
 const { version: VERSION } = require('./package.json');
@@ -336,13 +337,6 @@ async function copyContextBundle(ctx){
   }
 }
 
-function waitForProcessExit(child, timeoutMs=8000){
-  if(!child || child.exitCode != null) return Promise.resolve(true);
-  return Promise.race([
-    new Promise(resolve=>child.once('exit',()=>resolve(true))),
-    new Promise(resolve=>setTimeout(()=>resolve(false), Math.max(250, Number(timeoutMs) || 8000)))
-  ]);
-}
 function ensureGatewayNodeRuntime(){
   const key = process.execPath + '|' + (process.versions.node || '');
   if(gatewayNodeRuntime && gatewayNodeRuntimeKey === key) return gatewayNodeRuntime;
@@ -402,22 +396,21 @@ async function stopGatewayProcess(){
 async function stopStartCommand(){
   const child = startCommandProcess;
   if(!child) return {stopped:false,reason:'not-running'};
-  try{ if(child.exitCode == null && !child.killed) child.kill(); }catch(e){ return {stopped:false,reason:e.message || String(e)}; }
-  const exited = await waitForProcessExit(child, 4000);
-  if(exited && startCommandProcess === child) startCommandProcess = null;
-  return {stopped:exited,reason:exited ? '' : 'process-exit-timeout'};
+  const result = await terminateProcessTree(child);
+  if(result.exitConfirmed && startCommandProcess === child) startCommandProcess = null;
+  return {stopped:result.stopped,exitConfirmed:result.exitConfirmed,forced:result.forced,reason:result.reason};
 }
 function runDefaultStartCommand(){
   const command = String(cfg().get('defaultStartCommand') || '').trim();
   if(!command) return;
-  if(startCommandProcess && !startCommandProcess.killed){
+  if(startCommandProcess && !childExited(startCommandProcess)){
     log('Default start command is already running.');
     return;
   }
   const cwd = currentRoot();
   if(!cwd) return;
   log(`Starting default command: ${command}`);
-  const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
+  const child = spawn(command, [], { cwd, shell: true, windowsHide: true, detached: process.platform !== 'win32' });
   startCommandProcess = child;
   child.stdout?.on('data',d=>log(`[start] ${String(d).trimEnd()}`));
   child.stderr?.on('data',d=>log(`[start:err] ${String(d).trimEnd()}`));
@@ -538,11 +531,11 @@ function recordConnectionFailure(ctx, error, expectedRecord=null){
   }
 }
 async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning}){
-  let publicConnectionSafeToReleaseGateway = true;
+  let publicConnectionSafeToReleaseGateway = !tunnelWasRunning && !(tunnel?.attached && !tunnel?.owned);
   if(tunnel?.owned && !tunnelWasRunning){
     try {
       const stopped = await stopPublicTunnel();
-      publicConnectionSafeToReleaseGateway = classifyTunnelStop(stopped).safe;
+      publicConnectionSafeToReleaseGateway = tunnelAllowsGatewayShutdown(stopped);
       if(!publicConnectionSafeToReleaseGateway){
         log(`Could not confirm public connection rollback after failed Start: ${stopped?.reason || 'stop not confirmed'}`);
       }
@@ -566,7 +559,7 @@ async function quickStart(ctx,{quiet=false}={}){
   let gateway = null;
   let tunnel = null;
   let tunnelWasRunning = false;
-  const startCommandWasRunning = !!startCommandProcess && startCommandProcess.exitCode == null;
+  const startCommandWasRunning = !!startCommandProcess && !childExited(startCommandProcess);
   try{
     output.show(true);
     if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
@@ -619,10 +612,13 @@ async function stopAll(){
   }
   const tunnelState = classifyTunnelStop(tunnel);
   const startCommand = await stopStartCommand();
-  if(!tunnelState.safe){
-    setStatus('DevMate: stop failed');
+  if(!tunnelAllowsGatewayShutdown(tunnel)){
+    const reason = tunnelState.remoteOwner
+      ? 'preserved-for-remote-public-connection'
+      : 'preserved-after-public-connection-stop-failure';
+    setStatus(tunnelState.remoteOwner ? 'DevMate: shared' : 'DevMate: stop failed');
     refreshPanel();
-    return {ok:false,sharedStillActive:true,gateway:{stopped:false,reason:'preserved-after-public-connection-stop-failure'},tunnel,startCommand};
+    return {ok:false,sharedStillActive:true,gateway:{stopped:false,reason},tunnel,startCommand};
   }
 
   let gateway;
@@ -1125,8 +1121,12 @@ function activate(context){
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100); statusBar.command='devMate.open'; context.subscriptions.push(statusBar); setStatus('DevMate');
   ensureConfig(context,false);
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(()=>scheduleContextRefresh(context)));
-  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(()=>scheduleContextRefresh(context)));
-  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(()=>scheduleContextRefresh(context)));
+  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event=>{
+    if(event?.textEditor?.document?.uri?.scheme !== 'output') scheduleContextRefresh(context);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event=>{
+    if(event?.document?.uri?.scheme !== 'output') scheduleContextRefresh(context);
+  }));
   context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(()=>scheduleContextRefresh(context)));
   register(context,'devMate.start',(options={})=>lifecycleOperations.run('start',()=>quickStart(context,options)));
   register(context,'devMate.open',()=>openPanel(context));
@@ -1152,15 +1152,16 @@ function deactivate(){
   contextWriteTimer=null;
   return lifecycleOperations.run('deactivate',async()=>{
     const stopped = await stopAll();
-    const disposed = await gatewayController?.dispose({stopOwned:true});
+    const disposed = await gatewayController?.dispose({stopOwned:tunnelAllowsGatewayShutdown(stopped?.tunnel)});
     if(disposed?.disposed === false){
       log(`Gateway controller could not be disposed cleanly: ${disposed.reason || 'unknown error'}`);
+    } else {
+      gatewayController = null;
+      gatewayControllerKey = '';
+      gatewayNodeRuntime = null;
+      gatewayNodeRuntimeKey = '';
+      gatewayProcess = null;
     }
-    gatewayController = null;
-    gatewayControllerKey = '';
-    gatewayNodeRuntime = null;
-    gatewayNodeRuntimeKey = '';
-    gatewayProcess = null;
     return stopped;
   });
 }

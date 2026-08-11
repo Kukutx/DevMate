@@ -61,12 +61,25 @@ function childActive(child) {
 }
 
 function waitForChildExit(child, timeoutMs, { signalCodeConfirmsExit = true } = {}) {
-  if (!child || child.exitCode != null || (signalCodeConfirmsExit && child.signalCode != null)) return Promise.resolve(true);
-  return Promise.race([
-    new Promise(resolve => child.once('exit', () => resolve(true))),
-    new Promise(resolve => child.once?.('close', () => resolve(true))),
-    new Promise(resolve => setTimeout(() => resolve(false), Math.max(100, Number(timeoutMs) || CHILD_EXIT_TIMEOUT_MS)))
-  ]);
+  const exited = () => !child || child.exitCode != null || (signalCodeConfirmsExit && child.signalCode != null);
+  if (exited()) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let settled = false;
+    let timer = null;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.off?.('exit', onExit);
+      child.off?.('close', onClose);
+      resolve(value);
+    };
+    const onExit = () => finish(true);
+    const onClose = () => finish(true);
+    child.once?.('exit', onExit);
+    child.once?.('close', onClose);
+    timer = setTimeout(() => finish(exited()), Math.max(100, Number(timeoutMs) || CHILD_EXIT_TIMEOUT_MS));
+  });
 }
 
 async function terminateChild(child, {

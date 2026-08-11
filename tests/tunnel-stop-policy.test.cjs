@@ -6,6 +6,7 @@ const {
   assertTunnelSafeForCredentialChange,
   classifyTunnelStop,
   credentialProviderInUse,
+  tunnelAllowsGatewayShutdown,
   tunnelStopResult
 } = require('../vscode-host/tunnel-stop-policy.js');
 
@@ -35,6 +36,14 @@ test('another host owner is safe to leave untouched but is explicitly distinguis
   assert.equal(state.safe, true);
   assert.equal(state.remoteOwner, true);
   assert.equal(state.tunnel.publicUrl, 'https://old.example.com');
+});
+
+test('Gateway shutdown requires the public connection to be confirmed absent locally', () => {
+  assert.equal(tunnelAllowsGatewayShutdown({ stopped: true }), true);
+  assert.equal(tunnelAllowsGatewayShutdown({ stopped: false, reason: 'not-running' }), true);
+  assert.equal(tunnelAllowsGatewayShutdown({ stopped: false, reason: 'managed-by-another-host' }), false);
+  assert.equal(tunnelAllowsGatewayShutdown({ stopped: false, reason: 'process-exit-timeout' }), false);
+  assert.equal(tunnelAllowsGatewayShutdown(null), false);
 });
 
 test('base DevMate stop result unwraps the tunnel result before applying policy', () => {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.3.5
+
+- Hardened Gateway/public-tunnel shutdown ordering so a Gateway is preserved whenever public ingress is remote-owned or its shutdown cannot be confirmed.
+- Fenced VS Code automatic Start, public verification, shared-tunnel recovery, and teardown work against stale lifecycle generations.
+- Made default project-command and Windows process-tree termination bounded, exit-confirmed, and resistant to orphan child processes.
+- Hardened Obsidian Stop, restart, unload, disable, and state-directory reconfiguration against partial teardown and stale-controller state.
+- Kept retained shared-tunnel controllers registered and retryable instead of allowing a new activation to overwrite unresolved ownership.
+- Removed exit-wait listener/timer accumulation so repeated failed Stop attempts do not progressively degrade the host runtime.
+
 ## 3.3.4
 
 - Restricted existing-ngrok reuse to loopback HTTP upstreams on the exact DevMate Gateway port, so an unrelated same-port endpoint on another host can never be adopted.

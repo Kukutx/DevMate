@@ -4,6 +4,7 @@ const path = require('node:path');
 const vscode = require('vscode');
 const { version: VERSION } = require('./package.json');
 const { ensureInstanceConfig, readJson } = require('./shared/config-store.cjs');
+const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { strictPort } = require('./shared/port.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
@@ -26,12 +27,12 @@ let lifecycle = null;
 let runtime = null;
 let publicVerifier = null;
 let output = null;
-let activation = null;
-let deactivation = null;
+const hostLifecycleOperations = new OperationCoordinator({ name: 'shared-tunnel-host-lifecycle' });
 let runtimeStateDirectory = '';
 let sessionRecoveryTimer = null;
 let sessionRecoveryPromise = null;
 let sessionRecoveryNextAt = 0;
+let sessionRecoveryEpoch = 0;
 
 function strictBoolean(value, label) {
   if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
@@ -152,7 +153,7 @@ function createPublicVerifier() {
 function stopSessionRecoveryWatcher() {
   if (sessionRecoveryTimer) clearInterval(sessionRecoveryTimer);
   sessionRecoveryTimer = null;
-  sessionRecoveryPromise = null;
+  sessionRecoveryEpoch += 1;
   sessionRecoveryNextAt = 0;
 }
 
@@ -167,11 +168,15 @@ function requestedSessionNeedsRecovery() {
   return false;
 }
 
-async function recoverRequestedSession() {
+async function recoverRequestedSession(expectedEpoch = sessionRecoveryEpoch) {
+  if (expectedEpoch !== sessionRecoveryEpoch) return { recovered: false, reason: 'stale-lifecycle' };
   if (!runtime || !lifecycle || !tunnelSessionRequested()) return { recovered: false, reason: 'not-requested' };
   if (!requestedSessionNeedsRecovery()) return { recovered: false, reason: 'healthy-or-verifier-owned' };
   log('Recovering requested DevMate desktop session through the complete Start lifecycle.');
   const result = await vscode.commands.executeCommand('devMate.start', { quiet: true });
+  if (expectedEpoch !== sessionRecoveryEpoch || !runtime || !lifecycle || !tunnelSessionRequested()) {
+    return { recovered: false, reason: 'stale-lifecycle' };
+  }
   if (result?.ok === false || !result?.mcpUrl || Number(result?.toolCount || 0) <= 0) {
     const error = new Error(result?.error || 'DevMate recovery Start did not reach verified Ready state');
     error.code = result?.code || 'DEVMATE_SESSION_RECOVERY_NOT_READY';
@@ -184,8 +189,10 @@ async function recoverRequestedSession() {
 
 function startSessionRecoveryWatcher() {
   stopSessionRecoveryWatcher();
+  const epoch = sessionRecoveryEpoch;
   sessionRecoveryTimer = setInterval(() => {
     if (sessionRecoveryPromise || Date.now() < sessionRecoveryNextAt || !tunnelSessionRequested()) return;
+    if (epoch !== sessionRecoveryEpoch) return;
     let needsRecovery = false;
     try {
       needsRecovery = requestedSessionNeedsRecovery();
@@ -195,82 +202,107 @@ function startSessionRecoveryWatcher() {
       return;
     }
     if (!needsRecovery) return;
-    sessionRecoveryPromise = recoverRequestedSession()
+    let recovery;
+    recovery = recoverRequestedSession(epoch)
       .catch(error => {
+        if (epoch !== sessionRecoveryEpoch) return null;
         sessionRecoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
         log(`DevMate session recovery failed: ${error.message || error}`);
+        return null;
       })
-      .finally(() => { sessionRecoveryPromise = null; });
+      .finally(() => {
+        if (sessionRecoveryPromise === recovery) sessionRecoveryPromise = null;
+      });
+    sessionRecoveryPromise = recovery;
   }, SESSION_RECOVERY_POLL_MS);
   sessionRecoveryTimer.unref?.();
 }
 
-async function activate(context) {
-  if (activation) return activation;
-  activation = (async () => {
-    if (runtime || lifecycle || publicVerifier) await deactivate();
-    output = vscode.window.createOutputChannel('DevMate Tunnel');
-    context.subscriptions.push(output);
-    lifecycle = new VscodeHostLifecycle({ vscode });
-    try {
-      runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
-      localTunnelSettings();
-      ensureSharedDesktopConfig(runtimeStateDirectory);
-      runtime = new TunnelController({
-        stateDirectory: runtimeStateDirectory,
-        settings: () => tunnelSettings(runtimeStateDirectory),
-        getSecrets: () => tunnelSecrets(context),
-        hostId: `vscode-${process.pid}`,
-        logger: log
-      });
-      setTunnelController(runtime);
-      await lifecycle.activate(context);
-      publicVerifier = createPublicVerifier().start();
-      startSessionRecoveryWatcher();
-      log(`Provider-native shared public connection runtime ready in ${runtimeStateDirectory}.`);
-    } catch (error) {
-      stopSessionRecoveryWatcher();
-      const currentVerifier = publicVerifier;
-      const currentRuntime = runtime;
-      const currentLifecycle = lifecycle;
-      publicVerifier = null;
-      runtime = null;
-      lifecycle = null;
-      runtimeStateDirectory = '';
-      currentVerifier?.dispose();
-      clearTunnelController(currentRuntime);
-      try { await currentLifecycle?.deactivate(); } catch {}
-      try { await currentRuntime?.dispose({ stopOwned: true }); } catch {}
-      output = null;
+async function activateInternal(context) {
+  if (runtime || lifecycle || publicVerifier) {
+    await deactivateInternal();
+    if (runtime || lifecycle || publicVerifier) {
+      const error = new Error('Previous DevMate public connection teardown is still incomplete; refusing to create a second shared tunnel controller.');
+      error.code = 'DEVMATE_PREVIOUS_TUNNEL_TEARDOWN_PENDING';
       throw error;
     }
-  })();
-  try { return await activation; }
-  finally { activation = null; }
+  }
+  output = vscode.window.createOutputChannel('DevMate Tunnel');
+  context.subscriptions.push(output);
+  lifecycle = new VscodeHostLifecycle({ vscode });
+  try {
+    runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
+    localTunnelSettings();
+    ensureSharedDesktopConfig(runtimeStateDirectory);
+    runtime = new TunnelController({
+      stateDirectory: runtimeStateDirectory,
+      settings: () => tunnelSettings(runtimeStateDirectory),
+      getSecrets: () => tunnelSecrets(context),
+      hostId: `vscode-${process.pid}`,
+      logger: log
+    });
+    setTunnelController(runtime);
+    await lifecycle.activate(context);
+    publicVerifier = createPublicVerifier().start();
+    startSessionRecoveryWatcher();
+    log(`Provider-native shared public connection runtime ready in ${runtimeStateDirectory}.`);
+  } catch (error) {
+    try {
+      await deactivateInternal();
+    } catch (cleanupError) {
+      log(`Shared tunnel cleanup after activation failure reported: ${cleanupError.message || cleanupError}`);
+    }
+    throw error;
+  }
 }
 
-async function deactivate() {
-  if (deactivation) return deactivation;
-  deactivation = (async () => {
-    stopSessionRecoveryWatcher();
-    const currentVerifier = publicVerifier;
-    const currentRuntime = runtime;
-    const currentLifecycle = lifecycle;
-    publicVerifier = null;
-    runtime = null;
-    lifecycle = null;
-    runtimeStateDirectory = '';
-    currentVerifier?.dispose();
-    try {
-      await currentLifecycle?.deactivate();
-    } finally {
-      clearTunnelController(currentRuntime);
-      try { await currentRuntime?.dispose({ stopOwned: true }); }
-      finally { output = null; }
+async function deactivateInternal() {
+  stopSessionRecoveryWatcher();
+  const currentVerifier = publicVerifier;
+  const currentRuntime = runtime;
+  const currentLifecycle = lifecycle;
+  const currentStateDirectory = runtimeStateDirectory;
+  publicVerifier = null;
+  runtime = null;
+  lifecycle = null;
+  currentVerifier?.dispose();
+  if (currentRuntime) setTunnelController(currentRuntime);
+  let lifecycleResult = null;
+  let directStopResult = null;
+  try {
+    if (currentLifecycle) {
+      lifecycleResult = await currentLifecycle.deactivate();
+    } else if (currentRuntime) {
+      try {
+        directStopResult = await currentRuntime.stop();
+      } catch (error) {
+        log(`Retrying retained public connection shutdown reported: ${error.message || error}`);
+      }
     }
-  })();
-  try { return await deactivation; }
-  finally { deactivation = null; }
+  } finally {
+    let disposed = null;
+    try { disposed = await currentRuntime?.dispose({ stopOwned: false }); }
+    catch (error) { log(`Tunnel controller disposal failed during teardown: ${error.message || error}`); }
+    if (disposed?.disposed === false) {
+      runtime = currentRuntime;
+      runtimeStateDirectory = currentStateDirectory;
+      if (currentRuntime) setTunnelController(currentRuntime);
+      log(`Preserving active public connection controller after incomplete teardown: ${disposed.reason || 'stop not confirmed'}.`);
+    } else {
+      clearTunnelController(currentRuntime);
+      runtimeStateDirectory = '';
+    }
+    output = null;
+  }
+  return lifecycleResult || directStopResult;
+}
+
+function activate(context) {
+  return hostLifecycleOperations.run('activate', () => activateInternal(context));
+}
+
+function deactivate() {
+  return hostLifecycleOperations.run('deactivate', () => deactivateInternal());
 }
 
 module.exports = {
@@ -279,6 +311,7 @@ module.exports = {
   activate,
   createPublicVerifier,
   deactivate,
+  deactivateInternal,
   ensureSharedDesktopConfig,
   localTunnelSettings,
   recoverRequestedSession,

@@ -1,13 +1,25 @@
 import { spawn } from 'node:child_process';
+import processTreeRuntime from '../host/runtime/process-tree.js';
 import { requestSignal } from './request-context.mjs';
 
+const { runTaskkill: runBoundedTaskkill } = processTreeRuntime;
 const activeProcesses = new Set();
 
 function waitForExit(child) {
   if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ code: child.exitCode ?? null, signal: child.signalCode || null });
   return new Promise(resolve => {
-    child.once('close', (code, signal) => resolve({ code, signal: signal || null }));
-    child.once('error', error => resolve({ code: null, signal: null, error: error.message }));
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      child.off?.('close', onClose);
+      child.off?.('error', onError);
+      resolve(value);
+    };
+    const onClose = (code, signal) => finish({ code, signal: signal || null });
+    const onError = error => finish({ code: null, signal: null, error: error.message });
+    child.once('close', onClose);
+    child.once('error', onError);
   });
 }
 
@@ -33,19 +45,11 @@ function cancellationError(signal) {
   return error;
 }
 
-async function runTaskkill(pid) {
-  const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-    windowsHide: true,
-    stdio: 'ignore'
-  });
-  await waitForExit(killer);
-}
-
 export async function terminateProcessTree(child, { graceMs = 1500, forceMs = 2500 } = {}) {
   if (!child || child.exitCode != null || child.signalCode != null) return { terminated: false, forced: false, exitConfirmed: true };
 
   if (process.platform === 'win32') {
-    await runTaskkill(child.pid);
+    await runBoundedTaskkill(child.pid, true, spawn, Math.max(1000, forceMs));
     const exit = await waitWithTimeout(waitForExit(child), forceMs);
     return { terminated: true, forced: true, exitConfirmed: !!exit };
   }
@@ -117,10 +121,10 @@ export async function executeCommand(command, args = [], {
   if (winner.type === 'timeout' || winner.type === 'aborted') {
     termination = await terminateProcessTree(child);
     exit = await waitWithTimeout(exitPromise, 100);
-    if (!termination.exitConfirmed && !exit) exit = await exitPromise;
+    if (exit && !termination.exitConfirmed) termination = { ...termination, exitConfirmed: true };
   }
 
-  activeProcesses.delete(child);
+  if (exit || child.exitCode != null || child.signalCode != null) activeProcesses.delete(child);
   if (winner.type === 'aborted') throw winner.error;
   return {
     command: shell ? String(command) : [command, ...args].join(' '),
