@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.4
+
+- Restricted existing-ngrok reuse to loopback HTTP upstreams on the exact DevMate Gateway port, so an unrelated same-port endpoint on another host can never be adopted.
+- Added liveness checks for borrowed local ngrok endpoints; two consecutive misses release the shared record so the existing attachment-recovery path can safely reacquire or restart the tunnel.
+- Excluded VS Code Output pseudo-documents from captured editor context to prevent provider/runtime logs from generating useless context churn.
+
 ## 3.3.3
 
 - Reuse a pre-existing local ngrok endpoint when it already forwards to the current DevMate Gateway port, instead of starting a duplicate endpoint and hitting ERR_NGROK_334.

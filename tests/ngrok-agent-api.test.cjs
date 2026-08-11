@@ -85,4 +85,8 @@ test('current endpoint API matches the requested upstream port and HTTPS URL', a
   assert.equal(url, 'https://ready.ngrok.app');
   assert.equal(upstreamMatchesPort('8787', 8787), true);
   assert.equal(upstreamMatchesPort('localhost:8787', 8787), true);
+  assert.equal(upstreamMatchesPort('http://127.0.0.2:8787', 8787), true);
+  assert.equal(upstreamMatchesPort('http://[::1]:8787', 8787), true);
+  assert.equal(upstreamMatchesPort('http://192.168.1.20:8787', 8787), false);
+  assert.equal(upstreamMatchesPort('https://localhost:8787', 8787), false);
 });

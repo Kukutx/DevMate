@@ -130,7 +130,7 @@ function collectVsCodeContext(){
   const root = currentRoot();
   const editor = vscode.window.activeTextEditor;
   let active = null;
-  if(editor){
+  if(editor && editor.document.uri.scheme !== 'output'){
     const rel = relToRoot(editor.document.uri.fsPath);
     active = {
       path: rel || editor.document.uri.toString(),
@@ -141,12 +141,14 @@ function collectVsCodeContext(){
       selectedText: (rel && !isProtectedName(editor.document.uri.fsPath) && !editor.selection.isEmpty) ? editor.document.getText(editor.selection).slice(0,20000) : ''
     };
   }
-  const visibleEditors = vscode.window.visibleTextEditors.map(e=>({
-    path: relToRoot(e.document.uri.fsPath) || e.document.uri.toString(),
-    languageId: e.document.languageId,
-    isDirty: e.document.isDirty,
-    selection: rangePublic(e.selection)
-  })).slice(0,20);
+  const visibleEditors = vscode.window.visibleTextEditors
+    .filter(e=>e.document.uri.scheme !== 'output')
+    .map(e=>({
+      path: relToRoot(e.document.uri.fsPath) || e.document.uri.toString(),
+      languageId: e.document.languageId,
+      isDirty: e.document.isDirty,
+      selection: rangePublic(e.selection)
+    })).slice(0,20);
   const diagnostics = [];
   if(root){
     for(const [uri, items] of vscode.languages.getDiagnostics()){

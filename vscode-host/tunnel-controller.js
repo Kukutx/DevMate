@@ -190,6 +190,9 @@ class TunnelController {
     this.child = null;
     this.childReady = false;
     this.borrowedProvider = false;
+    this.borrowedAgentApiBase = '';
+    this.borrowedPublicUrl = '';
+    this.borrowedFailureCount = 0;
     this.port = 0;
     this.restartCount = 0;
     this.heartbeat = null;
@@ -260,6 +263,9 @@ class TunnelController {
     this.restartCount = 0;
     this.childReady = false;
     this.borrowedProvider = false;
+    this.borrowedAgentApiBase = '';
+    this.borrowedPublicUrl = '';
+    this.borrowedFailureCount = 0;
     this.ownershipFailureCount = 0;
     return true;
   }
@@ -309,6 +315,25 @@ class TunnelController {
     try {
       const record = this.store.read();
       if (record && record.ownerId === ownerId) {
+        if (this.borrowedProvider) {
+          const liveUrl = await discoverNgrokPublicUrl(record.port, {
+            apiBase: this.borrowedAgentApiBase,
+            request: this.httpRequest,
+            timeoutMs: 750,
+            expectedUrl: this.borrowedPublicUrl || record.publicUrl
+          });
+          if (!liveUrl) {
+            this.borrowedFailureCount += 1;
+            if (this.borrowedFailureCount < 2) {
+              this.store.write(ownerId, { childPid: null });
+              return { healthy: false, pending: true, providerMissing: true };
+            }
+            this.logger('Existing local ngrok endpoint disappeared; releasing the borrowed tunnel attachment for recovery.');
+            this.resetOwnership(ownerId);
+            return { healthy: false, providerMissing: true, released: true };
+          }
+          this.borrowedFailureCount = 0;
+        }
         this.ownershipFailureCount = 0;
         this.store.write(ownerId, { childPid: this.child?.pid || null });
         return { healthy: true };
@@ -377,13 +402,16 @@ class TunnelController {
     });
   }
 
-  adoptExistingNgrok(match, ownerId, publicUrl) {
+  adoptExistingNgrok(match, ownerId, publicUrl, agentApiBase = '') {
     const url = normalizePublicUrl(publicUrl);
     this.ownerId = ownerId;
     this.port = match.port;
     this.child = null;
     this.childReady = false;
     this.borrowedProvider = true;
+    this.borrowedAgentApiBase = String(agentApiBase || '');
+    this.borrowedPublicUrl = url;
+    this.borrowedFailureCount = 0;
     this.store.write(ownerId, {
       hostId: this.hostId,
       childPid: null,
@@ -554,7 +582,7 @@ class TunnelController {
           throw error;
         }
         const reusableUrl = await this.reusableLocalNgrokUrl(match, launch);
-        if (reusableUrl) return this.adoptExistingNgrok(match, ownerId, reusableUrl);
+        if (reusableUrl) return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);
       }
 
       child = this.childProcess.spawn(launch.command, launch.args, launch.options);
@@ -602,7 +630,7 @@ class TunnelController {
         const reusableUrl = await this.reusableLocalNgrokUrl(match, launch).catch(() => '');
         if (reusableUrl) {
           if (this.child === child) this.child = null;
-          return this.adoptExistingNgrok(match, ownerId, reusableUrl);
+          return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);
         }
       }
       if (this.child === child) this.child = null;

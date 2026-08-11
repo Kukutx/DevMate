@@ -88,3 +88,62 @@ test('does not reuse a local ngrok endpoint when a different stable URL was requ
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
 });
+
+
+test('does not reuse a same-port endpoint whose upstream is not loopback', async () => {
+  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-ngrok-reuse-remote-'));
+  let spawns = 0;
+  const controller = new TunnelController({
+    stateDirectory,
+    settings,
+    childProcess: fakeChildProcess(() => { spawns += 1; }),
+    httpRequest: fakeRequest({ endpoints: [{ name: 'remote', url: 'https://other.ngrok.app', upstream: { url: 'http://192.168.1.20:8788' } }] })
+  });
+  try {
+    await assert.rejects(() => controller.start(8788), /unexpected provider spawn/);
+    assert.equal(spawns, 1);
+  } finally {
+    await controller.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('borrowed endpoint liveness loss releases the shared record for attachment recovery', async () => {
+  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-ngrok-reuse-liveness-'));
+  let endpoints = [{ name: 'existing', url: 'https://ready.ngrok.app', upstream: { url: 'http://127.0.0.1:8788' } }];
+  const controller = new TunnelController({
+    stateDirectory,
+    settings,
+    childProcess: fakeChildProcess(() => { throw new Error('unexpected provider spawn'); }),
+    httpRequest: (_url, _options, callback) => {
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = () => {};
+      request.end = () => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        response.destroy = () => {};
+        callback(response);
+        queueMicrotask(() => {
+          response.emit('data', Buffer.from(JSON.stringify({ endpoints })));
+          response.emit('end');
+        });
+      };
+      return request;
+    }
+  });
+  try {
+    const started = await controller.start(8788);
+    assert.equal(started.attached, true);
+    endpoints = [];
+    const first = await controller.verifyOwnership();
+    assert.equal(first.pending, true);
+    assert.equal(controller.status(8788).running, true);
+    const second = await controller.verifyOwnership();
+    assert.equal(second.released, true);
+    assert.equal(controller.status(8788).running, false);
+  } finally {
+    await controller.dispose({ stopOwned: true }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});

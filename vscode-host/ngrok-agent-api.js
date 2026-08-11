@@ -104,6 +104,14 @@ function resolveNgrokAgentApiBase(command = 'ngrok', {
   }
 }
 
+function loopbackUpstreamHost(hostname) {
+  const value = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (value === 'localhost' || value === '::1') return true;
+  if (!/^127(?:\.\d{1,3}){3}$/.test(value)) return false;
+  const octets = value.split('.').map(Number);
+  return octets.length === 4 && octets.every(part => Number.isInteger(part) && part >= 0 && part <= 255);
+}
+
 function upstreamMatchesPort(value, port) {
   const target = Number(port);
   if (!Number.isInteger(target) || target <= 0) return false;
@@ -112,10 +120,10 @@ function upstreamMatchesPort(value, port) {
   if (/^\d+$/.test(raw)) return Number(raw) === target;
   try {
     const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`);
-    const parsedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
-    return parsedPort === target;
+    if (parsed.protocol !== 'http:' || !loopbackUpstreamHost(parsed.hostname)) return false;
+    return Number(parsed.port || 80) === target;
   } catch {
-    return Number(raw.match(/:(\d+)(?:\/)?$/)?.[1]) === target;
+    return false;
   }
 }
 
@@ -185,6 +193,7 @@ module.exports = {
   configPathFromCheckOutput,
   discoverNgrokPublicUrl,
   loopbackAgentApiBase,
+  loopbackUpstreamHost,
   ngrokWebAddrFromConfig,
   resolveNgrokAgentApiBase,
   upstreamMatchesPort,
