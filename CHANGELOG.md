@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.3
+
+- Reuse a pre-existing local ngrok endpoint when it already forwards to the current DevMate Gateway port, instead of starting a duplicate endpoint and hitting ERR_NGROK_334.
+- Never auto-enable ngrok pooling: a different local/remote endpoint or mismatched stable URL still fails closed rather than load-balancing MCP traffic to an unintended target.
+- Treat reused ngrok processes as attached rather than owned so DevMate Stop detaches without terminating a provider it did not start.
+- Remove the VS Code context-mirror feedback loop by deduplicating semantic editor state and eliminating success logs that changed the observed Output surface.
+
 ## 3.3.2
 
 - Fixed machine ngrok account mode so VS Code and Obsidian preserve the user's normal `NGROK_AUTHTOKEN` environment instead of deleting it before provider launch.

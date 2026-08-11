@@ -7,6 +7,16 @@ const {
 } = require('../host/runtime-controller.js');
 const { currentWorkspaceRoot, runtimeConfigPath } = require('./runtime-context.js');
 
+function contextSignature(value) {
+  if (!value || typeof value !== 'object') return '';
+  return JSON.stringify({
+    workspaceRoot: value.workspaceRoot || '',
+    activeEditor: value.activeEditor || null,
+    visibleEditors: Array.isArray(value.visibleEditors) ? value.visibleEditors : [],
+    diagnostics: Array.isArray(value.diagnostics) ? value.diagnostics : []
+  });
+}
+
 class VscodeContextMirror {
   constructor({ vscode, context, diagnostics, intervalMs = 750 }) {
     this.vscode = vscode;
@@ -25,7 +35,7 @@ class VscodeContextMirror {
     const vscodeContext = current?.vscodeContext;
     if (!vscodeContext || typeof vscodeContext !== 'object') return false;
     const capturedAt = vscodeContext.capturedAt || null;
-    if (current.hostContexts?.vscode?.capturedAt === capturedAt) return false;
+    if (contextSignature(current.hostContexts?.vscode) === contextSignature(vscodeContext)) return false;
     updateConfig(this.file, value => {
       value.hostContexts ||= {};
       value.hostContexts.vscode = {
@@ -50,7 +60,7 @@ class VscodeContextMirror {
     }
     this.running = true;
     try {
-      if (this.mirrorOnce()) this.diagnostics?.append('Mirrored VS Code editor context into shared host context.');
+      this.mirrorOnce();
     } catch (error) {
       this.diagnostics?.recordFailure(error, { phase: 'context-mirror', configFile: this.file });
     } finally {
@@ -79,5 +89,6 @@ class VscodeContextMirror {
 }
 
 module.exports = {
-  VscodeContextMirror
+  VscodeContextMirror,
+  contextSignature
 };

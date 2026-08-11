@@ -189,6 +189,7 @@ class TunnelController {
     this.ownerId = '';
     this.child = null;
     this.childReady = false;
+    this.borrowedProvider = false;
     this.port = 0;
     this.restartCount = 0;
     this.heartbeat = null;
@@ -258,6 +259,7 @@ class TunnelController {
     this.port = 0;
     this.restartCount = 0;
     this.childReady = false;
+    this.borrowedProvider = false;
     this.ownershipFailureCount = 0;
     return true;
   }
@@ -365,6 +367,38 @@ class TunnelController {
     await Promise.race([closed, delay(timeoutMs)]);
   }
 
+  async reusableLocalNgrokUrl(match, launch) {
+    if (launch.provider !== 'ngrok' || !launch.agentApiBase) return '';
+    return discoverNgrokPublicUrl(match.port, {
+      apiBase: launch.agentApiBase,
+      request: this.httpRequest,
+      timeoutMs: 750,
+      expectedUrl: launch.publicUrl || ''
+    });
+  }
+
+  adoptExistingNgrok(match, ownerId, publicUrl) {
+    const url = normalizePublicUrl(publicUrl);
+    this.ownerId = ownerId;
+    this.port = match.port;
+    this.child = null;
+    this.childReady = false;
+    this.borrowedProvider = true;
+    this.store.write(ownerId, {
+      hostId: this.hostId,
+      childPid: null,
+      port: match.port,
+      provider: match.provider,
+      configurationKey: match.configurationKey,
+      status: 'ready',
+      publicUrl: url,
+      readyAt: nowIso()
+    });
+    this.startHeartbeat();
+    this.logger('Reusing existing local ngrok endpoint ' + url + ' for Gateway port ' + match.port + '; DevMate will detach rather than terminate that pre-existing ngrok process on Stop.');
+    return this.store.read();
+  }
+
   async providerReadyUrl(launch, match, child, timeoutMs) {
     if (launch.provider === 'external') return launch.publicUrl;
     const startedAt = Date.now();
@@ -460,6 +494,7 @@ class TunnelController {
     if (!preserveOwner) {
       this.ownerId = `${this.hostId}-tunnel-${process.pid}-${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`;
       this.restartCount = 0;
+      this.borrowedProvider = false;
       this.ownershipFailureCount = 0;
     }
     const ownerId = this.ownerId;
@@ -518,6 +553,8 @@ class TunnelController {
           error.code = 'DEVMATE_NGROK_AGENT_API_DISABLED';
           throw error;
         }
+        const reusableUrl = await this.reusableLocalNgrokUrl(match, launch);
+        if (reusableUrl) return this.adoptExistingNgrok(match, ownerId, reusableUrl);
       }
 
       child = this.childProcess.spawn(launch.command, launch.args, launch.options);
@@ -561,6 +598,13 @@ class TunnelController {
         this.logger(`Tunnel startup cleanup did not confirm provider exit: ${error.cleanupReason}`);
         throw error;
       }
+      if (launch.provider === 'ngrok' && error?.code === 'DEVMATE_NGROK_ENDPOINT_CONFLICT') {
+        const reusableUrl = await this.reusableLocalNgrokUrl(match, launch).catch(() => '');
+        if (reusableUrl) {
+          if (this.child === child) this.child = null;
+          return this.adoptExistingNgrok(match, ownerId, reusableUrl);
+        }
+      }
       if (this.child === child) this.child = null;
       this.resetOwnership(ownerId);
       throw error;
@@ -592,13 +636,24 @@ class TunnelController {
     await this.spawnProvider(nextMatch, { preserveOwner: true });
   }
 
+  resultForRecord(record) {
+    const local = !!record && record.ownerId === this.ownerId;
+    const borrowed = local && this.borrowedProvider;
+    return {
+      attached: !!record && (!local || borrowed),
+      owned: !!record && local && !borrowed,
+      publicUrl: record?.publicUrl || '',
+      record
+    };
+  }
+
   async start(port) {
     if (this.disposed) throw new Error('Tunnel controller is disposed');
     const match = this.match(port);
     const current = this.currentRecord(match);
     if (current) {
       const ready = current.status === 'ready' ? current : await this.waitForReady(match);
-      if (ready) return { attached: ready.ownerId !== this.ownerId, owned: ready.ownerId === this.ownerId, publicUrl: ready.publicUrl, record: ready };
+      if (ready) return this.resultForRecord(ready);
     }
 
     const lease = new StartupLease({
@@ -617,16 +672,16 @@ class TunnelController {
         }
       });
       if (!(acquired instanceof StartupLease)) {
-        return { attached: true, owned: false, publicUrl: acquired.publicUrl, record: acquired };
+        return this.resultForRecord(acquired);
       }
       lease.assertOwned();
       const afterLease = this.currentRecord(match);
       if (afterLease) {
         const ready = afterLease.status === 'ready' ? afterLease : await this.waitForReady(match);
-        return { attached: true, owned: false, publicUrl: ready.publicUrl, record: ready };
+        return this.resultForRecord(ready);
       }
       const record = await this.spawnProvider(match);
-      return { attached: false, owned: true, publicUrl: record.publicUrl, record };
+      return this.resultForRecord(record);
     } finally {
       lease.release();
     }
@@ -635,10 +690,11 @@ class TunnelController {
   status(port = this.port) {
     const match = Number(port) > 0 ? this.match(port) : null;
     const record = this.currentRecord(match);
+    const result = this.resultForRecord(record);
     return {
       running: !!record,
-      owned: !!record && record.ownerId === this.ownerId,
-      attached: !!record && record.ownerId !== this.ownerId,
+      owned: result.owned,
+      attached: result.attached,
       publicUrl: record?.publicUrl || '',
       provider: record?.provider || match?.provider || this.settings().provider,
       port: record?.port || Number(port) || 0,
@@ -685,6 +741,16 @@ class TunnelController {
       }
       return { stopped: false, reason: 'managed-by-another-host', publicUrl: record.publicUrl };
     }
+    if (this.borrowedProvider) {
+      this.stopping = true;
+      try {
+        const publicUrl = record.publicUrl;
+        this.resetOwnership(this.ownerId);
+        return { stopped: true, detached: true, reason: 'detached-existing-provider', publicUrl };
+      } finally {
+        this.stopping = false;
+      }
+    }
     this.stopping = true;
     try {
       const result = await this.terminateLocalChild();
@@ -702,7 +768,7 @@ class TunnelController {
     if (stopOwned) {
       const stopped = await this.stop();
       if (childActive(this.child)) return { disposed: false, reason: 'process-exit-timeout', stop: stopped };
-    } else if (childActive(this.child) || (this.ownerId && this.store.read()?.ownerId === this.ownerId)) {
+    } else if (childActive(this.child) || (!this.borrowedProvider && this.ownerId && this.store.read()?.ownerId === this.ownerId)) {
       return { disposed: false, reason: 'owned-process-running' };
     }
     this.stopHeartbeat();

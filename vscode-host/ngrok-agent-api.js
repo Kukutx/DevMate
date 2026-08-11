@@ -122,10 +122,12 @@ function upstreamMatchesPort(value, port) {
 function discoverNgrokPublicUrl(port, {
   apiBase = DEFAULT_NGROK_AGENT_API_BASE,
   request = http.request,
-  timeoutMs = 1000
+  timeoutMs = 1000,
+  expectedUrl = ''
 } = {}) {
   if (!apiBase) return Promise.resolve('');
   const endpointUrl = `${String(apiBase).replace(/\/$/, '')}/endpoints`;
+  const expected = String(expectedUrl || '').trim();
   return new Promise(resolve => {
     let settled = false;
     const finish = value => {
@@ -153,9 +155,12 @@ function discoverNgrokPublicUrl(port, {
           if (settled || response.statusCode !== 200) return finish('');
           try {
             const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            const match = (payload?.endpoints || []).find(item =>
-              upstreamMatchesPort(item?.upstream?.url, port) && String(item?.url || '').startsWith('https://')
-            );
+            const match = (payload?.endpoints || []).find(item => {
+              const url = String(item?.url || '').trim();
+              return upstreamMatchesPort(item?.upstream?.url, port) &&
+                url.startsWith('https://') &&
+                (!expected || url === expected);
+            });
             finish(match?.url || '');
           } catch {
             finish('');

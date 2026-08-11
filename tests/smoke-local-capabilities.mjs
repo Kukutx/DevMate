@@ -14,7 +14,7 @@ const gatewayScript = path.join(root, 'gateway', 'server.bundle.mjs');
 
 fs.writeFileSync(configPath, JSON.stringify({
   version: 11,
-  appVersion: '3.3.2',
+  appVersion: '3.3.3',
   instanceId: `local-smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
   runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },
