@@ -416,15 +416,9 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
     hostRuntime: { workspaceRoot: normalizedWorkspaceRoot(root) },
     hostContexts: {},
     activeHostId: null,
-    vscodeContext: {
-      capturedAt: null,
-      activeEditor: null,
-      visibleEditors: [],
-      diagnostics: []
-    },
     commands: [],
     plugins: { enabled: [], settings: {} },
-    jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
+    jobs: { embeddedRunnerEnabled: false, allowJobGitSave: true },
     runnerControl: { enabled: false, credentials: [] },
     trustedWritableRoots: []
   };
