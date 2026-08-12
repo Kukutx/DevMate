@@ -40,36 +40,65 @@ jobs:
           node --check $path
 
       - name: Apply hardening
+        id: apply
+        continue-on-error: true
         shell: pwsh
-        run: node scripts/apply-stability-hardening.mjs
+        run: |
+          node scripts/apply-stability-hardening.mjs *> hardening-diagnostics.txt
+          $code = $LASTEXITCODE
+          Get-Content hardening-diagnostics.txt
+          exit $code
+
+      - name: Persist failure diagnostics
+        if: steps.apply.outcome == 'failure'
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add hardening-diagnostics.txt
+          git commit -m 'Capture stability hardening failure'
+          git push origin HEAD:master
+
+      - name: Stop after apply failure
+        if: steps.apply.outcome == 'failure'
+        shell: pwsh
+        run: throw 'One-time hardening script failed; diagnostics were persisted.'
 
       - name: Install dependencies
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: npm ci
 
       - name: Repository checks
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: npm run check
 
       - name: Unit tests
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: npm run test:unit
 
       - name: Gateway smoke tests
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: npm run smoke:gateway
 
       - name: Package VSIX
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: npm run package:vsix
 
       - name: Remove one-time machinery
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: |
           Remove-Item 'scripts/apply-stability-hardening.mjs' -Force
           Remove-Item '.github/workflows/stability-hardening-once.yml' -Force
+          if (Test-Path 'hardening-diagnostics.txt') { Remove-Item 'hardening-diagnostics.txt' -Force }
 
       - name: Commit verified hardening
+        if: steps.apply.outcome == 'success'
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
