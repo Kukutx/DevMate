@@ -62,9 +62,9 @@ The shared instance connection remains authoritative for the active endpoint. `d
 
 ## Endpoint already active
 
-If ngrok briefly reports that the same endpoint is already active, DevMate now treats that as a recoverable lifecycle condition: duplicate Start requests are coalesced, the local Agent is re-queried through both current and legacy-compatible endpoint views, and bounded retries allow a just-stopped or concurrently-starting DevMate session to converge without user cleanup.
+If ngrok reports that the same endpoint is already active, DevMate treats it as a recoverable lifecycle condition. Duplicate Start requests are coalesced and the local Agent is re-queried through current and legacy-compatible endpoint views. When ERR_NGROK_334 is caused by a stale local ngrok endpoint, DevMate now identifies the conflicting loopback endpoint, prefers endpoints whose upstream is a DevMate Gateway, stops that stale local endpoint through the Agent API, and retries the current Gateway once automatically.
 
-Only a persistent conflict that cannot be verified as the current loopback Gateway is surfaced to the user. In that case, determine whether another Agent is intentionally serving the same ngrok account/domain.
+If several unrelated local ngrok endpoints are present, DevMate leaves them untouched rather than guessing. A persistent conflict with no safely identifiable local endpoint is surfaced as an account/domain conflict instead of silently enabling pooling or routing MCP traffic to the wrong workspace.
 
 Useful actions include:
 

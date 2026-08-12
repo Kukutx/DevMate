@@ -1,9 +1,13 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { discoverNgrokPublicUrl } = require('../vscode-host/ngrok-agent-api.js');
+const {
+  discoverNgrokPublicUrl,
+  stopConflictingLocalNgrokEndpoints
+} = require('../vscode-host/ngrok-agent-api.js');
 const {
   clearTunnelController,
   setTunnelController,
@@ -115,4 +119,98 @@ test('transient ERR_NGROK_334 is reconciled automatically instead of failing the
     await stopTunnel().catch(() => {});
     clearTunnelController(controller);
   }
+});
+
+test('ERR_NGROK_334 recovery stops a stale local DevMate ngrok endpoint before retry', async () => {
+  const calls = [];
+  const request = (url, options, callback) => {
+    const req = new EventEmitter();
+    req.setTimeout = () => {};
+    req.destroy = () => {};
+    req.end = () => {
+      const method = String(options?.method || 'GET').toUpperCase();
+      const target = String(url);
+      calls.push({ method, target });
+      const response = new EventEmitter();
+      response.destroy = () => {};
+      let status = 404;
+      let payload;
+      if (method === 'GET' && target.endsWith('/api/tunnels')) {
+        status = 200;
+        payload = { tunnels: [{ name: 'stale-devmate', public_url: 'https://default.ngrok.app', config: { addr: 'http://127.0.0.1:8787' } }] };
+      } else if (method === 'GET' && target.endsWith(':8787/control/health')) {
+        status = 200;
+        payload = { name: 'devmate', version: '3.3.6' };
+      } else if (method === 'DELETE' && target.endsWith('/api/tunnels/stale-devmate')) {
+        status = 204;
+      }
+      response.statusCode = status;
+      callback(response);
+      queueMicrotask(() => {
+        if (payload !== undefined) response.emit('data', Buffer.from(JSON.stringify(payload)));
+        response.emit('end');
+      });
+    };
+    return req;
+  };
+
+  const result = await stopConflictingLocalNgrokEndpoints(8788, {
+    apiBase: 'http://127.0.0.1:4040/api',
+    request,
+    timeoutMs: 250
+  });
+  assert.equal(result.stopped, 1);
+  assert.equal(result.ambiguous, false);
+  assert.equal(result.endpoints[0].upstreamPort, 8787);
+  assert.equal(calls.some(call => call.method === 'DELETE' && call.target.endsWith('/api/tunnels/stale-devmate')), true);
+});
+
+test('ERR_NGROK_334 recovery does not delete ambiguous unrelated local ngrok endpoints', async () => {
+  const deleted = [];
+  const request = (url, options, callback) => {
+    const req = new EventEmitter();
+    req.setTimeout = () => {};
+    req.destroy = () => {};
+    req.end = () => {
+      const method = String(options?.method || 'GET').toUpperCase();
+      const target = String(url);
+      const response = new EventEmitter();
+      response.destroy = () => {};
+      let status = 404;
+      let payload;
+      if (method === 'GET' && target.endsWith('/api/tunnels')) {
+        status = 200;
+        payload = { tunnels: [
+          { name: 'one', public_url: 'https://one.ngrok.app', config: { addr: 'http://127.0.0.1:3000' } },
+          { name: 'two', public_url: 'https://two.ngrok.app', config: { addr: 'http://127.0.0.1:4000' } }
+        ] };
+      } else if (method === 'DELETE') {
+        deleted.push(target);
+        status = 204;
+      }
+      response.statusCode = status;
+      callback(response);
+      queueMicrotask(() => {
+        if (payload !== undefined) response.emit('data', Buffer.from(JSON.stringify(payload)));
+        response.emit('end');
+      });
+    };
+    return req;
+  };
+
+  const result = await stopConflictingLocalNgrokEndpoints(8788, {
+    apiBase: 'http://127.0.0.1:4040/api',
+    request,
+    timeoutMs: 250
+  });
+  assert.equal(result.stopped, 0);
+  assert.equal(result.ambiguous, true);
+  assert.deepEqual(deleted, []);
+});
+
+test('TunnelController performs real local endpoint reconciliation instead of wait-only ERR334 retries', () => {
+  const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'vscode-host', 'tunnel-controller.js'), 'utf8');
+  assert.match(source, /stopConflictingLocalNgrokEndpoints/);
+  assert.match(source, /conflictRecovery/);
+  assert.match(source, /Stopped stale local ngrok endpoint/);
 });

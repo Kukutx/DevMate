@@ -127,6 +127,23 @@ function upstreamMatchesPort(value, port) {
   }
 }
 
+function loopbackUpstreamPort(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  if (/^\d+$/.test(raw)) {
+    const port = Number(raw);
+    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
+  }
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`);
+    if (parsed.protocol !== 'http:' || !loopbackUpstreamHost(parsed.hostname)) return 0;
+    const port = Number(parsed.port || 80);
+    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function normalizedPublicUrl(value) {
   return String(value || '').trim().replace(/\/$/, '');
 }
@@ -202,6 +219,158 @@ function requestAgentCollection(apiBase, resource, {
   });
 }
 
+function endpointIdentity(item, resource) {
+  const value = resource === 'tunnels'
+    ? (item?.name || item?.id || '')
+    : (item?.id || item?.name || '');
+  return String(value || '').trim();
+}
+
+function requestAgentDelete(apiBase, resource, identity, {
+  request = http.request,
+  timeoutMs = 1000
+} = {}) {
+  const value = String(identity || '').trim();
+  if (!value) return Promise.resolve(false);
+  const endpointUrl = `${String(apiBase).replace(/\/$/, '')}/${resource}/${encodeURIComponent(value)}`;
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(value === true);
+    };
+    let req;
+    try {
+      req = request(endpointUrl, { method: 'DELETE' }, response => {
+        response.on?.('data', () => {});
+        response.on?.('end', () => finish([200, 202, 204, 404].includes(Number(response.statusCode))));
+      });
+      req.on?.('error', () => finish(false));
+      req.setTimeout?.(Math.max(250, Number(timeoutMs) || 1000), () => {
+        req.destroy?.();
+        finish(false);
+      });
+      req.end();
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+function probeDevMateGateway(port, {
+  request = http.request,
+  timeoutMs = 500
+} = {}) {
+  const target = Number(port);
+  if (!Number.isInteger(target) || target <= 0 || target > 65535) return Promise.resolve(false);
+  return new Promise(resolve => {
+    let settled = false;
+    const chunks = [];
+    let bytes = 0;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(value === true);
+    };
+    let req;
+    try {
+      req = request(`http://127.0.0.1:${target}/control/health`, { method: 'GET' }, response => {
+        response.on?.('data', chunk => {
+          if (settled) return;
+          const buffer = Buffer.from(chunk);
+          bytes += buffer.length;
+          if (bytes > 16 * 1024) {
+            response.destroy?.();
+            finish(false);
+            return;
+          }
+          chunks.push(buffer);
+        });
+        response.on?.('end', () => {
+          if (settled || Number(response.statusCode) !== 200) return finish(false);
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            finish(body?.name === 'devmate');
+          } catch {
+            finish(false);
+          }
+        });
+      });
+      req.on?.('error', () => finish(false));
+      req.setTimeout?.(Math.max(100, Number(timeoutMs) || 500), () => {
+        req.destroy?.();
+        finish(false);
+      });
+      req.end();
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function localNgrokEndpointCandidates(port, {
+  apiBase = DEFAULT_NGROK_AGENT_API_BASE,
+  request = http.request,
+  timeoutMs = 1000
+} = {}) {
+  if (!apiBase) return [];
+  const target = Number(port);
+  const resources = ['tunnels', 'endpoints'];
+  const collected = [];
+  for (const resource of resources) {
+    const payload = await requestAgentCollection(apiBase, resource, { request, timeoutMs });
+    const items = collectionItems(payload, resource);
+    for (const item of items) {
+      const upstreamPort = loopbackUpstreamPort(endpointUpstreamUrl(item));
+      const publicUrl = endpointPublicUrl(item);
+      const identity = endpointIdentity(item, resource);
+      if (!identity || !publicUrl.startsWith('https://') || !upstreamPort || upstreamPort === target) continue;
+      collected.push({ resource, identity, publicUrl, upstreamPort });
+    }
+    if (collected.length && resource === 'tunnels') break;
+  }
+  const unique = new Map();
+  for (const item of collected) {
+    const key = `${item.publicUrl}|${item.upstreamPort}`;
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  return [...unique.values()];
+}
+
+async function stopConflictingLocalNgrokEndpoints(port, {
+  apiBase = DEFAULT_NGROK_AGENT_API_BASE,
+  request = http.request,
+  timeoutMs = 1000
+} = {}) {
+  const candidates = await localNgrokEndpointCandidates(port, { apiBase, request, timeoutMs });
+  if (!candidates.length) return { stopped: 0, candidates: 0, ambiguous: false, endpoints: [] };
+
+  const verified = [];
+  for (const candidate of candidates) {
+    if (await probeDevMateGateway(candidate.upstreamPort, { request, timeoutMs: Math.min(750, timeoutMs) })) {
+      verified.push(candidate);
+    }
+  }
+
+  const selected = verified.length ? verified : (candidates.length === 1 ? candidates : []);
+  if (!selected.length) {
+    return { stopped: 0, candidates: candidates.length, ambiguous: true, endpoints: candidates };
+  }
+
+  const stopped = [];
+  for (const candidate of selected) {
+    const ok = await requestAgentDelete(apiBase, candidate.resource, candidate.identity, { request, timeoutMs });
+    if (ok) stopped.push(candidate);
+  }
+  return {
+    stopped: stopped.length,
+    candidates: candidates.length,
+    ambiguous: false,
+    endpoints: stopped
+  };
+}
+
 async function discoverNgrokPublicUrl(port, {
   apiBase = DEFAULT_NGROK_AGENT_API_BASE,
   request = http.request,
@@ -231,10 +400,15 @@ module.exports = {
   discoverNgrokPublicUrl,
   endpointPublicUrl,
   endpointUpstreamUrl,
+  localNgrokEndpointCandidates,
   loopbackAgentApiBase,
   loopbackUpstreamHost,
+  loopbackUpstreamPort,
   ngrokWebAddrFromConfig,
+  probeDevMateGateway,
+  requestAgentDelete,
   resolveNgrokAgentApiBase,
+  stopConflictingLocalNgrokEndpoints,
   upstreamMatchesPort,
   yamlScalar
 };

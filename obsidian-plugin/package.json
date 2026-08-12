@@ -1,7 +1,7 @@
 {
   "name": "devmate-obsidian",
   "private": true,
-  "version": "3.3.6",
+  "version": "3.3.7",
   "description": "Obsidian desktop host for DevMate",
   "scripts": {
     "build": "node esbuild.config.mjs",

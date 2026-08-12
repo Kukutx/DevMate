@@ -23,7 +23,8 @@ const {
 const { tunnelMaxRestarts } = require('./tunnel-settings.js');
 const {
   discoverNgrokPublicUrl,
-  resolveNgrokAgentApiBase
+  resolveNgrokAgentApiBase,
+  stopConflictingLocalNgrokEndpoints
 } = require('./ngrok-agent-api.js');
 const {
   DEFAULT_RUNTIME_LEASE_MS,
@@ -436,6 +437,10 @@ class TunnelController {
 
     while (Date.now() <= deadline) {
       const output = this.childOutput(child);
+      if (launch.provider === 'ngrok' && classifyNgrokError(output)?.kind === 'endpoint-conflict') {
+        await this.waitForProviderOutput(child, 100);
+        throw providerStartupError(match.provider, this.childOutput(child), child, { secrets: this.childSecrets(child) });
+      }
       if (!childActive(child)) {
         await this.waitForProviderOutput(child);
         throw providerStartupError(match.provider, this.childOutput(child), child, { secrets: this.childSecrets(child) });
@@ -522,7 +527,7 @@ class TunnelController {
     child.once?.('close', finish);
   }
 
-  async spawnProvider(match, { preserveOwner = false } = {}) {
+  async spawnProvider(match, { preserveOwner = false, conflictRecovery = true } = {}) {
     const settings = match.settings;
     const secrets = settings.provider === 'external' ? {} : await this.getSecrets();
     const launch = buildProviderLaunch(match.port, settings, secrets || {});
@@ -638,6 +643,25 @@ class TunnelController {
         if (reusableUrl) {
           if (this.child === child) this.child = null;
           return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);
+        }
+        if (conflictRecovery && launch.agentApiBase) {
+          const recovery = await stopConflictingLocalNgrokEndpoints(match.port, {
+            apiBase: launch.agentApiBase,
+            request: this.httpRequest,
+            timeoutMs: 1000
+          }).catch(reconcileError => ({ stopped: 0, error: reconcileError }));
+          if (recovery.stopped > 0) {
+            const summary = recovery.endpoints
+              .map(item => `${item.publicUrl} -> 127.0.0.1:${item.upstreamPort}`)
+              .join(', ');
+            this.logger(`Stopped stale local ngrok endpoint(s) after ERR_NGROK_334: ${summary}. Retrying the current DevMate Gateway once.`);
+            if (this.child === child) this.child = null;
+            this.resetOwnership(ownerId);
+            return this.spawnProvider(match, { preserveOwner: false, conflictRecovery: false });
+          }
+          if (recovery.ambiguous) {
+            this.logger('ERR_NGROK_334 recovery found multiple non-DevMate local ngrok endpoints and left them untouched.');
+          }
         }
       }
       if (this.child === child) this.child = null;

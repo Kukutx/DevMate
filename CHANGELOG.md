@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.7
+
+- Fixed the remaining ERR_NGROK_334 startup regression by performing real local Agent reconciliation instead of wait-only retries.
+- Detects stale local ngrok endpoints that forward to another loopback Gateway, verifies DevMate upstreams when possible, stops the conflicting local endpoint through the Agent API, and retries the requested DevMate Gateway once.
+- Detects endpoint-conflict output immediately so Start no longer waits the full provider readiness timeout before recovery.
+- Keeps ambiguous unrelated local ngrok endpoints untouched and still refuses to enable pooling implicitly.
+
 ## 3.3.6
 
 - Restored zero-friction ngrok startup by coalescing concurrent Start requests and automatically reconciling transient ERR_NGROK_334 conflicts instead of immediately tearing the session down.
