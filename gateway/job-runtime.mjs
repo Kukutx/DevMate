@@ -276,7 +276,7 @@ async function executeClaimedJob(job, abort) {
           deferJob({ id: job.id, runnerId: localRunnerId(), status: 'blocked_lease', error: message, delayMs: 5000 });
           incrementCounter('devmate_jobs_total', { status: 'blocked_lease', tool: job.tool }, 1);
         } else {
-          const retryable = !['job_timeout', 'job_cancelled'].includes(error?.code) && !/not allowed|requires the owner role|cannot use/i.test(message);
+          const retryable = !['job_timeout', 'job_cancelled', 'principal_inactive'].includes(error?.code) && !/not allowed|requires the owner role|cannot use/i.test(message);
           failJob({ id: job.id, runnerId: localRunnerId(), error: message, retryable });
           const status = error?.code === 'job_timeout' ? 'timed_out' : error?.code === 'job_cancelled' ? 'cancelled' : 'failed_attempt';
           incrementCounter('devmate_jobs_total', { status, tool: job.tool }, 1);

@@ -204,6 +204,49 @@ export function fallbackLocalPrincipal() {
   return { id: 'local-owner', name: 'Local owner', role: 'owner', workspaceIds: [], source: 'local' };
 }
 
+function principalInactive(id, detail = 'is no longer active') {
+  const error = new Error(`Team member ${id || 'unknown'} ${detail}`);
+  error.code = 'principal_inactive';
+  return error;
+}
+
+export function currentTeamPrincipal(principal, config) {
+  if (principal?.source !== 'team-token') return principal;
+  const member = config.team.members.find(item => item.id === principal.id);
+  if (!member) {
+    if (principal.tokenVersion !== undefined && principal.tokenVersion !== null) {
+      throw principalInactive(principal.id, 'no longer exists');
+    }
+    return principal; // Compatibility for legacy durable records and synthetic policy tests.
+  }
+  if (member.disabled || !member.salt || !member.tokenHash) throw principalInactive(principal.id);
+  if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
+  if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) throw principalInactive(principal.id, 'has expired');
+  const workspaceIds = Array.isArray(member.workspaceIds)
+    ? [...new Set(member.workspaceIds.filter(id => typeof id === 'string').map(id => id.trim()).filter(Boolean))]
+    : [];
+  if (!workspaceIds.length) throw principalInactive(principal.id, 'has no active workspace scope');
+  const tokenVersion = member.tokenVersion || 1;
+  if (principal.tokenVersion !== undefined && principal.tokenVersion !== null && Number(principal.tokenVersion) !== tokenVersion) {
+    throw principalInactive(principal.id, 'credential was rotated');
+  }
+  return {
+    id: member.id,
+    name: member.name,
+    role: member.role,
+    workspaceIds,
+    source: 'team-token',
+    tokenVersion
+  };
+}
+
+function dangerousGitPush(value) {
+  if (!/\bgit\s+push\b/.test(value)) return false;
+  return /(?:^|\s)-f(?:\s|$)/.test(value) ||
+    /(?:^|\s)--force(?:-with-lease)?(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)\+[^\s]+/.test(value);
+}
+
 function dangerousCommand(command) {
   const value = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(value) ||
@@ -211,7 +254,7 @@ function dangerousCommand(command) {
     /\brmdir\b.*\s\/s\b/.test(value) || /\bdel\b.*\s\/s\b/.test(value) ||
     /\bformat\b\s+[a-z]:/.test(value) || /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(value) ||
     /\bgit\s+reset\b.*--hard\b/.test(value) || /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(value) ||
-    /\bgit\s+push\b.*--force(?:-with-lease)?\b/.test(value);
+    dangerousGitPush(value);
 }
 
 function assertTeamOperationSafety(name, args, principal) {
@@ -227,9 +270,13 @@ function assertTeamOperationSafety(name, args, principal) {
   }
   if (name === 'git_raw') {
     const values = (args?.args || []).map(value => String(value).toLowerCase());
-    const joined = values.join(' ');
-    if ((values[0] === 'reset' && values.includes('--hard')) || values[0] === 'clean' ||
-      (values[0] === 'push' && /(?:^| )--force(?:-with-lease)?(?: |$)/.test(joined))) {
+    const command = values.find(value => !value.startsWith('-')) || '';
+    const forcePush = command === 'push' && (
+      values.includes('-f') ||
+      values.some(value => /^--force(?:-with-lease)?(?:=|$)/.test(value)) ||
+      values.some(value => value.startsWith('+') && value.length > 1)
+    );
+    if ((command === 'reset' && values.includes('--hard')) || command === 'clean' || forcePush) {
       throw new Error('High-risk raw Git operations are reserved for the owner token');
     }
   }
@@ -237,7 +284,7 @@ function assertTeamOperationSafety(name, args, principal) {
 
 export function authorizeToolCall({ name, annotations, args, config, principal }) {
   normalizeInstanceConfig(config);
-  const effectivePrincipal = principal || fallbackLocalPrincipal();
+  const effectivePrincipal = currentTeamPrincipal(principal || fallbackLocalPrincipal(), config);
   const capability = requiredCapabilityForTool(name, annotations, args);
   assertTeamOperationSafety(name, args, effectivePrincipal);
   if (ownerOnlyTool(name) && effectivePrincipal.role !== 'owner') {

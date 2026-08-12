@@ -67,6 +67,13 @@ export function assertFullAccess(config, action) {
 export function dangerousGuardEnabled(config) {
   return permissionProfile(config) !== 'fullAccess' && config.permissions?.blockDangerousOperations !== false;
 }
+function dangerousGitPush(value) {
+  if (!/\bgit\s+push\b/.test(value)) return false;
+  return /(?:^|\s)-f(?:\s|$)/.test(value) ||
+    /(?:^|\s)--force(?:-with-lease)?(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)\+[^\s]+/.test(value);
+}
+
 export function isDangerousCommand(command) {
   const normalized = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(normalized) ||
@@ -77,7 +84,7 @@ export function isDangerousCommand(command) {
     /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(normalized) ||
     /\bgit\s+reset\b.*--hard\b/.test(normalized) ||
     /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(normalized) ||
-    /\bgit\s+push\b.*--force(?:-with-lease)?\b/.test(normalized);
+    dangerousGitPush(normalized);
 }
 export function assertCommandAllowed(config, command) {
   assertCanMutate(config, 'Persistent process execution');

@@ -127,12 +127,18 @@ function isDangerousCommand(command){ return shared.isDangerousCommand(command);
 function assertCommandAllowed(cfg,command){ return shared.assertCommandAllowed(cfg,command); }
 function isDangerousGitArgs(args=[]){
   const a = args.map(x=>String(x).toLowerCase());
+  const command = a.find(value => !value.startsWith('-')) || '';
   const joined = a.join(' ');
-  return (a[0] === 'reset' && a.includes('--hard')) ||
-    a[0] === 'clean' ||
-    (a[0] === 'push' && (a.includes('--force') || a.includes('-f') || a.includes('--force-with-lease'))) ||
-    (a[0] === 'checkout' && joined.includes(' -- ')) ||
-    (a[0] === 'restore' && (a.includes('.') || a.includes(':/' ) || a.includes('--staged')));
+  const forcePush = command === 'push' && (
+    a.includes('-f') ||
+    a.some(value => /^--force(?:-with-lease)?(?:=|$)/.test(value)) ||
+    a.some(value => value.startsWith('+') && value.length > 1)
+  );
+  return (command === 'reset' && a.includes('--hard')) ||
+    command === 'clean' ||
+    forcePush ||
+    (command === 'checkout' && joined.includes(' -- ')) ||
+    (command === 'restore' && (a.includes('.') || a.includes(':/' ) || a.includes('--staged')));
 }
 function assertGitAllowed(cfg,args=[],action='Git mutation'){
   assertCanMutate(cfg,action);

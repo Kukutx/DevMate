@@ -30,8 +30,9 @@ function readLock(lockPath) {
 }
 
 function staleLock(lock, staleMs, now = Date.now()) {
-  const acquiredAt = Date.parse(lock?.acquiredAt || 0);
-  if (!Number.isFinite(acquiredAt) || now - acquiredAt >= staleMs) return true;
+  void staleMs;
+  void now;
+  // A live owner is authoritative. This synchronous lock has no heartbeat that can safely justify age-based takeover.
   return !processAlive(lock?.pid);
 }
 

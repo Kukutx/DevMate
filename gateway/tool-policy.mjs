@@ -96,13 +96,20 @@ export function ownerOnlyTool(name) {
   return OWNER_ONLY_TOOLS.has(String(name || ''));
 }
 
+function gitRawCommand(args = {}) {
+  const values = Array.isArray(args?.args)
+    ? args.args.map(value => String(value || '').trim()).filter(Boolean)
+    : [];
+  return values.find(value => !value.startsWith('-'))?.toLowerCase() || '';
+}
+
 function explicitCapabilityForTool(name, annotations = {}, args = {}) {
   const tool = String(name || '');
   if (OWNER_ONLY_TOOLS.has(tool) || ADMIN_TOOLS.has(tool)) return 'admin';
   if (tool === 'git_save' && args?.push) return 'publish';
   if (tool === 'git_raw') {
-    const first = String(args?.args?.[0] || '').toLowerCase();
-    return ['push', 'pull', 'fetch', 'remote'].includes(first) ? 'publish' : 'git';
+    const command = gitRawCommand(args);
+    return ['push', 'pull', 'fetch', 'remote'].includes(command) ? 'publish' : 'git';
   }
   if (PUBLISH_TOOLS.has(tool)) return 'publish';
   if (tool.startsWith('git_')) return 'git';
@@ -200,5 +207,6 @@ export const __test = {
   TOOL_NAME_PATTERN,
   VALIDATE_TOOLS,
   WRITE_TOOLS,
-  explicitCapabilityForTool
+  explicitCapabilityForTool,
+  gitRawCommand
 };

@@ -256,7 +256,7 @@
         "devMate.blockDangerousOperations": {
           "type": "boolean",
           "default": true,
-          "description": "Block destructive shell and Git patterns."
+          "description": "Block recognized destructive shell and Git patterns in balanced mode. fullAccess intentionally bypasses this guard and should be treated as trusted execution."
         },
         "devMate.confirmBeforePush": {
           "type": "boolean",

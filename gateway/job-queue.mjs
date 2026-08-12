@@ -83,7 +83,8 @@ function publicPrincipal(principal) {
     name: principal?.name || principal?.id || 'unknown',
     role: principal?.role || 'observer',
     source: principal?.source || 'unknown',
-    workspaceIds: Array.isArray(principal?.workspaceIds) ? [...principal.workspaceIds] : []
+    workspaceIds: Array.isArray(principal?.workspaceIds) ? [...principal.workspaceIds] : [],
+    tokenVersion: Number.isInteger(principal?.tokenVersion) ? principal.tokenVersion : null
   };
 }
 

@@ -31,7 +31,7 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - An instance may require exclusive workspace leases for scoped remote mutations through `team.requireWorkspaceLeaseForWrites`.
 - Dual-control approval is an **explicit optional policy and is disabled by default**. It protects only the configured capabilities/tools.
 - Approval records store a canonical argument digest and redacted summary, not raw secrets. An approval is bound to the requester, tool, workspace and exact argument set, and is consumed according to the current approval policy.
-- Team/member credentials cannot use policy-blocked force/destructive operations merely because the underlying OS account could execute them.
+- Team/member credentials are denied recognized direct force/destructive Git and shell patterns by policy. Execute access still runs as the DevMate OS identity and is a trusted execution boundary, not a hostile-code sandbox.
 - Global administration, credential lifecycle, request/Runner policy and other elevated control-plane operations require the capability declared by the central tool policy.
 
 ## Desktop public-session boundary
@@ -63,7 +63,7 @@ Desktop Stop is ownership-aware:
 ## Durable jobs and Runners
 
 - The queue accepts only reviewed targets. Arbitrary shell commands, direct push, force operations, credential rotation, and team administration are not queue targets.
-- Job submission/claim re-evaluates target capability, workspace scope, lease, approval, plugin state and Runner requirements. The queue is not an authorization bypass.
+- Job submission/claim re-evaluates current member status, role and workspace scope; current-schema jobs also bind the member credential generation. Lease, approval, plugin state and Runner requirements are rechecked as well. The queue is not an authorization bypass.
 - Persistent job arguments reject credential-shaped keys/values and are bounded in size and nesting depth.
 - Durable `git_save` cannot push.
 - Result summaries are bounded and redacted before persistence.
