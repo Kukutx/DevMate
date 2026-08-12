@@ -188,7 +188,7 @@ jobs:
           if [ ! -x ".godot-ci/${executable}" ]; then
             api="https://api.github.com/repos/godotengine/godot-builds/releases/tags/${GODOT_VERSION}-${GODOT_STATUS}"
             curl --fail --silent --show-error --location "$api" --output .godot-ci/release.json
-            archive_url=$(jq -r --arg name="$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
+            archive_url=$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
             sums_url=$(jq -r '.assets[] | select(.name == "SHA512-SUMS.txt") | .browser_download_url' .godot-ci/release.json)
             test -n "$archive_url" && test "$archive_url" != "null"
             test -n "$sums_url" && test "$sums_url" != "null"
