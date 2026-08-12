@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.6
+
+- Restored zero-friction ngrok startup by coalescing concurrent Start requests and automatically reconciling transient ERR_NGROK_334 conflicts instead of immediately tearing the session down.
+- Made local ngrok endpoint discovery compatible with both the current /api/endpoints response shapes and the legacy /api/tunnels shape while preserving exact loopback Gateway-port validation.
+- Serialized Stop behind an in-flight tunnel Start so automatic Start, manual Start, Restart, reload, and teardown cannot create a duplicate provider race.
+- Added regression coverage for duplicate Start convergence, transient endpoint-conflict recovery, alternate Agent API fields, and legacy Agent API fallback.
+
 ## 3.3.5
 
 - Hardened Gateway/public-tunnel shutdown ordering so a Gateway is preserved whenever public ingress is remote-owned or its shutdown cannot be confirmed.

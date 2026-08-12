@@ -62,7 +62,9 @@ The shared instance connection remains authoritative for the active endpoint. `d
 
 ## Endpoint already active
 
-If ngrok reports that the same endpoint is already active in another Agent/session, first determine whether that Agent is intentionally serving the same DevMate instance.
+If ngrok briefly reports that the same endpoint is already active, DevMate now treats that as a recoverable lifecycle condition: duplicate Start requests are coalesced, the local Agent is re-queried through both current and legacy-compatible endpoint views, and bounded retries allow a just-stopped or concurrently-starting DevMate session to converge without user cleanup.
+
+Only a persistent conflict that cannot be verified as the current loopback Gateway is surfaced to the user. In that case, determine whether another Agent is intentionally serving the same ngrok account/domain.
 
 Useful actions include:
 

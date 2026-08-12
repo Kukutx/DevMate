@@ -1,11 +1,13 @@
 'use strict';
 
 const ATTACHMENT_POLL_MS = 1000;
+const NGROK_CONFLICT_RETRY_DELAYS_MS = Object.freeze([250, 750, 1500, 3000, 5000]);
 
 let controller = null;
 let attachmentTimer = null;
 let attachmentPort = 0;
 let attachmentRecoveryPromise = null;
+let startOperation = null;
 let sessionRequested = false;
 
 function stopAttachmentWatcher() {
@@ -84,18 +86,62 @@ function tunnelController() {
   return controller;
 }
 
+function retryableNgrokConflict(error) {
+  return error?.code === 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function startTunnelAttempt(current, port) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await current.start(port);
+    } catch (error) {
+      const delayMs = NGROK_CONFLICT_RETRY_DELAYS_MS[attempt];
+      if (!retryableNgrokConflict(error) || delayMs == null) throw error;
+      attempt += 1;
+      current.logger?.(
+        'ngrok reported a transient endpoint conflict; waiting ' + delayMs +
+        'ms and reconciling the local Agent before retry ' + attempt +
+        '/' + NGROK_CONFLICT_RETRY_DELAYS_MS.length + '.'
+      );
+      await wait(delayMs);
+    }
+  }
+}
+
 async function startTunnel(port) {
   const current = tunnelController();
+  const requestedPort = Number(port) || 0;
+  if (startOperation) {
+    if (startOperation.controller === current && startOperation.port === requestedPort) {
+      return startOperation.promise;
+    }
+    await startOperation.promise.catch(() => null);
+  }
+
+  let operation;
+  operation = (async () => {
+    try {
+      const result = await startTunnelAttempt(current, requestedPort);
+      sessionRequested = true;
+      if (result?.attached) startAttachmentWatcher(requestedPort);
+      else stopAttachmentWatcher();
+      return result;
+    } catch (error) {
+      sessionRequested = false;
+      stopAttachmentWatcher();
+      throw error;
+    }
+  })();
+  startOperation = { controller: current, port: requestedPort, promise: operation };
   try {
-    const result = await current.start(port);
-    sessionRequested = true;
-    if (result?.attached) startAttachmentWatcher(port);
-    else stopAttachmentWatcher();
-    return result;
-  } catch (error) {
-    sessionRequested = false;
-    stopAttachmentWatcher();
-    throw error;
+    return await operation;
+  } finally {
+    if (startOperation?.promise === operation) startOperation = null;
   }
 }
 
@@ -103,6 +149,8 @@ async function stopTunnel() {
   const current = tunnelController();
   sessionRequested = false;
   stopAttachmentWatcher();
+  const pendingStart = startOperation?.controller === current ? startOperation.promise : null;
+  if (pendingStart) await pendingStart.catch(() => null);
   const pendingRecovery = attachmentRecoveryPromise;
   if (pendingRecovery) await pendingRecovery.catch(() => null);
   return current.stop();
@@ -118,6 +166,7 @@ function tunnelSessionRequested() {
 
 module.exports = {
   ATTACHMENT_POLL_MS,
+  NGROK_CONFLICT_RETRY_DELAYS_MS,
   clearTunnelController,
   setTunnelController,
   startTunnel,
