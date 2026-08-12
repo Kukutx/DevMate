@@ -81,6 +81,25 @@ test('recovers an expired startup lease even when the recorded process is still 
   assert.equal(second.release(), true);
 });
 
+test('recovers a fresh startup lease immediately when its recorded owner process is dead', () => {
+  const state = temporaryDirectory('devmate-startup-dead-owner-');
+  const first = new StartupLease({ stateDirectory: state, hostId: 'vscode', leaseMs: 20000 });
+  assert.equal(first.tryAcquire(), true);
+  if (first.timer) clearInterval(first.timer);
+  first.timer = null;
+
+  const payload = JSON.parse(fs.readFileSync(first.lockPath, 'utf8'));
+  payload.pid = 2147483647;
+  fs.writeFileSync(first.lockPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  assert.equal(startupLeaseExpired(first.lockPath, 20000), true);
+
+  const second = new StartupLease({ stateDirectory: state, hostId: 'obsidian', leaseMs: 20000 });
+  assert.equal(second.tryAcquire(), true);
+  assert.equal(readStartupLease(second.lockPath).ownerId, second.ownerId);
+  assert.equal(first.release(), false);
+  assert.equal(second.release(), true);
+});
+
 test('can converge on a runtime that becomes healthy while another host owns startup', async () => {
   const state = temporaryDirectory('devmate-startup-converge-');
   const owner = new StartupLease({ stateDirectory: state, hostId: 'vscode', leaseMs: 2000 });
