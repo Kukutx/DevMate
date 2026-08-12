@@ -34,12 +34,14 @@ test('default bootstrap creates one owner-only DevMate instance without a mode',
   assert.match(result.ownerToken, /^[A-Za-z0-9_-]{40,}$/);
   assert.equal(result.connection.provider, 'ngrok');
   assert.equal(result.access.ownerOnly, true);
-  assert.equal(result.execution.embeddedRunnerEnabled, true);
+  assert.equal(result.execution.embeddedRunnerEnabled, false);
   const config = await readConfig(current.config);
   assert.equal('deployment' in config, false);
   assert.equal('production' in config, false);
   assert.equal('preset' in result, false);
-  assert.equal(__test.status({ config: current.config }).ok, true);
+  const status = __test.status({ config: current.config });
+  assert.equal(status.ok, true);
+  assert.deepEqual(status.warnings, []);
 });
 
 test('member access composes with the same instance and never persists its plaintext token', async t => {
@@ -56,7 +58,7 @@ test('member access composes with the same instance and never persists its plain
   assert.equal(config.team.members.length, 1);
   assert.equal(config.team.members[0].tokenHash.includes(result.member.token), false);
   assert.equal(config.connection.provider, 'ngrok');
-  assert.equal(config.jobs.embeddedRunnerEnabled, true);
+  assert.equal(config.jobs.embeddedRunnerEnabled, false);
 });
 
 test('external Runner control composes with members, connection provider and local execution in one instance', async t => {
