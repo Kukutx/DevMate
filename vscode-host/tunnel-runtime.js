@@ -90,7 +90,7 @@ function tunnelController() {
 }
 
 async function startTunnelAttempt(current, port) {
-  return current.start(port);
+  return await current.start(port);
 }
 
 async function startTunnel(port) {
