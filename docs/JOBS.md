@@ -121,7 +121,7 @@ Tools that start supervised persistent processes should be managed through the e
 
 ## Embedded Runner
 
-The embedded Runner runs inside the central Gateway process. It registers:
+The embedded Runner runs inside the central Gateway process and is disabled by default. Enable it only when durable background execution is actually needed. It registers:
 
 - operating system and architecture;
 - writable workspace IDs;
@@ -160,7 +160,7 @@ A Runner claim creates a short renewable lease. The Runner renews while executin
 
 The execution model is at-least-once. A Runner may finish locally after losing the ability to report, and the job may later run again. Use idempotent target tools or application-level transaction and deduplication controls where duplicate execution would matter.
 
-Timeout failures are not automatically retried because an underlying local handler may still be finishing.
+Timeout and cancellation are cooperative for in-process handlers: DevMate aborts the request signal and stops waiting only after the handler settles. A non-cooperative JavaScript handler cannot be force-killed safely inside the Gateway process. Timeout failures are not automatically retried because an underlying local handler may still be finishing.
 
 ## Drain mode
 

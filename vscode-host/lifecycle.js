@@ -4,7 +4,6 @@ const fs = require('node:fs');
 const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
-const { VscodeContextMirror } = require('./context-mirror.js');
 const { VscodeRuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const {
   createRuntimeContext,
@@ -23,7 +22,6 @@ class VscodeHostLifecycle {
     this.runtimeContext = null;
     this.output = null;
     this.diagnostics = null;
-    this.mirror = null;
     this.startupTimer = null;
     this.active = false;
     this.lifecycleGeneration = 0;
@@ -81,12 +79,6 @@ class VscodeHostLifecycle {
       this.platformActivationAttempted = true;
       await this.platformExtension.activate(this.runtimeContext);
       this.platformActivated = true;
-      this.mirror = new VscodeContextMirror({
-        vscode: this.vscode,
-        context: this.runtimeContext,
-        diagnostics: this.diagnostics
-      }).start();
-      context.subscriptions.push({ dispose: () => this.mirror?.dispose() });
       this.registerHostListeners(context);
       this.active = true;
       this.lifecycleGeneration += 1;
@@ -240,8 +232,6 @@ class VscodeHostLifecycle {
       this.lifecycleGeneration += 1;
       if (this.startupTimer) clearTimeout(this.startupTimer);
       this.startupTimer = null;
-      this.mirror?.dispose();
-      this.mirror = null;
       let platformResult = null;
       try {
         if (this.platformActivationAttempted) platformResult = await this.platformExtension.deactivate();

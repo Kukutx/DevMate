@@ -201,6 +201,7 @@ class TunnelController {
     this.providerOutput = new WeakMap();
     this.providerSecrets = new WeakMap();
     this.providerClosed = new WeakMap();
+    this.expectedChildExits = new WeakSet();
     this.stopping = false;
     this.disposed = false;
   }
@@ -493,9 +494,15 @@ class TunnelController {
       terminal = true;
       if (this.child !== child) return;
       const wasReady = this.childReady;
+      const expectedExit = this.expectedChildExits.has(child);
+      this.expectedChildExits.delete(child);
       const detail = outputTail(safeProviderOutput(match.provider, this.childOutput(child), this.childSecrets(child)));
       this.child = null;
       this.childReady = false;
+      if (expectedExit) {
+        this.resetOwnership();
+        return;
+      }
       if (this.stopping || this.disposed) return;
       this.logger(`Tunnel provider ended code=${code ?? 'none'} signal=${signal || 'none'}${detail ? `: ${detail}` : ''}.`);
       if (!wasReady) {
@@ -731,8 +738,10 @@ class TunnelController {
   }
 
   async terminateLocalChild() {
-    if (!childActive(this.child)) return { exited: true, forced: false };
-    return terminateChild(this.child, {
+    const child = this.child;
+    if (!childActive(child)) return { exited: true, forced: false };
+    this.expectedChildExits.add(child);
+    return terminateChild(child, {
       timeoutMs: this.stopTimeoutMs,
       forceTimeoutMs: this.forceStopTimeoutMs,
       signalCodeConfirmsExit: false

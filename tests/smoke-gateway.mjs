@@ -129,6 +129,7 @@ try {
   const tools = await rpc('tools/list', {});
   assert(tools.response.ok && Array.isArray(tools.json?.result?.tools), `tools/list failed: ${tools.text}`);
   assert(tools.json.result.tools.length >= 40, `unexpectedly low tool count: ${tools.json.result.tools.length}`);
+  assert(tools.json.result.tools.length <= 150, `unexpectedly large default tool surface: ${tools.json.result.tools.length}`);
   const toolByName = new Map(tools.json.result.tools.map(t => [t.name, t]));
   assert(toolByName.get('read_file')?.outputSchema?.type === 'object', 'read_file is missing outputSchema');
   assert(toolByName.get('read_file')?.annotations?.readOnlyHint === true, 'read_file is missing readOnlyHint');

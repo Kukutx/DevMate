@@ -102,8 +102,9 @@ if (!isMainThread && parentPort) {
 
 try {
   installPlatformCapabilities(McpServer);
-  if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) startJobRuntime();
+  if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled === true) startJobRuntime();
   await import('./server.mjs');
 } finally {
   httpBootstrap.restore();
 }
+

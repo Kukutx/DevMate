@@ -470,10 +470,10 @@ export function jobQueueCapacityStatus() {
 }
 
 export function assertDrainAllows({ principal, capability, tool }) {
+  if (principal?.source !== 'team-token') return;
   const drain = drainStatus();
   if (!drain.active) return;
   if (String(tool || '').startsWith('deployment_drain_') || String(tool || '').startsWith('job_') && ['job_status', 'job_list', 'job_artifacts'].includes(tool)) return;
-  if (principal?.source !== 'team-token') return;
   if (['write', 'execute', 'git', 'publish', 'admin'].includes(capability)) throw new Error(`DevMate is draining and is not accepting new ${capability} operations: ${drain.reason || 'maintenance in progress'}`);
 }
 

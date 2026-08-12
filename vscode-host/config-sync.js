@@ -48,7 +48,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   const merged = { ...current };
   for (const key of [
     'appVersion', 'permissions', 'maintenance', 'commands',
-    'vscodeContext', 'activeWorkspaceId'
+    'activeWorkspaceId'
   ]) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
@@ -89,6 +89,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     merged.hostContexts = { ...object(current.hostContexts), ...object(candidate.hostContexts) };
   }
   if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
+  delete merged.vscodeContext;
   return merged;
 }
 

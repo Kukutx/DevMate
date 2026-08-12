@@ -25,11 +25,13 @@
 
 ## Work Sessions
 
-- Use `work_session_start` for a multi-step development change when DevMate MCP tools are available.
-- Use `work_session_status` to inspect the active session when needed.
+- Work sessions are optional. Do not start one automatically for a simple change.
+- Use `work_session_start` only when rollback/session tracking materially helps a multi-step mutation or the user asks for it.
+- Use `work_session_status` only when an active session needs inspection.
 - Use `show_changes` before finishing substantive code changes.
-- Finish with `work_session_finish` after review.
+- Finish an intentionally started session with `work_session_finish` after review.
 - Use `work_session_rollback` only for safe file rollback; it does not reverse commands or Git history.
+- Stay on the current branch. Do not create branches or pull requests unless the user asks.
 
 ## Safety
 

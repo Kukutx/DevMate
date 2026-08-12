@@ -114,6 +114,8 @@ export function releaseWorkspaceLeaseInDocument(document, {
 syncWorkspaceLeasesFromDurableState();
 
 export function pruneWorkspaceLeases(now = Date.now()) {
+  const expired = [...leases.values()].some(lease => Date.parse(lease.expiresAt) <= now);
+  if (!expired) return false;
   mutateDurableDocument(document => {
     const values = documentLeaseMap(document);
     pruneLeaseMap(values, now);
@@ -121,6 +123,7 @@ export function pruneWorkspaceLeases(now = Date.now()) {
     return document;
   });
   syncWorkspaceLeasesFromDurableState();
+  return true;
 }
 
 export function listWorkspaceLeases() {

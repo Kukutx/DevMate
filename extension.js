@@ -207,7 +207,7 @@ function mcpToken(ctx=globalContext){
   return data?.auth?.required === false ? '' : String(data?.auth?.token || '');
 }
 
-function ensureConfig(ctx, forceCurrent=false, portOverride=null){
+function ensureConfig(ctx){
   const p = configPath(ctx);
   const data = readConfig(p);
   if(!data){
@@ -216,6 +216,12 @@ function ensureConfig(ctx, forceCurrent=false, portOverride=null){
     error.configFile = p;
     throw error;
   }
+  selectedPort = Number(data.server?.port || configuredPort() || BASE_PORT);
+  return data;
+}
+function syncConfig(ctx, forceCurrent=false, portOverride=null){
+  const p = configPath(ctx);
+  const data = ensureConfig(ctx);
   data.appVersion = VERSION;
   data.instanceId ||= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
   data.server ||= {};
@@ -226,7 +232,16 @@ function ensureConfig(ctx, forceCurrent=false, portOverride=null){
   data.runtime.maxOutputChars = Number(cfg().get('maxOutputChars') || 120000);
   data.maintenance = maintenanceConfig();
   data.connection ||= {};
-  data.vscodeContext = collectVsCodeContext();
+  const vscodeContext = collectVsCodeContext();
+  data.hostContexts ||= {};
+  data.hostContexts.vscode = {
+    ...vscodeContext,
+    hostId: 'vscode',
+    kind: 'editor',
+    updatedAt: vscodeContext.capturedAt
+  };
+  data.activeHostId = 'vscode';
+  delete data.vscodeContext;
   data.auth ||= {};
   data.auth.required = authRequired();
   data.auth.token ||= newAuthToken();
@@ -251,7 +266,7 @@ function scheduleContextRefresh(ctx){
   if(contextWriteTimer) clearTimeout(contextWriteTimer);
   contextWriteTimer = setTimeout(()=>{
     contextWriteTimer = null;
-    try { ensureConfig(ctx,false); refreshPanel(); } catch(e) { log(`VS Code context refresh failed: ${e.message || e}`); }
+    try { syncConfig(ctx,false); refreshPanel(); } catch(e) { log(`VS Code context refresh failed: ${e.message || e}`); }
   }, 400);
 }
 function setStatus(text){ if(statusBar){ statusBar.text = text; statusBar.show(); } }
@@ -423,7 +438,7 @@ function runDefaultStartCommand(){
 }
 async function startGateway(ctx){
   const controller = await ensureGatewayController(ctx);
-  ensureConfig(ctx,true);
+  syncConfig(ctx,true);
   const result = await controller.start({timeoutMs:20000});
   gatewayProcess = controller.child;
   trackGatewayProcess(gatewayProcess);
@@ -1119,7 +1134,7 @@ function activate(context){
   globalContext=context;
   output = vscode.window.createOutputChannel('DevMate'); context.subscriptions.push(output);
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100); statusBar.command='devMate.open'; context.subscriptions.push(statusBar); setStatus('DevMate');
-  ensureConfig(context,false);
+  syncConfig(context,false);
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event=>{
     if(event?.textEditor?.document?.uri?.scheme !== 'output') scheduleContextRefresh(context);

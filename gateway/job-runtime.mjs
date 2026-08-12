@@ -176,6 +176,21 @@ function runnerSettings() {
   };
 }
 
+function sameValues(left = [], right = []) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function ensureLocalRunnerRegistered(settings = runnerSettings()) {
+  const existing = listRunners().find(item => item.id === settings.id);
+  if (
+    existing?.status === 'online' &&
+    existing.maxConcurrent === settings.maxConcurrent &&
+    sameValues(existing.capabilities, settings.capabilities) &&
+    sameValues(existing.workspaceIds, settings.workspaceIds)
+  ) return existing;
+  return registerRunner(settings);
+}
+
 export function refreshLocalRunner() {
   const settings = runnerSettings();
   const existing = listRunners().find(item => item.id === settings.id);
@@ -279,8 +294,8 @@ async function executeClaimedJob(job, abort) {
 
 export async function runJobWorkerOnce() {
   if (stopping) return null;
-  refreshLocalRunner();
   const settings = runnerSettings();
+  ensureLocalRunnerRegistered(settings);
   if (inflight.size >= settings.maxConcurrent) return null;
   const job = claimJob({ runnerId: settings.id, leaseSeconds: 90 });
   if (!job) return null;

@@ -71,13 +71,15 @@ test('partial extension updates preserve existing workspaces and shared connecti
   const merged = mergeExtensionConfig(current, {
     version: SUPPORTED_CONFIG_VERSION,
     connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale-candidate' },
-    vscodeContext: { capturedAt: 'now' }
+    hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   });
   assert.deepEqual(merged.workspaces, current.workspaces);
   assert.deepEqual(merged.connection, current.connection);
   assert.deepEqual(merged.team, current.team);
   assert.deepEqual(merged.requestPolicy, current.requestPolicy);
-  assert.deepEqual(merged.vscodeContext, { capturedAt: 'now' });
+  assert.deepEqual(merged.hostContexts.vscode, { capturedAt: 'now' });
+  assert.equal(merged.activeHostId, 'vscode');
+  assert.equal(Object.hasOwn(merged, 'vscodeContext'), false);
 });
 
 test('pure merge never manufactures shared nested state', () => {
@@ -116,7 +118,7 @@ test('generic VS Code writer refuses to recreate a missing shared config', () =>
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new-identity',
     auth: { required: true, token: 'new-token' },
-    vscodeContext: { capturedAt: 'now' }
+    hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   }), error => error?.code === 'DEVMATE_SHARED_CONFIG_MISSING');
   assert.equal(fs.existsSync(file), false);
 });
@@ -134,13 +136,15 @@ test('writes host context through the shared locked atomic store without replaci
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
     connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
-    vscodeContext: { capturedAt: 'now' }
+    hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   });
   const config = readExtensionConfig(file);
   assert.equal(config.instanceId, 'one');
   assert.equal(config.auth.token, 'secret');
   assert.deepEqual(config.connection, { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' });
-  assert.deepEqual(config.vscodeContext, { capturedAt: 'now' });
+  assert.deepEqual(config.hostContexts.vscode, { capturedAt: 'now' });
+  assert.equal(config.activeHostId, 'vscode');
+  assert.equal(Object.hasOwn(config, 'vscodeContext'), false);
 });
 
 test('VS Code config boundary rejects unsupported instance fields instead of preserving them', () => {
@@ -154,7 +158,7 @@ test('VS Code config boundary rejects unsupported instance fields instead of pre
   assert.throws(() => readExtensionConfig(file), error => error?.code === 'unsupported_instance_shape');
   assert.throws(() => writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
-    vscodeContext: { capturedAt: 'now' }
+    hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   }), error => error?.code === 'unsupported_instance_shape');
 });
 

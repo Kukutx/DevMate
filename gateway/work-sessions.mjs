@@ -50,6 +50,8 @@ function syncCaches() {
 }
 
 function prune(now = Date.now()) {
+  const expired = [...sessions.values()].some(session => Date.parse(session.expiresAt) <= now);
+  if (!expired) return false;
   mutateDurableDocument(document => {
     const values = documentSessionMap(document);
     pruneSessionMap(values, now);
@@ -57,6 +59,7 @@ function prune(now = Date.now()) {
     return document;
   });
   syncWorkSessionsFromDurableState();
+  return true;
 }
 
 export function startWorkSession({ principal, workspaceId, title = '', purpose = '', ttlSeconds = 3600, force = false }) {
@@ -116,6 +119,9 @@ export function workSession(id) {
 
 export function touchWorkSession(principalId, workspaceId, { failed = false } = {}) {
   const now = Date.now();
+  prune(now);
+  const existing = [...sessions.values()].find(item => item.principalId === principalId && item.workspaceId === workspaceId);
+  if (!existing) return null;
   let touched = null;
   mutateDurableDocument(document => {
     const values = documentSessionMap(document);

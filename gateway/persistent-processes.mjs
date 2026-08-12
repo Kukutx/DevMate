@@ -1,10 +1,13 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import processTreeRuntime from '../host/runtime/process-tree.js';
 import {
   assertCanMutate, assertCommandAllowed, audit, getWritableWorkspace, normalizeSlash, now,
   processLimits, readConfig, redactSensitiveString, resolveWorkspaceCwd, syncTrustedRootsIntoConfig
 } from './local-shared.mjs';
+
+const { runTaskkill: runBoundedTaskkill } = processTreeRuntime;
 
 const PROCESS_RETENTION_MS = 60 * 60 * 1000;
 const PROCESS_REGISTRY_LIMIT = 100;
@@ -73,21 +76,14 @@ function waitForExit(record, timeoutMs) {
 export async function killProcessTree(record, force = false, {
   gracefulWaitMs = 3000,
   forceWaitMs = 4000,
-  finalWaitMs = 1500
+  finalWaitMs = 1500,
+  taskkillTimeoutMs = 3000
 } = {}) {
   if (!record.child || !processOwned(record)) return true;
   record.status = 'stopping';
   const pid = record.child.pid;
   if (process.platform === 'win32' && pid) {
-    await new Promise(resolve => {
-      const args = ['/PID', String(pid), '/T'];
-      if (force) args.push('/F');
-      const killer = spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' });
-      let settled = false;
-      const done = () => { if (settled) return; settled = true; resolve(); };
-      killer.once('error', done);
-      killer.once('close', done);
-    });
+    await runBoundedTaskkill(pid, force, spawn, taskkillTimeoutMs);
   } else if (pid) {
     try { process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM'); }
     catch { try { record.child.kill(force ? 'SIGKILL' : 'SIGTERM'); } catch {} }
@@ -96,7 +92,7 @@ export async function killProcessTree(record, force = false, {
   }
 
   if (await waitForExit(record, force ? forceWaitMs : gracefulWaitMs)) return true;
-  if (!force) return killProcessTree(record, true, { gracefulWaitMs, forceWaitMs, finalWaitMs });
+  if (!force) return killProcessTree(record, true, { gracefulWaitMs, forceWaitMs, finalWaitMs, taskkillTimeoutMs });
 
   try { record.child.kill('SIGKILL'); } catch {}
   if (await waitForExit(record, finalWaitMs)) return true;

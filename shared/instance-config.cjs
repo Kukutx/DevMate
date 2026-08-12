@@ -127,7 +127,7 @@ function normalizeInstanceConfig(config) {
 
   const jobs = object(config.jobs, 'jobs');
   jobs.allowJobGitSave = strictBoolean(jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
-  jobs.embeddedRunnerEnabled = strictBoolean(jobs.embeddedRunnerEnabled, true, 'jobs.embeddedRunnerEnabled');
+  jobs.embeddedRunnerEnabled = strictBoolean(jobs.embeddedRunnerEnabled, false, 'jobs.embeddedRunnerEnabled');
   config.jobs = jobs;
   return config;
 }
