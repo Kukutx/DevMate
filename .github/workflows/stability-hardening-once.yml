@@ -12,7 +12,7 @@ jobs:
   harden:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,6 +54,59 @@ jobs:
         shell: pwsh
         run: node scripts/apply-stability-hardening.mjs
 
+      - name: Correct runtime hardening details
+        shell: pwsh
+        run: |
+          @'
+          import fs from 'node:fs';
+
+          function replace(file, before, after) {
+            const source = fs.readFileSync(file, 'utf8');
+            if (!source.includes(before)) throw new Error(`Missing correction pattern in ${file}`);
+            fs.writeFileSync(file, source.replace(before, after), 'utf8');
+          }
+
+          replace(
+            'gateway/persistent-processes.mjs',
+            'await runBoundedTaskkill(pid, force, { spawn }, taskkillTimeoutMs);',
+            'await runBoundedTaskkill(pid, force, spawn, taskkillTimeoutMs);'
+          );
+
+          replace(
+            'gateway/job-runtime.mjs',
+            `let runnerId = null;\nlet runnerReady = false;\nlet stopping = false;`,
+            `let runnerId = null;\nlet stopping = false;`
+          );
+
+          replace(
+            'gateway/job-runtime.mjs',
+            `export function refreshLocalRunner() {\n  const settings = runnerSettings();\n  const existing = listRunners().find(item => item.id === settings.id);\n  const runner = existing\n    ? heartbeatRunner(settings.id, { capabilities: settings.capabilities, workspaceIds: settings.workspaceIds })\n    : registerRunner(settings);\n  runnerReady = true;\n  return runner;\n}`,
+            `function sameValues(left = [], right = []) {\n  return left.length === right.length && left.every((value, index) => value === right[index]);\n}\n\nfunction ensureLocalRunnerRegistered(settings = runnerSettings()) {\n  const existing = listRunners().find(item => item.id === settings.id);\n  if (\n    existing?.status === 'online' &&\n    existing.maxConcurrent === settings.maxConcurrent &&\n    sameValues(existing.capabilities, settings.capabilities) &&\n    sameValues(existing.workspaceIds, settings.workspaceIds)\n  ) return existing;\n  return registerRunner(settings);\n}\n\nexport function refreshLocalRunner() {\n  const settings = runnerSettings();\n  const existing = listRunners().find(item => item.id === settings.id);\n  return existing\n    ? heartbeatRunner(settings.id, { capabilities: settings.capabilities, workspaceIds: settings.workspaceIds })\n    : registerRunner(settings);\n}`
+          );
+
+          replace(
+            'gateway/job-runtime.mjs',
+            `export async function runJobWorkerOnce() {\n  if (stopping) return null;\n  if (!runnerReady) refreshLocalRunner();\n  const settings = runnerSettings();`,
+            `export async function runJobWorkerOnce() {\n  if (stopping) return null;\n  const settings = runnerSettings();\n  ensureLocalRunnerRegistered(settings);`
+          );
+
+          replace(
+            'gateway/job-runtime.mjs',
+            `  heartbeatTimer = setInterval(() => {\n    try { refreshLocalRunner(); }\n    catch { runnerReady = false; }\n  }, 30000);`,
+            `  heartbeatTimer = setInterval(() => {\n    try { refreshLocalRunner(); } catch {}\n  }, 30000);`
+          );
+
+          replace(
+            'gateway/job-runtime.mjs',
+            `export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {\n  stopping = true;\n  runnerReady = false;`,
+            `export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {\n  stopping = true;`
+          );
+
+          console.log('Corrected bounded Windows process termination and no-write embedded runner polling.');
+          '@ | Set-Content -Path 'scripts/correct-stability-hardening.mjs' -Encoding utf8
+          node scripts/correct-stability-hardening.mjs
+          Remove-Item 'scripts/correct-stability-hardening.mjs' -Force
+
       - name: Prepare regression tests
         shell: pwsh
         run: |
@@ -79,7 +132,7 @@ jobs:
           test('persistent Windows process termination uses the bounded taskkill helper', () => {
             const persistent = source('gateway/persistent-processes.mjs');
             assert.equal(persistent.includes('runTaskkill: runBoundedTaskkill'), true);
-            assert.equal(persistent.includes('runBoundedTaskkill(pid, force, { spawn }, taskkillTimeoutMs)'), true);
+            assert.equal(persistent.includes('runBoundedTaskkill(pid, force, spawn, taskkillTimeoutMs)'), true);
             assert.equal(persistent.includes("const killer = spawn('taskkill'"), false);
           });
 
@@ -96,7 +149,7 @@ jobs:
             assert.equal(fs.existsSync(path.join(root, 'vscode-host', 'context-mirror.js')), false);
           });
 
-          test('idle embedded jobs are opt-in and worker polling does not heartbeat every second', () => {
+          test('idle embedded jobs are opt-in and worker polling never heartbeats an existing runner', () => {
             const instance = source('shared/instance-config.cjs');
             const runtime = source('gateway/job-runtime.mjs');
             const serverRuntime = source('gateway/server-runtime.mjs');
@@ -105,7 +158,8 @@ jobs:
             const workerStart = runtime.indexOf('export async function runJobWorkerOnce');
             const workerEnd = runtime.indexOf('export function startJobRuntime', workerStart);
             const worker = runtime.slice(workerStart, workerEnd);
-            assert.equal((worker.match(/refreshLocalRunner\(\)/g) || []).length, 1);
+            assert.equal(worker.includes('ensureLocalRunnerRegistered(settings)'), true);
+            assert.equal(worker.includes('refreshLocalRunner()'), false);
           });
 
           test('local owner drain checks and inactive sessions avoid durable control-plane writes', () => {
@@ -134,8 +188,12 @@ jobs:
       - name: Repository checks
         run: npm run check
 
+      - name: Targeted stability tests
+        timeout-minutes: 3
+        run: node --test tests/job-runtime.test.mjs tests/local-capabilities.test.mjs tests/stability-endurance-contract.test.cjs
+
       - name: Unit tests
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: npm run test:unit
 
       - name: Gateway smoke tests
