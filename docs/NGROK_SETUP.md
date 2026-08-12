@@ -99,3 +99,5 @@ Open project → Start → Ready
 ```
 
 There is no separate manual ngrok-start or MCP-verification step in the normal lifecycle.
+
+DevMate 3.3.7 regression coverage explicitly exercises stale-local-endpoint deletion and ambiguous-endpoint preservation before the packaged runtime smoke gates.
