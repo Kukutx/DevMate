@@ -54,7 +54,7 @@ jobs:
             'gateway/runner-tools.mjs',
             'normalizeRunnerControlConfig(readConfig())',
             'normalizedRunnerConfig()',
-            6
+            7
           );
           replace(
             'gateway/runner-tools.mjs',
