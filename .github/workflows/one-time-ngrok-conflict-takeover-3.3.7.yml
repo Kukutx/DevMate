@@ -1,0 +1,99 @@
+name: One-time DevMate 3.3.7 local ngrok conflict recovery
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Apply local ngrok conflict recovery
+        run: node scripts/one-time-ngrok-conflict-takeover-3.3.7.mjs
+
+      - name: Synchronize 3.3.7 version
+        shell: pwsh
+        run: |
+          npm version 3.3.7 --no-git-tag-version
+          npm run version:sync
+
+      - name: Remove one-time machinery before validation
+        shell: pwsh
+        run: |
+          Remove-Item scripts/one-time-ngrok-conflict-takeover-3.3.7.mjs -Force
+          Remove-Item .github/workflows/one-time-ngrok-conflict-takeover-3.3.7.yml -Force
+
+      - name: Syntax checks
+        shell: pwsh
+        run: |
+          node --check vscode-host/tunnel-controller.js
+          node --check vscode-host/ngrok-agent-api.js
+          node --check tests/ngrok-runtime-recovery.test.cjs
+
+      - name: Dependency audits
+        shell: pwsh
+        run: |
+          npm audit --omit=dev --audit-level=moderate
+          npm audit --audit-level=moderate
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Focused ngrok recovery tests
+        run: node --test tests/ngrok-runtime-recovery.test.cjs tests/ngrok-existing-endpoint-reuse.test.cjs tests/tunnel-controller.test.cjs
+
+      - name: Full unit and policy suite
+        run: npm run test:unit
+
+      - name: Gateway smoke
+        run: npm run smoke:gateway
+
+      - name: Package VSIX
+        run: npm run package:vsix
+
+      - name: Packaged VSIX runtime smoke
+        run: node scripts/smoke-vsix-runtime.mjs
+
+      - name: Packaged VSIX shared tunnel smoke
+        run: node scripts/smoke-vsix-shared-tunnel.mjs
+
+      - name: Build Obsidian
+        run: npm run build:obsidian
+
+      - name: Obsidian runtime smoke
+        run: node scripts/smoke-obsidian-runtime.mjs
+
+      - name: Commit verified recovery
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Release DevMate 3.3.7 local ngrok conflict recovery"
+          $pair = "x-access-token:$env:GITHUB_TOKEN"
+          $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic" push origin HEAD:master
