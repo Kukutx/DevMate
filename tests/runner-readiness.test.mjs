@@ -59,6 +59,17 @@ resetDurableStateForTests();
 clearJobsForTests();
 acquireGatewayInstanceLock();
 
+test('background execution is optional when neither embedded nor external Runner is configured', () => {
+  const withoutRunners = structuredClone(config);
+  withoutRunners.jobs.embeddedRunnerEnabled = false;
+  withoutRunners.runnerControl = { enabled: false, credentials: [] };
+  const status = readiness(withoutRunners);
+  const execution = status.checks.find(item => item.key === 'runner-execution');
+  assert.equal(execution.required, false);
+  assert.equal(execution.ok, true);
+  assert.equal(status.ready, true);
+});
+
 test('external-only execution requires an online external Runner after the public connection is verified', () => {
   const before = readiness(config);
   assert.equal(before.ready, false);
