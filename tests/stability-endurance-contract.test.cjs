@@ -56,6 +56,9 @@ test('runner controls use strict current config and never register a stopped emb
   assert.equal(runnerTools.includes('./team-access.mjs'), true);
   assert.equal(runnerTools.includes('normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig()))'), true);
   assert.equal(runnerTools.includes('embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled === true'), true);
+  assert.equal(runnerTools.includes('!!item.salt'), true);
+  assert.equal(runnerTools.includes('!!item.tokenHash'), true);
+  assert.equal(runnerTools.includes('item.workspaceIds.length > 0'), true);
   assert.equal(jobTools.includes('const runner = runtime.started ? refreshLocalRunner() : null'), true);
   const runnerControl = source('gateway/runner-control-plane.mjs');
   const touchStart = runnerControl.indexOf('function touchCredentialBestEffort');
