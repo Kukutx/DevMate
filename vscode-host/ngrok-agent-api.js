@@ -339,7 +339,8 @@ function localAgentApiBases(preferredApiBase = DEFAULT_NGROK_AGENT_API_BASE, {
 async function localNgrokEndpointCandidates(port, {
   apiBase = DEFAULT_NGROK_AGENT_API_BASE,
   request = http.request,
-  timeoutMs = 1000
+  timeoutMs = 1000,
+  includeTarget = false
 } = {}) {
   if (!apiBase) return [];
   const target = Number(port);
@@ -352,7 +353,7 @@ async function localNgrokEndpointCandidates(port, {
       const upstreamPort = loopbackUpstreamPort(endpointUpstreamUrl(item));
       const publicUrl = endpointPublicUrl(item);
       const identity = endpointIdentity(item, resource);
-      if (!identity || !publicUrl.startsWith('https://') || !upstreamPort || upstreamPort === target) continue;
+      if (!identity || !publicUrl.startsWith('https://') || !upstreamPort || (!includeTarget && upstreamPort === target)) continue;
       collected.push({ resource, identity, publicUrl, upstreamPort, apiBase: String(apiBase).replace(/\/$/, '') });
     }
     if (collected.length && resource === 'tunnels') break;
@@ -376,7 +377,8 @@ async function localNgrokEndpointCandidatesAcrossAgents(port, {
   const groups = await Promise.all(bases.map(base => localNgrokEndpointCandidates(port, {
     apiBase: base,
     request,
-    timeoutMs: Math.max(100, Math.min(500, Number(timeoutMs) || 350))
+    timeoutMs: Math.max(100, Math.min(500, Number(timeoutMs) || 350)),
+    includeTarget: true
   })));
   const unique = new Map();
   for (const item of groups.flat()) {
