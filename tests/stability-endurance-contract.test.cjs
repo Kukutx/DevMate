@@ -49,6 +49,15 @@ test('idle embedded jobs are opt-in and worker polling never heartbeats an exist
   assert.equal(worker.includes('refreshLocalRunner()'), false);
 });
 
+test('runner controls use strict current config and never register a stopped embedded runner', () => {
+  const runnerTools = source('gateway/runner-tools.mjs');
+  const jobTools = source('gateway/job-tools.mjs');
+  assert.equal(runnerTools.includes("import { normalizeInstanceConfig } from './team-access.mjs'"), true);
+  assert.equal(runnerTools.includes('normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig()))'), true);
+  assert.equal(runnerTools.includes('embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled === true'), true);
+  assert.equal(jobTools.includes('const runner = runtime.started ? refreshLocalRunner() : null'), true);
+});
+
 test('local owner drain checks and inactive sessions avoid durable control-plane writes', () => {
   const queue = source('gateway/job-queue.mjs');
   const sessions = source('gateway/work-sessions.mjs');
