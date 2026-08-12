@@ -18,13 +18,16 @@ concurrency:
 jobs:
   verify:
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
           cache: npm
@@ -63,13 +66,13 @@ jobs:
         run: node scripts/smoke-obsidian-runtime.mjs
 
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: devmate-vsix
           path: "*.vsix"
 
       - name: Upload Obsidian plugin artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: devmate-obsidian
           path: obsidian-plugin/dist/**
@@ -84,10 +87,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
           cache: npm
@@ -168,7 +173,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends xvfb
 
       - name: Cache Godot editor
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .godot-ci
           key: godot-${{ runner.os }}-${{ runner.arch }}-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
@@ -183,7 +188,7 @@ jobs:
           if [ ! -x ".godot-ci/${executable}" ]; then
             api="https://api.github.com/repos/godotengine/godot-builds/releases/tags/${GODOT_VERSION}-${GODOT_STATUS}"
             curl --fail --silent --show-error --location "$api" --output .godot-ci/release.json
-            archive_url=$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
+            archive_url=$(jq -r --arg name="$archive" '.assets[] | select(.name == $name) | .browser_download_url' .godot-ci/release.json)
             sums_url=$(jq -r '.assets[] | select(.name == "SHA512-SUMS.txt") | .browser_download_url' .godot-ci/release.json)
             test -n "$archive_url" && test "$archive_url" != "null"
             test -n "$sums_url" && test "$sums_url" != "null"
