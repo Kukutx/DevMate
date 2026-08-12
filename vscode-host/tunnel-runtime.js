@@ -1,7 +1,10 @@
 'use strict';
 
 const ATTACHMENT_POLL_MS = 1000;
-const NGROK_CONFLICT_RETRY_DELAYS_MS = Object.freeze([250, 750, 1500, 3000, 5000]);
+// Retained as an exported compatibility surface. ERR_NGROK_334 reconciliation now belongs
+// entirely to TunnelController so the runtime never adds blind backoff delays after a
+// controller has already exhausted its one safe local-recovery attempt.
+const NGROK_CONFLICT_RETRY_DELAYS_MS = Object.freeze([]);
 
 let controller = null;
 let attachmentTimer = null;
@@ -86,31 +89,8 @@ function tunnelController() {
   return controller;
 }
 
-function retryableNgrokConflict(error) {
-  return error?.code === 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
-}
-
-function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function startTunnelAttempt(current, port) {
-  let attempt = 0;
-  while (true) {
-    try {
-      return await current.start(port);
-    } catch (error) {
-      const delayMs = NGROK_CONFLICT_RETRY_DELAYS_MS[attempt];
-      if (!retryableNgrokConflict(error) || delayMs == null) throw error;
-      attempt += 1;
-      current.logger?.(
-        'ngrok reported a transient endpoint conflict; waiting ' + delayMs +
-        'ms and reconciling the local Agent before retry ' + attempt +
-        '/' + NGROK_CONFLICT_RETRY_DELAYS_MS.length + '.'
-      );
-      await wait(delayMs);
-    }
-  }
+  return current.start(port);
 }
 
 async function startTunnel(port) {
