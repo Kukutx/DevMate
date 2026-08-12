@@ -455,7 +455,7 @@ async function discoverNgrokPublicUrl(port, {
   return '';
 }
 
-async function discoverLocalNgrokPublicUrl(port, {
+async function discoverLocalNgrokEndpoint(port, {
   apiBase = DEFAULT_NGROK_AGENT_API_BASE,
   request = http.request,
   timeoutMs = 350,
@@ -463,7 +463,7 @@ async function discoverLocalNgrokPublicUrl(port, {
   firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
   lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT
 } = {}) {
-  if (!apiBase) return '';
+  if (!apiBase) return null;
   const boundedTimeout = Math.max(100, Math.min(500, Number(timeoutMs) || 350));
   const preferred = String(apiBase).replace(/\/$/, '');
   const direct = await discoverNgrokPublicUrl(port, {
@@ -472,16 +472,24 @@ async function discoverLocalNgrokPublicUrl(port, {
     timeoutMs: boundedTimeout,
     expectedUrl
   });
-  if (direct) return direct;
+  if (direct) return { publicUrl: direct, apiBase: preferred };
 
   const bases = localAgentApiBases(preferred, { firstPort, lastPort }).filter(base => base !== preferred);
-  const matches = await Promise.all(bases.map(base => discoverNgrokPublicUrl(port, {
+  const matches = await Promise.all(bases.map(async base => ({
     apiBase: base,
-    request,
-    timeoutMs: boundedTimeout,
-    expectedUrl
+    publicUrl: await discoverNgrokPublicUrl(port, {
+      apiBase: base,
+      request,
+      timeoutMs: boundedTimeout,
+      expectedUrl
+    })
   })));
-  return matches.find(Boolean) || '';
+  return matches.find(item => item.publicUrl) || null;
+}
+
+async function discoverLocalNgrokPublicUrl(port, options = {}) {
+  const endpoint = await discoverLocalNgrokEndpoint(port, options);
+  return endpoint?.publicUrl || '';
 }
 
 module.exports = {
@@ -491,6 +499,7 @@ module.exports = {
   MAX_NGROK_AGENT_RESPONSE_BYTES,
   collectionItems,
   configPathFromCheckOutput,
+  discoverLocalNgrokEndpoint,
   discoverLocalNgrokPublicUrl,
   discoverNgrokPublicUrl,
   endpointPublicUrl,

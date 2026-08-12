@@ -22,6 +22,7 @@ const {
 } = require('../tunnel-provider.js');
 const { tunnelMaxRestarts } = require('./tunnel-settings.js');
 const {
+  discoverLocalNgrokEndpoint,
   discoverNgrokPublicUrl,
   resolveNgrokAgentApiBase,
   stopConflictingLocalNgrokEndpoints
@@ -394,12 +395,12 @@ class TunnelController {
     await Promise.race([closed, delay(timeoutMs)]);
   }
 
-  async reusableLocalNgrokUrl(match, launch) {
-    if (launch.provider !== 'ngrok' || !launch.agentApiBase) return '';
-    return discoverNgrokPublicUrl(match.port, {
+  async reusableLocalNgrokEndpoint(match, launch) {
+    if (launch.provider !== 'ngrok' || !launch.agentApiBase) return null;
+    return discoverLocalNgrokEndpoint(match.port, {
       apiBase: launch.agentApiBase,
       request: this.httpRequest,
-      timeoutMs: 750,
+      timeoutMs: 250,
       expectedUrl: launch.publicUrl || ''
     });
   }
@@ -593,8 +594,10 @@ class TunnelController {
           error.code = 'DEVMATE_NGROK_AGENT_API_DISABLED';
           throw error;
         }
-        const reusableUrl = await this.reusableLocalNgrokUrl(match, launch);
-        if (reusableUrl) return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);
+        const reusable = await this.reusableLocalNgrokEndpoint(match, launch);
+        if (reusable?.publicUrl) {
+          return this.adoptExistingNgrok(match, ownerId, reusable.publicUrl, reusable.apiBase);
+        }
       }
 
       child = this.childProcess.spawn(launch.command, launch.args, launch.options);
@@ -639,10 +642,10 @@ class TunnelController {
         throw error;
       }
       if (launch.provider === 'ngrok' && error?.code === 'DEVMATE_NGROK_ENDPOINT_CONFLICT') {
-        const reusableUrl = await this.reusableLocalNgrokUrl(match, launch).catch(() => '');
-        if (reusableUrl) {
+        const reusable = await this.reusableLocalNgrokEndpoint(match, launch).catch(() => null);
+        if (reusable?.publicUrl) {
           if (this.child === child) this.child = null;
-          return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);
+          return this.adoptExistingNgrok(match, ownerId, reusable.publicUrl, reusable.apiBase);
         }
         if (conflictRecovery && launch.agentApiBase) {
           const recovery = await stopConflictingLocalNgrokEndpoints(match.port, {
