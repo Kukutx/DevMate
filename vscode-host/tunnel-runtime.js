@@ -1,9 +1,9 @@
 'use strict';
 
 const ATTACHMENT_POLL_MS = 1000;
-// Retained as an exported compatibility surface. ERR_NGROK_334 reconciliation now belongs
-// entirely to TunnelController so the runtime never adds blind backoff delays after a
-// controller has already exhausted its one safe local-recovery attempt.
+// Retained as an exported compatibility surface. ERR_NGROK_334 reconciliation belongs
+// entirely to TunnelController; the runtime must not add blind retry/backoff latency
+// after that bounded recovery path has already completed.
 const NGROK_CONFLICT_RETRY_DELAYS_MS = Object.freeze([]);
 
 let controller = null;
