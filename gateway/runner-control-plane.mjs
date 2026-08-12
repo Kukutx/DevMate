@@ -305,10 +305,10 @@ function classifyPreflight(error) {
 
 function touchCredentialBestEffort(runnerId) {
   try {
-    const preview = normalizeRunnerControlConfig(readConfig());
+    const preview = normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig()));
     if (!touchRunnerCredential(preview, runnerId)) return false;
     mutateConfig(current => {
-      normalizeRunnerControlConfig(current);
+      normalizeRunnerControlConfig(normalizeInstanceConfig(current));
       touchRunnerCredential(current, runnerId);
       return current;
     }, { retries: 4 });

@@ -43,7 +43,12 @@ function publicRuntime(config) {
     maxCredentials: config.runnerControl.maxCredentials,
     credentialCount: config.runnerControl.credentials.length,
     activeCredentials: config.runnerControl.credentials.filter(item =>
-      !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+      !item.disabled &&
+      !!item.salt &&
+      !!item.tokenHash &&
+      Array.isArray(item.workspaceIds) &&
+      item.workspaceIds.length > 0 &&
+      (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
     ).length
   };
 }

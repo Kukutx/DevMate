@@ -48,6 +48,26 @@ test('Runner runtime reporting treats missing embedded-runner state as disabled'
   assert.equal(__test.publicRuntime(config).embeddedRunnerEnabled, false);
 });
 
+test('Runner runtime reporting counts only usable credentials as active', () => {
+  const config = {
+    jobs: {},
+    runnerControl: {
+      enabled: true,
+      path: '/runner/v1',
+      maxRequestBytes: 65536,
+      requestsPerMinute: 30,
+      maxCredentials: 4,
+      credentials: [
+        { disabled: false, salt: 'salt', tokenHash: 'hash', workspaceIds: ['app'] },
+        { disabled: false, workspaceIds: ['app'] },
+        { disabled: false, salt: 'salt', tokenHash: 'hash', workspaceIds: [] },
+        { disabled: true, salt: 'salt', tokenHash: 'hash', workspaceIds: ['app'] }
+      ]
+    }
+  };
+  assert.equal(__test.publicRuntime(config).activeCredentials, 1);
+});
+
 test('Runner topology status distinguishes configured and live embedded state', async () => {
   await assert.rejects(
     runWithRequestContext({ principal: principal('reviewer') }, () =>
