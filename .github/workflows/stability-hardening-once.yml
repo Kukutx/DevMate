@@ -73,6 +73,12 @@ jobs:
           );
 
           replace(
+            'vscode-host/tunnel-controller.js',
+            `      if (expectedExit || this.stopping || this.disposed) return;`,
+            `      if (expectedExit) {\n        this.resetOwnership();\n        return;\n      }\n      if (this.stopping || this.disposed) return;`
+          );
+
+          replace(
             'gateway/job-runtime.mjs',
             `let runnerId = null;\nlet runnerReady = false;\nlet stopping = false;`,
             `let runnerId = null;\nlet stopping = false;`
@@ -102,15 +108,16 @@ jobs:
             `export async function shutdownJobRuntime({ graceMs = 15000 } = {}) {\n  stopping = true;`
           );
 
-          console.log('Corrected bounded Windows process termination and no-write embedded runner polling.');
+          console.log('Corrected lifecycle, Windows process termination, and embedded runner polling.');
           '@ | Set-Content -Path 'scripts/correct-stability-hardening.mjs' -Encoding utf8
           node scripts/correct-stability-hardening.mjs
           Remove-Item 'scripts/correct-stability-hardening.mjs' -Force
 
-      - name: Prepare regression tests
+      - name: Prepare clean verification tree
         shell: pwsh
         run: |
           Remove-Item 'scripts/apply-stability-hardening.mjs' -Force
+          Remove-Item '.github/workflows/stability-hardening-once.yml' -Force
           @'
           'use strict';
 
@@ -122,11 +129,12 @@ jobs:
           const root = path.resolve(__dirname, '..');
           const source = file => fs.readFileSync(path.join(root, file), 'utf8');
 
-          test('explicit tunnel termination remains intentional after a late close', () => {
+          test('explicit tunnel termination cleans up late exit without auto-restart', () => {
             const tunnel = source('vscode-host/tunnel-controller.js');
             assert.equal(tunnel.includes('expectedChildExits = new WeakSet'), true);
             assert.equal(tunnel.includes('expectedChildExits.add(child)'), true);
-            assert.equal(tunnel.includes('if (expectedExit || this.stopping || this.disposed) return'), true);
+            assert.equal(tunnel.includes('if (expectedExit) {'), true);
+            assert.equal(tunnel.includes('this.resetOwnership();'), true);
           });
 
           test('persistent Windows process termination uses the bounded taskkill helper', () => {
@@ -190,7 +198,7 @@ jobs:
 
       - name: Targeted stability tests
         timeout-minutes: 3
-        run: node --test tests/job-runtime.test.mjs tests/local-capabilities.test.mjs tests/stability-endurance-contract.test.cjs
+        run: node --test tests/job-runtime.test.mjs tests/local-capabilities.test.mjs tests/tunnel-runtime-safety.test.cjs tests/stability-endurance-contract.test.cjs tests/workflow-surface.test.cjs
 
       - name: Unit tests
         timeout-minutes: 10
@@ -203,12 +211,6 @@ jobs:
       - name: Package VSIX
         timeout-minutes: 5
         run: npm run package:vsix
-
-      - name: Remove one-time machinery
-        shell: pwsh
-        run: |
-          Remove-Item '.github/workflows/stability-hardening-once.yml' -Force
-          if (Test-Path 'hardening-diagnostics.txt') { Remove-Item 'hardening-diagnostics.txt' -Force }
 
       - name: Commit verified hardening
         shell: pwsh
