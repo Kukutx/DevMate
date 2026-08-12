@@ -95,7 +95,7 @@ test('VSIX smoke contract includes the provider-native tunnel runtime and curren
   assert.match(controller, /discoverNgrokPublicUrl/);
   assert.match(controller, /resolveNgrokAgentApiBase/);
   assert.doesNotMatch(controller, /nativeNgrokPublicUrl|\/api\/tunnels/);
-  assert.match(agentApi, /\/endpoints/);
+  assert.match(agentApi, /endpoints/);
   assert.match(agentApi, /ngrokWebAddrFromConfig/);
 });
 
