@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
+import { normalizeInstanceConfig } from './team-access.mjs';
 import { listRunners } from './job-queue.mjs';
 import { jobRuntimeStatus } from './job-runtime.mjs';
 import {
@@ -26,10 +27,14 @@ function ownerNow() {
   return principal;
 }
 
+function normalizedRunnerConfig() {
+  return normalizeRunnerControlConfig(normalizeInstanceConfig(readConfig()));
+}
+
 function publicRuntime(config) {
   const runtime = jobRuntimeStatus();
   return {
-    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false,
+    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled === true,
     embeddedRunnerRunning: runtime.started && !runtime.stopping,
     externalControlEnabled: config.runnerControl.enabled,
     path: config.runnerControl.path,
@@ -53,7 +58,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: ro
   }, async () => {
     maintainerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     return toolText({ ...publicRuntime(config), runners: listRunners() });
   });
 
@@ -70,7 +75,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async patch => {
     const principal = ownerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     config.jobs ||= {};
     for (const key of ['enabled', 'maxRequestBytes', 'requestsPerMinute', 'maxCredentials']) {
       if (patch[key] !== undefined) config.runnerControl[key] = patch[key];
@@ -98,7 +103,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: ro
   }, async () => {
     ownerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     return toolText({ credentials: config.runnerControl.credentials.map(runnerCredentialPublic) });
   });
 
@@ -116,7 +121,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: rw
   }, async input => {
     const principal = ownerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     const result = createRunnerCredential(config, {
       ...input,
       workspaceIds: workspaceIds(config, input.workspaceIds)
@@ -149,7 +154,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, ...patch }) => {
     const principal = ownerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     if (patch.workspaceIds !== undefined) patch.workspaceIds = workspaceIds(config, patch.workspaceIds);
     const credential = updateRunnerCredential(config, id, patch);
     writeConfig(config);
@@ -168,7 +173,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: rw
   }, async ({ id }) => {
     const principal = ownerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     const result = rotateRunnerCredentialToken(config, id);
     writeConfig(config);
     await audit('runner_credential_rotate', { principalId: principal.id, runnerId: id });
@@ -185,7 +190,7 @@ export function registerRunnerTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id }) => {
     const principal = ownerNow();
-    const config = normalizeRunnerControlConfig(readConfig());
+    const config = normalizedRunnerConfig();
     const credential = revokeRunnerCredential(config, id);
     writeConfig(config);
     await audit('runner_credential_revoke', { principalId: principal.id, runnerId: id });
@@ -193,4 +198,4 @@ export function registerRunnerTools(register, annotations) {
   });
 }
 
-export const __test = { maintainerNow, ownerNow, publicRuntime };
+export const __test = { maintainerNow, normalizedRunnerConfig, ownerNow, publicRuntime };

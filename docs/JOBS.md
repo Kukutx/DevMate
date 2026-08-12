@@ -121,14 +121,14 @@ Tools that start supervised persistent processes should be managed through the e
 
 ## Embedded Runner
 
-The embedded Runner runs inside the central Gateway process and is disabled by default. Enable it only when durable background execution is actually needed. It registers:
+The embedded Runner runs inside the central Gateway process and is disabled by default. Enable it only when durable background execution is actually needed. Toggle it with `runner_control_configure`; restart the Gateway when the tool reports that a lifecycle restart is required. It registers:
 
 - operating system and architecture;
 - writable workspace IDs;
 - currently available capabilities such as `core`, `browser-qa`, and `godot`;
 - configurable concurrency.
 
-Configure it with `job_runtime_configure`:
+Configure embedded concurrency and safe Git-save policy with `job_runtime_configure`:
 
 ```json
 {

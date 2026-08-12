@@ -109,13 +109,15 @@ export function registerJobTools(register, annotations) {
     if (patch.maxConcurrentJobs !== undefined) config.runtime.maxConcurrentJobs = patch.maxConcurrentJobs;
     if (patch.allowJobGitSave !== undefined) config.jobs.allowJobGitSave = patch.allowJobGitSave;
     writeConfig(config);
-    const runner = refreshLocalRunner();
+    const runtime = jobRuntimeStatus();
+    const runner = runtime.started ? refreshLocalRunner() : null;
     await audit('job_runtime_configure', {
       principalId: principal.id,
       keys: Object.keys(patch),
-      maxConcurrentJobs: runner.maxConcurrent
+      maxConcurrentJobs: config.runtime.maxConcurrentJobs,
+      embeddedRunnerRunning: runtime.started
     });
-    return toolText({ configured: true, policy: runtimePolicy(config), runner });
+    return toolText({ configured: true, policy: runtimePolicy(config), runner, runtime });
   });
 
   register('job_submit', {

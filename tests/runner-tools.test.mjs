@@ -11,16 +11,17 @@ await fsp.writeFile(configPath, JSON.stringify({
   version: 11,
   appVersion: '3.3.0',
   auth: { required: true, token: 'owner-token-long-enough' },
-  deployment: { mode: 'team' },
-  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: false },
-  production: {},
+  connection: { provider: 'ngrok', publicUrl: '' },
+  team: { members: [], requireWorkspaceLeaseForWrites: false },
+  requestPolicy: {},
+  runtime: { maxConcurrentJobs: 2 },
   jobs: { embeddedRunnerEnabled: true },
   runnerControl: { enabled: false, credentials: [] },
   activeWorkspaceId: 'app',
   workspaces: [{ id: 'app', name: 'Application', root: temp, mode: 'workspace-write', reference: false }]
 }, null, 2), 'utf8');
 
-const { registerRunnerTools } = await import('../gateway/runner-tools.mjs');
+const { __test, registerRunnerTools } = await import('../gateway/runner-tools.mjs');
 const { runWithRequestContext } = await import('../gateway/request-context.mjs');
 
 function principal(role) {
@@ -41,6 +42,11 @@ registerRunnerTools(
     rw: { readOnlyHint: false, destructiveHint: true }
   }
 );
+
+test('Runner runtime reporting treats missing embedded-runner state as disabled', () => {
+  const config = { jobs: {}, runnerControl: { enabled: false, path: '/runner/v1', maxRequestBytes: 65536, requestsPerMinute: 30, maxCredentials: 1, credentials: [] } };
+  assert.equal(__test.publicRuntime(config).embeddedRunnerEnabled, false);
+});
 
 test('Runner topology status distinguishes configured and live embedded state', async () => {
   await assert.rejects(
