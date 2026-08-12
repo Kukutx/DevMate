@@ -64,7 +64,7 @@ function runnerSummary(config) {
   const onlineExternal = external.filter(item => item.status === 'online');
   const runtime = jobRuntimeStatus();
   return {
-    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled !== false,
+    embeddedRunnerEnabled: config.jobs?.embeddedRunnerEnabled === true,
     embeddedRunnerRunning: runtime.started && !runtime.stopping,
     externalControlEnabled: config.runnerControl.enabled,
     credentialCount: credentials.length,
@@ -137,6 +137,7 @@ export function readiness(config = readConfig()) {
   const membersConfigured = config.team.members.length > 0;
   const leasesConfigured = config.team.requireWorkspaceLeaseForWrites;
   const externalRunnersConfigured = config.runnerControl.enabled;
+  const runnerExecutionConfigured = runners.embeddedRunnerEnabled || externalRunnersConfigured;
 
   add(
     'owner-token',
@@ -204,14 +205,15 @@ export function readiness(config = readConfig()) {
   );
   add(
     'runner-execution',
-    runners.embeddedRunnerRunning || externalRunnersConfigured,
+    !runnerExecutionConfigured || runners.embeddedRunnerRunning || externalRunnersConfigured,
     runners.embeddedRunnerRunning
       ? 'embedded Runner running'
       : runners.embeddedRunnerEnabled
         ? 'embedded Runner configured but not running; Gateway may be offline'
         : externalRunnersConfigured
           ? 'external Runner control enabled'
-          : 'no Runner execution path enabled'
+          : 'background Runner execution not configured',
+    { required: runnerExecutionConfigured }
   );
   add(
     'runner-credentials',
