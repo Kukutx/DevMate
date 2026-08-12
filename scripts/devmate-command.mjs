@@ -184,7 +184,6 @@ function status(options = {}) {
   if (!config.auth?.token && config.auth?.required !== false) warnings.push('Owner token is missing.');
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
   if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control is enabled but has no active credential.');
-  if (config.jobs.embeddedRunnerEnabled === false && !config.runnerControl.enabled) warnings.push('No Runner execution path is enabled.');
   if (
     (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
     !config.connection.publicUrl
