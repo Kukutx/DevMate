@@ -1,0 +1,81 @@
+name: One-time DevMate 3.3.8 cross-Agent reuse fix
+
+on:
+  push:
+    branches:
+      - fix/ngrok-fast-recovery-3.3.8
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Patch cross-Agent endpoint reuse
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replaceExact(file, before, after) {
+            let source = fs.readFileSync(file, 'utf8');
+            if (!source.includes(before)) throw new Error(`Expected source block not found in ${file}`);
+            source = source.replace(before, after);
+            fs.writeFileSync(file, source, 'utf8');
+          }
+
+          replaceExact(
+            'vscode-host/ngrok-agent-api.js',
+            `async function discoverLocalNgrokPublicUrl(port, {\n  apiBase = DEFAULT_NGROK_AGENT_API_BASE,\n  request = http.request,\n  timeoutMs = 350,\n  expectedUrl = '',\n  firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,\n  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT\n} = {}) {\n  if (!apiBase) return '';\n  const boundedTimeout = Math.max(100, Math.min(500, Number(timeoutMs) || 350));\n  const preferred = String(apiBase).replace(/\\\/$/, '');\n  const direct = await discoverNgrokPublicUrl(port, {\n    apiBase: preferred,\n    request,\n    timeoutMs: boundedTimeout,\n    expectedUrl\n  });\n  if (direct) return direct;\n\n  const bases = localAgentApiBases(preferred, { firstPort, lastPort }).filter(base => base !== preferred);\n  const matches = await Promise.all(bases.map(base => discoverNgrokPublicUrl(port, {\n    apiBase: base,\n    request,\n    timeoutMs: boundedTimeout,\n    expectedUrl\n  })));\n  return matches.find(Boolean) || '';\n}\n`,
+            `async function discoverLocalNgrokEndpoint(port, {\n  apiBase = DEFAULT_NGROK_AGENT_API_BASE,\n  request = http.request,\n  timeoutMs = 350,\n  expectedUrl = '',\n  firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,\n  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT\n} = {}) {\n  if (!apiBase) return null;\n  const boundedTimeout = Math.max(100, Math.min(500, Number(timeoutMs) || 350));\n  const preferred = String(apiBase).replace(/\\\/$/, '');\n  const direct = await discoverNgrokPublicUrl(port, {\n    apiBase: preferred,\n    request,\n    timeoutMs: boundedTimeout,\n    expectedUrl\n  });\n  if (direct) return { publicUrl: direct, apiBase: preferred };\n\n  const bases = localAgentApiBases(preferred, { firstPort, lastPort }).filter(base => base !== preferred);\n  const matches = await Promise.all(bases.map(async base => ({\n    apiBase: base,\n    publicUrl: await discoverNgrokPublicUrl(port, {\n      apiBase: base,\n      request,\n      timeoutMs: boundedTimeout,\n      expectedUrl\n    })\n  })));\n  return matches.find(item => item.publicUrl) || null;\n}\n\nasync function discoverLocalNgrokPublicUrl(port, options = {}) {\n  const endpoint = await discoverLocalNgrokEndpoint(port, options);\n  return endpoint?.publicUrl || '';\n}\n`
+          );
+
+          replaceExact(
+            'vscode-host/ngrok-agent-api.js',
+            `  discoverLocalNgrokPublicUrl,\n  discoverNgrokPublicUrl,`,
+            `  discoverLocalNgrokEndpoint,\n  discoverLocalNgrokPublicUrl,\n  discoverNgrokPublicUrl,`
+          );
+
+          replaceExact(
+            'vscode-host/tunnel-controller.js',
+            `  discoverNgrokPublicUrl,\n  resolveNgrokAgentApiBase,`,
+            `  discoverLocalNgrokEndpoint,\n  discoverNgrokPublicUrl,\n  resolveNgrokAgentApiBase,`
+          );
+
+          replaceExact(
+            'vscode-host/tunnel-controller.js',
+            `  async reusableLocalNgrokUrl(match, launch) {\n    if (launch.provider !== 'ngrok' || !launch.agentApiBase) return '';\n    return discoverNgrokPublicUrl(match.port, {\n      apiBase: launch.agentApiBase,\n      request: this.httpRequest,\n      timeoutMs: 750,\n      expectedUrl: launch.publicUrl || ''\n    });\n  }\n`,
+            `  async reusableLocalNgrokEndpoint(match, launch) {\n    if (launch.provider !== 'ngrok' || !launch.agentApiBase) return null;\n    return discoverLocalNgrokEndpoint(match.port, {\n      apiBase: launch.agentApiBase,\n      request: this.httpRequest,\n      timeoutMs: 250,\n      expectedUrl: launch.publicUrl || ''\n    });\n  }\n`
+          );
+
+          replaceExact(
+            'vscode-host/tunnel-controller.js',
+            `        const reusableUrl = await this.reusableLocalNgrokUrl(match, launch);\n        if (reusableUrl) return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);`,
+            `        const reusable = await this.reusableLocalNgrokEndpoint(match, launch);\n        if (reusable?.publicUrl) {\n          return this.adoptExistingNgrok(match, ownerId, reusable.publicUrl, reusable.apiBase);\n        }`
+          );
+
+          replaceExact(
+            'vscode-host/tunnel-controller.js',
+            `        const reusableUrl = await this.reusableLocalNgrokUrl(match, launch).catch(() => '');\n        if (reusableUrl) {\n          if (this.child === child) this.child = null;\n          return this.adoptExistingNgrok(match, ownerId, reusableUrl, launch.agentApiBase);\n        }`,
+            `        const reusable = await this.reusableLocalNgrokEndpoint(match, launch).catch(() => null);\n        if (reusable?.publicUrl) {\n          if (this.child === child) this.child = null;\n          return this.adoptExistingNgrok(match, ownerId, reusable.publicUrl, reusable.apiBase);\n        }`
+          );
+          NODE
+
+      - name: Remove one-time workflow
+        run: git rm .github/workflows/one-time-cross-agent-reuse-3.3.8.yml
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add vscode-host/ngrok-agent-api.js vscode-host/tunnel-controller.js
+          git commit -m 'Reuse existing ngrok endpoints across local Agent ports'
+          git push origin HEAD:fix/ngrok-fast-recovery-3.3.8
