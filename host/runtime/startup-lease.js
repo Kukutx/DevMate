@@ -35,9 +35,25 @@ function readStartupLease(lockPath) {
   }
 }
 
+function processAlive(pid) {
+  const numeric = Number(pid);
+  if (!Number.isInteger(numeric) || numeric <= 0) return false;
+  if (numeric === process.pid) return true;
+  try {
+    process.kill(numeric, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
 function startupLeaseExpired(lockPath, leaseMs = DEFAULT_STARTUP_LEASE_MS, at = Date.now()) {
   const stat = fs.statSync(lockPath, { throwIfNoEntry: false });
   if (!stat?.isFile()) return true;
+  const current = readStartupLease(lockPath);
+  if (current && Number.isInteger(Number(current.pid)) && Number(current.pid) > 0 && !processAlive(current.pid)) {
+    return true;
+  }
   return at - stat.mtimeMs >= Math.max(1000, Number(leaseMs) || DEFAULT_STARTUP_LEASE_MS);
 }
 
@@ -212,6 +228,7 @@ module.exports = {
   SAFE_LOCK_NAME,
   StartupLease,
   normalizeLockName,
+  processAlive,
   quarantineExpiredStartupLease,
   readStartupLease,
   startupLeaseExpired,
