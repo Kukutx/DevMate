@@ -1,0 +1,12 @@
+file:///D:/a/DevMate/DevMate/scripts/apply-stability-hardening.mjs:7
+  if (!source.includes(before)) throw new Error(`Pattern not found in ${file}: ${before.slice(0, 120)}`);
+                                      ^
+
+Error: Pattern not found in gateway/server-runtime.mjs:   if (process.env.DEVMATE_DISABLE_JOB_RUNTIME !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) {
+    at replaceOnce (file:///D:/a/DevMate/DevMate/scripts/apply-stability-hardening.mjs:7:39)
+    at file:///D:/a/DevMate/DevMate/scripts/apply-stability-hardening.mjs:105:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.18.1
