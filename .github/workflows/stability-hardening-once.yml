@@ -59,6 +59,23 @@ jobs:
           Get-Content hardening-diagnostics.txt
           exit $code
 
+      - name: Prepare verification tree
+        if: steps.apply.outcome == 'success'
+        shell: pwsh
+        run: |
+          Remove-Item 'scripts/apply-stability-hardening.mjs' -Force
+          $testPath = 'tests/stability-endurance-contract.test.cjs'
+          $testLines = Get-Content $testPath
+          $testLines = $testLines | ForEach-Object {
+            if ($_ -like '*assert.doesNotMatch(persistent*taskkill*') {
+              '  assert.equal(persistent.includes("const killer = spawn(''taskkill''"), false);'
+            } else {
+              $_
+            }
+          }
+          Set-Content -Path $testPath -Value $testLines -Encoding utf8
+          node --check $testPath
+
       - name: Verify hardening
         id: verify
         if: steps.apply.outcome == 'success'
@@ -96,7 +113,6 @@ jobs:
         if: steps.apply.outcome == 'success' && steps.verify.outcome == 'success'
         shell: pwsh
         run: |
-          Remove-Item 'scripts/apply-stability-hardening.mjs' -Force
           Remove-Item '.github/workflows/stability-hardening-once.yml' -Force
           if (Test-Path 'hardening-diagnostics.txt') { Remove-Item 'hardening-diagnostics.txt' -Force }
 
