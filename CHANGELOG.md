@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.8
+
+- Fixed ERR_NGROK_334 recovery when the conflicting local ngrok process exposes its Agent API on a secondary loopback port or still forwards to the same Gateway port.
+- Removed blind runtime-level ERR_NGROK_334 backoff retries; TunnelController now owns one bounded reconciliation attempt and unresolved conflicts fail fast.
+- Reclaims startup leases immediately when their recorded owner process is dead, eliminating reload delays caused by fresh orphaned lock files.
+- Scans the bounded local ngrok Agent range concurrently, verifies DevMate upstreams when possible, preserves ambiguous unrelated endpoints, and never enables pooling implicitly.
+
 ## 3.3.7
 
 - Fixed the remaining ERR_NGROK_334 startup regression by performing real local Agent reconciliation instead of wait-only retries.
