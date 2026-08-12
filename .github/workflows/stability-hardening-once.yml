@@ -24,7 +24,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Repair one-time script literal
+      - name: Repair one-time script literals
         shell: pwsh
         run: |
           $path = 'scripts/apply-stability-hardening.mjs'
@@ -37,6 +37,9 @@ jobs:
             }
           }
           Set-Content -Path $path -Value $lines -Encoding utf8
+          $script = Get-Content $path -Raw
+          $script = $script.Replace("DEVMATE_DISABLE_JOB_RUNTIME !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false", "DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false")
+          Set-Content -Path $path -Value $script -Encoding utf8
           node --check $path
 
       - name: Apply hardening
