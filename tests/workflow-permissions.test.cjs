@@ -11,23 +11,27 @@ const release = fs.readFileSync(path.join(root, '.github', 'workflows', 'release
 const manifest = require('../obsidian-plugin/manifest.json');
 const versions = require('../obsidian-plugin/versions.json');
 
+function pinnedAction(name, major) {
+  return new RegExp(`${name.replace('/', '\\/')}@[a-f0-9]{40}\\s+# v${major}`, 'i');
+}
+
 test('permanent CI is read-only and never mutates source branches', () => {
   assert.match(ci, /permissions:[\s\S]*?contents:\s*read/);
   assert.doesNotMatch(ci, /contents:\s*write/);
   assert.doesNotMatch(ci, /architecture_convergence|git push origin|Commit validated architecture/);
 });
 
-test('permanent workflows use current supported action majors and Node 24', () => {
+test('permanent workflows pin current supported actions and use Node 24', () => {
   for (const source of [ci, release]) {
     assert.doesNotMatch(source, /node-version:\s*22/);
     assert.match(source, /node-version:\s*24/);
-    assert.match(source, /actions\/checkout@v7/);
-    assert.match(source, /actions\/setup-node@v7/);
+    assert.match(source, pinnedAction('actions/checkout', 7));
+    assert.match(source, pinnedAction('actions/setup-node', 7));
   }
-  assert.match(ci, /actions\/upload-artifact@v7/);
-  assert.match(ci, /actions\/cache@v6/);
-  assert.match(release, /actions\/attest@v4/);
-  assert.match(release, /actions\/upload-artifact@v7/);
+  assert.match(ci, pinnedAction('actions/upload-artifact', 7));
+  assert.match(ci, pinnedAction('actions/cache', 6));
+  assert.match(release, pinnedAction('actions/attest', 4));
+  assert.match(release, pinnedAction('actions/upload-artifact', 7));
 });
 
 test('release authority is limited to publishing, CI verification, and provenance', () => {
