@@ -94,27 +94,26 @@ test('duplicate Start calls for one port converge on one tunnel start operation'
   }
 });
 
-test('transient ERR_NGROK_334 is reconciled automatically instead of failing the user Start', async () => {
+test('unresolved ERR_NGROK_334 is not blindly retried after TunnelController reconciliation fails', async () => {
   let starts = 0;
   const controller = {
     logger() {},
     status() { return { running: false, owned: false, attached: false }; },
     async start() {
       starts += 1;
-      if (starts === 1) {
-        const error = new Error('ngrok endpoint is already online');
-        error.code = 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
-        throw error;
-      }
-      return { attached: true, owned: false, publicUrl: 'https://reused.ngrok.app' };
+      const error = new Error('ngrok endpoint is already online');
+      error.code = 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
+      throw error;
     },
     async stop() { return { stopped: true }; }
   };
   setTunnelController(controller);
   try {
-    const result = await startTunnel(8788);
-    assert.equal(starts, 2);
-    assert.equal(result.publicUrl, 'https://reused.ngrok.app');
+    await assert.rejects(() => startTunnel(8788), error => {
+      assert.equal(error.code, 'DEVMATE_NGROK_ENDPOINT_CONFLICT');
+      return true;
+    });
+    assert.equal(starts, 1);
   } finally {
     await stopTunnel().catch(() => {});
     clearTunnelController(controller);
@@ -157,12 +156,61 @@ test('ERR_NGROK_334 recovery stops a stale local DevMate ngrok endpoint before r
   const result = await stopConflictingLocalNgrokEndpoints(8788, {
     apiBase: 'http://127.0.0.1:4040/api',
     request,
-    timeoutMs: 250
+    timeoutMs: 250,
+    firstPort: 4040,
+    lastPort: 4040
   });
   assert.equal(result.stopped, 1);
   assert.equal(result.ambiguous, false);
   assert.equal(result.endpoints[0].upstreamPort, 8787);
   assert.equal(calls.some(call => call.method === 'DELETE' && call.target.endsWith('/api/tunnels/stale-devmate')), true);
+});
+
+test('ERR_NGROK_334 recovery scans secondary local Agents and clears a stale same-port endpoint', async () => {
+  const calls = [];
+  const request = (url, options, callback) => {
+    const req = new EventEmitter();
+    req.setTimeout = () => {};
+    req.destroy = () => {};
+    req.end = () => {
+      const method = String(options?.method || 'GET').toUpperCase();
+      const target = String(url);
+      calls.push({ method, target });
+      const response = new EventEmitter();
+      response.destroy = () => {};
+      let status = 404;
+      let payload;
+      if (method === 'GET' && target === 'http://127.0.0.1:4041/api/tunnels') {
+        status = 200;
+        payload = { tunnels: [{ name: 'previous-devmate', public_url: 'https://default.ngrok.app', config: { addr: 'http://127.0.0.1:8788' } }] };
+      } else if (method === 'GET' && target === 'http://127.0.0.1:8788/control/health') {
+        status = 200;
+        payload = { name: 'devmate', version: '3.3.7' };
+      } else if (method === 'DELETE' && target === 'http://127.0.0.1:4041/api/tunnels/previous-devmate') {
+        status = 204;
+      }
+      response.statusCode = status;
+      callback(response);
+      queueMicrotask(() => {
+        if (payload !== undefined) response.emit('data', Buffer.from(JSON.stringify(payload)));
+        response.emit('end');
+      });
+    };
+    return req;
+  };
+
+  const result = await stopConflictingLocalNgrokEndpoints(8788, {
+    apiBase: 'http://127.0.0.1:4040/api',
+    request,
+    timeoutMs: 150,
+    firstPort: 4040,
+    lastPort: 4042
+  });
+  assert.equal(result.stopped, 1);
+  assert.equal(result.ambiguous, false);
+  assert.equal(result.endpoints[0].upstreamPort, 8788);
+  assert.equal(result.endpoints[0].apiBase, 'http://127.0.0.1:4041/api');
+  assert.equal(calls.some(call => call.method === 'DELETE' && call.target === 'http://127.0.0.1:4041/api/tunnels/previous-devmate'), true);
 });
 
 test('ERR_NGROK_334 recovery does not delete ambiguous unrelated local ngrok endpoints', async () => {
@@ -201,7 +249,9 @@ test('ERR_NGROK_334 recovery does not delete ambiguous unrelated local ngrok end
   const result = await stopConflictingLocalNgrokEndpoints(8788, {
     apiBase: 'http://127.0.0.1:4040/api',
     request,
-    timeoutMs: 250
+    timeoutMs: 250,
+    firstPort: 4040,
+    lastPort: 4040
   });
   assert.equal(result.stopped, 0);
   assert.equal(result.ambiguous, true);
