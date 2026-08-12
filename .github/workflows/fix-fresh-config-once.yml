@@ -1,0 +1,70 @@
+name: One-time fresh config consistency fix
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Apply fresh config fixes
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const configPath = 'shared/config-store.cjs';
+          let source = fs.readFileSync(configPath, 'utf8');
+
+          const legacyContext = `    hostContexts: {},\n    activeHostId: null,\n    vscodeContext: {\n      capturedAt: null,\n      activeEditor: null,\n      visibleEditors: [],\n      diagnostics: []\n    },\n    commands: [],`;
+          const canonicalContext = `    hostContexts: {},\n    activeHostId: null,\n    commands: [],`;
+          if (!source.includes(legacyContext)) throw new Error('Fresh config legacy VS Code context block not found');
+          source = source.replace(legacyContext, canonicalContext);
+
+          const enabledJobs = `    jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },`;
+          const disabledJobs = `    jobs: { embeddedRunnerEnabled: false, allowJobGitSave: true },`;
+          if (!source.includes(enabledJobs)) throw new Error('Fresh config embedded runner default not found');
+          source = source.replace(enabledJobs, disabledJobs);
+          fs.writeFileSync(configPath, source, 'utf8');
+
+          fs.writeFileSync('tests/fresh-config-defaults.test.cjs', `'use strict';\n\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst test = require('node:test');\nconst { newInstanceConfig } = require('../shared/config-store.cjs');\n\ntest('fresh DevMate config keeps background jobs opt-in and uses canonical host context state', () => {\n  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-fresh-config-'));\n  try {\n    const config = newInstanceConfig({ workspaceRoot });\n    assert.equal(config.jobs.embeddedRunnerEnabled, false);\n    assert.deepEqual(config.hostContexts, {});\n    assert.equal(config.activeHostId, null);\n    assert.equal(Object.hasOwn(config, 'vscodeContext'), false);\n  } finally {\n    fs.rmSync(workspaceRoot, { recursive: true, force: true });\n  }\n});\n`, 'utf8');
+          NODE
+
+          rm -f .github/workflows/fix-fresh-config-once.yml
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Repository checks
+        run: npm run check
+
+      - name: Targeted tests
+        run: node --test tests/fresh-config-defaults.test.cjs tests/stability-endurance-contract.test.cjs tests/config-version.test.cjs
+
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --exit-code && { echo 'No changes produced'; exit 1; }
+          git commit -m 'Align fresh config with hardened defaults'
+          git push origin HEAD:master
