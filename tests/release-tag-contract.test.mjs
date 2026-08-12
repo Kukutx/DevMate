@@ -23,7 +23,7 @@ test('release workflow verifies, packages, checksums, attests, and publishes ass
     'npm run test:unit',
     'npm run smoke:gateway',
     'SHA256SUMS',
-    'actions/attest@v4',
     'gh release create'
   ]) assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(workflow, /actions\/attest@[a-f0-9]{40}\b/i);
 });
