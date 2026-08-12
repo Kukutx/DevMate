@@ -1,12 +1,42 @@
-file:///D:/a/DevMate/DevMate/scripts/apply-stability-hardening.mjs:7
-  if (!source.includes(before)) throw new Error(`Pattern not found in ${file}: ${before.slice(0, 120)}`);
-                                      ^
+Skip unmatched pattern in gateway/server-runtime.mjs:   if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.
+Applied DevMate stability hardening.
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
 
-Error: Pattern not found in gateway/server-runtime.mjs:   if (process.env.DEVMATE_DISABLE_EMBEDDED_RUNNER !== '1' && readConfig().jobs?.embeddedRunnerEnabled !== false) {
-    at replaceOnce (file:///D:/a/DevMate/DevMate/scripts/apply-stability-hardening.mjs:7:39)
-    at file:///D:/a/DevMate/DevMate/scripts/apply-stability-hardening.mjs:105:1
-    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
-    at async node:internal/modules/esm/loader:643:26
-    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+added 348 packages, and audited 349 packages in 10s
+
+102 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+npm warn allow-scripts 3 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   @vscode/vsce-sign@2.0.9 (postinstall: node ./src/postinstall.js)
+npm warn allow-scripts   esbuild@0.28.1 (postinstall: node install.js)
+npm warn allow-scripts   keytar@7.9.0 (install: prebuild-install || npm run build)
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+
+> devmate@3.3.5 check
+> npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs
+
+
+> devmate@3.3.5 version:check
+> node scripts/sync-version.mjs --check
+
+Verified DevMate version 3.3.5.
+
+Repository source check failed: scripts/apply-stability-hardening.mjs
+missing local module ./context-mirror.js at line 328
+
+Repository source check failed: tests/stability-endurance-contract.test.cjs
+D:\a\DevMate\DevMate\tests\stability-endurance-contract.test.cjs:22
+  assert.doesNotMatch(persistent, /const killer = spawn('taskkill'/);
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+SyntaxError: Invalid regular expression: /const killer = spawn('taskkill'/: Unterminated group
+    at wrapSafe (node:internal/modules/cjs/loader:1804:18)
+    at checkSyntax (node:internal/main/check_syntax:76:3)
 
 Node.js v24.18.1
+
+2 source checks failed across 331 JavaScript files.
