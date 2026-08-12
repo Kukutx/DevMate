@@ -1,0 +1,64 @@
+name: One-time deep audit hardening v5
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Apply audited source hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check scripts/apply-deep-audit-hardening-once.mjs
+          node scripts/apply-deep-audit-hardening-once.mjs
+          rm -f .github/workflows/deep-audit-hardening-v5-once.yml
+          rm -f scripts/apply-deep-audit-hardening-once.mjs
+
+      - name: Install
+        run: npm ci
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Focused security and concurrency tests
+        run: node --test tests/deep-audit-security.test.mjs tests/team-access.test.mjs tests/tool-policy.test.mjs tests/config-file-lock.test.cjs tests/job-runtime.test.mjs tests/request-auth-boundaries.test.mjs
+
+      - name: Full unit and policy tests
+        run: npm run test:unit
+
+      - name: Gateway smoke tests
+        run: npm run smoke:gateway
+
+      - name: Commit verified source hardening
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add config-file-lock.cjs gateway package.json SECURITY.md scripts/apply-deep-audit-hardening-once.mjs
+          git diff --cached --exit-code && { echo 'Deep audit produced no source changes'; exit 1; }
+          git commit -m 'Harden authorization, Git policy, and config locking'
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:master
