@@ -229,7 +229,17 @@ async function activateInternal(context) {
   }
   output = vscode.window.createOutputChannel('DevMate Tunnel');
   context.subscriptions.push(output);
-  lifecycle = new VscodeHostLifecycle({ vscode });
+    lifecycle = new VscodeHostLifecycle({
+      vscode,
+      runtimeSnapshot: () => ({
+        tunnel: runtime?.diagnosticSnapshot?.() || null,
+        sessionRecovery: {
+          requested: tunnelSessionRequested(),
+          inFlight: !!sessionRecoveryPromise,
+          nextAttemptAt: sessionRecoveryNextAt || 0
+        }
+      })
+    });
   try {
     runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
     localTunnelSettings();

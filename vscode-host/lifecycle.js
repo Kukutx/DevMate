@@ -15,9 +15,10 @@ const {
 const RELOAD_SETTINGS = ['devMate.sharedStateDirectory'];
 
 class VscodeHostLifecycle {
-  constructor({ vscode, platformExtension = null }) {
+  constructor({ vscode, platformExtension = null, runtimeSnapshot = null }) {
     this.vscode = vscode;
     this.platformExtension = platformExtension || require('../extension-entry-platform.js');
+    this.runtimeSnapshot = typeof runtimeSnapshot === 'function' ? runtimeSnapshot : null;
     this.context = null;
     this.runtimeContext = null;
     this.output = null;
@@ -30,6 +31,7 @@ class VscodeHostLifecycle {
     this.platformActivationAttempted = false;
     this.platformActivated = false;
     this.workspaceRootAtActivation = '';
+    this.lastSelfCheck = null;
   }
 
   autoStart() {
@@ -68,7 +70,11 @@ class VscodeHostLifecycle {
       vscode: this.vscode,
       context,
       runtimeContext: this.runtimeContext,
-      output: this.output
+      output: this.output,
+      runtimeSnapshot: () => ({
+        platform: typeof this.platformExtension?.runtimeDiagnostics === 'function' ? this.platformExtension.runtimeDiagnostics() : null,
+        shared: this.runtimeSnapshot ? this.runtimeSnapshot() : null
+      })
     });
     this.diagnostics.append(`Activating DevMate VS Code host ${context.extension?.packageJSON?.version || APP_VERSION}.`);
 
@@ -119,6 +125,7 @@ class VscodeHostLifecycle {
   runSelfCheck(showMessage = false) {
     if (!this.diagnostics) return { ok: false, checks: [] };
     const result = this.diagnostics.selfCheck();
+    this.lastSelfCheck = result;
     if (showMessage) {
       const failed = result.checks.filter(check => !check.ok).map(check => check.id);
       const message = result.ok
@@ -167,7 +174,7 @@ class VscodeHostLifecycle {
     if (!this.active || generation !== this.lifecycleGeneration) {
       return { cancelled: true, reason: 'host-deactivating' };
     }
-    const check = this.runSelfCheck(false);
+    const check = this.lastSelfCheck || this.runSelfCheck(false);
     if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before DevMate Start'), {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
@@ -210,7 +217,13 @@ class VscodeHostLifecycle {
 
   async copyDiagnostics() {
     if (!this.diagnostics) return '';
-    const report = await this.diagnostics.copy({ autoStart: this.autoStart() });
+    const autoStart = this.autoStart();
+    const report = await this.diagnostics.copy({
+      autoStart,
+      startupMode: autoStart ? 'automatic' : 'manual',
+      enabled: this.active,
+      lastSelfCheck: this.lastSelfCheck
+    });
     this.vscode.window.showInformationMessage('DevMate VS Code host diagnostics copied.');
     return report;
   }

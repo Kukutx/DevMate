@@ -77,7 +77,9 @@ The command palette exposes host and connection diagnostics, including:
 - `DevMate: Connection Doctor`
 - `DevMate: Doctor`
 
-Diagnostics include bounded runtime versions/paths, child-process launch details, workspace information, current public-session state, the latest failure, a redacted config snapshot, and bounded log tails. Plaintext owner/member/provider credentials are excluded.
+Diagnostics include bounded runtime versions/paths, the latest Self-Check, complete Gateway controller state, startup-lease/process/last-launch details, stage timings for Gateway/tunnel/public-MCP verification, current tunnel ownership/borrowed-provider state, recent bounded tunnel events, ngrok probe/reconciliation metadata, the latest failure with bounded redacted details, a redacted config snapshot, and bounded host log tails. Plaintext owner/member/provider credentials are excluded.
+
+The in-process durable Job runner is controlled explicitly by `devMate.embeddedRunnerEnabled` and is disabled by default. Existing state converges to this setting so a hidden legacy `true` value cannot silently keep the embedded Runner active.
 
 ## Installed-artifact verification
 

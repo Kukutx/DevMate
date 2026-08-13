@@ -489,9 +489,15 @@ async function deactivate() {
   }
 }
 
+function runtimeDiagnostics() {
+  try { return baseExtension?.runtimeDiagnostics?.() || null; }
+  catch (error) { return { error: String(error.message || error) }; }
+}
+
 module.exports = {
   activate,
   deactivate,
+  runtimeDiagnostics,
   loadBaseExtension,
   prepareNgrokCredentialMutation,
   setupForConnection

@@ -9,6 +9,7 @@ const DEFAULT_NGROK_AGENT_API_BASE = 'http://127.0.0.1:4040/api';
 const DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT = 4040;
 const DEFAULT_NGROK_AGENT_SCAN_LAST_PORT = 4050;
 const MAX_NGROK_AGENT_RESPONSE_BYTES = 64 * 1024;
+const NGROK_CONFIG_CHECK_TIMEOUT_MS = 3000;
 
 function yamlScalar(value) {
   const raw = String(value || '').trim();
@@ -87,11 +88,12 @@ function configPathFromCheckOutput(output) {
 function resolveNgrokAgentApiBase(command = 'ngrok', {
   spawnSync = defaultChildProcess.spawnSync,
   readFile = fs.readFileSync,
-  env = process.env
+  env = process.env,
+  timeoutMs = NGROK_CONFIG_CHECK_TIMEOUT_MS
 } = {}) {
   let check;
   try {
-    check = spawnSync(command, ['config', 'check'], { encoding: 'utf8', windowsHide: true, env });
+    check = spawnSync(command, ['config', 'check'], { encoding: 'utf8', windowsHide: true, env, timeout: Math.max(500, Math.min(5000, Number(timeoutMs) || NGROK_CONFIG_CHECK_TIMEOUT_MS)) });
   } catch {
     return DEFAULT_NGROK_AGENT_API_BASE;
   }
@@ -393,7 +395,8 @@ async function stopConflictingLocalNgrokEndpoints(port, {
   request = http.request,
   timeoutMs = 1000,
   firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
-  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT
+  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT,
+  expectedUrl = ''
 } = {}) {
   const boundedTimeout = Math.max(100, Math.min(500, Number(timeoutMs) || 350));
   const candidates = await localNgrokEndpointCandidatesAcrossAgents(port, {
@@ -413,9 +416,25 @@ async function stopConflictingLocalNgrokEndpoints(port, {
     })
   })));
   const verified = verification.filter(item => item.verified).map(item => item.candidate);
-  const selected = verified.length ? verified : (candidates.length === 1 ? candidates : []);
+  const expected = normalizedPublicUrl(expectedUrl);
+  const selectedMap = new Map();
+  for (const candidate of verified) selectedMap.set(`${candidate.publicUrl}|${candidate.upstreamPort}`, candidate);
+  if (expected) {
+    for (const candidate of candidates) {
+      if (candidate.publicUrl === expected) selectedMap.set(`${candidate.publicUrl}|${candidate.upstreamPort}`, candidate);
+    }
+  }
+  const selected = [...selectedMap.values()];
+  const expectedMatches = expected ? candidates.filter(candidate => candidate.publicUrl === expected).length : 0;
   if (!selected.length) {
-    return { stopped: 0, candidates: candidates.length, ambiguous: true, endpoints: candidates };
+    return {
+      stopped: 0,
+      candidates: candidates.length,
+      ambiguous: true,
+      verified: verified.length,
+      expectedMatches,
+      endpoints: candidates
+    };
   }
 
   const deletion = await Promise.all(selected.map(async candidate => ({
@@ -430,6 +449,8 @@ async function stopConflictingLocalNgrokEndpoints(port, {
     stopped: stopped.length,
     candidates: candidates.length,
     ambiguous: false,
+    verified: verified.length,
+    expectedMatches,
     endpoints: stopped
   };
 }
@@ -497,6 +518,7 @@ module.exports = {
   DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
   DEFAULT_NGROK_AGENT_SCAN_LAST_PORT,
   MAX_NGROK_AGENT_RESPONSE_BYTES,
+  NGROK_CONFIG_CHECK_TIMEOUT_MS,
   collectionItems,
   configPathFromCheckOutput,
   discoverLocalNgrokEndpoint,
