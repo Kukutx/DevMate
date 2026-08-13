@@ -29,7 +29,20 @@ jobs:
           cache: npm
 
       - name: Apply hardening
-        run: node scripts/apply-runtime-hardening-339-once.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-runtime-hardening-339-once.mjs')
+          text = p.read_text()
+          before = '`    lifecycle = new VscodeHostLifecycle({ vscode });`'
+          after = '`  lifecycle = new VscodeHostLifecycle({ vscode });`'
+          if before not in text:
+              raise SystemExit('shared-tunnel patch contract not found')
+          p.write_text(text.replace(before, after, 1))
+          PY
+          node scripts/apply-runtime-hardening-339-once.mjs
 
       - name: Install
         run: npm ci
