@@ -33,6 +33,22 @@ function redactValue(value, key = '', depth = 0, seen = new WeakSet()) {
   );
 }
 
+function failureDetails(error) {
+  if (!error || typeof error !== 'object') return null;
+  const allowed = [
+    'name', 'provider', 'providerOutput', 'exitCode', 'signalCode', 'cleanupPending',
+    'cleanupReason', 'ngrokVersion', 'recordFile', 'configFile', 'health', 'diagnostics'
+  ];
+  const details = {};
+  for (const key of allowed) {
+    if (error[key] !== undefined) details[key] = redactValue(error[key], key);
+  }
+  const serialized = JSON.stringify(details);
+  if (!serialized || serialized === '{}') return null;
+  if (serialized.length <= 24000) return details;
+  return { truncated: true, preview: redactText(serialized.slice(0, 24000)) };
+}
+
 function normalizeMessage(message) {
   const text = redactText(message).replace(/\r\n/g, '\n').trimEnd();
   return text || '(empty message)';
@@ -98,6 +114,7 @@ class DiagnosticsStore {
       at: new Date().toISOString(),
       code: error?.code || null,
       message: redactText(error?.message || String(error)),
+      details: failureDetails(error),
       context: redactValue(context)
     };
     this.append(`Failure: ${this.lastFailure.message}`, 'error');
@@ -134,6 +151,7 @@ module.exports = {
   DEFAULT_MAX_LOG_BYTES,
   DEFAULT_MAX_MEMORY_LINES,
   DiagnosticsStore,
+  failureDetails,
   normalizeMessage,
   redactText,
   redactValue

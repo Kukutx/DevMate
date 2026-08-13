@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.9
+
+- Hardened ERR_NGROK_334 reconciliation so DevMate only removes endpoints proven to serve DevMate or explicitly matching the configured stable URL; a lone unknown endpoint is never treated as ownership evidence.
+- Bounded and cached ngrok version/config probes, removed redundant startup probing, and accelerated borrowed-endpoint liveness recovery.
+- Added complete redacted runtime diagnostics with Gateway/tunnel snapshots, startup stage timings, ngrok probe/reconciliation metadata, recent tunnel events, and structured failure details.
+- Removed duplicate automatic Self-Checks, fixed autoStart/startup-mode diagnostic wiring, and wired lifecycle desired-state to real Start/Stop intent.
+- Added an explicit disabled-by-default VS Code setting for the embedded durable Job runner so legacy workspace state no longer enables it invisibly.
+
 ## 3.3.8
 
 - Fixed ERR_NGROK_334 recovery when the conflicting local ngrok process exposes its Agent API on a secondary loopback port or still forwards to the same Gateway port.

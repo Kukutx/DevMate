@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
-  "version": "3.3.8",
+  "version": "3.3.9",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {
@@ -319,6 +319,11 @@
           "type": "boolean",
           "default": false,
           "description": "Expose detailed public health information."
+        },
+        "devMate.embeddedRunnerEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the in-process durable Job runner for this VS Code host. Disabled by default; external Runners remain available."
         }
       }
     }

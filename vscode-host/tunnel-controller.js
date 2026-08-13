@@ -38,6 +38,10 @@ const STARTUP_LOCK_NAME = 'tunnel.start.lock';
 const DEFAULT_START_TIMEOUT_MS = 20000;
 const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_HEARTBEAT_MS = 30000;
+const DEFAULT_BORROWED_HEARTBEAT_MS = 5000;
+const NGROK_PROBE_TIMEOUT_MS = 3000;
+const NGROK_PROBE_CACHE_MS = 60000;
+const MAX_DIAGNOSTIC_EVENTS = 80;
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
 const DEFAULT_FORCE_STOP_TIMEOUT_MS = 2000;
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
@@ -167,6 +171,7 @@ class TunnelController {
     logger = () => {},
     runtimeLeaseMs = DEFAULT_RUNTIME_LEASE_MS,
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
+    borrowedHeartbeatMs = DEFAULT_BORROWED_HEARTBEAT_MS,
     startTimeoutMs = DEFAULT_START_TIMEOUT_MS,
     readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,
     stopTimeoutMs = DEFAULT_STOP_TIMEOUT_MS,
@@ -180,14 +185,24 @@ class TunnelController {
     this.childProcess = childProcess;
     this.httpRequest = httpRequest;
     this.hostId = String(hostId || 'vscode');
-    this.logger = logger;
+    this.externalLogger = logger;
+    this.diagnosticEvents = [];
+    this.logger = message => {
+      const text = String(message || '');
+      this.diagnosticEvents.push({ at: nowIso(), message: text.slice(0, 4000) });
+      if (this.diagnosticEvents.length > MAX_DIAGNOSTIC_EVENTS) {
+        this.diagnosticEvents.splice(0, this.diagnosticEvents.length - MAX_DIAGNOSTIC_EVENTS);
+      }
+      this.externalLogger(text);
+    };
     this.runtimeLeaseMs = Math.max(30000, Number(runtimeLeaseMs) || DEFAULT_RUNTIME_LEASE_MS);
     this.heartbeatMs = Math.max(5000, Number(heartbeatMs) || DEFAULT_HEARTBEAT_MS);
+    this.borrowedHeartbeatMs = Math.max(2000, Number(borrowedHeartbeatMs) || DEFAULT_BORROWED_HEARTBEAT_MS);
     this.startTimeoutMs = Math.max(1000, Number(startTimeoutMs) || DEFAULT_START_TIMEOUT_MS);
     this.readyTimeoutMs = Math.max(1000, Number(readyTimeoutMs) || DEFAULT_READY_TIMEOUT_MS);
     this.stopTimeoutMs = Math.max(100, Number(stopTimeoutMs) || DEFAULT_STOP_TIMEOUT_MS);
     this.forceStopTimeoutMs = Math.max(100, Number(forceStopTimeoutMs) || DEFAULT_FORCE_STOP_TIMEOUT_MS);
-    this.store = new SharedTunnelRecordStore({ stateDirectory, leaseMs: this.runtimeLeaseMs, logger });
+    this.store = new SharedTunnelRecordStore({ stateDirectory, leaseMs: this.runtimeLeaseMs, logger: this.logger });
     this.ownerId = '';
     this.child = null;
     this.childReady = false;
@@ -204,6 +219,9 @@ class TunnelController {
     this.providerSecrets = new WeakMap();
     this.providerClosed = new WeakMap();
     this.expectedChildExits = new WeakSet();
+    this.ngrokProbeCache = null;
+    this.lastNgrokProbe = null;
+    this.lastConflictRecovery = null;
     this.stopping = false;
     this.disposed = false;
   }
@@ -361,11 +379,12 @@ class TunnelController {
 
   startHeartbeat() {
     if (this.heartbeat || !this.ownerId) return;
+    const intervalMs = this.borrowedProvider ? this.borrowedHeartbeatMs : this.heartbeatMs;
     this.heartbeat = setInterval(() => {
       void this.verifyOwnership().catch(error => {
         this.logger(`Tunnel ownership verification failed: ${error.message || error}`);
       });
-    }, this.heartbeatMs);
+    }, intervalMs);
     this.heartbeat.unref?.();
   }
 
@@ -403,6 +422,48 @@ class TunnelController {
       timeoutMs: 250,
       expectedUrl: launch.publicUrl || ''
     });
+  }
+
+  probeNgrokRuntime(launch) {
+    const key = [launch.command, launch.publicUrl || '', launch.options?.env?.NGROK_AUTHTOKEN ? 'managed' : 'machine'].join('|');
+    const now = Date.now();
+    if (this.ngrokProbeCache?.key === key && now - this.ngrokProbeCache.at < NGROK_PROBE_CACHE_MS) {
+      this.lastNgrokProbe = { ...this.ngrokProbeCache.result, cached: true, durationMs: 0, at: nowIso() };
+      return this.ngrokProbeCache.result;
+    }
+    const started = Date.now();
+    const check = this.childProcess.spawnSync(launch.command, ['version'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: launch.options?.env || process.env,
+      timeout: NGROK_PROBE_TIMEOUT_MS
+    });
+    if (check.error || check.status !== 0) {
+      const error = new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
+      error.code = check.error?.code === 'ETIMEDOUT' ? 'DEVMATE_NGROK_PROBE_TIMEOUT' : 'DEVMATE_NGROK_UNAVAILABLE';
+      throw error;
+    }
+    const version = parseNgrokVersion(`${check.stdout || ''}\n${check.stderr || ''}`);
+    if (!version) {
+      const error = new Error(`Could not determine the installed ngrok version from: ${outputTail(safeProviderOutput('ngrok', `${check.stdout || ''}\n${check.stderr || ''}`)) || 'empty output'}`);
+      error.code = 'DEVMATE_NGROK_VERSION_UNKNOWN';
+      throw error;
+    }
+    if (!supportsNgrokEndpointsApi(version)) {
+      const error = new Error(`DevMate requires ngrok 3.30.0+ for current Agent API endpoint discovery; found ${version.version}. Upgrade ngrok.`);
+      error.code = 'DEVMATE_NGROK_VERSION_UNSUPPORTED';
+      error.ngrokVersion = version.version;
+      throw error;
+    }
+    const agentApiBase = resolveNgrokAgentApiBase(launch.command, {
+      spawnSync: this.childProcess.spawnSync,
+      env: launch.options?.env || process.env,
+      timeoutMs: NGROK_PROBE_TIMEOUT_MS
+    });
+    const result = { version: version.version, agentApiBase, command: launch.command };
+    this.ngrokProbeCache = { key, at: now, result };
+    this.lastNgrokProbe = { ...result, cached: false, durationMs: Date.now() - started, at: nowIso() };
+    return result;
   }
 
   adoptExistingNgrok(match, ownerId, publicUrl, agentApiBase = '') {
@@ -558,12 +619,13 @@ class TunnelController {
         return this.store.read();
       }
 
-      const checkArgs = launch.provider === 'ngrok' ? ['version'] : ['--version'];
-      const check = this.childProcess.spawnSync(launch.command, checkArgs, {
-        encoding: 'utf8', windowsHide: true, env: launch.options?.env || process.env
-      });
-      if (check.error || check.status !== 0) {
-        throw new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
+      if (launch.provider !== 'ngrok') {
+        const check = this.childProcess.spawnSync(launch.command, ['--version'], {
+          encoding: 'utf8', windowsHide: true, env: launch.options?.env || process.env, timeout: NGROK_PROBE_TIMEOUT_MS
+        });
+        if (check.error || check.status !== 0) {
+          throw new Error(`${launch.command} is unavailable: ${String(check.stderr || check.stdout || check.error?.message || 'unknown error').trim()}`);
+        }
       }
       const sensitiveValues = [
         secrets?.ngrokAuthtoken,
@@ -572,23 +634,8 @@ class TunnelController {
         launch.options?.env?.TUNNEL_TOKEN
       ].map(value => String(value || '')).filter(Boolean);
       if (launch.provider === 'ngrok') {
-        const version = parseNgrokVersion(`${check.stdout || ''}\n${check.stderr || ''}`);
-        if (!version) {
-          const error = new Error(`Could not determine the installed ngrok version from: ${outputTail(safeProviderOutput('ngrok', `${check.stdout || ''}\n${check.stderr || ''}`, sensitiveValues)) || 'empty output'}`);
-          error.code = 'DEVMATE_NGROK_VERSION_UNKNOWN';
-          throw error;
-        }
-        if (!supportsNgrokEndpointsApi(version)) {
-          const error = new Error(`DevMate requires ngrok 3.30.0+ for current Agent API endpoint discovery; found ${version.version}. Upgrade ngrok.`);
-          error.code = 'DEVMATE_NGROK_VERSION_UNSUPPORTED';
-          error.ngrokVersion = version.version;
-          throw error;
-        }
-
-        launch.agentApiBase = resolveNgrokAgentApiBase(launch.command, {
-          spawnSync: this.childProcess.spawnSync,
-          env: launch.options?.env || process.env
-        });
+        const probe = this.probeNgrokRuntime(launch);
+        launch.agentApiBase = probe.agentApiBase;
         if (!launch.agentApiBase && !launch.publicUrl) {
           const error = new Error('ngrok local Agent API is disabled; configure a stable ngrok URL or enable agent web_addr');
           error.code = 'DEVMATE_NGROK_AGENT_API_DISABLED';
@@ -648,11 +695,23 @@ class TunnelController {
           return this.adoptExistingNgrok(match, ownerId, reusable.publicUrl, reusable.apiBase);
         }
         if (conflictRecovery && launch.agentApiBase) {
+          const recoveryStarted = Date.now();
           const recovery = await stopConflictingLocalNgrokEndpoints(match.port, {
             apiBase: launch.agentApiBase,
             request: this.httpRequest,
-            timeoutMs: 1000
+            timeoutMs: 1000,
+            expectedUrl: launch.publicUrl || ''
           }).catch(reconcileError => ({ stopped: 0, error: reconcileError }));
+          this.lastConflictRecovery = {
+            at: nowIso(),
+            durationMs: Date.now() - recoveryStarted,
+            stopped: Number(recovery.stopped || 0),
+            candidates: Number(recovery.candidates || 0),
+            ambiguous: recovery.ambiguous === true,
+            verified: Number(recovery.verified || 0),
+            expectedMatches: Number(recovery.expectedMatches || 0),
+            error: recovery.error ? String(recovery.error.message || recovery.error).slice(0, 1000) : null
+          };
           if (recovery.stopped > 0) {
             const summary = recovery.endpoints
               .map(item => `${item.publicUrl} -> 127.0.0.1:${item.upstreamPort}`)
@@ -747,6 +806,32 @@ class TunnelController {
     } finally {
       lease.release();
     }
+  }
+
+  diagnosticSnapshot(port = this.port) {
+    let record = null;
+    let recordError = null;
+    try { record = this.store.read({ includeStale: true }); }
+    catch (error) { recordError = String(error.message || error); }
+    const settings = this.settings();
+    return {
+      provider: settings.provider,
+      ownerId: this.ownerId || null,
+      port: Number(record?.port || port || this.port || 0),
+      owned: !!record && record.ownerId === this.ownerId && !this.borrowedProvider,
+      borrowed: this.borrowedProvider,
+      borrowedAgentApiBase: this.borrowedAgentApiBase || null,
+      publicUrl: record?.publicUrl || this.borrowedPublicUrl || null,
+      child: this.child ? { pid: this.child.pid || null, exitCode: this.child.exitCode ?? null, signalCode: this.child.signalCode || null, ready: this.childReady } : null,
+      heartbeatMs: this.borrowedProvider ? this.borrowedHeartbeatMs : this.heartbeatMs,
+      runtimeLeaseMs: this.runtimeLeaseMs,
+      restartCount: this.restartCount,
+      lastNgrokProbe: this.lastNgrokProbe,
+      lastConflictRecovery: this.lastConflictRecovery,
+      record,
+      recordError,
+      recentEvents: this.diagnosticEvents.slice(-40)
+    };
   }
 
   status(port = this.port) {
@@ -844,6 +929,9 @@ class TunnelController {
 module.exports = {
   DEFAULT_FORCE_STOP_TIMEOUT_MS,
   DEFAULT_HEARTBEAT_MS,
+  DEFAULT_BORROWED_HEARTBEAT_MS,
+  NGROK_PROBE_CACHE_MS,
+  NGROK_PROBE_TIMEOUT_MS,
   DEFAULT_READY_TIMEOUT_MS,
   DEFAULT_START_TIMEOUT_MS,
   DEFAULT_STOP_TIMEOUT_MS,

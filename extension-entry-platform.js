@@ -412,8 +412,14 @@ async function deactivate() {
   }
 }
 
+function runtimeDiagnostics() {
+  try { return innerExtension?.runtimeDiagnostics?.() || null; }
+  catch (error) { return { error: String(error.message || error) }; }
+}
+
 module.exports = {
   activate,
+  runtimeDiagnostics,
   cloudflareCredentialInUse,
   commitCloudflareConnection,
   configureConnection,

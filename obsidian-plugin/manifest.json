@@ -1,7 +1,7 @@
 {
   "id": "devmate",
   "name": "DevMate",
-  "version": "3.3.8",
+  "version": "3.3.9",
   "minAppVersion": "1.13.4",
   "description": "Connect an Obsidian vault to the DevMate local-first MCP workspace gateway.",
   "author": "Kukutx",

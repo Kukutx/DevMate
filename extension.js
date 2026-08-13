@@ -11,6 +11,7 @@ const { childExited, terminateProcessTree } = require('./host/runtime/process-tr
 const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
 const { updateConfig } = require('./shared/config-store.cjs');
+const { setLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
 const {
   recordGeneration,
   successfulVerificationPatch,
@@ -37,6 +38,7 @@ let selectedPort = BASE_PORT;
 let globalContext = null;
 let startCommandProcess = null;
 let contextWriteTimer = null;
+let lastStartupTrace = null;
 const lifecycleOperations = new OperationCoordinator({ name: 'vscode-lifecycle' });
 
 function cfg(){ return vscode.workspace.getConfiguration('devMate'); }
@@ -253,6 +255,8 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   data.permissions.allowDirectoryMutations = cfg().get('allowDirectoryMutations') === true;
   data.workspaces ||= [];
   data.commands ||= [];
+  data.jobs ||= {};
+  data.jobs.embeddedRunnerEnabled = cfg().get('embeddedRunnerEnabled') === true;
   const root = currentRoot();
   if(root && (forceCurrent || cfg().get('autoUseCurrentWorkspace'))){
     syncCurrentWorkspace(data, root);
@@ -457,6 +461,11 @@ function currentTunnelRecord(port){
   try { return tunnelStatus(Number(port || selectedPort))?.record || null; }
   catch { return null; }
 }
+function setDesiredLifecycleState(ctx, desiredState, reason=''){
+  const data = ensureConfig(ctx,false);
+  if(data.lifecycle?.desiredState === desiredState) return data.lifecycle;
+  return setLifecycleIntent(configPath(ctx), desiredState, {requestedBy:'vscode', reason});
+}
 function staleSessionGenerationError(){
   const error = new Error('Public MCP verification became stale because the complete session generation changed');
   error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
@@ -575,17 +584,29 @@ async function quickStart(ctx,{quiet=false}={}){
   let tunnel = null;
   let tunnelWasRunning = false;
   const startCommandWasRunning = !!startCommandProcess && !childExited(startCommandProcess);
+  const trace = { startedAt:new Date().toISOString(), totalMs:0, success:false, stages:{} };
+  const overallStarted = Date.now();
+  lastStartupTrace = trace;
   try{
     output.show(true);
     if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
+    setDesiredLifecycleState(ctx,'running','start');
+    let stageStarted = Date.now();
     gateway = await startGateway(ctx);
+    trace.stages.gatewayMs = Date.now() - stageStarted;
     try { tunnelWasRunning = currentTunnelStatus(ctx)?.running === true; } catch {}
+    stageStarted = Date.now();
     tunnel = await startPublicTunnel(ctx);
+    trace.stages.tunnelMs = Date.now() - stageStarted;
     const publicUrl = tunnel.publicUrl;
     log(`Running public MCP preflight through ${tunnel.provider} before reporting Ready...`);
+    stageStarted = Date.now();
     const verified = await verifyCurrentTunnel(publicUrl, tunnel.record, ctx);
+    trace.stages.publicMcpPreflightMs = Date.now() - stageStarted;
     const test = verified.test;
+    stageStarted = Date.now();
     await syncPublicUiState(ctx);
+    trace.stages.uiSyncMs = Date.now() - stageStarted;
 
     let copied = false;
     let copyError = '';
@@ -606,11 +627,18 @@ async function quickStart(ctx,{quiet=false}={}){
       else if(cfg().get('autoCopyUrl') && copyError) vscode.window.showWarningMessage('DevMate is Ready, but automatic MCP URL copy failed. Use DevMate: Copy MCP URL if needed.');
       else vscode.window.showInformationMessage(`Ready. Verified MCP URL: ${redactUrl(test.mcpUrl)}`);
     }
-    return {ok:true,gateway,tunnel,publicUrl,mcpUrl:test.mcpUrl,toolCount:test.toolCount,server:test.server,copied,copyError};
+    trace.success = true;
+    trace.totalMs = Date.now() - overallStarted;
+    trace.readyAt = new Date().toISOString();
+    return {ok:true,gateway,tunnel,publicUrl,mcpUrl:test.mcpUrl,toolCount:test.toolCount,server:test.server,copied,copyError,startupTrace:trace};
   }catch(e){
     await rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning});
     recordConnectionFailure(ctx,e,tunnel?.record || null);
     await syncPublicUiState(ctx);
+    trace.totalMs = Date.now() - overallStarted;
+    trace.failedAt = new Date().toISOString();
+    trace.errorCode = e.code || 'DEVMATE_START_FAILED';
+    trace.error = String(e.message || e).slice(0,2000);
     const message = String(e.message || e);
     log(`ERROR: ${e.stack || e.message || e}`);
     if(!quiet) vscode.window.showErrorMessage(`DevMate failed: ${message}`);
@@ -618,6 +646,7 @@ async function quickStart(ctx,{quiet=false}={}){
   }
 }
 async function stopAll(){
+  if(globalContext) setDesiredLifecycleState(globalContext,'stopped','stop');
   let tunnel = {stopped:false,reason:'not-running'};
   try{
     tunnel = await stopPublicTunnel();
@@ -1180,4 +1209,18 @@ function deactivate(){
     return stopped;
   });
 }
-module.exports = { activate, deactivate };
+function runtimeDiagnostics(){
+  let config = null;
+  try { config = globalContext ? ensureConfig(globalContext,false) : null; } catch {}
+  let tunnel = null;
+  try { tunnel = currentTunnelStatus(globalContext); } catch(error) { tunnel = { error:String(error.message || error) }; }
+  return {
+    startup: lastStartupTrace,
+    lifecycle: config?.lifecycle || null,
+    jobs: { embeddedRunnerEnabled: config?.jobs?.embeddedRunnerEnabled === true },
+    gateway: typeof gatewayController?.diagnosticSnapshot === 'function' ? gatewayController.diagnosticSnapshot() : null,
+    tunnel: tunnel ? { running:tunnel.running, owned:tunnel.owned, attached:tunnel.attached, provider:tunnel.provider, publicUrl:tunnel.publicUrl || null, port:tunnel.port || null } : null,
+    startCommand: { running: !!startCommandProcess && !childExited(startCommandProcess) }
+  };
+}
+module.exports = { activate, deactivate, runtimeDiagnostics };
