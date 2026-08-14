@@ -85,7 +85,7 @@ function syncTextContent(result) {
 
 function commandResultFailed(value) {
   if (!value || typeof value !== 'object') return false;
-  if (value.timedOut === true || value.error) return true;
+  if (value.timedOut === true || value.error || value.signal || value.exitConfirmed === false) return true;
   return value.exitCode != null && Number(value.exitCode) !== 0;
 }
 
@@ -228,6 +228,7 @@ export function wrapAuthorizedTool(name, config, handler) {
       const toolStatus = result?.isError === true ? 'error' : 'success';
       incrementCounter('devmate_tool_calls_total', { ...labels, status: toolStatus }, 1);
       observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
+      const failedPhase = result?.structuredContent?.failedPhase;
       await audit('tool_call', {
         requestId: requestContext()?.requestId || null,
         principalId: authorized.principal.id,
@@ -238,7 +239,7 @@ export function wrapAuthorizedTool(name, config, handler) {
         approvalId: approval?.request?.id || null,
         ok: result?.isError !== true,
         durationMs: Date.now() - started,
-        ...(result?.isError === true ? { error: `Git subprocess failed during ${result.structuredContent?.failedPhase || 'command'}` } : {})
+        ...(result?.isError === true ? { error: failedPhase ? `Git subprocess failed during ${failedPhase}` : 'Tool returned an MCP error result' } : {})
       }, { workSessionId });
       return result;
     } catch (error) {
