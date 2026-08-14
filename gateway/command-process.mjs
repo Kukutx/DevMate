@@ -5,6 +5,15 @@ import { requestSignal } from './request-context.mjs';
 const { runTaskkill: runBoundedTaskkill } = processTreeRuntime;
 const activeProcesses = new Set();
 
+export function commandEnvironment(command, environment = null) {
+  const env = { ...(environment || process.env) };
+  if (/(?:^|[\\/])git(?:\.exe)?$/i.test(String(command || '').trim())) {
+    env.GIT_TERMINAL_PROMPT = '0';
+    env.GCM_INTERACTIVE = 'Never';
+  }
+  return env;
+}
+
 function waitForExit(child) {
   if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ code: child.exitCode ?? null, signal: child.signalCode || null });
   return new Promise(resolve => {
@@ -81,7 +90,7 @@ export async function executeCommand(command, args = [], {
   if (signal?.aborted) throw cancellationError(signal);
   const child = spawn(command, args, {
     cwd,
-    env: environment || process.env,
+    env: commandEnvironment(command, environment),
     shell,
     windowsHide: true,
     detached: process.platform !== 'win32',
