@@ -6,7 +6,7 @@ import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
 import { fallbackLocalPrincipal, normalizeInstanceConfig } from './team-access.mjs';
-import { oauthAccessToken } from './oauth.mjs';
+import { oauthAccessToken, oauthResourceMetadataUrl } from './oauth.mjs';
 
 const rateWindows = new Map();
 const preAuthRateWindows = new Map();
@@ -26,10 +26,17 @@ function requestUrl(req) {
   catch { return null; }
 }
 
-function jsonError(res, status, message, code, requestId, extra = {}) {
+function jsonError(res, status, message, code, requestId, extra = {}, headers = {}) {
   if (res.headersSent) return;
-  res.writeHead(status, { 'content-type': 'application/json', 'x-devmate-request-id': requestId });
+  res.writeHead(status, { 'content-type': 'application/json', 'x-devmate-request-id': requestId, ...headers });
   res.end(JSON.stringify({ error: message, code, requestId, ...extra }));
+}
+
+function oauthChallenge(req, config) {
+  if (config?.auth?.mode !== 'oauth') return {};
+  return {
+    'www-authenticate': `Bearer resource_metadata="${oauthResourceMetadataUrl(req)}", scope="devmate offline_access"`
+  };
 }
 
 function touchTeamMember(config, principal) {
@@ -219,7 +226,7 @@ export function guardListener(listener) {
 
     const principal = authenticateGatewayRequest(req, url, config);
     if (!principal) {
-      jsonError(res, 401, 'Unauthorized DevMate request', 'unauthorized', requestId);
+      jsonError(res, 401, 'Unauthorized DevMate request', 'unauthorized', requestId, {}, oauthChallenge(req, config));
       return;
     }
 
@@ -313,6 +320,7 @@ export const __test = {
   loopbackHost,
   loopbackSocket,
   normalizeInnerAuthorization,
+  oauthChallenge,
   preAuthRateWindows,
   principalInflight: requestConcurrency.principals,
   rateWindows,
