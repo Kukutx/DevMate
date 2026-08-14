@@ -37,6 +37,10 @@ jobs:
           const after = "  text = replaceOnce(text, `    this.borrowedProvider = false;\\n    this.borrowedAgentApiBase = '';\\n    this.borrowedPublicUrl = '';\\n    this.borrowedFailureCount = 0;\\n    this.port = 0;`, `    this.borrowedProvider = false;\\n    this.borrowedAgentApiBase = '';\\n    this.borrowedPublicVerified = false;\\n    this.borrowedPublicUrl = '';\\n    this.borrowedFailureCount = 0;\\n    this.port = 0;`, 'borrowed public verification state');";
           if (!text.includes(before)) throw new Error('Expected ambiguous patcher block not found');
           text = text.replace(before, after);
+          const anchor = "  text = text.replace(`    this.lastConflictRecovery = null;\\n`, '');";
+          const extra = "  text = replaceOnce(text, `  async spawnProvider(match, { preserveOwner = false, conflictRecovery = true } = {}) {`, `  async spawnProvider(match, { preserveOwner = false } = {}) {`, 'remove ERR334 recovery parameter');";
+          if (!text.includes(anchor)) throw new Error('Expected conflict recovery anchor not found');
+          text = text.replace(anchor, `${anchor}\n${extra}`);
           fs.writeFileSync(file, text, 'utf8');
           NODE
 
