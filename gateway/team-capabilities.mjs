@@ -83,6 +83,46 @@ function syncTextContent(result) {
   return result;
 }
 
+function commandResultFailed(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (value.timedOut === true || value.error) return true;
+  return value.exitCode != null && Number(value.exitCode) !== 0;
+}
+
+function failedGitPhase(name, data) {
+  const tool = String(name || '');
+  if (!tool.startsWith('git_') || !data || typeof data !== 'object') return '';
+  if (tool === 'git_save') {
+    for (const phase of ['stage', 'commit', 'push', 'status']) {
+      if (commandResultFailed(data[phase])) return phase;
+    }
+    return '';
+  }
+  if (tool === 'git_commit') {
+    for (const phase of ['stage', 'commit', 'status']) {
+      if (commandResultFailed(data[phase])) return phase;
+    }
+    return '';
+  }
+  if (tool === 'git_add' || tool === 'git_stage') {
+    for (const phase of ['stage', 'status']) {
+      if (commandResultFailed(data[phase])) return phase;
+    }
+    return '';
+  }
+  return commandResultFailed(data) ? 'command' : '';
+}
+
+function markGitFailure(name, result) {
+  const data = result?.structuredContent;
+  const failedPhase = failedGitPhase(name, data);
+  if (!failedPhase) return result;
+  data.ok = false;
+  data.failedPhase = failedPhase;
+  result.isError = true;
+  return syncTextContent(result);
+}
+
 function filterResult(name, result, principal) {
   if (!principal?.workspaceIds?.length || !result?.structuredContent) return result;
   const allowed = new Set(principal.workspaceIds);
@@ -173,18 +213,20 @@ export function wrapAuthorizedTool(name, config, handler) {
       if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
       const invocationSignal = rest[0]?.signal || requestContext()?.signal || null;
+      const rawResult = await runWithRequestSignal(invocationSignal, () =>
+        runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest))
+      );
       const result = filterResult(
         name,
-        await runWithRequestSignal(invocationSignal, () =>
-          runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest))
-        ),
+        markGitFailure(name, rawResult),
         authorized.principal
       );
       const session = authorized.workspaceId
         ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
         : null;
       const workSessionId = session?.id || active?.id || null;
-      incrementCounter('devmate_tool_calls_total', { ...labels, status: 'success' }, 1);
+      const toolStatus = result?.isError === true ? 'error' : 'success';
+      incrementCounter('devmate_tool_calls_total', { ...labels, status: toolStatus }, 1);
       observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
       await audit('tool_call', {
         requestId: requestContext()?.requestId || null,
@@ -194,8 +236,9 @@ export function wrapAuthorizedTool(name, config, handler) {
         capability: authorized.capability,
         workspace: authorized.workspaceId,
         approvalId: approval?.request?.id || null,
-        ok: true,
-        durationMs: Date.now() - started
+        ok: result?.isError !== true,
+        durationMs: Date.now() - started,
+        ...(result?.isError === true ? { error: `Git subprocess failed during ${result.structuredContent?.failedPhase || 'command'}` } : {})
       }, { workSessionId });
       return result;
     } catch (error) {
@@ -247,8 +290,11 @@ export async function shutdownTeamServices() {
 
 export const __test = {
   cleanOrigin,
+  commandResultFailed,
+  failedGitPhase,
   filterResult,
   inferredWorkspace,
+  markGitFailure,
   publicDeployment,
   readiness,
   registerTeamTools,
