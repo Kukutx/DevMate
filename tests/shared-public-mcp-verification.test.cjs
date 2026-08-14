@@ -39,7 +39,9 @@ function success(publicUrl) {
     publicOrigin: publicUrl,
     mcpUrl: `${publicUrl}/mcp`,
     toolCount: 131,
-    server: { name: 'devmate', version: '3.4.1' }
+    toolCallVerified: true,
+    probeTool: 'gateway_status',
+    server: { name: 'devmate', version: '3.4.4' }
   };
 }
 
@@ -82,6 +84,8 @@ test('desktop hosts share one network preflight for the same connection generati
     assert.equal(calls, 1);
     assert.equal(a.test.toolCount, 131);
     assert.equal(b.test.toolCount, 131);
+    assert.equal(a.test.toolCallVerified, true);
+    assert.equal(b.test.toolCallVerified, true);
     assert.equal([a.reused, b.reused].filter(Boolean).length, 1);
   } finally {
     fx.cleanup();
