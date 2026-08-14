@@ -35,6 +35,8 @@ function verifiedConfig() {
       lastPublicHost: 'current.example.com',
       lastMcpPath: '/mcp',
       lastToolCount: 12,
+      lastToolCallVerified: true,
+      lastProbeTool: 'gateway_status',
       lastServerName: 'devmate',
       lastError: '',
       lastErrorAt: null
@@ -47,7 +49,7 @@ test('shared connection provider is the UI provider source of truth', () => {
   assert.throws(() => connectionProvider(config({ connection: { provider: 'automatic' } })), /Unknown connection provider/);
 });
 
-test('only the current verified generation is presented as ready', () => {
+test('only the current tool-call-verified generation is presented as ready', () => {
   const record = readyRecord();
   const state = publicUiState(verifiedConfig(), { running: true, publicUrl: record.publicUrl, record });
   assert.equal(state.state, 'verified');
@@ -56,6 +58,17 @@ test('only the current verified generation is presented as ready', () => {
   assert.equal(state.stability.kind, 'temporary');
   assert.equal(state.stability.chatgptEligible, false);
   assert.equal(statusLabel(state), 'DevMate: ready');
+});
+
+test('handshake-only evidence never produces the ready UI state', () => {
+  const record = readyRecord();
+  const handshakeOnly = verifiedConfig();
+  delete handshakeOnly.connection.lastToolCallVerified;
+  delete handshakeOnly.connection.lastProbeTool;
+  const state = publicUiState(handshakeOnly, { running: true, publicUrl: record.publicUrl, record });
+  assert.equal(state.state, 'unverified');
+  assert.equal(state.verified, false);
+  assert.equal(statusLabel(state), 'DevMate: public check pending');
 });
 
 test('a newly ready generation is pending until it has its own preflight evidence', () => {
