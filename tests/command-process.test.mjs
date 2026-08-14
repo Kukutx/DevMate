@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { activeCommandProcessCount, executeCommand } from '../gateway/command-process.mjs';
+import { activeCommandProcessCount, commandEnvironment, executeCommand } from '../gateway/command-process.mjs';
 
 test('normal commands preserve bounded output and exit metadata', async () => {
   const result = await executeCommand(process.execPath, ['-e', "process.stdout.write('abcdef')"], {
@@ -15,6 +15,22 @@ test('normal commands preserve bounded output and exit metadata', async () => {
   assert.equal(result.timedOut, false);
   assert.equal(result.stdout, 'cdef');
   assert.equal(result.stdoutTruncated, true);
+});
+
+test('Git commands are forced non-interactive because MCP commands have no stdin', () => {
+  for (const command of ['git', 'git.exe', '/usr/bin/git', 'C:\\Program Files\\Git\\cmd\\git.exe']) {
+    const env = commandEnvironment(command, {
+      PATH: process.env.PATH || '',
+      GIT_TERMINAL_PROMPT: '1',
+      GCM_INTERACTIVE: 'Always'
+    });
+    assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+    assert.equal(env.GCM_INTERACTIVE, 'Never');
+  }
+  const nodeEnv = commandEnvironment(process.execPath, { SAMPLE: 'kept' });
+  assert.equal(nodeEnv.SAMPLE, 'kept');
+  assert.equal(nodeEnv.GIT_TERMINAL_PROMPT, undefined);
+  assert.equal(nodeEnv.GCM_INTERACTIVE, undefined);
 });
 
 test('timeout terminates the complete owned process tree', async () => {
