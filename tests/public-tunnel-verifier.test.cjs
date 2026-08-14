@@ -8,6 +8,7 @@ const test = require('node:test');
 const { atomicWriteJson, readJson } = require('../shared/config-store.cjs');
 const { gatewayGeneration } = require('../shared/public-ingress-verification.cjs');
 const { PublicTunnelVerifier } = require('../vscode-host/public-tunnel-verifier.js');
+const oauthTokens = require('../shared/oauth-tokens.cjs');
 
 function writeGatewayLock(stateDirectory, overrides = {}) {
   const state = path.join(stateDirectory, 'state');
@@ -36,7 +37,7 @@ function fixture() {
     version: 11,
     instanceId: 'instance-a',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'owner-token' },
+    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } },
     connection: {
       lastPreflightAt: '2026-08-08T00:00:00.000Z',
       lastPublicHost: 'old.example.com',
@@ -79,7 +80,7 @@ function successfulTest(publicUrl, toolCount = 42) {
   };
 }
 
-test('new Gateway+tunnel generation is authenticated and atomically becomes the current verified endpoint', async () => {
+test('new Gateway+tunnel generation uses short-lived OAuth for preflight and atomically becomes verified', async () => {
   const fx = fixture();
   let call = null;
   let verifiedEvent = null;
@@ -99,7 +100,11 @@ test('new Gateway+tunnel generation is authenticated and atomically becomes the 
     const result = await verifier.check();
     assert.equal(result.verified, true);
     assert.equal(result.changedHost, true);
-    assert.equal(call.token, 'owner-token');
+    assert.ok(oauthTokens.verifyAccessToken(
+      readJson(fx.configFile, null, { strict: true, supportedVersion: true }),
+      call.token,
+      'https://new.example.com/mcp'
+    ));
     assert.equal(call.clientName, 'devmate-vscode-runtime-recovery');
     assert.equal(call.publicUrl, 'https://new.example.com');
     assert.equal(verifiedEvent.publicHost, 'new.example.com');
@@ -348,11 +353,11 @@ test('already verified current Gateway+tunnel generation performs no duplicate n
   }
 });
 
-test('authentication-disabled config performs recovery preflight without a bearer token', async () => {
+test('direct no-auth config performs recovery preflight without a bearer token', async () => {
   const fx = fixture();
   try {
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
-    config.auth = { required: false, token: 'must-not-be-sent' };
+    config.auth = { mode: 'none' };
     atomicWriteJson(fx.configFile, config);
     let observedToken = null;
     const verifier = new PublicTunnelVerifier({

@@ -62,7 +62,7 @@ class VscodeHostLifecycle {
         workspaceRoot: this.workspaceRootAtActivation,
         preferredPort: Number(setting(this.vscode, 'port', 8787)),
         appVersion: context.extension?.packageJSON?.version || APP_VERSION,
-        defaultConnectionProvider: 'cloudflare-quick'
+        defaultConnectionProvider: 'ngrok'
       });
     }
 

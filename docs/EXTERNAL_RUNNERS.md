@@ -3,8 +3,8 @@
 External Runners separate the central DevMate control plane from machines that execute builds, validation, Browser QA, Godot work, and platform-specific jobs.
 
 ```text
-ChatGPT / team clients
-        │ MCP + owner/dmt_ token
+ChatGPT / trusted clients
+        │ MCP (OAuth when shared)
         ▼
 Central DevMate Gateway
   ├─ identities / RBAC / approvals
@@ -15,7 +15,7 @@ Central DevMate Gateway
         │ HTTPS /runner/v1 + dmr_ token
         │
 External Runner Agent
-        │ loopback MCP + local owner token
+        │ loopback-only local MCP
         ▼
 Runner-local DevMate Gateway
   ├─ workspace protections
@@ -23,7 +23,7 @@ Runner-local DevMate Gateway
   └─ optional Browser QA / Godot plugins
 ```
 
-The central Gateway never sends owner or member MCP credentials to a Runner. `dmr_` credentials are accepted only by `/runner/v1`.
+The central Gateway never sends public MCP OAuth data to a Runner. `dmr_` credentials are accepted only by `/runner/v1`.
 
 ## Requirements
 

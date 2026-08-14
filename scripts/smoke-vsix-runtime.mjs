@@ -146,10 +146,10 @@ try {
   assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
   const verify = extensionSource.slice(verifyStart, verifyEnd);
   assert.match(verify, /return verifySharedPublicMcp\(\{/, 'VSIX verification must delegate to the shared single-flight verifier');
-  assert.match(verify, /token: data\.auth\?\.required === false \? '' : String\(data\.auth\?\.token \|\| ''\)/, 'VSIX verification must pass the current owner bearer token');
+  assert.match(verify, /token: preflightAccessToken\(data, publicUrl\)/, 'VSIX verification must use no credential by default and a short-lived OAuth token only when OAuth is enabled');
 
   const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
-  assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must authenticate requests');
+  assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must attach a short-lived OAuth token when one is supplied');
   assert.match(publicMcpSource, /'mcp-session-id'/, 'VSIX shared preflight must carry MCP session state');
   assert.match(publicMcpSource, /method: 'tools\/list'/, 'VSIX shared preflight must verify tools/list');
 

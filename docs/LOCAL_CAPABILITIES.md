@@ -14,7 +14,7 @@ These features extend convenience without turning the normal file tools into unr
 - Adding or removing a trusted writable root requires the `fullAccess` permission profile.
 - Persistent process execution is blocked by `readOnly` and follows the existing dangerous-command guard in `balanced` mode.
 - Processes run as the operating-system user that launched VS Code. DevMate cannot bypass UAC, filesystem ACLs, `sudo`, containers, Remote SSH boundaries, or other OS controls.
-- Public MCP access still requires the DevMate connection token by default.
+- Public MCP uses the direct no-auth default. OAuth is available only when a shared or published app needs it.
 
 ## Trusted writable roots
 
@@ -114,8 +114,8 @@ This avoids leaving common child processes, watchers, and shells orphaned after 
   "devMate.blockDangerousOperations": false,
   "devMate.confirmBeforePush": false,
   "devMate.allowDirectoryMutations": true,
-  "devMate.requireAuthToken": true
+  "devMate.authenticationMode": "none"
 }
 ```
 
-Keep `devMate.requireAuthToken` enabled. Trusted roots and persistent commands increase the value of the local gateway, so the public MCP URL must continue to be treated as a secret.
+Use `"oauth"` only when turning DevMate into a shared or published app. The ordinary private desktop flow remains no-auth.

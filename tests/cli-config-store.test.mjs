@@ -28,7 +28,7 @@ test('standalone initialization writes the supported capability schema atomicall
   assert.equal(result.file, config);
   assert.equal(persisted.version, configStore.SUPPORTED_CONFIG_VERSION);
   assert.equal(persisted.appVersion, packageJson.version);
-  assert.equal(persisted.auth.token, result.token);
+  assert.deepEqual(persisted.auth, { mode: 'none' });
   assert.equal(persisted.connection.provider, 'ngrok');
   assert.equal('deployment' in persisted, false);
   assert.equal('production' in persisted, false);

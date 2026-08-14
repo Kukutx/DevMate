@@ -10,6 +10,7 @@ const { readGatewayInstanceLock } = require('../host/runtime/instance-lock-clean
 const {
   readJson
 } = require('../shared/config-store.cjs');
+const { preflightAccessToken } = require('../shared/oauth-tokens.cjs');
 const {
   hostOf,
   recordGeneration,
@@ -218,14 +219,13 @@ class PublicTunnelVerifier {
     let success = null;
     let failure = null;
     try {
-      const token = config.auth?.required === false ? '' : String(config.auth?.token || '');
       const verification = await verifySharedPublicMcp({
         stateDirectory: this.stateDirectory,
         configFile: this.configFile,
         publicUrl: record.publicUrl,
         expectedRecord: record,
         currentRecord: () => this.currentSession(this.readConfig()).record,
-        token,
+        token: preflightAccessToken(config, record.publicUrl),
         clientName: 'devmate-vscode-runtime-recovery',
         clientVersion: this.appVersion,
         maxEvidenceAgeMs: this.verifiedMaxAgeMs,

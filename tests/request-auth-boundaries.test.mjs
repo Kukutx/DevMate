@@ -4,7 +4,7 @@ import { authenticateGatewayRequest, __test } from '../gateway/request-guard.mjs
 
 function unauthenticatedConfig() {
   return {
-    auth: { required: false },
+    auth: { mode: 'none' },
     connection: { provider: 'ngrok', publicUrl: '' },
     team: { members: [] },
     requestPolicy: {},
@@ -46,28 +46,24 @@ test('disabling authentication permits owner access through local and public ing
   assert.equal(mappedIpv4Principal?.role, 'owner');
 });
 
-test('inner Gateway never receives the caller credential', () => {
+test('no-auth strips irrelevant authorization while OAuth preserves its access token', () => {
   const req = {
     headers: {
-      authorization: 'Bearer dmt_member_secret',
-      'x-devmate-token': 'dmt_member_secret'
+      authorization: 'Bearer irrelevant-caller-value'
     }
   };
   assert.equal(__test.normalizeInnerAuthorization(req, {
-    auth: { required: true, token: 'owner-token' }
-  }, { source: 'team-token' }), true);
-  assert.equal(req.headers.authorization, 'Bearer owner-token');
-  assert.equal(req.headers['x-devmate-token'], undefined);
+    auth: { mode: 'none' }
+  }), true);
+  assert.equal(req.headers.authorization, undefined);
 
-  const openReq = {
+  const oauthReq = {
     headers: {
-      authorization: 'Bearer caller-secret',
-      'x-devmate-token': 'caller-secret'
+      authorization: 'Bearer oauth-access-token'
     }
   };
-  assert.equal(__test.normalizeInnerAuthorization(openReq, {
-    auth: { required: false }
-  }, { source: 'local' }), true);
-  assert.equal(openReq.headers.authorization, undefined);
-  assert.equal(openReq.headers['x-devmate-token'], undefined);
+  assert.equal(__test.normalizeInnerAuthorization(oauthReq, {
+    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } }
+  }), true);
+  assert.equal(oauthReq.headers.authorization, 'Bearer oauth-access-token');
 });

@@ -3,6 +3,7 @@
 const CONNECTION_PROVIDERS = Object.freeze(['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
 const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
 const LIFECYCLE_STATES = Object.freeze(['running', 'stopped']);
+const { normalizeAuthentication } = require('./auth-config.cjs');
 
 const REQUEST_POLICY_LIMITS = Object.freeze({
   maxRequestBytes: Object.freeze([64 * 1024, 32 * 1024 * 1024]),
@@ -99,6 +100,10 @@ function normalizeInstanceConfig(config) {
     provider: strictEnum(previousConnection.provider, CONNECTION_PROVIDERS, 'ngrok', 'connection provider'),
     publicUrl: cleanPublicUrl(previousConnection.publicUrl)
   };
+
+  // Personal desktop use is intentionally direct. Older bearer-token config is
+  // discarded here; OAuth is the only optional public-app authentication mode.
+  config.auth = normalizeAuthentication(config);
 
   const team = object(config.team, 'team');
   team.members = Array.isArray(team.members) ? team.members : [];

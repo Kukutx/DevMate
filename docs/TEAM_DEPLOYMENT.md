@@ -1,27 +1,27 @@
 # Team access and hardened deployments
 
-DevMate is a local-first development gateway. A single instance can combine owner access, scoped team members, public connection providers, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
+DevMate is a local-first development gateway. A single instance can combine public connection providers, optional OAuth, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
 
 ## Capability composition
 
 A current instance can compose:
 
 - **Connection** — `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or `external` HTTPS ingress.
-- **Access** — the owner credential plus optional scoped `dmt_` members.
+- **Access** — direct no-auth personal use or OAuth for a trusted shared/published app.
 - **Coordination** — work sessions and optional workspace-lease enforcement for shared mutations.
 - **Approval** — optional dual-control policy for selected high-risk capabilities.
 - **Request policy** — Host restrictions, request-size, rate, concurrency and timeout limits.
 - **Execution** — embedded execution and/or scoped external `dmr_` Runners.
 - **Operations** — durable jobs, audit, metrics, maintenance and drain controls.
 
-Adding team members does not change the connection provider. Hardening request policy does not create a second runtime. Moving execution to external Runners does not change MCP identity or workspace authorization.
+Changing authentication does not change the connection provider. Hardening request policy does not create a second runtime. Moving execution to external Runners does not change MCP identity or workspace authorization.
 
 ## Configuration ownership
 
 The machine-wide desktop `config.json` is the business source of truth for current capabilities, including:
 
 - `connection.provider` and `connection.publicUrl`;
-- `team.members`, default role, member limit and lease policy;
+- workspace lease and approval policy;
 - `requestPolicy` limits and optional Host allowlist;
 - Runner control and credentials metadata;
 - approval, jobs, plugins, permissions and maintenance state.
@@ -43,37 +43,13 @@ Current providers:
 
 `cloudflare-managed` and `external` require an explicit clean HTTPS origin. Dynamic providers may publish their runtime origin automatically.
 
-For desktop hosts, Ready is not derived from provider status alone. The active **Gateway + provider complete-session generation** must pass authenticated MCP `initialize` and `tools/list`. A Gateway restart, provider restart or ownership transfer invalidates old verification even when the hostname is unchanged.
+For desktop hosts, Ready is not derived from provider status alone. The active **Gateway + provider complete-session generation** must pass MCP `initialize` and `tools/list` under the active authentication mode. A Gateway restart, provider restart or ownership transfer invalidates old verification even when the hostname is unchanged.
 
 See `TUNNELS.md` and `HOST_INTEGRATION.md`.
 
-## Team identities
+## Shared access
 
-Roles are cumulative:
-
-```text
-observer → reviewer → developer → maintainer → owner
-```
-
-The per-instance owner token remains the recovery credential. Team tokens use the `dmt_` credential family and are stored only as salted hashes; plaintext is returned only when a credential is created or rotated.
-
-Member administration:
-
-- `team_member_create`
-- `team_member_update`
-- `team_member_rotate`
-- `team_member_revoke`
-- `team_member_list`
-
-Recommended practice:
-
-1. Create a separate principal for each human, bot or connector.
-2. Assign the minimum role and explicit workspace scope.
-3. Use expiry for temporary access.
-4. Rotate immediately after suspected exposure.
-5. Keep the owner token out of routine shared workflows.
-
-Team credentials do not bypass the tool policy. High-risk Git, shell, publish and administrative operations remain capability-gated.
+Public MCP does not accept static owner or member tokens. The normal private instance uses no authentication; a shared or published instance uses OAuth. All users of one DevMate instance are therefore inside the same trusted operating-system and workspace boundary. Use separate OS accounts, machines, containers, or DevMate instances when trust boundaries differ.
 
 ## Work sessions and workspace leases
 
@@ -90,7 +66,7 @@ Explicit lease operations remain available:
 - `workspace_lease_status`
 - `workspace_lease_release`
 
-When `team.requireWorkspaceLeaseForWrites` is enabled, scoped remote principals must own the required workspace lease before mutations covered by policy. The local owner remains a recovery path.
+When `team.requireWorkspaceLeaseForWrites` is enabled for advanced coordination, applicable remote work must own the required workspace lease before mutations covered by policy. Local desktop operation remains the recovery path.
 
 `work_session_start` resolves one workspace, validates the caller's scope and creates or renews the matching lease atomically. `work_session_finish` releases only the exact lease tenure belonging to that session. `work_session_rollback` reverses recorded file mutations, not arbitrary shell effects or Git history.
 
@@ -193,9 +169,9 @@ The `deployment_*` prefix identifies operational status APIs; it does **not** im
 Before exposing a long-lived instance remotely:
 
 1. Choose and verify the intended public connection provider.
-2. Keep DevMate authentication enabled even when the edge also authenticates users.
+2. Enable OAuth even when the edge also authenticates users.
 3. Configure explicit Host policy when your deployment requires it.
-4. Create scoped member credentials instead of distributing the owner token.
+4. Use separate DevMate instances for unrelated users or trust domains.
 5. Enable workspace-lease enforcement when multiple remote principals can mutate the same checkout.
 6. Configure dual-control approval where organizational policy requires it.
 7. Set bounded request, concurrency and timeout policy appropriate to the host.

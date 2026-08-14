@@ -7,7 +7,8 @@ const { verifySharedPublicMcp } = require('../../host/shared-public-mcp-verifica
 const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
 const { RuntimeController, resolveStateDirectory, workspaceRuntimeId } = require('../../host/runtime-controller.js');
-const { updateConfig } = require('../../shared/config-store.cjs');
+const { configureAuthentication, updateConfig } = require('../../shared/config-store.cjs');
+const { preflightAccessToken } = require('../../shared/oauth-tokens.cjs');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { normalizeInstanceConfig } = require('../../shared/instance-config.cjs');
 const {
@@ -84,7 +85,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.addCommand({ id: 'restart', name: 'Restart', callback: () => this.restartRuntime() });
     this.addCommand({ id: 'open', name: 'Open panel', callback: () => this.openView() });
     this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });
-    this.addCommand({ id: 'copy-token', name: 'Copy MCP bearer token', callback: () => this.copyConnectionToken() });
+    this.addCommand({ id: 'copy-oauth-approval-code', name: 'Copy OAuth approval code', callback: () => this.copyOAuthApprovalCode() });
     this.addCommand({ id: 'copy-context', name: 'Copy active vault context', callback: () => this.copyContextBundle() });
     this.addCommand({ id: 'copy-diagnostics', name: 'Copy diagnostics', callback: () => this.copyDiagnostics() });
 
@@ -221,7 +222,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   connectionConfiguration() {
     const config = this.controller?.readConfig?.() || null;
-    if (!config) return { provider: 'cloudflare-quick', publicUrl: '' };
+    if (!config) return { provider: 'ngrok', publicUrl: '' };
     normalizeInstanceConfig(config);
     return {
       provider: config.connection.provider,
@@ -301,7 +302,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           publicUrl: normalized,
           expectedRecord: initialRecord,
           currentRecord: () => this.currentTunnelRecord(initialRecord.port),
-          token: this.controller.ownerToken(),
+          token: this.preflightToken(normalized),
           clientName: 'devmate-obsidian-preflight',
           clientVersion: this.manifest.version,
           logger: message => this.logRuntime(message)
@@ -324,6 +325,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       }
     })();
     return this.publicVerificationPromise;
+  }
+
+  preflightToken(publicUrl) {
+    const config = this.controller?.readConfig?.();
+    return preflightAccessToken(config, publicUrl);
   }
 
   reconfigureRuntime(options = {}) {
@@ -378,7 +384,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         gatewayEntry: path.join(pluginDirectory, 'gateway', 'server.mjs'),
         preferredPort: this.settings.preferredPort,
         appVersion: this.manifest.version,
-        defaultConnectionProvider: 'cloudflare-quick',
+        defaultConnectionProvider: 'ngrok',
         hostId: this.hostInstanceId,
         logger: message => this.logRuntime(message)
       });
@@ -406,6 +412,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       }
     }
     this.controller.ensureConfig();
+    updateConfig(this.controller.configFile, config => {
+      normalizeInstanceConfig(config);
+      configureAuthentication(config, this.settings.authenticationMode);
+      return config;
+    });
 
     if (!this.settings.enabled) {
       this.sessionRequested = false;
@@ -825,17 +836,16 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
   }
 
-  async copyConnectionToken() {
+  async copyOAuthApprovalCode() {
     try {
-      const token = this.controller.ownerToken();
-      if (!token) {
-        new Notice('DevMate authentication is disabled or no owner token is configured.');
-        return;
-      }
-      await navigator.clipboard.writeText(token);
-      new Notice('DevMate bearer token copied. Keep it private and use it in the Authorization header.');
+      this.controller.ensureConfig();
+      const config = this.controller.readConfig();
+      const approvalCode = String(config?.auth?.mode === 'oauth' ? config.auth.oauth?.approvalCode || '' : '');
+      if (!approvalCode) throw new Error('OAuth is not enabled. DevMate uses no authentication by default.');
+      await navigator.clipboard.writeText(approvalCode);
+      new Notice('DevMate OAuth approval code copied. Paste it only into this DevMate authorization page.');
     } catch (error) {
-      new Notice(`Could not copy bearer token: ${error.message || error}`);
+      new Notice(`Could not copy OAuth approval code: ${error.message || error}`);
     }
   }
 

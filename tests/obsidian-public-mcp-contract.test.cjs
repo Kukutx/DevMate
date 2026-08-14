@@ -107,7 +107,7 @@ test('Obsidian automatic URL copy is convenience after Ready, not a required Sta
 test('Obsidian Copy MCP URL verifies the active public endpoint generation before copying it', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async copyConnectionUrl()');
-  const end = main.indexOf('async copyConnectionToken()', start);
+  const end = main.indexOf('async copyContextBundle()', start);
   assert.ok(start >= 0 && end > start);
   const block = main.slice(start, end);
   assert.match(block, /await this\.verifyPublicEndpoint\(publicUrl, tunnel\.record\)/);
@@ -122,7 +122,8 @@ test('Obsidian uses provider-native shared connection ownership with secure opti
   const build = source('obsidian-plugin/esbuild.config.mjs');
   assert.match(main, /TunnelController/);
   assert.match(settings, /Connection provider/);
-  assert.match(settings, /persistent ChatGPT apps need an account-owned stable HTTPS origin/);
+  assert.match(settings, /ngrok is the default persistent ChatGPT connection/);
+  assert.match(settings, /MCP authentication/);
   assert.match(settings, /ngrokAuthtokenEncrypted/);
   assert.match(settings, /cloudflareTunnelTokenEncrypted/);
   assert.match(settings, /OS-backed Electron safe storage API/);

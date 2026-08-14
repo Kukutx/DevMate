@@ -23,6 +23,16 @@ test('VS Code unified panel exposes the complete necessary lifecycle actions', (
   assert.doesNotMatch(panel, /data-cmd="copyUrl">Copy URL<\/button>/);
 });
 
+test('VS Code panel creates its CSP nonce at runtime', () => {
+  assert.match(extension, /const crypto = require\('node:crypto'\)/);
+  assert.match(extension, /function nonce\(\)\{ return crypto\.randomBytes\(16\)\.toString\('base64'\); \}/);
+  const panelStart = extension.indexOf('function panelHtml(ctx, webview)');
+  const panelEnd = extension.indexOf('function refreshPanel()', panelStart);
+  const panel = extension.slice(panelStart, panelEnd);
+  assert.match(panel, /const n = nonce\(\)/);
+  assert.match(panel, /script-src 'nonce-\$\{n\}'/);
+});
+
 test('panel and command Restart share the same complete stop then Start lifecycle', () => {
   const restartStart = extension.indexOf('async function restartAll(ctx)');
   const restartEnd = extension.indexOf('async function copyUrl()', restartStart);

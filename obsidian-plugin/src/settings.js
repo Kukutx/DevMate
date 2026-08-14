@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   nodeExecutable: '',
   captureSelection: true,
   autoCopyUrl: true,
+  authenticationMode: 'none',
   ngrokCommandPath: '',
   ngrokPoolingEnabled: false,
   tunnelAutoRestart: true,
@@ -42,6 +43,7 @@ function normalizeSettings(value = {}) {
     nodeExecutable: String(input.nodeExecutable || '').trim(),
     captureSelection: input.captureSelection !== false,
     autoCopyUrl: input.autoCopyUrl !== false,
+    authenticationMode: input.authenticationMode === 'oauth' ? 'oauth' : 'none',
     ngrokCommandPath: String(input.ngrokCommandPath || '').trim(),
     ngrokPoolingEnabled: input.ngrokPoolingEnabled === true,
     tunnelAutoRestart: input.tunnelAutoRestart !== false,
@@ -132,12 +134,12 @@ class DevMateSettingTab extends PluginSettingTab {
         }));
 
     const connection = this.plugin.connectionConfiguration();
-    const provider = tunnelProvider(connection.provider || 'cloudflare-quick');
+    const provider = tunnelProvider(connection.provider || 'ngrok');
     const stability = publicConnectionStability({ provider, publicUrl: connection.publicUrl || '' });
 
     new Setting(containerEl)
       .setName('Connection provider')
-      .setDesc('The shared HTTPS provider used by this DevMate instance. Cloudflare Quick is a one-click session share; persistent ChatGPT apps need an account-owned stable HTTPS origin.')
+      .setDesc('The shared HTTPS provider used by this DevMate instance. ngrok is the default persistent ChatGPT connection; Cloudflare and external ingress are optional.')
       .addDropdown(dropdown => {
         for (const value of PROVIDERS) dropdown.addOption(value, value);
         return dropdown
@@ -174,6 +176,19 @@ class DevMateSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('ChatGPT app address')
       .setDesc(stability.message);
+
+    new Setting(containerEl)
+      .setName('MCP authentication')
+      .setDesc('None is the direct private-use default. Choose OAuth only when sharing or publishing this DevMate app.')
+      .addDropdown(dropdown => dropdown
+        .addOption('none', 'None (default)')
+        .addOption('oauth', 'OAuth (shared or published app)')
+        .setValue(this.plugin.settings.authenticationMode)
+        .onChange(async value => {
+          this.plugin.settings.authenticationMode = value === 'oauth' ? 'oauth' : 'none';
+          await this.plugin.saveSettings();
+          this.plugin.scheduleReconfigure();
+        }));
 
     if (provider === 'ngrok') {
       new Setting(containerEl)

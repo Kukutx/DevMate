@@ -8,6 +8,7 @@ const {
   updateConfig
 } = require('../shared/config-store.cjs');
 const { assertSupportedInstanceShape } = require('../shared/instance-config.cjs');
+const { normalizeAuthentication } = require('../shared/auth-config.cjs');
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -106,11 +107,9 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   if (has(current, 'server')) merged.server = current.server;
   else if (has(candidate, 'server')) merged.server = candidate.server;
 
-  const currentAuth = object(current.auth);
-  const candidateAuth = object(candidate.auth);
-  merged.auth = { ...currentAuth };
-  if (has(candidateAuth, 'required')) merged.auth.required = candidateAuth.required;
-  if (!has(currentAuth, 'token') && has(candidateAuth, 'token')) merged.auth.token = candidateAuth.token;
+  if (has(candidate, 'auth')) merged.auth = normalizeAuthentication({ auth: candidate.auth });
+  else if (has(current, 'auth')) merged.auth = normalizeAuthentication({ auth: current.auth });
+  else delete merged.auth;
 
   const currentRuntime = object(current.runtime);
   const candidateRuntime = object(candidate.runtime);

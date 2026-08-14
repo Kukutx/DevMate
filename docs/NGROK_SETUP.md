@@ -1,6 +1,6 @@
 # ngrok setup and account switching
 
-ngrok is DevMate's optional stable desktop public-connection provider. Fresh desktop instances use account-free Cloudflare Quick; choose ngrok once in `DevMate: Connection Setup` when a stable account-owned endpoint is preferable.
+ngrok is DevMate's default desktop public-connection provider. Configure it once in `DevMate: Connection Setup`; normal Start/Stop cycles reuse the account-owned HTTPS setup.
 
 For a machine where ngrok is already installed and configured, no ngrok setup action is required: open the project and run `DevMate: Start`.
 
@@ -56,7 +56,7 @@ A stable ngrok URL is optional. When needed, configure a clean HTTPS URL/hostnam
 https://your-name.ngrok-free.app
 ```
 
-Do not append `/mcp`; DevMate adds the MCP path when presenting the verified connector URL. **DevMate never appends the bearer credential to the URL.** MCP authentication remains a separate `Authorization: Bearer ...` request header.
+Do not append `/mcp`; DevMate adds the MCP path when presenting the verified connector URL. The normal ChatGPT setup selects **No authentication**. If OAuth is deliberately enabled for a shared or published app, ChatGPT completes the OAuth flow; DevMate never appends credentials or OAuth data to the URL.
 
 The shared instance connection remains authoritative for the active endpoint. `devMate.ngrokUrl` is a machine-local setup candidate, not a second business-state source.
 

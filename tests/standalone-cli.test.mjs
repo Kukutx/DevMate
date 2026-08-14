@@ -12,15 +12,15 @@ async function tempRoot(t, prefix = 'devmate-cli-') {
   return root;
 }
 
-test('creates one secure standalone instance, owner URL, and optional member access', async t => {
+test('creates one secure standalone instance, MCP URL, and optional member access', async t => {
   const root = await tempRoot(t);
   const config = path.join(root, 'state', 'config.json');
   const result = __test.initConfig({ config, workspace: root, provider: 'external', 'public-url': 'devmate.example.com' });
   assert.equal(result.config.connection.provider, 'external');
   assert.equal(result.config.connection.publicUrl, 'https://devmate.example.com');
   assert.equal('deployment' in result.config, false);
-  assert.equal(__test.ownerUrl({ config }), 'https://devmate.example.com/mcp');
-  assert.match(result.token, /^[A-Za-z0-9_-]{40,}$/);
+  assert.equal(__test.mcpUrl({ config }), 'https://devmate.example.com/mcp');
+  assert.equal(result.config.auth.mode, 'none');
   const created = __test.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
   assert.match(created.token, /^dmt_/);
   assert.equal(__test.memberList({ config })[0].name, 'Alice');

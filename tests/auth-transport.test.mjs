@@ -12,9 +12,10 @@ const publicMcp = fs.readFileSync(path.join(root, 'host', 'public-mcp.js'), 'utf
 const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'main.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
-test('Gateway accepts credentials only from request headers', () => {
-  assert.match(gateway, /authorization/);
-  assert.match(gateway, /x-devmate-token/);
+test('Gateway defaults to direct no-auth MCP and keeps OAuth as the optional modern authentication path', () => {
+  assert.match(gateway, /auth\?\.mode === 'none'/);
+  assert.match(gateway, /oauthAccessToken/);
+  assert.doesNotMatch(gateway, /x-devmate-token/);
   assert.doesNotMatch(gateway, /searchParams\.get\('token'\)/);
 });
 
@@ -29,11 +30,15 @@ test('connection URLs never embed owner credentials and VS Code delegates authen
   assert.match(publicMcp, /method: 'tools\/list'/);
 });
 
-test('VS Code and Obsidian expose separate bearer-token copy commands', () => {
-  assert.match(extension, /devMate\.copyToken/);
-  assert.match(extension, /copyConnectionToken/);
-  assert.equal(packageJson.contributes.commands.some(command => command.command === 'devMate.copyToken'), true);
-  assert.match(obsidian, /id: 'copy-token'/);
-  assert.match(obsidian, /this\.controller\.ownerToken\(\)/);
-  assert.match(controller, /ownerToken\(\)/);
+test('desktop hosts do not expose legacy copied Bearer-token commands', () => {
+  assert.doesNotMatch(extension, /devMate\.copyToken/);
+  assert.doesNotMatch(extension, /copyConnectionToken/);
+  assert.equal(packageJson.contributes.commands.some(command => command.command === 'devMate.copyToken'), false);
+  assert.doesNotMatch(obsidian, /id: 'copy-token'/);
+  assert.doesNotMatch(obsidian, /ownerToken\(/);
+  assert.doesNotMatch(controller, /ownerToken\(/);
+  assert.match(extension, /authenticationMode\(\)/);
+  assert.match(obsidian, /authenticationMode/);
+  assert.match(extension, /copyOAuthApprovalCode/);
+  assert.match(obsidian, /copyOAuthApprovalCode/);
 });

@@ -22,7 +22,7 @@ function workspaceAndConfig(prefix) {
   return { workspaceRoot, state, configFile: path.join(state, 'config.json') };
 }
 
-test('recovers the newest valid Windows replacement instead of resetting identity and token', () => {
+test('recovers the newest valid Windows replacement without resetting identity or authentication mode', () => {
   const { workspaceRoot, configFile } = workspaceAndConfig('devmate-config-recover');
   const original = ensureInstanceConfig({ configFile, workspaceRoot, preferredPort: 9234 });
   original.custom = { preserved: true };
@@ -32,7 +32,7 @@ test('recovers the newest valid Windows replacement instead of resetting identit
 
   const recovered = ensureInstanceConfig({ configFile, workspaceRoot, preferredPort: 9999 });
   assert.equal(recovered.instanceId, original.instanceId);
-  assert.equal(recovered.auth.token, original.auth.token);
+  assert.deepEqual(recovered.auth, { mode: 'none' });
   assert.deepEqual(recovered.custom, { preserved: true });
   assert.equal(recovered.server.port, 9234);
   assert.equal(fs.existsSync(replacement), false);

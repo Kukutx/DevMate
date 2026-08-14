@@ -6,7 +6,7 @@ DevMate is a local-first development control plane. One codebase supports deskto
 
 ```text
 VS Code / Obsidian / standalone CLI / ChatGPT
-                    │ MCP + owner or dmt_ identity
+                    │ MCP (no auth by default; OAuth when enabled)
                     ▼
               DevMate Gateway
         ├─ HTTP request policy and observability
@@ -135,7 +135,7 @@ Workspace resolution is ID-first through `gateway/workspace-resolver.mjs`; displ
 
 Work sessions and their matching workspace leases are persisted atomically. A failed start cannot leave only a lease; a failed finish cannot drop only one half of an active session.
 
-Workspace lease enforcement is an explicit policy capability. Remote owner/member identities are subject to it when enabled, while the local owner remains a recovery path. Approval policy is likewise explicit and does not depend on a runtime mode.
+Workspace lease enforcement is an explicit policy capability for coordinated remote work, while local desktop operation remains a recovery path. Approval policy is likewise explicit and does not depend on a runtime mode.
 
 ## Processes
 

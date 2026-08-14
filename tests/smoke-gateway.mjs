@@ -5,7 +5,6 @@ import path from 'node:path';
 
 const root = process.cwd();
 const port = Number(process.env.DEVMATE_SMOKE_PORT || 8798);
-const token = 'smoke-token';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `devmate-smoke-${port}-`));
 const configPath = path.join(tempRoot, 'config.json');
 const bundledGateway = path.join(root, 'gateway', 'server.bundle.mjs');
@@ -13,13 +12,13 @@ const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundl
 
 const config = {
   version: 11,
-  appVersion: '3.4.3',
+  appVersion: '3.4.4',
   instanceId: `smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
   runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },
   maintenance: { backupRetentionDays: 30, auditRetentionDays: 30, maxBackupBytes: 268435456, maxAuditBytes: 5242880 },
   connection: { lastPreflightAt: new Date().toISOString(), lastPublicHost: 'example.ngrok-free.app', lastMcpPath: '/mcp', lastToolCount: 49, lastServerName: 'devmate', lastError: '' },
-  auth: { required: true, token },
+  auth: { mode: 'none' },
   permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: false, confirmBeforePush: false, allowDirectoryMutations: true },
   vscodeContext: {
     capturedAt: new Date().toISOString(),
@@ -83,12 +82,11 @@ async function waitReady() {
   throw new Error(`Gateway did not become ready.\nstdout=${stdout}\nstderr=${stderr}`);
 }
 
-async function rpc(method, params, authToken = token) {
+async function rpc(method, params) {
   const headers = {
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream'
   };
-  if (authToken) headers.authorization = `Bearer ${authToken}`;
   return fetchJson(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
     headers,
@@ -117,8 +115,8 @@ try {
   assert(publicHealth.response.ok && publicHealth.json?.status === 'ok', 'public health failed');
   assert(!Object.hasOwn(publicHealth.json, 'configPath'), 'public health leaked configPath');
 
-  const noAuth = await rpc('tools/list', {}, '');
-  assert(noAuth.response.status === 401, `expected unauthenticated MCP request to return 401, got ${noAuth.response.status}`);
+  const noAuth = await rpc('tools/list', {});
+  assert(noAuth.response.ok, `expected default no-auth MCP request to succeed, got ${noAuth.response.status}`);
 
   const init = await rpc('initialize', {
     protocolVersion: '2025-03-26',

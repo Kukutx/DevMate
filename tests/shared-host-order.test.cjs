@@ -36,7 +36,7 @@ test('Obsidian-first and VS-Code-first shared config both use the same ngrok con
       assert.deepEqual(reused.connection, created.connection);
       assert.equal(reused.server.port, 8787, 'a later host preference must not replace the shared active port');
       assert.equal(reused.instanceId, created.instanceId, 'both hosts must retain one shared Gateway identity');
-      assert.equal(reused.auth.token, created.auth.token, 'both hosts must retain one shared owner credential');
+      assert.deepEqual(reused.auth, created.auth, 'both hosts must retain one shared authentication mode');
     } finally {
       fs.rmSync(value.workspaceRoot, { recursive: true, force: true });
       fs.rmSync(value.stateDirectory, { recursive: true, force: true });

@@ -8,12 +8,10 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('authentication tokens are accepted only from request headers', async () => {
-  const { extractRequestToken } = await import('../gateway/team-access.mjs');
-  const queryOnly = { headers: {}, url: '/mcp?token=query-secret' };
-  assert.equal(extractRequestToken(queryOnly), '');
-  assert.equal(extractRequestToken({ headers: { authorization: 'Bearer bearer-secret' }, url: '/mcp?token=query-secret' }), 'bearer-secret');
-  assert.equal(extractRequestToken({ headers: { 'x-devmate-token': 'header-secret' }, url: '/mcp?token=query-secret' }), 'header-secret');
+test('legacy MCP token transport is absent', () => {
+  const source = read('gateway/server.mjs');
+  assert.doesNotMatch(source, /x-devmate-token/);
+  assert.doesNotMatch(source, /searchParams\.get\('token'\)/);
 });
 
 test('credential rotation does not implicitly reactivate revoked identities', () => {

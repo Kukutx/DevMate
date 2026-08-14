@@ -66,10 +66,10 @@ test('configured and project commands require execute authorization', () => {
   }
 });
 
-test('owner token remains unrestricted by member workspace scopes', () => {
+test('OAuth owner principal remains unrestricted by member workspace scopes', () => {
   const current = normalizeInstanceConfig(config());
   current.workspaces.push({ id: 'other', name: 'Other', reference: false, mode: 'workspace-write' });
-  const principal = verifyAccessToken('owner-secret-token-value', current);
+  const principal = { id: 'owner', name: 'OAuth owner', role: 'owner', workspaceIds: [], source: 'oauth' };
   assert.equal(principal.role, 'owner');
   assert.equal(authorizeToolCall({ name: 'read_file', annotations: { readOnlyHint: true }, args: { workspaceId: 'other' }, config: current, principal }).workspaceId, 'other');
 });

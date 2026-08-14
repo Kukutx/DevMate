@@ -1,6 +1,6 @@
 # Security Policy
 
-DevMate is a local-first development gateway with filesystem, process, Git, browser, queued-job, external-Runner, and optional platform capabilities. Treat every owner/member/Runner credential and every public endpoint as sensitive.
+DevMate is a local-first development gateway with filesystem, process, Git, browser, queued-job, external-Runner, and optional platform capabilities. Treat OAuth, provider, and Runner credentials and every public endpoint as sensitive.
 
 ## Network boundary
 
@@ -10,19 +10,19 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
 - `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits. These protections are capabilities, not a production runtime mode.
 - Runner control requests have their own bounded body, rate and protocol-version requirements.
-- Keep DevMate application authentication enabled even when ngrok, Cloudflare Access, a VPN, or another identity-aware edge also authenticates traffic.
+- Personal desktop MCP is intentionally no-auth. Enable OAuth for a shared or published app, including when an edge identity layer is also present.
 
 ## Credentials and identities
 
-- The generated instance owner token is the recovery/administrative credential.
-- Team/member tokens use the `dmt_` credential family and are returned once; only salted hashes are persisted.
+- Public MCP uses no authentication by default or OAuth when explicitly enabled; it never uses a copied static owner token.
+- Advanced member capability records are not a public MCP setup path and must not be presented as one.
 - External Runner tokens use the `dmr_` credential family and are returned once; only salted hashes are persisted.
 - `dmr_` credentials are accepted only by `/runner/v1`; they cannot call MCP tools.
 - Runner credentials require explicit workspace scope and support capability limits, concurrency, expiry, rotation, disable, and revocation.
 - Members support role, workspace scope, expiry, rotation, disable, and revocation.
 - DevMate-managed ngrok and Cloudflare credentials remain in host-local secure storage or provider process environments, not project files or shared `config.json`.
-- Never place owner, member, Runner, provider, preview, or artifact-service credentials in URLs, issues, screenshots, shared logs, shell history, process arguments, or CI artifacts.
-- Public MCP URLs contain no owner/member credential. Authentication is carried in request headers.
+- Never place OAuth, Runner, provider, preview, or artifact-service credentials in URLs, issues, screenshots, shared logs, shell history, process arguments, or CI artifacts.
+- Public MCP URLs contain no credentials. OAuth uses the standard authorization flow.
 
 ## Authorization and coordination
 
@@ -53,7 +53,7 @@ Desktop Stop is ownership-aware:
 - A Runner receives a job only after central execution preflight re-checks current policy.
 - Runner heartbeat capabilities and workspace IDs are intersected with credential scope; a Runner cannot widen its own authorization.
 - Runner credentials with an empty workspace scope are invalid.
-- Each Runner host uses its own current DevMate config/state and a loopback local Gateway for local tool execution. The local owner token never leaves that host.
+- Each Runner host uses its own current DevMate config/state and a loopback local Gateway for local tool execution. The local Gateway is never a public MCP endpoint.
 - Before spawning the local Gateway, the Agent removes central Runner-control secrets from the child environment and disables its embedded queue so project commands cannot inherit the central Runner token.
 - The Agent accepts the Runner token through a protected environment variable or token file, not a command-line token argument.
 - Revoking or rotating a Runner credential blocks new authenticated Runner requests. Owned jobs recover according to lease/retry state.

@@ -27,15 +27,16 @@ test('rejects invalid optional capabilities before creating a config', async t =
   await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
 });
 
-test('default bootstrap creates one owner-only DevMate instance without a mode', async t => {
+test('default bootstrap creates one direct no-auth DevMate instance without a mode selector', async t => {
   const current = await fixture('owner');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({ workspace: current.workspace, config: current.config });
-  assert.match(result.ownerToken, /^[A-Za-z0-9_-]{40,}$/);
+  assert.equal(result.authenticationMode, 'none');
   assert.equal(result.connection.provider, 'ngrok');
   assert.equal(result.access.ownerOnly, true);
   assert.equal(result.execution.embeddedRunnerEnabled, false);
   const config = await readConfig(current.config);
+  assert.deepEqual(config.auth, { mode: 'none' });
   assert.equal('deployment' in config, false);
   assert.equal('production' in config, false);
   assert.equal('preset' in result, false);

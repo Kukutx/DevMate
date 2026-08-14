@@ -188,8 +188,6 @@ function localMcpClient(config) {
   const port = integerValue(config.server?.port, 8787, 1, 65535, 'server.port');
   const mcpPath = config.server?.mcpPath === undefined ? '/mcp' : config.server.mcpPath;
   if (typeof mcpPath !== 'string' || !mcpPath.startsWith('/')) throw new Error('server.mcpPath must be an absolute path');
-  const token = config.auth?.token;
-  if (typeof token !== 'string' || !token) throw new Error('Runner local DevMate config must contain an owner auth token');
   let client = null;
   let transport = null;
   let connecting = null;
@@ -198,8 +196,7 @@ function localMcpClient(config) {
     if (connecting) return connecting;
     connecting = (async () => {
       const nextTransport = new StreamableHTTPClientTransport(
-        new URL(`http://127.0.0.1:${port}${mcpPath}`),
-        { requestInit: { headers: { Authorization: `Bearer ${token}` } } }
+        new URL(`http://127.0.0.1:${port}${mcpPath}`)
       );
       const nextClient = new Client(
         { name: 'devmate-external-runner', version: config.appVersion || 'unknown' },
@@ -294,7 +291,7 @@ export async function runExternalRunner(options = parseRunnerArgs(process.argv.s
   if (!fs.statSync(configPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Runner config is not a file: ${configPath}`);
   process.env.DEVMATE_CONFIG = configPath;
   const config = loadConfig(configPath);
-  if (config.auth?.required === false) throw new Error('External Runner local Gateway must keep owner-token authentication enabled');
+  if (config.auth?.mode !== 'none') throw new Error('External Runner local Gateway must use the loopback-only no-auth mode');
   const metadata = runnerMetadata(config, options);
   if (!metadata.workspaceIds.length) throw new Error('External Runner local config must contain at least one writable workspace');
   const allowHttp = booleanFlag(options['allow-http'], '--allow-http');

@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { readExtensionConfig, syncCurrentWorkspace: syncSharedWorkspace, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
@@ -11,7 +11,8 @@ const { RuntimeController, workspaceRuntimeId } = require('./host/runtime-contro
 const { childExited, terminateProcessTree } = require('./host/runtime/process-tree.js');
 const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
-const { updateConfig } = require('./shared/config-store.cjs');
+const { configureAuthentication, updateConfig } = require('./shared/config-store.cjs');
+const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
 const { setLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
 const {
   recordGeneration,
@@ -98,9 +99,8 @@ function normalizeWorkspaceRoles(data){
 function syncCurrentWorkspace(data, root){
   return syncSharedWorkspace(data, root);
 }
-function newAuthToken(){ return crypto.randomBytes(32).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function authenticationMode(){ return cfg().get('authenticationMode') === 'oauth' ? 'oauth' : 'none'; }
 function nonce(){ return crypto.randomBytes(16).toString('base64'); }
-function authRequired(){ return cfg().get('requireAuthToken') !== false; }
 function permissionProfile(){ const v = cfg().get('permissionProfile'); return ['readOnly','balanced','fullAccess'].includes(v) ? v : 'fullAccess'; }
 function maintenanceConfig(){
   return {
@@ -205,11 +205,6 @@ function updateConnectionSnapshot(ctx, patch){
 function mcpUrlFor(baseUrl){
   return new URL(`${String(baseUrl).replace(/\/$/,'')}${MCP_PATH}`).toString();
 }
-function mcpToken(ctx=globalContext){
-  const data = ctx ? ensureConfig(ctx,false) : null;
-  return data?.auth?.required === false ? '' : String(data?.auth?.token || '');
-}
-
 function ensureConfig(ctx){
   const p = configPath(ctx);
   const data = readConfig(p);
@@ -247,9 +242,7 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   };
   data.activeHostId = hostId;
   delete data.vscodeContext;
-  data.auth ||= {};
-  data.auth.required = authRequired();
-  data.auth.token ||= newAuthToken();
+  configureAuthentication(data, authenticationMode());
   data.permissions ||= {};
   data.permissions.profile = permissionProfile();
   data.permissions.readOnly = permissionProfile() === 'readOnly';
@@ -358,6 +351,18 @@ async function copyContextBundle(ctx){
   }
 }
 
+async function copyOAuthApprovalCode(ctx){
+  try{
+    const data = syncConfig(ctx,false);
+    const approvalCode = String(data?.auth?.mode === 'oauth' ? data.auth.oauth?.approvalCode || '' : '');
+    if(!approvalCode) throw new Error('OAuth is not enabled. DevMate uses no authentication by default.');
+    await vscode.env.clipboard.writeText(approvalCode);
+    vscode.window.showInformationMessage('DevMate OAuth approval code copied. Paste it only into this DevMate authorization page.');
+  }catch(e){
+    vscode.window.showErrorMessage(`Could not copy OAuth approval code: ${e.message || e}`);
+  }
+}
+
 function ensureGatewayNodeRuntime(){
   const key = process.execPath + '|' + (process.versions.node || '');
   if(gatewayNodeRuntime && gatewayNodeRuntimeKey === key) return gatewayNodeRuntime;
@@ -391,7 +396,7 @@ async function ensureGatewayController(ctx){
     gatewayEntry: gatewayPath(ctx),
     preferredPort: configuredPort(),
     appVersion: VERSION,
-    defaultConnectionProvider: 'cloudflare-quick',
+    defaultConnectionProvider: 'ngrok',
     hostId: vscodeHostInstanceId(root),
     nodeExecutable: nodeRuntime.executable,
     spawnImpl: spawn,
@@ -522,7 +527,7 @@ async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext)
     publicUrl,
     expectedRecord,
     currentRecord: () => currentTunnelRecord(expectedRecord?.port),
-    token: data.auth?.required === false ? '' : String(data.auth?.token || ''),
+    token: preflightAccessToken(data, publicUrl),
     clientName: 'devmate-vscode-preflight',
     clientVersion: VERSION,
     logger: log
@@ -719,17 +724,6 @@ async function copyUrl(){
     vscode.window.showErrorMessage(`DevMate is Ready, but the MCP URL could not be copied: ${e.message || e}`);
   }
 }
-async function copyConnectionToken(ctx=globalContext){
-  try{
-    const token = mcpToken(ctx);
-    if(!token) return vscode.window.showWarningMessage('DevMate authentication is disabled or no owner token is configured.');
-    await vscode.env.clipboard.writeText(token);
-    vscode.window.showInformationMessage('DevMate Bearer token copied. Keep it private and send it in the Authorization header.');
-  }catch(e){
-    vscode.window.showErrorMessage(`Bearer token copy failed: ${e.message || e}`);
-  }
-}
-
 async function copyStarterPrompt(){
   const text = '使用 DevMate，完成这个开发任务。复杂任务先用 work_session_start 建立工作会话；需要时读取、搜索、修改文件、运行命令和使用 Git；完成前用 show_changes 检查改动，再用 work_session_finish 结束会话。';
   await vscode.env.clipboard.writeText(text); vscode.window.showInformationMessage('Starter prompt copied.');
@@ -1085,7 +1079,7 @@ function panelHtml(ctx, webview){
     </div>
     <div class="status-grid">
       <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp · internal only</code>
-      <b>Auth</b><code>${esc(data.auth?.required ? 'token required' : 'disabled')}</code>
+      <b>Auth</b><code>${esc(data.auth?.mode === 'oauth' ? 'OAuth' : 'none')}</code>
       <b>Permissions</b><code>${esc(data.permissions?.profile || 'fullAccess')}</code>
       <b>Last preflight</b><code>${esc(data.connection?.lastPreflightAt ? `${data.connection.lastPreflightAt} ${data.connection.lastPublicHost || ''}` : 'not recorded')}</code>
       <b>Start command</b><code>${esc(startCommandProcess ? 'running' : (String(cfg().get('defaultStartCommand') || '').trim() || 'not configured'))}</code>
@@ -1203,7 +1197,6 @@ function activate(context){
   register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
   register(context,'devMate.restart',()=>lifecycleOperations.run('restart',()=>restartAll(context)));
   register(context,'devMate.copyUrl',()=>copyUrl());
-  register(context,'devMate.copyToken',()=>copyConnectionToken(context));
   register(context,'devMate.addReference',()=>addReference(context));
   register(context,'devMate.clearReferences',()=>clearReferences(context));
   register(context,'devMate.doctor',()=>doctor(context));
@@ -1212,6 +1205,7 @@ function activate(context){
   register(context,'devMate.setup',()=>setup(context));
   register(context,'devMate.copyPrompt',()=>copyStarterPrompt());
   register(context,'devMate.copyContextBundle',()=>copyContextBundle(context));
+  register(context,'devMate.copyOAuthApprovalCode',()=>copyOAuthApprovalCode(context));
   register(context,'devMate.openSettings',()=>openSettings());
   register(context,'devMate.syncPublicState',()=>syncPublicUiState(context));
 

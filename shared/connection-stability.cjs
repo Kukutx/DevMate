@@ -14,7 +14,7 @@ function cleanHttpsOrigin(value) {
   }
 }
 
-function publicConnectionStability({ provider = 'cloudflare-quick', publicUrl = '' } = {}) {
+function publicConnectionStability({ provider = 'ngrok', publicUrl = '' } = {}) {
   if (!CONNECTION_PROVIDERS.includes(provider)) {
     throw new Error(`Unknown connection provider: ${String(provider)}`);
   }

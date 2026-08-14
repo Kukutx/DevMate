@@ -115,7 +115,7 @@ If a dynamic provider publishes a different hostname, DevMate can notify the use
 
 `Copy MCP URL` never copies the internal loopback Gateway URL. It uses the active public connection and verifies the current complete session generation before copying the `/mcp` endpoint.
 
-The bearer credential is a separate secret. DevMate does not put owner credentials in the URL or query string.
+The normal desktop flow uses no authentication. Optional OAuth completes its authorization flow separately; DevMate never puts credentials in the URL or query string.
 
 ## Provider credentials
 

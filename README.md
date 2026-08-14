@@ -49,11 +49,11 @@ The normal desktop path is:
 1. Open a project.
 2. Run `DevMate: Start` — or leave the default auto-start enabled.
 3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, runs MCP `initialize` + `tools/list`, reaches Ready, and copies the verified HTTPS `/mcp` URL.
-4. Add that URL to ChatGPT. If the chosen client supports bearer credentials, configure it once with `DevMate: Copy Bearer Token`.
+4. Add that URL to ChatGPT and select **No authentication**. This is the complete default path.
 
-Fresh desktop instances use Cloudflare Quick Tunnel because it needs no account. It is a verified, one-click **session share**, not a persistent ChatGPT app address: its TryCloudflare hostname can change whenever that provider generation changes. For a persistent ChatGPT app, run `DevMate: Connection Setup` once and use an account-owned stable HTTPS origin with ngrok, a managed Cloudflare tunnel, or existing HTTPS ingress. If `cloudflared` is missing, VS Code Connection Setup and the Obsidian settings page offer a one-click `winget`/Homebrew install when the platform supports it. DevMate-managed credentials are stored in host secure storage.
+Fresh desktop instances use **ngrok**. Configure ngrok once, then DevMate keeps using the account-owned HTTPS endpoint across normal restarts. Cloudflare and external HTTPS ingress remain optional providers, not defaults.
 
-Routine Start never requires a separate tunnel-start or verification command. The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL. See [`docs/TUNNELS.md`](docs/TUNNELS.md).
+Routine Start never requires a separate tunnel-start or verification command. For a shared or published ChatGPT app, switch the optional authentication mode to **OAuth** before creating the app. DevMate does not support legacy copied Bearer tokens or credentials in URLs. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) and [`docs/TUNNELS.md`](docs/TUNNELS.md).
 
 ## Obsidian setup
 
@@ -71,10 +71,10 @@ See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md), [`obsidian-plugin/RE
 
 | Preset | Identity | Execution | Best for |
 |---|---|---|---|
-| Personal | Owner token | Embedded Runner | One developer |
-| Team | Scoped `dmt_` members | Embedded Runner, optional external Runners | Trusted team |
-| Control plane | Owner + scoped members | External `dmr_` Runners | Long-lived build/test hosts |
-| Runner host | Local owner token | Local toolchain through loopback MCP | Platform-specific execution |
+| Personal | No authentication | Embedded Runner | One developer, immediate use |
+| Shared / published | OAuth | Embedded Runner or external Runners | GitHub users and ChatGPT apps |
+| Team | Explicit scoped access | Embedded Runner, optional external Runners | Trusted team workflows |
+| Runner host | Local process boundary | Local toolchain through loopback MCP | Platform-specific execution |
 
 These presets compose connection, access, request policy and Runner capabilities. They do not create mutually exclusive runtime modes. DevMate supports ngrok, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress independently of access or Runner topology.
 
@@ -82,7 +82,7 @@ These presets compose connection, access, request policy and Runner capabilities
 
 ```text
 ChatGPT / team members
-        │ MCP + Bearer owner/dmt_ token
+        │ MCP (no auth by default, OAuth when enabled)
         ▼
 DevMate Gateway
   ├─ Capability Host and tool contracts

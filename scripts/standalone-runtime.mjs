@@ -13,7 +13,7 @@ import {
   rotateTeamMemberToken
 } from '../gateway/team-access.mjs';
 
-const { DEFAULT_VERSION, newInstanceConfig, readJson: readConfigJson, updateConfig } = configStore;
+const { DEFAULT_VERSION, configureAuthentication, newInstanceConfig, readJson: readConfigJson, updateConfig } = configStore;
 const { CONNECTION_PROVIDERS } = instanceConfig;
 const { parsePortOption } = portConfig;
 
@@ -92,6 +92,7 @@ export function initConfig(options = {}) {
   config.workspaces[0].id = 'workspace';
   config.connection.provider = provider;
   config.connection.publicUrl = publicUrl;
+  configureAuthentication(config, options['authentication-mode']);
   config.team.requireWorkspaceLeaseForWrites = optionalBoolean(
     options['require-workspace-lease-for-writes'],
     config.team.requireWorkspaceLeaseForWrites,
@@ -149,7 +150,7 @@ export function initConfig(options = {}) {
     : [];
 
   updateConfig(file, () => normalizeInstanceConfig(config));
-  return { file, config, token: config.auth.token };
+  return { file, config };
 }
 
 function executableStatus(command, args = ['--version']) {
@@ -164,7 +165,7 @@ export function doctor(options = {}) {
   const checks = [
     { key: 'config', ok: true, detail: file },
     { key: 'workspace', ok: !!workspace && !!fs.statSync(workspace.root, { throwIfNoEntry: false })?.isDirectory(), detail: workspace?.root || 'missing' },
-    { key: 'owner-token', ok: !!config.auth?.token || config.auth?.required === false, detail: config.auth?.token ? 'configured' : config.auth?.required === false ? 'disabled' : 'missing' },
+    { key: 'authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' },
     { key: 'git', ...executableStatus('git') },
     { key: 'node', ok: true, detail: process.version }
   ];
@@ -198,7 +199,7 @@ export function doctor(options = {}) {
   };
 }
 
-export function ownerUrl(options = {}) {
+export function mcpUrl(options = {}) {
   const config = normalizeInstanceConfig(readConfig(configFile(options)));
   const origin = normalizeOrigin(options.url || config.connection.publicUrl || `http://127.0.0.1:${config.server?.port || 8787}`);
   return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();

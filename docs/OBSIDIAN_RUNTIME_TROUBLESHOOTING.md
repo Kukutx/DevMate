@@ -40,7 +40,7 @@ Use **Copy diagnostics** before repeatedly changing settings. The report include
 - the most recent startup/recovery failure;
 - shared state/config paths.
 
-Diagnostics do not include note bodies, owner bearer tokens, or provider credentials.
+Diagnostics do not include note bodies, OAuth material, or provider credentials.
 
 ## Local log
 

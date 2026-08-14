@@ -25,13 +25,12 @@ async function freePort() {
   });
 }
 
-test('public preflight closes authenticated initialize and tools/list against the real Gateway', async () => {
+test('public preflight closes direct no-auth initialize and tools/list against the real Gateway', async () => {
   const root = process.cwd();
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-public-preflight-'));
   const workspaceRoot = path.join(temp, 'workspace');
   const configPath = path.join(temp, 'config.json');
   const port = await freePort();
-  const ownerToken = 'public-preflight-owner-token';
   await fsp.mkdir(workspaceRoot, { recursive: true });
 
   const config = {
@@ -42,7 +41,7 @@ test('public preflight closes authenticated initialize and tools/list against th
     runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000, maxConcurrentJobs: 2 },
     maintenance: { backupRetentionDays: 30, auditRetentionDays: 30, maxBackupBytes: 268435456, maxAuditBytes: 5242880 },
     connection: { provider: 'ngrok', publicUrl: '' },
-    auth: { required: true, token: ownerToken },
+    auth: { mode: 'none' },
     permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: true, confirmBeforePush: true, allowDirectoryMutations: false },
     team: { members: [], requireWorkspaceLeaseForWrites: false, defaultMemberRole: 'developer', maxMembers: 100, approvals: { enabled: false, requiredCapabilities: [], requiredTools: [], separationOfDuties: true } },
     requestPolicy: { allowedHosts: [], maxRequestBytes: 2097152, requestsPerMinute: 120, maxConcurrentRequests: 24, maxConcurrentPerPrincipal: 4, requestTimeoutMs: 900000 },
@@ -101,7 +100,7 @@ test('public preflight closes authenticated initialize and tools/list against th
 
     const result = await preflightPublicMcp({
       publicUrl: 'https://devmate-public.example',
-      token: ownerToken,
+      token: '',
       clientName: 'devmate-public-e2e',
       clientVersion: '3.3.0',
       request

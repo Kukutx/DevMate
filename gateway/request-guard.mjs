@@ -5,7 +5,8 @@ import { hostAllowed, isLocalRequest, loopbackHost, loopbackSocket, remoteAddres
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
-import { extractRequestToken, fallbackLocalPrincipal, normalizeInstanceConfig, verifyAccessToken } from './team-access.mjs';
+import { fallbackLocalPrincipal, normalizeInstanceConfig } from './team-access.mjs';
+import { oauthAccessToken } from './oauth.mjs';
 
 const rateWindows = new Map();
 const preAuthRateWindows = new Map();
@@ -59,22 +60,20 @@ function touchTeamMemberBestEffort(principal) {
 
 export function authenticateGatewayRequest(req, url, config) {
   normalizeInstanceConfig(config);
-  const token = extractRequestToken(req, url);
-  if (config.auth?.required === false && !token) {
+  if (config.auth?.mode === 'none') {
     return fallbackLocalPrincipal();
   }
-  return verifyAccessToken(token, config);
+  const token = String(req?.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
+  const access = oauthAccessToken(config, token, req);
+  return access ? { id: access.sub, name: 'OAuth owner', role: 'owner', workspaceIds: [], source: 'oauth' } : null;
 }
 
 function normalizeInnerAuthorization(req, config) {
-  if (req.headers) delete req.headers['x-devmate-token'];
-  if (config.auth?.required === false) {
+  if (config.auth?.mode === 'none') {
     if (req.headers) delete req.headers.authorization;
     return true;
   }
-  if (!config.auth?.token) return false;
-  req.headers.authorization = `Bearer ${config.auth.token}`;
-  return true;
+  return /^Bearer\s+.+/i.test(String(req?.headers?.authorization || ''));
 }
 
 function consumeRateLimit(principalId, limit, store = rateWindows) {
@@ -243,7 +242,7 @@ export function guardListener(listener) {
 
     if (!normalizeInnerAuthorization(req, config)) {
       concurrency.release();
-      jsonError(res, 503, 'DevMate owner token is not configured', 'owner_token_missing', requestId);
+      jsonError(res, 503, 'DevMate OAuth authorization is not configured', 'oauth_not_configured', requestId);
       return;
     }
 

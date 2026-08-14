@@ -5,7 +5,6 @@ import path from 'node:path';
 
 const root = process.cwd();
 const port = Number(process.env.DEVMATE_LOCAL_SMOKE_PORT || 8799);
-const token = 'local-capabilities-smoke-token';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-local-smoke-'));
 const trustedRoot = path.join(tempRoot, 'trusted');
 fs.mkdirSync(trustedRoot, { recursive: true });
@@ -14,12 +13,12 @@ const gatewayScript = path.join(root, 'gateway', 'server.bundle.mjs');
 
 fs.writeFileSync(configPath, JSON.stringify({
   version: 11,
-  appVersion: '3.4.3',
+  appVersion: '3.4.4',
   instanceId: `local-smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
   runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },
   maintenance: { backupRetentionDays: 30, auditRetentionDays: 30, maxBackupBytes: 268435456, maxAuditBytes: 5242880 },
-  auth: { required: true, token },
+  auth: { mode: 'none' },
   permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: false, confirmBeforePush: false, allowDirectoryMutations: true },
   activeWorkspaceId: 'devmate',
   workspaces: [{ id: 'devmate', name: 'devmate', root, mode: 'workspace-write', reference: false, role: 'active' }],
@@ -69,8 +68,7 @@ async function rpc(method, params) {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      authorization: `Bearer ${token}`
+      accept: 'application/json, text/event-stream'
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000), method, params })
   });
@@ -89,7 +87,7 @@ try {
   await waitReady();
   const init = await rpc('initialize', {
     protocolVersion: '2025-03-26', capabilities: {},
-    clientInfo: { name: 'devmate-local-smoke', version: '1.16.0' }
+    clientInfo: { name: 'devmate-local-smoke', version: '3.4.4' }
   });
   assert(init.response.ok && init.json?.result?.serverInfo?.name === 'devmate', `initialize failed: ${init.text}`);
 

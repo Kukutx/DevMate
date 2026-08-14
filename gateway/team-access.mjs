@@ -163,16 +163,6 @@ function parseTeamToken(token) {
 export function verifyAccessToken(token, config, { updateLastUsed = false } = {}) {
   normalizeInstanceConfig(config);
   const raw = String(token || '').trim();
-  if (config.auth?.token && timingSafeEqualText(raw, config.auth.token)) {
-    return {
-      id: 'owner',
-      name: 'Owner',
-      role: 'owner',
-      workspaceIds: [],
-      source: 'owner-token',
-      tokenVersion: 1
-    };
-  }
   const parsed = parseTeamToken(raw);
   if (!parsed) return null;
   const member = config.team.members.find(item => item.id === parsed.id);
@@ -192,12 +182,6 @@ export function verifyAccessToken(token, config, { updateLastUsed = false } = {}
     source: 'team-token',
     tokenVersion: member.tokenVersion || 1
   };
-}
-
-export function extractRequestToken(req) {
-  const authorization = String(req?.headers?.authorization || '');
-  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  return bearer || req?.headers?.['x-devmate-token'] || '';
 }
 
 export function fallbackLocalPrincipal() {
@@ -263,10 +247,10 @@ function assertTeamOperationSafety(name, args, principal) {
     throw new Error(`Team token ${principal.id} cannot run a high-risk command through ${name}`);
   }
   if (name === 'git_push' && (args?.force || args?.forceWithLease)) {
-    throw new Error('Force push is reserved for the owner token');
+    throw new Error('Force push requires the owner role');
   }
   if (name === 'git_branch' && args?.action === 'delete' && args?.force) {
-    throw new Error('Forced branch deletion is reserved for the owner token');
+    throw new Error('Forced branch deletion requires the owner role');
   }
   if (name === 'git_raw') {
     const values = (args?.args || []).map(value => String(value).toLowerCase());
@@ -277,7 +261,7 @@ function assertTeamOperationSafety(name, args, principal) {
       values.some(value => value.startsWith('+') && value.length > 1)
     );
     if ((command === 'reset' && values.includes('--hard')) || command === 'clean' || forcePush) {
-      throw new Error('High-risk raw Git operations are reserved for the owner token');
+      throw new Error('High-risk raw Git operations require the owner role');
     }
   }
 }

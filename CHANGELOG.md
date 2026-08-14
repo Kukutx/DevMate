@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.4.4
+
+- Restored the direct private-use contract across every desktop entrypoint: ngrok is the fresh-instance default, public MCP uses no authentication by default, and Start/Stop/Restart/Copy MCP URL remain the primary lifecycle.
+- Replaced the retired copied owner-Bearer transport with an optional OAuth mode for trusted shared or published apps, including protected-resource discovery, PKCE, authorization-code exchange, single-use local approval, and refresh tokens.
+- Removed `x-devmate-token`, URL credentials, copied Bearer commands, and the obsolete `devMate.requireAuthToken` setting from the desktop MCP path and documented the constraint to prevent reintroduction.
+- Unified VS Code, Obsidian, recovery verification, ngrok conflict adoption, standalone use, and loopback Runner calls on the same authentication/default-provider decisions.
+- Added end-to-end OAuth, direct no-auth, multi-host lifecycle, primary Stop visibility, configuration migration, and packaged-runtime regression coverage.
+
 ## 3.4.3
 
 - Fixed VS Code workspace synchronization so it retains the independently registered Obsidian Vault and other shared workspaces instead of replacing them on editor refresh.

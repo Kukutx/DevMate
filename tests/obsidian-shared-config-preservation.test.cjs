@@ -49,7 +49,7 @@ test('shared host config completion preserves connection, access, policy, runner
     assert.deepEqual(result.jobs, original.jobs);
     assert.deepEqual(result.runnerControl, original.runnerControl);
     assert.deepEqual(result.plugins, original.plugins);
-    assert.equal(result.auth.token, original.auth.token);
+    assert.deepEqual(result.auth, { mode: 'none' });
     assert.equal(result.server.port, 8787, 'an existing shared Gateway port must not be replaced by a host preference');
     assert.equal(result.activeWorkspaceId, 'vault');
   } finally {

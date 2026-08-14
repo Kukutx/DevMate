@@ -8,6 +8,7 @@ const { OperationCoordinator } = require('./host/runtime/operation-coordinator.j
 const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { strictPort } = require('./shared/port.cjs');
 const { publicConnectionStability } = require('./shared/connection-stability.cjs');
+const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
@@ -73,7 +74,7 @@ function ensureSharedDesktopConfig(stateDirectory) {
     workspaceRoot,
     preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
     appVersion: VERSION,
-    defaultConnectionProvider: 'cloudflare-quick'
+    defaultConnectionProvider: 'ngrok'
   });
   return configFile;
 }
@@ -125,10 +126,9 @@ async function stopConfigurationConflict() {
 async function verifyAlreadyOnlineNgrokEndpoint({ publicUrl }) {
   const config = readJson(path.join(runtimeStateDirectory, 'config.json'), null, { strict: true, supportedVersion: true });
   if (!config) return false;
-  const token = config.auth?.required === false ? '' : String(config.auth?.token || '');
   const test = await preflightPublicMcp({
     publicUrl,
-    token,
+    token: preflightAccessToken(config, publicUrl),
     clientName: 'devmate-ngrok-conflict-adoption',
     clientVersion: VERSION,
     timeoutMs: 5000
@@ -150,7 +150,7 @@ function createPublicVerifier() {
       if (!result.changedHost) return;
       const config = readJson(path.join(runtimeStateDirectory, 'config.json'), null, { strict: true, supportedVersion: true });
       const stability = publicConnectionStability({
-        provider: config?.connection?.provider || 'cloudflare-quick',
+        provider: config?.connection?.provider || 'ngrok',
         publicUrl: config?.connection?.publicUrl || ''
       });
       if (!stability.chatgptEligible) {

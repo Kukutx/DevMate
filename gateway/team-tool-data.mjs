@@ -140,9 +140,9 @@ export function readiness(config = readConfig()) {
   const runnerExecutionConfigured = runners.embeddedRunnerEnabled || externalRunnersConfigured;
 
   add(
-    'owner-token',
-    !!config.auth?.token || config.auth?.required === false,
-    config.auth?.token ? 'configured' : config.auth?.required === false ? 'local auth disabled' : 'missing'
+    'mcp-authentication',
+    config.auth?.mode === 'none' || config.auth?.mode === 'oauth',
+    config.auth?.mode === 'oauth' ? 'OAuth' : 'none'
   );
   add(
     'public-connection',

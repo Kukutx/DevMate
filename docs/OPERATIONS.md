@@ -211,7 +211,7 @@ The minimal image does not include Godot, Chromium, Android/iOS SDKs, compilers,
 
 `deploy/caddy/Caddyfile.example` is a reference for existing external ingress. Ensure the chosen deployment forwards the routes you intentionally expose, preserves the expected Host, supports required request timeouts and applies appropriate body limits.
 
-Keep DevMate application authentication enabled behind SSO, Cloudflare Access, VPN or another identity-aware edge.
+Enable OAuth for a shared or published app even when SSO, Cloudflare Access, VPN, or another identity-aware edge is present. Personal desktop instances remain no-auth by default.
 
 ## Backup scope
 
@@ -226,7 +226,7 @@ state/backups/
 
 Runner-local configs and workspaces are separate backup domains. Central artifact metadata is not a backup of remote artifacts.
 
-Central `config.json` includes the Owner bearer token and credential hashes. Runner-local config includes a local Owner token. Encrypt backups, restrict access and rotate credentials after an untrusted restore or disclosure.
+OAuth-enabled `config.json` includes local OAuth authorization material; Runner credentials remain separately scoped. Encrypt backups, restrict access, and reconfigure OAuth after an untrusted restore or disclosure.
 
 ## Upgrade verification
 

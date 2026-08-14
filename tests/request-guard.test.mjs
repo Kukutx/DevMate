@@ -8,12 +8,11 @@ import test from 'node:test';
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-request-guard-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
-const access = await import('../gateway/team-access.mjs');
 const requestContextModule = await import('../gateway/request-context.mjs');
 const guard = await import('../gateway/request-guard.mjs');
 const config = {
   version: 11,
-  auth: { required: true, token: 'owner-token-value-long-enough' },
+  auth: { mode: 'none' },
   permissions: { profile: 'fullAccess' },
   connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
   team: { members: [], requireWorkspaceLeaseForWrites: true },
@@ -30,10 +29,6 @@ const config = {
   activeWorkspaceId: 'workspace',
   workspaces: [{ id: 'workspace', root: temp }]
 };
-access.normalizeInstanceConfig(config);
-const created = access.createTeamMember(config, {
-  name: 'Alice', role: 'developer', workspaceIds: ['workspace']
-});
 await fsp.writeFile(configPath, JSON.stringify(config, null, 2));
 
 let server;
@@ -54,22 +49,22 @@ test.after(async () => {
   await fsp.rm(temp, { recursive: true, force: true });
 });
 
-test('authenticates scoped team tokens and rewrites the internal owner credential', async () => {
+test('direct no-auth treats callers as the local owner and strips irrelevant authorization', async () => {
   const response = await fetch(base, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${created.token}`,
+      authorization: 'Bearer irrelevant-caller-value',
       'content-type': 'application/json'
     },
     body: '{}'
   });
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.principal.id, created.member.id);
-  assert.equal(body.authorization, 'Bearer owner-token-value-long-enough');
+  assert.equal(body.principal.id, 'local-owner');
+  assert.equal(body.authorization, undefined);
 });
 
-test('rejects invalid tokens', async () => {
+test('direct no-auth does not turn an irrelevant Bearer value into a required credential', async () => {
   const response = await fetch(base, {
     method: 'POST',
     headers: {
@@ -78,7 +73,7 @@ test('rejects invalid tokens', async () => {
     },
     body: '{}'
   });
-  assert.equal(response.status, 401);
+  assert.equal(response.status, 200);
 });
 
 test('rejects oversized chunked MCP bodies without trusting Content-Length', async () => {
@@ -103,7 +98,6 @@ test('rejects oversized chunked MCP bodies without trusting Content-Length', asy
       path: '/mcp',
       method: 'POST',
       headers: {
-        authorization: `Bearer ${created.token}`,
         'content-type': 'application/json',
         'transfer-encoding': 'chunked'
       }

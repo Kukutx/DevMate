@@ -15,7 +15,7 @@ npx devmate init \
 
 There is no `--mode` option. Connection provider, member access, request policy, workspace-lease policy and Runner topology are independent capabilities.
 
-The command creates a mode-`0600` configuration where supported and prints the owner token once. Store that token in an approved password manager or secret store.
+The command creates a mode-`0600` configuration where supported. New instances use direct no-auth MCP; select `--authentication-mode oauth` only for a shared or published app.
 
 For common capability combinations, prefer `devmate bootstrap --preset ...`; presets provide initialization defaults only and never persist a runtime mode.
 
@@ -56,16 +56,16 @@ Examples:
 ```bash
 npx devmate doctor --config /srv/devmate/config.json
 npx devmate status --config /srv/devmate/config.json
-npx devmate owner-url --config /srv/devmate/config.json
+npx devmate mcp-url --config /srv/devmate/config.json
 ```
 
-`owner-url` returns the MCP endpoint URL only, for example:
+`mcp-url` returns the MCP endpoint URL only, for example:
 
 ```text
 https://devmate.example.com/mcp
 ```
 
-It does **not** embed the owner token. Configure MCP authentication separately with `Authorization: Bearer <owner-token>`.
+It never embeds credentials. The normal instance is no-auth; an OAuth-enabled instance completes OAuth discovery and authorization instead of accepting a copied static token.
 
 `doctor` validates current config/workspace state and provider prerequisites relevant to the selected connection capability. It does not claim that a separately managed public ingress is live or MCP-verified merely because configuration is valid.
 

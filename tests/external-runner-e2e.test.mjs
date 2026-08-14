@@ -28,7 +28,7 @@ const localServer = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/mcp' && req.method === 'POST') {
-    assert.match(String(req.headers.authorization || ''), /^Bearer local-owner-token/);
+    assert.equal(req.headers.authorization, undefined);
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -123,8 +123,7 @@ await fsp.writeFile(configPath, JSON.stringify({
   appVersion: '2.3.0',
   instanceId: 'external-runner-e2e',
   server: { port: localPort, mcpPath: '/mcp' },
-  auth: { required: true, token: 'local-owner-token-long-enough' },
-  deployment: { mode: 'personal' },
+  auth: { mode: 'none' },
   runtime: { maxConcurrentJobs: 1 },
   activeWorkspaceId: 'app',
   workspaces: [{ id: 'app', name: 'app', root: workspace, mode: 'workspace-write', reference: false }],

@@ -29,7 +29,7 @@ Remove the stable ngrok URL and use the selected account's default endpoint, or 
 
 ## DevMate Start does not reach Ready
 
-`Ready` requires the current **Gateway + public-connection session generation** to pass authenticated MCP `initialize` and `tools/list`.
+`Ready` requires the current **Gateway + public-connection session generation** to pass MCP `initialize` and `tools/list`.
 
 A local Gateway, a provider process, or an HTTPS URL alone is insufficient.
 
@@ -47,23 +47,23 @@ Use the endpoint copied by `DevMate: Start` or `DevMate: Copy MCP URL`. It must 
 https://example.ngrok-free.app/mcp
 ```
 
-Then run `DevMate: Copy Bearer Token` and configure that value as the connector's Bearer credential.
+For the normal personal workflow, select **No authentication** in ChatGPT. Do not add a credential to the URL or a separate Bearer-token field.
 
-Do not append credentials to the URL. Current DevMate accepts MCP credentials only from request headers; `/mcp?token=...` is intentionally not an authentication mechanism.
+When the optional OAuth mode is intentionally enabled for a shared or published app, select **OAuth** in ChatGPT and finish the OAuth browser flow. If DevMate's authorization page asks for the local approval code, use **DevMate: Copy OAuth Approval Code**. OAuth is never carried in an MCP URL.
 
 If ChatGPT reports a generic creation error:
 
 1. copy the current verified MCP URL again;
-2. replace the Bearer credential separately when authentication may be stale;
-3. confirm the URL ends in `/mcp` and has no credential query string;
+2. confirm the URL ends in `/mcp` and has no credential query string;
+3. select **No authentication** unless this DevMate instance was deliberately switched to OAuth;
 4. if a dynamic provider recovered on a different public host, update the connector URL;
 5. run Doctor and confirm the current complete session passes MCP preflight.
 
 ## 401 Unauthorized
 
-The request is missing a valid Bearer credential or uses a stale token. Copy the bearer token again and update the connector credential.
+The normal no-auth instance must not return `401` for MCP. Confirm that the same DevMate state has not been deliberately switched to OAuth and that the public URL reaches the current Gateway.
 
-A token embedded in the URL does not authenticate the request. This avoids leakage through browser history, proxy logs, screenshots, copied links, or analytics.
+For optional OAuth, complete the OAuth flow again; never replace it with a copied static Bearer token or a URL query token.
 
 ## 404 or connection error
 
@@ -90,7 +90,7 @@ A ChatGPT model/surface can lose connector selection or need tool rediscovery ev
 1. If DevMate tools are available, run `devmate_status_panel` or another lightweight status tool.
 2. If no MCP tools are exposed by the current ChatGPT surface, reselect/re-add the connector in that surface as applicable.
 3. Use DevMate Doctor locally to distinguish connector-surface issues from Gateway/provider failure.
-4. If the public host changed, update the connector URL. If only authentication changed, update the Bearer credential separately.
+4. If the public host changed, update the connector URL. If OAuth was deliberately enabled, complete the OAuth flow again.
 
 When the ChatGPT surface cannot call MCP tools, `Copy Context` provides bounded planning context only. Reconnect DevMate before asking ChatGPT to edit files, run commands, or use Git.
 

@@ -56,7 +56,7 @@ Provider selection changes only the connection capability. It does not silently 
 
 ### ngrok
 
-Fresh desktop instances use account-free Cloudflare Quick by default. ngrok is the optional stable provider, and Obsidian can use the machine's normal ngrok configuration when no DevMate-managed credential is stored.
+Fresh desktop instances use ngrok by default. Obsidian uses the machine's normal ngrok configuration when no DevMate-managed credential is stored.
 
 Optionally, an ngrok Authtoken can be stored through Electron's OS-backed safe storage. When such a secret is configured, DevMate uses it for the provider process without writing it to the vault or shared `config.json`.
 
@@ -90,7 +90,7 @@ The plugin keeps the useful lifecycle and support commands:
 - **DevMate: Stop** — release resources owned by this host without killing another host's shared ownership.
 - **DevMate: Restart** — restart the complete lifecycle and return only after Ready.
 - **DevMate: Copy MCP URL** — verify the current complete session generation and copy its `/mcp` URL.
-- **DevMate: Copy MCP bearer token** — copy the owner bearer token when connector credential setup is needed.
+- **DevMate: Copy OAuth approval code** — available only for the optional shared/published OAuth flow; it never appears in the normal panel or default setup.
 - **DevMate: Copy active vault context** — copy the current bounded Obsidian context bundle.
 - **DevMate: Copy diagnostics** — copy sanitized runtime diagnostics.
 - **DevMate: Open panel** — open the compact DevMate status panel.

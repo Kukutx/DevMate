@@ -43,7 +43,7 @@ test('merges host-owned fields without replacing shared capability state', () =>
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
     server: { port: 8788, mcpPath: '/mcp' },
-    auth: { required: true, token: 'owner-token' },
+    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } },
     connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com', lastPreflightAt: 'current' },
     team: { requireWorkspaceLeaseForWrites: true, defaultMemberRole: 'developer', maxMembers: 100, members: [{ id: 'alice' }] },
     requestPolicy: { allowedHosts: ['team.example.com'], requestsPerMinute: 120 },
@@ -56,7 +56,7 @@ test('merges host-owned fields without replacing shared capability state', () =>
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
     server: { port: 9999, mcpPath: '/mcp' },
-    auth: { required: false, token: 'stale-token' },
+    auth: { mode: 'none' },
     connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
     team: { requireWorkspaceLeaseForWrites: false, members: [] },
     requestPolicy: { allowedHosts: [], requestsPerMinute: 9999 },
@@ -66,8 +66,7 @@ test('merges host-owned fields without replacing shared capability state', () =>
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.instanceId, 'stable');
   assert.deepEqual(merged.server, current.server);
-  assert.equal(merged.auth.token, 'owner-token');
-  assert.equal(merged.auth.required, false);
+  assert.deepEqual(merged.auth, { mode: 'none' });
   assert.equal(merged.runtime.maxConcurrentJobs, 4);
   assert.equal(merged.runtime.defaultCommandTimeoutMs, 2000);
   assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
@@ -108,7 +107,7 @@ test('pure merge never manufactures shared nested state', () => {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'owner-token', forgedPolicy: true },
+    auth: { mode: 'none', forgedPolicy: true },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000, maxConcurrentJobs: 99 },
     connection: { provider: 'external', publicUrl: 'https://forged.example.com' },
     team: { requireWorkspaceLeaseForWrites: true, members: [{ id: 'forged-member' }], forgedPolicy: true },
@@ -122,7 +121,7 @@ test('pure merge never manufactures shared nested state', () => {
   });
   assert.equal(merged.instanceId, 'new');
   assert.deepEqual(merged.server, { port: 8787, mcpPath: '/mcp' });
-  assert.deepEqual(merged.auth, { required: true, token: 'owner-token' });
+  assert.deepEqual(merged.auth, { mode: 'none' });
   assert.deepEqual(merged.runtime, { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 });
   assert.deepEqual(merged.workspaces, [{ id: 'app' }]);
   for (const key of [
@@ -138,7 +137,7 @@ test('generic VS Code writer refuses to recreate a missing shared config', () =>
   assert.throws(() => writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new-identity',
-    auth: { required: true, token: 'new-token' },
+    auth: { mode: 'none' },
     hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   }), error => error?.code === 'DEVMATE_SHARED_CONFIG_MISSING');
   assert.equal(fs.existsSync(file), false);
@@ -150,7 +149,7 @@ test('writes host context through the shared locked atomic store without replaci
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'one',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'secret' },
+    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } },
     connection: { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' }
   });
   writeExtensionConfig(file, {
@@ -161,7 +160,7 @@ test('writes host context through the shared locked atomic store without replaci
   });
   const config = readExtensionConfig(file);
   assert.equal(config.instanceId, 'one');
-  assert.equal(config.auth.token, 'secret');
+  assert.equal(config.auth.mode, 'oauth');
   assert.deepEqual(config.connection, { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' });
   assert.deepEqual(config.hostContexts.vscode, { capturedAt: 'now' });
   assert.equal(config.activeHostId, 'vscode');

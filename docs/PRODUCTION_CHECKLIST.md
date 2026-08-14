@@ -3,11 +3,11 @@
 Before exposing a shared DevMate Gateway for long-lived remote use:
 
 - Use an intentional public connection: stable ngrok, Cloudflare managed, or an existing external HTTPS ingress when a stable endpoint is required.
-- Keep DevMate application authentication enabled behind any edge identity layer.
+- Enable OAuth for every shared or published app, including behind an edge identity layer.
 - Configure `connection.publicUrl` where the selected provider requires a stable origin.
 - Configure `requestPolicy.allowedHosts` when the deployment requires an explicit public Host policy.
 - Ensure the reverse proxy forwards only the routes you intentionally expose, including `/runner/v1` only when external Runners are enabled.
-- Create individual member tokens; reserve the Owner token for administration and recovery.
+- Do not add static MCP tokens; use OAuth for public MCP and separately scoped credentials only for the external Runner protocol.
 - Scope every member to the minimum role and workspace set.
 - Enable `team.requireWorkspaceLeaseForWrites` when multiple remote principals can mutate the same checkout.
 - Configure dual-control approval only where organizational policy requires it, then verify two distinct authorized principals can complete the flow.

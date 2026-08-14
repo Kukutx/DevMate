@@ -525,16 +525,11 @@ class RuntimeController {
     });
   }
 
-  ownerUrl(publicOrigin = '') {
+  mcpUrl(publicOrigin = '') {
     const config = this.ensureConfig();
     const origin = String(publicOrigin || config.connection?.publicUrl || `http://127.0.0.1:${config.server.port}`)
       .replace(/\/$/, '');
     return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
-  }
-
-  ownerToken() {
-    const config = this.ensureConfig();
-    return config.auth?.required === false ? '' : String(config.auth?.token || '');
   }
 
   dispose({ stopOwned = false } = {}) {

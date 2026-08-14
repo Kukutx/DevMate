@@ -12,7 +12,7 @@ npm run package:vsix
 
 The discovered suite covers current-schema configuration/state durability, authorization, work sessions and leases, rollback safety, durable jobs and Runners, optional approvals, provider ownership/failover, complete desktop-session generation, host runtime behavior, optional plugins and Godot automation contracts.
 
-`npm run smoke:gateway` rebuilds the self-contained Gateway and verifies the owner work-session lifecycle, local capabilities and rollback behavior. Member HTTP E2E coverage separately verifies scoped member authentication, lease enforcement, work-session writes, finish, lease reacquisition and rollback.
+`npm run smoke:gateway` rebuilds the self-contained Gateway and verifies the direct no-auth work-session lifecycle, local capabilities and rollback behavior. OAuth coverage separately verifies discovery, PKCE, authorization-code exchange, refresh, and protected MCP access.
 
 CI additionally:
 
@@ -28,12 +28,12 @@ When a discovered test batch fails, `scripts/run-tests.mjs` reruns that batch fi
 ## Desktop lifecycle acceptance
 
 1. Install the current VSIX and open a Git project.
-2. Confirm a fresh desktop instance selects account-free Cloudflare Quick. Use `DevMate: Connection Setup` only when a stable ngrok/managed/external endpoint is wanted.
+2. Confirm a fresh desktop instance selects ngrok and reaches a stable account-owned HTTPS endpoint after the one-time ngrok setup.
 3. Run `DevMate: Connection Doctor` or `DevMate: Doctor` and confirm diagnostics do not expose credentials.
 4. Run `DevMate: Start` once.
 5. Confirm Start itself performs Gateway start/attach → public connection start/attach → MCP `initialize` → `tools/list` → Ready. No second runtime action should be required.
 6. Confirm the copied endpoint is HTTPS, ends in `/mcp`, and contains no owner credential or token query parameter.
-7. Configure the bearer credential once with `DevMate: Copy Bearer Token` when the ChatGPT connector requires it.
+7. Select **No authentication** for the default private ChatGPT connector. Test OAuth separately only when the optional shared/published mode is enabled.
 8. Run `project_snapshot` and confirm the current workspace, Git state, scripts and instructions are available.
 9. Run `connection_diagnostics` and confirm it reports the current public MCP verification without treating the loopback Gateway as Ready.
 10. Confirm the VS Code panel presents MCP/Ready as the product state while provider, local Gateway and diagnostics remain supporting information rather than required manual stages.
@@ -80,8 +80,8 @@ With VS Code and Obsidian using the default machine-wide desktop state directory
 
 ## Authentication and policy acceptance
 
-1. Confirm `/mcp` without the required Bearer credential returns `401`.
-2. Confirm `/mcp?token=<token>` without the header still returns `401`; URL query credentials are never accepted.
+1. Confirm the default `/mcp` accepts MCP requests without a copied credential and rejects credential query parameters as an authentication mechanism.
+2. Enable OAuth only in a separate test instance, confirm unauthenticated `/mcp` returns `401`, and finish the PKCE authorization and refresh-token flows.
 3. Switch `devMate.permissionProfile` to `balanced` and confirm destructive commands such as `git reset --hard` are blocked by policy.
 4. Confirm invalid regex input to `search_text` returns a tool error.
 5. Confirm `read_audit_log` redacts token-like values and session-scoped mutations include `workSessionId`.

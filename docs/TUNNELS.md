@@ -80,7 +80,7 @@ DevMate never rewrites an older shared-config schema in place. When a newer desk
 
 A public URL is necessary but insufficient for Ready.
 
-After a provider publishes an HTTPS endpoint, DevMate performs authenticated MCP preflight:
+After a provider publishes an HTTPS endpoint, DevMate performs MCP preflight using the active authentication mode:
 
 1. `initialize` against `/mcp`.
 2. Validate that the server identifies itself as `devmate`.
@@ -92,7 +92,7 @@ Verification is tied to both the current Gateway generation and the current prov
 
 ## ngrok
 
-ngrok is the optional stable desktop provider and remains the standalone CLI default. Fresh VS Code and Obsidian desktop instances use Cloudflare Quick to avoid an account requirement.
+ngrok is the default desktop and standalone provider. Fresh VS Code and Obsidian instances select ngrok; an existing machine configuration needs no additional DevMate setup.
 
 DevMate supports two account strategies:
 
@@ -155,6 +155,6 @@ Stop is ownership-aware:
 
 ## Credentials and URLs
 
-DevMate never places owner or provider credentials in public MCP URLs. MCP authentication uses request headers.
+DevMate never places provider credentials or OAuth data in public MCP URLs. The normal desktop MCP flow is no-auth; optional OAuth uses its standard authorization flow rather than a copied static token.
 
 Provider credentials stay in host-local secure storage or the provider's normal machine configuration. Shared `config.json` stores business configuration such as provider and stable URL, not plaintext provider secrets.

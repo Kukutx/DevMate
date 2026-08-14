@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
+const { configureAuthentication } = require('./auth-config.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
@@ -385,10 +386,6 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
   });
 }
 
-function randomToken() {
-  return crypto.randomBytes(32).toString('base64url');
-}
-
 function workspaceId(root) {
   return path.basename(root)
     .replace(/[^a-zA-Z0-9_-]+/g, '-')
@@ -433,7 +430,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
     },
     maintenance: { ...DEFAULT_MAINTENANCE },
     connection: { provider, publicUrl: '' },
-    auth: { required: true, token: randomToken() },
+    auth: { mode: 'none' },
     permissions: {
       profile: 'fullAccess',
       readOnly: false,
@@ -494,9 +491,7 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
     config.server ||= {};
     config.server.port = strictPort(config.server.port ?? requestedPort, { label: 'server.port' });
     config.server.mcpPath ||= '/mcp';
-    config.auth ||= {};
-    config.auth.required = config.auth.required !== false;
-    config.auth.token ||= randomToken();
+    configureAuthentication(config);
     config.hostContexts ||= {};
     config.workspaces ||= [];
     let workspace = config.workspaces.find(item =>
@@ -561,12 +556,12 @@ module.exports = {
   atomicWriteJson,
   cleanupReplacementCandidates,
   configError,
+  configureAuthentication,
   ensureInstanceConfig,
   fsyncDirectory,
   newInstanceConfig,
   parseJsonObjectFile,
   quarantineConfig,
-  randomToken,
   readConfigSnapshot,
   readJson,
   replaceConfig,

@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
-  "version": "3.4.3",
+  "version": "3.4.4",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {
@@ -24,7 +24,6 @@
     "onCommand:devMate.stop",
     "onCommand:devMate.restart",
     "onCommand:devMate.copyUrl",
-    "onCommand:devMate.copyToken",
     "onCommand:devMate.addReference",
     "onCommand:devMate.clearReferences",
     "onCommand:devMate.doctor",
@@ -32,6 +31,7 @@
     "onCommand:devMate.exportSource",
     "onCommand:devMate.copyPrompt",
     "onCommand:devMate.copyContextBundle",
+    "onCommand:devMate.copyOAuthApprovalCode",
     "onCommand:devMate.openSettings",
     "onCommand:devMate.ngrokSetup",
     "onCommand:devMate.ngrokSwitchAccount",
@@ -69,11 +69,6 @@
         "title": "DevMate: Copy MCP URL"
       },
       {
-        "command": "devMate.copyToken",
-        "title": "DevMate: Copy Bearer Token",
-        "category": "DevMate"
-      },
-      {
         "command": "devMate.connectionSetup",
         "title": "DevMate: Connection Setup"
       },
@@ -108,6 +103,10 @@
       {
         "command": "devMate.copyContextBundle",
         "title": "DevMate: Copy Context Bundle"
+      },
+      {
+        "command": "devMate.copyOAuthApprovalCode",
+        "title": "DevMate: Copy OAuth Approval Code"
       },
       {
         "command": "devMate.openSettings",
@@ -238,10 +237,14 @@
           "default": true,
           "description": "Use the current VS Code folder as the active writable workspace."
         },
-        "devMate.requireAuthToken": {
-          "type": "boolean",
-          "default": true,
-          "description": "Require bearer authentication for MCP requests."
+        "devMate.authenticationMode": {
+          "type": "string",
+          "default": "none",
+          "enum": [
+            "none",
+            "oauth"
+          ],
+          "description": "MCP authentication mode. none is the direct private-use default; oauth is for a shared or published ChatGPT app."
         },
         "devMate.permissionProfile": {
           "type": "string",

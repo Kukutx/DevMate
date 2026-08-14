@@ -14,6 +14,7 @@ import * as shared from './local-shared.mjs';
 import { executeCommand } from './command-process.mjs';
 import { assertGitRawWorkspaceBound } from './git-raw-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
+import { handleOAuthRequest, oauthAccessToken, oauthResourceMetadataUrl } from './oauth.mjs';
 
 const VERSION = packageJson.version;
 const CONFIG_PATH = process.env.DEVMATE_CONFIG;
@@ -126,9 +127,8 @@ function commandLimits(cfg, timeoutMs, maxOutputChars){
     maxOutputChars: clampInt(maxOutputChars ?? cfg.runtime?.maxOutputChars, DEFAULT_MAX_OUTPUT, 1000, 500000)
   };
 }
-function timingSafeStringEqual(a,b){ const ab=Buffer.from(String(a||'')); const bb=Buffer.from(String(b||'')); return ab.length === bb.length && crypto.timingSafeEqual(ab,bb); }
-function requestToken(req){ const h=req.headers.authorization || ''; const bearer=String(h).match(/^Bearer\s+(.+)$/i)?.[1]; return bearer || req.headers['x-devmate-token'] || ''; }
-function isAuthorized(req,url,cfg){ if(cfg.auth?.required === false) return true; const expected=cfg.auth?.token; if(!expected) return false; return timingSafeStringEqual(requestToken(req), expected); }
+function requestToken(req){ const h=req.headers.authorization || ''; return String(h).match(/^Bearer\s+(.+)$/i)?.[1] || ''; }
+function isAuthorized(req,url,cfg){ if(cfg.auth?.mode === 'none') return true; return !!oauthAccessToken(cfg, requestToken(req), req); }
 function assertPushAllowed(cfg){ if(cfg.permissions?.confirmBeforePush) throw new Error('Git push is blocked by devMate.confirmBeforePush. Review locally, then disable that setting to push.'); }
 function isDangerousCommand(command){ return shared.isDangerousCommand(command); }
 function assertCommandAllowed(cfg,command){ return shared.assertCommandAllowed(cfg,command); }
@@ -440,7 +440,7 @@ async function connectionDiagnosticsData(){
       reason:'This MCP tool call reached the DevMate gateway.',
       mcpPath:'/mcp',
       localPort:cfg.server?.port || 8787,
-      authRequired:cfg.auth?.required !== false,
+      authenticationMode:cfg.auth?.mode || 'none',
       permissionProfile:permissionProfile(cfg),
       blockDangerousOperations:dangerousGuardEnabled(cfg)
     },
@@ -558,7 +558,7 @@ function statusPanelHtml(){
           card('Gateway', data.gateway?.reachable ? 'Reachable' : 'Unknown', 'Port ' + esc(data.gateway?.localPort) + ' ' + esc(data.gateway?.mcpPath)) +
           card('VS Code', data.vscode?.fresh ? 'Fresh context' : 'Check context', 'Captured ' + esc(fmtAge(data.vscode?.contextAgeSeconds))) +
           card('Workspace', data.workspace?.active?.root || 'None', (data.workspace?.count || 0) + ' workspace(s), ' + (data.workspace?.references || 0) + ' reference(s)') +
-          card('Permissions', data.gateway?.permissionProfile || 'unknown', data.gateway?.authRequired ? 'token required' : 'auth disabled') +
+          card('Permissions', data.gateway?.permissionProfile || 'unknown', data.gateway?.authenticationMode === 'oauth' ? 'OAuth enabled' : 'no authentication') +
           card('Diagnostics', String(diag.total || 0), 'errors ' + (diag.bySeverity?.error || 0) + ', warnings ' + (diag.bySeverity?.warning || 0)) +
           card('Last Preflight', data.connection?.lastPreflightAt ? fmtAge(data.connection?.lastPreflightAgeSeconds) : 'Not recorded', data.connection?.lastPublicHost || 'no public host snapshot') +
         '</div>' +
@@ -681,15 +681,22 @@ const httpServer = http.createServer(async (req,res)=>{
     res.end(JSON.stringify({error:'bad request url'}));
     return;
   }
-  if(req.method === 'OPTIONS') { res.writeHead(204, {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST,GET,DELETE,OPTIONS','Access-Control-Allow-Headers':'content-type,mcp-session-id,authorization,x-devmate-token','Access-Control-Expose-Headers':'Mcp-Session-Id'}); res.end(); return; }
+  if(req.method === 'OPTIONS') { res.writeHead(204, {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST,GET,DELETE,OPTIONS','Access-Control-Allow-Headers':'content-type,mcp-session-id,authorization','Access-Control-Expose-Headers':'Mcp-Session-Id'}); res.end(); return; }
+  const requestConfig = loadConfig();
+  try {
+    if(await handleOAuthRequest(req,res,url,requestConfig)) return;
+  } catch(e) {
+    res.writeHead(500,{'content-type':'application/json'});
+    res.end(JSON.stringify({error:'OAuth request failed'}));
+    return;
+  }
   if(req.method === 'GET' && url.pathname==='/control/health') { const addr = req.socket.remoteAddress || ''; const local = addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'; if(!local){ res.writeHead(403,{'content-type':'application/json'}); res.end(JSON.stringify({error:'local control endpoint only'})); return; } res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify({name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp',instanceId:config.instanceId,port:config.server.port,configPath:CONFIG_PATH,stateRoot:STATE_ROOT})); return; }
   if(req.method === 'GET' && (url.pathname==='/' || url.pathname==='/health')) { res.writeHead(200,{'content-type':'application/json'}); const base={name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp'}; const full={...base,instanceId:config.instanceId,port:config.server.port}; res.end(JSON.stringify(PUBLIC_HEALTH_DETAILS?full:base)); return; }
   if(url.pathname === '/mcp'){
-    const requestConfig = loadConfig();
     res.setHeader('Access-Control-Allow-Origin','*');
     res.setHeader('Access-Control-Expose-Headers','Mcp-Session-Id');
     if(!isAuthorized(req,url,requestConfig)){
-      res.writeHead(401,{'content-type':'application/json','WWW-Authenticate':'Bearer realm="DevMate MCP"'});
+      res.writeHead(401,{'content-type':'application/json','WWW-Authenticate':`Bearer resource_metadata="${oauthResourceMetadataUrl(req)}", scope="devmate offline_access"`});
       res.end(JSON.stringify({error:'unauthorized'}));
       return;
     }

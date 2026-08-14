@@ -98,13 +98,13 @@ Unknown preset names fail explicitly.
 The response returns:
 
 - config path;
-- owner token;
-- owner MCP endpoint URL;
+- MCP endpoint URL;
+- active authentication mode;
 - connection/access/execution summary;
 - optional member/Runner credentials created by the command;
 - next start command.
 
-The owner endpoint URL contains **no credential**. MCP credentials are configured separately and sent with `Authorization: Bearer <token>`.
+The MCP endpoint URL contains no credential. New instances are no-auth; an explicitly OAuth-enabled instance uses OAuth rather than a copied static Bearer token.
 
 ## Inspect configuration
 
@@ -122,7 +122,7 @@ devmate status
 devmate init
 devmate serve
 devmate doctor
-devmate owner-url
+devmate mcp-url
 devmate member-list
 devmate member-create
 devmate member-rotate

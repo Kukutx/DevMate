@@ -32,7 +32,7 @@ test('VS Code explicit verification binds evidence to the exact current complete
   assert.match(block, /stateDirectory: path\.dirname\(configPath\(ctx\)\)/);
   assert.match(block, /expectedRecord/);
   assert.match(block, /currentRecord: \(\) => currentTunnelRecord\(expectedRecord\?\.port\)/);
-  assert.match(block, /token: data\.auth\?\.required === false \? '' : String\(data\.auth\?\.token \|\| ''\)/);
+  assert.match(block, /token: preflightAccessToken\(data, publicUrl\)/);
   assert.match(block, /clientName: 'devmate-vscode-preflight'/);
 });
 
@@ -52,7 +52,7 @@ test('VS Code delegates authenticated public MCP protocol and cross-host single-
 
 test('VS Code Copy URL verifies and commits current generation before clipboard copy', () => {
   const start = extension.indexOf('async function copyUrl()');
-  const end = extension.indexOf('async function copyConnectionToken', start);
+  const end = extension.indexOf('async function copyStarterPrompt()', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
   const verify = block.indexOf('await verifyCurrentTunnel(url, status.record, globalContext)');

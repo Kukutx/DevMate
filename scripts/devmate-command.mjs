@@ -11,7 +11,7 @@ import {
   memberList,
   memberRevoke,
   memberRotate,
-  ownerUrl,
+  mcpUrl,
   readConfig,
   serve
 } from './standalone-runtime.mjs';
@@ -152,8 +152,8 @@ function bootstrap(options = {}) {
     ok: true,
     ...(resolved.preset ? { preset: resolved.preset } : {}),
     config: initialized.file,
-    ownerToken: initialized.token,
-    ownerUrl: ownerUrl({ config: initialized.file, url: finalConfig.connection.publicUrl || undefined }),
+    authenticationMode: finalConfig.auth?.mode || 'none',
+    mcpUrl: mcpUrl({ config: initialized.file, url: finalConfig.connection.publicUrl || undefined }),
     connection: { ...finalConfig.connection },
     access: {
       ownerOnly: finalConfig.team.members.length === 0,
@@ -181,7 +181,7 @@ function status(options = {}) {
   );
   const workspaces = config.workspaces || [];
   const warnings = [];
-  if (!config.auth?.token && config.auth?.required !== false) warnings.push('Owner token is missing.');
+  if (!['none', 'oauth'].includes(config.auth?.mode)) warnings.push('Authentication mode is invalid.');
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
   if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control is enabled but has no active credential.');
   if (
@@ -216,7 +216,7 @@ function status(options = {}) {
 }
 
 function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate owner-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nBootstrap always creates one current-schema DevMate instance. Presets supply capability defaults only when explicitly selected; explicit options override them. Members, external Runners, request policies, and connection providers remain composable capabilities rather than runtime modes.\n`;
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nNew instances use direct no-auth MCP by default. OAuth is the optional current standard for a shared or published ChatGPT app.\n`;
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -233,8 +233,8 @@ async function main(argv = process.argv.slice(2)) {
     return console.log(JSON.stringify({
       ok: true,
       config: result.file,
-      ownerToken: result.token,
-      ownerUrl: ownerUrl({ ...options, config: result.file })
+      authenticationMode: result.config.auth?.mode || 'none',
+      mcpUrl: mcpUrl({ ...options, config: result.file })
     }, null, 2));
   }
   if (command === 'serve') return serve(options);
@@ -244,7 +244,7 @@ async function main(argv = process.argv.slice(2)) {
     if (!result.ok) process.exitCode = 1;
     return;
   }
-  if (command === 'owner-url') return console.log(ownerUrl(options));
+  if (command === 'mcp-url') return console.log(mcpUrl(options));
   if (command === 'member-list') return console.log(JSON.stringify({ members: memberList(options) }, null, 2));
   if (command === 'member-create') return console.log(JSON.stringify(memberCreate(options), null, 2));
   if (command === 'member-rotate') return console.log(JSON.stringify(memberRotate(options), null, 2));
@@ -274,7 +274,7 @@ export const __test = {
   memberList,
   memberRevoke,
   memberRotate,
-  ownerUrl,
+  mcpUrl,
   parseArgs,
   presetOptions,
   status
