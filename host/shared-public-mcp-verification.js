@@ -28,6 +28,8 @@ function evidenceResult(config, record) {
     mcpUrl: `${origin}/mcp`,
     sessionId: null,
     toolCount: Number(config?.connection?.lastToolCount || 0),
+    toolCallVerified: config?.connection?.lastToolCallVerified === true,
+    probeTool: String(config?.connection?.lastProbeTool || ''),
     server: {
       name: String(config?.connection?.lastServerName || 'devmate'),
       version: String(config?.connection?.lastServerVersion || '')
