@@ -25,7 +25,7 @@ async function freePort() {
   });
 }
 
-test('public preflight closes direct no-auth initialize and tools/list against the real Gateway', async () => {
+test('public preflight closes direct no-auth initialize, tools/list, and tools/call against the real Gateway', async () => {
   const root = process.cwd();
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-public-preflight-'));
   const workspaceRoot = path.join(temp, 'workspace');
@@ -35,7 +35,7 @@ test('public preflight closes direct no-auth initialize and tools/list against t
 
   const config = {
     version: 11,
-    appVersion: '3.3.0',
+    appVersion: '3.4.4',
     instanceId: `public-preflight-${Date.now()}`,
     server: { port, mcpPath: '/mcp' },
     runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000, maxConcurrentJobs: 2 },
@@ -102,13 +102,15 @@ test('public preflight closes direct no-auth initialize and tools/list against t
       publicUrl: 'https://devmate-public.example',
       token: '',
       clientName: 'devmate-public-e2e',
-      clientVersion: '3.3.0',
+      clientVersion: '3.4.4',
       request
     });
 
     assert.equal(result.server?.name, 'devmate');
     assert.ok(result.toolCount > 0);
     assert.equal(result.mcpUrl, 'https://devmate-public.example/mcp');
+    assert.equal(result.toolCallVerified, true);
+    assert.equal(result.probeTool, 'gateway_status');
   } finally {
     if (child.exitCode === null) {
       child.kill();
