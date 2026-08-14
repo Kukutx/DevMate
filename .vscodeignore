@@ -3,6 +3,8 @@
 .gitignore
 .npmignore
 .vscode/**
+.codex/**
+.tmp_*
 .playwright-cli/**
 node_modules/**
 obsidian-plugin/**

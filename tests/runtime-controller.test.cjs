@@ -110,6 +110,32 @@ test('runtime controller publishes a bounded generic host context', () => {
   assert.equal(config.hostContexts.obsidian.workspaceRoot, root);
 });
 
+test('runtime controller clears only its own host context on a clean host shutdown', () => {
+  const root = temporaryDirectory('devmate-context-clear-root-');
+  const state = temporaryDirectory('devmate-context-clear-state-');
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: path.join(root, 'missing-gateway.mjs'),
+    hostId: 'vscode-project-123'
+  });
+  controller.ensureConfig();
+  controller.updateHostContext({ kind: 'editor', updatedAt: '2026-01-01T00:00:00.000Z' });
+  const other = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: path.join(root, 'missing-gateway.mjs'),
+    hostId: 'obsidian-vault-456'
+  });
+  other.updateHostContext({ kind: 'knowledge-base', updatedAt: '2026-01-01T00:01:00.000Z' });
+
+  controller.clearHostContext();
+  const config = readJson(controller.configFile);
+  assert.equal(config.hostContexts['vscode-project-123'], undefined);
+  assert.equal(config.hostContexts['obsidian-vault-456'].kind, 'knowledge-base');
+  assert.equal(config.activeHostId, 'obsidian-vault-456');
+});
+
 test('runtime controller reuses its owned Gateway and waits for clean stop', async () => {
   const root = temporaryDirectory('devmate-owned-root-');
   const state = temporaryDirectory('devmate-owned-state-');

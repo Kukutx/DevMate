@@ -31,7 +31,7 @@ There is no separate user step for starting the public connection or verifying M
 
 ## Shared with VS Code
 
-For the same filesystem root, Obsidian and VS Code resolve the same DevMate state directory and share:
+When Obsidian and VS Code use the default machine-wide desktop state directory (or the same explicit override), they share:
 
 - one supported `config.json`,
 - one Gateway process/ownership record,
@@ -56,7 +56,7 @@ Provider selection changes only the connection capability. It does not silently 
 
 ### ngrok
 
-ngrok is the default provider. Obsidian can use the machine's normal ngrok configuration when no DevMate-managed credential is stored.
+Fresh desktop instances use account-free Cloudflare Quick by default. ngrok is the optional stable provider, and Obsidian can use the machine's normal ngrok configuration when no DevMate-managed credential is stored.
 
 Optionally, an ngrok Authtoken can be stored through Electron's OS-backed safe storage. When such a secret is configured, DevMate uses it for the provider process without writing it to the vault or shared `config.json`.
 
@@ -64,7 +64,7 @@ A stable ngrok URL is optional. Leave it empty when the account/default endpoint
 
 ### Cloudflare Quick
 
-Cloudflare Quick uses a native `cloudflared` quick tunnel. The public hostname is temporary and is discovered automatically.
+Cloudflare Quick uses a native `cloudflared` quick tunnel. The public hostname is temporary and is discovered automatically; it is suitable for the current desktop session, not for a persistent ChatGPT app. Configure an account-owned stable ngrok, managed Cloudflare, or external HTTPS origin before creating a persistent ChatGPT app.
 
 ### Cloudflare managed
 

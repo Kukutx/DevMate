@@ -61,6 +61,7 @@ class DevMateView extends ItemView {
       return button;
     };
     action('Start', () => this.plugin.startRuntime());
+    action('Stop', () => this.plugin.stopRuntime());
     action('Restart', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
 
@@ -77,7 +78,6 @@ class DevMateView extends ItemView {
       };
       return button;
     };
-    moreAction('Stop', () => this.plugin.stopRuntime());
     moreAction('Copy context', () => this.plugin.copyContextBundle());
     moreAction('Copy diagnostics', () => this.plugin.copyDiagnostics());
 

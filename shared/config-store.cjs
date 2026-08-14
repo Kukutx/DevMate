@@ -21,6 +21,13 @@ function normalizedWorkspaceRoot(root) {
   return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
+function workspaceForRoot(config, workspaceRoot) {
+  const rootKey = normalizedWorkspaceRoot(path.resolve(workspaceRoot));
+  return (config?.workspaces || []).find(item =>
+    item && !item.reference && normalizedWorkspaceRoot(String(item.root || '.')) === rootKey
+  ) || null;
+}
+
 function configError(message, code, file, cause = null) {
   const error = new Error(`${message}: ${file}`);
   error.code = code;
@@ -194,6 +201,31 @@ function quarantineConfig(file, reason = 'corrupt') {
   } catch {
     return null;
   }
+}
+
+function archiveUnsupportedLegacyConfig(file) {
+  const target = path.resolve(file);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  return withFileLockSync(target, () => {
+    let parsed = null;
+    try { parsed = parseJsonObjectFile(target); }
+    catch { return null; }
+    if (!parsed.exists) return null;
+    try {
+      assertSupportedConfigVersion(parsed.value, target);
+      return null;
+    } catch (error) {
+      const version = error?.configVersion;
+      if (error?.code !== 'unsupported_config_version' || !Number.isInteger(version) || version < 1 || version >= SUPPORTED_CONFIG_VERSION) {
+        throw error;
+      }
+      const archived = `${target}.legacy-v${version}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.json`;
+      fs.renameSync(target, archived);
+      try { fs.chmodSync(archived, 0o600); } catch {}
+      fsyncDirectory(path.dirname(target));
+      return archived;
+    }
+  });
 }
 
 function cleanupReplacementCandidates(candidates, except = '') {
@@ -451,6 +483,7 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`Workspace is not a directory: ${root}`);
   }
+  archiveUnsupportedLegacyConfig(file);
   return updateConfig(file, current => {
     if (!Object.keys(current).length) return newInstanceConfig({ workspaceRoot: root, port: requestedPort, appVersion, defaultConnectionProvider });
     const config = normalizeInstanceConfig(current);
@@ -522,6 +555,7 @@ module.exports = {
   DEFAULT_VERSION,
   MAX_CONFIG_BYTES,
   SUPPORTED_CONFIG_VERSION,
+  archiveUnsupportedLegacyConfig,
   assertSupportedConfigVersion,
   activateInstanceWorkspace,
   atomicWriteJson,
@@ -542,5 +576,6 @@ module.exports = {
   validateReplacement,
   newerVersion,
   versionParts,
+  workspaceForRoot,
   workspaceId
 };

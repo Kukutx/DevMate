@@ -12,7 +12,7 @@ const tunnelEntry = fs.readFileSync(path.join(root, 'extension-entry-shared-tunn
 const tunnelController = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
 
 test('actual VS Code Start and Stop use the shared RuntimeController', () => {
-  assert.match(source, /const \{ RuntimeController \} = require\('\.\/host\/runtime-controller\.js'\)/);
+  assert.match(source, /const \{ RuntimeController, workspaceRuntimeId \} = require\('\.\/host\/runtime-controller\.js'\)/);
   assert.doesNotMatch(source, /SUPPORTED_CONFIG_VERSION/);
   assert.match(source, /gatewayController = new RuntimeController\(/);
   assert.match(source, /const result = await controller\.start\(\{timeoutMs:20000\}\)/);
@@ -41,6 +41,7 @@ test('VS Code host shutdown detaches by default and reserves explicit Stop for u
   const block = source.slice(start, end);
   assert.match(block, /host-deactivation-preserves-shared-session/);
   assert.match(block, /stopOwned:!preserveSession && tunnelAllowsGatewayShutdown/);
+  assert.match(block, /gatewayController\?\.clearHostContext\(\)/);
   assert.doesNotMatch(block, /const stopped = await stopAll\(\);/);
 });
 

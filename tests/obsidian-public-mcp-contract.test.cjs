@@ -134,7 +134,8 @@ test('Obsidian uses provider-native shared connection ownership with secure opti
 test('Obsidian normal panel exposes one user-facing Ready state, not internal transport layers', () => {
   const view = source('obsidian-plugin/src/view.js');
   assert.match(view, /action\('Start'/);
-  assert.match(view, /moreAction\('Stop'/);
+  assert.match(view, /action\('Stop'/);
+  assert.doesNotMatch(view, /moreAction\('Stop'/);
   assert.match(view, /action\('Restart'/);
   assert.match(view, /action\('Copy MCP URL'/);
   assert.doesNotMatch(view, /Public MCP|Public connection|Public ingress|Internal Gateway|Verification|internal only/);

@@ -66,6 +66,16 @@ Connection ownership is strict about the public capability: the provider, Gatewa
 
 The shared connection capability is the single provider-selection authority for every desktop host.
 
+## Workspace routing
+
+The default desktop state is machine-wide so one VS Code project, multiple VS Code windows, and multiple Obsidian Vaults can attach to the same healthy Gateway and public connection. Each host publishes a workspace-specific runtime identity and removes only its own context/bridge records when it closes.
+
+When the shared instance contains more than one writable workspace, every MCP operation that resolves a workspace must include an exact `workspaceId`. DevMate returns the available choices instead of guessing from the most recently focused host. A single writable workspace remains zero-configuration.
+
+### Desktop config upgrades
+
+DevMate never rewrites an older shared-config schema in place. When a newer desktop host first sees an older schema, it preserves the exact old `config.json` as a `config.json.legacy-v<version>-...json` file in the same state directory, then resumes a current instance (creating a fresh one when no valid current replacement exists). Future-version, malformed, and oversized configuration files remain rejected rather than downgraded or replaced.
+
 ## Complete-session verification
 
 A public URL is necessary but insufficient for Ready.

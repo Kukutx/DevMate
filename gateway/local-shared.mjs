@@ -223,12 +223,8 @@ export function syncTrustedRootsIntoConfig() {
   if (JSON.stringify(config) !== before) writeConfig(config);
   return config;
 }
-function activeWorkspace(config) {
-  return config.workspaces?.find(item => item.id === config.activeWorkspaceId) ||
-    config.workspaces?.find(item => !item.reference && !item.trusted) || config.workspaces?.[0];
-}
 export function getWritableWorkspace(config, id) {
-  const workspace = id ? resolveWorkspace(config, id) : activeWorkspace(config);
+  const workspace = resolveWorkspace(config, id);
   if (!workspace) throw new Error('No workspace configured');
   if (workspace.reference || workspace.mode === 'readonly') throw new Error(`Workspace is readonly/reference: ${workspace.id}`);
   return workspace;

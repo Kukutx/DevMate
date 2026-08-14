@@ -6,13 +6,14 @@ import path from 'node:path';
 const root = process.cwd();
 const port = Number(process.env.DEVMATE_SMOKE_PORT || 8798);
 const token = 'smoke-token';
-const configPath = path.join(os.tmpdir(), `devmate-smoke-${port}.json`);
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `devmate-smoke-${port}-`));
+const configPath = path.join(tempRoot, 'config.json');
 const bundledGateway = path.join(root, 'gateway', 'server.bundle.mjs');
 const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundledGateway) ? 'gateway/server.bundle.mjs' : 'gateway/server.mjs');
 
 const config = {
   version: 11,
-  appVersion: '3.4.1',
+  appVersion: '3.4.3',
   instanceId: `smoke-${Date.now()}`,
   server: { port, mcpPath: '/mcp' },
   runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },
@@ -232,5 +233,6 @@ try {
   }));
 } finally {
   await stopGateway();
+  fs.rmSync(tempRoot, { recursive: true, force: true });
   try { fs.rmdirSync(path.join(root, 'tmp')); } catch {}
 }

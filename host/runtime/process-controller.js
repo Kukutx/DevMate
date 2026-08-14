@@ -230,6 +230,21 @@ class RuntimeController {
     });
   }
 
+  clearHostContext() {
+    return updateConfig(this.configFile, config => {
+      if (!config.hostContexts?.[this.hostId]) return config;
+      delete config.hostContexts[this.hostId];
+      if (config.activeHostId === this.hostId) {
+        const next = Object.entries(config.hostContexts)
+          .filter(([, context]) => context && typeof context === 'object')
+          .sort(([, left], [, right]) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))[0];
+        if (next) config.activeHostId = next[0];
+        else delete config.activeHostId;
+      }
+      return config;
+    });
+  }
+
   async status() {
     if (this.disposed) return { state: 'disposed', phase: 'disposed', attached: false, owned: false };
     const config = this.ensureConfig();

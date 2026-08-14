@@ -64,7 +64,7 @@ test('unsupported config versions are refused without rewriting the file', () =>
   }
 });
 
-test('instance config initialization does not silently migrate an old schema', () => {
+test('instance config initialization archives an old schema before creating a current instance', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-config-no-migration-'));
   const workspace = path.join(directory, 'workspace');
   const file = path.join(directory, 'state', 'config.json');
@@ -73,12 +73,33 @@ test('instance config initialization does not silently migrate an old schema', (
   const original = `${JSON.stringify({ version: Math.max(1, SUPPORTED_CONFIG_VERSION - 1), preserved: true }, null, 2)}\n`;
   fs.writeFileSync(file, original, 'utf8');
   try {
+    const current = ensureInstanceConfig({ configFile: file, workspaceRoot: workspace });
+    const archives = fs.readdirSync(path.dirname(file)).filter(name => name.startsWith('config.json.legacy-v'));
+
+    assert.equal(current.version, SUPPORTED_CONFIG_VERSION);
+    assert.equal(archives.length, 1);
+    assert.equal(fs.readFileSync(path.join(path.dirname(file), archives[0]), 'utf8'), original);
+    assert.equal(fs.readdirSync(path.dirname(file)).filter(name => name.includes('.corrupt-')).length, 0);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('instance config initialization leaves a versionless schema untouched', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-config-versionless-'));
+  const workspace = path.join(directory, 'workspace');
+  const file = path.join(directory, 'state', 'config.json');
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const original = `${JSON.stringify({ preserved: true }, null, 2)}\n`;
+  fs.writeFileSync(file, original, 'utf8');
+  try {
     assert.throws(
       () => ensureInstanceConfig({ configFile: file, workspaceRoot: workspace }),
-      error => error?.code === 'unsupported_config_version'
+      error => error?.code === 'unsupported_config_version' && error?.configVersion === null
     );
     assert.equal(fs.readFileSync(file, 'utf8'), original);
-    assert.equal(fs.readdirSync(path.dirname(file)).filter(name => name.includes('.corrupt-')).length, 0);
+    assert.equal(fs.readdirSync(path.dirname(file)).filter(name => name.startsWith('config.json.legacy-v')).length, 0);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

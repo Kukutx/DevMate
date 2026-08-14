@@ -2,6 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { z } from 'zod';
 import { readConfig, toolText } from './local-shared.mjs';
+import { resolveWorkspace, writableWorkspaces } from './workspace-resolver.mjs';
 import { registerServerInitializer } from './server-extension-host.mjs';
 
 const REGISTERED = Symbol.for('devmate.obsidianHostToolsRegistered');
@@ -14,31 +15,39 @@ function pathKey(value) {
 }
 
 function workspaceFor(config, requested = '') {
-  const name = String(requested || config?.activeWorkspaceId || '').trim();
-  const workspace = (config?.workspaces || []).find(item => item?.id === name || item?.name === name) ||
-    (config?.workspaces || []).find(item => item?.id === config?.activeWorkspaceId);
-  if (!workspace) throw new Error(`Obsidian workspace is not configured: ${name || '(active)'}`);
-  return workspace;
+  return resolveWorkspace(config, requested);
+}
+
+function bridgeEntries(config) {
+  return Object.entries(config?.hostBridges || {}).filter(([hostId, bridge]) => bridge && typeof bridge === 'object' && (
+    hostId === 'obsidian' || bridge.kind === 'obsidian' || bridge.hostKind === 'obsidian' || String(bridge.hostId || hostId).startsWith('obsidian-')
+  ));
 }
 
 function bridgeConfig(config = readConfig(), workspaceId = '') {
-  const bridge = config?.hostBridges?.obsidian;
-  if (!bridge || typeof bridge !== 'object') return null;
+  const workspace = workspaceFor(config, workspaceId);
+  const candidates = [];
+  let attachedElsewhere = '';
+  let rootMismatch = false;
+  for (const [hostId, bridge] of bridgeEntries(config)) {
   let url;
   try { url = new URL(String(bridge.url || '')); }
-  catch { return null; }
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) return null;
-  if (url.username || url.password || url.search || url.hash || !String(bridge.token || '')) return null;
-  const workspace = workspaceFor(config, workspaceId);
+  catch { continue; }
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) continue;
+  if (url.username || url.password || url.search || url.hash || !String(bridge.token || '')) continue;
   if (bridge.workspaceId && bridge.workspaceId !== workspace.id) {
-    throw new Error(`Obsidian host bridge is attached to workspace ${bridge.workspaceId}, not ${workspace.id}`);
+    attachedElsewhere ||= String(bridge.workspaceId);
+    continue;
   }
   if (bridge.workspaceRoot && pathKey(bridge.workspaceRoot) !== pathKey(workspace.root)) {
-    throw new Error('Obsidian host bridge workspace root does not match the requested DevMate workspace');
+    rootMismatch = true;
+    continue;
   }
+  if (!bridge.workspaceId && !bridge.workspaceRoot && writableWorkspaces(config).length > 1) continue;
   const protocolVersion = Number(bridge.protocolVersion || 1);
-  if (!Number.isInteger(protocolVersion) || protocolVersion < MIN_BRIDGE_PROTOCOL_VERSION) return null;
-  return {
+  if (!Number.isInteger(protocolVersion) || protocolVersion < MIN_BRIDGE_PROTOCOL_VERSION) continue;
+  candidates.push({
+    hostId: String(bridge.hostId || hostId),
     url: `${url.protocol}//${url.host}`,
     token: String(bridge.token),
     updatedAt: bridge.updatedAt || null,
@@ -46,7 +55,14 @@ function bridgeConfig(config = readConfig(), workspaceId = '') {
     workspaceRoot: workspace.root,
     protocolVersion,
     capabilities: Array.isArray(bridge.capabilities) ? bridge.capabilities.map(String) : []
-  };
+  });
+  }
+  if (candidates.length) {
+    return candidates.sort((left, right) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))[0];
+  }
+  if (attachedElsewhere) throw new Error(`Obsidian host bridge is attached to workspace ${attachedElsewhere}, not ${workspace.id}`);
+  if (rootMismatch) throw new Error('Obsidian host bridge workspace root does not match the requested DevMate workspace');
+  return null;
 }
 
 function callBridge(action, args = {}, timeoutMs = 30000) {
@@ -267,4 +283,4 @@ export function installObsidianHostCapabilities(McpServerClass) {
   });
 }
 
-export const __test = { bridgeConfig, definitions, selectorSchema, workspaceFor };
+export const __test = { bridgeConfig, bridgeEntries, definitions, selectorSchema, workspaceFor };

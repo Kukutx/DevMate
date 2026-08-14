@@ -46,6 +46,7 @@ const WRITE_TOOLS = new Set([
 const NON_WORKSPACE_TOOLS = new Set([
   'gateway_status', 'gateway_self_test', 'maintenance_status', 'connection_diagnostics',
   'devmate_status_panel', 'devmate_team_panel', 'list_workspaces',
+  'add_trusted_root', 'remove_trusted_root',
   'work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback',
   'plugin_catalog', 'plugin_diagnostics', 'plugin_enable', 'plugin_disable', 'plugin_configure', 'devmate_plugins_panel',
   'team_status', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',

@@ -38,6 +38,9 @@ When a discovered test batch fails, `scripts/run-tests.mjs` reruns that batch fi
 9. Run `connection_diagnostics` and confirm it reports the current public MCP verification without treating the loopback Gateway as Ready.
 10. Confirm the VS Code panel presents MCP/Ready as the product state while provider, local Gateway and diagnostics remain supporting information rather than required manual stages.
 11. Start VS Code and Obsidian together and confirm one shared public preflight is performed for the generation; a forced transient timeout must keep the URL alive and recover without a contradictory Ready/error state.
+12. Open two independent writable VS Code projects against the same desktop state and confirm an MCP call without `workspaceId` is rejected with the available choices; repeat the call with each exact ID and confirm it reaches only that project.
+13. Open two separate Obsidian Vaults against the same state and confirm each registers its own loopback bridge; an explicit `workspaceId` must reach the matching Vault, never the most recently opened Vault.
+14. Confirm Stop is visible in the primary action row in both desktop panels, while window reload/close merely detaches and a later Start/auto-start reaches Ready again.
 
 ## Complete-session generation and recovery
 

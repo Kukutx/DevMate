@@ -3,11 +3,11 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('node:child_process');
-const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
+const { readExtensionConfig, syncCurrentWorkspace: syncSharedWorkspace, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { connectionErrorSummary, transientPublicMcpError } = require('./host/public-mcp.js');
 const { verifySharedPublicMcp } = require('./host/shared-public-mcp-verification.js');
-const { RuntimeController } = require('./host/runtime-controller.js');
+const { RuntimeController, workspaceRuntimeId } = require('./host/runtime-controller.js');
 const { childExited, terminateProcessTree } = require('./host/runtime/process-tree.js');
 const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
@@ -51,6 +51,9 @@ function configPath(ctx){ return path.join(ctx.globalStorageUri.fsPath,'config.j
 function gatewayPath(ctx){ return path.join(ctx.extensionPath,'gateway','server.bundle.mjs'); }
 function esc(v){ return String(v ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch])); }
 function currentRoot(){ return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''; }
+function vscodeHostInstanceId(root=currentRoot()){
+  return root ? `vscode-${workspaceRuntimeId(root)}-${process.pid}` : `vscode-${process.pid}`;
+}
 function readConfig(p){ return readExtensionConfig(p); }
 function readJsonFile(p){
   try {
@@ -75,7 +78,11 @@ function uniqueWorkspaceId(workspaces, base, currentId=''){
 function normalizeWorkspaceRoles(data){
   data.workspaces ||= [];
   for(const w of data.workspaces){
-    if(w.reference){
+    if(w.trusted === true || w.role === 'trusted'){
+      w.trusted = true;
+      w.mode ||= 'workspace-write';
+      w.role = 'trusted';
+    } else if(w.reference){
       w.mode = 'readonly';
       w.role = 'reference';
     } else if(w.id === data.activeWorkspaceId){
@@ -89,15 +96,7 @@ function normalizeWorkspaceRoles(data){
   }
 }
 function syncCurrentWorkspace(data, root){
-  const references = (data.workspaces || []).filter(w => w.reference && !samePath(w.root, root));
-  const existing = (data.workspaces || []).find(w => !w.reference && samePath(w.root, root));
-  let id = existing?.id || makeId(root);
-  if(references.some(w => w.id === id)) id = uniqueWorkspaceId(references, makeId(root));
-  data.activeWorkspaceId = id;
-  data.workspaces = [
-    { id, name:path.basename(root), root, mode:'workspace-write', reference:false, role:'active' },
-    ...references
-  ];
+  return syncSharedWorkspace(data, root);
 }
 function newAuthToken(){ return crypto.randomBytes(32).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function nonce(){ return crypto.randomBytes(16).toString('base64'); }
@@ -226,6 +225,8 @@ function ensureConfig(ctx){
 function syncConfig(ctx, forceCurrent=false, portOverride=null){
   const p = configPath(ctx);
   const data = ensureConfig(ctx);
+  const root = currentRoot();
+  const hostId = vscodeHostInstanceId(root);
   data.appVersion = VERSION;
   data.instanceId ||= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
   data.server ||= {};
@@ -238,13 +239,13 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   data.connection ||= {};
   const vscodeContext = collectVsCodeContext();
   data.hostContexts ||= {};
-  data.hostContexts.vscode = {
+  data.hostContexts[hostId] = {
     ...vscodeContext,
-    hostId: 'vscode',
+    hostId,
     kind: 'editor',
     updatedAt: vscodeContext.capturedAt
   };
-  data.activeHostId = 'vscode';
+  data.activeHostId = hostId;
   delete data.vscodeContext;
   data.auth ||= {};
   data.auth.required = authRequired();
@@ -259,7 +260,6 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   data.commands ||= [];
   data.jobs ||= {};
   data.jobs.embeddedRunnerEnabled = cfg().get('embeddedRunnerEnabled') === true;
-  const root = currentRoot();
   if(root && (forceCurrent || cfg().get('autoUseCurrentWorkspace'))){
     syncCurrentWorkspace(data, root);
   }
@@ -380,6 +380,7 @@ async function ensureGatewayController(ctx){
     return gatewayController;
   }
   if(gatewayController){
+    try { gatewayController.clearHostContext(); } catch(error) { log(`Could not clear previous VS Code host context: ${error.message || error}`); }
     const disposed = await gatewayController.dispose({stopOwned:true});
     if(disposed?.disposed === false) throw new Error(`Previous Gateway controller could not be disposed: ${disposed.reason || 'unknown error'}`);
   }
@@ -391,7 +392,7 @@ async function ensureGatewayController(ctx){
     preferredPort: configuredPort(),
     appVersion: VERSION,
     defaultConnectionProvider: 'cloudflare-quick',
-    hostId: 'vscode',
+    hostId: vscodeHostInstanceId(root),
     nodeExecutable: nodeRuntime.executable,
     spawnImpl: spawn,
     logger: message => log(message)
@@ -613,6 +614,7 @@ async function quickStart(ctx,{quiet=false}={}){
 
     log(`Public MCP preflight OK: ${redactUrl(test.mcpUrl)}, tools=${test.toolCount}`);
     if(!quiet){
+      const data = ensureConfig(ctx,false);
       const stability = publicConnectionStability({provider:tunnel.provider,publicUrl:data.connection?.publicUrl || ''});
       const destination = stability.chatgptEligible ? 'persistent ChatGPT MCP URL' : 'temporary session MCP URL';
       if(copied) vscode.window.showInformationMessage(`Ready. Verified ${destination} copied: ${redactUrl(test.mcpUrl)}`);
@@ -1067,15 +1069,15 @@ function panelHtml(ctx, webview){
   </div>
   <div class="toolbar">
     <button data-cmd="quickStart">Start</button>
+    <button class="secondary danger" data-cmd="stop">Stop</button>
     <button class="secondary" data-cmd="restart">Restart</button>
     <button data-cmd="copyUrl">Copy MCP URL</button>
+    <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>
   </div>
   <p class="flow muted">${esc(chatgptFlow)}</p>
   <details>
     <summary>More actions and diagnostics</summary>
     <div class="toolbar">
-      <button class="secondary" data-cmd="stop">Stop</button>
-      <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>
       <button class="secondary" data-cmd="doctor">Doctor</button>
       <button class="secondary" data-cmd="copyContext">Copy Context</button>
       <button class="secondary" data-cmd="settings">Settings</button>
@@ -1222,6 +1224,7 @@ function deactivate({preserveSession=false}={}){
     const stopped = preserveSession
       ? {ok:false,detached:true,reason:'host-deactivation-preserves-shared-session'}
       : await stopAll();
+    try { gatewayController?.clearHostContext(); } catch(error) { log(`Could not clear VS Code host context during shutdown: ${error.message || error}`); }
     const disposed = await gatewayController?.dispose({stopOwned:!preserveSession && tunnelAllowsGatewayShutdown(stopped?.tunnel)});
     if(disposed?.disposed === false){
       log(preserveSession

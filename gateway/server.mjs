@@ -40,7 +40,14 @@ const ROOT_PROJECT_INSTRUCTION_FILES = ['AGENTS.md','CLAUDE.md'];
 const PROJECT_INSTRUCTION_SKIP_DIRS = new Set([...HIDDEN_DIRS, '.github', '.vscode', '.idea', 'tmp']);
 
 function loadConfig(){ const c=shared.readConfig(); c.server ||= {}; c.instanceId ||= 'missing-instance'; c.server.port ||= 8787; c.server.mcpPath = '/mcp'; c.runtime ||= {}; c.runtime.defaultCommandTimeoutMs ||= DEFAULT_TIMEOUT_MS; c.runtime.maxOutputChars ||= DEFAULT_MAX_OUTPUT; c.maintenance = maintenanceOptions(c.maintenance || DEFAULT_MAINTENANCE); c.connection ||= {}; c.workspaces ||= []; c.commands ||= []; return c; }
-function vscodeContext(cfg){ return cfg.hostContexts?.vscode || cfg.vscodeContext || {activeEditor:null,visibleEditors:[],diagnostics:[]}; }
+function vscodeContext(cfg){
+  const contexts = Object.entries(cfg.hostContexts || {}).filter(([id, context]) =>
+    id === 'vscode' || context?.kind === 'editor' || String(context?.hostId || id).startsWith('vscode-')
+  );
+  const active = contexts.find(([id]) => id === cfg.activeHostId)?.[1];
+  const latest = contexts.sort(([, left], [, right]) => Date.parse(right?.updatedAt || '') - Date.parse(left?.updatedAt || ''))[0]?.[1];
+  return active || latest || cfg.vscodeContext || {activeEditor:null,visibleEditors:[],diagnostics:[]};
+}
 function now(){ return shared.now(); }
 function relParts(p){ return String(p||'').split(/[\\/]+/).filter(Boolean); }
 function normalizeSlash(p){ return shared.normalizeSlash(p); }

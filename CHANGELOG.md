@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.4.3
+
+- Fixed VS Code workspace synchronization so it retains the independently registered Obsidian Vault and other shared workspaces instead of replacing them on editor refresh.
+- Preserved trusted workspace metadata during VS Code normalization, preventing a routine context update from downgrading shared workspace classification.
+- Fixed the VS Code quick-start configuration crash, restored Stop to the primary action row in both desktop panels, and kept Connection Setup visible in VS Code.
+- Isolated VS Code windows and Obsidian Vaults with workspace-specific host identities; each close now removes only its own context and Vault bridge record.
+- Made multi-workspace routing fail closed: when more than one writable workspace is registered, MCP calls require an exact `workspaceId` instead of silently using the last active host.
+- Added safe legacy-config recovery: an older schema is preserved byte-for-byte in a versioned archive before a current instance is initialized; malformed and future schemas remain fail-closed.
+
+## 3.4.2
+
+- Fixed Obsidian bridge registration so it always binds to the Vault's own shared workspace instead of an unrelated active VS Code workspace.
+- Reject bridge registration when the Vault cannot be resolved to a registered workspace, preventing self-contradictory bridge metadata from reaching MCP tools.
+
 ## 3.4.1
 
 - Made fresh desktop setup account-free by default with Cloudflare Quick, while keeping ngrok and managed/external ingress as optional stable providers.

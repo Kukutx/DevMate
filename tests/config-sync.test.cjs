@@ -9,6 +9,7 @@ const { SUPPORTED_CONFIG_VERSION, atomicWriteJson } = require('../shared/config-
 const {
   mergeExtensionConfig,
   readExtensionConfig,
+  syncCurrentWorkspace,
   writeExtensionConfig
 } = require('../vscode-host/config-sync.js');
 
@@ -16,6 +17,26 @@ function tempFile() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-config-sync-'));
   return path.join(directory, 'config.json');
 }
+
+test('switching the active VS Code workspace preserves an Obsidian workspace registration', () => {
+  const projectRoot = path.join(path.sep, 'workspace', 'devmate');
+  const vaultRoot = path.join(path.sep, 'vaults', 'obsidian');
+  const config = {
+    activeWorkspaceId: 'obsidian-vault',
+    workspaces: [
+      { id: 'obsidian-vault', name: 'Obsidian Vault', root: vaultRoot, mode: 'workspace-write', reference: false, role: 'active' },
+      { id: 'reference', name: 'Reference', root: path.join(path.sep, 'reference'), mode: 'readonly', reference: true, role: 'reference' },
+      { id: 'trusted', name: 'Trusted', root: path.join(path.sep, 'trusted'), mode: 'workspace-write', trusted: true, role: 'trusted' }
+    ]
+  };
+
+  syncCurrentWorkspace(config, projectRoot);
+
+  assert.equal(config.activeWorkspaceId, 'devmate');
+  assert.equal(config.workspaces.find(item => item.id === 'obsidian-vault')?.root, vaultRoot);
+  assert.equal(config.workspaces.find(item => item.id === 'reference')?.reference, true);
+  assert.equal(config.workspaces.find(item => item.id === 'trusted')?.trusted, true);
+});
 
 test('merges host-owned fields without replacing shared capability state', () => {
   const current = {

@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const http = require('node:http');
-const { updateConfig } = require('../../../host/runtime-controller.js');
+const { updateConfig, workspaceForRoot } = require('../../../host/runtime-controller.js');
 const { BridgeMetrics } = require('./bridge-metrics.js');
 const {
   BRIDGE_CAPABILITIES,
@@ -69,6 +69,7 @@ class ObsidianHostBridge {
   constructor(plugin, controller) {
     this.plugin = plugin;
     this.controller = controller;
+    this.hostId = String(plugin.hostInstanceId || controller.hostId || 'obsidian');
     this.server = null;
     this.token = crypto.randomBytes(32).toString('base64url');
     this.url = '';
@@ -159,9 +160,16 @@ class ObsidianHostBridge {
     const address = this.server.address();
     this.url = `http://127.0.0.1:${address.port}`;
     const runtimeConfig = this.controller.ensureConfig();
+    const workspace = workspaceForRoot(runtimeConfig, this.plugin.vaultRoot);
+    if (!workspace) {
+      await this.stop();
+      throw new Error('The Obsidian Vault is not registered as a DevMate workspace. Reopen Obsidian to repair the shared workspace registration.');
+    }
     updateConfig(this.controller.configFile, config => {
       config.hostBridges ||= {};
-      config.hostBridges.obsidian = {
+      config.hostBridges[this.hostId] = {
+        kind: 'obsidian',
+        hostId: this.hostId,
         url: this.url,
         token: this.token,
         pid: process.pid,
@@ -169,7 +177,7 @@ class ObsidianHostBridge {
         capabilities: BRIDGE_CAPABILITIES,
         updatedAt: now(),
         workspaceRoot: this.plugin.vaultRoot,
-        workspaceId: runtimeConfig.activeWorkspaceId || null
+        workspaceId: workspace.id
       };
       return config;
     });
@@ -180,7 +188,7 @@ class ObsidianHostBridge {
     const token = this.token;
     try {
       updateConfig(this.controller.configFile, config => {
-        if (config.hostBridges?.obsidian?.token === token) delete config.hostBridges.obsidian;
+        if (config.hostBridges?.[this.hostId]?.token === token) delete config.hostBridges[this.hostId];
         return config;
       });
     } catch {}

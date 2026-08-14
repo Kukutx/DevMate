@@ -12,10 +12,14 @@ test('VS Code unified panel exposes the complete necessary lifecycle actions', (
   const panelEnd = extension.indexOf('function refreshPanel()', panelStart);
   assert.ok(panelStart >= 0 && panelEnd > panelStart);
   const panel = extension.slice(panelStart, panelEnd);
-  assert.match(panel, /data-cmd="quickStart">Start<\/button>/);
-  assert.match(panel, /data-cmd="stop">Stop<\/button>/);
-  assert.match(panel, /data-cmd="restart">Restart<\/button>/);
-  assert.match(panel, /data-cmd="copyUrl">Copy MCP URL<\/button>/);
+  const primaryToolbarEnd = panel.indexOf('</div>', panel.indexOf('<div class="toolbar">'));
+  const primaryToolbar = panel.slice(0, primaryToolbarEnd);
+  assert.match(primaryToolbar, /data-cmd="quickStart">Start<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="stop">Stop<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="restart">Restart<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="copyUrl">Copy MCP URL<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="connectionSetup">Connection Setup<\/button>/);
+  assert.match(primaryToolbar, /class="secondary danger" data-cmd="stop">Stop<\/button>/);
   assert.doesNotMatch(panel, /data-cmd="copyUrl">Copy URL<\/button>/);
 });
 

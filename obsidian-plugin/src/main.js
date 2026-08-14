@@ -6,7 +6,7 @@ const { connectionErrorSummary, redactUrl, transientPublicMcpError } = require('
 const { verifySharedPublicMcp } = require('../../host/shared-public-mcp-verification.js');
 const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
-const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
+const { RuntimeController, resolveStateDirectory, workspaceRuntimeId } = require('../../host/runtime-controller.js');
 const { updateConfig } = require('../../shared/config-store.cjs');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { normalizeInstanceConfig } = require('../../shared/instance-config.cjs');
@@ -29,7 +29,6 @@ const { decryptSecret } = require('./secret-store.js');
 const { DevMateSettingTab, normalizeSettings } = require('./settings.js');
 const { DevMateView, VIEW_TYPE } = require('./view.js');
 
-const HOST_ID = 'obsidian';
 const CONTEXT_CAPTURE_DEBOUNCE_MS = 750;
 const STATUS_REFRESH_MS = 5000;
 const PUBLIC_REVERIFY_BACKOFF_MS = 30000;
@@ -61,6 +60,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.recoveryPromise = null;
     this.recoveryNextAt = 0;
     this.vaultRoot = '';
+    this.hostInstanceId = '';
     this.layoutReady = false;
     this.unloading = false;
     this.hostOperations = new OperationCoordinator({ name: 'obsidian-host' });
@@ -72,6 +72,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     }
 
     this.vaultRoot = this.app.vault.adapter.getBasePath();
+    this.hostInstanceId = `obsidian-${workspaceRuntimeId(this.vaultRoot)}-${process.pid}`;
     this.contextProvider = new ObsidianContextProvider(this);
 
     this.registerView(VIEW_TYPE, leaf => new DevMateView(leaf, this));
@@ -127,6 +128,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         this.logRuntime(`Detached from the shared public connection during Obsidian shutdown: ${tunnelDisposed.reason || 'still-owned'}.`);
       }
       this.tunnelController = null;
+      try { this.controller?.clearHostContext(); } catch (error) {
+        this.logRuntime(`Could not clear Obsidian host context during shutdown: ${error.message || error}`);
+      }
       const gatewayDisposed = await this.controller?.dispose({ stopOwned: false });
       if (gatewayDisposed?.disposed === false) {
         this.logRuntime(`Detached from the shared Gateway during Obsidian shutdown: ${gatewayDisposed.reason || 'still-owned'}.`);
@@ -375,14 +379,14 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         preferredPort: this.settings.preferredPort,
         appVersion: this.manifest.version,
         defaultConnectionProvider: 'cloudflare-quick',
-        hostId: HOST_ID,
+        hostId: this.hostInstanceId,
         logger: message => this.logRuntime(message)
       });
       this.tunnelController = new TunnelController({
         stateDirectory,
         settings: () => this.tunnelSettings(stateDirectory),
         getSecrets: async () => this.tunnelSecrets(),
-        hostId: `${HOST_ID}-${process.pid}`,
+        hostId: this.hostInstanceId,
         logger: message => this.logRuntime(message)
       });
       this.logRuntime(`Configured shared DevMate Gateway and public connection lifecycle for ${this.vaultRoot}.`);
@@ -396,7 +400,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           stateDirectory,
           settings: () => this.tunnelSettings(stateDirectory),
           getSecrets: async () => this.tunnelSecrets(),
-          hostId: `${HOST_ID}-${process.pid}`,
+          hostId: this.hostInstanceId,
           logger: message => this.logRuntime(message)
         });
       }

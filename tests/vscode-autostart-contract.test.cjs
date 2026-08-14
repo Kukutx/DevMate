@@ -17,6 +17,7 @@ test('real VS Code Start returns the Ready evidence required by automatic lifecy
   const block = extension.slice(start, end);
 
   assert.match(block, /return \{ok:true,[^\n]*mcpUrl:test\.mcpUrl,[^\n]*toolCount:test\.toolCount/);
+  assert.match(block, /const data = ensureConfig\(ctx,false\);[\s\S]*publicConnectionStability\(\{provider:tunnel\.provider,publicUrl:data\.connection\?\.publicUrl \|\| ''\}\)/);
   assert.match(block, /if\(!quiet\)\{[\s\S]*vscode\.window\.showErrorMessage/);
   assert.match(lifecycle, /commandResult = await this\.vscode\.commands\.executeCommand\('devMate\.start', \{ quiet: true \}\)/);
   assert.match(lifecycle, /!commandResult\?\.mcpUrl/);

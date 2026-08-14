@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('node:path');
 const {
   SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
@@ -29,6 +30,52 @@ function mergeWorkspaces(candidate, current) {
     if (!ids.has(workspace.id)) output.push(workspace);
   }
   return output;
+}
+
+function workspacePathKey(value) {
+  const resolved = path.resolve(String(value || '.'));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function sameWorkspacePath(left, right) {
+  return !!left && !!right && workspacePathKey(left) === workspacePathKey(right);
+}
+
+function workspaceIdForRoot(root) {
+  return path.basename(root).replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase() || 'workspace';
+}
+
+function uniqueWorkspaceId(workspaces, base) {
+  const cleanBase = String(base || 'workspace').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase() || 'workspace';
+  const ids = new Set((workspaces || []).map(item => item?.id).filter(Boolean));
+  let id = cleanBase;
+  let suffix = 2;
+  while (ids.has(id)) id = `${cleanBase}-${suffix++}`;
+  return id;
+}
+
+function syncCurrentWorkspace(candidate, root) {
+  const workspaceRoot = path.resolve(String(root || '.'));
+  const workspaces = Array.isArray(candidate.workspaces) ? candidate.workspaces : [];
+  const existing = workspaces.find(item => item && sameWorkspacePath(item.root, workspaceRoot)) || null;
+  const retained = workspaces.filter(item => !sameWorkspacePath(item?.root, workspaceRoot));
+  let id = String(existing?.id || workspaceIdForRoot(workspaceRoot));
+  if (retained.some(item => item?.id === id)) id = uniqueWorkspaceId(retained, workspaceIdForRoot(workspaceRoot));
+  const { trusted: _trusted, ...currentWorkspace } = existing || {};
+  candidate.activeWorkspaceId = id;
+  candidate.workspaces = [
+    {
+      ...currentWorkspace,
+      id,
+      name: path.basename(workspaceRoot),
+      root: workspaceRoot,
+      mode: 'workspace-write',
+      reference: false,
+      role: 'active'
+    },
+    ...retained
+  ];
+  return candidate;
 }
 
 function preserveCurrentObject(merged, current, key) {
@@ -115,5 +162,6 @@ module.exports = {
   mergeExtensionConfig,
   mergeWorkspaces,
   readExtensionConfig,
+  syncCurrentWorkspace,
   writeExtensionConfig
 };
