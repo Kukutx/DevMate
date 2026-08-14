@@ -5,9 +5,15 @@ import { requestSignal } from './request-context.mjs';
 const { runTaskkill: runBoundedTaskkill } = processTreeRuntime;
 const activeProcesses = new Set();
 
+function isGitCommand(command) {
+  const text = String(command || '').trim();
+  if (/(?:^|[\\/])git(?:\.exe)?$/i.test(text)) return true;
+  return /^(?:git(?:\.exe)?|"[^"\r\n]*[\\/]git(?:\.exe)?"|'[^'\r\n]*[\\/]git(?:\.exe)?')(?:\s|$)/i.test(text);
+}
+
 export function commandEnvironment(command, environment = null) {
   const env = { ...(environment || process.env) };
-  if (/(?:^|[\\/])git(?:\.exe)?$/i.test(String(command || '').trim())) {
+  if (isGitCommand(command)) {
     env.GIT_TERMINAL_PROMPT = '0';
     env.GCM_INTERACTIVE = 'Never';
   }
