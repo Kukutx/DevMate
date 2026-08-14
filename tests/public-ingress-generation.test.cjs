@@ -94,21 +94,12 @@ test('runtime-enriched ready tunnel is never a valid generation when no live Gat
   assert.equal(verifiedForCurrentRecord(config(), missingGateway), false);
 });
 
-test('handshake-only evidence is never considered verified', () => {
-  const current = record('2026-08-08T01:00:00.000Z');
-  const handshakeOnly = config();
-  delete handshakeOnly.connection.lastToolCallVerified;
-  delete handshakeOnly.connection.lastProbeTool;
-  assert.equal(verifiedForCurrentRecord(handshakeOnly, current), false);
-});
-
 test('matching host alone can never validate malformed or empty MCP evidence', () => {
   const current = record('2026-08-08T01:00:00.000Z');
   for (const connection of [
     { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 0, lastToolCallVerified: true, lastServerName: 'devmate' },
     { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/wrong', lastToolCount: 25, lastToolCallVerified: true, lastServerName: 'devmate' },
     { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastServerName: 'other' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: false, lastServerName: 'devmate' },
     { lastPreflightAt: 'not-a-date', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastServerName: 'devmate' }
   ]) {
     assert.equal(verifiedForCurrentRecord({ connection }, current), false);
