@@ -1,6 +1,6 @@
 # Godot testing, performance budgets, and deterministic capture
 
-DevMate 2.7 extends the Godot capability with three production-oriented evidence paths:
+DevMate provides three production-oriented Godot evidence paths:
 
 - native performance sampling with explicit pass/fail budgets;
 - deterministic Movie Maker AVI capture by frame count;

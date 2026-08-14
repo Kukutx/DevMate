@@ -61,7 +61,7 @@ export function authenticateGatewayRequest(req, url, config) {
   normalizeInstanceConfig(config);
   const token = extractRequestToken(req, url);
   if (config.auth?.required === false && !token) {
-    return isLocalRequest(req) ? fallbackLocalPrincipal() : null;
+    return fallbackLocalPrincipal();
   }
   return verifyAccessToken(token, config);
 }

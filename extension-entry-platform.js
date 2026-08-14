@@ -16,6 +16,7 @@ const {
   credentialProviderInUse
 } = require('./vscode-host/tunnel-stop-policy.js');
 const { tunnelMaxRestarts } = require('./vscode-host/tunnel-settings.js');
+const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -51,11 +52,11 @@ function localTunnelSettings() {
   return {
     publicUrl: String(setting('publicUrl', '') || '').trim(),
     ngrokUrl: String(setting('ngrokUrl', '') || '').trim(),
-    ngrokCommandPath: String(setting('ngrokCommandPath', '') || '').trim(),
+    ngrokCommandPath: resolveTunnelExecutable('ngrok', setting('ngrokCommandPath', '')),
     ngrokUseManagedAccount: strictBoolean(setting('ngrokUseManagedAccount', false), 'devMate.ngrokUseManagedAccount'),
     ngrokPoolingEnabled: strictBoolean(setting('ngrokPoolingEnabled', false), 'ngrokPoolingEnabled'),
     ngrokTrafficPolicyFile: String(setting('ngrokTrafficPolicyFile', '') || '').trim(),
-    cloudflareCommandPath: String(setting('cloudflareCommandPath', '') || '').trim(),
+    cloudflareCommandPath: resolveTunnelExecutable('cloudflared', setting('cloudflareCommandPath', '')),
     autoRestart: strictBoolean(setting('tunnelAutoRestart', true), 'tunnelAutoRestart'),
     maxRestarts: tunnelMaxRestarts(setting('tunnelMaxRestarts', 10))
   };
@@ -273,7 +274,7 @@ async function configureConnection(context) {
       publicUrl = current;
     }
   } else if (providerChoice.value === 'cloudflare-quick') {
-    const command = String(setting('cloudflareCommandPath', '') || 'cloudflared');
+    const command = resolveTunnelExecutable('cloudflared', setting('cloudflareCommandPath', ''));
     const check = checkCommand(command);
     if (!check.ok) {
       vscode.window.showWarningMessage(

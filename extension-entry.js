@@ -10,6 +10,7 @@ const {
   writeActiveNgrokUrl
 } = require('./vscode-host/ngrok-connection-state.js');
 const { stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
+const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const {
   assertTunnelSafeForCredentialChange,
   credentialProviderInUse
@@ -39,7 +40,7 @@ async function updatePreference(name, value) {
 }
 
 function ngrokCommand() {
-  return String(preferenceValue('ngrokCommandPath', '') || 'ngrok').trim() || 'ngrok';
+  return resolveTunnelExecutable('ngrok', preferenceValue('ngrokCommandPath', ''));
 }
 
 function usesManagedAccount() { return preferenceValue('ngrokUseManagedAccount', false) === true; }

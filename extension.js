@@ -18,6 +18,7 @@ const {
   verifiedForCurrentRecord
 } = require('./shared/public-ingress-verification.cjs');
 const { connectionProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
+const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
 const { classifyTunnelStop, tunnelAllowsGatewayShutdown } = require('./vscode-host/tunnel-stop-policy.js');
 
@@ -950,13 +951,13 @@ async function doctor(ctx){
   }
   const git=spawnSync('git',['--version'],{encoding:'utf8',windowsHide:true}); checks.push(`git: ${git.error ? 'MISSING' : git.stdout.trim()}`);
   if(provider === 'ngrok'){
-    const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
+    const command=resolveTunnelExecutable('ngrok',cfg().get('ngrokCommandPath'));
     const result=spawnSync(command,['version'],{encoding:'utf8',windowsHide:true});
-    checks.push(`ngrok: ${result.error ? 'MISSING' : String(result.stdout || result.stderr || '').trim().split(/\r?\n/)[0]}`);
+    checks.push(`ngrok: ${result.error || result.status !== 0 ? 'MISSING' : String(result.stdout || result.stderr || '').trim().split(/\r?\n/)[0]}`);
   } else if(provider.startsWith('cloudflare')){
-    const command=String(cfg().get('cloudflareCommandPath') || 'cloudflared');
+    const command=resolveTunnelExecutable('cloudflared',cfg().get('cloudflareCommandPath'));
     const result=spawnSync(command,['--version'],{encoding:'utf8',windowsHide:true});
-    checks.push(`cloudflared: ${result.error ? 'MISSING' : String(result.stdout || result.stderr || '').trim().split(/\r?\n/)[0]}`);
+    checks.push(`cloudflared: ${result.error || result.status !== 0 ? 'MISSING' : String(result.stdout || result.stderr || '').trim().split(/\r?\n/)[0]}`);
   } else {
     checks.push('tunnel executable: external ingress');
   }
@@ -980,13 +981,13 @@ async function setup(ctx){
   const data=ensureConfig(ctx,false);
   const provider=connectionProvider(data);
   if(provider === 'ngrok'){
-    const command=String(cfg().get('ngrokCommandPath') || 'ngrok');
+    const command=resolveTunnelExecutable('ngrok',cfg().get('ngrokCommandPath'));
     const result=spawnSync(command,['version'],{encoding:'utf8',windowsHide:true});
-    if(result.error) actions.push('Install ngrok, then configure its DevMate account and run DevMate: Start.');
+    if(result.error || result.status !== 0) actions.push('Install ngrok, then configure its DevMate account and run DevMate: Start.');
   } else if(provider.startsWith('cloudflare')){
-    const command=String(cfg().get('cloudflareCommandPath') || 'cloudflared');
+    const command=resolveTunnelExecutable('cloudflared',cfg().get('cloudflareCommandPath'));
     const result=spawnSync(command,['--version'],{encoding:'utf8',windowsHide:true});
-    if(result.error) actions.push('Install cloudflared, then run DevMate: Start.');
+    if(result.error || result.status !== 0) actions.push('Install cloudflared, then run DevMate: Start.');
   } else if(provider === 'external' && !String(data.connection?.publicUrl || '').trim()) {
     actions.push('Configure a stable publicUrl for the shared external connection.');
   }

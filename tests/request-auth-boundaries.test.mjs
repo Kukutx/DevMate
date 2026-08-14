@@ -13,20 +13,22 @@ function unauthenticatedConfig() {
   };
 }
 
-test('unauthenticated owner access requires loopback Host and socket', () => {
+test('disabling authentication permits owner access through local and public ingress', () => {
   const publicHost = authenticateGatewayRequest(
     { headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '127.0.0.1' } },
     new URL('http://localhost/mcp'),
     unauthenticatedConfig()
   );
-  assert.equal(publicHost, null);
+  assert.equal(publicHost?.role, 'owner');
+  assert.equal(publicHost?.source, 'local');
 
   const spoofedLocalHost = authenticateGatewayRequest(
     { headers: { host: 'localhost:8787' }, socket: { remoteAddress: '203.0.113.10' } },
     new URL('http://localhost/mcp'),
     unauthenticatedConfig()
   );
-  assert.equal(spoofedLocalHost, null);
+  assert.equal(spoofedLocalHost?.role, 'owner');
+  assert.equal(spoofedLocalHost?.source, 'local');
 
   const localPrincipal = authenticateGatewayRequest(
     { headers: { host: '127.0.0.1:8787' }, socket: { remoteAddress: '127.0.0.1' } },

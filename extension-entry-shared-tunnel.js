@@ -12,6 +12,7 @@ const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.j
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
 const { currentWorkspaceRoot, resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
 const { TunnelController } = require('./vscode-host/tunnel-controller.js');
+const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const {
   clearTunnelController,
   setTunnelController,
@@ -44,11 +45,11 @@ function localTunnelSettings() {
   return {
     publicUrl: setting(vscode, 'publicUrl', ''),
     ngrokUrl: setting(vscode, 'ngrokUrl', ''),
-    ngrokCommandPath: setting(vscode, 'ngrokCommandPath', ''),
+    ngrokCommandPath: resolveTunnelExecutable('ngrok', setting(vscode, 'ngrokCommandPath', '')),
     ngrokUseManagedAccount: strictBoolean(setting(vscode, 'ngrokUseManagedAccount', false), 'ngrokUseManagedAccount'),
     ngrokPoolingEnabled: strictBoolean(setting(vscode, 'ngrokPoolingEnabled', false), 'ngrokPoolingEnabled'),
     ngrokTrafficPolicyFile: setting(vscode, 'ngrokTrafficPolicyFile', ''),
-    cloudflareCommandPath: setting(vscode, 'cloudflareCommandPath', ''),
+    cloudflareCommandPath: resolveTunnelExecutable('cloudflared', setting(vscode, 'cloudflareCommandPath', '')),
     autoRestart: strictBoolean(setting(vscode, 'tunnelAutoRestart', true), 'tunnelAutoRestart'),
     maxRestarts: tunnelMaxRestarts(setting(vscode, 'tunnelMaxRestarts', 10))
   };

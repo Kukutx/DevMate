@@ -1,5 +1,7 @@
 # DevMate 3.2 validation record
 
+> Historical release record for 3.2.0. Use the current CI and release workflows for new releases.
+
 DevMate 3.2.0 hardens the shared desktop runtime used by VS Code and Obsidian. The release candidate was versioned only after the complete 3.1.0 functional candidate passed the Windows and Linux release gates.
 
 ## Required behavior

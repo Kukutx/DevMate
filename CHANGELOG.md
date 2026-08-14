@@ -6,6 +6,8 @@
 - Made Start explicitly select the initiating workspace while passive host registration no longer changes the active project, and prevented older hosts from downgrading shared version metadata.
 - Kept a healthy local Gateway available when public connection startup fails, with a safe actionable ngrok conflict message that never suggests pooling unrelated machines.
 - Fixed Cloudflare Quick readiness by waiting for edge registration, using authoritative DNS with a system fallback, and retrying bounded transient DNS/edge propagation failures before reporting Ready.
+- Resolved ngrok and cloudflared executables consistently across Start, Setup, Doctor, and shared-runtime recovery, including standard Windows installer locations when the host PATH is stale.
+- Made the explicit `requireAuthToken: false` setting apply to public ingress as well as loopback access so current ChatGPT no-auth custom plugins can connect as configured.
 - Excluded browser interaction artifacts from source control and VSIX packages.
 
 ## 3.3.9

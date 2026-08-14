@@ -1,6 +1,6 @@
 # Trusted local capabilities
 
-DevMate 1.16 adds two bounded local-development capabilities:
+DevMate provides two bounded local-development capabilities:
 
 1. Explicit trusted writable roots outside the current VS Code folder.
 2. Persistent process management for development servers, watchers, interactive CLIs, and other long-running commands.
