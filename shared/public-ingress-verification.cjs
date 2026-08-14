@@ -111,6 +111,8 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   if (String(connection.lastServerName || '').toLowerCase() !== 'devmate') return false;
   if (String(connection.lastMcpPath || '') !== '/mcp') return false;
   if (!Number.isInteger(Number(connection.lastToolCount)) || Number(connection.lastToolCount) <= 0) return false;
+  if (connection.lastToolCallVerified !== true) return false;
+  if (String(connection.lastProbeTool || '') !== 'gateway_status') return false;
   const publicHost = hostOf(publicUrl);
   const verifiedHost = String(connection.lastPublicHost || '').trim().toLowerCase();
   return !!publicHost && verifiedHost === publicHost;
