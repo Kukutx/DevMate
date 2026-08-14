@@ -27,6 +27,19 @@ test('direct Git subprocess failure is surfaced as MCP isError', () => {
   assert.match(result.content[0].text, /"failedPhase": "command"/);
 });
 
+test('signaled or unconfirmed Git termination is never reported as success', () => {
+  for (const command of [
+    { exitCode: null, signal: 'SIGTERM', stdout: '', stderr: '' },
+    { exitCode: null, exitConfirmed: false, stdout: '', stderr: '' }
+  ]) {
+    const result = toolResult(command);
+    markGitFailure('git_pull', result);
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.ok, false);
+    assert.equal(result.structuredContent.failedPhase, 'command');
+  }
+});
+
 test('git_save reports the exact failed nested phase', () => {
   const result = toolResult({
     stage: { exitCode: 0, stdout: '', stderr: '' },
