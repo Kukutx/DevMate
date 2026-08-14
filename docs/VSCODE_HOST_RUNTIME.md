@@ -58,10 +58,10 @@ If provider shutdown cannot be confirmed, cleanup fails closed instead of blindl
 
 ## Shared state
 
-VS Code and Obsidian resolve the same workspace-derived state directory unless an explicit shared-state override is configured:
+VS Code and Obsidian resolve the same machine-wide desktop state directory unless an explicit shared-state override is configured:
 
 ```text
-~/.devmate/hosts/<workspace-name>-<path-hash>/
+~/.devmate/desktop/
 ```
 
 Changing the primary workspace or shared-state location while active requires a VS Code window reload rather than continuing against stale state.

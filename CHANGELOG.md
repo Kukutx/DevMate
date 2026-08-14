@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.4.0
+
+- Unified VS Code and Obsidian under one machine-wide desktop state so projects register with one Gateway/public-connection lifecycle instead of competing for free tunnel endpoints.
+- Made Start explicitly select the initiating workspace while passive host registration no longer changes the active project, and prevented older hosts from downgrading shared version metadata.
+- Kept a healthy local Gateway available when public connection startup fails, with a safe actionable ngrok conflict message that never suggests pooling unrelated machines.
+- Fixed Cloudflare Quick readiness by waiting for edge registration, using authoritative DNS with a system fallback, and retrying bounded transient DNS/edge propagation failures before reporting Ready.
+- Excluded browser interaction artifacts from source control and VSIX packages.
+
 ## 3.3.9
 
 - Hardened ERR_NGROK_334 reconciliation so DevMate only removes endpoints proven to serve DevMate or explicitly matching the configured stable URL; a lone unknown endpoint is never treated as ownership evidence.

@@ -5,7 +5,9 @@ const test = require('node:test');
 const {
   mcpUrlFor,
   parseJsonPayload,
-  preflightPublicMcp
+  preflightPublicMcp,
+  publicEndpointLookup,
+  transientPublicMcpError
 } = require('../host/public-mcp.js');
 
 test('public MCP preflight authenticates initialize and tools/list and carries the MCP session', async () => {
@@ -64,4 +66,57 @@ test('public MCP response parsing accepts JSON and SSE data frames', () => {
     parseJsonPayload('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'),
     { jsonrpc: '2.0', id: 1, result: {} }
   );
+});
+
+test('public MCP preflight retries only transient tunnel propagation failures', async () => {
+  let attempts = 0;
+  const request = async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    if (payload.method === 'initialize' && attempts++ < 2) {
+      return { ok: false, status: 530, headers: {}, body: 'error code: 1033', error: '', json: null };
+    }
+    if (payload.method === 'initialize') {
+      return { ok: true, status: 200, headers: {}, body: '', json: { result: { serverInfo: { name: 'devmate' } } } };
+    }
+    return { ok: true, status: 200, headers: {}, body: '', json: { result: { tools: [] } } };
+  };
+  const result = await preflightPublicMcp({
+    publicUrl: 'https://eventual.trycloudflare.com',
+    request,
+    readyTimeoutMs: 1000,
+    retryDelayMs: 100
+  });
+  assert.equal(result.server.name, 'devmate');
+  assert.equal(attempts, 3);
+  assert.equal(transientPublicMcpError({ response: { status: 401 } }), false);
+  assert.equal(transientPublicMcpError({ response: { error: 'getaddrinfo ENOTFOUND edge.example' } }), true);
+});
+
+test('Cloudflare quick endpoints bypass the Windows lookup cache without changing other providers', async () => {
+  const calls = [];
+  const resolver = {
+    lookup(hostname, options, callback) {
+      calls.push(['lookup', hostname, options]);
+      callback(null, '203.0.113.10', 4);
+    },
+    resolve4(hostname, callback) {
+      calls.push(['resolve4', hostname]);
+      callback(null, ['203.0.113.20']);
+    }
+  };
+  const cloudflare = await new Promise((resolve, reject) => {
+    publicEndpointLookup('fresh.trycloudflare.com', {}, (error, address, family) => {
+      if (error) reject(error);
+      else resolve({ address, family });
+    }, resolver);
+  });
+  const ngrok = await new Promise((resolve, reject) => {
+    publicEndpointLookup('example.ngrok-free.app', {}, (error, address, family) => {
+      if (error) reject(error);
+      else resolve({ address, family });
+    }, resolver);
+  });
+  assert.deepEqual(cloudflare, { address: '203.0.113.20', family: 4 });
+  assert.deepEqual(ngrok, { address: '203.0.113.10', family: 4 });
+  assert.deepEqual(calls.map(call => call[0]), ['resolve4', 'lookup']);
 });

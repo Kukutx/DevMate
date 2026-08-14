@@ -2,11 +2,27 @@
 
 const http = require('node:http');
 const https = require('node:https');
+const dns = require('node:dns');
 
 const MCP_PATH = '/mcp';
 const MCP_PROTOCOL_VERSION = '2025-03-26';
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+const cloudflarePublicDns = new dns.Resolver();
+cloudflarePublicDns.setServers(['1.1.1.1', '1.0.0.1']);
+
+const defaultPublicResolver = {
+  lookup: dns.lookup.bind(dns),
+  resolve4(hostname, callback) {
+    cloudflarePublicDns.resolve4(hostname, (error, addresses) => {
+      if (!error && addresses?.length) {
+        callback(null, addresses);
+        return;
+      }
+      dns.resolve4(hostname, callback);
+    });
+  }
+};
 
 function normalizePublicOrigin(value) {
   const text = String(value || '').trim();
@@ -49,6 +65,24 @@ function parseJsonPayload(text) {
     try { return JSON.parse(data); } catch {}
   }
   return null;
+}
+
+function publicEndpointLookup(hostname, options, callback, resolver = defaultPublicResolver) {
+  if (!String(hostname || '').toLowerCase().endsWith('.trycloudflare.com')) {
+    resolver.lookup(hostname, options, callback);
+    return;
+  }
+  resolver.resolve4(hostname, (error, addresses) => {
+    if (error || !addresses?.length) {
+      callback(error || Object.assign(new Error(`No IPv4 address found for ${hostname}`), { code: 'ENOTFOUND' }));
+      return;
+    }
+    if (typeof options === 'object' && options?.all) {
+      callback(null, addresses.map(address => ({ address, family: 4 })));
+      return;
+    }
+    callback(null, addresses[0], 4);
+  });
 }
 
 function requestRaw(url, {
@@ -94,7 +128,7 @@ function requestRaw(url, {
     };
 
     try {
-      request = transport.request(target, { method, headers }, incoming => {
+      request = transport.request(target, { method, headers, lookup: publicEndpointLookup }, incoming => {
         response = incoming;
         const advertised = Number(incoming.headers?.['content-length']);
         if (Number.isFinite(advertised) && advertised > limit) {
@@ -158,7 +192,18 @@ function postJson(url, payload, { headers = {}, timeoutMs = DEFAULT_TIMEOUT_MS, 
   });
 }
 
-async function preflightPublicMcp({
+function transientPublicMcpError(error) {
+  const status = Number(error?.response?.status || 0);
+  if (status >= 500 && status <= 599) return true;
+  const detail = `${error?.response?.error || ''} ${error?.response?.body || ''} ${error?.message || ''}`;
+  return /\b(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|ENOTFOUND)\b|socket hang up|timed?\s*out|error code:\s*1033/i.test(detail);
+}
+
+function retryDelay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function preflightPublicMcpOnce({
   publicUrl,
   token = '',
   clientName = 'devmate-preflight',
@@ -226,6 +271,26 @@ async function preflightPublicMcp({
   };
 }
 
+async function preflightPublicMcp(options = {}) {
+  const readyTimeoutMs = Math.max(0, Math.min(30000, Number(options.readyTimeoutMs) || 0));
+  const retryDelayMs = Math.max(100, Math.min(2000, Number(options.retryDelayMs) || 500));
+  const deadline = Date.now() + readyTimeoutMs;
+  while (true) {
+    if (typeof options.shouldContinue === 'function' && options.shouldContinue() !== true) {
+      const error = new Error('Public MCP verification became stale before the endpoint was ready');
+      error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
+      throw error;
+    }
+    try {
+      return await preflightPublicMcpOnce(options);
+    } catch (error) {
+      const remaining = deadline - Date.now();
+      if (!readyTimeoutMs || remaining <= 0 || !transientPublicMcpError(error)) throw error;
+      await retryDelay(Math.min(retryDelayMs, remaining));
+    }
+  }
+}
+
 module.exports = {
   DEFAULT_MAX_RESPONSE_BYTES,
   DEFAULT_TIMEOUT_MS,
@@ -236,6 +301,8 @@ module.exports = {
   parseJsonPayload,
   postJson,
   preflightPublicMcp,
+  publicEndpointLookup,
   redactUrl,
-  requestRaw
+  requestRaw,
+  transientPublicMcpError
 };

@@ -251,9 +251,9 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Shared state directory override')
-      .setDesc('Optional absolute directory. Leave empty to use ~/.devmate/hosts/<workspace-id> and share one DevMate instance with VS Code for the same root.')
+      .setDesc('Optional absolute directory. Leave empty to use the machine-wide ~/.devmate/desktop instance shared with VS Code.')
       .addText(text => text
-        .setPlaceholder('C:\\Users\\you\\.devmate\\hosts\\my-vault')
+        .setPlaceholder('C:\\Users\\you\\.devmate\\desktop')
         .setValue(this.plugin.settings.sharedStateDirectory)
         .onChange(async value => {
           this.plugin.settings.sharedStateDirectory = value.trim();

@@ -34,15 +34,17 @@ test('VS Code Stop preserves the Gateway while public connection ownership is re
   assert.match(block, /return \{ok:false,sharedStillActive:true,gateway:\{stopped:false,reason\},tunnel,startCommand\}/);
 });
 
-test('failed Start preserves a newly owned Gateway while a pre-existing or attached public connection still depends on it', () => {
+test('failed Start preserves a newly owned Gateway for diagnostics, retry, or an attached public connection', () => {
   const start = source.indexOf('async function rollbackFailedStart');
   const end = source.indexOf('async function quickStart', start);
   assert.ok(start >= 0 && end > start);
   const block = source.slice(start, end);
   assert.match(block, /let publicConnectionSafeToReleaseGateway = !tunnelWasRunning && !\(tunnel\?\.attached && !tunnel\?\.owned\)/);
   assert.match(block, /publicConnectionSafeToReleaseGateway = tunnelAllowsGatewayShutdown\(stopped\)/);
-  assert.match(block, /gateway\?\.started && gateway\?\.owned && publicConnectionSafeToReleaseGateway/);
+  assert.match(block, /if\(gateway\?\.started && gateway\?\.owned\)/);
+  assert.match(block, /keeping the local Gateway available for diagnostics and retry/);
   assert.match(block, /Preserving the newly owned Gateway because public connection shutdown was not confirmed/);
+  assert.doesNotMatch(block, /gateway\?\.started && gateway\?\.owned[\s\S]*stopGatewayProcess\(\)/);
   assert.doesNotMatch(block, /sharedTunnelActive/);
 });
 

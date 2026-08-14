@@ -73,7 +73,7 @@ function childProcessFor(child, url = 'https://ownership.trycloudflare.com') {
   return {
     spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; },
     spawn() {
-      setTimeout(() => child.stdout.write(`Ready ${url}\n`), 20);
+      setTimeout(() => child.stdout.write(`Ready ${url}\nRegistered tunnel connection\n`), 20);
       return child;
     }
   };

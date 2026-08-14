@@ -442,6 +442,7 @@ function runDefaultStartCommand(){
 }
 async function startGateway(ctx){
   const controller = await ensureGatewayController(ctx);
+  controller.activateWorkspace();
   syncConfig(ctx,true);
   const result = await controller.start({timeoutMs:20000});
   gatewayProcess = controller.child;
@@ -514,13 +515,14 @@ async function stopPublicTunnel(){
     lastPublicUrl = '';
   }
 }
-async function verifyPublicMcp(baseUrl, ctx=globalContext){
+async function verifyPublicMcp(baseUrl, ctx=globalContext, options={}){
   const data = ctx ? ensureConfig(ctx,false) : null;
   return preflightPublicMcp({
     publicUrl: baseUrl,
     token: data?.auth?.required === false ? '' : String(data?.auth?.token || ''),
     clientName: 'devmate-vscode-preflight',
-    clientVersion: VERSION
+    clientVersion: VERSION,
+    ...options
   });
 }
 async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext){
@@ -530,7 +532,10 @@ async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext)
     error.code = 'DEVMATE_PUBLIC_MCP_GENERATION_UNAVAILABLE';
     throw error;
   }
-  const test = await verifyPublicMcp(publicUrl, ctx);
+  const test = await verifyPublicMcp(publicUrl, ctx, {
+    readyTimeoutMs: 15000,
+    shouldContinue: () => recordGeneration(currentTunnelRecord(expectedRecord.port)) === generation
+  });
   let currentRecord = currentTunnelRecord(expectedRecord.port);
   if(recordGeneration(currentRecord) !== generation) throw staleSessionGenerationError();
   const stamp = new Date().toISOString();
@@ -568,11 +573,10 @@ async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommand
       log(`Could not roll back owned public connection after failed Start: ${error.message || error}`);
     }
   }
-  if(gateway?.started && gateway?.owned && publicConnectionSafeToReleaseGateway){
-    try { await stopGatewayProcess(); }
-    catch(error){ log(`Could not roll back owned Gateway after failed Start: ${error.message || error}`); }
-  }else if(gateway?.started && gateway?.owned && !publicConnectionSafeToReleaseGateway){
-    log('Preserving the newly owned Gateway because public connection shutdown was not confirmed.');
+  if(gateway?.started && gateway?.owned){
+    log(publicConnectionSafeToReleaseGateway
+      ? 'Public connection startup failed; keeping the local Gateway available for diagnostics and retry.'
+      : 'Preserving the newly owned Gateway because public connection shutdown was not confirmed.');
   }
   if(!startCommandWasRunning && startCommandProcess){
     const stopped = await stopStartCommand();

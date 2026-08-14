@@ -22,8 +22,8 @@ test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle 
   assert.match(block, /toolCount: preflight\.toolCount/);
   assert.match(block, /this\.sessionRequested = true/);
   assert.match(block, /if \(tunnel\?\.owned\)[\s\S]*this\.tunnelController\.stop\(\)/);
-  assert.match(block, /if \(gateway\?\.started && gateway\?\.owned && publicConnectionSafeToReleaseGateway\)[\s\S]*this\.controller\.stop\(\)/);
-  assert.match(block, /gateway\?\.owned && !publicConnectionSafeToReleaseGateway[\s\S]*Preserving the newly owned Gateway/);
+  assert.match(block, /if \(gateway\?\.started && gateway\?\.owned\)[\s\S]*keeping the local Gateway available for diagnostics and retry/);
+  assert.doesNotMatch(block, /if \(gateway\?\.started && gateway\?\.owned[\s\S]*this\.controller\.stop\(\)/);
 });
 
 test('Obsidian Ready is tied to the current complete Gateway+tunnel generation rather than URL equality', () => {

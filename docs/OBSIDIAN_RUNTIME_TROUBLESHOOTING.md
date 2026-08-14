@@ -60,7 +60,7 @@ Credential-shaped values are redacted before persistence.
 4. Confirm the plugin package contains the expected Gateway bundle/runtime files.
 5. Run connection diagnostics and verify the configured provider/executable/credential requirements.
 6. Change the preferred Gateway port only when diagnostics report a real port conflict.
-7. If VS Code is using the same workspace state, verify whether Obsidian should attach rather than spawn duplicate resources.
+7. If VS Code is using the same desktop state, verify that Obsidian attaches rather than spawning duplicate resources.
 
 Repeated Restart is not a repair strategy for a missing bundle, invalid current config, missing Node runtime, provider credential failure, or incompatible shared provider configuration.
 

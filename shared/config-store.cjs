@@ -364,6 +364,23 @@ function workspaceId(root) {
     .toLowerCase() || 'workspace';
 }
 
+function versionParts(value) {
+  const match = String(value || '').trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function newerVersion(current, candidate) {
+  const left = versionParts(current);
+  const right = versionParts(candidate);
+  if (!left) return String(candidate || current || '');
+  if (!right) return String(current || candidate || '');
+  for (let index = 0; index < 3; index += 1) {
+    if (right[index] > left[index]) return String(candidate);
+    if (right[index] < left[index]) return String(current);
+  }
+  return String(current);
+}
+
 function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
   const root = path.resolve(workspaceRoot);
   const id = workspaceId(root);
@@ -413,7 +430,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       reference: false,
       role: 'active'
     }],
-    hostRuntime: { workspaceRoot: normalizedWorkspaceRoot(root) },
+    hostRuntime: {},
     hostContexts: {},
     activeHostId: null,
     commands: [],
@@ -435,17 +452,10 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   return updateConfig(file, current => {
     if (!Object.keys(current).length) return newInstanceConfig({ workspaceRoot: root, port: requestedPort, appVersion });
     const config = normalizeInstanceConfig(current);
-    config.appVersion = appVersion;
+    config.appVersion = newerVersion(config.appVersion, appVersion);
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     config.hostRuntime ||= {};
-    const boundWorkspace = String(config.hostRuntime.workspaceRoot || '');
-    if (boundWorkspace && boundWorkspace !== rootKey) {
-      const error = configError('DevMate state directory is bound to a different workspace', 'config_workspace_mismatch', file);
-      error.boundWorkspaceRoot = boundWorkspace;
-      error.requestedWorkspaceRoot = rootKey;
-      throw error;
-    }
-    config.hostRuntime.workspaceRoot = rootKey;
+    delete config.hostRuntime.workspaceRoot;
     config.server ||= {};
     config.server.port = strictPort(config.server.port ?? requestedPort, { label: 'server.port' });
     config.server.mcpPath ||= '/mcp';
@@ -473,10 +483,34 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
       };
       config.workspaces.push(workspace);
     }
+    const activeWorkspace = config.workspaces.find(item => item && !item.reference && item.id === config.activeWorkspaceId);
+    if (!activeWorkspace) config.activeWorkspaceId = workspace.id;
+    for (const item of config.workspaces) {
+      if (!item || item.reference) continue;
+      item.role = item.id === config.activeWorkspaceId ? 'active' : (item.role === 'active' ? 'workspace' : item.role || 'workspace');
+    }
+    return config;
+  });
+}
+
+function activateInstanceWorkspace({ configFile, workspaceRoot }) {
+  const file = path.resolve(configFile);
+  const root = path.resolve(workspaceRoot);
+  const rootKey = normalizedWorkspaceRoot(root);
+  return updateConfig(file, current => {
+    const config = normalizeInstanceConfig(current);
+    const workspace = (config.workspaces || []).find(item =>
+      item && !item.reference && normalizedWorkspaceRoot(String(item.root || '.')) === rootKey
+    );
+    if (!workspace) {
+      const error = configError('Workspace is not registered in the DevMate desktop instance', 'config_workspace_missing', file);
+      error.requestedWorkspaceRoot = rootKey;
+      throw error;
+    }
     config.activeWorkspaceId = workspace.id;
     for (const item of config.workspaces) {
       if (!item || item.reference) continue;
-      item.role = item.id === workspace.id ? 'active' : (item.role === 'active' ? 'workspace' : item.role || 'workspace');
+      item.role = item.id === workspace.id ? 'active' : 'workspace';
     }
     return config;
   });
@@ -487,6 +521,7 @@ module.exports = {
   MAX_CONFIG_BYTES,
   SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
+  activateInstanceWorkspace,
   atomicWriteJson,
   cleanupReplacementCandidates,
   configError,
@@ -503,5 +538,7 @@ module.exports = {
   replacementCandidates,
   updateConfig,
   validateReplacement,
+  newerVersion,
+  versionParts,
   workspaceId
 };

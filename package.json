@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
-  "version": "3.3.9",
+  "version": "3.4.0",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {
@@ -163,7 +163,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional shared DevMate state directory override. Leave empty to use ~/.devmate/hosts/<workspace-id>."
+          "description": "Optional shared DevMate state directory override. Leave empty to use the machine-wide ~/.devmate/desktop instance shared by VS Code and Obsidian."
         },
         "devMate.port": {
           "type": "number",
@@ -188,7 +188,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional machine-local stable ngrok URL candidate used by Connection Setup. The active URL is workspace-scoped."
+          "description": "Optional machine-local stable ngrok URL candidate used by Connection Setup. The active runtime URL is shared by the machine-wide desktop instance."
         },
         "devMate.ngrokPoolingEnabled": {
           "type": "boolean",
@@ -212,7 +212,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional machine-local stable HTTPS URL candidate for managed Cloudflare or external ingress. The active URL is workspace-scoped."
+          "description": "Optional machine-local stable HTTPS URL candidate for managed Cloudflare or external ingress. The active runtime URL is shared by the machine-wide desktop instance."
         },
         "devMate.tunnelAutoRestart": {
           "type": "boolean",

@@ -43,7 +43,7 @@ function cloudflareLaunch(provider, port, settings, secrets) {
       args: ['tunnel', '--url', `http://127.0.0.1:${port}`],
       options: { windowsHide: true },
       publicUrl: '',
-      readyPattern: null
+      readyPattern: /registered tunnel connection|connection .* registered/i
     };
   }
   if (provider !== 'cloudflare-managed') {

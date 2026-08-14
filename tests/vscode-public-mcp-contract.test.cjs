@@ -29,7 +29,9 @@ test('VS Code explicit verification binds evidence to the exact current complete
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
   assert.match(block, /const generation = recordGeneration\(expectedRecord\)/);
-  assert.match(block, /const test = await verifyPublicMcp\(publicUrl, ctx\)/);
+  assert.match(block, /const test = await verifyPublicMcp\(publicUrl, ctx, \{/);
+  assert.match(block, /readyTimeoutMs: 15000/);
+  assert.match(block, /shouldContinue: \(\) => recordGeneration\(currentTunnelRecord\(expectedRecord\.port\)\) === generation/);
   assert.match(block, /recordGeneration\(currentRecord\) !== generation/);
   assert.match(block, /successfulVerificationPatch\(test, publicUrl, stamp, expectedRecord\)/);
   assert.match(block, /verifiedForCurrentRecord\(persisted, currentRecord\)/);

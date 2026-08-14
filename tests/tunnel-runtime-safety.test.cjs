@@ -325,7 +325,7 @@ test('error plus close without exit removes a ready provider owner exactly once'
   const child = new FakeChild();
   const childProcess = {
     spawn() {
-      setTimeout(() => child.stdout.write('Ready https://native-close-only.trycloudflare.com\n'), 25);
+      setTimeout(() => child.stdout.write('Ready https://native-close-only.trycloudflare.com\nRegistered tunnel connection\n'), 25);
       return child;
     },
     spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; }
@@ -354,7 +354,7 @@ test('stop timeout preserves a live provider and shared ownership', async () => 
   const child = new StubbornChild();
   const childProcess = {
     spawn() {
-      setTimeout(() => child.stdout.write('Ready https://stubborn.trycloudflare.com\n'), 25);
+      setTimeout(() => child.stdout.write('Ready https://stubborn.trycloudflare.com\nRegistered tunnel connection\n'), 25);
       return child;
     },
     spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; }
@@ -406,7 +406,7 @@ test('auto-restart re-evaluates provider settings after backoff', async () => {
       spawnCount += 1;
       const child = new FakeChild();
       children.push(child);
-      setTimeout(() => child.stdout.write(`Ready https://restart-${spawnCount}.trycloudflare.com\n`), 25);
+      setTimeout(() => child.stdout.write(`Ready https://restart-${spawnCount}.trycloudflare.com\nRegistered tunnel connection\n`), 25);
       return child;
     },
     spawnSync() { return { status: 0, stdout: 'cloudflared version', stderr: '', error: null }; }
@@ -453,6 +453,37 @@ test('configuration conflict is rejected before a second provider can own the tu
   } finally {
     await first.dispose({ stopOwned: true }).catch(() => {});
     await second.dispose({ stopOwned: false }).catch(() => {});
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('followers attach when only host-local provider execution settings differ', async () => {
+  const stateDirectory = tempState();
+  const publicUrl = 'https://shared.example.test';
+  const firstSettings = {
+    ...externalSettings(publicUrl),
+    ngrokCommandPath: 'C:\\Tools\\owner-ngrok.exe',
+    cloudflareCommandPath: 'C:\\Tools\\owner-cloudflared.exe'
+  };
+  const followerSettings = {
+    ...externalSettings(publicUrl),
+    autoRestart: true,
+    maxRestarts: 10,
+    ngrokCommandPath: '',
+    cloudflareCommandPath: ''
+  };
+  const first = new TunnelController({ stateDirectory, settings: () => firstSettings, hostId: 'first' });
+  const follower = new TunnelController({ stateDirectory, settings: () => followerSettings, hostId: 'follower' });
+  try {
+    const owner = await first.start(8787);
+    const attached = await follower.start(8787);
+    assert.equal(owner.owned, true);
+    assert.equal(attached.attached, true);
+    assert.equal(attached.publicUrl, publicUrl);
+    assert.notEqual(configurationKey(firstSettings, 8787), configurationKey(followerSettings, 8787));
+  } finally {
+    await first.dispose({ stopOwned: true }).catch(() => {});
+    await follower.dispose({ stopOwned: false }).catch(() => {});
     fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
 });

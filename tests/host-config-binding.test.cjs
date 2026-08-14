@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { ensureInstanceConfig } = require('../shared/config-store.cjs');
+const { activateInstanceWorkspace, ensureInstanceConfig } = require('../shared/config-store.cjs');
 const { normalizedWorkspaceRoot } = require('../host/runtime/state-paths.js');
 
 function temporaryDirectory(prefix) {
@@ -47,24 +47,21 @@ test('does not rename or overwrite a directory accidentally placed at config.jso
   assert.equal(fs.readdirSync(state).some(name => name.includes('.corrupt-')), false);
 });
 
-test('binds a shared state directory to one normalized workspace root', () => {
+test('registers multiple workspace roots in one desktop state without changing the active workspace implicitly', () => {
   const firstRoot = temporaryDirectory('devmate-binding-first-');
   const secondRoot = temporaryDirectory('devmate-binding-second-');
   const state = temporaryDirectory('devmate-binding-state-');
   const configFile = path.join(state, 'config.json');
-  const first = ensureInstanceConfig({ configFile, workspaceRoot: firstRoot });
-  assert.equal(first.hostRuntime.workspaceRoot, normalizedWorkspaceRoot(firstRoot));
+  const first = ensureInstanceConfig({ configFile, workspaceRoot: firstRoot, appVersion: '3.3.9' });
+  const second = ensureInstanceConfig({ configFile, workspaceRoot: secondRoot, appVersion: '3.3.0' });
+  assert.equal(second.hostRuntime.workspaceRoot, undefined);
+  assert.equal(second.appVersion, '3.3.9');
+  assert.equal(second.workspaces.length, 2);
+  assert.equal(second.activeWorkspaceId, first.activeWorkspaceId);
+  assert.ok(second.workspaces.some(item => normalizedWorkspaceRoot(item.root) === normalizedWorkspaceRoot(secondRoot)));
 
-  assert.throws(
-    () => ensureInstanceConfig({ configFile, workspaceRoot: secondRoot }),
-    error => {
-      assert.equal(error.code, 'config_workspace_mismatch');
-      assert.equal(error.boundWorkspaceRoot, normalizedWorkspaceRoot(firstRoot));
-      assert.equal(error.requestedWorkspaceRoot, normalizedWorkspaceRoot(secondRoot));
-      return true;
-    }
-  );
-  const persisted = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-  assert.equal(persisted.hostRuntime.workspaceRoot, normalizedWorkspaceRoot(firstRoot));
-  assert.equal(persisted.activeWorkspaceId, first.activeWorkspaceId);
+  const activated = activateInstanceWorkspace({ configFile, workspaceRoot: secondRoot });
+  const active = activated.workspaces.find(item => item.id === activated.activeWorkspaceId);
+  assert.equal(normalizedWorkspaceRoot(active.root), normalizedWorkspaceRoot(secondRoot));
+  assert.equal(activated.workspaces.filter(item => item.role === 'active').length, 1);
 });

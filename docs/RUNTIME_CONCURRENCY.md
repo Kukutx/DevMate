@@ -1,6 +1,6 @@
 # Runtime concurrency and recovery
 
-DevMate desktop hosts share a workspace-derived state directory and may be open at the same time. Start, Stop, Restart, recovery, reconfiguration and unload are coordinated state transitions rather than independent button handlers.
+DevMate desktop hosts share one machine-wide state directory by default and may be open at the same time. Start, Stop, Restart, recovery, reconfiguration and unload are coordinated state transitions rather than independent button handlers. Opening another project registers it with the same desktop instance; an explicit Start selects that host's project as active.
 
 ## Host operation serialization
 
@@ -34,7 +34,7 @@ The provider-native public connection uses the same convergence pattern with:
 <state directory>/tunnel.runtime.json
 ```
 
-`TunnelController` performs provider-native owner election. Compatible followers attach to the shared provider record; incompatible provider/endpoint configuration fails closed rather than starting a second conflicting provider.
+`TunnelController` performs provider-native owner election. Followers attach when the provider, Gateway port, and any configured stable public origin match. Provider executable paths, credentials, and restart policy belong to the owning host and do not prevent another desktop host from attaching. A genuinely different provider, port, or stable endpoint still fails closed rather than starting a second conflicting provider.
 
 Both VS Code and Obsidian can own or attach to this shared public connection. Neither editor is the permanent provider owner.
 

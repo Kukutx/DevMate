@@ -52,7 +52,7 @@ Verify that Ready belongs to the current **Gateway + provider session generation
 
 ## Cross-host ownership acceptance
 
-With VS Code and Obsidian pointed at the same workspace-derived state directory:
+With VS Code and Obsidian using the default machine-wide desktop state directory (or the same explicit override):
 
 1. Start from Host A and reach Ready.
 2. Open Host B and confirm it attaches instead of starting duplicate compatible Gateway/provider processes.

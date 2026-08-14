@@ -42,7 +42,7 @@ A loopback Gateway without a verified public MCP endpoint is not Ready.
 
 ## Shared ownership
 
-The provider runtime stores one bounded shared ownership record under the workspace-derived state directory. The record includes the information required to prove compatibility and identify the provider generation, including:
+The provider runtime stores one bounded shared ownership record under the machine-wide desktop state directory. The record includes the information required to prove compatibility and identify the provider generation, including:
 
 - owner identity,
 - host identity,
@@ -62,7 +62,7 @@ Owners heartbeat their shared runtime records. Loss of ownership triggers fail-c
 
 ## Configuration identity
 
-Connection ownership is strict. The provider configuration identity includes endpoint-affecting provider settings and the Gateway port. A running generation with a different provider or incompatible endpoint configuration is not reused.
+Connection ownership is strict about the public capability: the provider, Gateway port, and configured stable origin must agree. Host-local launch details such as executable paths, credentials, and restart policy are owned by the process that started the tunnel and do not block VS Code or Obsidian from attaching to that same healthy generation. A running generation with a different provider, port, or stable origin is not reused.
 
 The shared connection capability is the single provider-selection authority for every desktop host.
 

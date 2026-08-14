@@ -18,7 +18,7 @@ Adding team members does not change the connection provider. Hardening request p
 
 ## Configuration ownership
 
-The workspace-derived shared `config.json` is the business source of truth for current capabilities, including:
+The machine-wide desktop `config.json` is the business source of truth for current capabilities, including:
 
 - `connection.provider` and `connection.publicUrl`;
 - `team.members`, default role, member limit and lease policy;

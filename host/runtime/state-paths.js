@@ -31,9 +31,8 @@ function workspaceRuntimeId(root) {
   return `${base}-${digest}`;
 }
 
-function defaultSharedStateDirectory(root, { homeDirectory = os.homedir() } = {}) {
-  if (!root) throw new Error('A workspace root is required to resolve shared DevMate state');
-  return path.join(homeDirectory, '.devmate', 'hosts', workspaceRuntimeId(root));
+function defaultSharedStateDirectory(_root, { homeDirectory = os.homedir() } = {}) {
+  return path.join(homeDirectory, '.devmate', 'desktop');
 }
 
 function resolveStateDirectory({

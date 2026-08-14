@@ -17,7 +17,7 @@ A running loopback Gateway is not Ready. A public HTTPS URL by itself is not Rea
 
 ## Shared desktop topology
 
-For the same workspace or vault root, desktop hosts resolve the same state directory:
+Desktop hosts resolve one machine-wide state directory by default, regardless of which workspace or vault is currently active:
 
 ```text
 VS Code ─────┐
@@ -63,7 +63,7 @@ The host accepts only the current supported instance schema. Unsupported fields 
 
 Both desktop hosts implement the same complete Start semantics:
 
-1. Resolve the shared workspace state directory and current supported config.
+1. Resolve the machine-wide desktop state directory and current supported config.
 2. Publish current host context.
 3. Start or attach to the shared Gateway.
 4. Start or attach to the configured provider-native public connection.

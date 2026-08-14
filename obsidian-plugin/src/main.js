@@ -300,7 +300,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           publicUrl: normalized,
           token: this.controller.ownerToken(),
           clientName: 'devmate-obsidian-preflight',
-          clientVersion: this.manifest.version
+          clientVersion: this.manifest.version,
+          readyTimeoutMs: 15000,
+          shouldContinue: () => recordGeneration(this.currentTunnelRecord(initialRecord.port)) === generation
         });
         const currentRecord = this.currentTunnelRecord(initialRecord.port);
         if (recordGeneration(currentRecord) !== generation) {
@@ -648,6 +650,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       await this.captureContextInternal();
 
       this.logRuntime('Starting DevMate: Gateway -> public connection -> MCP verification.');
+      this.controller.activateWorkspace();
       gateway = await this.controller.start();
       this.logRuntime(gateway.attached
         ? `Attached to shared DevMate Gateway on port ${gateway.port}.`
@@ -705,12 +708,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
           this.logRuntime(`Could not roll back owned public connection after failed Start: ${cleanupError.message || cleanupError}`);
         }
       }
-      if (gateway?.started && gateway?.owned && publicConnectionSafeToReleaseGateway) {
-        try { await this.controller.stop(); } catch (cleanupError) {
-          this.logRuntime(`Could not roll back owned Gateway after failed Start: ${cleanupError.message || cleanupError}`);
-        }
-      } else if (gateway?.started && gateway?.owned && !publicConnectionSafeToReleaseGateway) {
-        this.logRuntime('Preserving the newly owned Gateway because the public connection is still active or its shutdown was not confirmed.');
+      if (gateway?.started && gateway?.owned) {
+        this.logRuntime(publicConnectionSafeToReleaseGateway
+          ? 'Public connection startup failed; keeping the local Gateway available for diagnostics and retry.'
+          : 'Preserving the newly owned Gateway because the public connection is still active or its shutdown was not confirmed.');
       }
       this.runtimeDiagnostics?.recordFailure(error);
       console.error('[DevMate] Start failed', error);

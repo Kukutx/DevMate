@@ -1,4 +1,5 @@
 node_modules/
+.playwright-cli/
 tmp/
 obsidian-plugin/dist/
 gateway/server.bundle.mjs

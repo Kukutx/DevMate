@@ -73,9 +73,9 @@ If the hostname is unchanged but Ready does not return, check whether the Gatewa
 
 ## VS Code and Obsidian disagree about runtime state
 
-Both hosts should resolve the same workspace-derived state directory and may own or attach to the same Gateway/provider resources.
+Both hosts should resolve the same machine-wide desktop state directory and may own or attach to the same Gateway/provider resources.
 
-1. Confirm both hosts point to the same filesystem root/state directory.
+1. Confirm both hosts use `~/.devmate/desktop` or the same explicit state-directory override.
 2. Do not force-start duplicate providers with incompatible settings.
 3. Run Stop on the host you want to remove. It releases only resources it owns.
 4. If the remaining host still requested the session, allow its recovery loop to recreate/attach the missing Gateway/provider and re-run MCP preflight.

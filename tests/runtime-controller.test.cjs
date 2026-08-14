@@ -70,8 +70,7 @@ test('shared state resolves below the configured home directory', () => {
   const root = temporaryDirectory('devmate-state-root-');
   const home = temporaryDirectory('devmate-state-home-');
   const state = resolveStateDirectory({ workspaceRoot: root, homeDirectory: home });
-  assert.equal(path.dirname(path.dirname(state)), path.join(home, '.devmate'));
-  assert.match(path.basename(state), /^[a-z0-9_.-]+-[a-f0-9]{12}$/);
+  assert.equal(state, path.join(home, '.devmate', 'desktop'));
 });
 
 test('instance config creation preserves unrelated fields on later updates', () => {

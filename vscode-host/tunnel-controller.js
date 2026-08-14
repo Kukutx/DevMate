@@ -109,14 +109,14 @@ function providerStartupError(provider, rawOutput, child, { timeoutMs = 0, secre
       message = `ngrok authentication failed${classified.code ? ` (${classified.code})` : ''}. Configure DevMate ngrok credentials or fix the machine ngrok configuration/environment.`;
     } else if (classified?.kind === 'endpoint-conflict') {
       code = 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
-      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}.`;
+      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}. Stop the old endpoint in the ngrok dashboard, then click Start again. The local Gateway remains available for retry. Do not enable pooling unless every endpoint intentionally serves this same DevMate instance.`;
     } else if (classified?.kind === 'domain') {
       code = 'DEVMATE_NGROK_DOMAIN';
       message = `ngrok could not use the configured stable URL/domain${classified.code ? ` (${classified.code})` : ''}. Verify that the URL belongs to the active ngrok account.`;
     }
   }
 
-  if (detail) message += ` Provider output: ${detail}`;
+  if (detail && classified?.kind !== 'endpoint-conflict') message += ` Provider output: ${detail}`;
   const error = new Error(message);
   error.code = code;
   error.provider = provider;
@@ -247,10 +247,20 @@ class TunnelController {
   }
 
   matches(record, match) {
-    return !!record &&
-      Number(record.port) === Number(match.port) &&
-      record.provider === match.provider &&
-      record.configurationKey === match.configurationKey;
+    if (!record || Number(record.port) !== Number(match.port) || record.provider !== match.provider) return false;
+
+    // Provider executable paths, credentials, restart policy, and other launch
+    // details are local to the process that owns the shared tunnel. Followers
+    // must not reject an otherwise compatible live endpoint merely because
+    // their host-local execution settings differ (for example VS Code using
+    // PATH while Obsidian stores an absolute cloudflared path).
+    const configuredUrl = match.provider === 'ngrok'
+      ? normalizePublicUrl(match.settings.ngrokUrl || '')
+      : (match.provider === 'cloudflare-managed' || match.provider === 'external')
+          ? normalizePublicUrl(match.settings.publicUrl || '')
+          : '';
+    if (!configuredUrl || record.status !== 'ready') return true;
+    return normalizePublicUrl(record.publicUrl || '') === configuredUrl;
   }
 
   conflict(record, match) {
@@ -546,7 +556,8 @@ class TunnelController {
           discovered = launch.publicUrl;
         }
       }
-      if (discovered) return normalizePublicUrl(discovered);
+      const providerReady = launch.provider !== 'cloudflare-quick' || launch.readyPattern?.test(output);
+      if (discovered && providerReady) return normalizePublicUrl(discovered);
       await delay(200);
     }
     throw providerStartupError(match.provider, this.childOutput(child), child, {

@@ -51,6 +51,7 @@ test('alternate providers build native launches instead of ngrok compatibility c
   }, {});
   assert.equal(quick.command, 'cloudflared');
   assert.deepEqual(quick.args, ['tunnel', '--url', 'http://127.0.0.1:8787']);
+  assert.equal(quick.readyPattern.test('Registered tunnel connection'), true);
 
   const external = buildProviderLaunch(8787, externalSettings(), {});
   assert.equal(external.provider, 'external');
