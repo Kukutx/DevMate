@@ -18,7 +18,14 @@ test('normal commands preserve bounded output and exit metadata', async () => {
 });
 
 test('Git commands are forced non-interactive because MCP commands have no stdin', () => {
-  for (const command of ['git', 'git.exe', '/usr/bin/git', 'C:\\Program Files\\Git\\cmd\\git.exe']) {
+  for (const command of [
+    'git',
+    'git.exe',
+    '/usr/bin/git',
+    'C:\\Program Files\\Git\\cmd\\git.exe',
+    'git push origin master',
+    '"C:\\Program Files\\Git\\cmd\\git.exe" push origin master'
+  ]) {
     const env = commandEnvironment(command, {
       PATH: process.env.PATH || '',
       GIT_TERMINAL_PROMPT: '1',
