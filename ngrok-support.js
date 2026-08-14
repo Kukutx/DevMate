@@ -109,12 +109,31 @@ function redactNgrokOutput(value, secrets = []) {
     .replace(/(authtoken\s+(?:is|was)\s+)[^\s,;]+/ig, '$1[REDACTED]');
 }
 
+function extractNgrokConflictUrl(text) {
+  const value = String(text || '');
+  const patterns = [
+    /The endpoint\s+[\x60'"]?(https:\/\/[^\s\x60'"]+)[\x60'"]?\s+is already online/i,
+    /endpoint\s+[\x60'"]?(https:\/\/[^\s\x60'"]+)[\x60'"]?[^\n]{0,120}already online/i
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (!match?.[1]) continue;
+    const candidate = match[1].replace(/[),.;]+$/, '');
+    try { return normalizeNgrokUrl(candidate); } catch {}
+  }
+  return '';
+}
+
 function classifyNgrokError(text) {
   const value = String(text || '');
   const code = value.match(/ERR_NGROK_\d+/i)?.[0]?.toUpperCase() || '';
 
   if (code === 'ERR_NGROK_334' || /endpoint.+already online/i.test(value)) {
-    return { kind: 'endpoint-conflict', code: code || 'ERR_NGROK_334' };
+    return {
+      kind: 'endpoint-conflict',
+      code: code || 'ERR_NGROK_334',
+      publicUrl: extractNgrokConflictUrl(value)
+    };
   }
   if (/authtoken|authentication failed|not authorized|unauthori[sz]ed/i.test(value) || /^ERR_NGROK_10[5-9]$/i.test(code)) {
     return { kind: 'authentication', code };
@@ -138,6 +157,7 @@ module.exports = {
   buildNgrokSpawnOptions,
   classifyNgrokError,
   copyEnvWithoutKey,
+  extractNgrokConflictUrl,
   isNgrokExecutable,
   isNgrokHttpArgs,
   normalizeNgrokUrl,

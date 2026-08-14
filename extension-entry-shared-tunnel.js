@@ -5,6 +5,7 @@ const vscode = require('vscode');
 const { version: VERSION } = require('./package.json');
 const { ensureInstanceConfig, readJson } = require('./shared/config-store.cjs');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
+const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { strictPort } = require('./shared/port.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
@@ -116,6 +117,20 @@ async function stopConfigurationConflict() {
     vscode.window.showWarningMessage(`DevMate could not stop the stale public connection cleanly: ${result.reason}`);
   }
   return result;
+}
+
+async function verifyAlreadyOnlineNgrokEndpoint({ publicUrl }) {
+  const config = readJson(path.join(runtimeStateDirectory, 'config.json'), null, { strict: true, supportedVersion: true });
+  if (!config) return false;
+  const token = config.auth?.required === false ? '' : String(config.auth?.token || '');
+  const test = await preflightPublicMcp({
+    publicUrl,
+    token,
+    clientName: 'devmate-ngrok-conflict-adoption',
+    clientVersion: VERSION,
+    timeoutMs: 5000
+  });
+  return test?.server?.name === 'devmate' && Number(test?.toolCount || 0) > 0;
 }
 
 function createPublicVerifier() {
@@ -248,6 +263,7 @@ async function activateInternal(context) {
       stateDirectory: runtimeStateDirectory,
       settings: () => tunnelSettings(runtimeStateDirectory),
       getSecrets: () => tunnelSecrets(context),
+      verifyExistingEndpoint: verifyAlreadyOnlineNgrokEndpoint,
       hostId: `vscode-${process.pid}`,
       logger: log
     });
@@ -331,5 +347,6 @@ module.exports = {
   stopSessionRecoveryWatcher,
   syncBasePublicState,
   tunnelSecrets,
-  tunnelSettings
+  tunnelSettings,
+  verifyAlreadyOnlineNgrokEndpoint
 };
