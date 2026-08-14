@@ -27,11 +27,11 @@ async function waitForGateway(port, child, output) {
   throw new Error(`OAuth Gateway did not become ready: ${output()}`);
 }
 
-test('optional OAuth uses protected-resource discovery, PKCE, refresh tokens, and rejects unauthenticated MCP', async t => {
+test('optional OAuth uses protected-resource discovery, PKCE, refresh tokens, and production request guard', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-oauth-'));
   const port = freePort();
   const configPath = path.join(directory, 'config.json');
-  const config = configStore.newInstanceConfig({ workspaceRoot: process.cwd(), port, appVersion: '3.4.3' });
+  const config = configStore.newInstanceConfig({ workspaceRoot: process.cwd(), port, appVersion: '3.4.4' });
   config.auth = {
     mode: 'oauth',
     oauth: {
@@ -40,7 +40,7 @@ test('optional OAuth uses protected-resource discovery, PKCE, refresh tokens, an
     }
   };
   fs.writeFileSync(configPath, JSON.stringify(config), 'utf8');
-  const child = spawn(process.execPath, ['gateway/server.mjs'], {
+  const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: process.cwd(),
     env: { ...process.env, DEVMATE_CONFIG: configPath },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -65,6 +65,7 @@ test('optional OAuth uses protected-resource discovery, PKCE, refresh tokens, an
   const noAuth = await fetch(`${origin}/mcp`, { method: 'POST', headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }) });
   assert.equal(noAuth.status, 401);
   assert.match(noAuth.headers.get('www-authenticate') || '', /resource_metadata=/);
+  assert.match(noAuth.headers.get('www-authenticate') || '', /oauth-protected-resource\/mcp/);
 
   const registration = await fetch(`${origin}/oauth/register`, {
     method: 'POST',
@@ -117,6 +118,16 @@ test('optional OAuth uses protected-resource discovery, PKCE, refresh tokens, an
     body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
   });
   assert.equal(protectedCall.status, 200);
+
+  const toolCall = await fetch(`${origin}/mcp`, {
+    method: 'POST',
+    headers: { accept: 'application/json, text/event-stream', authorization: `Bearer ${issued.access_token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'gateway_status', arguments: {} } })
+  });
+  assert.equal(toolCall.status, 200);
+  const toolResult = await toolCall.json();
+  assert.equal(toolResult.result?.isError, undefined);
+  assert.equal(toolResult.result?.structuredContent?.name, 'devmate');
 
   const refreshed = await fetch(`${origin}/oauth/token`, {
     method: 'POST',
