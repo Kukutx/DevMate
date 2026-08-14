@@ -1,6 +1,6 @@
-
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -31,6 +31,30 @@ test('Git commands are forced non-interactive because MCP commands have no stdin
   assert.equal(nodeEnv.SAMPLE, 'kept');
   assert.equal(nodeEnv.GIT_TERMINAL_PROMPT, undefined);
   assert.equal(nodeEnv.GCM_INTERACTIVE, undefined);
+});
+
+test('Git HTTP credential challenges fail promptly instead of hanging an MCP tool call', async t => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(401, {
+      'www-authenticate': 'Basic realm="DevMate Git test"',
+      'content-type': 'text/plain'
+    });
+    res.end('credentials required');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+
+  const started = Date.now();
+  const result = await executeCommand('git', ['ls-remote', `http://127.0.0.1:${port}/repo.git`], {
+    timeoutMs: 5000,
+    maxOutputChars: 4000
+  });
+  const elapsed = Date.now() - started;
+
+  assert.equal(result.timedOut, false, result.stderr);
+  assert.notEqual(result.exitCode, 0, result.stderr);
+  assert.ok(elapsed < 4500, `credential failure took ${elapsed}ms and approached the command timeout`);
 });
 
 test('timeout terminates the complete owned process tree', async () => {
