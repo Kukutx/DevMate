@@ -24,8 +24,7 @@ const { tunnelMaxRestarts } = require('./tunnel-settings.js');
 const {
   discoverLocalNgrokEndpoint,
   discoverNgrokPublicUrl,
-  resolveNgrokAgentApiBase,
-  stopConflictingLocalNgrokEndpoints
+  resolveNgrokAgentApiBase
 } = require('./ngrok-agent-api.js');
 const {
   DEFAULT_RUNTIME_LEASE_MS,
@@ -101,15 +100,16 @@ function providerStartupError(provider, rawOutput, child, { timeoutMs = 0, secre
   let message = timeoutMs
     ? `Tunnel provider ${provider} did not publish a valid HTTPS URL within ${timeoutMs}ms`
     : `Tunnel provider ${provider} exited before readiness${exit}${signal}`;
+  let classified = null;
 
   if (provider === 'ngrok') {
-    const classified = classifyNgrokError(safeOutput);
+    classified = classifyNgrokError(safeOutput);
     if (classified?.kind === 'authentication') {
       code = 'DEVMATE_NGROK_AUTHENTICATION';
       message = `ngrok authentication failed${classified.code ? ` (${classified.code})` : ''}. Configure DevMate ngrok credentials or fix the machine ngrok configuration/environment.`;
     } else if (classified?.kind === 'endpoint-conflict') {
       code = 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
-      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}. Stop the conflicting ngrok session or enable pooling only when intentional.`;
+      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}.`;
     } else if (classified?.kind === 'domain') {
       code = 'DEVMATE_NGROK_DOMAIN';
       message = `ngrok could not use the configured stable URL/domain${classified.code ? ` (${classified.code})` : ''}. Verify that the URL belongs to the active ngrok account.`;
@@ -123,6 +123,7 @@ function providerStartupError(provider, rawOutput, child, { timeoutMs = 0, secre
   error.providerOutput = detail;
   error.exitCode = child?.exitCode ?? null;
   error.signalCode = child?.signalCode || null;
+  if (classified?.publicUrl) error.conflictUrl = classified.publicUrl;
   return error;
 }
 
@@ -165,6 +166,7 @@ class TunnelController {
     stateDirectory,
     settings = () => ({}),
     getSecrets = async () => ({}),
+    verifyExistingEndpoint = null,
     childProcess = defaultChildProcess,
     httpRequest = http.request,
     hostId = 'vscode',
@@ -182,6 +184,10 @@ class TunnelController {
     this.stateDirectory = stateDirectory;
     this.settingsGetter = settings;
     this.getSecrets = getSecrets;
+    if (verifyExistingEndpoint != null && typeof verifyExistingEndpoint !== 'function') {
+      throw new TypeError('verifyExistingEndpoint must be a function when provided');
+    }
+    this.verifyExistingEndpoint = verifyExistingEndpoint;
     this.childProcess = childProcess;
     this.httpRequest = httpRequest;
     this.hostId = String(hostId || 'vscode');
@@ -208,6 +214,7 @@ class TunnelController {
     this.childReady = false;
     this.borrowedProvider = false;
     this.borrowedAgentApiBase = '';
+    this.borrowedPublicVerified = false;
     this.borrowedPublicUrl = '';
     this.borrowedFailureCount = 0;
     this.port = 0;
@@ -221,7 +228,6 @@ class TunnelController {
     this.expectedChildExits = new WeakSet();
     this.ngrokProbeCache = null;
     this.lastNgrokProbe = null;
-    this.lastConflictRecovery = null;
     this.stopping = false;
     this.disposed = false;
   }
@@ -285,6 +291,7 @@ class TunnelController {
     this.childReady = false;
     this.borrowedProvider = false;
     this.borrowedAgentApiBase = '';
+    this.borrowedPublicVerified = false;
     this.borrowedPublicUrl = '';
     this.borrowedFailureCount = 0;
     this.ownershipFailureCount = 0;
@@ -337,19 +344,33 @@ class TunnelController {
       const record = this.store.read();
       if (record && record.ownerId === ownerId) {
         if (this.borrowedProvider) {
-          const liveUrl = await discoverNgrokPublicUrl(record.port, {
-            apiBase: this.borrowedAgentApiBase,
-            request: this.httpRequest,
-            timeoutMs: 750,
-            expectedUrl: this.borrowedPublicUrl || record.publicUrl
-          });
-          if (!liveUrl) {
+          let live = false;
+          if (this.borrowedAgentApiBase) {
+            const liveUrl = await discoverNgrokPublicUrl(record.port, {
+              apiBase: this.borrowedAgentApiBase,
+              request: this.httpRequest,
+              timeoutMs: 750,
+              expectedUrl: this.borrowedPublicUrl || record.publicUrl
+            });
+            live = !!liveUrl;
+          } else if (this.borrowedPublicVerified && this.verifyExistingEndpoint) {
+            try {
+              live = await this.verifyExistingEndpoint({
+                publicUrl: this.borrowedPublicUrl || record.publicUrl,
+                port: record.port,
+                reason: 'heartbeat'
+              }) === true;
+            } catch {
+              live = false;
+            }
+          }
+          if (!live) {
             this.borrowedFailureCount += 1;
             if (this.borrowedFailureCount < 2) {
               this.store.write(ownerId, { childPid: null });
               return { healthy: false, pending: true, providerMissing: true };
             }
-            this.logger('Existing local ngrok endpoint disappeared; releasing the borrowed tunnel attachment for recovery.');
+            this.logger('Borrowed ngrok endpoint no longer reaches the current DevMate Gateway; releasing it for recovery.');
             this.resetOwnership(ownerId);
             return { healthy: false, providerMissing: true, released: true };
           }
@@ -379,7 +400,7 @@ class TunnelController {
 
   startHeartbeat() {
     if (this.heartbeat || !this.ownerId) return;
-    const intervalMs = this.borrowedProvider ? this.borrowedHeartbeatMs : this.heartbeatMs;
+    const intervalMs = this.borrowedProvider && this.borrowedAgentApiBase ? this.borrowedHeartbeatMs : this.heartbeatMs;
     this.heartbeat = setInterval(() => {
       void this.verifyOwnership().catch(error => {
         this.logger(`Tunnel ownership verification failed: ${error.message || error}`);
@@ -466,7 +487,7 @@ class TunnelController {
     return result;
   }
 
-  adoptExistingNgrok(match, ownerId, publicUrl, agentApiBase = '') {
+  adoptExistingNgrok(match, ownerId, publicUrl, agentApiBase = '', publicVerified = false) {
     const url = normalizePublicUrl(publicUrl);
     this.ownerId = ownerId;
     this.port = match.port;
@@ -474,6 +495,7 @@ class TunnelController {
     this.childReady = false;
     this.borrowedProvider = true;
     this.borrowedAgentApiBase = String(agentApiBase || '');
+    this.borrowedPublicVerified = publicVerified === true;
     this.borrowedPublicUrl = url;
     this.borrowedFailureCount = 0;
     this.store.write(ownerId, {
@@ -487,7 +509,9 @@ class TunnelController {
       readyAt: nowIso()
     });
     this.startHeartbeat();
-    this.logger('Reusing existing local ngrok endpoint ' + url + ' for Gateway port ' + match.port + '; DevMate will detach rather than terminate that pre-existing ngrok process on Stop.');
+    this.logger(this.borrowedPublicVerified
+      ? 'Reusing already-online ngrok endpoint ' + url + ' after authenticated verification against the current DevMate Gateway.'
+      : 'Reusing existing local ngrok endpoint ' + url + ' for Gateway port ' + match.port + '; DevMate will detach rather than terminate that pre-existing ngrok process on Stop.');
     return this.store.read();
   }
 
@@ -589,7 +613,7 @@ class TunnelController {
     child.once?.('close', finish);
   }
 
-  async spawnProvider(match, { preserveOwner = false, conflictRecovery = true } = {}) {
+  async spawnProvider(match, { preserveOwner = false } = {}) {
     const settings = match.settings;
     const secrets = settings.provider === 'external' ? {} : await this.getSecrets();
     const launch = buildProviderLaunch(match.port, settings, secrets || {});
@@ -694,35 +718,22 @@ class TunnelController {
           if (this.child === child) this.child = null;
           return this.adoptExistingNgrok(match, ownerId, reusable.publicUrl, reusable.apiBase);
         }
-        if (conflictRecovery && launch.agentApiBase) {
-          const recoveryStarted = Date.now();
-          const recovery = await stopConflictingLocalNgrokEndpoints(match.port, {
-            apiBase: launch.agentApiBase,
-            request: this.httpRequest,
-            timeoutMs: 1000,
-            expectedUrl: launch.publicUrl || ''
-          }).catch(reconcileError => ({ stopped: 0, error: reconcileError }));
-          this.lastConflictRecovery = {
-            at: nowIso(),
-            durationMs: Date.now() - recoveryStarted,
-            stopped: Number(recovery.stopped || 0),
-            candidates: Number(recovery.candidates || 0),
-            ambiguous: recovery.ambiguous === true,
-            verified: Number(recovery.verified || 0),
-            expectedMatches: Number(recovery.expectedMatches || 0),
-            error: recovery.error ? String(recovery.error.message || recovery.error).slice(0, 1000) : null
-          };
-          if (recovery.stopped > 0) {
-            const summary = recovery.endpoints
-              .map(item => `${item.publicUrl} -> 127.0.0.1:${item.upstreamPort}`)
-              .join(', ');
-            this.logger(`Stopped stale local ngrok endpoint(s) after ERR_NGROK_334: ${summary}. Retrying the current DevMate Gateway once.`);
-            if (this.child === child) this.child = null;
-            this.resetOwnership(ownerId);
-            return this.spawnProvider(match, { preserveOwner: false, conflictRecovery: false });
+
+        const conflictUrl = normalizePublicUrl(error.conflictUrl || launch.publicUrl || '');
+        if (conflictUrl && this.verifyExistingEndpoint) {
+          let verified = false;
+          try {
+            verified = await this.verifyExistingEndpoint({
+              publicUrl: conflictUrl,
+              port: match.port,
+              reason: 'endpoint-conflict'
+            }) === true;
+          } catch (verifyError) {
+            this.logger('Already-online ngrok endpoint did not verify as the current DevMate Gateway: ' + (verifyError.message || verifyError));
           }
-          if (recovery.ambiguous) {
-            this.logger('ERR_NGROK_334 recovery found multiple non-DevMate local ngrok endpoints and left them untouched.');
+          if (verified) {
+            if (this.child === child) this.child = null;
+            return this.adoptExistingNgrok(match, ownerId, conflictUrl, '', true);
           }
         }
       }
@@ -821,13 +832,13 @@ class TunnelController {
       owned: !!record && record.ownerId === this.ownerId && !this.borrowedProvider,
       borrowed: this.borrowedProvider,
       borrowedAgentApiBase: this.borrowedAgentApiBase || null,
+      borrowedPublicVerified: this.borrowedPublicVerified,
       publicUrl: record?.publicUrl || this.borrowedPublicUrl || null,
       child: this.child ? { pid: this.child.pid || null, exitCode: this.child.exitCode ?? null, signalCode: this.child.signalCode || null, ready: this.childReady } : null,
       heartbeatMs: this.borrowedProvider ? this.borrowedHeartbeatMs : this.heartbeatMs,
       runtimeLeaseMs: this.runtimeLeaseMs,
       restartCount: this.restartCount,
       lastNgrokProbe: this.lastNgrokProbe,
-      lastConflictRecovery: this.lastConflictRecovery,
       record,
       recordError,
       recentEvents: this.diagnosticEvents.slice(-40)

@@ -6,8 +6,6 @@ const path = require('node:path');
 const defaultChildProcess = require('node:child_process');
 
 const DEFAULT_NGROK_AGENT_API_BASE = 'http://127.0.0.1:4040/api';
-const DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT = 4040;
-const DEFAULT_NGROK_AGENT_SCAN_LAST_PORT = 4050;
 const MAX_NGROK_AGENT_RESPONSE_BYTES = 64 * 1024;
 const NGROK_CONFIG_CHECK_TIMEOUT_MS = 3000;
 
@@ -131,23 +129,6 @@ function upstreamMatchesPort(value, port) {
   }
 }
 
-function loopbackUpstreamPort(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return 0;
-  if (/^\d+$/.test(raw)) {
-    const port = Number(raw);
-    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
-  }
-  try {
-    const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`);
-    if (parsed.protocol !== 'http:' || !loopbackUpstreamHost(parsed.hostname)) return 0;
-    const port = Number(parsed.port || 80);
-    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
-  } catch {
-    return 0;
-  }
-}
-
 function normalizedPublicUrl(value) {
   return String(value || '').trim().replace(/\/$/, '');
 }
@@ -226,235 +207,6 @@ function requestAgentCollection(apiBase, resource, {
   });
 }
 
-function endpointIdentity(item, resource) {
-  const value = resource === 'tunnels'
-    ? (item?.name || item?.id || '')
-    : (item?.id || item?.name || '');
-  return String(value || '').trim();
-}
-
-function requestAgentDelete(apiBase, resource, identity, {
-  request = http.request,
-  timeoutMs = 1000
-} = {}) {
-  const value = String(identity || '').trim();
-  if (!value) return Promise.resolve(false);
-  const endpointUrl = `${String(apiBase).replace(/\/$/, '')}/${resource}/${encodeURIComponent(value)}`;
-  return new Promise(resolve => {
-    let settled = false;
-    const finish = value => {
-      if (settled) return;
-      settled = true;
-      resolve(value === true);
-    };
-    let req;
-    try {
-      req = request(endpointUrl, { method: 'DELETE' }, response => {
-        response.on?.('data', () => {});
-        response.on?.('end', () => finish([200, 202, 204, 404].includes(Number(response.statusCode))));
-      });
-      req.on?.('error', () => finish(false));
-      req.setTimeout?.(Math.max(100, Number(timeoutMs) || 1000), () => {
-        req.destroy?.();
-        finish(false);
-      });
-      req.end();
-    } catch {
-      finish(false);
-    }
-  });
-}
-
-function probeDevMateGateway(port, {
-  request = http.request,
-  timeoutMs = 500
-} = {}) {
-  const target = Number(port);
-  if (!Number.isInteger(target) || target <= 0 || target > 65535) return Promise.resolve(false);
-  return new Promise(resolve => {
-    let settled = false;
-    const chunks = [];
-    let bytes = 0;
-    const finish = value => {
-      if (settled) return;
-      settled = true;
-      resolve(value === true);
-    };
-    let req;
-    try {
-      req = request(`http://127.0.0.1:${target}/control/health`, { method: 'GET' }, response => {
-        response.on?.('data', chunk => {
-          if (settled) return;
-          const buffer = Buffer.from(chunk);
-          bytes += buffer.length;
-          if (bytes > 16 * 1024) {
-            response.destroy?.();
-            finish(false);
-            return;
-          }
-          chunks.push(buffer);
-        });
-        response.on?.('end', () => {
-          if (settled || Number(response.statusCode) !== 200) return finish(false);
-          try {
-            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            finish(body?.name === 'devmate');
-          } catch {
-            finish(false);
-          }
-        });
-      });
-      req.on?.('error', () => finish(false));
-      req.setTimeout?.(Math.max(100, Number(timeoutMs) || 500), () => {
-        req.destroy?.();
-        finish(false);
-      });
-      req.end();
-    } catch {
-      finish(false);
-    }
-  });
-}
-
-function localAgentApiBases(preferredApiBase = DEFAULT_NGROK_AGENT_API_BASE, {
-  firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
-  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT
-} = {}) {
-  const bases = [];
-  const add = value => {
-    const raw = String(value || '').trim().replace(/\/$/, '');
-    if (!raw) return;
-    try {
-      const parsed = new URL(raw);
-      if (parsed.protocol !== 'http:' || !loopbackUpstreamHost(parsed.hostname)) return;
-      const normalized = `http://127.0.0.1:${parsed.port || '80'}${parsed.pathname.replace(/\/$/, '') || '/api'}`;
-      if (!bases.includes(normalized)) bases.push(normalized);
-    } catch {}
-  };
-  add(preferredApiBase);
-  const start = Math.max(1, Math.min(65535, Number(firstPort) || DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT));
-  const end = Math.max(start, Math.min(65535, Number(lastPort) || DEFAULT_NGROK_AGENT_SCAN_LAST_PORT));
-  for (let port = start; port <= end; port += 1) add(`http://127.0.0.1:${port}/api`);
-  return bases;
-}
-
-async function localNgrokEndpointCandidates(port, {
-  apiBase = DEFAULT_NGROK_AGENT_API_BASE,
-  request = http.request,
-  timeoutMs = 1000,
-  includeTarget = false
-} = {}) {
-  if (!apiBase) return [];
-  const target = Number(port);
-  const resources = ['tunnels', 'endpoints'];
-  const collected = [];
-  for (const resource of resources) {
-    const payload = await requestAgentCollection(apiBase, resource, { request, timeoutMs });
-    const items = collectionItems(payload, resource);
-    for (const item of items) {
-      const upstreamPort = loopbackUpstreamPort(endpointUpstreamUrl(item));
-      const publicUrl = endpointPublicUrl(item);
-      const identity = endpointIdentity(item, resource);
-      if (!identity || !publicUrl.startsWith('https://') || !upstreamPort || (!includeTarget && upstreamPort === target)) continue;
-      collected.push({ resource, identity, publicUrl, upstreamPort, apiBase: String(apiBase).replace(/\/$/, '') });
-    }
-    if (collected.length && resource === 'tunnels') break;
-  }
-  const unique = new Map();
-  for (const item of collected) {
-    const key = `${item.publicUrl}|${item.upstreamPort}`;
-    if (!unique.has(key)) unique.set(key, item);
-  }
-  return [...unique.values()];
-}
-
-async function localNgrokEndpointCandidatesAcrossAgents(port, {
-  apiBase = DEFAULT_NGROK_AGENT_API_BASE,
-  request = http.request,
-  timeoutMs = 350,
-  firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
-  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT
-} = {}) {
-  const bases = localAgentApiBases(apiBase, { firstPort, lastPort });
-  const groups = await Promise.all(bases.map(base => localNgrokEndpointCandidates(port, {
-    apiBase: base,
-    request,
-    timeoutMs: Math.max(100, Math.min(500, Number(timeoutMs) || 350)),
-    includeTarget: true
-  })));
-  const unique = new Map();
-  for (const item of groups.flat()) {
-    const key = `${item.publicUrl}|${item.upstreamPort}`;
-    if (!unique.has(key)) unique.set(key, item);
-  }
-  return [...unique.values()];
-}
-
-async function stopConflictingLocalNgrokEndpoints(port, {
-  apiBase = DEFAULT_NGROK_AGENT_API_BASE,
-  request = http.request,
-  timeoutMs = 1000,
-  firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
-  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT,
-  expectedUrl = ''
-} = {}) {
-  const boundedTimeout = Math.max(100, Math.min(500, Number(timeoutMs) || 350));
-  const candidates = await localNgrokEndpointCandidatesAcrossAgents(port, {
-    apiBase,
-    request,
-    timeoutMs: boundedTimeout,
-    firstPort,
-    lastPort
-  });
-  if (!candidates.length) return { stopped: 0, candidates: 0, ambiguous: false, endpoints: [] };
-
-  const verification = await Promise.all(candidates.map(async candidate => ({
-    candidate,
-    verified: await probeDevMateGateway(candidate.upstreamPort, {
-      request,
-      timeoutMs: Math.min(350, boundedTimeout)
-    })
-  })));
-  const verified = verification.filter(item => item.verified).map(item => item.candidate);
-  const expected = normalizedPublicUrl(expectedUrl);
-  const selectedMap = new Map();
-  for (const candidate of verified) selectedMap.set(`${candidate.publicUrl}|${candidate.upstreamPort}`, candidate);
-  if (expected) {
-    for (const candidate of candidates) {
-      if (candidate.publicUrl === expected) selectedMap.set(`${candidate.publicUrl}|${candidate.upstreamPort}`, candidate);
-    }
-  }
-  const selected = [...selectedMap.values()];
-  const expectedMatches = expected ? candidates.filter(candidate => candidate.publicUrl === expected).length : 0;
-  if (!selected.length) {
-    return {
-      stopped: 0,
-      candidates: candidates.length,
-      ambiguous: true,
-      verified: verified.length,
-      expectedMatches,
-      endpoints: candidates
-    };
-  }
-
-  const deletion = await Promise.all(selected.map(async candidate => ({
-    candidate,
-    ok: await requestAgentDelete(candidate.apiBase || apiBase, candidate.resource, candidate.identity, {
-      request,
-      timeoutMs: boundedTimeout
-    })
-  })));
-  const stopped = deletion.filter(item => item.ok).map(item => item.candidate);
-  return {
-    stopped: stopped.length,
-    candidates: candidates.length,
-    ambiguous: false,
-    verified: verified.length,
-    expectedMatches,
-    endpoints: stopped
-  };
-}
-
 async function discoverNgrokPublicUrl(port, {
   apiBase = DEFAULT_NGROK_AGENT_API_BASE,
   request = http.request,
@@ -480,32 +232,17 @@ async function discoverLocalNgrokEndpoint(port, {
   apiBase = DEFAULT_NGROK_AGENT_API_BASE,
   request = http.request,
   timeoutMs = 350,
-  expectedUrl = '',
-  firstPort = DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
-  lastPort = DEFAULT_NGROK_AGENT_SCAN_LAST_PORT
+  expectedUrl = ''
 } = {}) {
   if (!apiBase) return null;
-  const boundedTimeout = Math.max(100, Math.min(500, Number(timeoutMs) || 350));
-  const preferred = String(apiBase).replace(/\/$/, '');
-  const direct = await discoverNgrokPublicUrl(port, {
-    apiBase: preferred,
+  const normalizedApiBase = String(apiBase).replace(/\/$/, '');
+  const publicUrl = await discoverNgrokPublicUrl(port, {
+    apiBase: normalizedApiBase,
     request,
-    timeoutMs: boundedTimeout,
+    timeoutMs: Math.max(100, Math.min(1000, Number(timeoutMs) || 350)),
     expectedUrl
   });
-  if (direct) return { publicUrl: direct, apiBase: preferred };
-
-  const bases = localAgentApiBases(preferred, { firstPort, lastPort }).filter(base => base !== preferred);
-  const matches = await Promise.all(bases.map(async base => ({
-    apiBase: base,
-    publicUrl: await discoverNgrokPublicUrl(port, {
-      apiBase: base,
-      request,
-      timeoutMs: boundedTimeout,
-      expectedUrl
-    })
-  })));
-  return matches.find(item => item.publicUrl) || null;
+  return publicUrl ? { publicUrl, apiBase: normalizedApiBase } : null;
 }
 
 async function discoverLocalNgrokPublicUrl(port, options = {}) {
@@ -515,8 +252,6 @@ async function discoverLocalNgrokPublicUrl(port, options = {}) {
 
 module.exports = {
   DEFAULT_NGROK_AGENT_API_BASE,
-  DEFAULT_NGROK_AGENT_SCAN_FIRST_PORT,
-  DEFAULT_NGROK_AGENT_SCAN_LAST_PORT,
   MAX_NGROK_AGENT_RESPONSE_BYTES,
   NGROK_CONFIG_CHECK_TIMEOUT_MS,
   collectionItems,
@@ -526,17 +261,10 @@ module.exports = {
   discoverNgrokPublicUrl,
   endpointPublicUrl,
   endpointUpstreamUrl,
-  localAgentApiBases,
-  localNgrokEndpointCandidates,
-  localNgrokEndpointCandidatesAcrossAgents,
   loopbackAgentApiBase,
   loopbackUpstreamHost,
-  loopbackUpstreamPort,
   ngrokWebAddrFromConfig,
-  probeDevMateGateway,
-  requestAgentDelete,
   resolveNgrokAgentApiBase,
-  stopConflictingLocalNgrokEndpoints,
   upstreamMatchesPort,
   yamlScalar
 };

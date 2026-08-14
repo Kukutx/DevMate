@@ -7,6 +7,7 @@ const {
   buildNgrokArgs,
   buildNgrokSpawnOptions,
   classifyNgrokError,
+  extractNgrokConflictUrl,
   isNgrokExecutable,
   normalizeNgrokUrl,
   parseNgrokVersion,
@@ -81,7 +82,10 @@ test('recognizes the current ngrok endpoint API generation and redacts authentic
 });
 
 test('classifies endpoint, authentication, and domain errors', () => {
-  assert.deepEqual(classifyNgrokError('ERROR: ERR_NGROK_334 endpoint is already online'), { kind: 'endpoint-conflict', code: 'ERR_NGROK_334' });
+  assert.deepEqual(classifyNgrokError('ERROR: ERR_NGROK_334 endpoint is already online'), { kind: 'endpoint-conflict', code: 'ERR_NGROK_334', publicUrl: '' });
+  const conflict = "ERROR: failed to start tunnel: The endpoint 'https://assigned.ngrok-free.app' is already online.\nERROR: ERR_NGROK_334";
+  assert.equal(extractNgrokConflictUrl(conflict), 'https://assigned.ngrok-free.app');
+  assert.equal(classifyNgrokError(conflict)?.publicUrl, 'https://assigned.ngrok-free.app');
   assert.equal(classifyNgrokError('authentication failed: invalid authtoken')?.kind, 'authentication');
   assert.equal(classifyNgrokError('domain does not belong to this account')?.kind, 'domain');
   assert.equal(classifyNgrokError('ordinary output'), null);
