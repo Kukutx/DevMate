@@ -63,7 +63,7 @@ function rpcClient(port) {
   };
 }
 
-test('MCP Git can stage, commit, push repeatedly, and remain callable afterward', async t => {
+test('MCP Git can push repeatedly, surface a failed push, recover, and remain callable', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-mcp-git-'));
   const workspace = path.join(temp, 'workspace');
   const remote = path.join(temp, 'remote.git');
@@ -162,20 +162,61 @@ test('MCP Git can stage, commit, push repeatedly, and remain callable afterward'
   assert.equal(secondSave.json?.result?.structuredContent?.commit?.exitCode, 0, secondSave.text);
   assert.equal(secondSave.json?.result?.structuredContent?.push?.exitCode, 0, secondSave.text);
 
+  const thirdCreate = await rpc('tools/call', {
+    name: 'create_file',
+    arguments: { path: 'third.txt', content: 'third\n' }
+  });
+  assert.equal(thirdCreate.response.ok, true, thirdCreate.text);
+  assert.notEqual(thirdCreate.json?.result?.isError, true, thirdCreate.text);
+
+  const failedSave = await rpc('tools/call', {
+    name: 'git_save',
+    arguments: {
+      message: 'MCP Git failed push recovery',
+      all: true,
+      push: true,
+      remote: 'missing-remote',
+      branch: 'master'
+    }
+  });
+  assert.equal(failedSave.response.ok, true, failedSave.text);
+  assert.equal(failedSave.json?.result?.isError, true, failedSave.text);
+  assert.equal(failedSave.json?.result?.structuredContent?.failedPhase, 'push', failedSave.text);
+  assert.equal(failedSave.json?.result?.structuredContent?.commit?.exitCode, 0, failedSave.text);
+  assert.notEqual(failedSave.json?.result?.structuredContent?.push?.exitCode, 0, failedSave.text);
+
+  const afterFailureStatus = await rpc('tools/call', { name: 'git_status', arguments: {} });
+  assert.equal(afterFailureStatus.response.ok, true, afterFailureStatus.text);
+  assert.notEqual(afterFailureStatus.json?.result?.isError, true, afterFailureStatus.text);
+  assert.match(afterFailureStatus.json?.result?.structuredContent?.stdout || '', /ahead 1/, afterFailureStatus.text);
+
+  const afterFailureGateway = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
+  assert.equal(afterFailureGateway.response.ok, true, afterFailureGateway.text);
+  assert.notEqual(afterFailureGateway.json?.result?.isError, true, afterFailureGateway.text);
+
+  const recoveryPush = await rpc('tools/call', {
+    name: 'git_push',
+    arguments: { remote: 'origin', branch: 'master' }
+  });
+  assert.equal(recoveryPush.response.ok, true, recoveryPush.text);
+  assert.notEqual(recoveryPush.json?.result?.isError, true, recoveryPush.text);
+  assert.equal(recoveryPush.json?.result?.structuredContent?.exitCode, 0, recoveryPush.text);
+
   const finalStatus = await rpc('tools/call', { name: 'git_status', arguments: {} });
   assert.equal(finalStatus.response.ok, true, finalStatus.text);
   assert.notEqual(finalStatus.json?.result?.isError, true, finalStatus.text);
   assert.equal(finalStatus.json?.result?.structuredContent?.exitCode, 0, finalStatus.text);
   assert.equal(finalStatus.json?.result?.structuredContent?.stdout.trim(), '## master...origin/master', finalStatus.text);
 
-  const gatewayStatus = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
-  assert.equal(gatewayStatus.response.ok, true, gatewayStatus.text);
-  assert.notEqual(gatewayStatus.json?.result?.isError, true, gatewayStatus.text);
+  const finalGatewayStatus = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
+  assert.equal(finalGatewayStatus.response.ok, true, finalGatewayStatus.text);
+  assert.notEqual(finalGatewayStatus.json?.result?.isError, true, finalGatewayStatus.text);
 
   const localHead = git(workspace, ['rev-parse', 'HEAD']);
   const remoteHead = git(temp, ['--git-dir', remote, 'rev-parse', 'refs/heads/master']);
   assert.equal(remoteHead, localHead);
-  const remoteLog = git(temp, ['--git-dir', remote, 'log', '--format=%s', '-2']);
+  const remoteLog = git(temp, ['--git-dir', remote, 'log', '--format=%s', '-3']);
+  assert.match(remoteLog, /MCP Git failed push recovery/);
   assert.match(remoteLog, /MCP Git second save/);
   assert.match(remoteLog, /MCP Git first save/);
 }, { timeout: 60000 });
