@@ -6,6 +6,7 @@ const dns = require('node:dns');
 
 const MCP_PATH = '/mcp';
 const MCP_PROTOCOL_VERSION = '2025-03-26';
+const PREFLIGHT_PROBE_TOOL = 'gateway_status';
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 const cloudflarePublicDns = new dns.Resolver();
@@ -225,7 +226,7 @@ function publicMcpErrorSummary(error) {
   if (kind === 'authentication') return 'The public endpoint rejected DevMate authentication. Check the connection token setting.';
   if (kind === 'wrong-endpoint') return 'The public URL does not point to the DevMate MCP endpoint.';
   if (kind === 'stale-generation') return 'The connection changed while it was being checked. DevMate will verify the current connection.';
-  return 'The public endpoint responded, but the MCP handshake was invalid. Copy diagnostics for details.';
+  return 'The public endpoint responded, but the MCP handshake or tool-call probe was invalid. Copy diagnostics for details.';
 }
 
 function retryDelay(ms) {
@@ -291,11 +292,38 @@ async function preflightPublicMcpOnce({
     throw error;
   }
 
+  if (!tools.json.result.tools.some(tool => tool?.name === PREFLIGHT_PROBE_TOOL)) {
+    const error = new Error(`MCP tools/list did not expose required probe tool ${PREFLIGHT_PROBE_TOOL}`);
+    error.code = 'DEVMATE_PUBLIC_MCP_PROBE_TOOL_MISSING';
+    error.response = tools;
+    throw error;
+  }
+
+  const probe = await postJson(mcpUrl, {
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: { name: PREFLIGHT_PROBE_TOOL, arguments: {} }
+  }, { headers: requestHeaders, timeoutMs, request });
+  const probeResult = probe.json?.result;
+  const probeName = probeResult?.structuredContent?.name;
+  if (!probe.ok || probe.json?.error || probeResult?.isError === true || probeName !== 'devmate') {
+    const error = new Error(
+      `MCP tools/call probe failed via ${redactUrl(mcpUrl)}. ` +
+      `HTTP=${probe.status || 'none'} error=${probe.error || ''} body=${String(probe.body || '').slice(0, 300)}`
+    );
+    error.code = 'DEVMATE_PUBLIC_MCP_TOOL_CALL_FAILED';
+    error.response = probe;
+    throw error;
+  }
+
   return {
     publicOrigin,
     mcpUrl,
     sessionId: sessionId || null,
     toolCount: tools.json.result.tools.length,
+    toolCallVerified: true,
+    probeTool: PREFLIGHT_PROBE_TOOL,
     server: init.json.result.serverInfo
   };
 }
@@ -327,6 +355,7 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   MCP_PATH,
   MCP_PROTOCOL_VERSION,
+  PREFLIGHT_PROBE_TOOL,
   connectionErrorSummary,
   mcpUrlFor,
   normalizePublicOrigin,
