@@ -8,10 +8,10 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('VS Code explicit public MCP flows use the shared preflight helper only', () => {
+test('VS Code explicit public MCP flows use the shared cross-host verifier only', () => {
   const extension = source('extension.js');
-  assert.match(extension, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/);
-  assert.match(extension, /return preflightPublicMcp\(\{/);
+  assert.match(extension, /const \{ verifySharedPublicMcp \} = require\('\.\/host\/shared-public-mcp-verification\.js'\)/);
+  assert.match(extension, /return verifySharedPublicMcp\(\{/);
   assert.match(extension, /clientName: 'devmate-vscode-preflight'/);
   assert.doesNotMatch(extension, /function mcpHandshakeTest\(/);
   assert.doesNotMatch(extension, /async function postJson\(/);
@@ -45,7 +45,7 @@ test('connection and Gateway recovery state changes trigger a read-only base UI 
   assert.match(base, /register\(context,'devMate\.syncPublicState',\(\)=>syncPublicUiState\(context\)\)/);
   assert.match(wrapper, /onStateChange: async \(\) => \{/);
   assert.match(wrapper, /executeCommand\('devMate\.syncPublicState'\)/);
-  assert.match(verifier, /notifyState\('unverified'/);
+  assert.match(verifier, /notifyState\(currentlyVerified \? 'verified' : 'unverified'/);
   assert.match(verifier, /notifyState\('verified'/);
   assert.match(verifier, /notifyState\('failed'/);
   assert.match(verifier, /'gateway-unavailable'/);
@@ -55,8 +55,10 @@ test('connection and Gateway recovery state changes trigger a read-only base UI 
 test('explicit and automatic verification persist the same complete-generation connection evidence shape', () => {
   const extension = source('extension.js');
   const verifier = source('vscode-host/public-tunnel-verifier.js');
-  assert.match(extension, /successfulVerificationPatch\(test, publicUrl, stamp, expectedRecord\)/);
-  assert.match(verifier, /successfulVerificationPatch\(test, record\.publicUrl, stamp, record, snapshot\.gatewayLock\)/);
-  assert.match(extension, /verifiedForCurrentRecord\(persisted, currentRecord\)/);
-  assert.match(verifier, /verifiedForCurrentRecord\(persisted, persistedSession\.record, persistedSession\.gatewayLock\)/);
+  const shared = source('host/shared-public-mcp-verification.js');
+  assert.match(extension, /verifySharedPublicMcp\(\{/);
+  assert.match(verifier, /verifySharedPublicMcp\(\{/);
+  assert.match(shared, /successfulVerificationPatch\(test, publicUrl, stamp, record, currentGatewayLock\(\)\)/);
+  assert.match(shared, /verifiedForCurrentRecord\(config, record, currentGatewayLock\(\)\)/);
+  assert.match(shared, /VERIFICATION_LOCK_NAME = 'public-mcp\.verify\.lock'/);
 });

@@ -28,27 +28,22 @@ test('VS Code explicit verification binds evidence to the exact current complete
   const end = extension.indexOf('function recordConnectionFailure', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
-  assert.match(block, /const generation = recordGeneration\(expectedRecord\)/);
-  assert.match(block, /const test = await verifyPublicMcp\(publicUrl, ctx, \{/);
-  assert.match(block, /readyTimeoutMs: 15000/);
-  assert.match(block, /shouldContinue: \(\) => recordGeneration\(currentTunnelRecord\(expectedRecord\.port\)\) === generation/);
-  assert.match(block, /recordGeneration\(currentRecord\) !== generation/);
-  assert.match(block, /successfulVerificationPatch\(test, publicUrl, stamp, expectedRecord\)/);
-  assert.match(block, /verifiedForCurrentRecord\(persisted, currentRecord\)/);
-  assert.match(block, /throw staleSessionGenerationError\(\)/);
-  assert.doesNotMatch(block, /staleTunnelGenerationError/);
+  assert.match(block, /return verifySharedPublicMcp\(\{/);
+  assert.match(block, /stateDirectory: path\.dirname\(configPath\(ctx\)\)/);
+  assert.match(block, /expectedRecord/);
+  assert.match(block, /currentRecord: \(\) => currentTunnelRecord\(expectedRecord\?\.port\)/);
+  assert.match(block, /token: data\.auth\?\.required === false \? '' : String\(data\.auth\?\.token \|\| ''\)/);
+  assert.match(block, /clientName: 'devmate-vscode-preflight'/);
 });
 
-test('VS Code delegates authenticated public MCP protocol handling to the shared helper', () => {
-  assert.match(extension, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/);
-  const start = extension.indexOf('async function verifyPublicMcp');
-  const end = extension.indexOf('async function verifyCurrentTunnel', start);
+test('VS Code delegates authenticated public MCP protocol and cross-host single-flight handling to the shared helper', () => {
+  assert.match(extension, /const \{ verifySharedPublicMcp \} = require\('\.\/host\/shared-public-mcp-verification\.js'\)/);
+  const start = extension.indexOf('async function verifyCurrentTunnel');
+  const end = extension.indexOf('function recordConnectionFailure', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
-  assert.match(block, /const data = ctx \? ensureConfig\(ctx,false\) : null/);
-  assert.match(block, /return preflightPublicMcp\(\{/);
-  assert.match(block, /publicUrl: baseUrl/);
-  assert.match(block, /token: data\?\.auth\?\.required === false \? '' : String\(data\?\.auth\?\.token \|\| ''\)/);
+  assert.match(block, /return verifySharedPublicMcp\(\{/);
+  assert.match(block, /publicUrl/);
   assert.match(block, /clientName: 'devmate-vscode-preflight'/);
   assert.match(block, /clientVersion: VERSION/);
   assert.doesNotMatch(block, /method\s*:\s*'initialize'/);
@@ -76,4 +71,20 @@ test('clipboard convenience cannot turn a verified Start into a failed lifecycle
   const success = block.indexOf('return {ok:true');
   assert.ok(verify >= 0 && copyTry > verify && success > copyTry);
   assert.match(block, /copyError = String\(error\.message \|\| error\)/);
+});
+
+test('temporary public failures preserve the current URL for automatic recovery', () => {
+  const start = extension.indexOf('async function quickStart(ctx');
+  const end = extension.indexOf('async function stopAll()', start);
+  const block = extension.slice(start, end);
+  assert.match(block, /const recovering = transientPublicMcpError\(e\)/);
+  assert.match(block, /preserveConnection:recovering/);
+  assert.match(block, /showWarningMessage\(summary/);
+});
+
+test('VS Code product copy distinguishes a session-only endpoint from a persistent ChatGPT app address', () => {
+  assert.match(extension, /publicConnectionStability/);
+  assert.match(extension, /temporary session MCP URL/);
+  assert.match(extension, /persistent ChatGPT MCP URL/);
+  assert.match(extension, /current-session share/);
 });

@@ -119,6 +119,7 @@ class RuntimeController {
     gatewayEntry,
     preferredPort = DEFAULT_PORT,
     appVersion = DEFAULT_VERSION,
+    defaultConnectionProvider = 'ngrok',
     hostId = 'host',
     logger = () => {},
     nodeExecutable = process.execPath,
@@ -131,6 +132,7 @@ class RuntimeController {
     this.gatewayEntry = requiredPath(gatewayEntry, 'gatewayEntry');
     this.preferredPort = preferredPort;
     this.appVersion = appVersion;
+    this.defaultConnectionProvider = String(defaultConnectionProvider || 'ngrok');
     this.hostId = String(hostId || 'host');
     this.logger = logger;
     this.nodeExecutable = nodeExecutable;
@@ -155,7 +157,8 @@ class RuntimeController {
       configFile: this.configFile,
       workspaceRoot: this.workspaceRoot,
       preferredPort: this.preferredPort,
-      appVersion: this.appVersion
+      appVersion: this.appVersion,
+      defaultConnectionProvider: this.defaultConnectionProvider
     });
   }
 

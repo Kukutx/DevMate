@@ -61,11 +61,25 @@ class DevMateView extends ItemView {
       return button;
     };
     action('Start', () => this.plugin.startRuntime());
-    action('Stop', () => this.plugin.stopRuntime());
     action('Restart', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
-    action('Copy context', () => this.plugin.copyContextBundle());
-    action('Copy diagnostics', () => this.plugin.copyDiagnostics());
+
+    const more = container.createEl('details');
+    more.createEl('summary', { text: 'More actions' });
+    const moreActions = more.createDiv({ cls: 'devmate-actions' });
+    const moreAction = (label, handler) => {
+      const button = moreActions.createEl('button', { text: label });
+      button.onclick = async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        try { await handler(); }
+        finally { button.disabled = false; }
+      };
+      return button;
+    };
+    moreAction('Stop', () => this.plugin.stopRuntime());
+    moreAction('Copy context', () => this.plugin.copyContextBundle());
+    moreAction('Copy diagnostics', () => this.plugin.copyDiagnostics());
 
     container.createEl('h3', { text: 'Workspace' });
     const list = container.createEl('dl', { cls: 'devmate-details' });

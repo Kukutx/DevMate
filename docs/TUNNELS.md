@@ -82,7 +82,7 @@ Verification is tied to both the current Gateway generation and the current prov
 
 ## ngrok
 
-ngrok is the default connection provider.
+ngrok is the optional stable desktop provider and remains the standalone CLI default. Fresh VS Code and Obsidian desktop instances use Cloudflare Quick to avoid an account requirement.
 
 DevMate supports two account strategies:
 
@@ -102,6 +102,10 @@ DevMate discovers dynamic ngrok endpoints through the current local Agent endpoi
 `cloudflare-quick` starts a native `cloudflared tunnel --url ...` quick tunnel and discovers the TryCloudflare HTTPS endpoint from provider output.
 
 The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh MCP preflight and may produce a new hostname.
+
+Both desktop hosts coordinate one public preflight for each Gateway+tunnel generation. Fresh success evidence is reused briefly across the two hosts, then periodically revalidated. Temporary DNS, TLS, edge propagation, or timeout failures leave the current tunnel running and retry with bounded backoff instead of creating another hostname.
+
+On Windows and macOS, the desktop setup surfaces can install `cloudflared` with the platform package manager (`winget` or Homebrew). Unsupported platforms receive the official install guide instead of an unsafe privilege-escalation attempt.
 
 ## Cloudflare managed
 
@@ -125,9 +129,9 @@ The configured origin must be a clean HTTPS origin without credentials, path, qu
 
 Managed provider processes can restart automatically after unexpected exit using bounded backoff and a bounded restart count. Settings are re-evaluated before restart so stale provider configuration is not resurrected.
 
-A Gateway or provider generation change makes the previous complete session stale. A desktop host that still requests the session recovers through the complete Start lifecycle and re-runs preflight; the user does not need to run a separate verification action.
+A Gateway or provider generation change makes the previous complete session stale. A desktop host that still requests the session recovers through the complete Start lifecycle and re-runs preflight; the user does not need to run a separate verification action. Closing or reloading VS Code or Obsidian detaches that host from the shared session instead of issuing Stop. The next desktop host attaches to a healthy session or recovers it when the previous owner has exited.
 
-If a dynamic endpoint changes host, DevMate can notify the user to update the ChatGPT connector URL.
+Quick Tunnel is intentionally a session-only share. DevMate verifies it for the active session but never treats it as a persistent ChatGPT app address or asks the user to replace a persistent app URL with it. Persistent ChatGPT apps require an explicitly configured, account-owned stable HTTPS origin.
 
 ## Stop semantics
 

@@ -2,22 +2,25 @@
 
 const path = require('node:path');
 const { preflightPublicMcp } = require('../host/public-mcp.js');
+const {
+  verificationEvidenceFresh,
+  verifySharedPublicMcp
+} = require('../host/shared-public-mcp-verification.js');
 const { readGatewayInstanceLock } = require('../host/runtime/instance-lock-cleanup.js');
 const {
-  readJson,
-  updateConfig
+  readJson
 } = require('../shared/config-store.cjs');
 const {
   hostOf,
   recordGeneration,
   sessionGeneration,
-  successfulVerificationPatch,
   verifiedForCurrentRecord
 } = require('../shared/public-ingress-verification.cjs');
 
 const DEFAULT_POLL_MS = 5000;
 const DEFAULT_RETRY_MS = 30000;
 const DEFAULT_READY_GRACE_MS = 20000;
+const DEFAULT_VERIFIED_MAX_AGE_MS = 60000;
 
 function sameGeneration(a, b) {
   return !!a && a === b;
@@ -47,6 +50,7 @@ class PublicTunnelVerifier {
     pollMs = DEFAULT_POLL_MS,
     retryMs = DEFAULT_RETRY_MS,
     readyGraceMs = DEFAULT_READY_GRACE_MS,
+    verifiedMaxAgeMs = DEFAULT_VERIFIED_MAX_AGE_MS,
     now = () => Date.now()
   } = {}) {
     if (!stateDirectory) throw new Error('A shared state directory is required');
@@ -66,6 +70,7 @@ class PublicTunnelVerifier {
     this.pollMs = Math.max(1000, Number(pollMs) || DEFAULT_POLL_MS);
     this.retryMs = Math.max(5000, Number(retryMs) || DEFAULT_RETRY_MS);
     this.readyGraceMs = Math.max(0, Number(readyGraceMs) || 0);
+    this.verifiedMaxAgeMs = Math.max(5000, Number(verifiedMaxAgeMs) || DEFAULT_VERIFIED_MAX_AGE_MS);
     this.now = now;
     this.timer = null;
     this.inFlightGeneration = '';
@@ -185,12 +190,13 @@ class PublicTunnelVerifier {
       await this.notifyState('gateway-unavailable', { record });
       return { checked: false, reason: 'no-ready-gateway' };
     }
-    if (verifiedForCurrentRecord(config, record, snapshot.gatewayLock)) {
+    const currentlyVerified = verifiedForCurrentRecord(config, record, snapshot.gatewayLock);
+    if (currentlyVerified && verificationEvidenceFresh(config, record, snapshot.gatewayLock, this.verifiedMaxAgeMs, this.now())) {
       await this.notifyState('verified', { record, generation });
       return { checked: false, reason: 'already-verified', generation };
     }
 
-    await this.notifyState('unverified', { record, generation });
+    await this.notifyState(currentlyVerified ? 'verified' : 'unverified', { record, generation });
     const readyAt = Date.parse(record.readyAt || '');
     const now = this.now();
     if (!force && Number.isFinite(readyAt) && now - readyAt < this.readyGraceMs) {
@@ -213,12 +219,23 @@ class PublicTunnelVerifier {
     let failure = null;
     try {
       const token = config.auth?.required === false ? '' : String(config.auth?.token || '');
-      const test = await this.preflight({
+      const verification = await verifySharedPublicMcp({
+        stateDirectory: this.stateDirectory,
+        configFile: this.configFile,
         publicUrl: record.publicUrl,
+        expectedRecord: record,
+        currentRecord: () => this.currentSession(this.readConfig()).record,
         token,
         clientName: 'devmate-vscode-runtime-recovery',
-        clientVersion: this.appVersion
+        clientVersion: this.appVersion,
+        maxEvidenceAgeMs: this.verifiedMaxAgeMs,
+        preflight: this.preflight,
+        logger: this.logger,
+        now: this.now,
+        isCurrent: () => this.lifecycleCurrent(epoch) && this.generationStillCurrent(this.readConfig(), generation),
+        currentGatewayLock: () => this.currentSession(this.readConfig()).gatewayLock
       });
+      const test = verification.test;
 
       if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       const latest = this.readConfig();
@@ -226,18 +243,6 @@ class PublicTunnelVerifier {
         this.logger('Discarded public MCP preflight result because the Gateway or tunnel generation changed during verification.');
         return { checked: true, verified: false, stale: true, generation };
       }
-
-      const stamp = new Date(this.now()).toISOString();
-      if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
-      updateConfig(this.configFile, current => {
-        if (!this.lifecycleCurrent(epoch)) return current;
-        if (!this.generationStillCurrent(current, generation)) return current;
-        current.connection = {
-          ...(current.connection || {}),
-          ...successfulVerificationPatch(test, record.publicUrl, stamp, record, snapshot.gatewayLock)
-        };
-        return current;
-      });
 
       if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       const persisted = this.readConfig();
@@ -270,21 +275,7 @@ class PublicTunnelVerifier {
     } catch (error) {
       if (!this.lifecycleCurrent(epoch)) return this.stoppedResult(generation);
       const latest = this.readConfig();
-      let current = !!latest && this.generationStillCurrent(latest, generation);
-      if (current) {
-        updateConfig(this.configFile, value => {
-          if (!this.lifecycleCurrent(epoch)) return value;
-          if (!this.generationStillCurrent(value, generation)) return value;
-          value.connection = {
-            ...(value.connection || {}),
-            lastError: String(error.message || error),
-            lastErrorAt: new Date(this.now()).toISOString()
-          };
-          return value;
-        });
-        const afterFailureWrite = this.readConfig();
-        current = !!afterFailureWrite && this.generationStillCurrent(afterFailureWrite, generation);
-      }
+      const current = !!latest && this.generationStillCurrent(latest, generation);
       this.logger(`Public MCP recovery verification failed: ${error.message || error}`);
       failure = {
         checked: true,
@@ -346,6 +337,7 @@ module.exports = {
   DEFAULT_POLL_MS,
   DEFAULT_READY_GRACE_MS,
   DEFAULT_RETRY_MS,
+  DEFAULT_VERIFIED_MAX_AGE_MS,
   PublicTunnelVerifier,
   sameGeneration,
   stateKey

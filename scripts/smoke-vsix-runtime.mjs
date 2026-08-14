@@ -118,6 +118,7 @@ try {
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
     'shared/config-store.cjs',
+    'shared/connection-stability.cjs',
     'shared/public-ingress-verification.cjs',
     'host/runtime/diagnostics-store.js',
     'host/runtime/instance-lock-cleanup.js',
@@ -139,15 +140,13 @@ try {
   assert.match(extensionSource, /resolveNodeRuntime/, 'VSIX must resolve a verified Node runtime before launching the Gateway');
   assert.match(extensionSource, /host\/runtime\/network\.js/, 'VSIX must use the shared Gateway health contract');
   assert.doesNotMatch(extensionSource, /runtime-io\.js|bounded-http-client\.js/, 'VSIX must not package retired private runtime adapters');
-  assert.match(extensionSource, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/, 'VSIX must link VS Code to the shared public MCP preflight');
-  assert.match(extensionSource, /recordGeneration\(expectedRecord\)/, 'VSIX must bind explicit verification to the current complete session generation');
-  assert.match(extensionSource, /verifiedForCurrentRecord\(persisted, currentRecord\)/, 'VSIX must validate persisted Ready evidence against the current session');
-  const verifyStart = extensionSource.indexOf('async function verifyPublicMcp');
+  assert.match(extensionSource, /const \{ verifySharedPublicMcp \} = require\('\.\/host\/shared-public-mcp-verification\.js'\)/, 'VSIX must link VS Code to shared cross-host public MCP verification');
+  const verifyStart = extensionSource.indexOf('async function verifyCurrentTunnel');
   const verifyEnd = extensionSource.indexOf('async function quickStart', verifyStart);
   assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
   const verify = extensionSource.slice(verifyStart, verifyEnd);
-  assert.match(verify, /return preflightPublicMcp\(\{/, 'VSIX verification must delegate to the shared preflight helper');
-  assert.match(verify, /token: data\?\.auth\?\.required === false \? '' : String\(data\?\.auth\?\.token \|\| ''\)/, 'VSIX verification must pass the current owner bearer token');
+  assert.match(verify, /return verifySharedPublicMcp\(\{/, 'VSIX verification must delegate to the shared single-flight verifier');
+  assert.match(verify, /token: data\.auth\?\.required === false \? '' : String\(data\.auth\?\.token \|\| ''\)/, 'VSIX verification must pass the current owner bearer token');
 
   const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
   assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must authenticate requests');

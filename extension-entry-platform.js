@@ -16,7 +16,12 @@ const {
   credentialProviderInUse
 } = require('./vscode-host/tunnel-stop-policy.js');
 const { tunnelMaxRestarts } = require('./vscode-host/tunnel-settings.js');
-const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
+const {
+  cloudflaredInstallCommand,
+  installCloudflared,
+  resolveTunnelExecutable
+} = require('./vscode-host/tunnel-executable.js');
+const { publicConnectionStability } = require('./shared/connection-stability.cjs');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -165,6 +170,19 @@ function checkCommand(command, args = ['--version']) {
   };
 }
 
+async function installCloudflaredWithProgress() {
+  const installer = cloudflaredInstallCommand();
+  if (!installer) return { ok: false, reason: 'automatic-install-unavailable' };
+  const result = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: `Installing cloudflared with ${installer.label}`,
+    cancellable: false
+  }, () => installCloudflared());
+  const executable = resolveTunnelExecutable('cloudflared', setting('cloudflareCommandPath', ''));
+  const check = checkCommand(executable);
+  return { ok: result.ok && check.ok, executable, output: check.ok ? check.output : result.output };
+}
+
 async function promptPublicUrl(current = '') {
   const value = await vscode.window.showInputBox({
     title: 'DevMate · Public HTTPS URL',
@@ -225,15 +243,14 @@ async function storeCloudflareToken(context, value) {
 }
 
 async function configureConnection(context) {
-  output.show(true);
   let state = readInstanceConfig(configPath(context));
   if (!state) throw new Error('DevMate shared config is not initialized');
 
   const providerChoice = await vscode.window.showQuickPick([
-    { label: '$(radio-tower) ngrok', description: 'Default local-first HTTPS connection; optional stable endpoint', value: 'ngrok' },
-    { label: '$(beaker) Cloudflare Quick Tunnel', description: 'Temporary TryCloudflare HTTPS endpoint', value: 'cloudflare-quick' },
-    { label: '$(cloud) Cloudflare managed tunnel', description: 'Stable managed HTTPS connection', value: 'cloudflare-managed' },
-    { label: '$(link) External reverse proxy', description: 'Existing HTTPS ingress, load balancer, VPN, or tunnel', value: 'external' }
+    { label: '$(beaker) Cloudflare Quick Tunnel', description: 'One-click session share; the URL is temporary and not for a persistent ChatGPT app', value: 'cloudflare-quick' },
+    { label: '$(radio-tower) ngrok', description: 'Account-owned HTTPS endpoint; set its stable URL for a persistent ChatGPT app', value: 'ngrok' },
+    { label: '$(cloud) Cloudflare managed tunnel', description: 'Account-owned stable HTTPS connection', value: 'cloudflare-managed' },
+    { label: '$(link) External reverse proxy', description: 'Existing account-owned HTTPS ingress, load balancer, VPN, or tunnel', value: 'external' }
   ], {
     title: 'DevMate · Connection Provider',
     ignoreFocusOut: true
@@ -277,10 +294,24 @@ async function configureConnection(context) {
     const command = resolveTunnelExecutable('cloudflared', setting('cloudflareCommandPath', ''));
     const check = checkCommand(command);
     if (!check.ok) {
-      vscode.window.showWarningMessage(
-        `cloudflared was not detected: ${check.output || 'unknown error'}`,
-        'Open Cloudflare Docs'
-      ).then(choice => choice && openExternal(CLOUDFLARE_DOCS));
+      const canInstall = !!cloudflaredInstallCommand();
+      const choice = await vscode.window.showWarningMessage(
+        'Cloudflare Quick needs the cloudflared helper once.',
+        ...(canInstall ? ['Install automatically'] : []),
+        'Open install guide'
+      );
+      if (choice === 'Open install guide') {
+        await openExternal(CLOUDFLARE_DOCS);
+        return;
+      }
+      if (choice !== 'Install automatically') return;
+      const installed = await installCloudflaredWithProgress();
+      if (!installed.ok) {
+        const next = await vscode.window.showErrorMessage('cloudflared could not be installed automatically.', 'Open install guide');
+        if (next) await openExternal(CLOUDFLARE_DOCS);
+        return;
+      }
+      vscode.window.showInformationMessage('cloudflared is installed. DevMate will use it automatically.');
     }
   } else if (providerChoice.value === 'cloudflare-managed') {
     const current = state.connection.provider === 'cloudflare-managed'
@@ -316,8 +347,9 @@ async function configureConnection(context) {
     return;
   }
 
+  const stability = publicConnectionStability({ provider: providerChoice.value, publicUrl });
   const start = await vscode.window.showInformationMessage(
-    'DevMate connection settings saved.',
+    `DevMate connection settings saved. ${stability.message}`,
     'Start Now',
     'Open DevMate'
   );
@@ -331,6 +363,12 @@ async function connectionDoctor(context) {
   log('--- connection diagnostics ---');
   log(`Connection provider: ${settings.provider}`);
   log(`Stable public URL: ${settings.provider === 'ngrok' ? settings.ngrokUrl || 'not configured' : settings.publicUrl || 'not configured'}`);
+  const stability = publicConnectionStability({
+    provider: settings.provider,
+    publicUrl: settings.provider === 'ngrok' ? settings.ngrokUrl : settings.publicUrl
+  });
+  log(`ChatGPT app address: ${stability.chatgptEligible ? stability.publicUrl : stability.kind}`);
+  log(stability.message);
   log(`Auto restart: ${settings.autoRestart ? 'enabled' : 'disabled'}; max restarts=${settings.maxRestarts}`);
   if (settings.provider === 'ngrok') {
     log(`ngrok Traffic Policy: ${settings.ngrokTrafficPolicyFile || 'not configured'}`);

@@ -2,15 +2,16 @@
 
 const path = require('node:path');
 const { FileSystemAdapter, Notice, Plugin } = require('obsidian');
-const { preflightPublicMcp, redactUrl } = require('../../host/public-mcp.js');
+const { connectionErrorSummary, redactUrl, transientPublicMcpError } = require('../../host/public-mcp.js');
+const { verifySharedPublicMcp } = require('../../host/shared-public-mcp-verification.js');
 const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
 const { RuntimeController, resolveStateDirectory } = require('../../host/runtime-controller.js');
 const { updateConfig } = require('../../shared/config-store.cjs');
+const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { normalizeInstanceConfig } = require('../../shared/instance-config.cjs');
 const {
   recordGeneration,
-  successfulVerificationPatch,
   verifiedForCurrentRecord
 } = require('../../shared/public-ingress-verification.cjs');
 const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
@@ -32,6 +33,7 @@ const HOST_ID = 'obsidian';
 const CONTEXT_CAPTURE_DEBOUNCE_MS = 750;
 const STATUS_REFRESH_MS = 5000;
 const PUBLIC_REVERIFY_BACKOFF_MS = 30000;
+const PUBLIC_VERIFIED_MAX_AGE_MS = 60000;
 const SESSION_RECOVERY_RETRY_MS = 30000;
 
 module.exports = class DevMateObsidianPlugin extends Plugin {
@@ -120,21 +122,14 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     await this.hostOperations.run('unload', async () => {
       await this.bridge?.stop();
       this.bridge = null;
-      let tunnel = { stopped: false, reason: 'not-running' };
-      try { tunnel = await this.tunnelController?.stop() || tunnel; }
-      catch (error) {
-        tunnel = { stopped: false, reason: error.message || String(error), error };
-        this.logRuntime(`Could not stop owned public connection during unload: ${error.message || error}`);
-      }
-      const releaseGateway = tunnelAllowsGatewayShutdown(tunnel);
       const tunnelDisposed = await this.tunnelController?.dispose({ stopOwned: false }).catch(error => ({ disposed: false, reason: error.message || String(error) }));
       if (tunnelDisposed?.disposed === false) {
-        this.logRuntime(`Public connection controller remains active after unload: ${tunnelDisposed.reason || 'stop not confirmed'}.`);
+        this.logRuntime(`Detached from the shared public connection during Obsidian shutdown: ${tunnelDisposed.reason || 'still-owned'}.`);
       }
       this.tunnelController = null;
-      const gatewayDisposed = await this.controller?.dispose({ stopOwned: releaseGateway });
+      const gatewayDisposed = await this.controller?.dispose({ stopOwned: false });
       if (gatewayDisposed?.disposed === false) {
-        this.logRuntime(`Gateway is preserved because public connection shutdown was not confirmed: ${gatewayDisposed.reason || 'owned process still running'}.`);
+        this.logRuntime(`Detached from the shared Gateway during Obsidian shutdown: ${gatewayDisposed.reason || 'still-owned'}.`);
       }
       this.controller = null;
     });
@@ -222,7 +217,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   connectionConfiguration() {
     const config = this.controller?.readConfig?.() || null;
-    if (!config) return { provider: 'ngrok', publicUrl: '' };
+    if (!config) return { provider: 'cloudflare-quick', publicUrl: '' };
     normalizeInstanceConfig(config);
     return {
       provider: config.connection.provider,
@@ -296,55 +291,26 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.publicVerificationGeneration = generation;
     this.publicVerificationPromise = (async () => {
       try {
-        const test = await preflightPublicMcp({
+        const verified = await verifySharedPublicMcp({
+          stateDirectory: this.controller.stateDirectory,
+          configFile: this.controller.configFile,
           publicUrl: normalized,
+          expectedRecord: initialRecord,
+          currentRecord: () => this.currentTunnelRecord(initialRecord.port),
           token: this.controller.ownerToken(),
           clientName: 'devmate-obsidian-preflight',
           clientVersion: this.manifest.version,
-          readyTimeoutMs: 15000,
-          shouldContinue: () => recordGeneration(this.currentTunnelRecord(initialRecord.port)) === generation
+          logger: message => this.logRuntime(message)
         });
-        const currentRecord = this.currentTunnelRecord(initialRecord.port);
-        if (recordGeneration(currentRecord) !== generation) {
-          const error = new Error('Public MCP verification became stale because the Gateway or connection generation changed');
-          error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
-          throw error;
-        }
-
-        const stamp = new Date().toISOString();
-        updateConfig(this.controller.configFile, config => {
-          normalizeInstanceConfig(config);
-          if (recordGeneration(this.currentTunnelRecord(initialRecord.port)) !== generation) return config;
-          config.connection = {
-            ...config.connection,
-            ...successfulVerificationPatch(test, normalized, stamp, initialRecord)
-          };
-          return config;
-        });
-
-        const persisted = this.controller.readConfig();
-        const persistedRecord = this.currentTunnelRecord(initialRecord.port);
-        if (
-          recordGeneration(persistedRecord) !== generation ||
-          !verifiedForCurrentRecord(persisted, persistedRecord)
-        ) {
-          const error = new Error('Public MCP verification could not be committed for the current Gateway+connection generation');
-          error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
-          throw error;
-        }
-
+        const test = verified.test;
+        const stamp = verified.stamp || this.controller.readConfig()?.connection?.lastPreflightAt || new Date().toISOString();
         this.lastVerifiedAt = stamp;
         this.lastVerifiedToolCount = test.toolCount;
+        this.runtimeDiagnostics?.clearFailure();
         this.logRuntime(`Verified public MCP endpoint: ${redactUrl(test.mcpUrl)} tools=${test.toolCount}`);
         return test;
       } catch (error) {
         this.clearPublicVerification();
-        if (recordGeneration(this.currentTunnelRecord(initialRecord.port)) === generation) {
-          this.updateConnectionSnapshot({
-            lastError: String(error.message || error),
-            lastErrorAt: new Date().toISOString()
-          });
-        }
         throw error;
       } finally {
         if (this.publicVerificationGeneration === generation) {
@@ -408,6 +374,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         gatewayEntry: path.join(pluginDirectory, 'gateway', 'server.mjs'),
         preferredPort: this.settings.preferredPort,
         appVersion: this.manifest.version,
+        defaultConnectionProvider: 'cloudflare-quick',
         hostId: HOST_ID,
         logger: message => this.logRuntime(message)
       });
@@ -517,6 +484,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
       if (gateway.state === 'running') {
         const config = this.controller.readConfig();
+        const stability = publicConnectionStability({
+          provider: config?.connection?.provider || tunnel.provider,
+          publicUrl: config?.connection?.publicUrl || ''
+        });
         const verified = !!tunnel.record && verifiedForCurrentRecord(config, tunnel.record);
         if (verified) {
           return {
@@ -528,13 +499,31 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
             publicUrl: tunnel.publicUrl,
             state: 'ready',
             label: 'DevMate ready',
-            detail: `Verified public MCP via ${tunnel.provider}: ${redactUrl(`${tunnel.publicUrl}/mcp`)}`
+            detail: stability.chatgptEligible
+              ? `Verified persistent ChatGPT MCP address: ${redactUrl(`${tunnel.publicUrl}/mcp`)}`
+              : `Verified session-only MCP via ${tunnel.provider}. ${stability.message}`
           };
         }
         if (connectionError) {
           return { ...gateway, gateway, tunnel, connectionError, state: 'error', label: 'DevMate connection error', detail: connectionError };
         }
         if (tunnel.running && tunnel.publicUrl) {
+          const failure = String(config?.connection?.lastError || '');
+          if (failure) {
+            const temporary = config?.connection?.lastErrorKind === 'temporary-network';
+            return {
+              ...gateway,
+              gateway,
+              tunnel,
+              connection: tunnel,
+              connectionError: failure,
+              verified: false,
+              publicUrl: tunnel.publicUrl,
+              state: temporary ? 'recovering' : 'error',
+              label: temporary ? 'DevMate reconnecting' : 'DevMate public check failed',
+              detail: connectionErrorSummary({ message: failure, code: config?.connection?.lastErrorCode })
+            };
+          }
           return {
             ...gateway,
             gateway,
@@ -583,6 +572,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     const status = await this.runtimeStatus();
     const statusText = status.state === 'ready'
       ? 'DevMate: ready'
+      : status.state === 'recovering'
+        ? 'DevMate: reconnecting'
       : status.state === 'starting' || status.state === 'verifying'
         ? 'DevMate: starting'
         : status.label;
@@ -594,11 +585,13 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       if (leaf.view instanceof DevMateView) await leaf.view.refresh(status);
     }
 
+    const evidenceAt = Date.parse(this.controller.readConfig()?.connection?.lastPreflightAt || '');
+    const evidenceStale = !Number.isFinite(evidenceAt) || Date.now() - evidenceAt > PUBLIC_VERIFIED_MAX_AGE_MS;
     if (
       status.gateway?.state === 'running' &&
       status.tunnel?.publicUrl &&
       status.tunnel?.record &&
-      !status.verified &&
+      (!status.verified || evidenceStale) &&
       !this.publicVerificationPromise &&
       Date.now() - this.lastPublicVerificationAttemptAt >= PUBLIC_REVERIFY_BACKOFF_MS
     ) {
@@ -698,8 +691,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       };
     } catch (error) {
       if (this.sessionRequested) this.recoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
-      let publicConnectionSafeToReleaseGateway = !(tunnel?.attached && !tunnel?.owned);
-      if (tunnel?.owned) {
+      const recovering = transientPublicMcpError(error);
+      let publicConnectionSafeToReleaseGateway = recovering || !(tunnel?.attached && !tunnel?.owned);
+      if (tunnel?.owned && !recovering) {
         try {
           const stopped = await this.tunnelController.stop();
           publicConnectionSafeToReleaseGateway = tunnelAllowsGatewayShutdown(stopped);
@@ -709,14 +703,19 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         }
       }
       if (gateway?.started && gateway?.owned) {
-        this.logRuntime(publicConnectionSafeToReleaseGateway
+        this.logRuntime(recovering
+          ? 'Keeping the current Gateway and public connection alive so automatic verification can recover without changing the URL.'
+          : publicConnectionSafeToReleaseGateway
           ? 'Public connection startup failed; keeping the local Gateway available for diagnostics and retry.'
           : 'Preserving the newly owned Gateway because the public connection is still active or its shutdown was not confirmed.');
       }
-      this.runtimeDiagnostics?.recordFailure(error);
+      this.logRuntime(`Start verification details: ${error.stack || error.message || error}`);
+      const displayError = new Error(connectionErrorSummary(error));
+      displayError.code = error.code;
+      this.runtimeDiagnostics?.recordFailure(displayError);
       console.error('[DevMate] Start failed', error);
-      if (!quiet) new Notice(`DevMate start failed: ${error.message || error}`);
-      return { ok: false, error: error.message || String(error), code: error.code || 'DEVMATE_OBSIDIAN_START_FAILED' };
+      if (!quiet) new Notice(connectionErrorSummary(error));
+      return { ok: false, recovering, error: error.message || String(error), summary: connectionErrorSummary(error), code: error.code || 'DEVMATE_OBSIDIAN_START_FAILED' };
     } finally {
       await this.refreshStatus();
     }
@@ -811,7 +810,10 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       const test = await this.verifyPublicEndpoint(publicUrl, tunnel.record);
       await navigator.clipboard.writeText(test.mcpUrl);
       this.updateConnectionSnapshot({ lastCopiedAt: new Date().toISOString() });
-      new Notice(`Verified public MCP URL copied: ${redactUrl(test.mcpUrl)}`);
+      const stability = publicConnectionStability(this.connectionConfiguration());
+      new Notice(stability.chatgptEligible
+        ? `Verified persistent ChatGPT MCP URL copied: ${redactUrl(test.mcpUrl)}`
+        : `Verified temporary session MCP URL copied: ${redactUrl(test.mcpUrl)}`);
     } catch (error) {
       new Notice(`Could not copy public MCP URL: ${error.message || error}`);
     } finally {

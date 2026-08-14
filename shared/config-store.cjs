@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
-const { normalizeInstanceConfig } = require('./instance-config.cjs');
+const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
@@ -381,10 +381,12 @@ function newerVersion(current, candidate) {
   return String(current);
 }
 
-function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
+function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DEFAULT_VERSION, defaultConnectionProvider = 'ngrok' }) {
   const root = path.resolve(workspaceRoot);
   const id = workspaceId(root);
   const serverPort = strictPort(port, { label: 'server.port' });
+  const provider = String(defaultConnectionProvider || 'ngrok').trim().toLowerCase();
+  if (!CONNECTION_PROVIDERS.includes(provider)) throw new Error(`Unknown default connection provider: ${provider}`);
   return {
     version: SUPPORTED_CONFIG_VERSION,
     appVersion,
@@ -398,7 +400,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       maxConcurrentJobs: 2
     },
     maintenance: { ...DEFAULT_MAINTENANCE },
-    connection: { provider: 'ngrok', publicUrl: '' },
+    connection: { provider, publicUrl: '' },
     auth: { required: true, token: randomToken() },
     permissions: {
       profile: 'fullAccess',
@@ -441,7 +443,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
   };
 }
 
-function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAULT_PORT, appVersion = DEFAULT_VERSION }) {
+function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAULT_PORT, appVersion = DEFAULT_VERSION, defaultConnectionProvider = 'ngrok' }) {
   const file = path.resolve(configFile);
   const root = path.resolve(workspaceRoot);
   const rootKey = normalizedWorkspaceRoot(root);
@@ -450,7 +452,7 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
     throw new Error(`Workspace is not a directory: ${root}`);
   }
   return updateConfig(file, current => {
-    if (!Object.keys(current).length) return newInstanceConfig({ workspaceRoot: root, port: requestedPort, appVersion });
+    if (!Object.keys(current).length) return newInstanceConfig({ workspaceRoot: root, port: requestedPort, appVersion, defaultConnectionProvider });
     const config = normalizeInstanceConfig(current);
     config.appVersion = newerVersion(config.appVersion, appVersion);
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;

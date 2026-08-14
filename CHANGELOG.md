@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.4.1
+
+- Made fresh desktop setup account-free by default with Cloudflare Quick, while keeping ngrok and managed/external ingress as optional stable providers.
+- Added one-click platform-native cloudflared installation in VS Code and Obsidian setup surfaces, with bounded execution and a documentation fallback.
+- Unified VS Code, Obsidian, and background recovery behind one cross-process public MCP verification lease so simultaneous starts perform one `initialize` + `tools/list` check.
+- Added freshness-based public endpoint revalidation, generation fencing, and atomic success/failure ordering so stale Ready evidence and concurrent timeout races cannot misreport connection health.
+- Preserved healthy Gateway and tunnel processes through transient edge/DNS timeouts, added bounded retry/backoff, and replaced startup error dumps with concise recovering states and automatic recovery.
+- Simplified both desktop panels around Start, Restart, and Copy MCP URL while keeping Stop, diagnostics, provider setup, and advanced state available on demand.
+- Removed obsolete release validation snapshots and aligned release documentation with the direct `master` workflow.
+
 ## 3.4.0
 
 - Unified VS Code and Obsidian under one machine-wide desktop state so projects register with one Gateway/public-connection lifecycle instead of competing for free tunnel endpoints.

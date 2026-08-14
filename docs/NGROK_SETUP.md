@@ -1,6 +1,6 @@
 # ngrok setup and account switching
 
-ngrok is DevMate's default desktop public-connection provider. Fresh VS Code installs use the machine's normal ngrok configuration unless the user explicitly chooses a DevMate-managed account.
+ngrok is DevMate's optional stable desktop public-connection provider. Fresh desktop instances use account-free Cloudflare Quick; choose ngrok once in `DevMate: Connection Setup` when a stable account-owned endpoint is preferable.
 
 For a machine where ngrok is already installed and configured, no ngrok setup action is required: open the project and run `DevMate: Start`.
 

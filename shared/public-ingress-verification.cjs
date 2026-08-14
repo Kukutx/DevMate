@@ -102,6 +102,8 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   const connection = config?.connection || {};
   const preflightAt = Date.parse(connection.lastPreflightAt || '');
   if (!Number.isFinite(preflightAt)) return false;
+  const failureAt = Date.parse(connection.lastErrorAt || '');
+  if (connection.lastError && Number.isFinite(failureAt) && failureAt >= preflightAt) return false;
   if (notBefore) {
     const minimum = Date.parse(notBefore);
     if (!Number.isFinite(minimum) || preflightAt < minimum) return false;
@@ -145,9 +147,12 @@ function successfulVerificationPatch(
     lastMcpPath: '/mcp',
     lastToolCount: Number(test?.toolCount || 0),
     lastServerName: String(test?.server?.name || 'devmate'),
+    lastServerVersion: String(test?.server?.version || ''),
     ...(tunnelGeneration ? { lastTunnelGeneration: tunnelGeneration } : {}),
     ...(currentGatewayGeneration ? { lastGatewayGeneration: currentGatewayGeneration } : {}),
     lastError: '',
+    lastErrorCode: '',
+    lastErrorKind: '',
     lastErrorAt: null
   };
 }

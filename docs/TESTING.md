@@ -28,7 +28,7 @@ When a discovered test batch fails, `scripts/run-tests.mjs` reruns that batch fi
 ## Desktop lifecycle acceptance
 
 1. Install the current VSIX and open a Git project.
-2. If the default machine ngrok configuration is not appropriate, run `DevMate: Connection Setup` once and configure the intended provider/account.
+2. Confirm a fresh desktop instance selects account-free Cloudflare Quick. Use `DevMate: Connection Setup` only when a stable ngrok/managed/external endpoint is wanted.
 3. Run `DevMate: Connection Doctor` or `DevMate: Doctor` and confirm diagnostics do not expose credentials.
 4. Run `DevMate: Start` once.
 5. Confirm Start itself performs Gateway start/attach → public connection start/attach → MCP `initialize` → `tools/list` → Ready. No second runtime action should be required.
@@ -37,6 +37,7 @@ When a discovered test batch fails, `scripts/run-tests.mjs` reruns that batch fi
 8. Run `project_snapshot` and confirm the current workspace, Git state, scripts and instructions are available.
 9. Run `connection_diagnostics` and confirm it reports the current public MCP verification without treating the loopback Gateway as Ready.
 10. Confirm the VS Code panel presents MCP/Ready as the product state while provider, local Gateway and diagnostics remain supporting information rather than required manual stages.
+11. Start VS Code and Obsidian together and confirm one shared public preflight is performed for the generation; a forced transient timeout must keep the URL alive and recover without a contradictory Ready/error state.
 
 ## Complete-session generation and recovery
 

@@ -102,8 +102,8 @@ test('ERR_NGROK_334 is left untouched when the already-online URL does not verif
     await assert.rejects(() => controller.start(8788), error => {
       assert.equal(error.code, 'DEVMATE_NGROK_ENDPOINT_CONFLICT');
       assert.equal(error.conflictUrl, 'https://assigned.ngrok-free.app');
-      assert.match(error.message, /Stop the old endpoint in the ngrok dashboard, then click Start again/);
-      assert.match(error.message, /local Gateway remains available for retry/);
+      assert.match(error.message, /DevMate leaves that existing session untouched/);
+      assert.match(error.message, /Use an account-owned endpoint for this machine or correct the local ngrok configuration, then retry/);
       assert.doesNotMatch(error.message, /Provider output|start both endpoints|--pooling-enabled/);
       return true;
     });

@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { readExtensionConfig, writeExtensionConfig } = require('./vscode-host/config-sync.js');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
-const { preflightPublicMcp } = require('./host/public-mcp.js');
+const { connectionErrorSummary, transientPublicMcpError } = require('./host/public-mcp.js');
+const { verifySharedPublicMcp } = require('./host/shared-public-mcp-verification.js');
 const { RuntimeController } = require('./host/runtime-controller.js');
 const { childExited, terminateProcessTree } = require('./host/runtime/process-tree.js');
 const { healthAt, healthMatches } = require('./host/runtime/network.js');
@@ -14,9 +15,9 @@ const { updateConfig } = require('./shared/config-store.cjs');
 const { setLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
 const {
   recordGeneration,
-  successfulVerificationPatch,
   verifiedForCurrentRecord
 } = require('./shared/public-ingress-verification.cjs');
+const { publicConnectionStability } = require('./shared/connection-stability.cjs');
 const { connectionProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
 const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
@@ -389,6 +390,7 @@ async function ensureGatewayController(ctx){
     gatewayEntry: gatewayPath(ctx),
     preferredPort: configuredPort(),
     appVersion: VERSION,
+    defaultConnectionProvider: 'cloudflare-quick',
     hostId: 'vscode',
     nodeExecutable: nodeRuntime.executable,
     spawnImpl: spawn,
@@ -468,11 +470,6 @@ function setDesiredLifecycleState(ctx, desiredState, reason=''){
   if(data.lifecycle?.desiredState === desiredState) return data.lifecycle;
   return setLifecycleIntent(configPath(ctx), desiredState, {requestedBy:'vscode', reason});
 }
-function staleSessionGenerationError(){
-  const error = new Error('Public MCP verification became stale because the complete session generation changed');
-  error.code = 'DEVMATE_PUBLIC_MCP_STALE_GENERATION';
-  return error;
-}
 function currentPublicUiState(data){
   let tunnel = null;
   let runtimeError = '';
@@ -516,43 +513,28 @@ async function stopPublicTunnel(){
     lastPublicUrl = '';
   }
 }
-async function verifyPublicMcp(baseUrl, ctx=globalContext, options={}){
-  const data = ctx ? ensureConfig(ctx,false) : null;
-  return preflightPublicMcp({
-    publicUrl: baseUrl,
-    token: data?.auth?.required === false ? '' : String(data?.auth?.token || ''),
+async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext){
+  const data = ensureConfig(ctx,false);
+  return verifySharedPublicMcp({
+    stateDirectory: path.dirname(configPath(ctx)),
+    configFile: configPath(ctx),
+    publicUrl,
+    expectedRecord,
+    currentRecord: () => currentTunnelRecord(expectedRecord?.port),
+    token: data.auth?.required === false ? '' : String(data.auth?.token || ''),
     clientName: 'devmate-vscode-preflight',
     clientVersion: VERSION,
-    ...options
+    logger: log
   });
-}
-async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext){
-  const generation = recordGeneration(expectedRecord);
-  if(!generation){
-    const error = new Error('The public connection is not bound to a current complete session generation');
-    error.code = 'DEVMATE_PUBLIC_MCP_GENERATION_UNAVAILABLE';
-    throw error;
-  }
-  const test = await verifyPublicMcp(publicUrl, ctx, {
-    readyTimeoutMs: 15000,
-    shouldContinue: () => recordGeneration(currentTunnelRecord(expectedRecord.port)) === generation
-  });
-  let currentRecord = currentTunnelRecord(expectedRecord.port);
-  if(recordGeneration(currentRecord) !== generation) throw staleSessionGenerationError();
-  const stamp = new Date().toISOString();
-  updateConnectionSnapshot(ctx, successfulVerificationPatch(test, publicUrl, stamp, expectedRecord));
-  const persisted = readConfig(configPath(ctx));
-  currentRecord = currentTunnelRecord(expectedRecord.port);
-  if(recordGeneration(currentRecord) !== generation || !verifiedForCurrentRecord(persisted, currentRecord)){
-    throw staleSessionGenerationError();
-  }
-  return {test,stamp,generation,record:currentRecord};
 }
 function recordConnectionFailure(ctx, error, expectedRecord=null){
   if(!ctx) return;
   if(expectedRecord){
     const generation = recordGeneration(expectedRecord);
-    if(generation && recordGeneration(currentTunnelRecord(expectedRecord.port)) !== generation) return;
+    const record = currentTunnelRecord(expectedRecord.port);
+    if(generation && recordGeneration(record) !== generation) return;
+    const data = readConfig(configPath(ctx));
+    if(record && data && verifiedForCurrentRecord(data,record)) return;
   }
   try{
     updateConnectionSnapshot(ctx,{lastError:String(error.message || error),lastErrorAt:new Date().toISOString()});
@@ -560,7 +542,11 @@ function recordConnectionFailure(ctx, error, expectedRecord=null){
     log(`Could not persist DevMate connection failure: ${writeError.message || writeError}`);
   }
 }
-async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning}){
+async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning,preserveConnection=false}){
+  if(preserveConnection){
+    log('Keeping the current Gateway and public connection alive so automatic verification can recover without changing the URL.');
+    return;
+  }
   let publicConnectionSafeToReleaseGateway = !tunnelWasRunning && !(tunnel?.attached && !tunnel?.owned);
   if(tunnel?.owned && !tunnelWasRunning){
     try {
@@ -593,7 +579,6 @@ async function quickStart(ctx,{quiet=false}={}){
   const overallStarted = Date.now();
   lastStartupTrace = trace;
   try{
-    output.show(true);
     if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
     setDesiredLifecycleState(ctx,'running','start');
     let stageStarted = Date.now();
@@ -628,16 +613,19 @@ async function quickStart(ctx,{quiet=false}={}){
 
     log(`Public MCP preflight OK: ${redactUrl(test.mcpUrl)}, tools=${test.toolCount}`);
     if(!quiet){
-      if(copied) vscode.window.showInformationMessage(`Ready. ChatGPT MCP URL copied and verified: ${redactUrl(test.mcpUrl)}`);
+      const stability = publicConnectionStability({provider:tunnel.provider,publicUrl:data.connection?.publicUrl || ''});
+      const destination = stability.chatgptEligible ? 'persistent ChatGPT MCP URL' : 'temporary session MCP URL';
+      if(copied) vscode.window.showInformationMessage(`Ready. Verified ${destination} copied: ${redactUrl(test.mcpUrl)}`);
       else if(cfg().get('autoCopyUrl') && copyError) vscode.window.showWarningMessage('DevMate is Ready, but automatic MCP URL copy failed. Use DevMate: Copy MCP URL if needed.');
-      else vscode.window.showInformationMessage(`Ready. Verified MCP URL: ${redactUrl(test.mcpUrl)}`);
+      else vscode.window.showInformationMessage(`Ready. Verified ${destination}: ${redactUrl(test.mcpUrl)}`);
     }
     trace.success = true;
     trace.totalMs = Date.now() - overallStarted;
     trace.readyAt = new Date().toISOString();
     return {ok:true,gateway,tunnel,publicUrl,mcpUrl:test.mcpUrl,toolCount:test.toolCount,server:test.server,copied,copyError,startupTrace:trace};
   }catch(e){
-    await rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning});
+    const recovering = transientPublicMcpError(e);
+    await rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning,preserveConnection:recovering});
     recordConnectionFailure(ctx,e,tunnel?.record || null);
     await syncPublicUiState(ctx);
     trace.totalMs = Date.now() - overallStarted;
@@ -646,8 +634,18 @@ async function quickStart(ctx,{quiet=false}={}){
     trace.error = String(e.message || e).slice(0,2000);
     const message = String(e.message || e);
     log(`ERROR: ${e.stack || e.message || e}`);
-    if(!quiet) vscode.window.showErrorMessage(`DevMate failed: ${message}`);
-    return {ok:false,error:message,code:e.code || 'DEVMATE_START_FAILED'};
+    if(!quiet){
+      const summary = connectionErrorSummary(e);
+      if(recovering) vscode.window.showWarningMessage(summary,'Open DevMate','Copy diagnostics').then(choice=>{
+        if(choice === 'Open DevMate') vscode.commands.executeCommand('devMate.open');
+        if(choice === 'Copy diagnostics') vscode.commands.executeCommand('devMate.copyHostDiagnostics');
+      });
+      else vscode.window.showErrorMessage(summary,'Connection Setup','Copy diagnostics').then(choice=>{
+        if(choice === 'Connection Setup') vscode.commands.executeCommand('devMate.connectionSetup');
+        if(choice === 'Copy diagnostics') vscode.commands.executeCommand('devMate.copyHostDiagnostics');
+      });
+    }
+    return {ok:false,recovering,error:message,summary:connectionErrorSummary(e),code:e.code || 'DEVMATE_START_FAILED'};
   }
 }
 async function stopAll(){
@@ -705,7 +703,9 @@ async function copyUrl(){
     recordConnectionFailure(globalContext,e,status.record || null);
     await syncPublicUiState(globalContext);
     log(`MCP URL verification failed: ${e.stack || e.message || e}`);
-    vscode.window.showErrorMessage(`MCP URL is not healthy: ${e.message || e}`);
+    vscode.window.showErrorMessage(connectionErrorSummary(e),'Copy diagnostics').then(choice=>{
+      if(choice === 'Copy diagnostics') vscode.commands.executeCommand('devMate.copyHostDiagnostics');
+    });
     return;
   }
   try{
@@ -965,7 +965,7 @@ async function doctor(ctx){
   try{
     const tunnel=currentTunnelStatus(ctx);
     checks.push(`Public connection: ${tunnel.running ? `${tunnel.provider} ${tunnel.publicUrl || 'starting'}` : `${provider} not running`}`);
-    if(tunnel.publicUrl){ try{ const test=await verifyPublicMcp(tunnel.publicUrl,ctx); checks.push(`public MCP preflight: OK tools=${test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
+    if(tunnel.publicUrl && tunnel.record){ try{ const verified=await verifyCurrentTunnel(tunnel.publicUrl,tunnel.record,ctx); checks.push(`public MCP preflight: OK tools=${verified.test.toolCount}`); }catch(e){ checks.push(`public MCP preflight: FAILED ${e.message}`); } }
   }catch(e){ checks.push(`Public connection: unavailable (${e.message || e})`); }
   output.show(true); checks.forEach(x=>log(`[doctor] ${x}`)); vscode.window.showInformationMessage('Doctor finished. See DevMate output.');
 }
@@ -1011,6 +1011,12 @@ function panelHtml(ctx, webview){
   const ingressDisplay = publicState.publicUrl
     ? `${publicState.provider} ${redactUrl(publicState.publicUrl)} (${publicState.state})`
     : `${publicState.provider} (${publicState.state})`;
+  const chatgptDetail = publicState.stability?.chatgptEligible
+    ? 'Ready for the configured persistent ChatGPT app address.'
+    : publicState.stability?.message || 'DevMate is preparing the public MCP connection automatically.';
+  const chatgptFlow = publicState.stability?.chatgptEligible
+    ? 'Press Start once. DevMate verifies the configured stable endpoint; use Copy MCP URL in the DevMate ChatGPT connection.'
+    : 'This verified endpoint is a current-session share. For a persistent ChatGPT app address, use Connection Setup and choose an account-owned stable HTTPS endpoint.';
   const references = (data.workspaces || []).filter(w => w.reference);
   const activeWorkspace = (data.workspaces || []).find(w => w.id === data.activeWorkspaceId) || (data.workspaces || []).find(w => !w.reference);
   const workspaceState = {
@@ -1048,32 +1054,44 @@ function panelHtml(ctx, webview){
     .ref-main{min-width:0; display:flex; flex-direction:column; gap:4px;}
     .ref-main code{display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
     .flow{margin-top:18px;}
+    .ready-card{max-width:980px; border:1px solid var(--vscode-panel-border); border-radius:8px; padding:12px 14px; margin:10px 0 14px;}
+    .ready-card strong{display:block; margin-bottom:4px;}
   </style>
   </head><body>
   <h2>DevMate ${VERSION}</h2>
+  <div class="ready-card"><strong>${esc(statusLabel(publicState))}</strong><span class="muted">${esc(publicState.verified ? chatgptDetail : ['failed','recovering'].includes(publicState.state) ? connectionErrorSummary({message:publicState.failure,code:publicState.failureCode}) : 'DevMate is preparing the public MCP connection automatically.')}</span></div>
   <div class="status-grid">
     <b>Active project</b><code>${esc(root || 'Open a VS Code folder first')}</code>
     <b>MCP</b><code>${esc(mcpDisplay)}</code>
     <b>Connection</b><code>${esc(ingressDisplay)}</code>
-    <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp · internal only</code>
-    <b>Auth</b><code>${esc(data.auth?.required ? 'token required' : 'disabled')}</code>
-    <b>Permissions</b><code>${esc(data.permissions?.profile || 'fullAccess')}</code>
-    <b>Last preflight</b><code>${esc(data.connection?.lastPreflightAt ? `${data.connection.lastPreflightAt} ${data.connection.lastPublicHost || ''}` : 'not recorded')}</code>
-    <b>Start command</b><code>${esc(startCommandProcess ? 'running' : (String(cfg().get('defaultStartCommand') || '').trim() || 'not configured'))}</code>
   </div>
   <div class="toolbar">
     <button data-cmd="quickStart">Start</button>
-    <button class="secondary" data-cmd="stop">Stop</button>
     <button class="secondary" data-cmd="restart">Restart</button>
     <button data-cmd="copyUrl">Copy MCP URL</button>
-    <button class="secondary" data-cmd="doctor">Doctor</button>
-    <button class="secondary" data-cmd="starter">Copy Prompt</button>
-    <button class="secondary" data-cmd="copyContext">Copy Context</button>
-    <button class="secondary" data-cmd="settings">Settings</button>
-    <button class="secondary" data-cmd="logs">Logs</button>
   </div>
-  <div class="section">
-    <h3>References</h3>
+  <p class="flow muted">${esc(chatgptFlow)}</p>
+  <details>
+    <summary>More actions and diagnostics</summary>
+    <div class="toolbar">
+      <button class="secondary" data-cmd="stop">Stop</button>
+      <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>
+      <button class="secondary" data-cmd="doctor">Doctor</button>
+      <button class="secondary" data-cmd="copyContext">Copy Context</button>
+      <button class="secondary" data-cmd="settings">Settings</button>
+      <button class="secondary" data-cmd="logs">Logs</button>
+    </div>
+    <div class="status-grid">
+      <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp · internal only</code>
+      <b>Auth</b><code>${esc(data.auth?.required ? 'token required' : 'disabled')}</code>
+      <b>Permissions</b><code>${esc(data.permissions?.profile || 'fullAccess')}</code>
+      <b>Last preflight</b><code>${esc(data.connection?.lastPreflightAt ? `${data.connection.lastPreflightAt} ${data.connection.lastPublicHost || ''}` : 'not recorded')}</code>
+      <b>Start command</b><code>${esc(startCommandProcess ? 'running' : (String(cfg().get('defaultStartCommand') || '').trim() || 'not configured'))}</code>
+    </div>
+  </details>
+  <details>
+    <summary>Reference projects</summary>
+    <div class="section">
     <div class="input-row">
       <input id="referenceInput" placeholder="Folder path or https://github.com/owner/repo">
       <button data-cmd="addReferenceInput">Add</button>
@@ -1091,13 +1109,13 @@ function panelHtml(ctx, webview){
         <button class="secondary danger" data-cmd="clearReferences">Clear All References</button>
       </div>
     </details>
-  </div>
+    </div>
+  </details>
   <details>
     <summary>Workspace state</summary>
     <p class="muted">DevMate keeps one writable active workspace. Add other projects as readonly references.</p>
     <pre>${esc(JSON.stringify(workspaceState,null,2))}</pre>
   </details>
-  <p class="flow muted">Daily flow: open project -> <b>Start</b> -> paste URL into ChatGPT App -> say “使用 DevMate，完成这个开发任务”。</p>
   <script nonce="${n}">
   const vscode=acquireVsCodeApi();
   document.addEventListener('click', event => {
@@ -1125,6 +1143,7 @@ function openPanel(ctx){
     if(m.cmd==='stop') await lifecycleOperations.run('stop',()=>stopAll());
     if(m.cmd==='restart') await lifecycleOperations.run('restart',()=>restartAll(ctx));
     if(m.cmd==='doctor') await doctor(ctx);
+    if(m.cmd==='connectionSetup') await vscode.commands.executeCommand('devMate.connectionSetup');
     if(m.cmd==='addReference') await addReference(ctx);
     if(m.cmd==='addReferenceInput') await addReferenceInput(ctx, m.value);
     if(m.cmd==='addReferenceClipboard') await addReferenceFromClipboard(ctx);
@@ -1196,14 +1215,18 @@ function activate(context){
 
   log(`Activated DevMate ${VERSION}`);
 }
-function deactivate(){
+function deactivate({preserveSession=false}={}){
   if(contextWriteTimer) clearTimeout(contextWriteTimer);
   contextWriteTimer=null;
   return lifecycleOperations.run('deactivate',async()=>{
-    const stopped = await stopAll();
-    const disposed = await gatewayController?.dispose({stopOwned:tunnelAllowsGatewayShutdown(stopped?.tunnel)});
+    const stopped = preserveSession
+      ? {ok:false,detached:true,reason:'host-deactivation-preserves-shared-session'}
+      : await stopAll();
+    const disposed = await gatewayController?.dispose({stopOwned:!preserveSession && tunnelAllowsGatewayShutdown(stopped?.tunnel)});
     if(disposed?.disposed === false){
-      log(`Gateway controller could not be disposed cleanly: ${disposed.reason || 'unknown error'}`);
+      log(preserveSession
+        ? `Detached from the shared Gateway during host shutdown: ${disposed.reason || 'still-owned'}.`
+        : `Gateway controller could not be disposed cleanly: ${disposed.reason || 'unknown error'}`);
     } else {
       gatewayController = null;
       gatewayControllerKey = '';

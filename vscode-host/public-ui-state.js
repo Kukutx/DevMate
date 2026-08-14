@@ -1,6 +1,7 @@
 'use strict';
 
 const { verifiedForCurrentRecord } = require('../shared/public-ingress-verification.cjs');
+const { publicConnectionStability } = require('../shared/connection-stability.cjs');
 const { tunnelProvider: validateTunnelProvider } = require('./tunnel-settings.js');
 
 function connectionProvider(config, fallback = 'ngrok') {
@@ -20,25 +21,41 @@ function publicUiState(config, tunnelStatus = null, { runtimeError = '', gateway
   const provider = connectionProvider(config);
   const record = tunnelStatus?.record || null;
   const publicUrl = String(record?.publicUrl || tunnelStatus?.publicUrl || '').trim();
+  const stability = publicConnectionStability({
+    provider,
+    publicUrl: String(config?.connection?.publicUrl || '').trim()
+  });
   const verified = !!record && verifiedForCurrentRecord(config, record, gatewayLock);
   const failure = currentFailure(config, record);
 
   if (verified) {
-    return { state: 'verified', provider: record.provider || provider, publicUrl, verified: true, failure: '', record, tunnel: tunnelStatus };
+    return { state: 'verified', provider: record.provider || provider, publicUrl, stability, verified: true, failure: '', record, tunnel: tunnelStatus };
   }
   if (record?.status === 'ready' && publicUrl && failure) {
-    return { state: 'failed', provider: record.provider || provider, publicUrl, verified: false, failure, record, tunnel: tunnelStatus };
+    return {
+      state: config?.connection?.lastErrorKind === 'temporary-network' ? 'recovering' : 'failed',
+      provider: record.provider || provider,
+      publicUrl,
+      verified: false,
+      failure,
+      failureCode: String(config?.connection?.lastErrorCode || ''),
+      failureKind: String(config?.connection?.lastErrorKind || ''),
+      stability,
+      record,
+      tunnel: tunnelStatus
+    };
   }
   if (record?.status === 'ready' && publicUrl) {
-    return { state: 'unverified', provider: record.provider || provider, publicUrl, verified: false, failure: '', record, tunnel: tunnelStatus };
+    return { state: 'unverified', provider: record.provider || provider, publicUrl, stability, verified: false, failure: '', record, tunnel: tunnelStatus };
   }
   if (record?.status === 'pending' || tunnelStatus?.running) {
-    return { state: 'pending', provider: record?.provider || tunnelStatus?.provider || provider, publicUrl: '', verified: false, failure: '', record, tunnel: tunnelStatus };
+    return { state: 'pending', provider: record?.provider || tunnelStatus?.provider || provider, publicUrl: '', stability, verified: false, failure: '', record, tunnel: tunnelStatus };
   }
   return {
     state: runtimeError ? 'unavailable' : 'absent',
     provider,
     publicUrl: '',
+    stability,
     verified: false,
     failure: runtimeError ? String(runtimeError) : '',
     record,
@@ -49,6 +66,7 @@ function publicUiState(config, tunnelStatus = null, { runtimeError = '', gateway
 function statusLabel(state, gateway = null) {
   if (state?.state === 'verified') return 'DevMate: ready';
   if (state?.state === 'failed') return 'DevMate: public check failed';
+  if (state?.state === 'recovering') return 'DevMate: reconnecting';
   if (state?.state === 'unverified') return 'DevMate: public check pending';
   if (state?.state === 'pending') return 'DevMate: tunnel starting';
   if (gateway?.state === 'running') return `DevMate: gateway :${gateway.port}`;

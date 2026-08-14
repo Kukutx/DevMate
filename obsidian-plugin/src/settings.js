@@ -3,7 +3,9 @@
 const { Notice, PluginSettingTab, Setting } = require('obsidian');
 const { normalizeNgrokUrl, validateAuthtoken } = require('../../ngrok-support.js');
 const { normalizePublicOrigin } = require('../../host/public-mcp.js');
+const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { PROVIDERS, tunnelMaxRestarts, tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
+const { cloudflaredInstallCommand, installCloudflared } = require('../../vscode-host/tunnel-executable.js');
 const { encryptSecret, encryptionAvailable } = require('./secret-store.js');
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -130,11 +132,12 @@ class DevMateSettingTab extends PluginSettingTab {
         }));
 
     const connection = this.plugin.connectionConfiguration();
-    const provider = tunnelProvider(connection.provider || 'ngrok');
+    const provider = tunnelProvider(connection.provider || 'cloudflare-quick');
+    const stability = publicConnectionStability({ provider, publicUrl: connection.publicUrl || '' });
 
     new Setting(containerEl)
       .setName('Connection provider')
-      .setDesc('The shared HTTPS provider used by this DevMate instance. Changing it does not change DevMate features or access capabilities.')
+      .setDesc('The shared HTTPS provider used by this DevMate instance. Cloudflare Quick is a one-click session share; persistent ChatGPT apps need an account-owned stable HTTPS origin.')
       .addDropdown(dropdown => {
         for (const value of PROVIDERS) dropdown.addOption(value, value);
         return dropdown
@@ -150,7 +153,7 @@ class DevMateSettingTab extends PluginSettingTab {
         .setName(provider === 'ngrok' ? 'Stable ngrok URL' : 'Public HTTPS URL')
         .setDesc(provider === 'external'
           ? 'Required HTTPS origin for the external ingress.'
-          : 'Optional stable HTTPS origin. Leave empty when the provider can publish its own endpoint.')
+          : 'Required for a persistent ChatGPT app. Leave empty only when the provider publishes a session-only endpoint.')
         .addText(text => text
           .setPlaceholder('https://devmate.example.com')
           .setValue(connection.publicUrl || '')
@@ -167,6 +170,10 @@ class DevMateSettingTab extends PluginSettingTab {
             }
           }));
     }
+
+    new Setting(containerEl)
+      .setName('ChatGPT app address')
+      .setDesc(stability.message);
 
     if (provider === 'ngrok') {
       new Setting(containerEl)
@@ -213,6 +220,29 @@ class DevMateSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.plugin.scheduleReconfigure();
           }));
+
+      const installer = cloudflaredInstallCommand();
+      const install = new Setting(containerEl)
+        .setName('cloudflared helper')
+        .setDesc(installer
+          ? `Install or repair cloudflared automatically with ${installer.label}.`
+          : 'Install cloudflared once, then DevMate finds it automatically.');
+      if (installer) install.addButton(button => button
+        .setButtonText('Install automatically')
+        .onClick(async () => {
+          button.setDisabled(true);
+          try {
+            const result = await installCloudflared();
+            new Notice(result.ok ? 'cloudflared is installed. DevMate will use it automatically.' : 'cloudflared installation failed. Open the install guide for details.');
+            if (result.ok) this.plugin.scheduleReconfigure();
+          } finally {
+            button.setDisabled(false);
+          }
+        }));
+      install.addExtraButton(button => button
+        .setIcon('external-link')
+        .setTooltip('Open cloudflared install guide')
+        .onClick(() => window.open('https://developers.cloudflare.com/tunnel/setup/')));
     }
 
     if (provider === 'cloudflare-managed') {

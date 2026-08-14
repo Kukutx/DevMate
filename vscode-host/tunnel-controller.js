@@ -109,7 +109,7 @@ function providerStartupError(provider, rawOutput, child, { timeoutMs = 0, secre
       message = `ngrok authentication failed${classified.code ? ` (${classified.code})` : ''}. Configure DevMate ngrok credentials or fix the machine ngrok configuration/environment.`;
     } else if (classified?.kind === 'endpoint-conflict') {
       code = 'DEVMATE_NGROK_ENDPOINT_CONFLICT';
-      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}. Stop the old endpoint in the ngrok dashboard, then click Start again. The local Gateway remains available for retry. Do not enable pooling unless every endpoint intentionally serves this same DevMate instance.`;
+      message = `ngrok endpoint is already online${classified.code ? ` (${classified.code})` : ''}. DevMate leaves that existing session untouched. Use an account-owned endpoint for this machine or correct the local ngrok configuration, then retry. Do not enable pooling unless every endpoint intentionally serves this same DevMate instance.`;
     } else if (classified?.kind === 'domain') {
       code = 'DEVMATE_NGROK_DOMAIN';
       message = `ngrok could not use the configured stable URL/domain${classified.code ? ` (${classified.code})` : ''}. Verify that the URL belongs to the active ngrok account.`;

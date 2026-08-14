@@ -2,9 +2,63 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { execFile, spawnSync } = require('node:child_process');
 
 const resolutionCache = new Map();
+
+function clearTunnelExecutableCache(name = '') {
+  const prefix = String(name || '').trim();
+  if (!prefix) {
+    resolutionCache.clear();
+    return;
+  }
+  for (const key of resolutionCache.keys()) {
+    if (key.includes(`:${prefix}:`)) resolutionCache.delete(key);
+  }
+}
+
+function cloudflaredInstallCommand(platform = process.platform, spawnSyncImpl = spawnSync) {
+  const available = (command, args) => {
+    const result = spawnSyncImpl(command, args, { encoding: 'utf8', windowsHide: true });
+    return !result.error && result.status === 0;
+  };
+  if (platform === 'win32' && available('winget.exe', ['--version'])) {
+    return {
+      command: 'winget.exe',
+      args: ['install', '--id', 'Cloudflare.cloudflared', '--exact', '--accept-source-agreements', '--accept-package-agreements'],
+      label: 'winget'
+    };
+  }
+  if (platform === 'darwin' && available('brew', ['--version'])) {
+    return { command: 'brew', args: ['install', 'cloudflared'], label: 'Homebrew' };
+  }
+  return null;
+}
+
+function installCloudflared({
+  platform = process.platform,
+  spawnSyncImpl = spawnSync,
+  execFileImpl = execFile,
+  timeoutMs = 180000
+} = {}) {
+  const installer = cloudflaredInstallCommand(platform, spawnSyncImpl);
+  if (!installer) return Promise.resolve({ ok: false, reason: 'automatic-install-unavailable' });
+  return new Promise(resolve => {
+    execFileImpl(installer.command, installer.args, {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: Math.max(30000, Number(timeoutMs) || 180000),
+      maxBuffer: 2 * 1024 * 1024
+    }, (error, stdout, stderr) => {
+      clearTunnelExecutableCache('cloudflared');
+      resolve({
+        ok: !error,
+        installer: installer.label,
+        output: String(stdout || stderr || error?.message || '').trim()
+      });
+    });
+  });
+}
 
 function windowsCandidates(name, env = process.env) {
   const executable = `${name}.exe`;
@@ -47,4 +101,10 @@ function resolveTunnelExecutable(name, configuredPath = '', {
   return resolved;
 }
 
-module.exports = { resolveTunnelExecutable, windowsCandidates };
+module.exports = {
+  clearTunnelExecutableCache,
+  cloudflaredInstallCommand,
+  installCloudflared,
+  resolveTunnelExecutable,
+  windowsCandidates
+};

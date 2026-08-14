@@ -21,11 +21,13 @@ test('VS Code entry initializes shared instance config before the provider-nativ
   assert.match(source, /ensureSharedDesktopConfig/);
   assert.match(source, /ensureInstanceConfig\(\{/);
   assert.match(source, /preferredPort: strictPort\(setting\(vscode, 'port', 8787\), \{ label: 'devMate\.port' \}\)/);
+  assert.match(source, /defaultConnectionProvider: 'cloudflare-quick'/);
   assert.doesNotMatch(source, /normalizeBootstrapDeployment/);
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
 
   const sharedConfig = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
-  assert.match(sharedConfig, /connection: \{ provider: 'ngrok', publicUrl: '' \}/);
+  assert.match(sharedConfig, /connection: \{ provider, publicUrl: '' \}/);
+  assert.match(sharedConfig, /defaultConnectionProvider = 'ngrok'/);
 
   const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
   assert.match(effective, /validateTunnelProvider/);

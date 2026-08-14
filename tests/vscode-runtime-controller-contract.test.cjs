@@ -17,7 +17,7 @@ test('actual VS Code Start and Stop use the shared RuntimeController', () => {
   assert.match(source, /gatewayController = new RuntimeController\(/);
   assert.match(source, /const result = await controller\.start\(\{timeoutMs:20000\}\)/);
   assert.match(source, /const result = await gatewayController\.stop\(\)/);
-  assert.match(source, /await gatewayController\?\.dispose\(\{stopOwned:tunnelAllowsGatewayShutdown\(stopped\?\.tunnel\)\}\)/);
+  assert.match(source, /await gatewayController\?\.dispose\(\{stopOwned:!preserveSession && tunnelAllowsGatewayShutdown\(stopped\?\.tunnel\)\}\)/);
   assert.doesNotMatch(source, /function spawnNode\(/);
   assert.doesNotMatch(source, /gatewayProcess\s*=\s*spawnNode\(/);
 });
@@ -32,6 +32,16 @@ test('VS Code Stop preserves the Gateway while public connection ownership is re
   assert.ok(safetyGate >= 0 && gatewayStop > safetyGate);
   assert.match(block, /tunnelState\.remoteOwner[\s\S]*preserved-for-remote-public-connection/);
   assert.match(block, /return \{ok:false,sharedStillActive:true,gateway:\{stopped:false,reason\},tunnel,startCommand\}/);
+});
+
+test('VS Code host shutdown detaches by default and reserves explicit Stop for user intent', () => {
+  const start = source.indexOf('function deactivate({preserveSession=false}={})');
+  const end = source.indexOf('function runtimeDiagnostics()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /host-deactivation-preserves-shared-session/);
+  assert.match(block, /stopOwned:!preserveSession && tunnelAllowsGatewayShutdown/);
+  assert.doesNotMatch(block, /const stopped = await stopAll\(\);/);
 });
 
 test('failed Start preserves a newly owned Gateway for diagnostics, retry, or an attached public connection', () => {

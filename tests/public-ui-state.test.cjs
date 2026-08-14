@@ -53,6 +53,8 @@ test('only the current verified generation is presented as ready', () => {
   assert.equal(state.state, 'verified');
   assert.equal(state.verified, true);
   assert.equal(state.publicUrl, 'https://current.example.com');
+  assert.equal(state.stability.kind, 'temporary');
+  assert.equal(state.stability.chatgptEligible, false);
   assert.equal(statusLabel(state), 'DevMate: ready');
 });
 
@@ -75,6 +77,17 @@ test('only errors recorded after the current readyAt mark that generation as fai
   assert.equal(failed.state, 'failed');
   assert.equal(failed.failure, 'current failure');
   assert.equal(statusLabel(failed), 'DevMate: public check failed');
+
+  const recoveringConfig = config({ connection: {
+    lastError: 'timeout',
+    lastErrorAt: '2026-08-08T01:00:02.000Z',
+    lastErrorCode: 'ETIMEDOUT',
+    lastErrorKind: 'temporary-network'
+  } });
+  const recovering = publicUiState(recoveringConfig, { running: true, publicUrl: record.publicUrl, record });
+  assert.equal(recovering.state, 'recovering');
+  assert.equal(recovering.failureCode, 'ETIMEDOUT');
+  assert.equal(statusLabel(recovering), 'DevMate: reconnecting');
 });
 
 test('provider pending and absent states never expose a stale public URL', () => {

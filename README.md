@@ -44,14 +44,14 @@ See [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) for all presets and options.
 
 ## VS Code desktop setup
 
-If ngrok is already installed and configured normally on the machine, the normal path is simply:
+The normal desktop path is:
 
 1. Open a project.
 2. Run `DevMate: Start` — or leave the default auto-start enabled.
 3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, runs MCP `initialize` + `tools/list`, reaches Ready, and copies the verified HTTPS `/mcp` URL.
-4. Add that URL to ChatGPT and configure the bearer credential once with `DevMate: Copy Bearer Token` when the connector requires it.
+4. Add that URL to ChatGPT. If the chosen client supports bearer credentials, configure it once with `DevMate: Copy Bearer Token`.
 
-`DevMate: Connection Setup` is a **one-time provider/account configuration** action when the default machine ngrok configuration is not what you want. It supports `ngrok`, `cloudflare-quick`, `cloudflare-managed`, and an existing external HTTPS ingress. DevMate-managed ngrok and managed Cloudflare credentials are stored in VS Code Secret Storage; external ingress requires no tunnel credential.
+Fresh desktop instances use Cloudflare Quick Tunnel because it needs no account. It is a verified, one-click **session share**, not a persistent ChatGPT app address: its TryCloudflare hostname can change whenever that provider generation changes. For a persistent ChatGPT app, run `DevMate: Connection Setup` once and use an account-owned stable HTTPS origin with ngrok, a managed Cloudflare tunnel, or existing HTTPS ingress. If `cloudflared` is missing, VS Code Connection Setup and the Obsidian settings page offer a one-click `winget`/Homebrew install when the platform supports it. DevMate-managed credentials are stored in host secure storage.
 
 Routine Start never requires a separate tunnel-start or verification command. The endpoint URL never contains credentials. DevMate accepts MCP credentials only from request headers, so do not append `?token=...` to the URL. See [`docs/TUNNELS.md`](docs/TUNNELS.md).
 
@@ -60,6 +60,8 @@ Routine Start never requires a separate tunnel-start or verification command. Th
 DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins.
 
 Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → MCP preflight → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
+
+VS Code and Obsidian also share one generation-scoped public verification. They do not compete with duplicate startup probes; a temporary edge timeout keeps the current URL alive while automatic recovery continues. Ready evidence is periodically refreshed so a process that is still running cannot hide a remote endpoint failure indefinitely.
 
 The host also provides incremental note queries, Property schema audits, public-API note mutations, and preview/apply/rollback Property batches.
 

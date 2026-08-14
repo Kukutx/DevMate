@@ -7,6 +7,7 @@ const { ensureInstanceConfig, readJson } = require('./shared/config-store.cjs');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { strictPort } = require('./shared/port.cjs');
+const { publicConnectionStability } = require('./shared/connection-stability.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
@@ -71,7 +72,8 @@ function ensureSharedDesktopConfig(stateDirectory) {
     configFile,
     workspaceRoot,
     preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
-    appVersion: VERSION
+    appVersion: VERSION,
+    defaultConnectionProvider: 'cloudflare-quick'
   });
   return configFile;
 }
@@ -146,8 +148,17 @@ function createPublicVerifier() {
     onConfigurationConflict: async () => stopConfigurationConflict(),
     onVerified: async result => {
       if (!result.changedHost) return;
+      const config = readJson(path.join(runtimeStateDirectory, 'config.json'), null, { strict: true, supportedVersion: true });
+      const stability = publicConnectionStability({
+        provider: config?.connection?.provider || 'cloudflare-quick',
+        publicUrl: config?.connection?.publicUrl || ''
+      });
+      if (!stability.chatgptEligible) {
+        log(`DevMate recovered a new ${stability.kind} public endpoint (${result.publicHost}). ${stability.message}`);
+        return;
+      }
       const choice = await vscode.window.showWarningMessage(
-        `DevMate recovered a new verified public endpoint (${result.publicHost}). Update the ChatGPT MCP connection to the new URL.`,
+        `DevMate recovered a new verified public endpoint (${result.publicHost}). The configured persistent ChatGPT app address is ${stability.publicUrl}.`,
         'Copy MCP URL',
         'Open DevMate'
       );

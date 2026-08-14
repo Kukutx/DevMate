@@ -17,7 +17,7 @@ test('real VS Code Start returns the Ready evidence required by automatic lifecy
   const block = extension.slice(start, end);
 
   assert.match(block, /return \{ok:true,[^\n]*mcpUrl:test\.mcpUrl,[^\n]*toolCount:test\.toolCount/);
-  assert.match(block, /if\(!quiet\) vscode\.window\.showErrorMessage/);
+  assert.match(block, /if\(!quiet\)\{[\s\S]*vscode\.window\.showErrorMessage/);
   assert.match(lifecycle, /commandResult = await this\.vscode\.commands\.executeCommand\('devMate\.start', \{ quiet: true \}\)/);
   assert.match(lifecycle, /!commandResult\?\.mcpUrl/);
   assert.match(lifecycle, /!Number\.isInteger\(Number\(commandResult\?\.toolCount\)\)/);
@@ -27,7 +27,7 @@ test('real VS Code Start returns the Ready evidence required by automatic lifecy
 test('automatic lifecycle reaches Ready from one command instead of invoking setup substeps', () => {
   const lifecycle = source('vscode-host/lifecycle.js');
   const start = lifecycle.indexOf('async startAutomatically(');
-  const end = lifecycle.indexOf('async deactivate()', start);
+  const end = lifecycle.indexOf('async deactivate({ preserveSession = true } = {})', start);
   assert.ok(start >= 0 && end > start);
   const block = lifecycle.slice(start, end);
   assert.equal((block.match(/executeCommand\('devMate\.start'/g) || []).length, 1);

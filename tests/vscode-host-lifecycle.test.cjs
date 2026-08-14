@@ -99,3 +99,26 @@ test('activates in manual mode with child-process runtime diagnostics and cleans
   assert.equal(deactivateCalls, 1);
   assert.equal(harness.lifecycle.active, false);
 });
+
+test('normal VS Code host shutdown preserves the shared DevMate session', async () => {
+  let deactivationOptions = null;
+  const platform = {
+    async activate() {},
+    async deactivate(options) { deactivationOptions = options; }
+  };
+  const harness = createHarness({ platform });
+  await harness.lifecycle.activate(harness.context);
+  await harness.lifecycle.deactivate();
+  assert.deepEqual(deactivationOptions, { preserveSession: true });
+});
+
+test('activation rollback still requests a full platform cleanup', async () => {
+  let deactivationOptions = null;
+  const platform = {
+    async activate() { throw new Error('synthetic activation failure'); },
+    async deactivate(options) { deactivationOptions = options; }
+  };
+  const harness = createHarness({ platform });
+  await assert.rejects(harness.lifecycle.activate(harness.context), /synthetic activation failure/);
+  assert.deepEqual(deactivationOptions, { preserveSession: false });
+});

@@ -69,7 +69,7 @@ test('Obsidian is a first-class owner or attacher of the same provider-native sh
 test('normal Obsidian UI presents Ready as one product state', () => {
   const view = source('obsidian-plugin/src/view.js');
   assert.match(view, /action\('Start'/);
-  assert.match(view, /action\('Stop'/);
+  assert.match(view, /moreAction\('Stop'/);
   assert.match(view, /action\('Restart'/);
   assert.match(view, /action\('Copy MCP URL'/);
 });

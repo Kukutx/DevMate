@@ -23,8 +23,8 @@ test('connection URLs never embed owner credentials and VS Code delegates authen
     assert.doesNotMatch(source, /searchParams\.set\('token'/);
     assert.doesNotMatch(source, /\?token=/);
   }
-  assert.match(extension, /const \{ preflightPublicMcp \} = require\('\.\/host\/public-mcp\.js'\)/);
-  assert.match(extension, /return preflightPublicMcp\(\{/);
+  assert.match(extension, /const \{ verifySharedPublicMcp \} = require\('\.\/host\/shared-public-mcp-verification\.js'\)/);
+  assert.match(extension, /return verifySharedPublicMcp\(\{/);
   assert.match(publicMcp, /preflightPublicMcp/);
   assert.match(publicMcp, /method: 'tools\/list'/);
 });

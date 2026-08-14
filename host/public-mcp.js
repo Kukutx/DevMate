@@ -199,6 +199,35 @@ function transientPublicMcpError(error) {
   return /\b(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|ENOTFOUND)\b|socket hang up|timed?\s*out|error code:\s*1033/i.test(detail);
 }
 
+function publicMcpErrorKind(error) {
+  const status = Number(error?.response?.status || 0);
+  if (status === 401 || status === 403) return 'authentication';
+  if (status === 404) return 'wrong-endpoint';
+  if (status >= 500 && status <= 599) return 'temporary-network';
+  if (error?.code === 'DEVMATE_PUBLIC_MCP_STALE_GENERATION') return 'stale-generation';
+  if (error?.code === 'DEVMATE_STARTUP_LEASE_TIMEOUT') return 'temporary-network';
+  return transientPublicMcpError(error) ? 'temporary-network' : 'protocol';
+}
+
+function connectionErrorSummary(error) {
+  const code = String(error?.code || '');
+  if (code.includes('PUBLIC_MCP') || error?.response) return publicMcpErrorSummary(error);
+  const message = String(error?.message || error || '').replace(/\s+/g, ' ').trim();
+  if (code === 'ENOENT' || /(?:not found|not recognized|cannot find).*(?:ngrok|cloudflared)|spawn .* ENOENT/i.test(message)) {
+    return 'The selected connection helper is not installed. Open Connection Setup for the one-time install/configuration step.';
+  }
+  return message.length > 260 ? `${message.slice(0, 257)}...` : message || 'DevMate could not start the connection. Copy diagnostics for details.';
+}
+
+function publicMcpErrorSummary(error) {
+  const kind = publicMcpErrorKind(error);
+  if (kind === 'temporary-network') return 'The public endpoint is still becoming reachable. DevMate kept it running and will retry automatically.';
+  if (kind === 'authentication') return 'The public endpoint rejected DevMate authentication. Check the connection token setting.';
+  if (kind === 'wrong-endpoint') return 'The public URL does not point to the DevMate MCP endpoint.';
+  if (kind === 'stale-generation') return 'The connection changed while it was being checked. DevMate will verify the current connection.';
+  return 'The public endpoint responded, but the MCP handshake was invalid. Copy diagnostics for details.';
+}
+
 function retryDelay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -272,9 +301,10 @@ async function preflightPublicMcpOnce({
 }
 
 async function preflightPublicMcp(options = {}) {
-  const readyTimeoutMs = Math.max(0, Math.min(30000, Number(options.readyTimeoutMs) || 0));
+  const readyTimeoutMs = Math.max(0, Math.min(90000, Number(options.readyTimeoutMs) || 0));
   const retryDelayMs = Math.max(100, Math.min(2000, Number(options.retryDelayMs) || 500));
   const deadline = Date.now() + readyTimeoutMs;
+  let attempt = 0;
   while (true) {
     if (typeof options.shouldContinue === 'function' && options.shouldContinue() !== true) {
       const error = new Error('Public MCP verification became stale before the endpoint was ready');
@@ -286,7 +316,8 @@ async function preflightPublicMcp(options = {}) {
     } catch (error) {
       const remaining = deadline - Date.now();
       if (!readyTimeoutMs || remaining <= 0 || !transientPublicMcpError(error)) throw error;
-      await retryDelay(Math.min(retryDelayMs, remaining));
+      const backoff = Math.min(2000, retryDelayMs * (2 ** Math.min(3, attempt++)));
+      await retryDelay(Math.min(backoff, remaining));
     }
   }
 }
@@ -296,11 +327,14 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   MCP_PATH,
   MCP_PROTOCOL_VERSION,
+  connectionErrorSummary,
   mcpUrlFor,
   normalizePublicOrigin,
   parseJsonPayload,
   postJson,
   preflightPublicMcp,
+  publicMcpErrorKind,
+  publicMcpErrorSummary,
   publicEndpointLookup,
   redactUrl,
   requestRaw,

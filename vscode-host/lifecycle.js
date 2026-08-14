@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
+const { connectionErrorSummary } = require('../host/public-mcp.js');
 const { VscodeRuntimeDiagnostics } = require('./runtime-diagnostics.js');
 const {
   createRuntimeContext,
@@ -44,7 +45,7 @@ class VscodeHostLifecycle {
     try {
       return await this.activating;
     } catch (error) {
-      try { await this.deactivate(); } catch {}
+      try { await this.deactivate({ preserveSession: false }); } catch {}
       throw error;
     } finally {
       this.activating = null;
@@ -60,7 +61,8 @@ class VscodeHostLifecycle {
         configFile: runtimeConfigPath(this.runtimeContext),
         workspaceRoot: this.workspaceRootAtActivation,
         preferredPort: Number(setting(this.vscode, 'port', 8787)),
-        appVersion: context.extension?.packageJSON?.version || APP_VERSION
+        appVersion: context.extension?.packageJSON?.version || APP_VERSION,
+        defaultConnectionProvider: 'cloudflare-quick'
       });
     }
 
@@ -184,8 +186,13 @@ class VscodeHostLifecycle {
       return { cancelled: true, reason: 'host-deactivating' };
     }
     if (commandResult?.ok === false) {
-      const error = new Error(commandResult.error || 'DevMate start command reported failure');
+      if (commandResult.recovering) {
+        this.diagnostics?.append('The public endpoint is still becoming reachable; background verification will continue without replacing the URL.');
+        return commandResult;
+      }
+      const error = new Error(commandResult.summary || connectionErrorSummary(commandResult.error) || 'DevMate start command reported failure');
       error.code = commandResult.code || 'DEVMATE_VSCODE_START_COMMAND_FAILED';
+      error.detail = commandResult.error || '';
       throw error;
     }
     if (!commandResult?.mcpUrl || !Number.isInteger(Number(commandResult?.toolCount)) || Number(commandResult.toolCount) <= 0) {
@@ -205,7 +212,7 @@ class VscodeHostLifecycle {
   async handleStartupFailure(error, generation = this.lifecycleGeneration) {
     if (!this.active || generation !== this.lifecycleGeneration || this.deactivating) return;
     this.diagnostics?.recordFailure(error, { phase: 'automatic-start' });
-    const detail = error?.message || String(error);
+    const detail = connectionErrorSummary(error);
     const choice = await this.vscode.window.showErrorMessage(
       `DevMate could not reach Ready state: ${detail}`,
       'Copy diagnostics',
@@ -238,7 +245,7 @@ class VscodeHostLifecycle {
     this.output?.show(true);
   }
 
-  async deactivate() {
+  async deactivate({ preserveSession = true } = {}) {
     if (this.deactivating) return this.deactivating;
     this.deactivating = (async () => {
       this.active = false;
@@ -247,7 +254,7 @@ class VscodeHostLifecycle {
       this.startupTimer = null;
       let platformResult = null;
       try {
-        if (this.platformActivationAttempted) platformResult = await this.platformExtension.deactivate();
+        if (this.platformActivationAttempted) platformResult = await this.platformExtension.deactivate({ preserveSession });
       } finally {
         this.platformActivationAttempted = false;
         this.platformActivated = false;

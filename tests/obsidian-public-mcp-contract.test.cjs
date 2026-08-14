@@ -21,20 +21,22 @@ test('Obsidian Start owns the same complete Gateway to verified Ready lifecycle 
   assert.match(block, /mcpUrl: preflight\.mcpUrl/);
   assert.match(block, /toolCount: preflight\.toolCount/);
   assert.match(block, /this\.sessionRequested = true/);
-  assert.match(block, /if \(tunnel\?\.owned\)[\s\S]*this\.tunnelController\.stop\(\)/);
+  assert.match(block, /if \(tunnel\?\.owned && !recovering\)[\s\S]*this\.tunnelController\.stop\(\)/);
   assert.match(block, /if \(gateway\?\.started && gateway\?\.owned\)[\s\S]*keeping the local Gateway available for diagnostics and retry/);
   assert.doesNotMatch(block, /if \(gateway\?\.started && gateway\?\.owned[\s\S]*this\.controller\.stop\(\)/);
 });
 
 test('Obsidian Ready is tied to the current complete Gateway+tunnel generation rather than URL equality', () => {
   const main = source('obsidian-plugin/src/main.js');
+  const shared = source('host/shared-public-mcp-verification.js');
   assert.match(main, /recordGeneration/);
   assert.match(main, /verifiedForCurrentRecord/);
-  assert.match(main, /successfulVerificationPatch/);
+  assert.match(main, /verifySharedPublicMcp/);
+  assert.match(main, /publicConnectionStability/);
   assert.match(main, /const generation = recordGeneration\(initialRecord\)/);
-  assert.match(main, /recordGeneration\(currentRecord\) !== generation/);
-  assert.match(main, /successfulVerificationPatch\(test, normalized, stamp, initialRecord\)/);
-  assert.match(main, /verifiedForCurrentRecord\(persisted, persistedRecord\)/);
+  assert.match(main, /expectedRecord: initialRecord/);
+  assert.match(shared, /successfulVerificationPatch\(test, publicUrl, stamp, record, currentGatewayLock\(\)\)/);
+  assert.match(shared, /recordGeneration\(record\) !== generation/);
   assert.match(main, /const verified = !!tunnel\.record && verifiedForCurrentRecord\(config, tunnel\.record\)/);
   assert.doesNotMatch(main, /lastVerifiedPublicUrl\s*===\s*tunnel\.publicUrl/);
 });
@@ -84,8 +86,9 @@ test('Obsidian never shuts down the Gateway while public connection shutdown is 
   const unloadStart = main.indexOf('async onunload()');
   const unloadEnd = main.indexOf('async saveSettings()', unloadStart);
   const unload = main.slice(unloadStart, unloadEnd);
-  assert.match(unload, /const releaseGateway = tunnelAllowsGatewayShutdown\(tunnel\)/);
-  assert.match(unload, /dispose\(\{ stopOwned: releaseGateway \}\)/);
+  assert.match(unload, /dispose\(\{ stopOwned: false \}\)/);
+  assert.match(unload, /Detached from the shared public connection during Obsidian shutdown/);
+  assert.doesNotMatch(unload, /tunnelController\?\.stop\(\)/);
 });
 
 test('Obsidian automatic URL copy is convenience after Ready, not a required Start stage', () => {
@@ -119,6 +122,7 @@ test('Obsidian uses provider-native shared connection ownership with secure opti
   const build = source('obsidian-plugin/esbuild.config.mjs');
   assert.match(main, /TunnelController/);
   assert.match(settings, /Connection provider/);
+  assert.match(settings, /persistent ChatGPT apps need an account-owned stable HTTPS origin/);
   assert.match(settings, /ngrokAuthtokenEncrypted/);
   assert.match(settings, /cloudflareTunnelTokenEncrypted/);
   assert.match(settings, /OS-backed Electron safe storage API/);
@@ -130,7 +134,7 @@ test('Obsidian uses provider-native shared connection ownership with secure opti
 test('Obsidian normal panel exposes one user-facing Ready state, not internal transport layers', () => {
   const view = source('obsidian-plugin/src/view.js');
   assert.match(view, /action\('Start'/);
-  assert.match(view, /action\('Stop'/);
+  assert.match(view, /moreAction\('Stop'/);
   assert.match(view, /action\('Restart'/);
   assert.match(view, /action\('Copy MCP URL'/);
   assert.doesNotMatch(view, /Public MCP|Public connection|Public ingress|Internal Gateway|Verification|internal only/);

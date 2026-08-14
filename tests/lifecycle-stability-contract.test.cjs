@@ -17,9 +17,10 @@ test('VS Code Stop and teardown preserve Gateway whenever public connection rele
   const gatewayStop = stop.indexOf('stopGatewayProcess()');
   assert.ok(publicGate >= 0 && gatewayStop > publicGate, 'Gateway shutdown must remain after the public connection safety gate');
 
-  const deactivateStart = extension.indexOf('function deactivate()');
+  const deactivateStart = extension.indexOf('function deactivate({preserveSession=false}={})');
   const deactivate = extension.slice(deactivateStart);
-  assert.match(deactivate, /dispose\(\{stopOwned:tunnelAllowsGatewayShutdown\(stopped\?\.tunnel\)\}\)/);
+  assert.match(deactivate, /host-deactivation-preserves-shared-session/);
+  assert.match(deactivate, /dispose\(\{stopOwned:!preserveSession && tunnelAllowsGatewayShutdown\(stopped\?\.tunnel\)\}\)/);
   assert.match(deactivate, /if\(disposed\?\.disposed === false\)/);
 });
 
