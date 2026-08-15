@@ -42,11 +42,12 @@ test('redacts quoted key-value secrets without leaking trailing words', () => {
   assert.equal((redacted.match(/redacted/g) || []).length, 3);
 });
 
-test('redacts sensitive URL query parameter variants', () => {
+test('redacts sensitive URL query parameter variants exactly', () => {
   const input = 'https://example.test/callback?access_token=access-secret&client_secret=client-secret&mode=safe';
-  const redacted = redactSensitiveString(input);
-  assert.doesNotMatch(redacted, /access-secret|client-secret/);
-  assert.match(redacted, /mode=safe/);
+  assert.equal(
+    redactSensitiveString(input),
+    'https://example.test/callback?access_token=redacted&client_secret=redacted&mode=safe'
+  );
 });
 
 test('does not redact ordinary CLI option values', () => {
