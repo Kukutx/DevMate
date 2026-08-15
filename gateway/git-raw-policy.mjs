@@ -15,12 +15,33 @@ const BLOCKED_COMMANDS = new Set([
   'worktree'
 ]);
 
+const PATH_VALUE_OPTIONS = Object.freeze([
+  '--directory',
+  '--output',
+  '--output-directory',
+  '--prefix'
+]);
+
+function pathValueEscapesWorkspace(value) {
+  const text = String(value || '').trim().replace(/\\/g, '/');
+  if (!text) return false;
+  if (/^file:\/\//i.test(text)) return true;
+  if (/^[a-z]:/i.test(text) || text.startsWith('/')) return true;
+  const normalized = path.posix.normalize(text);
+  return normalized === '..' || normalized.startsWith('../');
+}
+
 function localPathEscape(value) {
   const text = String(value || '').trim();
   if (!text) return false;
-  if (path.isAbsolute(text)) return true;
-  const normalized = text.replace(/\\/g, '/');
-  return normalized === '..' || normalized.startsWith('../') || /^file:\/\//i.test(normalized);
+  if (pathValueEscapesWorkspace(text)) return true;
+  const lower = text.toLowerCase();
+  for (const option of PATH_VALUE_OPTIONS) {
+    const prefix = `${option}=`;
+    if (lower.startsWith(prefix)) return pathValueEscapesWorkspace(text.slice(prefix.length));
+  }
+  if (/^-o.+/i.test(text)) return pathValueEscapesWorkspace(text.slice(2));
+  return false;
 }
 
 export function assertGitRawWorkspaceBound(args = []) {
@@ -49,4 +70,4 @@ export function assertGitRawWorkspaceBound(args = []) {
   return values;
 }
 
-export const __test = { BLOCKED_COMMANDS, BLOCKED_GLOBAL_FLAGS, localPathEscape };
+export const __test = { BLOCKED_COMMANDS, BLOCKED_GLOBAL_FLAGS, PATH_VALUE_OPTIONS, localPathEscape, pathValueEscapesWorkspace };
