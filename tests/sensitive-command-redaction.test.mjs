@@ -24,14 +24,28 @@ test('redacts sensitive CLI flags with space, equals, quoted, and hyphenated nam
 });
 
 test('redacts bearer headers before generic authorization handling', () => {
+  assert.equal(
+    redactSensitiveString('Authorization: Bearer abc.def-123'),
+    'Authorization: Bearer redacted'
+  );
   for (const input of [
-    'Authorization: Bearer abc.def-123',
     'authorization=Bearer abcdef123',
     'prefix Bearer standalone-token suffix'
   ]) {
     const redacted = redactSensitiveString(input);
-    assert.doesNotMatch(redacted, /abc\.def-123|abcdef123|standalone-token/);
+    assert.doesNotMatch(redacted, /abcdef123|standalone-token/);
     assert.match(redacted, /redacted/);
+  }
+});
+
+test('sensitive string redaction is idempotent', () => {
+  for (const input of [
+    'Authorization: Bearer abc.def-123',
+    'tool --client-secret="quoted secret value" --mode safe',
+    'https://example.test/callback?access_token=access-secret&client_secret=client-secret&mode=safe'
+  ]) {
+    const once = redactSensitiveString(input);
+    assert.equal(redactSensitiveString(once), once);
   }
 });
 
