@@ -81,6 +81,36 @@ test('blocks high-risk operations for member tokens even under full local access
   assert.throws(() => authorizeToolCall({ name: 'git_push', annotations: { destructiveHint: true }, args: { workspaceId: 'app', forceWithLease: true }, config: current, principal: maintainer }), /Force push/);
 });
 
+test('structured Git fields cannot smuggle options or force refspecs for Team tokens', () => {
+  const current = normalizeInstanceConfig(config());
+  const maintainer = { id: 'm', name: 'Maintainer', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
+  const base = { annotations: { destructiveHint: true }, config: current, principal: maintainer };
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: '--force', branch: 'main' } }),
+    /cannot smuggle options or force refspecs/
+  );
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: 'origin', branch: '+main' } }),
+    /cannot smuggle options or force refspecs/
+  );
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'git_save', args: { workspaceId: 'app', push: true, remote: 'origin', branch: '+main' } }),
+    /cannot smuggle options or force refspecs/
+  );
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'git_pull', args: { workspaceId: 'app', remote: '--rebase', branch: 'main' } }),
+    /cannot smuggle options or force refspecs/
+  );
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'git_checkout', args: { workspaceId: 'app', branch: '--detach' } }),
+    /checkout targets cannot be option-like/
+  );
+  assert.equal(
+    authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: 'origin', branch: 'main' } }).capability,
+    'publish'
+  );
+});
+
 test('classifies queue and Runner administration without implicit workspace scope', () => {
   const current = normalizeInstanceConfig(config());
   assert.equal(requiredCapabilityForTool('job_submit', { destructiveHint: true }, {}), 'validate');
