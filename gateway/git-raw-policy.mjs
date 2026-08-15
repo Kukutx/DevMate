@@ -5,13 +5,21 @@ const BLOCKED_GLOBAL_FLAGS = new Set([
   '--config-env',
   '--exec-path',
   '--git-dir',
-  '--work-tree'
+  '--work-tree',
+  '--unsafe-paths'
 ]);
 
 const BLOCKED_COMMANDS = new Set([
   'clone',
   'config',
+  'credential',
+  'credential-cache',
+  'credential-store',
+  'daemon',
+  'http-push',
   'init',
+  'send-pack',
+  'shell',
   'worktree'
 ]);
 
@@ -62,9 +70,9 @@ export function assertGitRawWorkspaceBound(args = []) {
   }
   const command = values.find(value => !value.startsWith('-'))?.toLowerCase() || '';
   if (BLOCKED_COMMANDS.has(command)) {
-    throw new Error(`git_raw command is not allowed because it can target state outside the current workspace: ${command}`);
+    throw new Error(`git_raw command is not allowed because it can escape the workspace, expose credentials, or bypass DevMate publish controls: ${command}`);
   }
-  if (command === 'config' || values.includes('--global') || values.includes('--system')) {
+  if (values.includes('--global') || values.includes('--system')) {
     throw new Error('git_raw cannot modify Git configuration outside the current repository');
   }
   return values;
