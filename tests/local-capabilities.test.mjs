@@ -147,8 +147,25 @@ test('persistent-process limits and dangerous command classification are bounded
     maxProcesses: 32,
     outputBytes: 65536
   });
-  assert.equal(shared.isDangerousCommand('git reset --hard'), true);
-  assert.equal(shared.isDangerousCommand('npm run dev'), false);
+  for (const command of [
+    'git reset --hard',
+    'git reset --soft HEAD~1',
+    'git restore .',
+    'git checkout -- file.txt',
+    'git checkout -B reset-branch',
+    'git branch -D old-branch',
+    'git switch -C reset-branch',
+    'git push origin --delete old-branch',
+    'git push --mirror origin'
+  ]) assert.equal(shared.isDangerousCommand(command), true, command);
+  for (const command of [
+    'npm run dev',
+    'git status --short',
+    'git switch -c feature/safe',
+    'git checkout -b feature/safe-2',
+    'git branch -d merged-branch',
+    'git clean -n'
+  ]) assert.equal(shared.isDangerousCommand(command), false, command);
   assert.equal(shared.redactSensitiveString('token=placeholder-value'), 'token=redacted');
 });
 
