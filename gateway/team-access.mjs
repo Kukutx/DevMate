@@ -227,8 +227,10 @@ export function currentTeamPrincipal(principal, config) {
 function dangerousGitPush(value) {
   if (!/\bgit\s+push\b/.test(value)) return false;
   return /(?:^|\s)-f(?:\s|$)/.test(value) ||
-    /(?:^|\s)--force(?:-with-lease)?(?:=\S+)?(?:\s|$)/.test(value) ||
-    /(?:^|\s)\+[^\s]+/.test(value);
+    /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)--(?:delete|mirror|prune)(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)\+[^\s]+/.test(value) ||
+    /\s:[^\s]+/.test(value);
 }
 
 function dangerousCommand(command) {
@@ -237,7 +239,7 @@ function dangerousCommand(command) {
     /\bremove-item\b.*\b-recurse\b.*\b-force\b/.test(value) ||
     /\brmdir\b.*\s\/s\b/.test(value) || /\bdel\b.*\s\/s\b/.test(value) ||
     /\bformat\b\s+[a-z]:/.test(value) || /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(value) ||
-    /\bgit\s+reset\b.*--hard\b/.test(value) || /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(value) ||
+    /\bgit\s+reset\b/.test(value) || /\bgit\s+clean\b/.test(value) ||
     dangerousGitPush(value);
 }
 
@@ -248,18 +250,32 @@ function structuredGitOperandUnsafe(value, { forceRefspec = false } = {}) {
   return text.startsWith('-') || (forceRefspec && text.startsWith('+'));
 }
 
+function structuredGitBranchUnsafe(value) {
+  if (value === undefined || value === null) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  if (structuredGitOperandUnsafe(text, { forceRefspec: true })) return true;
+  if (text === '@' || text.startsWith('/') || text.endsWith('/') || text.endsWith('.') || text.includes('..') || text.includes('//') || text.includes('@{')) return true;
+  const forbidden = new Set([' ', '~', '^', ':', '?', '*', '[', '\\']);
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (code < 32 || code === 127 || forbidden.has(char)) return true;
+  }
+  return text.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.lock'));
+}
+
 function assertStructuredGitOperands(name, args = {}) {
   const pushOrPull = name === 'git_push' || name === 'git_pull' || (name === 'git_save' && args?.push);
   if (pushOrPull) {
-    if (structuredGitOperandUnsafe(args?.remote, { forceRefspec: true }) || structuredGitOperandUnsafe(args?.branch, { forceRefspec: true })) {
+    if (structuredGitOperandUnsafe(args?.remote, { forceRefspec: true }) || structuredGitBranchUnsafe(args?.branch)) {
       throw new Error('Structured Git remote/branch fields cannot smuggle options or force refspecs');
     }
   }
-  if (name === 'git_branch' && structuredGitOperandUnsafe(args?.name)) {
-    throw new Error('Structured Git branch names cannot be option-like');
+  if (name === 'git_branch' && structuredGitBranchUnsafe(args?.name)) {
+    throw new Error('Structured Git branch names cannot be option-like or refspec-like');
   }
-  if (name === 'git_checkout' && structuredGitOperandUnsafe(args?.branch)) {
-    throw new Error('Structured Git checkout targets cannot be option-like');
+  if (name === 'git_checkout' && structuredGitBranchUnsafe(args?.branch)) {
+    throw new Error('Structured Git checkout targets cannot be option-like or refspec-like');
   }
 }
 
@@ -276,6 +292,23 @@ function assertStructuredToolInputs(name, args = {}) {
   assertStructuredProjectScript(name, args);
 }
 
+function rawGitHighRisk(values, command) {
+  if (command === 'reset' || command === 'clean' || command === 'restore') return true;
+  if (command === 'checkout' && values.includes('--')) return true;
+  if (command === 'switch' && values.some(value => value === '-f' || value === '--force' || value === '--discard-changes')) return true;
+  if (command === 'branch') {
+    const forcedDelete = values.includes('-D') ||
+      (values.some(value => value === '-d' || value === '--delete') && values.some(value => value === '-f' || value === '--force'));
+    if (forcedDelete) return true;
+  }
+  if (command !== 'push') return false;
+  return values.includes('-f') ||
+    values.some(value => /^--force(?:-with-lease|-if-includes)?(?:=|$)/.test(value)) ||
+    values.some(value => /^--(?:delete|mirror|prune)(?:=|$)/.test(value)) ||
+    values.some(value => value.startsWith('+') && value.length > 1) ||
+    values.some(value => /^:[^:]/.test(value));
+}
+
 function assertTeamOperationSafety(name, args, principal) {
   if (principal?.source !== 'team-token') return;
   if ((name === 'run_command' || name === 'start_process') && dangerousCommand(args?.command)) {
@@ -290,12 +323,7 @@ function assertTeamOperationSafety(name, args, principal) {
   if (name === 'git_raw') {
     const values = (args?.args || []).map(value => String(value).toLowerCase());
     const command = values.find(value => !value.startsWith('-')) || '';
-    const forcePush = command === 'push' && (
-      values.includes('-f') ||
-      values.some(value => /^--force(?:-with-lease)?(?:=|$)/.test(value)) ||
-      values.some(value => value.startsWith('+') && value.length > 1)
-    );
-    if ((command === 'reset' && values.includes('--hard')) || command === 'clean' || forcePush) {
+    if (rawGitHighRisk(values, command)) {
       throw new Error('High-risk raw Git operations require the owner role');
     }
   }
@@ -328,8 +356,10 @@ export const __test = {
   dangerousCommand,
   hashSecret,
   parseTeamToken,
+  rawGitHighRisk,
   requiredCapabilityForTool,
   scopedWorkspaceIds,
+  structuredGitBranchUnsafe,
   structuredGitOperandUnsafe,
   timingSafeEqualText,
   toolWorkspaceId,
