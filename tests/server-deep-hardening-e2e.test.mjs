@@ -71,6 +71,12 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   await fsp.mkdir(path.join(workspace, 'credentials'), { recursive: true });
   await fsp.writeFile(path.join(workspace, 'credentials', 'secret.txt'), 'hidden-needle\n', 'utf8');
   await fsp.writeFile(path.join(workspace, 'MixedCase.txt'), 'NeedleToken\n', 'utf8');
+  await fsp.writeFile(path.join(workspace, 'Player.gd'), 'extends Node\nconst GODOT_NEEDLE = "godot-text-needle"\n', 'utf8');
+  await fsp.writeFile(path.join(workspace, 'scene.tscn'), '[gd_scene format=3]\n', 'utf8');
+  const binaryAsset = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]);
+  await fsp.writeFile(path.join(workspace, 'image.png'), binaryAsset);
+  await fsp.mkdir(path.join(workspace, '.godot'), { recursive: true });
+  await fsp.writeFile(path.join(workspace, '.godot', 'internal.cfg'), 'cache-secret-needle\n', 'utf8');
   await fsp.writeFile(path.join(outside, 'outside-agents.md'), 'outside-instruction-secret\n', 'utf8');
 
   let directoryAliasCreated = false;
@@ -176,6 +182,55 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   assertToolSuccess(literalSearch, 'case-insensitive literal search');
   assert.ok(literalSearch.data?.results?.some(item => item.file === 'MixedCase.txt'), literalSearch.text);
 
+  const godotRead = await rpc('tools/call', { name: 'read_file', arguments: { workspaceId: 'app', path: 'Player.gd' } });
+  assertToolSuccess(godotRead, 'GDScript read');
+  assert.match(godotRead.data?.text || '', /godot-text-needle/);
+
+  const godotSearch = await rpc('tools/call', {
+    name: 'search_text',
+    arguments: { workspaceId: 'app', query: 'godot-text-needle' }
+  });
+  assertToolSuccess(godotSearch, 'GDScript search');
+  assert.ok(godotSearch.data?.results?.some(item => item.file === 'Player.gd'), godotSearch.text);
+
+  const fileList = await rpc('tools/call', {
+    name: 'list_files',
+    arguments: { workspaceId: 'app', subpath: '.', depth: 2, maxResults: 200 }
+  });
+  assertToolSuccess(fileList, 'Godot file listing');
+  const listedPaths = fileList.data?.items?.map(item => item.path) || [];
+  assert.ok(listedPaths.includes('Player.gd'), fileList.text);
+  assert.ok(listedPaths.includes('scene.tscn'), fileList.text);
+  assert.equal(listedPaths.some(item => item.startsWith('.godot/')), false, fileList.text);
+
+  const godotWrite = await rpc('tools/call', {
+    name: 'apply_patch',
+    arguments: { workspaceId: 'app', path: 'Player.gd', oldText: 'godot-text-needle', newText: 'godot-text-updated' }
+  });
+  assertToolSuccess(godotWrite, 'GDScript patch');
+  assert.match(await fsp.readFile(path.join(workspace, 'Player.gd'), 'utf8'), /godot-text-updated/);
+
+  const binaryWrite = await rpc('tools/call', {
+    name: 'write_file',
+    arguments: { workspaceId: 'app', path: 'image.png', content: 'not-a-png' }
+  });
+  assertToolError(binaryWrite, 'binary write protection');
+  assert.deepEqual(await fsp.readFile(path.join(workspace, 'image.png')), binaryAsset);
+
+  const binaryPatch = await rpc('tools/call', {
+    name: 'apply_patch',
+    arguments: { workspaceId: 'app', path: 'image.png', oldText: 'PNG', newText: 'BAD' }
+  });
+  assertToolError(binaryPatch, 'binary patch protection');
+  assert.deepEqual(await fsp.readFile(path.join(workspace, 'image.png')), binaryAsset);
+
+  const binaryCreate = await rpc('tools/call', {
+    name: 'create_file',
+    arguments: { workspaceId: 'app', path: 'new-image.png', content: 'not-a-png' }
+  });
+  assertToolError(binaryCreate, 'binary create protection');
+  assert.equal(fs.existsSync(path.join(workspace, 'new-image.png')), false);
+
   if (outsideInstructionAliasCreated) {
     const instructions = await rpc('tools/call', { name: 'project_instructions', arguments: { workspaceId: 'app' } });
     assertToolSuccess(instructions, 'project_instructions');
@@ -203,4 +258,11 @@ test('status panel keeps complete HTML entity escaping', async () => {
   const source = await fsp.readFile(new URL('../gateway/server.mjs', import.meta.url), 'utf8');
   assert.match(source, /'"':'&quot;'/, 'double quotes must use the complete &quot; entity');
   assert.doesNotMatch(source, /'"':'&quot'(?=,)/, 'unterminated &quot entity regression');
+});
+
+test('server package scripts execute through explicit package-manager argv', async () => {
+  const source = await fsp.readFile(new URL('../gateway/server.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const command = `\$\{pm\} run \$\{script\}`/);
+  assert.match(source, /execProcess\(pm,\['run',script\],\{cwd:dir,\.\.\.limits,shell:false\}\)/);
+  assert.match(source, /const command = `\$\{pm\} run \$\{name\}`/);
 });
