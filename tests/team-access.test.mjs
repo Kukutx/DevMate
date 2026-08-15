@@ -82,6 +82,24 @@ test('blocks high-risk operations for member tokens even under full local access
   assert.throws(() => authorizeToolCall({ name: 'git_push', annotations: { destructiveHint: true }, args: { workspaceId: 'app', forceWithLease: true }, config: current, principal: maintainer }), /Force push/);
 });
 
+test('Team shell Git safety blocks force-reset forms but keeps normal branch workflows', () => {
+  const current = normalizeInstanceConfig(config());
+  const maintainer = { id: 'm', name: 'Maintainer', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
+  const request = command => authorizeToolCall({
+    name: 'run_command',
+    annotations: { destructiveHint: true },
+    args: { workspaceId: 'app', command },
+    config: current,
+    principal: maintainer
+  });
+  for (const command of ['git switch -c feature/safe', 'git checkout -b feature/safe-2', 'git branch -d merged-branch']) {
+    assert.equal(request(command).capability, 'execute', command);
+  }
+  for (const command of ['git switch -C feature/reset', 'git checkout -B feature/reset', 'git branch -D old-branch']) {
+    assert.throws(() => request(command), /high-risk/, command);
+  }
+});
+
 test('structured Git fields cannot smuggle options or destructive refspecs', () => {
   const current = normalizeInstanceConfig(config());
   const maintainer = { id: 'm', name: 'Maintainer', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
