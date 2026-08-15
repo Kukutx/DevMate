@@ -73,17 +73,23 @@ function publishTemporaryTunnel(publicUrl = 'https://temporary.trycloudflare.com
   return record;
 }
 
+function verifiedEvidence(publicUrl) {
+  return {
+    publicOrigin: publicUrl,
+    toolCount: 10,
+    toolCallVerified: true,
+    probeTool: 'gateway_status',
+    server: { name: 'devmate' }
+  };
+}
+
 function markPreflight(config, record, overrides = {}) {
   const stamp = new Date(Date.parse(record.readyAt) + 1000).toISOString();
-  const evidence = successfulVerificationPatch({
-    publicOrigin: record.publicUrl,
-    toolCount: 10,
-    server: { name: 'devmate' }
-  }, record.publicUrl, stamp, record);
+  const evidence = successfulVerificationPatch(verifiedEvidence(record.publicUrl), record.publicUrl, stamp, record);
   config.connection = { ...config.connection, ...evidence, ...overrides };
 }
 
-test('dynamic public connection is not Ready until the current Gateway+tunnel session passes MCP preflight', () => {
+test('dynamic public connection is not Ready until the current Gateway+tunnel session passes MCP tool-call preflight', () => {
   clearRuntime();
   const config = baseConfig();
   const record = publishTemporaryTunnel();
@@ -110,6 +116,10 @@ test('stale or mismatched preflight cannot validate the current desktop session'
   markPreflight(config, record, { lastPublicHost: 'wrong.example.com' });
   assert.equal(runtimePublicIngress(config, { stateDirectory: temp }).verified, false);
   markPreflight(config, record, { lastServerName: 'not-devmate' });
+  assert.equal(runtimePublicIngress(config, { stateDirectory: temp }).verified, false);
+  markPreflight(config, record, { lastToolCallVerified: false });
+  assert.equal(runtimePublicIngress(config, { stateDirectory: temp }).verified, false);
+  markPreflight(config, record, { lastProbeTool: 'wrong-tool' });
   assert.equal(runtimePublicIngress(config, { stateDirectory: temp }).verified, false);
 });
 
@@ -156,7 +166,7 @@ test('explicit Host allowlist validates the effective verified URL', () => {
   assert.equal(teamToolDataTest.allowedPublicHost(config, ingress), false);
 });
 
-test('managed stable URL requires its own preflight and cannot borrow temporary-session evidence', () => {
+test('managed stable URL requires its own tool-call preflight and cannot borrow temporary-session evidence', () => {
   clearRuntime();
   const config = baseConfig('cloudflare-managed', 'https://prod.example.com');
   const record = publishTemporaryTunnel('https://production-temp.trycloudflare.com');
@@ -171,11 +181,7 @@ test('managed stable URL requires its own preflight and cannot borrow temporary-
   const stamp = new Date().toISOString();
   config.connection = {
     ...config.connection,
-    ...successfulVerificationPatch({
-      publicOrigin: 'https://prod.example.com',
-      toolCount: 10,
-      server: { name: 'devmate' }
-    }, 'https://prod.example.com', stamp)
+    ...successfulVerificationPatch(verifiedEvidence('https://prod.example.com'), 'https://prod.example.com', stamp)
   };
   const stable = effectivePublicIngress(config, { stateDirectory: temp });
   assert.equal(stable.source, 'configured');

@@ -10,9 +10,8 @@ const {
   transientPublicMcpError
 } = require('../host/public-mcp.js');
 
-test('public MCP preflight authenticates initialize and tools/list and carries the MCP session', async () => {
-  const calls = [];
-  const request = async (url, options) => {
+function successfulRequestRecorder(calls = []) {
+  return async (url, options) => {
     calls.push({ url: String(url), options });
     const payload = JSON.parse(options.body);
     if (payload.method === 'initialize') {
@@ -23,35 +22,70 @@ test('public MCP preflight authenticates initialize and tools/list and carries t
         body: '',
         json: {
           jsonrpc: '2.0',
-          id: 1,
-          result: { serverInfo: { name: 'devmate', version: '3.3.0' } }
+          id: payload.id,
+          result: { serverInfo: { name: 'devmate', version: '3.4.4' } }
         }
       };
     }
-    return {
-      ok: true,
-      status: 200,
-      headers: {},
-      body: '',
-      json: { jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'read_file' }] } }
-    };
+    if (payload.method === 'tools/list') {
+      return {
+        ok: true,
+        status: 200,
+        headers: {},
+        body: '',
+        json: { jsonrpc: '2.0', id: payload.id, result: { tools: [{ name: 'gateway_status' }, { name: 'read_file' }] } }
+      };
+    }
+    if (payload.method === 'tools/call' && payload.params?.name === 'gateway_status') {
+      return {
+        ok: true,
+        status: 200,
+        headers: {},
+        body: '',
+        json: { jsonrpc: '2.0', id: payload.id, result: { structuredContent: { name: 'devmate', version: '3.4.4' } } }
+      };
+    }
+    throw new Error(`Unexpected MCP request: ${options.body}`);
   };
+}
 
+test('public MCP preflight authenticates initialize, tools/list, and a real tools/call probe', async () => {
+  const calls = [];
   const result = await preflightPublicMcp({
     publicUrl: 'https://example.ngrok-free.app',
     token: 'owner-secret',
-    clientVersion: '3.3.0',
-    request
+    clientVersion: '3.4.4',
+    request: successfulRequestRecorder(calls)
   });
 
   assert.equal(result.mcpUrl, 'https://example.ngrok-free.app/mcp');
-  assert.equal(result.toolCount, 1);
+  assert.equal(result.toolCount, 2);
   assert.equal(result.sessionId, 'session-123');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].options.headers.authorization, 'Bearer owner-secret');
-  assert.equal(calls[1].options.headers.authorization, 'Bearer owner-secret');
+  assert.equal(result.toolCallVerified, true);
+  assert.equal(result.probeTool, 'gateway_status');
+  assert.equal(calls.length, 3);
+  for (const call of calls) assert.equal(call.options.headers.authorization, 'Bearer owner-secret');
   assert.equal(calls[1].options.headers['mcp-session-id'], 'session-123');
+  assert.equal(calls[2].options.headers['mcp-session-id'], 'session-123');
   assert.equal(calls[1].options.headers['mcp-protocol-version'], '2025-03-26');
+  assert.equal(calls[2].options.headers['mcp-protocol-version'], '2025-03-26');
+});
+
+test('public MCP preflight rejects handshake-only endpoints whose tool call is broken', async () => {
+  const request = async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    if (payload.method === 'initialize') {
+      return { ok: true, status: 200, headers: {}, body: '', json: { result: { serverInfo: { name: 'devmate' } } } };
+    }
+    if (payload.method === 'tools/list') {
+      return { ok: true, status: 200, headers: {}, body: '', json: { result: { tools: [{ name: 'gateway_status' }] } } };
+    }
+    return { ok: true, status: 200, headers: {}, body: '', json: { result: { isError: true, content: [{ type: 'text', text: 'broken tool execution' }] } } };
+  };
+  await assert.rejects(
+    preflightPublicMcp({ publicUrl: 'https://broken.example', request }),
+    error => error.code === 'DEVMATE_PUBLIC_MCP_TOOL_CALL_FAILED'
+  );
 });
 
 test('public MCP URL accepts only a clean HTTPS origin', () => {
@@ -78,7 +112,10 @@ test('public MCP preflight retries only transient tunnel propagation failures', 
     if (payload.method === 'initialize') {
       return { ok: true, status: 200, headers: {}, body: '', json: { result: { serverInfo: { name: 'devmate' } } } };
     }
-    return { ok: true, status: 200, headers: {}, body: '', json: { result: { tools: [] } } };
+    if (payload.method === 'tools/list') {
+      return { ok: true, status: 200, headers: {}, body: '', json: { result: { tools: [{ name: 'gateway_status' }] } } };
+    }
+    return { ok: true, status: 200, headers: {}, body: '', json: { result: { structuredContent: { name: 'devmate' } } } };
   };
   const result = await preflightPublicMcp({
     publicUrl: 'https://eventual.trycloudflare.com',
@@ -87,6 +124,7 @@ test('public MCP preflight retries only transient tunnel propagation failures', 
     retryDelayMs: 100
   });
   assert.equal(result.server.name, 'devmate');
+  assert.equal(result.toolCallVerified, true);
   assert.equal(attempts, 3);
   assert.equal(transientPublicMcpError({ response: { status: 401 } }), false);
   assert.equal(transientPublicMcpError({ response: { error: 'getaddrinfo ENOTFOUND edge.example' } }), true);

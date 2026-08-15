@@ -1,10 +1,10 @@
-
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { activeCommandProcessCount, executeCommand } from '../gateway/command-process.mjs';
+import { activeCommandProcessCount, commandEnvironment, executeCommand } from '../gateway/command-process.mjs';
 
 test('normal commands preserve bounded output and exit metadata', async () => {
   const result = await executeCommand(process.execPath, ['-e', "process.stdout.write('abcdef')"], {
@@ -15,6 +15,53 @@ test('normal commands preserve bounded output and exit metadata', async () => {
   assert.equal(result.timedOut, false);
   assert.equal(result.stdout, 'cdef');
   assert.equal(result.stdoutTruncated, true);
+});
+
+test('Git commands are forced non-interactive because MCP commands have no stdin', () => {
+  for (const command of [
+    'git',
+    'git.exe',
+    '/usr/bin/git',
+    'C:\\Program Files\\Git\\cmd\\git.exe',
+    'git push origin master',
+    '"C:\\Program Files\\Git\\cmd\\git.exe" push origin master'
+  ]) {
+    const env = commandEnvironment(command, {
+      PATH: process.env.PATH || '',
+      GIT_TERMINAL_PROMPT: '1',
+      GCM_INTERACTIVE: 'Always'
+    });
+    assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+    assert.equal(env.GCM_INTERACTIVE, 'Never');
+  }
+  const nodeEnv = commandEnvironment(process.execPath, { SAMPLE: 'kept' });
+  assert.equal(nodeEnv.SAMPLE, 'kept');
+  assert.equal(nodeEnv.GIT_TERMINAL_PROMPT, undefined);
+  assert.equal(nodeEnv.GCM_INTERACTIVE, undefined);
+});
+
+test('Git HTTP credential challenges fail promptly instead of hanging an MCP tool call', async t => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(401, {
+      'www-authenticate': 'Basic realm="DevMate Git test"',
+      'content-type': 'text/plain'
+    });
+    res.end('credentials required');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+
+  const started = Date.now();
+  const result = await executeCommand('git', ['ls-remote', `http://127.0.0.1:${port}/repo.git`], {
+    timeoutMs: 5000,
+    maxOutputChars: 4000
+  });
+  const elapsed = Date.now() - started;
+
+  assert.equal(result.timedOut, false, result.stderr);
+  assert.notEqual(result.exitCode, 0, result.stderr);
+  assert.ok(elapsed < 4500, `credential failure took ${elapsed}ms and approached the command timeout`);
 });
 
 test('timeout terminates the complete owned process tree', async () => {

@@ -27,8 +27,20 @@ function config(preflightAt = '2026-08-08T01:00:01.000Z') {
       lastPublicHost: 'stable.example.com',
       lastMcpPath: '/mcp',
       lastToolCount: 25,
+      lastToolCallVerified: true,
+      lastProbeTool: 'gateway_status',
       lastServerName: 'devmate'
     }
+  };
+}
+
+function verifiedTestResult(publicUrl) {
+  return {
+    publicOrigin: publicUrl,
+    toolCount: 25,
+    toolCallVerified: true,
+    probeTool: 'gateway_status',
+    server: { name: 'devmate' }
   };
 }
 
@@ -50,15 +62,12 @@ test('ownership takeover creates a distinct generation even when URL and ready t
 
 test('new verification evidence binds to the exact tunnel generation', () => {
   const first = record('2026-08-08T01:00:00.000Z');
-  const testResult = {
-    publicOrigin: first.publicUrl,
-    toolCount: 25,
-    server: { name: 'devmate' }
-  };
   const current = {
-    connection: successfulVerificationPatch(testResult, first.publicUrl, '2026-08-08T01:00:01.000Z', first)
+    connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first)
   };
   assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
+  assert.equal(current.connection.lastToolCallVerified, true);
+  assert.equal(current.connection.lastProbeTool, 'gateway_status');
   assert.equal(verifiedForCurrentRecord(current, first), true);
 
   const takeover = record('2026-08-08T01:00:00.000Z', { ownerId: 'owner-b' });
@@ -67,13 +76,8 @@ test('new verification evidence binds to the exact tunnel generation', () => {
 
 test('same tunnel process requires a fresh preflight when Gateway generation changes', () => {
   const first = record('2026-08-08T01:00:00.000Z', { gatewayGeneration: 'gateway-a' });
-  const testResult = {
-    publicOrigin: first.publicUrl,
-    toolCount: 25,
-    server: { name: 'devmate' }
-  };
   const current = {
-    connection: successfulVerificationPatch(testResult, first.publicUrl, '2026-08-08T01:00:01.000Z', first)
+    connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first)
   };
   assert.equal(current.connection.lastGatewayGeneration, 'gateway-a');
   assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
@@ -90,13 +94,27 @@ test('runtime-enriched ready tunnel is never a valid generation when no live Gat
   assert.equal(verifiedForCurrentRecord(config(), missingGateway), false);
 });
 
+test('handshake-only evidence is invalid until a real MCP tool call succeeds', () => {
+  const current = record('2026-08-08T01:00:00.000Z');
+  const handshakeOnly = config();
+  delete handshakeOnly.connection.lastToolCallVerified;
+  delete handshakeOnly.connection.lastProbeTool;
+  assert.equal(verifiedForCurrentRecord(handshakeOnly, current), false);
+
+  const wrongProbe = config();
+  wrongProbe.connection.lastProbeTool = 'tools/list';
+  assert.equal(verifiedForCurrentRecord(wrongProbe, current), false);
+});
+
 test('matching host alone can never validate malformed or empty MCP evidence', () => {
   const current = record('2026-08-08T01:00:00.000Z');
   for (const connection of [
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 0, lastServerName: 'devmate' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/wrong', lastToolCount: 25, lastServerName: 'devmate' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastServerName: 'other' },
-    { lastPreflightAt: 'not-a-date', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastServerName: 'devmate' }
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 0, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/wrong', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'other' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: false, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'wrong', lastServerName: 'devmate' },
+    { lastPreflightAt: 'not-a-date', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' }
   ]) {
     assert.equal(verifiedForCurrentRecord({ connection }, current), false);
   }

@@ -76,7 +76,9 @@ function successfulTest(publicUrl, toolCount = 42) {
     publicOrigin: publicUrl,
     mcpUrl: `${publicUrl}/mcp`,
     toolCount,
-    server: { name: 'devmate', version: '3.3.0' }
+    toolCallVerified: true,
+    probeTool: 'gateway_status',
+    server: { name: 'devmate', version: '3.4.4' }
   };
 }
 
@@ -88,7 +90,7 @@ test('new Gateway+tunnel generation uses short-lived OAuth for preflight and ato
     const verifier = new PublicTunnelVerifier({
       stateDirectory: fx.stateDirectory,
       tunnelStatus: port => fx.status(port),
-      appVersion: '3.3.0',
+      appVersion: '3.4.4',
       readyGraceMs: 0,
       now: () => Date.parse('2026-08-08T01:01:00.000Z'),
       preflight: async input => {
@@ -115,6 +117,8 @@ test('new Gateway+tunnel generation uses short-lived OAuth for preflight and ato
     assert.equal(config.connection.lastPublicHost, 'new.example.com');
     assert.equal(config.connection.lastMcpPath, '/mcp');
     assert.equal(config.connection.lastToolCount, 42);
+    assert.equal(config.connection.lastToolCallVerified, true);
+    assert.equal(config.connection.lastProbeTool, 'gateway_status');
     assert.equal(config.connection.lastServerName, 'devmate');
     assert.equal(config.connection.lastError, '');
     assert.equal(config.connection.lastGatewayGeneration, gatewayGeneration(fx.writeGateway()));
@@ -347,6 +351,8 @@ test('already verified current Gateway+tunnel generation performs no duplicate n
     const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     assert.ok(persisted.connection.lastGatewayGeneration);
     assert.ok(persisted.connection.lastTunnelGeneration);
+    assert.equal(persisted.connection.lastToolCallVerified, true);
+    assert.equal(persisted.connection.lastProbeTool, 'gateway_status');
     assert.equal(config.instanceId, persisted.instanceId);
   } finally {
     fx.cleanup();

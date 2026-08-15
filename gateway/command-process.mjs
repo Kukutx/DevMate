@@ -5,6 +5,21 @@ import { requestSignal } from './request-context.mjs';
 const { runTaskkill: runBoundedTaskkill } = processTreeRuntime;
 const activeProcesses = new Set();
 
+function isGitCommand(command) {
+  const text = String(command || '').trim();
+  if (/(?:^|[\\/])git(?:\.exe)?$/i.test(text)) return true;
+  return /^(?:git(?:\.exe)?|"[^"\r\n]*[\\/]git(?:\.exe)?"|'[^'\r\n]*[\\/]git(?:\.exe)?')(?:\s|$)/i.test(text);
+}
+
+export function commandEnvironment(command, environment = null) {
+  const env = { ...(environment || process.env) };
+  if (isGitCommand(command)) {
+    env.GIT_TERMINAL_PROMPT = '0';
+    env.GCM_INTERACTIVE = 'Never';
+  }
+  return env;
+}
+
 function waitForExit(child) {
   if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ code: child.exitCode ?? null, signal: child.signalCode || null });
   return new Promise(resolve => {
@@ -81,7 +96,7 @@ export async function executeCommand(command, args = [], {
   if (signal?.aborted) throw cancellationError(signal);
   const child = spawn(command, args, {
     cwd,
-    env: environment || process.env,
+    env: commandEnvironment(command, environment),
     shell,
     windowsHide: true,
     detached: process.platform !== 'win32',

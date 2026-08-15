@@ -10,7 +10,7 @@ process.env.DEVMATE_CONFIG = configPath;
 
 const config = {
   version: 11,
-  appVersion: '3.3.0',
+  appVersion: '3.4.4',
   instanceId: 'runner-readiness-tests',
   auth: { required: true, token: 'owner-token-long-enough' },
   connection: {
@@ -20,6 +20,8 @@ const config = {
     lastPublicHost: 'devmate.example.com',
     lastMcpPath: '/mcp',
     lastToolCount: 10,
+    lastToolCallVerified: true,
+    lastProbeTool: 'gateway_status',
     lastServerName: 'devmate'
   },
   team: {
@@ -83,7 +85,7 @@ test('external-only execution requires an online external Runner after the publi
     capabilities: ['core', 'external'],
     workspaceIds: ['app'],
     maxConcurrent: 1,
-    version: '3.3.0',
+    version: '3.4.4',
     platform: 'linux',
     arch: 'x64',
     labels: { kind: 'external' }
