@@ -222,7 +222,7 @@ export function wrapAuthorizedTool(name, config, handler) {
         authorized.principal
       );
       const session = authorized.workspaceId
-        ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
+        ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true })
         : null;
       const workSessionId = session?.id || active?.id || null;
       const toolStatus = result?.isError === true ? 'error' : 'success';
