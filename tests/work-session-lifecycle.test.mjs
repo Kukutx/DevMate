@@ -1,24 +1,35 @@
 import assert from 'node:assert/strict';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
-import {
+
+const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-work-session-lifecycle-'));
+process.env.DEVMATE_CONFIG = path.join(temp, 'config.json');
+await fsp.writeFile(process.env.DEVMATE_CONFIG, JSON.stringify({ version: 11 }), 'utf8');
+
+const {
   acquireWorkspaceLease,
   clearWorkspaceLeases,
   workspaceLease
-} from '../gateway/workspace-leases.mjs';
-import {
+} = await import('../gateway/workspace-leases.mjs');
+const {
   clearWorkSessions,
   finishWorkSession,
   listWorkSessions,
   startWorkSession
-} from '../gateway/work-sessions.mjs';
+} = await import('../gateway/work-sessions.mjs');
 
 const alice = { id: 'alice', name: 'Alice', role: 'developer', workspaceIds: ['app'], source: 'team-token' };
 const bob = { id: 'bob', name: 'Bob', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
 
-test.afterEach(() => {
+function reset() {
   clearWorkSessions();
   clearWorkspaceLeases();
-});
+}
+
+test.beforeEach(reset);
+test.afterEach(reset);
 
 test('finishing a work session releases only its matching lease', () => {
   const session = startWorkSession({ principal: alice, workspaceId: 'app', ttlSeconds: 300 });
@@ -62,4 +73,10 @@ test('forced session cleanup never releases the maintainer takeover lease', () =
   assert.equal(result.lease?.reason, 'lease changed since session started');
   assert.deepEqual(workspaceLease('app'), takeover);
   assert.equal(listWorkSessions().length, 0);
+});
+
+test.after(async () => {
+  try { reset(); } catch {}
+  delete process.env.DEVMATE_CONFIG;
+  await fsp.rm(temp, { recursive: true, force: true });
 });
