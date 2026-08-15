@@ -1,4 +1,4 @@
-import { isLoopbackAddress } from './http-host-policy.mjs';
+import { isLocalRequest } from './http-host-policy.mjs';
 import { incrementCounter, observeDuration, renderPrometheusMetrics, setGauge } from './observability.mjs';
 
 const INSTALLED = Symbol.for('devmate.httpObservabilityInstalled');
@@ -10,7 +10,7 @@ function pathname(req) {
 }
 
 function isLocal(req) {
-  return isLoopbackAddress(req.socket?.remoteAddress);
+  return isLocalRequest(req);
 }
 
 function routeLabel(path) {
@@ -29,7 +29,7 @@ export function instrumentHttpListener(listener) {
     const path = pathname(req);
     if (path === '/control/metrics') {
       if (!isLocal(req)) {
-        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end('Forbidden');
         return;
       }
