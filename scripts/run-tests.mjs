@@ -25,6 +25,18 @@ function githubError(file, message) {
   console.error(`::error file=${annotationEscape(file)}::${annotationEscape(message)}`);
 }
 
+function failureNames(output) {
+  const names = [];
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const match = line.match(/^\s*[✖✗]\s+(.+?)(?:\s+\([\d.]+ms\))?\s*$/u);
+    if (!match) continue;
+    const name = match[1].trim();
+    if (name && !names.includes(name)) names.push(name);
+    if (names.length >= 5) break;
+  }
+  return names;
+}
+
 function discover(directory = testsRoot, output = []) {
   const entries = fs.readdirSync(directory, { withFileTypes: true })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -64,7 +76,9 @@ function diagnoseBatch(batch) {
     console.error(`\nFAIL: ${rel}`);
     if (result.stdout) process.stderr.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
-    githubError(rel, `Isolated test file failed with exit code ${result.status || 1}. See the Discovered unit and policy tests step for details.`);
+    const names = failureNames(`${result.stdout || ''}\n${result.stderr || ''}`);
+    const detail = names.length ? ` Failing test(s): ${names.join('; ')}.` : '';
+    githubError(rel, `Isolated test file failed with exit code ${result.status || 1}.${detail} See the Discovered unit and policy tests step for details.`);
   }
   if (!failures.length) {
     const message = 'The failed test batch passed file-by-file, indicating an inter-test or concurrency interaction.';
@@ -94,3 +108,5 @@ for (let index = 0; index < files.length; index += batchSize) {
 }
 
 console.log(`Passed ${files.length} discovered test files.`);
+
+export const __test = { annotationEscape, failureNames };
