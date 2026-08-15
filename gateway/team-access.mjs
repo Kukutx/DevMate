@@ -240,6 +240,9 @@ function dangerousCommand(command) {
     /\brmdir\b.*\s\/s\b/.test(value) || /\bdel\b.*\s\/s\b/.test(value) ||
     /\bformat\b\s+[a-z]:/.test(value) || /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(value) ||
     /\bgit\s+reset\b/.test(value) || /\bgit\s+clean\b/.test(value) ||
+    /\bgit\s+restore\b/.test(value) || /\bgit\s+checkout\b.*\s--(?:\s|$)/.test(value) ||
+    /\bgit\s+branch\b.*(?:\s-d(?:\s|$)|\s--delete(?:\s|$))/.test(value) ||
+    /\bgit\s+switch\b.*(?:\s-f(?:\s|$)|\s-c(?:\s|$)|\s--force(?:\s|$)|\s--discard-changes(?:\s|$))/.test(value) ||
     dangerousGitPush(value);
 }
 
@@ -292,14 +295,19 @@ function assertStructuredToolInputs(name, args = {}) {
   assertStructuredProjectScript(name, args);
 }
 
-function rawGitHighRisk(values, command) {
+function rawGitHighRisk(rawValues = []) {
+  const raw = rawValues.map(value => String(value));
+  const values = raw.map(value => value.toLowerCase());
+  const command = values.find(value => !value.startsWith('-')) || '';
   if (command === 'reset' || command === 'clean' || command === 'restore') return true;
   if (command === 'checkout' && values.includes('--')) return true;
-  if (command === 'switch' && values.some(value => value === '-f' || value === '--force' || value === '--discard-changes')) return true;
+  if (command === 'switch') {
+    if (raw.includes('-C')) return true;
+    if (values.some(value => value === '-f' || value === '--force' || value === '--discard-changes')) return true;
+  }
   if (command === 'branch') {
-    const forcedDelete = values.includes('-D') ||
-      (values.some(value => value === '-d' || value === '--delete') && values.some(value => value === '-f' || value === '--force'));
-    if (forcedDelete) return true;
+    if (raw.includes('-D')) return true;
+    if (values.some(value => value === '-d' || value === '--delete') && values.some(value => value === '-f' || value === '--force')) return true;
   }
   if (command !== 'push') return false;
   return values.includes('-f') ||
@@ -320,12 +328,8 @@ function assertTeamOperationSafety(name, args, principal) {
   if (name === 'git_branch' && args?.action === 'delete' && args?.force) {
     throw new Error('Forced branch deletion requires the owner role');
   }
-  if (name === 'git_raw') {
-    const values = (args?.args || []).map(value => String(value).toLowerCase());
-    const command = values.find(value => !value.startsWith('-')) || '';
-    if (rawGitHighRisk(values, command)) {
-      throw new Error('High-risk raw Git operations require the owner role');
-    }
+  if (name === 'git_raw' && rawGitHighRisk(args?.args || [])) {
+    throw new Error('High-risk raw Git operations require the owner role');
   }
 }
 
