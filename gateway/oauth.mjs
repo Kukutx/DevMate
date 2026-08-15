@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import tokens from '../shared/oauth-tokens.cjs';
 import authConfig from '../shared/auth-config.cjs';
 import { mutateConfig } from './local-shared.mjs';
+import { isLoopbackHostname } from './http-host-policy.mjs';
 
 const issuedCodes = new Map();
 const CLIENT_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -30,10 +31,12 @@ function formPage(parameters, error = '') {
 }
 
 function originFor(req) {
-  const forwarded = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
-  const protocol = forwarded === 'https' ? 'https' : 'http';
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const host = String(req.headers.host || '').split(',')[0].trim();
   if (!host || /[\s/\\@]/.test(host)) throw new Error('OAuth request has an invalid host');
+  let hostname;
+  try { hostname = new URL(`http://${host}`).hostname; }
+  catch { throw new Error('OAuth request has an invalid host'); }
+  const protocol = isLoopbackHostname(hostname) ? 'http' : 'https';
   return `${protocol}://${host}`;
 }
 
@@ -278,3 +281,5 @@ export async function handleOAuthRequest(req, res, url, config) {
   }
   return false;
 }
+
+export const __test = { originFor };
