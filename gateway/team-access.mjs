@@ -305,14 +305,17 @@ function rawGitHighRisk(rawValues = []) {
   const values = raw.map(value => value.toLowerCase());
   const command = values.find(value => !value.startsWith('-')) || '';
   if (command === 'reset' || command === 'clean' || command === 'restore') return true;
-  if (command === 'checkout' && values.includes('--')) return true;
+  if (command === 'checkout') {
+    if (values.includes('--') || raw.includes('-B')) return true;
+    if (values.some(value => value === '-f' || value === '--force')) return true;
+  }
   if (command === 'switch') {
     if (raw.includes('-C')) return true;
     if (values.some(value => value === '-f' || value === '--force' || value === '--discard-changes')) return true;
   }
   if (command === 'branch') {
-    if (raw.includes('-D')) return true;
-    if (values.some(value => value === '-d' || value === '--delete') && values.some(value => value === '-f' || value === '--force')) return true;
+    if (raw.some(value => ['-D', '-M', '-C'].includes(value))) return true;
+    if (values.some(value => value === '-f' || value === '--force')) return true;
   }
   if (command !== 'push') return false;
   return values.includes('-f') ||
