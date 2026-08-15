@@ -263,9 +263,21 @@ function assertStructuredGitOperands(name, args = {}) {
   }
 }
 
+function assertStructuredProjectScript(name, args = {}) {
+  if (name !== 'run_project_script') return;
+  const script = String(args?.script || '');
+  if (!/^[A-Za-z0-9_.@][A-Za-z0-9_.:@/-]{0,199}$/.test(script)) {
+    throw new Error('Project script name must be a single option-safe package script identifier');
+  }
+}
+
+function assertStructuredToolInputs(name, args = {}) {
+  assertStructuredGitOperands(name, args);
+  assertStructuredProjectScript(name, args);
+}
+
 function assertTeamOperationSafety(name, args, principal) {
   if (principal?.source !== 'team-token') return;
-  assertStructuredGitOperands(name, args);
   if ((name === 'run_command' || name === 'start_process') && dangerousCommand(args?.command)) {
     throw new Error(`Team token ${principal.id} cannot run a high-risk command through ${name}`);
   }
@@ -293,6 +305,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
   normalizeInstanceConfig(config);
   const effectivePrincipal = currentTeamPrincipal(principal || fallbackLocalPrincipal(), config);
   const capability = requiredCapabilityForTool(name, annotations, args);
+  assertStructuredToolInputs(name, args);
   assertTeamOperationSafety(name, args, effectivePrincipal);
   if (ownerOnlyTool(name) && effectivePrincipal.role !== 'owner') {
     throw new Error(`Tool ${name} requires the owner role`);
@@ -310,6 +323,8 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
 export const __test = {
   ROLE_CAPABILITIES,
   assertStructuredGitOperands,
+  assertStructuredProjectScript,
+  assertStructuredToolInputs,
   dangerousCommand,
   hashSecret,
   parseTeamToken,
