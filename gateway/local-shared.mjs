@@ -97,9 +97,9 @@ export function redactSensitiveString(value) {
     .replace(/([?&](?:authorization|auth[_-]?token|token|access[_-]?token|refresh[_-]?token|api[_-]?key|key|secret|password|authtoken|client[_-]?secret|claim[_-]?token|owner[_-]?token)=)[^&\s]+/gi, '$1redacted')
     .replace(/(\bauthorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
     .replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
-    .replace(/((?:^|\s)--(?:authorization|auth[-_]?token|password|token|access[-_]?token|refresh[-_]?token|api[-_]?key|secret|authtoken|client[-_]?secret|claim[-_]?token|owner[-_]?token))(?:\s+|=)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=redacted')
-    .replace(/(\bauthorization\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1redacted')
-    .replace(/(\b(?:auth[_-]?token|token|access[_-]?token|refresh[_-]?token|secret|password|api[_-]?key|authtoken|client[_-]?secret|claim[_-]?token|owner[_-]?token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1redacted')
+    .replace(/((?:^|\s)--(?:authorization|auth[-_]?token|password|token|access[-_]?token|refresh[-_]?token|api[-_]?key|secret|authtoken|client[-_]?secret|claim[-_]?token|owner[-_]?token))(?:\s+|=)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1=redacted')
+    .replace(/(\bauthorization\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1redacted')
+    .replace(/(\b(?:auth[_-]?token|token|access[_-]?token|refresh[_-]?token|secret|password|api[_-]?key|authtoken|client[_-]?secret|claim[_-]?token|owner[_-]?token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1redacted')
     .replace(/\b(?:dmt|dmr)_[a-z0-9_-]{1,120}_[A-Za-z0-9_-]{43}\b/gi, 'devmate-token-redacted')
     .replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, 'sk-redacted');
 }
