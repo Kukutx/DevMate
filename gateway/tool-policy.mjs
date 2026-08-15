@@ -16,7 +16,8 @@ const ADMIN_TOOLS = new Set([
 const OWNER_ONLY_TOOLS = new Set([
   'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
   'team_approval_configure',
-  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
+  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke',
+  'read_audit_log', 'list_backups', 'restore_backup'
 ]);
 
 const PUBLISH_TOOLS = new Set([
