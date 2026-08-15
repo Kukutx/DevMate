@@ -111,6 +111,24 @@ test('structured Git fields cannot smuggle options or force refspecs for Team to
   );
 });
 
+test('structured operand safety also applies to owner calls and package scripts', () => {
+  const current = normalizeInstanceConfig(config());
+  const owner = { id: 'owner', name: 'Owner', role: 'owner', workspaceIds: [], source: 'oauth' };
+  const base = { annotations: { destructiveHint: true }, config: current, principal: owner };
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: '--force', branch: 'main' } }),
+    /cannot smuggle options or force refspecs/
+  );
+  assert.throws(
+    () => authorizeToolCall({ ...base, name: 'run_project_script', args: { workspaceId: 'app', script: 'test; echo injected' } }),
+    /option-safe package script identifier/
+  );
+  assert.equal(
+    authorizeToolCall({ ...base, name: 'run_project_script', args: { workspaceId: 'app', script: 'test:e2e' } }).capability,
+    'execute'
+  );
+});
+
 test('classifies queue and Runner administration without implicit workspace scope', () => {
   const current = normalizeInstanceConfig(config());
   assert.equal(requiredCapabilityForTool('job_submit', { destructiveHint: true }, {}), 'validate');
