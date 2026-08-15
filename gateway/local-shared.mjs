@@ -70,20 +70,31 @@ export function dangerousGuardEnabled(config) {
 function dangerousGitPush(value) {
   if (!/\bgit\s+push\b/.test(value)) return false;
   return /(?:^|\s)-f(?:\s|$)/.test(value) ||
-    /(?:^|\s)--force(?:-with-lease)?(?:=\S+)?(?:\s|$)/.test(value) ||
-    /(?:^|\s)\+[^\s]+/.test(value);
+    /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)--(?:delete|mirror|prune)(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)\+[^\s]+/.test(value) ||
+    /\s:[^\s]+/.test(value);
 }
 
 export function isDangerousCommand(command) {
-  const normalized = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const raw = String(command || '').replace(/\s+/g, ' ').trim();
+  const normalized = raw.toLowerCase();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(normalized) ||
     /\bremove-item\b.*\b-recurse\b.*\b-force\b/.test(normalized) ||
     /\brmdir\b.*\s\/s\b/.test(normalized) ||
     /\bdel\b.*\s\/s\b/.test(normalized) ||
     /\bformat\b\s+[a-z]:/.test(normalized) ||
     /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(normalized) ||
-    /\bgit\s+reset\b.*--hard\b/.test(normalized) ||
-    /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(normalized) ||
+    /\bgit\s+reset\b/.test(normalized) ||
+    /\bgit\s+clean\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$)|\s-[^\s]*f[^\s]*)/.test(normalized) ||
+    /\bgit\s+restore\b/.test(normalized) ||
+    /\bgit\s+checkout\b.*\s--(?:\s|$)/.test(normalized) ||
+    /\bgit\s+checkout\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(normalized) ||
+    /\bgit\s+checkout\b.*\s-B(?:\s|$)/.test(raw) ||
+    /\bgit\s+branch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(normalized) ||
+    /\bgit\s+branch\b.*\s(?:-D|-M|-C)(?:\s|$)/.test(raw) ||
+    /\bgit\s+switch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$)|\s--discard-changes(?:\s|$))/.test(normalized) ||
+    /\bgit\s+switch\b.*\s-C(?:\s|$)/.test(raw) ||
     dangerousGitPush(normalized);
 }
 export function assertCommandAllowed(config, command) {
