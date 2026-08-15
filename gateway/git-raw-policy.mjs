@@ -10,32 +10,47 @@ const BLOCKED_GLOBAL_FLAGS = new Set([
 ]);
 
 const BLOCKED_COMMANDS = new Set([
+  'add',
+  'archive',
+  'blame',
+  'bundle',
+  'cat-file',
+  'checkout-index',
   'clone',
+  'commit',
   'config',
   'credential',
   'credential-cache',
   'credential-store',
   'daemon',
+  'diff',
+  'diff-files',
+  'diff-index',
+  'diff-tree',
+  'format-patch',
+  'grep',
   'http-push',
   'init',
+  'log',
+  'merge-file',
+  'merge-tree',
+  'mv',
+  'range-diff',
   'send-pack',
   'shell',
+  'show',
   'worktree'
 ]);
 
 // git_raw is intentionally lower-level than the structured Git tools, but it
-// must still invoke a real Git builtin. Unknown subcommands may resolve to
-// shell aliases (alias.foo=!...) from repository/global configuration and
-// would otherwise turn Git capability into arbitrary command execution.
+// must still invoke a reviewed Git builtin that cannot bypass DevMate's file
+// content protections or turn Git aliases into arbitrary command execution.
 const ALLOWED_COMMANDS = new Set([
-  'add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle',
-  'cat-file', 'checkout', 'checkout-index', 'cherry', 'cherry-pick', 'commit',
-  'describe', 'diff', 'diff-files', 'diff-index', 'diff-tree', 'fetch',
-  'for-each-ref', 'format-patch', 'grep', 'log', 'ls-files', 'ls-remote',
-  'ls-tree', 'merge', 'merge-base', 'merge-file', 'merge-tree', 'mv',
-  'name-rev', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog',
-  'remote', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm',
-  'shortlog', 'show', 'show-branch', 'show-ref', 'stash', 'status', 'switch',
+  'am', 'apply', 'bisect', 'branch', 'checkout', 'cherry', 'cherry-pick',
+  'describe', 'fetch', 'for-each-ref', 'ls-files', 'ls-remote', 'ls-tree',
+  'merge', 'merge-base', 'name-rev', 'notes', 'pull', 'push', 'rebase',
+  'reflog', 'remote', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse',
+  'rm', 'shortlog', 'show-branch', 'show-ref', 'stash', 'status', 'switch',
   'tag', 'verify-commit', 'verify-tag'
 ]);
 
@@ -87,7 +102,7 @@ export function assertGitRawWorkspaceBound(args = []) {
   const command = values.find(value => !value.startsWith('-'))?.toLowerCase() || '';
   if (!command) throw new Error('git_raw requires an explicit Git subcommand');
   if (BLOCKED_COMMANDS.has(command)) {
-    throw new Error(`git_raw command is not allowed because it can escape the workspace, expose credentials, or bypass DevMate publish controls: ${command}`);
+    throw new Error(`git_raw command is not allowed because it can escape the workspace, expose protected content, or bypass DevMate safety controls: ${command}`);
   }
   if (!ALLOWED_COMMANDS.has(command)) {
     throw new Error(`git_raw command is not in the reviewed builtin allowlist: ${command}`);

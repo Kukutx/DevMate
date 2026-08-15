@@ -2,6 +2,7 @@ import { installHostContextCapabilities } from './host-context-capabilities.mjs'
 import { installLocalCapabilities } from './local-capabilities.mjs';
 import { installObsidianHostCapabilities } from './obsidian-host-capabilities.mjs';
 import { installRunnerCapabilities } from './runner-capabilities.mjs';
+import { installGitProtectedPathGuard } from './git-protected-path-guard.mjs';
 import {
   registerServerInitializer,
   registerToolDecorator,
@@ -22,6 +23,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
       return { handler };
     }
   });
+  installGitProtectedPathGuard(McpServerClass);
   installTeamCapabilities(McpServerClass);
   installRunnerCapabilities(McpServerClass);
   installHostContextCapabilities(McpServerClass);
