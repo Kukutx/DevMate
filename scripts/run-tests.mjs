@@ -16,6 +16,15 @@ function relative(file) {
   return path.relative(root, file).replace(/\\/g, '/');
 }
 
+function annotationEscape(value) {
+  return String(value || '').replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
+
+function githubError(file, message) {
+  if (!process.env.GITHUB_ACTIONS) return;
+  console.error(`::error file=${annotationEscape(file)}::${annotationEscape(message)}`);
+}
+
 function discover(directory = testsRoot, output = []) {
   const entries = fs.readdirSync(directory, { withFileTypes: true })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -50,13 +59,17 @@ function diagnoseBatch(batch) {
     const result = run([file], 'pipe');
     if (result.error) throw result.error;
     if (result.status === 0) continue;
-    failures.push(relative(file));
-    console.error(`\nFAIL: ${relative(file)}`);
+    const rel = relative(file);
+    failures.push(rel);
+    console.error(`\nFAIL: ${rel}`);
     if (result.stdout) process.stderr.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
+    githubError(rel, `Isolated test file failed with exit code ${result.status || 1}. See the Discovered unit and policy tests step for details.`);
   }
   if (!failures.length) {
-    console.error('The batch failure was not reproducible file-by-file; this indicates an inter-test or concurrency interaction.');
+    const message = 'The failed test batch passed file-by-file, indicating an inter-test or concurrency interaction.';
+    console.error(message);
+    githubError('.github', message);
   } else {
     console.error(`\nFailing test files: ${failures.join(', ')}`);
   }
