@@ -95,9 +95,9 @@ export function assertCommandAllowed(config, command) {
 export function redactSensitiveString(value) {
   return String(value ?? '')
     .replace(/([?&](?:token|key|secret|password|auth|authorization)=)[^&\s]+/gi, '$1redacted')
+    .replace(/((?:^|\s)--(?:authorization|password|token|access[-_]?token|refresh[-_]?token|api[-_]?key|secret|authtoken|client[-_]?secret|claim[-_]?token|owner[-_]?token))(?:\s+|=)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=redacted')
     .replace(/(\b(?:token|secret|password|authorization|api[_-]?key|authToken)\s*[:=]\s*)[^\s&"'`]+/gi, '$1redacted')
     .replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
-    .replace(/(\b(?:--password|--token|--api-key|--secret)\s+)[^\s]+/gi, '$1redacted')
     .replace(/\b(?:dmt|dmr)_[a-z0-9_-]{1,120}_[A-Za-z0-9_-]{43}\b/gi, 'devmate-token-redacted')
     .replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, 'sk-redacted');
 }
