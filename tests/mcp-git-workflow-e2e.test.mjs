@@ -63,7 +63,7 @@ function rpcClient(port) {
   };
 }
 
-test('MCP Git can push repeatedly, surface a failed push, recover, and remain callable', async t => {
+test('MCP Git can push repeatedly, surface failures, recover, and never commit after a failed stage', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-mcp-git-'));
   const workspace = path.join(temp, 'workspace');
   const remote = path.join(temp, 'remote.git');
@@ -219,4 +219,25 @@ test('MCP Git can push repeatedly, surface a failed push, recover, and remain ca
   assert.match(remoteLog, /MCP Git failed push recovery/);
   assert.match(remoteLog, /MCP Git second save/);
   assert.match(remoteLog, /MCP Git first save/);
+
+  fs.writeFileSync(path.join(workspace, 'prestage.txt'), 'prestage\n', 'utf8');
+  git(workspace, ['add', 'prestage.txt']);
+  const beforeFailedStageHead = git(workspace, ['rev-parse', 'HEAD']);
+  const failedStageSave = await rpc('tools/call', {
+    name: 'git_save',
+    arguments: {
+      message: 'must not commit after stage failure',
+      paths: ['definitely-missing-path.txt'],
+      all: false,
+      push: false
+    }
+  });
+  assert.equal(failedStageSave.response.ok, true, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.isError, true, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.structuredContent?.failedPhase, 'stage', failedStageSave.text);
+  assert.notEqual(failedStageSave.json?.result?.structuredContent?.stage?.exitCode, 0, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.structuredContent?.commit, null, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.structuredContent?.push, null, failedStageSave.text);
+  assert.equal(git(workspace, ['rev-parse', 'HEAD']), beforeFailedStageHead, 'failed stage must not create a commit');
+  assert.match(git(workspace, ['diff', '--cached', '--name-only']), /prestage\.txt/, 'pre-existing staged work must remain staged');
 }, { timeout: 60000 });
