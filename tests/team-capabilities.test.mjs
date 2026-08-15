@@ -46,6 +46,18 @@ test('redacts command secrets from structured and text MCP results',()=>{
  assert.match(result.structuredContent.result.stderr,/Authorization: Bearer redacted/);
 });
 
+test('preserves independent JSON text payload semantics while redacting them',()=>{
+ const structured={summary:'keep',result:{command:'tool --token structured-secret',exitCode:0,stdout:'ok',stderr:''}};
+ const partial={part:{command:'tool --token text-secret',exitCode:0,stdout:'ok',stderr:''}};
+ const result={structuredContent:structured,content:[{type:'text',text:JSON.stringify(partial)}]};
+ teamCapabilitiesTest.sanitizeToolResult('run_command',result);
+ const text=JSON.parse(result.content[0].text);
+ assert.deepEqual(Object.keys(text),['part']);
+ assert.equal(text.summary,undefined);
+ assert.match(text.part.command,/--token=redacted/);
+ assert.doesNotMatch(JSON.stringify(result),/structured-secret|text-secret/);
+});
+
 test('redacts persistent process output events without rewriting ordinary text',()=>{
  const result={structuredContent:{events:[{text:'owner_token=owner-value then ok'}]},content:[{type:'text',text:'process output ready'}]};
  teamCapabilitiesTest.sanitizeToolResult('read_process_output',result);
