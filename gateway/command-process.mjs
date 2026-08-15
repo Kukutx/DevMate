@@ -11,9 +11,9 @@ function isGitCommand(command) {
   return /^(?:git(?:\.exe)?|"[^"\r\n]*[\\/]git(?:\.exe)?"|'[^'\r\n]*[\\/]git(?:\.exe)?')(?:\s|$)/i.test(text);
 }
 
-export function commandEnvironment(command, environment = null) {
+export function commandEnvironment(command, environment = null, forceGitNonInteractive = false) {
   const env = { ...(environment || process.env) };
-  if (isGitCommand(command)) {
+  if (forceGitNonInteractive || isGitCommand(command)) {
     env.GIT_TERMINAL_PROMPT = '0';
     env.GCM_INTERACTIVE = 'Never';
   }
@@ -96,7 +96,7 @@ export async function executeCommand(command, args = [], {
   if (signal?.aborted) throw cancellationError(signal);
   const child = spawn(command, args, {
     cwd,
-    env: commandEnvironment(command, environment),
+    env: commandEnvironment(command, environment, shell),
     shell,
     windowsHide: true,
     detached: process.platform !== 'win32',
