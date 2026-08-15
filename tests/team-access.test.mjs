@@ -140,10 +140,15 @@ test('Team git_raw cannot bypass destructive Git safeguards', () => {
     ['push', '--mirror', 'origin'],
     ['push', '--prune', 'origin'],
     ['branch', '-D', 'main'],
+    ['branch', '-f', 'main', 'HEAD~1'],
+    ['branch', '-M', 'main', 'other'],
     ['restore', '.'],
     ['reset', '--soft', 'HEAD~1'],
     ['checkout', '--', 'file.txt'],
-    ['switch', '--discard-changes', 'main']
+    ['checkout', '-f', 'main'],
+    ['checkout', '-B', 'main', 'HEAD~1'],
+    ['switch', '--discard-changes', 'main'],
+    ['switch', '-C', 'main', 'HEAD~1']
   ]) {
     assert.throws(
       () => authorizeToolCall({ ...base, args: { workspaceId: 'app', args } }),
@@ -151,10 +156,18 @@ test('Team git_raw cannot bypass destructive Git safeguards', () => {
       args.join(' ')
     );
   }
-  assert.equal(
-    authorizeToolCall({ ...base, args: { workspaceId: 'app', args: ['status', '--short'] } }).capability,
-    'git'
-  );
+  for (const args of [
+    ['status', '--short'],
+    ['branch', '-d', 'merged-branch'],
+    ['switch', '-c', 'feature/safe'],
+    ['checkout', '-b', 'feature/safe-2']
+  ]) {
+    assert.equal(
+      authorizeToolCall({ ...base, args: { workspaceId: 'app', args } }).capability,
+      'git',
+      args.join(' ')
+    );
+  }
 });
 
 test('structured operand safety also applies to owner calls and package scripts', () => {
