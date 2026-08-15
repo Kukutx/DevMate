@@ -234,15 +234,20 @@ function dangerousGitPush(value) {
 }
 
 function dangerousCommand(command) {
-  const value = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const raw = String(command || '').replace(/\s+/g, ' ').trim();
+  const value = raw.toLowerCase();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(value) ||
     /\bremove-item\b.*\b-recurse\b.*\b-force\b/.test(value) ||
     /\brmdir\b.*\s\/s\b/.test(value) || /\bdel\b.*\s\/s\b/.test(value) ||
     /\bformat\b\s+[a-z]:/.test(value) || /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(value) ||
-    /\bgit\s+reset\b/.test(value) || /\bgit\s+clean\b/.test(value) ||
-    /\bgit\s+restore\b/.test(value) || /\bgit\s+checkout\b.*\s--(?:\s|$)/.test(value) ||
-    /\bgit\s+branch\b.*(?:\s-d(?:\s|$)|\s--delete(?:\s|$))/.test(value) ||
-    /\bgit\s+switch\b.*(?:\s-f(?:\s|$)|\s-c(?:\s|$)|\s--force(?:\s|$)|\s--discard-changes(?:\s|$))/.test(value) ||
+    /\bgit\s+reset\b/.test(value) || /\bgit\s+clean\b/.test(value) || /\bgit\s+restore\b/.test(value) ||
+    /\bgit\s+checkout\b.*\s--(?:\s|$)/.test(value) ||
+    /\bgit\s+checkout\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(value) ||
+    /\bgit\s+checkout\b.*\s-B(?:\s|$)/.test(raw) ||
+    /\bgit\s+branch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(value) ||
+    /\bgit\s+branch\b.*\s(?:-D|-M|-C)(?:\s|$)/.test(raw) ||
+    /\bgit\s+switch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$)|\s--discard-changes(?:\s|$))/.test(value) ||
+    /\bgit\s+switch\b.*\s-C(?:\s|$)/.test(raw) ||
     dangerousGitPush(value);
 }
 
