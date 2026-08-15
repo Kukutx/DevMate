@@ -78,21 +78,22 @@ test('blocks high-risk operations for member tokens even under full local access
   const current = normalizeInstanceConfig(config());
   const maintainer = { id: 'm', name: 'Maintainer', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
   assert.throws(() => authorizeToolCall({ name: 'run_command', annotations: { destructiveHint: true }, args: { workspaceId: 'app', command: 'git reset --hard' }, config: current, principal: maintainer }), /high-risk/);
+  assert.throws(() => authorizeToolCall({ name: 'run_command', annotations: { destructiveHint: true }, args: { workspaceId: 'app', command: 'git push origin --mirror' }, config: current, principal: maintainer }), /high-risk/);
   assert.throws(() => authorizeToolCall({ name: 'git_push', annotations: { destructiveHint: true }, args: { workspaceId: 'app', forceWithLease: true }, config: current, principal: maintainer }), /Force push/);
 });
 
-test('structured Git fields cannot smuggle options or force refspecs for Team tokens', () => {
+test('structured Git fields cannot smuggle options or destructive refspecs', () => {
   const current = normalizeInstanceConfig(config());
   const maintainer = { id: 'm', name: 'Maintainer', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
   const base = { annotations: { destructiveHint: true }, config: current, principal: maintainer };
-  assert.throws(
-    () => authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: '--force', branch: 'main' } }),
-    /cannot smuggle options or force refspecs/
-  );
-  assert.throws(
-    () => authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: 'origin', branch: '+main' } }),
-    /cannot smuggle options or force refspecs/
-  );
+  for (const args of [
+    { workspaceId: 'app', remote: '--force', branch: 'main' },
+    { workspaceId: 'app', remote: 'origin', branch: '+main' },
+    { workspaceId: 'app', remote: 'origin', branch: ':main' },
+    { workspaceId: 'app', remote: 'origin', branch: 'main:other' }
+  ]) {
+    assert.throws(() => authorizeToolCall({ ...base, name: 'git_push', args }), /cannot smuggle options or force refspecs/);
+  }
   assert.throws(
     () => authorizeToolCall({ ...base, name: 'git_save', args: { workspaceId: 'app', push: true, remote: 'origin', branch: '+main' } }),
     /cannot smuggle options or force refspecs/
@@ -103,11 +104,38 @@ test('structured Git fields cannot smuggle options or force refspecs for Team to
   );
   assert.throws(
     () => authorizeToolCall({ ...base, name: 'git_checkout', args: { workspaceId: 'app', branch: '--detach' } }),
-    /checkout targets cannot be option-like/
+    /checkout targets cannot be option-like or refspec-like/
   );
   assert.equal(
-    authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: 'origin', branch: 'main' } }).capability,
+    authorizeToolCall({ ...base, name: 'git_push', args: { workspaceId: 'app', remote: 'origin', branch: 'feature/safe' } }).capability,
     'publish'
+  );
+});
+
+test('Team git_raw cannot bypass destructive Git safeguards', () => {
+  const current = normalizeInstanceConfig(config());
+  const maintainer = { id: 'm', name: 'Maintainer', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
+  const base = { name: 'git_raw', annotations: { destructiveHint: true }, config: current, principal: maintainer };
+  for (const args of [
+    ['push', 'origin', '--delete', 'main'],
+    ['push', 'origin', ':main'],
+    ['push', '--mirror', 'origin'],
+    ['push', '--prune', 'origin'],
+    ['branch', '-D', 'main'],
+    ['restore', '.'],
+    ['reset', '--soft', 'HEAD~1'],
+    ['checkout', '--', 'file.txt'],
+    ['switch', '--discard-changes', 'main']
+  ]) {
+    assert.throws(
+      () => authorizeToolCall({ ...base, args: { workspaceId: 'app', args } }),
+      /High-risk raw Git operations require the owner role/,
+      args.join(' ')
+    );
+  }
+  assert.equal(
+    authorizeToolCall({ ...base, args: { workspaceId: 'app', args: ['status', '--short'] } }).capability,
+    'git'
   );
 });
 
