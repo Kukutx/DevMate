@@ -23,6 +23,22 @@ const BLOCKED_COMMANDS = new Set([
   'worktree'
 ]);
 
+// git_raw is intentionally lower-level than the structured Git tools, but it
+// must still invoke a real Git builtin. Unknown subcommands may resolve to
+// shell aliases (alias.foo=!...) from repository/global configuration and
+// would otherwise turn Git capability into arbitrary command execution.
+const ALLOWED_COMMANDS = new Set([
+  'add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle',
+  'cat-file', 'checkout', 'checkout-index', 'cherry', 'cherry-pick', 'commit',
+  'describe', 'diff', 'diff-files', 'diff-index', 'diff-tree', 'fetch',
+  'for-each-ref', 'format-patch', 'grep', 'log', 'ls-files', 'ls-remote',
+  'ls-tree', 'merge', 'merge-base', 'merge-file', 'merge-tree', 'mv',
+  'name-rev', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog',
+  'remote', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm',
+  'shortlog', 'show', 'show-branch', 'show-ref', 'stash', 'status', 'switch',
+  'tag', 'verify-commit', 'verify-tag'
+]);
+
 const PATH_VALUE_OPTIONS = Object.freeze([
   '--directory',
   '--output',
@@ -69,8 +85,12 @@ export function assertGitRawWorkspaceBound(args = []) {
     }
   }
   const command = values.find(value => !value.startsWith('-'))?.toLowerCase() || '';
+  if (!command) throw new Error('git_raw requires an explicit Git subcommand');
   if (BLOCKED_COMMANDS.has(command)) {
     throw new Error(`git_raw command is not allowed because it can escape the workspace, expose credentials, or bypass DevMate publish controls: ${command}`);
+  }
+  if (!ALLOWED_COMMANDS.has(command)) {
+    throw new Error(`git_raw command is not in the reviewed builtin allowlist: ${command}`);
   }
   if (values.includes('--global') || values.includes('--system')) {
     throw new Error('git_raw cannot modify Git configuration outside the current repository');
@@ -78,4 +98,11 @@ export function assertGitRawWorkspaceBound(args = []) {
   return values;
 }
 
-export const __test = { BLOCKED_COMMANDS, BLOCKED_GLOBAL_FLAGS, PATH_VALUE_OPTIONS, localPathEscape, pathValueEscapesWorkspace };
+export const __test = {
+  ALLOWED_COMMANDS,
+  BLOCKED_COMMANDS,
+  BLOCKED_GLOBAL_FLAGS,
+  PATH_VALUE_OPTIONS,
+  localPathEscape,
+  pathValueEscapesWorkspace
+};
