@@ -6,7 +6,7 @@ import test from 'node:test';
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(),'devmate-team-cap-'));
 const configPath = path.join(temp,'config.json'); process.env.DEVMATE_CONFIG=configPath;
 await fsp.writeFile(configPath,JSON.stringify({version:11,auth:{required:true,token:'owner-token-value-long-enough'},permissions:{profile:'fullAccess'},connection:{provider:'external',publicUrl:'https://devmate.example.com'},team:{members:[],requireWorkspaceLeaseForWrites:true},requestPolicy:{allowedHosts:[]},runtime:{},jobs:{},maintenance:{auditRetentionDays:90},activeWorkspaceId:'app',workspaces:[{id:'app',name:'app',root:temp,mode:'workspace-write',reference:false}],plugins:{enabled:[],settings:{}}},null,2));
-const { installTeamCapabilities }=await import('../gateway/team-capabilities.mjs');
+const { __test: teamCapabilitiesTest, installTeamCapabilities }=await import('../gateway/team-capabilities.mjs');
 const { runWithRequestContext }=await import('../gateway/request-context.mjs');
 const { __test: teamToolDataTest }=await import('../gateway/team-tool-data.mjs');
 class MockServer{constructor(){this.tools=new Map()} registerTool(n,c,h){this.tools.set(n,{config:c,handler:h})} async connect(){return'ok'}}
@@ -27,6 +27,30 @@ test('Host allowlist is an explicit request capability independent of provider',
  assert.equal(teamToolDataTest.allowedPublicHost(config,{publicUrl:config.connection.publicUrl}),false);
  config.requestPolicy.allowedHosts=['devmate.example.com']; assert.equal(teamToolDataTest.allowedPublicHost(config,{publicUrl:config.connection.publicUrl}),true);
  config.requestPolicy.allowedHosts=[]; assert.equal(teamToolDataTest.allowedPublicHost(config,{publicUrl:config.connection.publicUrl}),true);
+});
+
+test('redacts command secrets from structured and text MCP results',()=>{
+ const raw={
+  command:'tool --token top-secret --mode safe',
+  exitCode:0,
+  timedOut:false,
+  stdout:'client_secret=client-value&mode=safe',
+  stderr:'Authorization: Bearer abc.def-123'
+ };
+ const result={structuredContent:{result:{...raw}},content:[{type:'text',text:JSON.stringify({result:raw},null,2)}]};
+ teamCapabilitiesTest.sanitizeToolResult('run_command',result);
+ const serialized=JSON.stringify(result);
+ assert.doesNotMatch(serialized,/top-secret|client-value|abc\.def-123/);
+ assert.match(result.structuredContent.result.command,/--token=redacted/);
+ assert.match(result.structuredContent.result.stdout,/client_secret=redacted&mode=safe/);
+ assert.match(result.structuredContent.result.stderr,/Authorization: Bearer redacted/);
+});
+
+test('redacts persistent process output events without rewriting ordinary text',()=>{
+ const result={structuredContent:{events:[{text:'owner_token=owner-value then ok'}]},content:[{type:'text',text:'process output ready'}]};
+ teamCapabilitiesTest.sanitizeToolResult('read_process_output',result);
+ assert.equal(result.structuredContent.events[0].text,'owner_token=redacted then ok');
+ assert.equal(result.content[0].text,'process output ready');
 });
 
 test.after(async()=>fsp.rm(temp,{recursive:true,force:true}));
