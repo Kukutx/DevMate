@@ -264,8 +264,8 @@ function assertStructuredGitOperands(name, args = {}) {
 }
 
 function assertStructuredProjectScript(name, args = {}) {
-  if (name !== 'run_project_script') return;
-  const script = String(args?.script || '');
+  if (name !== 'run_project_script' || args?.script === undefined) return;
+  const script = String(args.script);
   if (!/^[A-Za-z0-9_.@][A-Za-z0-9_.:@/-]{0,199}$/.test(script)) {
     throw new Error('Project script name must be a single option-safe package script identifier');
   }
