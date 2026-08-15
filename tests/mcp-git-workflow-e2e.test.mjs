@@ -63,7 +63,7 @@ function rpcClient(port) {
   };
 }
 
-test('MCP Git can push repeatedly, surface failures, recover, and never commit after a failed stage', async t => {
+test('MCP Git can push repeatedly, surface failures, recover, and fail closed across every save phase', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-mcp-git-'));
   const workspace = path.join(temp, 'workspace');
   const remote = path.join(temp, 'remote.git');
@@ -208,6 +208,23 @@ test('MCP Git can push repeatedly, surface failures, recover, and never commit a
   assert.equal(finalStatus.json?.result?.structuredContent?.exitCode, 0, finalStatus.text);
   assert.equal(finalStatus.json?.result?.structuredContent?.stdout.trim(), '## master...origin/master', finalStatus.text);
 
+  const noChangeSave = await rpc('tools/call', {
+    name: 'git_save',
+    arguments: {
+      message: 'must not push after commit failure',
+      all: true,
+      push: true,
+      remote: 'origin',
+      branch: 'master'
+    }
+  });
+  assert.equal(noChangeSave.response.ok, true, noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.isError, true, noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.structuredContent?.failedPhase, 'commit', noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.structuredContent?.stage?.exitCode, 0, noChangeSave.text);
+  assert.notEqual(noChangeSave.json?.result?.structuredContent?.commit?.exitCode, 0, noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.structuredContent?.push, null, noChangeSave.text);
+
   const finalGatewayStatus = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
   assert.equal(finalGatewayStatus.response.ok, true, finalGatewayStatus.text);
   assert.notEqual(finalGatewayStatus.json?.result?.isError, true, finalGatewayStatus.text);
@@ -240,4 +257,26 @@ test('MCP Git can push repeatedly, surface failures, recover, and never commit a
   assert.equal(failedStageSave.json?.result?.structuredContent?.push, null, failedStageSave.text);
   assert.equal(git(workspace, ['rev-parse', 'HEAD']), beforeFailedStageHead, 'failed stage must not create a commit');
   assert.match(git(workspace, ['diff', '--cached', '--name-only']), /prestage\.txt/, 'pre-existing staged work must remain staged');
+
+  const indexLock = path.join(workspace, '.git', 'index.lock');
+  fs.writeFileSync(indexLock, 'intentional test lock\n', 'utf8');
+  let failedCommitStage;
+  try {
+    failedCommitStage = await rpc('tools/call', {
+      name: 'git_commit',
+      arguments: {
+        message: 'must not commit after git_commit stage failure',
+        all: true
+      }
+    });
+  } finally {
+    fs.rmSync(indexLock, { force: true });
+  }
+  assert.equal(failedCommitStage.response.ok, true, failedCommitStage.text);
+  assert.equal(failedCommitStage.json?.result?.isError, true, failedCommitStage.text);
+  assert.equal(failedCommitStage.json?.result?.structuredContent?.failedPhase, 'stage', failedCommitStage.text);
+  assert.notEqual(failedCommitStage.json?.result?.structuredContent?.stage?.exitCode, 0, failedCommitStage.text);
+  assert.equal(failedCommitStage.json?.result?.structuredContent?.commit, null, failedCommitStage.text);
+  assert.equal(git(workspace, ['rev-parse', 'HEAD']), beforeFailedStageHead, 'git_commit stage failure must not create a commit');
+  assert.match(git(workspace, ['diff', '--cached', '--name-only']), /prestage\.txt/, 'git_commit stage failure must preserve existing staged work');
 }, { timeout: 60000 });
