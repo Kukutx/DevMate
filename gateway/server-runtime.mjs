@@ -12,6 +12,7 @@ import { shutdownPluginServices } from './plugins/plugin-host.mjs';
 import { installGatewayRequestGuard, resetRequestGuardState } from './request-guard.mjs';
 import { installHttpObservability } from './http-observability.mjs';
 import { installHttpServerBootstrap } from './http-server-bootstrap.mjs';
+import { installLocalControlGuard } from './local-control-guard.mjs';
 import { acquireGatewayInstanceLock, releaseGatewayInstanceLock } from './durable-state.mjs';
 import { shutdownTeamServices } from './team-capabilities.mjs';
 import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
@@ -27,6 +28,7 @@ acquireGatewayInstanceLock();
 const createdHttpServers = new Set();
 const httpBootstrap = installHttpServerBootstrap(http, {
   installers: [
+    installLocalControlGuard,
     installHttpObservability,
     installGatewayRequestGuard,
     installRunnerControlPlane
