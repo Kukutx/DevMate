@@ -67,9 +67,12 @@ test('observability layer independently rejects proxied access to control metric
   t.after(() => new Promise(resolve => server.close(resolve)));
   const port = server.address().port;
 
+  const health = await request(port, '/health', `localhost:${port}`);
+  assert.equal(health.status, 200);
+
   const local = await request(port, '/control/metrics', `localhost:${port}`);
   assert.equal(local.status, 200);
-  assert.match(local.body, /devmate_http_inflight/);
+  assert.match(local.body, /devmate_http_requests_total/);
 
   const proxied = await request(port, '/control/metrics', 'devmate.example.com');
   assert.equal(proxied.status, 403);
