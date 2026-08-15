@@ -39,8 +39,20 @@ test('git_raw blocks credential helpers, servers, and low-level remote writers',
   }
 });
 
-test('git_raw still permits workspace-contained output paths', () => {
+test('git_raw rejects unknown subcommands so Git shell aliases cannot become an execution bypass', () => {
+  for (const command of ['deploy', 'pwn', 'my-company-alias']) {
+    assert.throws(
+      () => assertGitRawWorkspaceBound([command]),
+      /reviewed builtin allowlist/
+    );
+  }
+  assert.throws(() => assertGitRawWorkspaceBound(['--no-pager']), /explicit Git subcommand/);
+});
+
+test('git_raw still permits reviewed builtin commands and workspace-contained output paths', () => {
   for (const args of [
+    ['status', '--short'],
+    ['rev-parse', '--show-toplevel'],
     ['archive', '--output=artifacts/repo.zip', 'HEAD'],
     ['format-patch', '-oartifacts/patches', 'HEAD~1..HEAD'],
     ['checkout-index', '--all', '--prefix=artifacts/export/'],
