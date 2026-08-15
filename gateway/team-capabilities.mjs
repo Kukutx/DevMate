@@ -145,28 +145,33 @@ function redactCommandResultPayload(value, seen = new WeakSet()) {
   return value;
 }
 
+function redactProcessOutputEvents(name, value) {
+  if (name !== 'read_process_output' || !Array.isArray(value?.events)) return value;
+  for (const event of value.events) {
+    if (typeof event?.text === 'string') event.text = redactSensitiveString(event.text);
+  }
+  return value;
+}
+
+function sanitizeResultPayload(name, value) {
+  redactCommandResultPayload(value);
+  redactProcessOutputEvents(name, value);
+  return value;
+}
+
 function sanitizeToolResult(name, result) {
   if (!result || typeof result !== 'object') return result;
-  if (result.structuredContent) {
-    redactCommandResultPayload(result.structuredContent);
-    if (name === 'read_process_output' && Array.isArray(result.structuredContent.events)) {
-      for (const event of result.structuredContent.events) {
-        if (typeof event?.text === 'string') event.text = redactSensitiveString(event.text);
-      }
-    }
-  }
+  if (result.structuredContent) sanitizeResultPayload(name, result.structuredContent);
   if (Array.isArray(result.content)) {
-    const structuredJson = result.structuredContent ? JSON.stringify(result.structuredContent, null, 2) : null;
     for (const item of result.content) {
       if (item?.type !== 'text' || typeof item.text !== 'string') continue;
-      let mirrorsStructured = false;
-      if (structuredJson != null) {
-        try {
-          JSON.parse(item.text);
-          mirrorsStructured = true;
-        } catch {}
+      try {
+        const parsed = JSON.parse(item.text);
+        sanitizeResultPayload(name, parsed);
+        item.text = JSON.stringify(parsed, null, 2);
+      } catch {
+        item.text = redactSensitiveString(item.text);
       }
-      item.text = mirrorsStructured ? structuredJson : redactSensitiveString(item.text);
     }
   }
   return result;
@@ -350,8 +355,10 @@ export const __test = {
   markGitFailure,
   publicDeployment,
   redactCommandResultPayload,
+  redactProcessOutputEvents,
   readiness,
   registerTeamTools,
+  sanitizeResultPayload,
   sanitizeToolResult,
   syncTextContent,
   workspaceIds,
