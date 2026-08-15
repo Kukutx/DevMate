@@ -241,8 +241,31 @@ function dangerousCommand(command) {
     dangerousGitPush(value);
 }
 
+function structuredGitOperandUnsafe(value, { forceRefspec = false } = {}) {
+  if (value === undefined || value === null) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  return text.startsWith('-') || (forceRefspec && text.startsWith('+'));
+}
+
+function assertStructuredGitOperands(name, args = {}) {
+  const pushOrPull = name === 'git_push' || name === 'git_pull' || (name === 'git_save' && args?.push);
+  if (pushOrPull) {
+    if (structuredGitOperandUnsafe(args?.remote, { forceRefspec: true }) || structuredGitOperandUnsafe(args?.branch, { forceRefspec: true })) {
+      throw new Error('Structured Git remote/branch fields cannot smuggle options or force refspecs');
+    }
+  }
+  if (name === 'git_branch' && structuredGitOperandUnsafe(args?.name)) {
+    throw new Error('Structured Git branch names cannot be option-like');
+  }
+  if (name === 'git_checkout' && structuredGitOperandUnsafe(args?.branch)) {
+    throw new Error('Structured Git checkout targets cannot be option-like');
+  }
+}
+
 function assertTeamOperationSafety(name, args, principal) {
   if (principal?.source !== 'team-token') return;
+  assertStructuredGitOperands(name, args);
   if ((name === 'run_command' || name === 'start_process') && dangerousCommand(args?.command)) {
     throw new Error(`Team token ${principal.id} cannot run a high-risk command through ${name}`);
   }
@@ -286,11 +309,13 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
 
 export const __test = {
   ROLE_CAPABILITIES,
+  assertStructuredGitOperands,
   dangerousCommand,
   hashSecret,
   parseTeamToken,
   requiredCapabilityForTool,
   scopedWorkspaceIds,
+  structuredGitOperandUnsafe,
   timingSafeEqualText,
   toolWorkspaceId,
   uniqueMemberId
