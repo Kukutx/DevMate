@@ -20,23 +20,27 @@ const { DEFAULT_VERSION, updateConfig } = configStore;
 
 const BOOTSTRAP_PRESETS = Object.freeze({
   personal: Object.freeze({
+    'authentication-mode': 'none',
     'embedded-runner': true,
     'external-runner-control': false,
     'require-workspace-lease-for-writes': false
   }),
   team: Object.freeze({
+    'authentication-mode': 'oauth',
     'embedded-runner': true,
     'external-runner-control': false,
     'require-workspace-lease-for-writes': true
   }),
   'control-plane': Object.freeze({
     provider: 'external',
+    'authentication-mode': 'oauth',
     'embedded-runner': false,
     'external-runner-control': true,
     'require-workspace-lease-for-writes': true,
     'restrict-public-host': true
   }),
   runner: Object.freeze({
+    'authentication-mode': 'none',
     'embedded-runner': false,
     'external-runner-control': false,
     'require-workspace-lease-for-writes': false
@@ -103,9 +107,15 @@ function presetOptions(options = {}) {
 
 function bootstrap(options = {}) {
   const resolved = presetOptions(options);
-  const effective = resolved.options;
+  const effective = { ...resolved.options };
   const memberName = String(effective['member-name'] || '').trim();
   if (effective['member-role'] && !memberName) throw new Error('--member-role requires --member-name');
+  if (memberName) {
+    if (effective['authentication-mode'] === undefined) effective['authentication-mode'] = 'oauth';
+    if (effective['authentication-mode'] !== 'oauth') {
+      throw new Error('--member-name requires --authentication-mode oauth because member access is an OAuth identity flow');
+    }
+  }
   if (effective['runner-concurrency'] !== undefined) {
     const value = Number(effective['runner-concurrency']);
     if (!Number.isInteger(value) || value < 1 || value > 16) throw new Error('--runner-concurrency must be an integer from 1 to 16');
@@ -182,6 +192,7 @@ function status(options = {}) {
   const workspaces = config.workspaces || [];
   const warnings = [];
   if (!['none', 'oauth'].includes(config.auth?.mode)) warnings.push('Authentication mode is invalid.');
+  if (activeMembers.length && config.auth?.mode !== 'oauth') warnings.push('Active members require OAuth authentication.');
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
   if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control is enabled but has no active credential.');
   if (
@@ -216,7 +227,7 @@ function status(options = {}) {
 }
 
 function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nNew instances use direct no-auth MCP by default. OAuth is the optional current standard for a shared or published ChatGPT app.\n`;
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nStandalone personal/runner bootstrap uses loopback-only no-auth. Team/control-plane presets and any bootstrap that creates a member use OAuth. Public remote MCP access always requires OAuth.\n`;
 }
 
 async function main(argv = process.argv.slice(2)) {
