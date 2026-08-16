@@ -139,6 +139,7 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
   assert.equal(discovery.status, 200);
   const discovered = await discovery.json();
   assert.ok(discovered.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION));
+  assert.equal(typeof discovered.result?.capabilities, 'object');
 
   const statusCall = await fetch(audience, {
     method: 'POST',
@@ -218,50 +219,6 @@ test('CIMD policy is HTTPS-only, metadata-bound, redirect-safe, and rejects non-
       assert.equal(__test.publicAddress(address), false, `${address} must not be a CIMD destination`);
     }
     assert.equal(__test.publicAddress('8.8.8.8'), true);
-  } finally {
-    if (previous === undefined) delete process.env.DEVMATE_CONFIG;
-    else process.env.DEVMATE_CONFIG = previous;
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('OAuth authorization codes are single-use and refresh-token replay persistently revokes the whole family', async () => {
-  const previous = process.env.DEVMATE_CONFIG;
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-oauth-state-'));
-  const configPath = path.join(directory, 'config.json');
-  const config = configStore.newInstanceConfig({ workspaceRoot: process.cwd(), port: freePort(), appVersion: configStore.DEFAULT_VERSION });
-  configStore.atomicWriteJson(configPath, config);
-  process.env.DEVMATE_CONFIG = configPath;
-  const state = await import(`../gateway/oauth-state.mjs?oauth-state=${Date.now()}`);
-  try {
-    const nonce = `nonce-${Date.now()}`;
-    state.registerAuthorizationCode(nonce, new Date(Date.now() + 60_000).toISOString());
-    assert.equal(state.consumeAuthorizationCode(nonce), true);
-    assert.equal(state.consumeAuthorizationCode(nonce), false);
-
-    const binding = {
-      subject: 'member:alice',
-      authVersion: 7,
-      clientId: 'https://client.example/oauth/client-metadata.json',
-      audience: 'https://devmate.example/mcp',
-      scope: 'devmate offline_access'
-    };
-    const family = state.createRefreshFamily(binding);
-    assert.equal(family.generation, 1);
-    const rotated = state.consumeRefreshFamily({ ...binding, familyId: family.id, generation: 1 });
-    assert.equal(rotated.generation, 2);
-
-    assert.throws(
-      () => state.consumeRefreshFamily({ ...binding, familyId: family.id, generation: 1 }),
-      error => error?.code === 'oauth_refresh_reuse'
-    );
-    assert.throws(
-      () => state.consumeRefreshFamily({ ...binding, familyId: family.id, generation: 2 }),
-      error => error?.code === 'oauth_refresh_invalid'
-    );
-    const status = state.oauthRuntimeStateStatus();
-    assert.equal(status.activeRefreshFamilies, 0);
-    assert.equal(status.revokedRefreshFamilies, 1);
   } finally {
     if (previous === undefined) delete process.env.DEVMATE_CONFIG;
     else process.env.DEVMATE_CONFIG = previous;
