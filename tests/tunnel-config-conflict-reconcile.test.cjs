@@ -5,17 +5,19 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { atomicWriteJson } = require('../shared/config-store.cjs');
+const configStore = require('../shared/config-store.cjs');
+const oauthSecrets = require('../shared/oauth-secrets.cjs');
 const { PublicTunnelVerifier } = require('../vscode-host/public-tunnel-verifier.js');
 
 function stateDirectory() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-tunnel-conflict-'));
-  atomicWriteJson(path.join(directory, 'config.json'), {
-    version: 11,
-    server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'owner' },
-    connection: { provider: 'cloudflare-managed', publicUrl: 'https://new.example.com' }
-  });
+  const configFile = path.join(directory, 'config.json');
+  const config = configStore.newInstanceConfig({ workspaceRoot: directory, port: 8787, appVersion: configStore.DEFAULT_VERSION });
+  config.auth = { mode: 'oauth' };
+  config.connection = { provider: 'cloudflare-managed', publicUrl: 'https://new.example.com' };
+  config.requestPolicy.allowedHosts = ['new.example.com'];
+  configStore.atomicWriteJson(configFile, config);
+  oauthSecrets.ensureOAuthSecrets(configFile);
   return directory;
 }
 
