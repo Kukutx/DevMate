@@ -5,7 +5,7 @@ import {
   normalizeCredentialId,
   uniqueCredentialId
 } from '../gateway/credential-id.mjs';
-import { createTeamMember, verifyAccessToken } from '../gateway/team-access.mjs';
+import { createTeamMember, verifyMemberLoginCode } from '../gateway/team-access.mjs';
 import { createRunnerCredential, verifyRunnerToken } from '../gateway/runner-access.mjs';
 
 test('credential IDs are normalized, bounded, and suffix-safe', () => {
@@ -18,9 +18,9 @@ test('credential IDs are normalized, bounded, and suffix-safe', () => {
   assert.notEqual(second, long);
 });
 
-test('long and duplicate Team member names always produce immediately usable tokens', () => {
+test('long and duplicate Team member names produce unique immediately usable OAuth login codes', () => {
   const config = {
-    auth: { required: true, token: 'owner-token' },
+    auth: { mode: 'oauth' },
     connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
     team: { members: [] },
     requestPolicy: {},
@@ -33,11 +33,13 @@ test('long and duplicate Team member names always produce immediately usable tok
   assert.ok(first.member.id.length <= MAX_GENERATED_CREDENTIAL_ID);
   assert.ok(second.member.id.length <= MAX_GENERATED_CREDENTIAL_ID);
   assert.notEqual(first.member.id, second.member.id);
-  assert.equal(verifyAccessToken(first.token, config)?.id, first.member.id);
-  assert.equal(verifyAccessToken(second.token, config)?.id, second.member.id);
+  assert.match(first.loginCode, /^dmc_/);
+  assert.match(second.loginCode, /^dmc_/);
+  assert.equal(verifyMemberLoginCode(first.loginCode, config)?.id, first.member.id);
+  assert.equal(verifyMemberLoginCode(second.loginCode, config)?.id, second.member.id);
 });
 
-test('long and duplicate Runner names always produce immediately usable tokens', () => {
+test('long and duplicate Runner names always produce immediately usable scoped Runner tokens', () => {
   const config = { runnerControl: { enabled: true, credentials: [] } };
   const name = 'Very Long External Runner '.repeat(20);
   const first = createRunnerCredential(config, { name, workspaceIds: ['app'] });
