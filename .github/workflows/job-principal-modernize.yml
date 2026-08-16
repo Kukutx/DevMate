@@ -1,0 +1,45 @@
+name: Durable Job principal modernization
+
+on:
+  push:
+    branches:
+      - fix/final-deep-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/final-deep-hardening
+      - name: Replace retired durable principal fields
+        shell: pwsh
+        run: |
+          $file = 'gateway/job-queue.mjs'
+          $text = Get-Content $file -Raw
+          $oldVersion = "tokenVersion: Number.isInteger(principal?.tokenVersion) ? principal.tokenVersion : null"
+          if (-not $text.Contains($oldVersion)) { throw 'Missing tokenVersion durable principal field' }
+          $text = $text.Replace($oldVersion, "authVersion: Number.isInteger(principal?.authVersion) ? principal.authVersion : null")
+          $oldTeam = "principal?.source === 'team-token'"
+          $countTeam = ([regex]::Matches($text, [regex]::Escape($oldTeam))).Count
+          if ($countTeam -ne 1) { throw "Expected one positive team-token source check, found $countTeam" }
+          $text = $text.Replace($oldTeam, "principal?.source === 'oauth-member'")
+          $oldNotTeam = "principal?.source !== 'team-token'"
+          $countNotTeam = ([regex]::Matches($text, [regex]::Escape($oldNotTeam))).Count
+          if ($countNotTeam -ne 1) { throw "Expected one negative team-token source check, found $countNotTeam" }
+          $text = $text.Replace($oldNotTeam, "principal?.source !== 'oauth-member'")
+          if ($text -match 'team-token|tokenVersion') { throw 'Retired durable principal vocabulary remains' }
+          Set-Content $file $text -Encoding utf8NoBOM
+      - name: Commit current durable principal contract
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gateway/job-queue.mjs
+          git commit -m "refactor: persist OAuth member Job principals"
+          git push origin HEAD:fix/final-deep-hardening
