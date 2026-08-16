@@ -173,7 +173,11 @@ function verifyRefreshToken(signingKey, token, audience, issuer) {
 }
 
 function preflightAccessToken(config, publicUrl, configFile) {
-  if (config?.auth?.mode !== 'oauth') return '';
+  if (config?.auth?.mode !== 'oauth') {
+    const error = new Error('Public MCP preflight requires OAuth authentication');
+    error.code = 'DEVMATE_PUBLIC_MCP_OAUTH_REQUIRED';
+    throw error;
+  }
   const origin = new URL(String(publicUrl || ''));
   origin.pathname = '/';
   origin.search = '';

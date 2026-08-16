@@ -93,5 +93,5 @@ test('provider-native runtime and documentation describe one shared connection i
   const docs = source('docs/TUNNELS.md');
   assert.equal(typeof controller.TunnelController, 'function');
   assert.match(docs, /one shared public connection capability/i);
-  assert.match(docs, /complete desktop session generation/i);
+  assert.match(docs, /complete desktop generation/i);
 });

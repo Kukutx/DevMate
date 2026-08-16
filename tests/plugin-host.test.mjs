@@ -3,20 +3,20 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-plugin-host-'));
 const workspace = path.join(temp, 'workspace');
 const configPath = path.join(temp, 'config.json');
 await fsp.mkdir(workspace, { recursive: true });
 await fsp.writeFile(path.join(workspace, 'project.godot'), '[application]\nconfig/name="Test"\n', 'utf8');
-await fsp.writeFile(configPath, `${JSON.stringify({
-  version: 11,
-  permissions: { profile: 'fullAccess' },
-  runtime: {},
-  workspaces: [{ id: 'workspace', name: 'workspace', root: workspace, mode: 'workspace-write', reference: false }],
-  activeWorkspaceId: 'workspace',
-  plugins: { enabled: [], settings: {} }
-}, null, 2)}\n`, 'utf8');
+const config = configStore.newInstanceConfig({
+  workspaceRoot: workspace,
+  appVersion: configStore.DEFAULT_VERSION
+});
+config.permissions.profile = 'fullAccess';
+config.plugins = { enabled: [], settings: {} };
+configStore.atomicWriteJson(configPath, config);
 process.env.DEVMATE_CONFIG = configPath;
 
 const { installPluginHost, __test } = await import('../gateway/plugins/plugin-host.mjs');
