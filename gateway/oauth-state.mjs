@@ -2,8 +2,9 @@ import crypto from 'node:crypto';
 import { mutateDurableNamespace, readDurableNamespace } from './durable-state.mjs';
 
 const NAMESPACE = 'oauth';
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const MAX_FAMILIES = 5000;
+const MAX_AUTHORIZATION_CODES = 2000;
 const FAMILY_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const REVOKED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -12,19 +13,35 @@ function nowIso() {
 }
 
 function emptyState() {
-  return { version: STATE_VERSION, families: {} };
+  return { version: STATE_VERSION, authorizationCodes: {}, families: {} };
 }
 
 function normalizeState(value) {
   const state = value && typeof value === 'object' && !Array.isArray(value) ? value : emptyState();
   if (state.version !== STATE_VERSION) throw new Error(`Unsupported OAuth runtime-state version: ${String(state.version)}`);
-  if (!state.families || typeof state.families !== 'object' || Array.isArray(state.families)) throw new Error('OAuth runtime-state families are invalid');
+  if (!state.authorizationCodes || typeof state.authorizationCodes !== 'object' || Array.isArray(state.authorizationCodes)) {
+    throw new Error('OAuth runtime-state authorization codes are invalid');
+  }
+  if (!state.families || typeof state.families !== 'object' || Array.isArray(state.families)) {
+    throw new Error('OAuth runtime-state families are invalid');
+  }
   return state;
 }
 
 function prune(state, at = Date.now()) {
-  const entries = Object.entries(state.families);
-  for (const [id, family] of entries) {
+  for (const [nonce, record] of Object.entries(state.authorizationCodes)) {
+    const expiresAt = Date.parse(record?.expiresAt || '');
+    if (!Number.isFinite(expiresAt) || expiresAt <= at) delete state.authorizationCodes[nonce];
+  }
+  const codes = Object.entries(state.authorizationCodes);
+  if (codes.length > MAX_AUTHORIZATION_CODES) {
+    codes
+      .sort(([, left], [, right]) => Date.parse(left?.createdAt || 0) - Date.parse(right?.createdAt || 0))
+      .slice(0, codes.length - MAX_AUTHORIZATION_CODES)
+      .forEach(([nonce]) => { delete state.authorizationCodes[nonce]; });
+  }
+
+  for (const [id, family] of Object.entries(state.families)) {
     const expiresAt = Date.parse(family?.expiresAt || '');
     const revokedAt = Date.parse(family?.revokedAt || '');
     if ((Number.isFinite(expiresAt) && expiresAt <= at) || (Number.isFinite(revokedAt) && revokedAt + REVOKED_RETENTION_MS <= at)) {
@@ -45,6 +62,36 @@ function requireText(value, label) {
   const text = String(value || '').trim();
   if (!text) throw new Error(`${label} is required`);
   return text;
+}
+
+export function registerAuthorizationCode(nonce, expiresAt) {
+  const key = requireText(nonce, 'OAuth authorization-code nonce');
+  const expiry = new Date(expiresAt).toISOString();
+  if (Date.parse(expiry) <= Date.now()) throw new Error('OAuth authorization-code expiry must be in the future');
+  mutateDurableNamespace(NAMESPACE, emptyState(), current => {
+    const state = prune(normalizeState(current));
+    if (Object.keys(state.authorizationCodes).length >= MAX_AUTHORIZATION_CODES) {
+      throw new Error('OAuth authorization-code capacity reached');
+    }
+    if (state.authorizationCodes[key]) throw new Error('OAuth authorization-code nonce collision');
+    state.authorizationCodes[key] = { createdAt: nowIso(), expiresAt: expiry };
+    return state;
+  });
+}
+
+export function consumeAuthorizationCode(nonce) {
+  const key = String(nonce || '').trim();
+  if (!key) return false;
+  let consumed = false;
+  mutateDurableNamespace(NAMESPACE, emptyState(), current => {
+    const state = prune(normalizeState(current));
+    const record = state.authorizationCodes[key];
+    if (!record || Date.parse(record.expiresAt || '') <= Date.now()) return state;
+    delete state.authorizationCodes[key];
+    consumed = true;
+    return state;
+  });
+  return consumed;
 }
 
 export function createRefreshFamily({ subject, authVersion = null, clientId, audience, scope }) {
@@ -134,6 +181,7 @@ export function oauthRuntimeStateStatus() {
   const state = prune(normalizeState(readDurableNamespace(NAMESPACE, emptyState())));
   const families = Object.values(state.families);
   return {
+    pendingAuthorizationCodes: Object.keys(state.authorizationCodes).length,
     activeRefreshFamilies: families.filter(item => !item.revokedAt && Date.parse(item.expiresAt || '') > Date.now()).length,
     revokedRefreshFamilies: families.filter(item => !!item.revokedAt).length
   };
