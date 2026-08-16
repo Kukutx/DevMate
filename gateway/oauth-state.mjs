@@ -128,14 +128,20 @@ function familyError(code, message) {
 
 export function consumeRefreshFamily({ familyId, generation, subject, authVersion = null, clientId, audience, scope }) {
   let result = null;
+  let failure = null;
   mutateDurableNamespace(NAMESPACE, emptyState(), current => {
     const state = prune(normalizeState(current));
     const family = state.families[String(familyId || '')];
-    if (!family || family.revokedAt) throw familyError('oauth_refresh_invalid', 'OAuth refresh-token family is not active');
+    if (!family || family.revokedAt) {
+      failure = familyError('oauth_refresh_invalid', 'OAuth refresh-token family is not active');
+      return state;
+    }
     if (Date.parse(family.expiresAt || '') <= Date.now()) {
       family.revokedAt = nowIso();
       family.revokeReason = 'expired';
-      throw familyError('oauth_refresh_invalid', 'OAuth refresh-token family has expired');
+      family.updatedAt = family.revokedAt;
+      failure = familyError('oauth_refresh_invalid', 'OAuth refresh-token family has expired');
+      return state;
     }
     const matches =
       family.subject === String(subject || '') &&
@@ -146,19 +152,23 @@ export function consumeRefreshFamily({ familyId, generation, subject, authVersio
     if (!matches) {
       family.revokedAt = nowIso();
       family.revokeReason = 'binding_mismatch';
-      throw familyError('oauth_refresh_invalid', 'OAuth refresh-token binding is invalid');
+      family.updatedAt = family.revokedAt;
+      failure = familyError('oauth_refresh_invalid', 'OAuth refresh-token binding is invalid');
+      return state;
     }
     if (Number(generation) !== Number(family.generation)) {
       family.revokedAt = nowIso();
       family.revokeReason = 'reuse_detected';
       family.updatedAt = family.revokedAt;
-      throw familyError('oauth_refresh_reuse', 'OAuth refresh-token reuse detected; the token family was revoked');
+      failure = familyError('oauth_refresh_reuse', 'OAuth refresh-token reuse detected; the token family was revoked');
+      return state;
     }
     family.generation += 1;
     family.updatedAt = nowIso();
     result = { id: family.id, generation: family.generation, expiresAt: family.expiresAt };
     return state;
   });
+  if (failure) throw failure;
   return result;
 }
 
