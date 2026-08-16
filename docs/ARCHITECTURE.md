@@ -1,6 +1,6 @@
 # DevMate architecture
 
-DevMate is a local-first development control plane. VS Code, Obsidian, standalone deployment, member access, external execution Runners and optional platform capabilities all use one Gateway and one current capability model.
+DevMate is a local-first development control plane. VS Code, Obsidian, standalone deployment, OAuth member access, external Runners and optional platform capabilities all use one Gateway and one current capability model.
 
 ## Runtime topology
 
@@ -33,16 +33,7 @@ local toolchains/workspaces
 
 The central Gateway is a single active process per state directory. External Runners distribute execution but never replicate or independently own central control-plane state.
 
-Desktop hosts coordinate one provider-native public connection for the same state directory:
-
-```text
-VS Code ─────┐
-             ├─ shared Gateway
-Obsidian ────┤
-             └─ shared public connection → OAuth-protected /mcp
-```
-
-Either desktop host can own or attach to the shared Gateway and public connection.
+Desktop hosts coordinate one provider-native public connection for the same state directory. Either VS Code or Obsidian can own or attach to the shared Gateway and public connection.
 
 ## MCP 2026 transport
 
@@ -70,65 +61,67 @@ The external Runner client pins `2026-07-28`; it does not negotiate down to an o
 
 ## Authentication and identity
 
-Loopback and remote ingress are intentionally different trust boundaries:
+Loopback and remote ingress are distinct trust boundaries:
 
 - verified loopback MCP requests are the local owner;
 - every non-loopback `/mcp` request requires OAuth;
-- `auth.mode: "none"` therefore means loopback-only MCP, not unauthenticated public MCP;
-- OAuth is the default for new desktop and standalone instances.
+- `auth.mode: "none"` means loopback-only MCP, never unauthenticated public MCP;
+- OAuth is the default for VS Code/Obsidian public access, Team/Control-plane bootstrap, member-enabled bootstrap, and standalone initialization with an explicit public URL.
 
 OAuth uses protected-resource discovery, authorization-server discovery, HTTPS Client ID Metadata Documents, Authorization Code + PKCE S256, exact `resource` binding, issuer-bound access/refresh tokens and durable refresh-token rotation.
 
-`config.json` stores only the authentication mode. OAuth signing material and the owner approval code live in protected instance state and are loaded fail-closed at Gateway startup.
+`config.json` stores only authentication mode and non-plaintext identity metadata. OAuth signing material and the owner approval code live in protected instance state and are loaded fail-closed at Gateway startup.
 
 Remote identities resolve as:
 
 ```text
 OAuth claims
    ├─ sub=owner       → oauth-owner → owner
-   └─ sub=member:<id> → current Team member
+   └─ sub=member:<id> → current member state
                          ├─ role
                          ├─ workspace scope
                          ├─ expiry/disabled state
-                         └─ authorization version
+                         └─ authVersion
 ```
 
-Member login codes use the `dmc_` prefix only at the OAuth authorization page. They are never MCP access tokens. Rotating a login code increments the member authorization version; existing member OAuth tokens then fail current-state resolution.
+Member login codes use the `dmc_` prefix only at the OAuth authorization page. They are never MCP access tokens. Rotating a login code increments `authVersion`; existing member OAuth credentials then fail current-state resolution.
 
 Runner `dmr_` credentials are separate machine/service credentials for `/runner/v1` and do not authenticate MCP ingress.
 
 ## Entry points
 
 - `extension-entry-shared-tunnel.js`: VS Code extension entry and shared public-connection coordination.
-- `vscode-host/lifecycle.js`: VS Code host activation, configuration synchronization, context mirroring, diagnostics and isolated child-process Gateway routing.
+- `vscode-host/lifecycle.js`: VS Code activation, configuration synchronization, context mirroring, diagnostics and isolated child-process Gateway routing.
 - `extension-entry-platform.js` and `extension.js`: remaining VS Code commands and platform integration.
 - `obsidian-plugin/src/main.js`: Obsidian bridge, shared Gateway lifecycle, public connection lifecycle and Ready state.
-- `scripts/devmate-command.mjs`: standalone CLI dispatcher.
-- `scripts/standalone-runtime.mjs`: standalone configuration and management operations.
+- `scripts/devmate-command.mjs`: standalone CLI dispatcher and secure bootstrap composition.
+- `scripts/standalone-runtime.mjs`: standalone configuration, OAuth/member lifecycle and management operations.
 - `scripts/devmate-runner.mjs`: external Runner Agent using a pinned MCP 2026 client.
 - `gateway/server-entry.mjs` / `gateway/server-runtime.mjs`: runtime infrastructure, request wrappers, process lock and MCP server bootstrap.
 - `gateway/server.mjs`: core file, command, Git, context and reporting tools.
 
-## Capability-based instance configuration
+## Capability-based configuration
 
 `shared/instance-config.cjs` defines the only supported current instance schema. Major capabilities include:
 
-- `auth`: current authentication mode only;
+- `auth`: authentication mode only;
 - `connection`: public provider and stable HTTPS origin;
-- `team`: member identities, RBAC and optional workspace-lease policy;
+- `team`: member identity metadata, RBAC and optional workspace-lease policy;
 - `requestPolicy`: Host restrictions, body limits, rate limits, concurrency and timeout policy;
-- `runners`: embedded/external execution topology and credential metadata;
+- `jobs` / `runnerControl`: embedded and external execution topology plus Runner credential metadata;
 - `permissions`: local permission profile;
 - `plugins`: optional capability state;
 - maintenance and workspace configuration.
 
-Capabilities compose independently. Unsupported instance fields and unsupported schema versions fail closed rather than being translated at runtime.
+Capabilities compose independently. Unsupported instance fields and schema versions fail closed rather than being translated at runtime.
+
+Standalone invariants are enforced below bootstrap: public URLs imply OAuth unless explicitly invalidated, public URL + `none` is rejected, and member creation/rotation ensures OAuth private state. This prevents alternate CLI paths from manufacturing half-configured shared instances.
 
 ## Capability Host
 
 `gateway/server-extension-host.mjs` is the single MCP registration interception layer. It installs once on the MCP server class and provides deterministic tool decorators and server initializers. `gateway/platform-capabilities.mjs` installs policy, member access, Runner, local and plugin capabilities in fixed order.
 
-No plugin or capability may patch `McpServer.prototype` independently. `gateway/plugins/plugin-host.mjs` is invoked through the Capability Host only.
+No plugin or capability may patch `McpServer.prototype` independently. Repository contracts reject competing `registerTool`/`connect` prototype interception.
 
 ## Tool policy and authorization
 
@@ -140,15 +133,19 @@ Member roles are cumulative:
 observer → reviewer → developer → maintainer → owner
 ```
 
-Every remote member request is re-resolved against current member state before tool authorization. Invalid providers, roles, request limits, concurrency values and credentials fail explicitly.
+Every remote member request is re-resolved against current member state before tool authorization. Durable jobs persist `authVersion` and re-evaluate current identity/policy before execution. Invalid providers, roles, request limits, concurrency values and credentials fail explicitly.
+
+Approval policy applies to current `oauth-member` principals. It is independent of ingress provider and no longer relies on a static Team bearer identity.
 
 ## Configuration and durable state
 
-`shared/config-store.cjs` is the single configuration persistence boundary. VS Code, Obsidian, Gateway, standalone CLI, public-connection runtime and Runner paths use its strict supported-version checks, lock, atomic replacement, recovery, size bounds and restrictive permissions.
+`shared/config-store.cjs` is the single public configuration persistence boundary. VS Code, Obsidian, Gateway, standalone CLI, public-connection runtime and Runner paths use its strict supported-version checks, lock, atomic replacement, recovery, size bounds and restrictive permissions.
 
-`shared/oauth-secrets.cjs` owns protected OAuth signing/owner-approval secrets outside `config.json`.
+`shared/oauth-secrets.cjs` owns OAuth signing/owner-approval secrets outside `config.json`.
 
-`gateway/durable-state.mjs` owns namespaced control-plane runtime state under `state/runtime-state.json`. OAuth one-time authorization-code state and refresh-token family generations use this durable boundary, so restart does not make credentials reusable.
+`gateway/durable-state.mjs` owns namespaced control-plane runtime state under `state/runtime-state.json`. OAuth one-time authorization-code state and refresh-token family generations use this durable boundary, so restart cannot make credentials reusable.
+
+Refresh-family mutation persists revocation before surfacing replay, binding-mismatch or expiry errors. A failed refresh therefore cannot accidentally roll back its security side effect.
 
 Other state includes:
 
@@ -162,13 +159,11 @@ Unsupported future durable-state versions are rejected rather than overwritten o
 
 ## Desktop lifecycle and Ready
 
-The desktop product lifecycle is:
-
 ```text
 Start
   → start/attach Gateway
   → start/attach configured public connection
-  → obtain short-lived internal owner preflight access token when OAuth is active
+  → obtain short-lived internal owner preflight token
   → MCP 2026 server/discover
   → tools/list
   → real tools/call probe
@@ -183,16 +178,7 @@ VS Code uses `vscode-host/public-tunnel-verifier.js` for automatic generation-aw
 
 `vscode-host/tunnel-controller.js` is the provider-native shared connection controller used by desktop hosts. It supports ngrok, Cloudflare Quick, Cloudflare managed and external HTTPS ingress.
 
-The controller provides:
-
-- shared startup lease;
-- strict configuration matching;
-- one ownership record;
-- ownership heartbeat;
-- native provider launch/readiness;
-- fail-closed cleanup on ownership loss;
-- bounded auto-restart;
-- ownership-aware stop/dispose semantics.
+The controller provides shared startup lease, strict configuration matching, one ownership record, ownership heartbeat, native provider launch/readiness, fail-closed cleanup on ownership loss, bounded auto-restart, and ownership-aware stop/dispose semantics.
 
 A public connection never weakens the authentication boundary: remote `/mcp` access still requires OAuth.
 
@@ -210,11 +196,13 @@ Workspace-lease enforcement is an explicit policy capability for coordinated rem
 
 Transient commands run through `gateway/command-process.mjs`, which owns and terminates the complete process tree on timeout and Gateway shutdown. Persistent processes and previews use bounded registries with explicit workspace ownership.
 
-Desktop Gateway processes are isolated child processes. Each host releases only processes it owns; another host that still requests the desktop product lifecycle recovers through the complete Start path instead of relying on an orphan process.
+Desktop Gateway processes are isolated child processes. Each host releases only processes it owns; another host that still requests the desktop lifecycle recovers through the complete Start path instead of relying on an orphan process.
 
 ## Durable Jobs and Runners
 
-Only reviewed targets declared by policy can be queued. Before execution DevMate rechecks current role, workspace scope, lease, approval, plugin state and Runner capability requirements. External Runners authenticate only to `/runner/v1` using scoped `dmr_` credentials. Credential workspace scope is mandatory and invalid Runner limits fail rather than being silently clamped.
+Only reviewed targets declared by policy can be queued. Before execution DevMate rechecks current role, workspace scope, `authVersion`, lease, approval, plugin state and Runner capability requirements.
+
+External Runners authenticate only to `/runner/v1` using scoped `dmr_` credentials. Credential workspace scope is mandatory and invalid Runner limits fail rather than being silently clamped.
 
 Execution after Runner loss is at-least-once. Side-effecting queued operations must therefore be idempotent or transactional.
 
@@ -230,7 +218,7 @@ Obsidian exposes an authenticated loopback bridge for operations requiring the O
 
 Repository verification is discovery-based:
 
-- `scripts/check-repository.mjs` syntax-checks JavaScript modules and architecture contracts;
+- `scripts/check-repository.mjs` syntax-checks JavaScript modules and enforces current-only architecture/security contracts;
 - `scripts/check-workflows.mjs` parses permanent GitHub Actions workflows;
 - `scripts/run-tests.mjs` discovers normal tests and isolates exact failing files;
 - Windows CI validates dependencies, contracts, tests, Gateway smoke, VSIX packaging, packaged VSIX runtime/tunnel smokes and Obsidian package smoke;
