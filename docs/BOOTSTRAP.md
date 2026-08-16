@@ -1,17 +1,19 @@
 # DevMate bootstrap
 
-`devmate bootstrap` is the fastest standalone setup path. It always creates one current-schema DevMate instance. Presets are convenience templates that provide **capability defaults**; they are not runtime modes, and explicit CLI options override preset defaults.
+`devmate bootstrap` creates one current-schema DevMate instance. Presets are capability defaults, not runtime modes. Explicit options may override preset capabilities, but DevMate refuses combinations that would create an unusable or insecure identity configuration.
 
 ## Presets
 
-| Preset | Use | Embedded Runner | External Runner API | Workspace lease default | Connection default |
+| Preset | MCP authentication | Embedded Runner | External Runner API | Workspace lease default | Connection default |
 |---|---|---:|---:|---:|---|
-| `personal` | One developer | on | off | off | ngrok |
-| `team` | Trusted team on one host | on | off | on | ngrok |
-| `control-plane` | Hardened central build/test Gateway | off | on | on | external HTTPS |
-| `runner` | External Runner host local config | off | off | off | ngrok/default local config |
+| `personal` | `none` — loopback-only | on | off | off | ngrok |
+| `team` | OAuth | on | off | on | ngrok |
+| `control-plane` | OAuth | off | on | on | external HTTPS |
+| `runner` | `none` — local loopback MCP | off | off | off | ngrok/local config |
 
-No preset writes `mode`, `deployment`, or `production` fields.
+No preset writes historical `mode`, `deployment`, or `production` fields.
+
+`auth.mode: "none"` is not a public authentication mode. It accepts MCP only from a genuine loopback socket with a loopback Host. Team and Control-plane presets therefore use OAuth by construction.
 
 ## Personal preset
 
@@ -19,7 +21,7 @@ No preset writes `mode`, `deployment`, or `production` fields.
 npx devmate bootstrap --preset personal --workspace /srv/project
 ```
 
-This creates one owner-only instance with embedded execution enabled.
+This creates one local owner instance. Its MCP endpoint is usable without authentication only over loopback.
 
 ## Team preset
 
@@ -31,7 +33,9 @@ npx devmate bootstrap \
   --member-role developer
 ```
 
-The preset enables workspace-lease enforcement by default and keeps embedded execution enabled. Member creation is optional; when supplied, the member token is returned once and only a salted hash is persisted.
+The preset enables OAuth and workspace-lease enforcement by default. Member creation returns a one-time `dmc_` **OAuth login code**. DevMate stores only a salted verifier plus the member `authVersion`; it never stores the plaintext login code in `config.json`.
+
+Creating a member without a preset also makes OAuth mandatory. If `--member-name` is supplied with `--authentication-mode none`, bootstrap fails instead of producing a member record that cannot authenticate remotely.
 
 ## Control-plane preset
 
@@ -49,15 +53,16 @@ npx devmate bootstrap \
 
 Defaults:
 
+- OAuth MCP authentication;
 - external HTTPS connection;
 - embedded Runner disabled;
 - external Runner control enabled;
 - workspace-lease enforcement enabled;
 - public Host restricted to the configured stable origin.
 
-Because the default provider is `external`, `--public-url` is required unless you explicitly override the provider with another valid current provider.
+Because the default provider is `external`, `--public-url` is required unless another current provider is explicitly selected.
 
-Creating a Runner credential also enables external Runner control. The plaintext `dmr_` token is returned once.
+Creating a Runner credential returns a one-time `dmr_` token and enables external Runner control. Only its salted verifier is persisted.
 
 ## Runner-host preset
 
@@ -75,11 +80,17 @@ devmate-runner \
   --concurrency 2
 ```
 
-The Runner-host preset disables both the local embedded queue and external Runner-control API. The external Agent still uses the local Gateway as its loopback execution surface.
+The Runner-host preset disables both the local embedded queue and the central external Runner-control API. Its local MCP surface is loopback-only. The external Agent authenticates separately to the central `/runner/v1` endpoint with the scoped `dmr_` credential.
+
+## OAuth secret boundary
+
+OAuth mode creates private runtime secret state beside the instance configuration. OAuth signing material and the rotating owner approval code are stored under the DevMate state directory with restrictive permissions; they are not fields in public `config.json`.
+
+Member `dmc_` login codes are used only to authenticate the member during OAuth authorization. MCP `/mcp` receives OAuth access tokens, not `dmc_` codes and not static member Bearer credentials.
 
 ## Override preset defaults
 
-Explicit options win over preset defaults. For example:
+Explicit options still compose capabilities. For example:
 
 ```bash
 npx devmate bootstrap \
@@ -89,7 +100,7 @@ npx devmate bootstrap \
   --external-runner-control true
 ```
 
-This remains one instance with a different capability composition; it does not create or switch a runtime mode.
+This remains one instance with a different capability composition. Authentication invariants still apply: a member-enabled bootstrap cannot be downgraded to `none`.
 
 Unknown preset names fail explicitly.
 
@@ -101,18 +112,20 @@ The response returns:
 - MCP endpoint URL;
 - active authentication mode;
 - connection/access/execution summary;
-- optional member/Runner credentials created by the command;
+- optional one-time member login code and/or Runner credential;
 - next start command.
 
-The MCP endpoint URL contains no credential. New instances are no-auth; an explicitly OAuth-enabled instance uses OAuth rather than a copied static Bearer token.
+MCP endpoint URLs never contain credentials.
 
 ## Inspect configuration
 
-`status` is offline and does not print credential values:
+`status` is offline and never prints plaintext credentials:
 
 ```bash
 npx devmate status --config /srv/devmate/config.json
 ```
+
+It also reports an invalid state if active members exist while authentication is not OAuth.
 
 ## Commands
 
@@ -128,5 +141,7 @@ devmate member-create
 devmate member-rotate
 devmate member-revoke
 ```
+
+`member-rotate` rotates the member's OAuth login code and increments `authVersion`, invalidating previously issued member OAuth credentials. There is no Team bearer-token rotation API.
 
 There is one CLI dispatcher. Commands execute in the current Node process; there is no compatibility subprocess or alternate persistence path.
