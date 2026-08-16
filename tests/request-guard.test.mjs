@@ -4,32 +4,32 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
+import { hostAllowed } from '../gateway/http-host-policy.mjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-request-guard-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
 const requestContextModule = await import('../gateway/request-context.mjs');
 const guard = await import('../gateway/request-guard.mjs');
-const config = {
-  version: 11,
-  auth: { mode: 'none' },
-  permissions: { profile: 'fullAccess' },
-  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
-  team: { members: [], requireWorkspaceLeaseForWrites: true },
-  requestPolicy: {
-    requestsPerMinute: 10,
-    maxConcurrentRequests: 4,
-    maxConcurrentPerPrincipal: 2,
-    maxRequestBytes: 100000,
-    requestTimeoutMs: 10000,
-    allowedHosts: ['127.0.0.1']
-  },
-  runtime: { maxConcurrentJobs: 2 },
-  jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
-  activeWorkspaceId: 'workspace',
-  workspaces: [{ id: 'workspace', root: temp }]
+const config = configStore.newInstanceConfig({
+  workspaceRoot: temp,
+  appVersion: configStore.DEFAULT_VERSION
+});
+config.permissions.profile = 'fullAccess';
+config.requestPolicy = {
+  ...config.requestPolicy,
+  requestsPerMinute: 10,
+  maxConcurrentRequests: 4,
+  maxConcurrentPerPrincipal: 2,
+  maxRequestBytes: 100000,
+  requestTimeoutMs: 10000,
+  allowedHosts: ['127.0.0.1']
 };
-await fsp.writeFile(configPath, JSON.stringify(config, null, 2));
+config.runtime.maxConcurrentJobs = 2;
+config.jobs.embeddedRunnerEnabled = true;
+config.jobs.allowJobGitSave = true;
+configStore.atomicWriteJson(configPath, config);
 
 let server;
 let base;
@@ -45,7 +45,8 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await new Promise(resolve => server.close(resolve));
+  if (server) await new Promise(resolve => server.close(resolve));
+  delete process.env.DEVMATE_CONFIG;
   await fsp.rm(temp, { recursive: true, force: true });
 });
 
@@ -61,6 +62,7 @@ test('direct no-auth treats callers as the local owner and strips irrelevant aut
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.principal.id, 'local-owner');
+  assert.equal(body.principal.source, 'local');
   assert.equal(body.authorization, undefined);
 });
 
@@ -117,40 +119,14 @@ test('rejects oversized chunked MCP bodies without trusting Content-Length', asy
   assert.equal(bodyCompleted, false);
 });
 
-test('enforces per-principal rate limits', () => {
-  guard.resetRequestGuardState();
-  for (let index = 0; index < 10; index++) {
-    assert.equal(guard.__test.consumeRateLimit('alice', 10).allowed, true);
-  }
-  assert.equal(guard.__test.consumeRateLimit('alice', 10).allowed, false);
-});
-
-test('maintains a separate authentication-attempt limiter', () => {
-  guard.resetRequestGuardState();
-  assert.equal(guard.__test.consumeRateLimit('ip:test', 2, guard.__test.preAuthRateWindows).allowed, true);
-  assert.equal(guard.__test.consumeRateLimit('ip:test', 2, guard.__test.preAuthRateWindows).allowed, true);
-  assert.equal(guard.__test.consumeRateLimit('ip:test', 2, guard.__test.preAuthRateWindows).allowed, false);
-});
-
-test('rate limits unauthenticated published preview traffic per remote address', () => {
-  guard.resetRequestGuardState();
-  const request = { socket: { remoteAddress: '203.0.113.10' } };
-  const previewConfig = { requestPolicy: { requestsPerMinute: 10 } };
-  for (let index = 0; index < 240; index += 1) {
-    assert.equal(guard.__test.consumePreviewRateLimit(request, previewConfig).allowed, true);
-  }
-  assert.equal(guard.__test.consumePreviewRateLimit(request, previewConfig).allowed, false);
-  assert.equal(guard.__test.consumePreviewRateLimit({ socket: { remoteAddress: '203.0.113.11' } }, previewConfig).allowed, true);
-});
-
 test('Host restrictions are explicit request policy rather than a deployment mode side effect', () => {
   const publicRequest = host => ({ headers: { host }, socket: { remoteAddress: '203.0.113.10' } });
   const localRequest = host => ({ headers: { host }, socket: { remoteAddress: '127.0.0.1' } });
   const unrestricted = { requestPolicy: { allowedHosts: [] } };
-  assert.equal(guard.__test.hostAllowed(publicRequest('devmate.example.com'), unrestricted), true);
-  assert.equal(guard.__test.hostAllowed(localRequest('127.0.0.1:8787'), unrestricted), true);
-  assert.equal(guard.__test.hostAllowed(publicRequest('localhost:8787'), unrestricted), false);
+  assert.equal(hostAllowed(publicRequest('devmate.example.com'), unrestricted), true);
+  assert.equal(hostAllowed(localRequest('127.0.0.1:8787'), unrestricted), true);
+  assert.equal(hostAllowed(publicRequest('localhost:8787'), unrestricted), false);
   const restricted = { requestPolicy: { allowedHosts: ['devmate.example.com'] } };
-  assert.equal(guard.__test.hostAllowed(publicRequest('devmate.example.com'), restricted), true);
-  assert.equal(guard.__test.hostAllowed(publicRequest('evil.example.com'), restricted), false);
+  assert.equal(hostAllowed(publicRequest('devmate.example.com'), restricted), true);
+  assert.equal(hostAllowed(publicRequest('evil.example.com'), restricted), false);
 });

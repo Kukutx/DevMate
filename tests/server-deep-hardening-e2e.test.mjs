@@ -8,6 +8,8 @@ import path from 'node:path';
 import test from 'node:test';
 import configStore from '../shared/config-store.cjs';
 
+const MCP_PROTOCOL_VERSION = '2026-07-28';
+
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function freePort() {
@@ -33,13 +35,33 @@ async function waitReady(port, child, output) {
   throw new Error(`Gateway did not become ready: ${output()}`);
 }
 
+function requestMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': { name: 'server-hardening-e2e', version: configStore.DEFAULT_VERSION },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+
 function rpcClient(port) {
   let id = 0;
   return async (method, params = {}) => {
+    const name = method === 'tools/call' ? String(params?.name || '') : '';
     const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
-      headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params })
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+        'mcp-method': method,
+        ...(name ? { 'mcp-name': name } : {})
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: ++id,
+        method,
+        params: { ...params, _meta: requestMeta() }
+      })
     });
     const text = await response.text();
     let json = null;
@@ -96,7 +118,7 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   } catch {}
 
   const port = await freePort();
-  const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: '3.4.4' });
+  const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: configStore.DEFAULT_VERSION });
   config.activeWorkspaceId = 'app';
   config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'Application', role: 'active' };
   config.connection = {
@@ -115,7 +137,7 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
     readOnly: true,
     command: 'node script.mjs --token top-secret-configured-command'
   }];
-  await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+  configStore.atomicWriteJson(configPath, config);
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: process.cwd(),
@@ -128,20 +150,18 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   child.stdout.on('data', chunk => { stdout += chunk; });
   child.stderr.on('data', chunk => { stderr += chunk; });
   t.after(async () => {
+    const exited = new Promise(resolve => child.once('exit', resolve));
     if (child.exitCode === null) child.kill();
-    await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(3000)]);
+    if (child.exitCode === null) await Promise.race([exited, delay(3000)]);
     await fsp.rm(temp, { recursive: true, force: true });
   });
 
   await waitReady(port, child, () => `${stdout}\n${stderr}`);
   const rpc = rpcClient(port);
-  const init = await rpc('initialize', {
-    protocolVersion: '2025-03-26',
-    capabilities: {},
-    clientInfo: { name: 'server-hardening-e2e', version: '1' }
-  });
-  assert.equal(init.response.ok, true, init.text);
-  assert.equal(init.json?.result?.serverInfo?.name, 'devmate');
+  const discovery = await rpc('server/discover');
+  assert.equal(discovery.response.ok, true, discovery.text);
+  assert.ok(discovery.json?.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION), discovery.text);
+  assert.equal(typeof discovery.json?.result?.capabilities, 'object', discovery.text);
 
   const firstGateway = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
   assertToolSuccess(firstGateway, 'gateway_status first');

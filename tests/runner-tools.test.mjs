@@ -3,40 +3,59 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-runner-tools-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
-await fsp.writeFile(configPath, JSON.stringify({
-  version: 11,
-  appVersion: '3.3.0',
-  auth: { required: true, token: 'owner-token-long-enough' },
-  connection: { provider: 'ngrok', publicUrl: '' },
-  team: { members: [], requireWorkspaceLeaseForWrites: false },
-  requestPolicy: {},
-  runtime: { maxConcurrentJobs: 2 },
-  jobs: { embeddedRunnerEnabled: true },
-  runnerControl: { enabled: false, credentials: [] },
-  activeWorkspaceId: 'app',
-  workspaces: [{ id: 'app', name: 'Application', root: temp, mode: 'workspace-write', reference: false }]
-}, null, 2), 'utf8');
+
+const config = configStore.newInstanceConfig({
+  workspaceRoot: temp,
+  appVersion: configStore.DEFAULT_VERSION
+});
+config.activeWorkspaceId = 'app';
+config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'Application', role: 'active' };
+config.permissions.profile = 'fullAccess';
+config.team.requireWorkspaceLeaseForWrites = false;
+config.jobs.embeddedRunnerEnabled = true;
+config.runnerControl.enabled = false;
+
+const teamAccess = await import('../gateway/team-access.mjs');
+const reviewerMember = teamAccess.createTeamMember(config, {
+  id: 'reviewer',
+  name: 'Reviewer',
+  role: 'reviewer',
+  workspaceIds: ['app']
+}).member;
+const maintainerMember = teamAccess.createTeamMember(config, {
+  id: 'maintainer',
+  name: 'Maintainer',
+  role: 'maintainer',
+  workspaceIds: ['app']
+}).member;
+configStore.atomicWriteJson(configPath, config);
 
 const { __test, registerRunnerTools } = await import('../gateway/runner-tools.mjs');
 const { runWithRequestContext } = await import('../gateway/request-context.mjs');
 
 function principal(role) {
+  if (role === 'owner') {
+    return { id: 'local-owner', name: 'Local owner', role: 'owner', source: 'local', workspaceIds: [] };
+  }
+  const member = role === 'maintainer' ? maintainerMember : reviewerMember;
   return {
-    id: role,
-    name: role,
-    role,
-    source: 'team-token',
-    workspaceIds: ['app']
+    id: member.id,
+    name: member.name,
+    role: member.role,
+    source: 'oauth-member',
+    workspaceIds: [...member.workspaceIds],
+    authVersion: member.authVersion
   };
 }
 
 const tools = new Map();
 registerRunnerTools(
-  (name, config, handler) => tools.set(name, { config, handler }),
+  (name, toolConfig, handler) => tools.set(name, { config: toolConfig, handler }),
   {
     ro: { readOnlyHint: true, destructiveHint: false },
     rw: { readOnlyHint: false, destructiveHint: true }
@@ -44,12 +63,12 @@ registerRunnerTools(
 );
 
 test('Runner runtime reporting treats missing embedded-runner state as disabled', () => {
-  const config = { jobs: {}, runnerControl: { enabled: false, path: '/runner/v1', maxRequestBytes: 65536, requestsPerMinute: 30, maxCredentials: 1, credentials: [] } };
-  assert.equal(__test.publicRuntime(config).embeddedRunnerEnabled, false);
+  const runtimeConfig = { jobs: {}, runnerControl: { enabled: false, path: '/runner/v1', maxRequestBytes: 65536, requestsPerMinute: 30, maxCredentials: 1, credentials: [] } };
+  assert.equal(__test.publicRuntime(runtimeConfig).embeddedRunnerEnabled, false);
 });
 
 test('Runner runtime reporting counts only usable credentials as active', () => {
-  const config = {
+  const runtimeConfig = {
     jobs: {},
     runnerControl: {
       enabled: true,
@@ -65,7 +84,7 @@ test('Runner runtime reporting counts only usable credentials as active', () => 
       ]
     }
   };
-  assert.equal(__test.publicRuntime(config).activeCredentials, 1);
+  assert.equal(__test.publicRuntime(runtimeConfig).activeCredentials, 1);
 });
 
 test('Runner topology status distinguishes configured and live embedded state', async () => {

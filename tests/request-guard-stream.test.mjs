@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { hostAllowed } from '../gateway/http-host-policy.mjs';
 import { __test } from '../gateway/request-guard.mjs';
 
 function request(host, remoteAddress = '203.0.113.10') {
@@ -8,10 +9,10 @@ function request(host, remoteAddress = '203.0.113.10') {
 
 test('explicit Host policy accepts configured public hosts and rejects unrelated hosts', () => {
   const config = { requestPolicy: { allowedHosts: ['devmate.example.com'] } };
-  assert.equal(__test.hostAllowed(request('devmate.example.com'), config), true);
-  assert.equal(__test.hostAllowed(request('unrelated.example.com'), config), false);
-  assert.equal(__test.hostAllowed(request('127.0.0.1:8787', '127.0.0.1'), config), true);
-  assert.equal(__test.hostAllowed(request('localhost:8787'), config), false);
+  assert.equal(hostAllowed(request('devmate.example.com'), config), true);
+  assert.equal(hostAllowed(request('unrelated.example.com'), config), false);
+  assert.equal(hostAllowed(request('127.0.0.1:8787', '127.0.0.1'), config), true);
+  assert.equal(hostAllowed(request('localhost:8787'), config), false);
 });
 
 test('bounds global and principal concurrency independently', () => {

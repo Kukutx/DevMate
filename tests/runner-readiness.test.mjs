@@ -3,47 +3,43 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
+import publicVerification from '../shared/public-ingress-verification.cjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-runner-readiness-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
 
-const config = {
-  version: 11,
-  appVersion: '3.4.4',
-  instanceId: 'runner-readiness-tests',
-  auth: { required: true, token: 'owner-token-long-enough' },
-  connection: {
-    provider: 'external',
-    publicUrl: 'https://devmate.example.com',
-    lastPreflightAt: new Date().toISOString(),
-    lastPublicHost: 'devmate.example.com',
-    lastMcpPath: '/mcp',
-    lastToolCount: 10,
-    lastToolCallVerified: true,
-    lastProbeTool: 'gateway_status',
-    lastServerName: 'devmate'
-  },
-  team: {
-    members: [{ id: 'developer', name: 'Developer', role: 'developer', disabled: false, workspaceIds: ['app'] }],
-    requireWorkspaceLeaseForWrites: true,
-    approvals: { enabled: true, requiredCapabilities: ['publish', 'admin'], separationOfDuties: true }
-  },
-  requestPolicy: {
-    allowedHosts: ['devmate.example.com'],
-    maxRequestBytes: 2097152,
-    requestsPerMinute: 120,
-    maxConcurrentRequests: 24,
-    maxConcurrentPerPrincipal: 4,
-    requestTimeoutMs: 900000
-  },
-  runtime: { maxConcurrentJobs: 2 },
-  jobs: { embeddedRunnerEnabled: false, allowJobGitSave: true },
-  runnerControl: { enabled: true, credentials: [] },
-  maintenance: { auditRetentionDays: 90 },
-  activeWorkspaceId: 'app',
-  workspaces: [{ id: 'app', name: 'Application', root: temp, mode: 'workspace-write', reference: false }]
+const config = configStore.newInstanceConfig({
+  workspaceRoot: temp,
+  appVersion: configStore.DEFAULT_VERSION
+});
+config.instanceId = 'runner-readiness-tests';
+config.activeWorkspaceId = 'app';
+config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'Application', role: 'active' };
+config.auth = { mode: 'oauth' };
+config.connection.provider = 'external';
+config.connection.publicUrl = 'https://devmate.example.com';
+config.requestPolicy.allowedHosts = ['devmate.example.com'];
+config.team.requireWorkspaceLeaseForWrites = true;
+config.team.approvals = {
+  ...config.team.approvals,
+  enabled: true,
+  requiredCapabilities: ['publish', 'admin'],
+  separationOfDuties: true
 };
+config.jobs.embeddedRunnerEnabled = false;
+config.jobs.allowJobGitSave = true;
+config.runnerControl.enabled = true;
+config.maintenance.auditRetentionDays = 90;
+
+const teamAccess = await import('../gateway/team-access.mjs');
+teamAccess.createTeamMember(config, {
+  id: 'developer',
+  name: 'Developer',
+  role: 'developer',
+  workspaceIds: ['app']
+});
 
 const { createRunnerCredential } = await import('../gateway/runner-access.mjs');
 createRunnerCredential(config, {
@@ -51,7 +47,17 @@ createRunnerCredential(config, {
   workspaceIds: ['app'],
   capabilities: ['core', 'external']
 });
-await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+
+const verificationStamp = new Date().toISOString();
+Object.assign(config.connection, publicVerification.successfulVerificationPatch({
+  publicOrigin: config.connection.publicUrl,
+  mcpUrl: `${config.connection.publicUrl}/mcp`,
+  toolCount: 10,
+  toolCallVerified: true,
+  probeTool: 'gateway_status',
+  server: { name: 'devmate', version: configStore.DEFAULT_VERSION }
+}, config.connection.publicUrl, verificationStamp));
+configStore.atomicWriteJson(configPath, config);
 
 const { acquireGatewayInstanceLock, releaseGatewayInstanceLock, resetDurableStateForTests } = await import('../gateway/durable-state.mjs');
 const { clearJobsForTests, registerRunner } = await import('../gateway/job-queue.mjs');
@@ -64,7 +70,8 @@ acquireGatewayInstanceLock();
 test('background execution is optional when neither embedded nor external Runner is configured', () => {
   const withoutRunners = structuredClone(config);
   withoutRunners.jobs.embeddedRunnerEnabled = false;
-  withoutRunners.runnerControl = { enabled: false, credentials: [] };
+  withoutRunners.runnerControl.enabled = false;
+  withoutRunners.runnerControl.credentials = [];
   const status = readiness(withoutRunners);
   const execution = status.checks.find(item => item.key === 'runner-execution');
   assert.equal(execution.required, false);
@@ -85,7 +92,7 @@ test('external-only execution requires an online external Runner after the publi
     capabilities: ['core', 'external'],
     workspaceIds: ['app'],
     maxConcurrent: 1,
-    version: '3.4.4',
+    version: configStore.DEFAULT_VERSION,
     platform: 'linux',
     arch: 'x64',
     labels: { kind: 'external' }

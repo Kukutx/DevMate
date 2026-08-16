@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { atomicWriteJson, newInstanceConfig, readJson } = require('../shared/config-store.cjs');
+const { DEFAULT_VERSION, atomicWriteJson, newInstanceConfig, readJson } = require('../shared/config-store.cjs');
 const {
   recordVerificationFailure,
   verifySharedPublicMcp
@@ -24,13 +24,15 @@ function fixture() {
     readyAt: '2026-08-14T12:00:00.000Z',
     gatewayGeneration: 'gateway-a'
   };
-  atomicWriteJson(configFile, {
-    version: 11,
-    instanceId: 'instance-a',
-    server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: false, token: 'unused' },
-    connection: { provider: 'cloudflare-quick', publicUrl: '' }
+  const config = newInstanceConfig({
+    workspaceRoot: stateDirectory,
+    port: 8787,
+    appVersion: DEFAULT_VERSION,
+    defaultConnectionProvider: 'cloudflare-quick'
   });
+  config.instanceId = 'instance-a';
+  config.auth = { mode: 'oauth' };
+  atomicWriteJson(configFile, config);
   return { stateDirectory, configFile, record, cleanup: () => fs.rmSync(stateDirectory, { recursive: true, force: true }) };
 }
 
@@ -41,7 +43,7 @@ function success(publicUrl) {
     toolCount: 131,
     toolCallVerified: true,
     probeTool: 'gateway_status',
-    server: { name: 'devmate', version: '3.4.4' }
+    server: { name: 'devmate', version: DEFAULT_VERSION }
   };
 }
 
