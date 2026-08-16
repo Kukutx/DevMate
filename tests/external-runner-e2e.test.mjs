@@ -4,8 +4,11 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 import { runExternalRunner } from '../scripts/devmate-runner.mjs';
 
+const { SUPPORTED_CONFIG_VERSION } = configStore;
+const MCP_PROTOCOL_VERSION = '2026-07-28';
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-external-runner-e2e-'));
 const workspace = path.join(temp, 'workspace');
 await fsp.mkdir(path.join(workspace, 'artifacts'), { recursive: true });
@@ -23,7 +26,7 @@ const localServer = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/mcp' && req.method === 'DELETE') {
-    res.writeHead(200);
+    res.writeHead(405, { allow: 'POST' });
     res.end();
     return;
   }
@@ -32,17 +35,16 @@ const localServer = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if (rpc.id === undefined) {
-      res.writeHead(202);
-      res.end();
-      return;
-    }
+    assert.equal(req.headers['mcp-protocol-version'], MCP_PROTOCOL_VERSION);
+    assert.equal(rpc.params?._meta?.['io.modelcontextprotocol/protocolVersion'], MCP_PROTOCOL_VERSION);
     let result;
-    if (rpc.method === 'initialize') {
+    if (rpc.method === 'server/discover') {
       result = {
-        protocolVersion: '2025-03-26',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'devmate', version: '2.3.0' }
+        supportedVersions: [MCP_PROTOCOL_VERSION],
+        _meta: {
+          'io.modelcontextprotocol/serverInfo': { name: 'devmate', version: '3.4.4' },
+          'io.modelcontextprotocol/serverCapabilities': { tools: {} }
+        }
       };
     } else if (rpc.method === 'tools/call') {
       assert.equal(rpc.params.name, 'run_smart_checks');
@@ -54,7 +56,7 @@ const localServer = http.createServer(async (req, res) => {
         structuredContent: { ok: true, reportPath: 'artifacts/remote.json' }
       };
     } else {
-      result = {};
+      throw new Error(`Unexpected MCP 2026 request: ${rpc.method}`);
     }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }));
@@ -119,8 +121,8 @@ const controlPort = controlServer.address().port;
 
 const configPath = path.join(temp, 'config.json');
 await fsp.writeFile(configPath, JSON.stringify({
-  version: 11,
-  appVersion: '2.3.0',
+  version: SUPPORTED_CONFIG_VERSION,
+  appVersion: '3.4.4',
   instanceId: 'external-runner-e2e',
   server: { port: localPort, mcpPath: '/mcp' },
   auth: { mode: 'none' },
@@ -132,7 +134,7 @@ await fsp.writeFile(configPath, JSON.stringify({
 
 process.env.DEVMATE_RUNNER_TOKEN = 'dmr_remote_token-value-long-enough';
 
-test('executes a remote job through the official local MCP client and reports artifacts', async () => {
+test('executes a remote job through the MCP 2026 local client and reports artifacts', async () => {
   await runExternalRunner({
     config: configPath,
     'control-url': `http://127.0.0.1:${controlPort}`,
