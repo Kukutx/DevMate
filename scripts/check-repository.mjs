@@ -170,7 +170,8 @@ const documentationFiles = [
   'docs/HOST_INTEGRATION.md',
   'docs/STANDALONE.md',
   'docs/TEAM_DEPLOYMENT.md',
-  'docs/TUNNELS.md'
+  'docs/TUNNELS.md',
+  'obsidian-plugin/README.md'
 ];
 const retiredDocumentationPatterns = [
   { pattern: /(?:authenticated\s+)?MCP\s+`initialize`|MCP\s+initialize/i, label: 'retired MCP initialize guidance' },
@@ -194,7 +195,8 @@ const documentationRequired = [
   ['docs/HOST_INTEGRATION.md', /MCP 2026 verification is stateless/, 'host integration must document stateless MCP 2026'],
   ['docs/STANDALONE.md', /`--authentication-mode none` with `--public-url` is rejected/, 'standalone docs must reject public no-auth'],
   ['docs/TEAM_DEPLOYMENT.md', /single-use rotating token families/, 'team docs must document refresh-token rotation'],
-  ['docs/TUNNELS.md', /The MCP transport is stateless/, 'tunnel docs must document stateless public verification']
+  ['docs/TUNNELS.md', /The MCP transport is stateless/, 'tunnel docs must document stateless public verification'],
+  ['obsidian-plugin/README.md', /OAuth-authenticated MCP server\/discover verified[\s\S]*MCP 2026 verification is stateless/, 'Obsidian docs must describe the current OAuth MCP 2026 lifecycle']
 ];
 for (const [file, pattern, label] of documentationRequired) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
