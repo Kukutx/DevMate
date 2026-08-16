@@ -19,7 +19,8 @@ config.plugins = { enabled: [], settings: {} };
 configStore.atomicWriteJson(configPath, config);
 process.env.DEVMATE_CONFIG = configPath;
 
-const { registerPluginHost, __test } = await import('../gateway/plugins/plugin-host.mjs');
+const { builtinPlugins } = await import('../gateway/plugins/builtins.mjs');
+const { registerPluginHost, shutdownPluginServices, __test } = await import('../gateway/plugins/plugin-host.mjs');
 
 class MockServer {
   constructor() { this.tools = new Map(); this.resources = new Map(); }
@@ -42,19 +43,30 @@ test('registers management and automation tools while optional plugins remain di
   assert.equal(server.tools.get('plugin_disable').config._meta['openai/widgetAccessible'], true);
 });
 
-test('enabling Godot also enables Browser QA and its shared service on the next server instance', async () => {
+test('enabling Godot persists its Browser QA dependency closure for the next explicit server registration', async () => {
   const server = new MockServer();
   await registerPluginHost(server);
   await server.connect();
+
   await server.tools.get('plugin_enable').handler({ id: 'devmate.godot' });
-  const next = new MockServer();
-  await registerPluginHost(next);
-  await next.connect();
-  assert.equal(next.tools.has('godot_status'), true);
-  assert.equal(next.tools.has('browser_qa_status'), true);
-  assert.equal(next.tools.has('web_preview_start'), true);
-  const catalog = await next.tools.get('plugin_catalog').handler({});
-  assert.deepEqual(catalog.structuredContent.activeServices, [{ name: 'devmate.browser-qa', pluginId: 'devmate.browser-qa' }]);
+
+  const persisted = configStore.readConfigSnapshot(configPath);
+  assert.deepEqual([...persisted.plugins.enabled].sort(), ['devmate.browser-qa', 'devmate.godot']);
+
+  const map = __test.pluginMap(builtinPlugins);
+  const enabled = __test.expandDependencies(new Set(persisted.plugins.enabled), map);
+  assert.deepEqual(
+    __test.activationOrder(enabled, map).map(plugin => plugin.manifest.id),
+    ['devmate.browser-qa', 'devmate.godot']
+  );
+
+  const catalog = await server.tools.get('plugin_catalog').handler({});
+  const byId = new Map(catalog.structuredContent.plugins.map(plugin => [plugin.id, plugin]));
+  assert.equal(byId.get('devmate.browser-qa').enabled, true);
+  assert.equal(byId.get('devmate.godot').enabled, true);
+  assert.equal(byId.get('devmate.browser-qa').active, false, 'current server keeps its immutable registration snapshot');
+  assert.equal(byId.get('devmate.godot').active, false, 'new tools activate on the next explicit server registration');
+  assert.deepEqual(catalog.structuredContent.activeServices, []);
 });
 
 test('rejects multi-plugin dependency cycles', () => {
@@ -65,4 +77,7 @@ test('rejects multi-plugin dependency cycles', () => {
   assert.throws(() => __test.expandDependencies(new Set(['a']), map), /dependency cycle/);
 });
 
-test.after(async () => { await fsp.rm(temp, { recursive: true, force: true }); });
+test.after(async () => {
+  await shutdownPluginServices();
+  await fsp.rm(temp, { recursive: true, force: true });
+});
