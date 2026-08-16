@@ -9,7 +9,7 @@ function object(value, label) {
 }
 
 function authenticationMode(value) {
-  const mode = value === undefined ? 'none' : String(value).trim().toLowerCase();
+  const mode = value === undefined ? 'oauth' : String(value).trim().toLowerCase();
   if (!AUTHENTICATION_MODES.includes(mode)) throw new Error(`Unknown DevMate authentication mode: ${String(value)}`);
   return mode;
 }
