@@ -27,7 +27,7 @@ test('rejects invalid optional capabilities before creating a config', async t =
   await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
 });
 
-test('default bootstrap creates one direct no-auth DevMate instance without a mode selector', async t => {
+test('default bootstrap creates one direct loopback-only DevMate instance without a mode selector', async t => {
   const current = await fixture('owner');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({ workspace: current.workspace, config: current.config });
@@ -45,7 +45,7 @@ test('default bootstrap creates one direct no-auth DevMate instance without a mo
   assert.deepEqual(status.warnings, []);
 });
 
-test('member access composes with the same instance and never persists its plaintext token', async t => {
+test('member access composes with the same instance and persists only a verifier for the OAuth login code', async t => {
   const current = await fixture('member');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({
@@ -54,10 +54,15 @@ test('member access composes with the same instance and never persists its plain
     'member-name': 'Alice',
     'member-role': 'developer'
   });
-  assert.match(result.member.token, /^dmt_/);
-  const config = await readConfig(current.config);
+  assert.match(result.member.loginCode, /^dmc_[a-z0-9_-]+_[A-Za-z0-9_-]{43}$/);
+  const configText = await fsp.readFile(current.config, 'utf8');
+  const config = JSON.parse(configText);
   assert.equal(config.team.members.length, 1);
-  assert.equal(config.team.members[0].tokenHash.includes(result.member.token), false);
+  assert.equal(typeof config.team.members[0].loginHash, 'string');
+  assert.equal(typeof config.team.members[0].loginSalt, 'string');
+  assert.equal(config.team.members[0].authVersion, 1);
+  assert.equal(configText.includes(result.member.loginCode), false);
+  assert.equal('tokenHash' in config.team.members[0], false);
   assert.equal(config.connection.provider, 'ngrok');
   assert.equal(config.jobs.embeddedRunnerEnabled, false);
 });
@@ -77,6 +82,7 @@ test('external Runner control composes with members, connection provider and loc
     'runner-concurrency': '2',
     'embedded-runner': 'false'
   });
+  assert.match(result.member.loginCode, /^dmc_/);
   assert.match(result.runner.token, /^dmr_/);
   const config = await readConfig(current.config);
   assert.equal(config.connection.provider, 'external');
@@ -86,6 +92,7 @@ test('external Runner control composes with members, connection provider and loc
   assert.equal(config.team.members.length, 1);
   assert.deepEqual(config.runnerControl.credentials[0].workspaceIds, ['workspace']);
   assert.equal(config.runnerControl.credentials[0].tokenHash.includes(result.runner.token), false);
+  assert.equal(JSON.stringify(config).includes(result.member.loginCode), false);
   const status = __test.status({ config: current.config });
   assert.equal(status.ok, true);
   assert.equal(status.execution.externalRunnerControlEnabled, true);
