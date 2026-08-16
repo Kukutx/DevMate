@@ -22,7 +22,7 @@ test('git_raw rejects Git unsafe-path override', () => {
   );
 });
 
-test('git_raw blocks credential helpers, servers, and low-level remote writers', () => {
+test('git_raw blocks credential helpers, servers, low-level remote writers, and protected-content bypasses', () => {
   for (const command of [
     'credential',
     'credential-cache',
@@ -30,10 +30,20 @@ test('git_raw blocks credential helpers, servers, and low-level remote writers',
     'daemon',
     'http-push',
     'send-pack',
-    'shell'
+    'shell',
+    'archive',
+    'blame',
+    'bundle',
+    'cat-file',
+    'checkout-index',
+    'diff',
+    'format-patch',
+    'grep',
+    'log',
+    'show'
   ]) {
     assert.throws(
-      () => assertGitRawWorkspaceBound([command, 'origin']),
+      () => assertGitRawWorkspaceBound([command, 'HEAD']),
       /git_raw command is not allowed/
     );
   }
@@ -49,14 +59,13 @@ test('git_raw rejects unknown subcommands so Git shell aliases cannot become an 
   assert.throws(() => assertGitRawWorkspaceBound(['--no-pager']), /explicit Git subcommand/);
 });
 
-test('git_raw still permits reviewed builtin commands and workspace-contained output paths', () => {
+test('git_raw still permits reviewed metadata-oriented builtins', () => {
   for (const args of [
     ['status', '--short'],
     ['rev-parse', '--show-toplevel'],
-    ['archive', '--output=artifacts/repo.zip', 'HEAD'],
-    ['format-patch', '-oartifacts/patches', 'HEAD~1..HEAD'],
-    ['checkout-index', '--all', '--prefix=artifacts/export/'],
-    ['apply', 'patch.diff']
+    ['show-ref', '--heads'],
+    ['branch', '--show-current'],
+    ['ls-files']
   ]) {
     assert.deepEqual(assertGitRawWorkspaceBound(args), args);
   }
