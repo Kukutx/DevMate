@@ -5,7 +5,7 @@ import { hostAllowed, isLocalRequest, loopbackHost, loopbackSocket, remoteAddres
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { runWithRequestContext } from './request-context.mjs';
 import { handlePublishedPreview, isPublishedPreviewPath } from './published-previews.mjs';
-import { fallbackLocalPrincipal, normalizeInstanceConfig } from './team-access.mjs';
+import { fallbackLocalPrincipal, normalizeInstanceConfig, principalFromOAuthClaims } from './team-access.mjs';
 import { oauthAccessToken, oauthResourceMetadataUrl } from './oauth.mjs';
 
 const rateWindows = new Map();
@@ -40,7 +40,7 @@ function oauthChallenge(req, config) {
 }
 
 function touchTeamMember(config, principal) {
-  if (principal?.source !== 'team-token') return false;
+  if (principal?.source !== 'oauth-member') return false;
   const member = config.team?.members?.find(item => item.id === principal.id);
   if (!member) return false;
   const last = Date.parse(member.lastUsedAt || 0);
@@ -50,7 +50,7 @@ function touchTeamMember(config, principal) {
 }
 
 function touchTeamMemberBestEffort(principal) {
-  if (principal?.source !== 'team-token') return false;
+  if (principal?.source !== 'oauth-member') return false;
   try {
     const preview = normalizeInstanceConfig(readConfig());
     if (!touchTeamMember(preview, principal)) return false;
@@ -71,7 +71,7 @@ export function authenticateGatewayRequest(req, url, config) {
   if (config.auth?.mode !== 'oauth') return null;
   const token = String(req?.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
   const access = oauthAccessToken(config, token, req);
-  return access ? { id: access.sub, name: 'OAuth owner', role: 'owner', workspaceIds: [], source: 'oauth' } : null;
+  return access ? principalFromOAuthClaims(access, config) : null;
 }
 
 function normalizeInnerAuthorization(req) {
@@ -240,7 +240,7 @@ export function guardListener(listener) {
     touchTeamMemberBestEffort(principal);
     recordActivity(req, principal, requestId);
 
-    if (!normalizeInnerAuthorization(req, config)) {
+    if (!normalizeInnerAuthorization(req)) {
       concurrency.release();
       jsonError(res, 503, 'DevMate OAuth authorization is not configured', 'oauth_not_configured', requestId);
       return;
@@ -294,28 +294,20 @@ export function installGatewayRequestGuard(httpModule) {
   };
 }
 
+export function restoreGatewayRequestGuard(httpModule) {
+  void httpModule;
+}
+
 export function resetRequestGuardState() {
   rateWindows.clear();
   preAuthRateWindows.clear();
-  requestConcurrency.reset();
   activities.clear();
 }
 
 export const __test = {
-  activities,
-  consumePreviewRateLimit,
-  consumeRateLimit,
+  authenticateGatewayRequest,
   enterConcurrency,
-  globalInflight: requestConcurrency.global,
-  hostAllowed,
   installRequestBodyLimit,
-  isLocalRequest,
-  loopbackHost,
-  loopbackSocket,
-  normalizeInnerAuthorization,
-  oauthChallenge,
-  preAuthRateWindows,
-  principalInflight: requestConcurrency.principals,
-  rateWindows,
-  touchTeamMemberBestEffort
+  isLoopbackRequest: req => loopbackHost(req) && loopbackSocket(req),
+  normalizeInnerAuthorization
 };
