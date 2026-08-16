@@ -35,7 +35,7 @@ function jsonError(res, status, message, code, requestId, extra = {}, headers = 
 function oauthChallenge(req, config) {
   if (config?.auth?.mode !== 'oauth') return {};
   return {
-    'www-authenticate': `Bearer resource_metadata="${oauthResourceMetadataUrl(req)}", scope="devmate offline_access"`
+    'www-authenticate': `Bearer resource_metadata="${oauthResourceMetadataUrl(req)}", scope="devmate"`
   };
 }
 
@@ -67,20 +67,16 @@ function touchTeamMemberBestEffort(principal) {
 
 export function authenticateGatewayRequest(req, url, config) {
   normalizeInstanceConfig(config);
-  if (config.auth?.mode === 'none') {
-    return fallbackLocalPrincipal();
-  }
+  if (isLocalRequest(req)) return fallbackLocalPrincipal();
+  if (config.auth?.mode !== 'oauth') return null;
   const token = String(req?.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
   const access = oauthAccessToken(config, token, req);
   return access ? { id: access.sub, name: 'OAuth owner', role: 'owner', workspaceIds: [], source: 'oauth' } : null;
 }
 
-function normalizeInnerAuthorization(req, config) {
-  if (config.auth?.mode === 'none') {
-    if (req.headers) delete req.headers.authorization;
-    return true;
-  }
-  return /^Bearer\s+.+/i.test(String(req?.headers?.authorization || ''));
+function normalizeInnerAuthorization(req) {
+  if (req.headers) delete req.headers.authorization;
+  return true;
 }
 
 function consumeRateLimit(principalId, limit, store = rateWindows) {
@@ -102,8 +98,6 @@ function enterConcurrency(principalId, config) {
 }
 
 function activityKey(req, principal) {
-  const session = String(req.headers?.['mcp-session-id'] || '').trim();
-  if (session) return `session:${session}`;
   const agent = String(req.headers?.['user-agent'] || '').slice(0, 200);
   return `principal:${principal.id}:${crypto.createHash('sha256').update(agent).digest('hex').slice(0, 12)}`;
 }
@@ -124,7 +118,6 @@ function recordActivity(req, principal, requestId) {
   existing.lastRequestId = requestId;
   existing.remoteAddress = remoteAddress(req);
   existing.userAgent = String(req.headers?.['user-agent'] || '').slice(0, 300);
-  existing.sessionId = String(req.headers?.['mcp-session-id'] || '') || null;
   activities.set(key, existing);
   if (activities.size > 1000) {
     const oldest = [...activities.values()].sort((a, b) => String(a.lastSeenAt).localeCompare(String(b.lastSeenAt))).slice(0, activities.size - 1000);

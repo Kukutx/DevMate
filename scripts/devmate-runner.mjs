@@ -199,7 +199,7 @@ function localMcpClient(config) {
       );
       const nextClient = new Client(
         { name: 'devmate-external-runner', version: config.appVersion || 'unknown' },
-        { capabilities: {} }
+        { capabilities: {}, versionNegotiation: { mode: { pin: '2026-07-28' } } }
       );
       await nextClient.connect(nextTransport, { timeout: 30000 });
       transport = nextTransport;

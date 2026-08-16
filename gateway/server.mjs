@@ -5,8 +5,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
-import { McpServer } from "@modelcontextprotocol/server";
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import packageJson from '../package.json' with { type: 'json' };
 import { DEFAULT_MAINTENANCE, maintenanceOptions, pruneState, stateSummary } from './maintenance.mjs';
@@ -15,7 +15,7 @@ import { executeCommand } from './command-process.mjs';
 import { assertGitRawWorkspaceBound } from './git-raw-policy.mjs';
 import { isLocalRequest } from './http-host-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
-import { handleOAuthRequest, oauthAccessToken, oauthResourceMetadataUrl } from './oauth.mjs';
+import { handleOAuthRequest } from './oauth.mjs';
 
 const VERSION = packageJson.version;
 const SERVER_STARTED_AT = shared.now();
@@ -135,8 +135,6 @@ function commandLimits(cfg, timeoutMs, maxOutputChars){
     maxOutputChars: clampInt(maxOutputChars ?? cfg.runtime?.maxOutputChars, DEFAULT_MAX_OUTPUT, 1000, 500000)
   };
 }
-function requestToken(req){ const h=req.headers.authorization || ''; return String(h).match(/^Bearer\s+(.+)$/i)?.[1] || ''; }
-function isAuthorized(req,url,cfg){ if(cfg.auth?.mode === 'none') return true; return !!oauthAccessToken(cfg, requestToken(req), req); }
 function assertPushAllowed(cfg){ if(cfg.permissions?.confirmBeforePush) throw new Error('Git push is blocked by devMate.confirmBeforePush. Review locally, then disable that setting to push.'); }
 function isDangerousCommand(command){ return shared.isDangerousCommand(command); }
 function assertCommandAllowed(cfg,command){ return shared.assertCommandAllowed(cfg,command); }
@@ -680,6 +678,8 @@ function createServer(){
   return server;
 }
 
+const mcpHandler = toNodeHandler(createMcpHandler(() => createServer(), { legacy: 'reject' }));
+
 const config = loadConfig();
 try {
   const maintenance = await pruneState({stateRoot:STATE_ROOT,backupRoot:BACKUP_ROOT,auditLog:AUDIT_LOG}, config.maintenance);
@@ -698,7 +698,7 @@ const httpServer = http.createServer(async (req,res)=>{
     res.end(JSON.stringify({error:'bad request url'}));
     return;
   }
-  if(req.method === 'OPTIONS') { res.writeHead(204, {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST,GET,DELETE,OPTIONS','Access-Control-Allow-Headers':'content-type,mcp-session-id,authorization','Access-Control-Expose-Headers':'Mcp-Session-Id'}); res.end(); return; }
+  if(req.method === 'OPTIONS') { res.writeHead(204, {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Allow-Headers':'content-type,authorization,mcp-protocol-version,mcp-method,mcp-name'}); res.end(); return; }
   const requestConfig = loadConfig();
   try {
     if(await handleOAuthRequest(req,res,url,requestConfig)) return;
@@ -710,18 +710,14 @@ const httpServer = http.createServer(async (req,res)=>{
   if(req.method === 'GET' && url.pathname==='/control/health') { if(!isLocalRequest(req)){ res.writeHead(403,{'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify({error:'local control endpoint only'})); return; } res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify({name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp',instanceId:config.instanceId,port:config.server.port,configPath:CONFIG_PATH,stateRoot:STATE_ROOT})); return; }
   if(req.method === 'GET' && (url.pathname==='/' || url.pathname==='/health')) { res.writeHead(200,{'content-type':'application/json'}); const base={name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp'}; const full={...base,instanceId:config.instanceId,port:config.server.port}; res.end(JSON.stringify(PUBLIC_HEALTH_DETAILS?full:base)); return; }
   if(url.pathname === '/mcp'){
-    res.setHeader('Access-Control-Allow-Origin','*');
-    res.setHeader('Access-Control-Expose-Headers','Mcp-Session-Id');
-    if(!isAuthorized(req,url,requestConfig)){
-      res.writeHead(401,{'content-type':'application/json','WWW-Authenticate':`Bearer resource_metadata="${oauthResourceMetadataUrl(req)}", scope="devmate offline_access"`});
-      res.end(JSON.stringify({error:'unauthorized'}));
+    if(req.method !== 'POST'){
+      res.writeHead(405, {'content-type':'application/json','allow':'POST, OPTIONS'});
+      res.end(JSON.stringify({error:'method not allowed'}));
       return;
     }
-    const mcp = createServer();
-    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    res.on('close', () => { transport.close(); mcp.close(); });
-    try { await mcp.connect(transport); await transport.handleRequest(req,res); }
-    catch(e){ console.error(e); if(!res.headersSent) { res.writeHead(500,{'content-type':'application/json'}); res.end(JSON.stringify({error:String(e.message||e)})); } }
+    res.setHeader('Access-Control-Allow-Origin','*');
+    try { await mcpHandler(req,res); }
+    catch(e){ console.error(e); if(!res.headersSent) { res.writeHead(500,{'content-type':'application/json'}); res.end(JSON.stringify({error:'MCP request failed'})); } }
     return;
   }
   res.writeHead(404,{'content-type':'text/plain'}); res.end('Not Found');

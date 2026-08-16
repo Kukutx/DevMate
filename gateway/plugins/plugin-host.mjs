@@ -10,7 +10,6 @@ import {
   expandDependencies, normalizePluginConfig, pluginMap, settingsFor
 } from './plugin-config.mjs';
 
-const INSTALLED = Symbol.for('devmate.pluginHostInstalled');
 const REGISTERED = Symbol.for('devmate.pluginHostRegistered');
 const PLUGIN_UI_URI = 'ui://devmate/plugins.html';
 const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
@@ -206,16 +205,6 @@ export async function registerPluginHost(server, plugins = builtinPlugins) {
   const snapshot = { states, registeredToolNames, enabled, services: serviceRegistry.list() };
   Object.defineProperty(server, REGISTERED, { value: snapshot });
   return snapshot;
-}
-
-export function installPluginHost(McpServerClass, plugins = builtinPlugins) {
-  if (McpServerClass.prototype[INSTALLED]) return;
-  const originalConnect = McpServerClass.prototype.connect;
-  Object.defineProperty(McpServerClass.prototype, INSTALLED, { value: true });
-  McpServerClass.prototype.connect = async function pluginHostConnect(...args) {
-    await registerPluginHost(this, plugins);
-    return originalConnect.apply(this, args);
-  };
 }
 
 export async function shutdownPluginServices() {
