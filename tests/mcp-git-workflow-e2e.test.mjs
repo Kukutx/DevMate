@@ -7,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import configStore from '../shared/config-store.cjs';
 
+const MCP_PROTOCOL_VERSION = '2026-07-28';
+
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -45,16 +47,33 @@ async function waitReady(port, child, output) {
   throw new Error(`Gateway did not become ready: ${output()}`);
 }
 
+function requestMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': { name: 'mcp-git-e2e', version: '1' },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+
 function rpcClient(port) {
   let id = 0;
   return async (method, params = {}) => {
+    const name = method === 'tools/call' ? String(params?.name || '') : '';
     const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
       headers: {
         accept: 'application/json, text/event-stream',
-        'content-type': 'application/json'
+        'content-type': 'application/json',
+        'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+        'mcp-method': method,
+        ...(name ? { 'mcp-name': name } : {})
       },
-      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params })
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: ++id,
+        method,
+        params: { ...params, _meta: requestMeta() }
+      })
     });
     const text = await response.text();
     let json = null;
@@ -81,10 +100,10 @@ test('MCP Git can push repeatedly, surface failures, recover, and fail closed ac
   git(workspace, ['push', '-u', 'origin', 'master']);
 
   const port = await freePort();
-  const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: '3.4.4' });
+  const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: configStore.DEFAULT_VERSION });
   config.permissions.confirmBeforePush = false;
   config.requestPolicy.requestTimeoutMs = 30000;
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  configStore.atomicWriteJson(configPath, config);
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: process.cwd(),
@@ -104,13 +123,11 @@ test('MCP Git can push repeatedly, surface failures, recover, and fail closed ac
 
   await waitReady(port, child, () => `${stdout}\n${stderr}`);
   const rpc = rpcClient(port);
-  const init = await rpc('initialize', {
-    protocolVersion: '2025-03-26',
-    capabilities: {},
-    clientInfo: { name: 'mcp-git-e2e', version: '1' }
-  });
-  assert.equal(init.response.ok, true, init.text);
-  assert.equal(init.json?.result?.serverInfo?.name, 'devmate');
+  const discover = await rpc('server/discover');
+  assert.equal(discover.response.ok, true, discover.text);
+  assert.ok(discover.json?.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION), discover.text);
+  assert.equal(typeof discover.json?.result?.capabilities, 'object', discover.text);
+  assert.equal(discover.json?.result?._meta?.['io.modelcontextprotocol/serverInfo']?.name, 'devmate', discover.text);
 
   const initialStatus = await rpc('tools/call', { name: 'git_status', arguments: {} });
   assert.equal(initialStatus.response.ok, true, initialStatus.text);
