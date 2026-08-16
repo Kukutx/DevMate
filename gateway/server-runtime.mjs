@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { isMainThread, parentPort } from 'node:worker_threads';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from "@modelcontextprotocol/server";
 import permissionConfig from '../shared/permission-config.cjs';
 import portConfig from '../shared/port.cjs';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
