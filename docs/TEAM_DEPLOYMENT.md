@@ -1,13 +1,14 @@
 # Team access and hardened deployments
 
-DevMate is a local-first development gateway. A single instance can combine public connection providers, optional OAuth, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
+DevMate is a local-first development gateway. A single instance can combine public connection providers, OAuth member identity, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
 
 ## Capability composition
 
 A current instance can compose:
 
 - **Connection** — `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or `external` HTTPS ingress.
-- **Access** — direct no-auth personal use or OAuth for a trusted shared/published app.
+- **MCP access** — loopback-only `none`, or OAuth. Every remote/public MCP request requires OAuth.
+- **Member identity** — one-time `dmc_` login codes that enter the OAuth flow; MCP never accepts them directly as Bearer tokens.
 - **Coordination** — work sessions and optional workspace-lease enforcement for shared mutations.
 - **Approval** — optional dual-control policy for selected high-risk capabilities.
 - **Request policy** — Host restrictions, request-size, rate, concurrency and timeout limits.
@@ -20,36 +21,59 @@ Changing authentication does not change the connection provider. Hardening reque
 
 The machine-wide desktop `config.json` is the business source of truth for current capabilities, including:
 
+- `auth.mode`;
 - `connection.provider` and `connection.publicUrl`;
+- member records, salted login-code verifiers and `authVersion`;
 - workspace lease and approval policy;
 - `requestPolicy` limits and optional Host allowlist;
-- Runner control and credentials metadata;
-- approval, jobs, plugins, permissions and maintenance state.
+- Runner control and credential metadata;
+- jobs, plugins, permissions and maintenance state.
 
-Desktop machine settings and secure host storage contain only machine-local execution details such as executable paths, restart preferences and provider credentials. They are not a second instance database.
+OAuth signing material and the owner approval code live in restrictive private state rather than `config.json`. Desktop machine settings and secure host storage contain only machine-local execution/provider details. They are not a second instance database.
 
-Unsupported historical instance fields fail closed. Current hosts do not translate a previous deployment-mode shape into current capabilities at startup.
+Unsupported historical instance fields fail closed. Current hosts do not translate a previous deployment-mode shape into current capabilities at runtime.
 
-## Public connection
+## Public connection and MCP 2026
 
 The public connection remains independent of access topology.
 
 Current providers:
 
-- `ngrok` — default desktop provider; can use normal machine configuration or a DevMate-managed account.
-- `cloudflare-quick` — dynamic development endpoint.
-- `cloudflare-managed` — managed tunnel with a stable HTTPS origin.
-- `external` — an existing HTTPS reverse proxy, VPN, ingress or service-managed endpoint.
+- `ngrok` — default desktop provider;
+- `cloudflare-quick` — dynamic development endpoint;
+- `cloudflare-managed` — managed tunnel with a stable HTTPS origin;
+- `external` — existing HTTPS reverse proxy, VPN, ingress or service-managed endpoint.
 
 `cloudflare-managed` and `external` require an explicit clean HTTPS origin. Dynamic providers may publish their runtime origin automatically.
 
-For desktop hosts, Ready is not derived from provider status alone. The active **Gateway + provider complete-session generation** must pass MCP `initialize` and `tools/list` under the active authentication mode. A Gateway restart, provider restart or ownership transfer invalidates old verification even when the hostname is unchanged.
+Desktop public MCP defaults to OAuth. `auth.mode: "none"` trusts only genuine loopback traffic and cannot authorize public ingress.
+
+Ready is not derived from provider status alone. The active **Gateway + provider generation** must pass OAuth-authenticated MCP `server/discover`, `tools/list`, and a real read-only `gateway_status` call with protocol pinned to `2026-07-28`. The transport is stateless; there is no retained MCP session identifier. A Gateway restart, provider restart or ownership transfer invalidates prior verification even when the hostname is unchanged.
 
 See `TUNNELS.md` and `HOST_INTEGRATION.md`.
 
-## Shared access
+## Member identity
 
-Public MCP does not accept static owner or member tokens. The normal private instance uses no authentication; a shared or published instance uses OAuth. All users of one DevMate instance are therefore inside the same trusted operating-system and workspace boundary. Use separate OS accounts, machines, containers, or DevMate instances when trust boundaries differ.
+Team and Control-plane bootstrap use OAuth by construction. Creating a member returns a one-time login code:
+
+```text
+dmc_<member-id>_<secret>
+```
+
+Only a salted verifier is persisted. During OAuth authorization, DevMate validates the login code against current member state and issues OAuth credentials bound to:
+
+- the current member ID;
+- current `authVersion`;
+- OAuth client ID;
+- issuer;
+- MCP resource audience;
+- requested scope.
+
+Every authenticated request resolves the current member again, so disabling, revoking, expiring, changing role/scope, or rotating the member login code takes effect without trusting stale role/workspace claims. Login-code rotation increments `authVersion` and invalidates previously issued member OAuth credentials.
+
+Access tokens are short-lived. Refresh tokens are single-use rotating token families. Replay or binding mismatch revokes the family.
+
+Static owner/member Bearer credentials, query credentials and the retired Team bearer-token identity are not public MCP paths.
 
 ## Work sessions and workspace leases
 
@@ -66,15 +90,15 @@ Explicit lease operations remain available:
 - `workspace_lease_status`
 - `workspace_lease_release`
 
-When `team.requireWorkspaceLeaseForWrites` is enabled for advanced coordination, applicable remote work must own the required workspace lease before mutations covered by policy. Local desktop operation remains the recovery path.
+When `team.requireWorkspaceLeaseForWrites` is enabled, applicable remote work must own the required workspace lease before policy-covered mutations. Local desktop operation remains the recovery path.
 
-`work_session_start` resolves one workspace, validates the caller's scope and creates or renews the matching lease atomically. `work_session_finish` releases only the exact lease tenure belonging to that session. `work_session_rollback` reverses recorded file mutations, not arbitrary shell effects or Git history.
+`work_session_start` resolves one workspace, validates caller scope and creates or renews the matching lease atomically. `work_session_finish` releases only the exact lease tenure belonging to that session. `work_session_rollback` reverses recorded file mutations, not arbitrary shell effects or Git history.
 
 For genuine parallel implementation, use separate worktrees/clones as separate writable workspace IDs instead of weakening lease policy.
 
 ## Request hardening
 
-`requestPolicy` is explicit instance policy, not a side effect of a deployment mode. It can define:
+`requestPolicy` is explicit instance policy. It can define:
 
 - `allowedHosts`;
 - maximum request bytes;
@@ -89,7 +113,7 @@ An empty Host allowlist does not turn spoofed localhost requests into local traf
 
 ## Approval policy
 
-Dual-control approval is an explicit access capability. When enabled for a protected capability, the original call creates a pending approval without executing. A different authorized Maintainer or Owner approves it, then the requester retries the identical operation.
+Dual-control approval is an explicit access capability. It applies to current `oauth-member` principals, not to a retired Team bearer principal. When enabled for a protected capability, the original call creates a pending approval without executing. A different authorized Maintainer or Owner approves it, then the requester retries the identical operation.
 
 Approval tools:
 
@@ -104,11 +128,11 @@ Approval is independent of connection provider and Runner topology.
 
 ## Durable jobs and external Runners
 
-Durable jobs use the same central authorization policy as direct MCP tools. `job_submit` accepts reviewed targets only and rechecks role, workspace scope, lease, approval, plugin state and Runner requirements before execution.
+Durable jobs use the same central authorization policy as direct MCP tools. The persisted requester identity carries member `authVersion`; execution rechecks current member status, role, workspace scope, lease, approval, plugin state and Runner requirements before work proceeds.
 
 External Runners authenticate to `/runner/v1` using scoped `dmr_` credentials. Every Runner credential has explicit workspace scope and bounded concurrency. Reported Runner capabilities are scheduling metadata, not an operating-system security boundary.
 
-Use drain controls before maintenance when queued work should stop being claimed while in-flight work settles.
+Use drain controls before maintenance when queued work should stop being claimed while in-flight work settles. Drain logic distinguishes OAuth members from local owner recovery rather than relying on a retired Team bearer source.
 
 See `JOBS.md` and `EXTERNAL_RUNNERS.md`.
 
@@ -124,18 +148,16 @@ The initial share token is exchanged for a path-scoped `HttpOnly`, `SameSite=Str
 
 ## Long-lived deployment topology
 
-A hardened long-lived installation commonly looks like:
-
 ```text
 ChatGPT / trusted MCP clients
-        │ HTTPS + bearer identity
+        │ HTTPS + OAuth
         ▼
 managed tunnel / reverse proxy / VPN ingress
         │
         ▼
 DevMate Gateway
   ├─ explicit workspaces
-  ├─ member and owner authorization
+  ├─ current OAuth member authorization
   ├─ request policy
   ├─ leases / approvals
   ├─ durable jobs / audit / metrics
@@ -160,26 +182,25 @@ Current operational tools retain their existing names:
 - `team_configure`
 - `team_activity_status`
 
-The `deployment_*` prefix identifies operational status APIs; it does **not** imply a runtime-mode selector.
-
-`team_configure` updates current connection/request/lease capabilities through the shared configuration. It does not switch the instance between personal, team and production modes.
+The `deployment_*` prefix identifies operational status APIs; it does not imply a runtime-mode selector.
 
 ## Hardened deployment checklist
 
 Before exposing a long-lived instance remotely:
 
 1. Choose and verify the intended public connection provider.
-2. Enable OAuth even when the edge also authenticates users.
-3. Configure explicit Host policy when your deployment requires it.
+2. Require OAuth for MCP; do not expose `none` through public ingress.
+3. Configure explicit Host policy where required.
 4. Use separate DevMate instances for unrelated users or trust domains.
-5. Enable workspace-lease enforcement when multiple remote principals can mutate the same checkout.
-6. Configure dual-control approval where organizational policy requires it.
-7. Set bounded request, concurrency and timeout policy appropriate to the host.
-8. Keep detailed public health output disabled.
-9. Run `deployment_readiness`, `connection_diagnostics` and `gateway_self_test`.
-10. Confirm the intended embedded or external Runner is actually live.
-11. Back up DevMate config/state with controls appropriate for development credentials.
-12. Use drain controls before upgrades that affect running work.
+5. Create members with scoped roles/workspaces and deliver `dmc_` login codes securely.
+6. Enable workspace-lease enforcement when multiple remote principals can mutate the same checkout.
+7. Configure dual-control approval where organizational policy requires it.
+8. Set bounded request, concurrency and timeout policy appropriate to the host.
+9. Keep detailed public health output disabled.
+10. Run `deployment_readiness`, `connection_diagnostics` and `gateway_self_test`.
+11. Confirm the intended embedded or external Runner is live.
+12. Back up DevMate config/state with controls appropriate for development credentials.
+13. Use drain controls before upgrades that affect running work.
 
 ## Trust boundary
 
