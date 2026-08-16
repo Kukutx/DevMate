@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import configStore from '../shared/config-store.cjs';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-local-capabilities-'));
 const activeRoot = path.join(tempRoot, 'active');
@@ -11,15 +12,14 @@ const trustedRoot = path.join(tempRoot, 'trusted');
 fs.mkdirSync(activeRoot, { recursive: true });
 fs.mkdirSync(trustedRoot, { recursive: true });
 const configPath = path.join(tempRoot, 'config.json');
-fs.writeFileSync(configPath, JSON.stringify({
-  version: 11,
-  appVersion: '1.16.0',
-  activeWorkspaceId: 'active',
-  workspaces: [{ id: 'active', name: 'active', root: activeRoot, mode: 'workspace-write', reference: false, role: 'active' }],
-  permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: false, allowDirectoryMutations: true },
-  runtime: { maxPersistentProcesses: 4, persistentProcessOutputBytes: 131072 },
-  trustedWritableRoots: []
-}, null, 2));
+const config = configStore.newInstanceConfig({ workspaceRoot: activeRoot, port: 8787, appVersion: configStore.DEFAULT_VERSION });
+config.activeWorkspaceId = 'active';
+config.workspaces = [{ id: 'active', name: 'active', root: activeRoot, mode: 'workspace-write', reference: false, role: 'active' }];
+config.permissions = { profile: 'fullAccess', readOnly: false, blockDangerousOperations: false, allowDirectoryMutations: true };
+config.runtime.maxPersistentProcesses = 4;
+config.runtime.persistentProcessOutputBytes = 131072;
+config.trustedWritableRoots = [];
+configStore.atomicWriteJson(configPath, config);
 process.env.DEVMATE_CONFIG = configPath;
 
 const moduleUrl = new URL('../gateway/local-capabilities.mjs', import.meta.url);
@@ -31,7 +31,7 @@ const shared = await import(sharedUrl.href);
 
 class FakeMcpServer {
   constructor() { this.tools = new Map(); }
-  registerTool(name, config, handler) { this.tools.set(name, { config, handler }); }
+  registerTool(name, toolConfig, handler) { this.tools.set(name, { config: toolConfig, handler }); }
   async connect() { return 'connected'; }
 }
 installLocalCapabilities(FakeMcpServer);
@@ -69,9 +69,9 @@ test('trusted writable root lifecycle is persisted and restored into workspaces'
   assert.equal(added.added, true);
   assert.equal(added.root.root, fs.realpathSync.native(trustedRoot));
 
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.equal(config.trustedWritableRoots.length, 1);
-  assert(config.workspaces.some(item => item.id === added.root.id && item.trusted === true));
+  const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.equal(persisted.trustedWritableRoots.length, 1);
+  assert(persisted.workspaces.some(item => item.id === added.root.id && item.trusted === true));
 
   const listed = structured(await call('list_trusted_roots'));
   assert.equal(listed.roots.length, 1);
