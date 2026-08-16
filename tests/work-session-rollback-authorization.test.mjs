@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-work-session-rollback-auth-'));
 const workspaceRoot = path.join(temp, 'workspace');
@@ -10,24 +11,23 @@ const configPath = path.join(temp, 'config.json');
 await fsp.mkdir(workspaceRoot, { recursive: true });
 process.env.DEVMATE_CONFIG = configPath;
 
-await fsp.writeFile(configPath, JSON.stringify({
-  version: 11,
-  auth: { required: true, token: 'owner-token-value-long-enough' },
-  permissions: { profile: 'fullAccess' },
-  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
-  team: { members: [], requireWorkspaceLeaseForWrites: true },
-  requestPolicy: { allowedHosts: ['devmate.example.com'] },
-  maintenance: { auditRetentionDays: 90 },
-  activeWorkspaceId: 'app',
-  workspaces: [{ id: 'app', name: 'app', root: workspaceRoot, mode: 'workspace-write', reference: false }]
-}, null, 2), 'utf8');
+const config = configStore.newInstanceConfig({ workspaceRoot, appVersion: configStore.DEFAULT_VERSION });
+config.auth = { mode: 'oauth' };
+config.permissions.profile = 'fullAccess';
+config.activeWorkspaceId = 'app';
+config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'app', role: 'active' };
+config.team.requireWorkspaceLeaseForWrites = true;
+const teamAccess = await import('../gateway/team-access.mjs');
+const aliceCreated = teamAccess.createTeamMember(config, { id: 'alice', name: 'Alice', role: 'developer', workspaceIds: ['app'] });
+const bobCreated = teamAccess.createTeamMember(config, { id: 'bob', name: 'Bob', role: 'maintainer', workspaceIds: ['app'] });
+configStore.atomicWriteJson(configPath, config);
+const alice = teamAccess.verifyMemberLoginCode(aliceCreated.loginCode, config);
+const bob = teamAccess.verifyMemberLoginCode(bobCreated.loginCode, config);
 
 const { audit } = await import('../gateway/local-shared.mjs');
+const { drainAllAuditLogs } = await import('../gateway/audit-log-coordinator.mjs');
 const { rollbackWorkSession } = await import('../gateway/work-session-rollback.mjs');
 const { acquireWorkspaceLease, clearWorkspaceLeases } = await import('../gateway/workspace-leases.mjs');
-
-const alice = { id: 'alice', name: 'Alice', role: 'developer', workspaceIds: ['app'], source: 'team-token' };
-const bob = { id: 'bob', name: 'Bob', role: 'maintainer', workspaceIds: ['app'], source: 'team-token' };
 
 async function recordCreatedSession(id, principal, fileName) {
   const file = path.join(workspaceRoot, fileName);
@@ -45,7 +45,7 @@ async function recordCreatedSession(id, principal, fileName) {
   return file;
 }
 
-test('maintainer must opt in with force before rolling back another principal session', async () => {
+test('maintainer must opt in with force before rolling back another OAuth member work session', async () => {
   clearWorkspaceLeases();
   const id = 'work-owned-by-alice';
   const file = await recordCreatedSession(id, alice, 'alice-created.txt');
@@ -62,7 +62,7 @@ test('maintainer must opt in with force before rolling back another principal se
   assert.equal(await fsp.stat(file).then(() => true, () => false), false);
 });
 
-test('rollback refuses audit history when session ownership metadata is unavailable', async () => {
+test('rollback refuses audit history when work-session ownership metadata is unavailable', async () => {
   clearWorkspaceLeases();
   const id = 'work-missing-owner';
   const fileName = 'unknown-created.txt';
@@ -84,6 +84,7 @@ test('rollback refuses audit history when session ownership metadata is unavaila
 
 test.after(async () => {
   clearWorkspaceLeases();
+  await drainAllAuditLogs();
   delete process.env.DEVMATE_CONFIG;
   await fsp.rm(temp, { recursive: true, force: true });
 });
