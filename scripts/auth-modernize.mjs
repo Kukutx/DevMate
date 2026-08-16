@@ -22,7 +22,13 @@ function once(text, search, replacement, label) {
 
 edit('gateway/team-access.mjs', source => {
   let next = source;
-  next = once(next, '    tokenVersion: member.tokenVersion || 1', '    authVersion: member.authVersion || 1', 'member public auth version');
+  next = once(next,
+`    lastUsedAt: member.lastUsedAt || null,
+    tokenVersion: member.tokenVersion || 1
+  };`,
+`    lastUsedAt: member.lastUsedAt || null,
+    authVersion: member.authVersion || 1
+  };`, 'member public auth version');
   next = once(next,
 `    salt,
     tokenHash: hashSecret(secret, salt),
