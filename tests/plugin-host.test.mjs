@@ -19,7 +19,7 @@ config.plugins = { enabled: [], settings: {} };
 configStore.atomicWriteJson(configPath, config);
 process.env.DEVMATE_CONFIG = configPath;
 
-const { installPluginHost, __test } = await import('../gateway/plugins/plugin-host.mjs');
+const { registerPluginHost, __test } = await import('../gateway/plugins/plugin-host.mjs');
 
 class MockServer {
   constructor() { this.tools = new Map(); this.resources = new Map(); }
@@ -28,10 +28,9 @@ class MockServer {
   async connect() { return 'connected'; }
 }
 
-installPluginHost(MockServer);
-
 test('registers management and automation tools while optional plugins remain disabled', async () => {
   const server = new MockServer();
+  await registerPluginHost(server);
   await server.connect();
   assert.equal(server.tools.has('plugin_catalog'), true);
   assert.equal(server.tools.has('devmate_plugins_panel'), true);
@@ -45,9 +44,11 @@ test('registers management and automation tools while optional plugins remain di
 
 test('enabling Godot also enables Browser QA and its shared service on the next server instance', async () => {
   const server = new MockServer();
+  await registerPluginHost(server);
   await server.connect();
   await server.tools.get('plugin_enable').handler({ id: 'devmate.godot' });
   const next = new MockServer();
+  await registerPluginHost(next);
   await next.connect();
   assert.equal(next.tools.has('godot_status'), true);
   assert.equal(next.tools.has('browser_qa_status'), true);
