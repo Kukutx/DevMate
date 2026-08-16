@@ -21,7 +21,9 @@ function discoverResponse(id) {
       jsonrpc: '2.0',
       id,
       result: {
+        resultType: 'complete',
         supportedVersions: ['2026-07-28'],
+        capabilities: { tools: {} },
         _meta: { 'io.modelcontextprotocol/serverInfo': { name: 'devmate', version: '4.0.0' } }
       }
     }
@@ -39,7 +41,7 @@ function successfulRequestRecorder(calls = []) {
         status: 200,
         headers: {},
         body: '',
-        json: { jsonrpc: '2.0', id: payload.id, result: { tools: [{ name: 'gateway_status' }, { name: 'read_file' }] } }
+        json: { jsonrpc: '2.0', id: payload.id, result: { resultType: 'complete', tools: [{ name: 'gateway_status' }, { name: 'read_file' }] } }
       };
     }
     if (payload.method === 'tools/call' && payload.params?.name === 'gateway_status') {
@@ -48,7 +50,7 @@ function successfulRequestRecorder(calls = []) {
         status: 200,
         headers: {},
         body: '',
-        json: { jsonrpc: '2.0', id: payload.id, result: { structuredContent: { name: 'devmate', version: '4.0.0' } } }
+        json: { jsonrpc: '2.0', id: payload.id, result: { resultType: 'complete', structuredContent: { name: 'devmate', version: '4.0.0' } } }
       };
     }
     throw new Error(`Unexpected MCP request: ${options.body}`);
@@ -89,9 +91,9 @@ test('public MCP preflight rejects discovery-only endpoints whose tool call is b
     const payload = JSON.parse(options.body);
     if (payload.method === 'server/discover') return discoverResponse(payload.id);
     if (payload.method === 'tools/list') {
-      return { ok: true, status: 200, headers: {}, body: '', json: { result: { tools: [{ name: 'gateway_status' }] } } };
+      return { ok: true, status: 200, headers: {}, body: '', json: { result: { resultType: 'complete', tools: [{ name: 'gateway_status' }] } } };
     }
-    return { ok: true, status: 200, headers: {}, body: '', json: { result: { isError: true, content: [{ type: 'text', text: 'broken tool execution' }] } } };
+    return { ok: true, status: 200, headers: {}, body: '', json: { result: { resultType: 'complete', isError: true, content: [{ type: 'text', text: 'broken tool execution' }] } } };
   };
   await assert.rejects(
     preflightPublicMcp({ publicUrl: 'https://broken.example', request }),
@@ -135,9 +137,9 @@ test('public MCP preflight retries only transient tunnel propagation failures', 
     }
     if (payload.method === 'server/discover') return discoverResponse(payload.id);
     if (payload.method === 'tools/list') {
-      return { ok: true, status: 200, headers: {}, body: '', json: { result: { tools: [{ name: 'gateway_status' }] } } };
+      return { ok: true, status: 200, headers: {}, body: '', json: { result: { resultType: 'complete', tools: [{ name: 'gateway_status' }] } } };
     }
-    return { ok: true, status: 200, headers: {}, body: '', json: { result: { structuredContent: { name: 'devmate' } } } };
+    return { ok: true, status: 200, headers: {}, body: '', json: { result: { resultType: 'complete', structuredContent: { name: 'devmate' } } } };
   };
   const result = await preflightPublicMcp({
     publicUrl: 'https://eventual.trycloudflare.com',
