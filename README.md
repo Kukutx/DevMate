@@ -7,16 +7,16 @@ DevMate is a local-first MCP development gateway for ChatGPT. It can inspect, mo
 Choose one bootstrap preset to compose a complete starting configuration:
 
 ```bash
-# One developer
+# One local developer: loopback-only MCP
 npx devmate bootstrap --preset personal --workspace /srv/project
 
-# Trusted team with the first member
+# Trusted team: OAuth MCP + first member login code
 npx devmate bootstrap \
   --preset team \
   --workspace /srv/project \
   --member-name Alice
 
-# Hardened control plane with a first member and Runner credential
+# Hardened control plane: OAuth MCP + member + Runner credential
 npx devmate bootstrap \
   --preset control-plane \
   --workspace /srv/project \
@@ -32,9 +32,11 @@ npx devmate bootstrap \
   --config /var/lib/devmate-runner/config.json
 ```
 
-Presets compose the same capability-based instance schema; they are not runtime modes. Each bootstrap response includes the config path, one-time credentials that were created, and the next action. Member and Runner plaintext tokens are never written to config.
+Presets compose the same capability-based instance schema; they are not runtime modes. Personal and Runner presets use `auth.mode: "none"`, which is **loopback-only**. Team and Control-plane presets use OAuth. Any bootstrap that creates a member also requires OAuth.
 
-Inspect a configuration without exposing tokens:
+Member creation returns a one-time `dmc_` OAuth login code. Only its salted verifier and the member `authVersion` are persisted. Runner creation returns a one-time `dmr_` Runner credential; only its salted verifier is persisted. Neither plaintext credential is written to `config.json`.
+
+Inspect a configuration without exposing credentials:
 
 ```bash
 npx devmate status --config /srv/devmate/config.json
@@ -48,18 +50,18 @@ The normal desktop path is:
 
 1. Open a project.
 2. Run `DevMate: Start` — or leave the default auto-start enabled.
-3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, runs MCP `initialize` + `tools/list`, reaches Ready, and copies the verified HTTPS `/mcp` URL.
-4. Add that URL to ChatGPT and select **No authentication**. This is the complete default path.
+3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, verifies MCP 2026 with `server/discover` → `tools/list` → a real `gateway_status` tool call, then reaches Ready and copies the verified HTTPS `/mcp` URL.
+4. Add that URL to ChatGPT and use **OAuth**. Desktop public MCP defaults to OAuth.
 
 Fresh desktop instances use **ngrok**. Configure ngrok once, then DevMate keeps using the account-owned HTTPS endpoint across normal restarts. Cloudflare and external HTTPS ingress remain optional providers, not defaults.
 
-Routine Start never requires a separate tunnel-start or verification command. For a shared or published ChatGPT app, switch the optional authentication mode to **OAuth** before creating the app. DevMate does not support legacy copied Bearer tokens or credentials in URLs. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) and [`docs/TUNNELS.md`](docs/TUNNELS.md).
+Routine Start never requires a separate tunnel-start or verification command. `auth.mode: "none"` is retained only for loopback-only MCP and is rejected for remote ingress. Public MCP never accepts copied owner/member Bearer tokens or credentials in URLs. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) and [`docs/TUNNELS.md`](docs/TUNNELS.md).
 
 ## Obsidian setup
 
 DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins.
 
-Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → MCP preflight → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
+Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → OAuth-authenticated MCP 2026 preflight → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
 
 VS Code and Obsidian also share one generation-scoped public verification. They do not compete with duplicate startup probes; a temporary edge timeout keeps the current URL alive while automatic recovery continues. Ready evidence is periodically refreshed so a process that is still running cannot hide a remote endpoint failure indefinitely.
 
@@ -69,20 +71,20 @@ See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md), [`obsidian-plugin/RE
 
 ## Capability presets
 
-| Preset | Identity | Execution | Best for |
+| Preset | MCP identity | Execution | Best for |
 |---|---|---|---|
-| Personal | No authentication | Embedded Runner | One developer, immediate use |
-| Shared / published | OAuth | Embedded Runner or external Runners | GitHub users and ChatGPT apps |
-| Team | Explicit scoped access | Embedded Runner, optional external Runners | Trusted team workflows |
-| Runner host | Local process boundary | Local toolchain through loopback MCP | Platform-specific execution |
+| Personal | Loopback-only, no auth | Embedded Runner | One local developer |
+| Team | OAuth members | Embedded Runner, optional external Runners | Trusted shared workflows |
+| Control-plane | OAuth members | External Runners by default | Hardened long-lived control plane |
+| Runner host | Loopback-only local MCP + `dmr_` central credential | Local toolchain | Platform-specific execution |
 
 These presets compose connection, access, request policy and Runner capabilities. They do not create mutually exclusive runtime modes. DevMate supports ngrok, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress independently of access or Runner topology.
 
 ## Architecture
 
 ```text
-ChatGPT / team members
-        │ MCP (no auth by default, OAuth when enabled)
+ChatGPT / OAuth members
+        │ HTTPS MCP 2026 + OAuth access token
         ▼
 DevMate Gateway
   ├─ Capability Host and tool contracts
@@ -91,15 +93,15 @@ DevMate Gateway
   ├─ durable job queue
   ├─ audit, metrics, backups, and previews
   └─ optional Browser QA / Godot plugins
-        │ /runner/v1 + dmr_ token
+        │ /runner/v1 + scoped dmr_ credential
         ▼
 External Runner hosts
   └─ loopback DevMate Gateway + local toolchain
 ```
 
-Desktop hosts additionally coordinate one shared provider-native public connection. Ready is bound to the **current complete Gateway + provider session generation**: a Gateway restart, provider restart, ownership transfer, or endpoint generation change makes previous MCP verification stale even when the public hostname is unchanged.
+MCP transport is current-only: protocol `2026-07-28`, `server/discover` negotiation, stateless HTTP handling, and legacy transport rejection. Desktop hosts additionally coordinate one shared provider-native public connection. Ready is bound to the **current complete Gateway + provider generation**: a Gateway restart, provider restart, ownership transfer, or endpoint generation change makes previous MCP verification stale even when the public hostname is unchanged.
 
-DevMate uses one deterministic Capability Host for registration and initialization. `gateway/tool-policy.mjs` is the shared source of truth for team capability, workspace scope and durable Runner requirements. Plugins extend through a validated composition API rather than manually calling another plugin lifecycle.
+DevMate uses one deterministic Capability Host for registration and initialization. `gateway/tool-policy.mjs` is the shared source of truth for member capability, workspace scope and durable Runner requirements. Plugins extend through a validated composition API rather than manually installing competing MCP prototype hooks.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md).
 
@@ -113,20 +115,24 @@ observer → reviewer → developer → maintainer → owner
 
 Core protections include:
 
-- salted member and Runner token hashes;
-- explicit workspace scopes;
-- token expiry, rotation, disable, and revocation;
+- one-time `dmc_` member login codes with salted verifiers and monotonic `authVersion`;
+- short-lived OAuth access tokens and single-use rotating refresh-token families;
+- refresh-token replay detection that revokes the whole family;
+- current-role and current-workspace-scope re-evaluation on member requests and durable jobs;
+- scoped `dmr_` Runner credentials kept separate from MCP identity;
 - optional exclusive workspace leases for shared mutations;
 - optional dual-control approval for configured capabilities or tools;
 - high-risk shell and Git guards;
 - request, tool, approval, and Runner audit metadata;
 - bounded rate, request-size, timeout, and concurrency policies.
 
+Rotating a member login code increments `authVersion`, invalidating previously issued member OAuth credentials. Disabling, revoking, expiring, or changing a member is enforced from current member state rather than trusted from stale token claims.
+
 Use work sessions or acquire a workspace lease before shared mutations when lease policy is enabled.
 
 ## Durable jobs and Runners
 
-Long operations can survive MCP refreshes and Gateway restarts:
+Long operations can survive MCP requests and Gateway restarts:
 
 ```text
 job_target_catalog
@@ -220,8 +226,9 @@ Use drain controls before upgrades so new mutations and job claims stop while in
 ## Safety boundary
 
 - Gateways bind to `127.0.0.1` by default; container deployments opt into an explicit container bind host while host publishing remains loopback-bound.
-- MCP credentials are accepted only from request headers; endpoint URLs never contain owner/member credentials.
-- MCP, Runner, and preview credentials are separate.
+- `auth.mode: "none"` trusts only a genuine loopback socket + loopback Host; it is not a remote/public authentication mode.
+- Public MCP uses OAuth Bearer access tokens only. OAuth signing material and owner approval codes live in private state, not `config.json`.
+- Member, Runner, provider, preview, and MCP credentials are distinct trust domains.
 - Workspace paths use realpath containment and block secrets, keys, databases, logs, and real `.env` files.
 - Runner capabilities are scheduling metadata, not an operating-system sandbox.
 - Godot QA inputs are limited to declared InputMap actions; report, movie, and export paths remain workspace-contained.
@@ -236,7 +243,7 @@ Use drain controls before upgrades so new mutations and job claims stop while in
 
 ```bash
 npm install
-npm run check       # discovers all JavaScript source and validates workflows
+npm run check       # syntax, architecture/current-only contracts, workflows, release metadata
 npm run test:unit   # discovers all normal tests
 npm run smoke:gateway
 npm run package:vsix
@@ -245,6 +252,7 @@ npm run package:vsix
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md)
 - [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md)
 - [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md)
 - [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)
