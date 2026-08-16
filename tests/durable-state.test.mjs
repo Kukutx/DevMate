@@ -4,10 +4,12 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
+const { SUPPORTED_CONFIG_VERSION } = configStore;
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-durable-state-'));
 const configPath = path.join(temp, 'config.json');
-await fsp.writeFile(configPath, JSON.stringify({ version: 11, instanceId: 'durable-test', permissions: { profile: 'fullAccess' } }), 'utf8');
+await fsp.writeFile(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, instanceId: 'durable-test', permissions: { profile: 'fullAccess' } }), 'utf8');
 process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_RUNTIME_OWNER_ID = 'durable-owner';
 process.env.DEVMATE_RUNTIME_PARENT_PID = String(process.pid);
