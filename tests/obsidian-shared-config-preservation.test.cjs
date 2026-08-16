@@ -19,7 +19,7 @@ test('shared host config completion preserves connection, access, policy, runner
     appVersion: '3.3.0',
     instanceId: 'shared-instance',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'shared-owner-token' },
+    auth: { mode: 'oauth' },
     connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com' },
     permissions: { profile: 'fullAccess', readOnly: false },
     team: {
@@ -49,7 +49,7 @@ test('shared host config completion preserves connection, access, policy, runner
     assert.deepEqual(result.jobs, original.jobs);
     assert.deepEqual(result.runnerControl, original.runnerControl);
     assert.deepEqual(result.plugins, original.plugins);
-    assert.deepEqual(result.auth, { mode: 'none' });
+    assert.deepEqual(result.auth, { mode: 'oauth' });
     assert.equal(result.server.port, 8787, 'an existing shared Gateway port must not be replaced by a host preference');
     assert.equal(result.activeWorkspaceId, 'vault');
   } finally {

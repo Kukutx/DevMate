@@ -34,14 +34,14 @@ function fakeRequest(payload, { statusCode = 200, capture = null } = {}) {
   };
 }
 
-test('reads v2 and v3 web_addr without treating other YAML keys as agent settings', () => {
-  assert.equal(ngrokWebAddrFromConfig('version: 2\nweb_addr: 127.0.0.1:4141\n'), '127.0.0.1:4141');
+test('reads only current v3 agent.web_addr without treating other YAML keys as agent settings', () => {
   assert.equal(ngrokWebAddrFromConfig('version: 3\nagent:\n  web_addr: "127.0.0.1:4242"\nendpoints: []\n'), '127.0.0.1:4242');
+  assert.equal(ngrokWebAddrFromConfig('agent:\n  web_addr: 127.0.0.1:4141\n'), null);
   assert.equal(ngrokWebAddrFromConfig('version: 3\nagent:\n  authtoken: x\nendpoints:\n  - name: web_addr\n'), null);
   assert.equal(ngrokWebAddrFromConfig('version: 3\nagent:\n  web_addr: false\n'), 'false');
 });
 
-test('normalizes only local Agent API addresses and fails closed for disabled or nonlocal bindings', () => {
+test('normalizes only local Agent API addresses and fails closed for disabled, invalid, or nonlocal bindings', () => {
   assert.equal(loopbackAgentApiBase(null), DEFAULT_NGROK_AGENT_API_BASE);
   assert.equal(loopbackAgentApiBase('127.0.0.1:4141'), 'http://127.0.0.1:4141/api');
   assert.equal(loopbackAgentApiBase('localhost:4242'), 'http://127.0.0.1:4242/api');
@@ -51,7 +51,7 @@ test('normalizes only local Agent API addresses and fails closed for disabled or
   assert.equal(loopbackAgentApiBase('remote.example.com:4040'), '');
 });
 
-test('config check output resolves the active config and web_addr without changing ngrok config', () => {
+test('config check output resolves the active v3 config and web_addr without changing ngrok config', () => {
   assert.equal(configPathFromCheckOutput('Valid configuration file at C:\\Users\\Dev\\AppData\\Local\\ngrok\\ngrok.yml\n'), 'C:\\Users\\Dev\\AppData\\Local\\ngrok\\ngrok.yml');
   const calls = [];
   const configFile = path.resolve('fixtures', 'ngrok', 'ngrok.yml');
@@ -69,7 +69,7 @@ test('config check output resolves the active config and web_addr without changi
   assert.deepEqual(calls, [['ngrok', ['config', 'check']]]);
 });
 
-test('current endpoint API matches the requested upstream port and HTTPS URL', async () => {
+test('current endpoint API matches only endpoint.url plus endpoint.upstream.url', async () => {
   let requested = '';
   const url = await discoverNgrokPublicUrl(8787, {
     apiBase: 'http://127.0.0.1:4545/api',

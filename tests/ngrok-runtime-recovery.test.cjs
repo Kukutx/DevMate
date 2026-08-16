@@ -27,31 +27,26 @@ function responseRequest(routes) {
   };
 }
 
-test('ngrok discovery falls back to the legacy tunnels Agent API shape', async () => {
+test('ngrok discovery fails closed when the current endpoints Agent API is unavailable', async () => {
   const publicUrl = await discoverNgrokPublicUrl(8788, {
     apiBase: 'http://127.0.0.1:4040/api',
-    request: responseRequest([
-      { suffix: '/endpoints', status: 404 },
-      { suffix: '/tunnels', status: 200, payload: { tunnels: [
-        { public_url: 'https://legacy.ngrok.app', config: { addr: 'http://127.0.0.1:8788' } }
-      ] } }
-    ]),
+    request: responseRequest([{ suffix: '/endpoints', status: 404 }]),
     timeoutMs: 250
   });
-  assert.equal(publicUrl, 'https://legacy.ngrok.app');
+  assert.equal(publicUrl, '');
 });
 
-test('ngrok discovery accepts alternate current upstream field names while keeping exact loopback-port checks', async () => {
+test('ngrok discovery ignores endpoint objects without the current nested upstream.url shape', async () => {
   const publicUrl = await discoverNgrokPublicUrl(8788, {
     apiBase: 'http://127.0.0.1:4040/api',
     request: responseRequest([
       { suffix: '/endpoints', status: 200, payload: { endpoints: [
-        { url: 'https://current.ngrok.app', upstream_url: 'http://localhost:8788' }
+        { url: 'https://current.ngrok.app', upstream: {} }
       ] } }
     ]),
     timeoutMs: 250
   });
-  assert.equal(publicUrl, 'https://current.ngrok.app');
+  assert.equal(publicUrl, '');
 });
 
 test('duplicate Start calls for one port converge on one tunnel start operation', async () => {

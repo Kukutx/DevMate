@@ -51,3 +51,17 @@ test('desktop public connection lifecycle is provider-native and shared', () => 
   assert.match(obsidian, /new TunnelController\(\{/);
   assert.match(obsidian, /this\.tunnelController\.start\(gateway\.port\)/);
 });
+
+test('ngrok discovery is pinned to the current v3 Agent endpoints API and exact response shape', () => {
+  const agent = source('vscode-host/ngrok-agent-api.js');
+  const support = source('ngrok-support.js');
+  const controller = source('vscode-host/tunnel-controller.js');
+  assert.match(agent, /\/endpoints/);
+  assert.match(agent, /item\?\.url/);
+  assert.match(agent, /item\?\.upstream\?\.url/);
+  for (const retired of ['tun' + 'nels', 'public' + '_url', 'upstream' + '_url', 'forwards' + '_to', 'config' + '.addr']) {
+    assert.equal(agent.includes(retired), false, `retired ngrok Agent API shape must not return: ${retired}`);
+  }
+  assert.match(support, /supportsNgrokEndpointsApi/);
+  assert.match(controller, /requires ngrok 3\.30\.0\+ for current Agent API endpoint discovery/);
+});

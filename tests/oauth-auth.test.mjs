@@ -58,12 +58,25 @@ function mcpHeaders(method, token = '', name = '') {
   };
 }
 
+function publicGatewayFetch(localOrigin, publicHost, pathname, options = {}) {
+  return fetch(`${localOrigin}${pathname}`, {
+    ...options,
+    headers: { ...(options.headers || {}), host: publicHost }
+  });
+}
+
 test('OAuth Gateway keeps secrets out of config, publishes current metadata, rejects DCR, and enforces bound MCP 2026 access tokens', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-oauth-gateway-'));
   const port = freePort();
+  const publicHost = `oauth-${port}.devmate.test`;
+  const origin = `https://${publicHost}`;
+  const localOrigin = `http://127.0.0.1:${port}`;
+  const audience = `${origin}/mcp`;
   const configPath = path.join(directory, 'config.json');
   const config = configStore.newInstanceConfig({ workspaceRoot: process.cwd(), port, appVersion: configStore.DEFAULT_VERSION });
   config.auth = { mode: 'oauth' };
+  config.connection.publicUrl = origin;
+  config.requestPolicy.allowedHosts = [publicHost];
   configStore.atomicWriteJson(configPath, config);
   const secrets = oauthSecrets.ensureOAuthSecrets(configPath);
 
@@ -89,17 +102,15 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
   });
 
   await waitForGateway(port, child, () => output);
-  const origin = `http://127.0.0.1:${port}`;
-  const audience = `${origin}/mcp`;
 
-  const protectedMetadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
+  const protectedMetadata = await publicGatewayFetch(localOrigin, publicHost, '/.well-known/oauth-protected-resource/mcp');
   assert.equal(protectedMetadata.status, 200);
   const resource = await protectedMetadata.json();
   assert.equal(resource.resource, audience);
   assert.deepEqual(resource.authorization_servers, [origin]);
   assert.deepEqual(resource.bearer_methods_supported, ['header']);
 
-  const authorizationMetadata = await fetch(`${origin}/.well-known/oauth-authorization-server`);
+  const authorizationMetadata = await publicGatewayFetch(localOrigin, publicHost, '/.well-known/oauth-authorization-server');
   assert.equal(authorizationMetadata.status, 200);
   const authorization = await authorizationMetadata.json();
   assert.equal(authorization.issuer, origin);
@@ -109,14 +120,14 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
   assert.equal(authorization.client_id_metadata_document_supported, true);
   assert.deepEqual(authorization.code_challenge_methods_supported, ['S256']);
 
-  const retiredDcr = await fetch(`${origin}/oauth/register`, {
+  const retiredDcr = await publicGatewayFetch(localOrigin, publicHost, '/oauth/register', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ redirect_uris: ['http://127.0.0.1:43123/callback'] })
   });
   assert.equal(retiredDcr.status, 404);
 
-  const unauthenticated = await fetch(audience, {
+  const unauthenticated = await publicGatewayFetch(localOrigin, publicHost, '/mcp', {
     method: 'POST',
     headers: mcpHeaders('server/discover'),
     body: mcpBody(1, 'server/discover')
@@ -131,7 +142,7 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
     subject: 'owner',
     ttlSeconds: 600
   });
-  const discovery = await fetch(audience, {
+  const discovery = await publicGatewayFetch(localOrigin, publicHost, '/mcp', {
     method: 'POST',
     headers: mcpHeaders('server/discover', accessToken),
     body: mcpBody(2, 'server/discover')
@@ -141,7 +152,7 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
   assert.ok(discovered.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION));
   assert.equal(typeof discovered.result?.capabilities, 'object');
 
-  const statusCall = await fetch(audience, {
+  const statusCall = await publicGatewayFetch(localOrigin, publicHost, '/mcp', {
     method: 'POST',
     headers: mcpHeaders('tools/call', accessToken, 'gateway_status'),
     body: mcpBody(3, 'tools/call', { name: 'gateway_status', arguments: {} })
@@ -157,7 +168,7 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
     scope: 'devmate',
     subject: 'owner'
   });
-  const rejectedIssuer = await fetch(audience, {
+  const rejectedIssuer = await publicGatewayFetch(localOrigin, publicHost, '/mcp', {
     method: 'POST',
     headers: mcpHeaders('server/discover', wrongIssuer),
     body: mcpBody(4, 'server/discover')
@@ -170,7 +181,7 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
     scope: 'devmate',
     subject: 'owner'
   });
-  const rejectedAudience = await fetch(audience, {
+  const rejectedAudience = await publicGatewayFetch(localOrigin, publicHost, '/mcp', {
     method: 'POST',
     headers: mcpHeaders('server/discover', wrongAudience),
     body: mcpBody(5, 'server/discover')

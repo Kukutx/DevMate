@@ -20,13 +20,7 @@ function yamlScalar(value) {
 function ngrokWebAddrFromConfig(text) {
   const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/);
   const version3 = lines.some(line => /^\s*version\s*:\s*["']?3["']?\s*(?:#.*)?$/i.test(line));
-  if (!version3) {
-    for (const line of lines) {
-      const match = line.match(/^web_addr\s*:\s*(.*?)\s*$/i);
-      if (match) return yamlScalar(match[1]);
-    }
-    return null;
-  }
+  if (!version3) return null;
 
   let agentIndent = -1;
   for (const line of lines) {
@@ -52,7 +46,7 @@ function loopbackAgentApiBase(webAddr) {
   try {
     parsed = new URL(value.includes('://') ? value : `http://${value}`);
   } catch {
-    return DEFAULT_NGROK_AGENT_API_BASE;
+    return '';
   }
   if (parsed.protocol !== 'http:') return '';
   const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -134,35 +128,22 @@ function normalizedPublicUrl(value) {
 }
 
 function endpointPublicUrl(item) {
-  return normalizedPublicUrl(item?.url || item?.public_url || item?.publicUrl || '');
+  return normalizedPublicUrl(item?.url || '');
 }
 
 function endpointUpstreamUrl(item) {
-  return String(
-    item?.upstream?.url ||
-    item?.upstream?.uri ||
-    item?.upstream?.addr ||
-    item?.upstream_url ||
-    item?.upstreamUrl ||
-    item?.forwards_to ||
-    item?.forwardsTo ||
-    item?.config?.addr ||
-    item?.config?.upstream ||
-    ''
-  ).trim();
+  return String(item?.upstream?.url || '').trim();
 }
 
-function collectionItems(payload, resource) {
-  if (resource === 'endpoints') return Array.isArray(payload?.endpoints) ? payload.endpoints : [];
-  if (resource === 'tunnels') return Array.isArray(payload?.tunnels) ? payload.tunnels : [];
-  return [];
+function collectionItems(payload) {
+  return Array.isArray(payload?.endpoints) ? payload.endpoints : [];
 }
 
-function requestAgentCollection(apiBase, resource, {
+function requestAgentEndpoints(apiBase, {
   request = http.request,
   timeoutMs = 1000
 } = {}) {
-  const endpointUrl = `${String(apiBase).replace(/\/$/, '')}/${resource}`;
+  const endpointUrl = `${String(apiBase).replace(/\/$/, '')}/endpoints`;
   return new Promise(resolve => {
     let settled = false;
     const finish = value => {
@@ -215,17 +196,14 @@ async function discoverNgrokPublicUrl(port, {
 } = {}) {
   if (!apiBase) return '';
   const expected = normalizedPublicUrl(expectedUrl);
-  for (const resource of ['endpoints', 'tunnels']) {
-    const payload = await requestAgentCollection(apiBase, resource, { request, timeoutMs });
-    const match = collectionItems(payload, resource).find(item => {
-      const url = endpointPublicUrl(item);
-      return upstreamMatchesPort(endpointUpstreamUrl(item), port) &&
-        url.startsWith('https://') &&
-        (!expected || url === expected);
-    });
-    if (match) return endpointPublicUrl(match);
-  }
-  return '';
+  const payload = await requestAgentEndpoints(apiBase, { request, timeoutMs });
+  const match = collectionItems(payload).find(item => {
+    const url = endpointPublicUrl(item);
+    return upstreamMatchesPort(endpointUpstreamUrl(item), port) &&
+      url.startsWith('https://') &&
+      (!expected || url === expected);
+  });
+  return match ? endpointPublicUrl(match) : '';
 }
 
 async function discoverLocalNgrokEndpoint(port, {
