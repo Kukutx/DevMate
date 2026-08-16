@@ -5,7 +5,7 @@ const https = require('node:https');
 const dns = require('node:dns');
 
 const MCP_PATH = '/mcp';
-const MCP_PROTOCOL_VERSION = '2025-03-26';
+const MCP_PROTOCOL_VERSION = '2026-07-28';
 const PREFLIGHT_PROBE_TOOL = 'gateway_status';
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -57,8 +57,6 @@ function parseJsonPayload(text) {
   const body = String(text || '').trim();
   if (!body) return null;
   try { return JSON.parse(body); } catch {}
-
-  // Streamable HTTP may respond as SSE. Use the first JSON data frame.
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data:')) continue;
     const data = line.slice(5).trim();
@@ -223,14 +221,56 @@ function connectionErrorSummary(error) {
 function publicMcpErrorSummary(error) {
   const kind = publicMcpErrorKind(error);
   if (kind === 'temporary-network') return 'The public endpoint is still becoming reachable. DevMate kept it running and will retry automatically.';
-  if (kind === 'authentication') return 'The public endpoint rejected DevMate authentication. Check the connection token setting.';
+  if (kind === 'authentication') return 'The public endpoint rejected DevMate OAuth authorization. Re-authorize the MCP client or inspect the OAuth configuration.';
   if (kind === 'wrong-endpoint') return 'The public URL does not point to the DevMate MCP endpoint.';
   if (kind === 'stale-generation') return 'The connection changed while it was being checked. DevMate will verify the current connection.';
-  return 'The public endpoint responded, but the MCP handshake or tool-call probe was invalid. Copy diagnostics for details.';
+  return 'The public endpoint responded, but the MCP 2026 discovery or tool-call probe was invalid. Copy diagnostics for details.';
 }
 
 function retryDelay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function requestMeta(clientName, clientVersion) {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': {
+      name: String(clientName || 'devmate-preflight'),
+      version: String(clientVersion || '0')
+    },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+
+function protocolHeaders(method, name, authHeaders = {}) {
+  return {
+    ...authHeaders,
+    'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+    'mcp-method': method,
+    ...(name ? { 'mcp-name': String(name) } : {})
+  };
+}
+
+function mcpPayload(id, method, params, clientName, clientVersion) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    method,
+    params: {
+      ...(params || {}),
+      _meta: requestMeta(clientName, clientVersion)
+    }
+  };
+}
+
+function mcpProtocolError(label, response, mcpUrl, code) {
+  const error = new Error(
+    `${label} failed via ${redactUrl(mcpUrl)}. ` +
+    `HTTP=${response.status || 'none'} error=${response.error || ''} body=${String(response.body || '').slice(0, 300)}`
+  );
+  error.code = code;
+  error.response = response;
+  return error;
 }
 
 async function preflightPublicMcpOnce({
@@ -247,51 +287,28 @@ async function preflightPublicMcpOnce({
     ? { authorization: `Bearer ${String(token).trim()}` }
     : {};
 
-  const init = await postJson(mcpUrl, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: String(clientName || 'devmate-preflight'), version: String(clientVersion || '0') }
-    }
-  }, { headers: authHeaders, timeoutMs, request });
-
-  const serverName = init.json?.result?.serverInfo?.name;
-  if (!init.ok || serverName !== 'devmate') {
-    const error = new Error(
-      `MCP initialize failed via ${redactUrl(mcpUrl)}. Expected DevMate server, got ${serverName || 'none'}. ` +
-      `HTTP=${init.status || 'none'} error=${init.error || ''} body=${String(init.body || '').slice(0, 300)}`
-    );
-    error.code = 'DEVMATE_PUBLIC_MCP_INITIALIZE_FAILED';
-    error.response = init;
-    throw error;
+  const discover = await postJson(
+    mcpUrl,
+    mcpPayload(1, 'server/discover', {}, clientName, clientVersion),
+    { headers: protocolHeaders('server/discover', '', authHeaders), timeoutMs, request }
+  );
+  const discoverResult = discover.json?.result;
+  const serverInfo = discoverResult?._meta?.['io.modelcontextprotocol/serverInfo'];
+  if (
+    !discover.ok || discover.json?.error || serverInfo?.name !== 'devmate' ||
+    !Array.isArray(discoverResult?.supportedVersions) || !discoverResult.supportedVersions.includes(MCP_PROTOCOL_VERSION)
+  ) {
+    throw mcpProtocolError('MCP server/discover', discover, mcpUrl, 'DEVMATE_PUBLIC_MCP_DISCOVER_FAILED');
   }
 
-  const sessionId = String(init.headers?.['mcp-session-id'] || '').trim();
-  const requestHeaders = {
-    ...authHeaders,
-    'mcp-protocol-version': MCP_PROTOCOL_VERSION,
-    ...(sessionId ? { 'mcp-session-id': sessionId } : {})
-  };
-  const tools = await postJson(mcpUrl, {
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/list',
-    params: {}
-  }, { headers: requestHeaders, timeoutMs, request });
-
-  if (!tools.ok || !Array.isArray(tools.json?.result?.tools)) {
-    const error = new Error(
-      `MCP tools/list failed via ${redactUrl(mcpUrl)}. ` +
-      `HTTP=${tools.status || 'none'} error=${tools.error || ''} body=${String(tools.body || '').slice(0, 300)}`
-    );
-    error.code = 'DEVMATE_PUBLIC_MCP_TOOLS_FAILED';
-    error.response = tools;
-    throw error;
+  const tools = await postJson(
+    mcpUrl,
+    mcpPayload(2, 'tools/list', {}, clientName, clientVersion),
+    { headers: protocolHeaders('tools/list', '', authHeaders), timeoutMs, request }
+  );
+  if (!tools.ok || tools.json?.error || !Array.isArray(tools.json?.result?.tools)) {
+    throw mcpProtocolError('MCP tools/list', tools, mcpUrl, 'DEVMATE_PUBLIC_MCP_TOOLS_FAILED');
   }
-
   if (!tools.json.result.tools.some(tool => tool?.name === PREFLIGHT_PROBE_TOOL)) {
     const error = new Error(`MCP tools/list did not expose required probe tool ${PREFLIGHT_PROBE_TOOL}`);
     error.code = 'DEVMATE_PUBLIC_MCP_PROBE_TOOL_MISSING';
@@ -299,32 +316,26 @@ async function preflightPublicMcpOnce({
     throw error;
   }
 
-  const probe = await postJson(mcpUrl, {
-    jsonrpc: '2.0',
-    id: 3,
-    method: 'tools/call',
-    params: { name: PREFLIGHT_PROBE_TOOL, arguments: {} }
-  }, { headers: requestHeaders, timeoutMs, request });
+  const probe = await postJson(
+    mcpUrl,
+    mcpPayload(3, 'tools/call', { name: PREFLIGHT_PROBE_TOOL, arguments: {} }, clientName, clientVersion),
+    { headers: protocolHeaders('tools/call', PREFLIGHT_PROBE_TOOL, authHeaders), timeoutMs, request }
+  );
   const probeResult = probe.json?.result;
   const probeName = probeResult?.structuredContent?.name;
   if (!probe.ok || probe.json?.error || probeResult?.isError === true || probeName !== 'devmate') {
-    const error = new Error(
-      `MCP tools/call probe failed via ${redactUrl(mcpUrl)}. ` +
-      `HTTP=${probe.status || 'none'} error=${probe.error || ''} body=${String(probe.body || '').slice(0, 300)}`
-    );
-    error.code = 'DEVMATE_PUBLIC_MCP_TOOL_CALL_FAILED';
-    error.response = probe;
-    throw error;
+    throw mcpProtocolError('MCP tools/call probe', probe, mcpUrl, 'DEVMATE_PUBLIC_MCP_TOOL_CALL_FAILED');
   }
 
   return {
     publicOrigin,
     mcpUrl,
-    sessionId: sessionId || null,
+    protocolVersion: MCP_PROTOCOL_VERSION,
+    supportedVersions: [...discoverResult.supportedVersions],
     toolCount: tools.json.result.tools.length,
     toolCallVerified: true,
     probeTool: PREFLIGHT_PROBE_TOOL,
-    server: init.json.result.serverInfo
+    server: serverInfo
   };
 }
 
@@ -357,15 +368,18 @@ module.exports = {
   MCP_PROTOCOL_VERSION,
   PREFLIGHT_PROBE_TOOL,
   connectionErrorSummary,
+  mcpPayload,
   mcpUrlFor,
   normalizePublicOrigin,
   parseJsonPayload,
   postJson,
   preflightPublicMcp,
+  protocolHeaders,
   publicMcpErrorKind,
   publicMcpErrorSummary,
   publicEndpointLookup,
   redactUrl,
+  requestMeta,
   requestRaw,
   transientPublicMcpError
 };
