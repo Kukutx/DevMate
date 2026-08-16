@@ -174,7 +174,7 @@ const documentationFiles = [
 ];
 const retiredDocumentationPatterns = [
   { pattern: /(?:authenticated\s+)?MCP\s+`initialize`|MCP\s+initialize/i, label: 'retired MCP initialize guidance' },
-  { pattern: /preserve the MCP session|MCP session ID|MCP-Session-Id|mcp-session-id/i, label: 'retired stateful MCP session guidance' },
+  { pattern: /preserve the MCP session|MCP session ID\b|MCP-Session-Id|mcp-session-id/i, label: 'retired stateful MCP session guidance' },
   { pattern: /Public MCP uses no authentication by default|normal desktop MCP flow is no-auth|normal desktop flow uses no authentication/i, label: 'retired unauthenticated public MCP guidance' },
   { pattern: /member token is returned|member tokens are printed/i, label: 'retired static member-token guidance' }
 ];
@@ -189,7 +189,7 @@ const documentationRequired = [
   ['README.md', /server\/discover[\s\S]*2026-07-28|2026-07-28[\s\S]*server\/discover/, 'README must document MCP 2026 discovery'],
   ['README.md', /Desktop public MCP defaults to OAuth/, 'README must document OAuth-default desktop public MCP'],
   ['SECURITY.md', /Every remote\/public `\/mcp` request requires OAuth/, 'security policy must require OAuth on remote MCP'],
-  ['docs/AUTHENTICATION.md', /auth\.mode: "none" means \*\*loopback-only MCP\*\*/, 'authentication policy must define no-auth as loopback-only'],
+  ['docs/AUTHENTICATION.md', /auth\.mode: "none"` means \*\*loopback-only MCP\*\*/, 'authentication policy must define no-auth as loopback-only'],
   ['docs/BOOTSTRAP.md', /Team and Control-plane presets therefore use OAuth by construction/, 'bootstrap docs must encode shared OAuth defaults'],
   ['docs/HOST_INTEGRATION.md', /MCP 2026 verification is stateless/, 'host integration must document stateless MCP 2026'],
   ['docs/STANDALONE.md', /`--authentication-mode none` with `--public-url` is rejected/, 'standalone docs must reject public no-auth'],
