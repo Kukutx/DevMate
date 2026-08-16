@@ -128,7 +128,7 @@ export function toolNeedsApproval({ config, principal, tool, capability }) {
   const policy = approvalPolicy(config);
   if (String(tool || '').startsWith('team_approval_')) return false;
   if (!policy.enabled) return false;
-  if (!principal || principal.source !== 'team-token') return false;
+  if (!principal || principal.source !== 'oauth-member') return false;
   if (principal.role === 'owner' && policy.ownerBypass) return false;
   return policy.requiredTools.includes(tool) || policy.requiredCapabilities.includes(capability);
 }
