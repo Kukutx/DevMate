@@ -9,9 +9,7 @@ const extensions = new Set(['.js', '.mjs', '.cjs']);
 const ignoredDirectories = new Set([
   '.git', '.godot-ci', '.vscode-test', 'build', 'coverage', 'dist', 'node_modules', 'out'
 ]);
-const ignoredFiles = new Set([
-  'gateway/server.bundle.mjs'
-]);
+const ignoredFiles = new Set(['gateway/server.bundle.mjs']);
 
 function relative(file) {
   return path.relative(root, file).replace(/\\/g, '/');
@@ -101,10 +99,7 @@ for (const file of files) {
     windowsHide: true
   });
   if (result.status !== 0) {
-    failures.push({
-      file: relative(file),
-      output: `${result.stdout || ''}${result.stderr || ''}`.trim()
-    });
+    failures.push({ file: relative(file), output: `${result.stdout || ''}${result.stderr || ''}`.trim() });
     continue;
   }
 
@@ -118,10 +113,7 @@ for (const file of files) {
       for (const term of retiredRuntimeTerms) {
         if (source.includes(term.value)) failures.push({ file: fileName, output: term.label });
       }
-      if (
-        fileName !== 'gateway/server-extension-host.mjs' &&
-        /\.prototype\.(?:registerTool|connect)\s*=/.test(source)
-      ) {
+      if (fileName !== 'gateway/server-extension-host.mjs' && /\.prototype\.(?:registerTool|connect)\s*=/.test(source)) {
         failures.push({ file: fileName, output: 'MCP server prototype interception must be centralized in gateway/server-extension-host.mjs' });
       }
     }
@@ -130,17 +122,12 @@ for (const file of files) {
   for (const entry of localModuleSpecifiers(source)) {
     if (localModuleExists(file, entry.specifier)) continue;
     const line = source.slice(0, entry.index).split(/\r?\n/).length;
-    failures.push({
-      file: fileName,
-      output: `missing local module ${entry.specifier} at line ${line}`
-    });
+    failures.push({ file: fileName, output: `missing local module ${entry.specifier} at line ${line}` });
   }
 }
 
 if (failures.length) {
-  for (const failure of failures) {
-    console.error(`\nRepository source check failed: ${failure.file}\n${failure.output}`);
-  }
+  for (const failure of failures) console.error(`\nRepository source check failed: ${failure.file}\n${failure.output}`);
   console.error(`\n${failures.length} source checks failed across ${files.length} JavaScript files.`);
   process.exit(1);
 }
@@ -161,9 +148,55 @@ const required = [
   ['scripts/devmate-runner.mjs', /versionNegotiation:\s*\{\s*mode:\s*\{\s*pin:\s*'2026-07-28'\s*\}\s*\}/, 'external Runner MCP client must reject protocol fallback'],
   ['gateway/server.mjs', /createMcpHandler\(\(\) => createServer\(\), \{ legacy: 'reject' \}\)/, 'Gateway MCP server must reject legacy transport eras'],
   ['gateway/server-extension-host.mjs', /prototype\.registerTool = function devmateRegisterTool/, 'Gateway must retain the single MCP tool interception host'],
-  ['shared/auth-config.cjs', /AUTHENTICATION_MODES = Object\.freeze\(\['none', 'oauth'\]\)/, 'authentication config must remain mode-only and OAuth-capable']
+  ['shared/auth-config.cjs', /AUTHENTICATION_MODES = Object\.freeze\(\['none', 'oauth'\]\)/, 'authentication config must remain mode-only and OAuth-capable'],
+  ['scripts/devmate-command.mjs', /team:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'oauth'/, 'Team bootstrap must use OAuth by construction'],
+  ['scripts/devmate-command.mjs', /'control-plane':\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'oauth'/, 'Control-plane bootstrap must use OAuth by construction'],
+  ['scripts/devmate-command.mjs', /--member-name requires --authentication-mode oauth/, 'member-enabled bootstrap must reject no-auth'],
+  ['scripts/standalone-runtime.mjs', /publicUrl && requestedAuthentication === 'none'/, 'standalone public URL must reject loopback-only no-auth'],
+  ['scripts/standalone-runtime.mjs', /if \(config\.auth\?\.mode !== 'oauth'\) configureAuthentication\(config, 'oauth'\);[\s\S]*?createTeamMember/, 'standalone member creation must promote the instance to OAuth'],
+  ['scripts/standalone-runtime.mjs', /ensureOAuthSecrets\(file\);[\s\S]*?return result;/, 'standalone member identity changes must initialize private OAuth state']
 ];
 for (const [file, pattern, label] of required) {
+  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  if (!pattern.test(source)) failures.push({ file, output: label });
+}
+
+const documentationFiles = [
+  'README.md',
+  'SECURITY.md',
+  'docs/ARCHITECTURE.md',
+  'docs/AUTHENTICATION.md',
+  'docs/BOOTSTRAP.md',
+  'docs/HOST_INTEGRATION.md',
+  'docs/STANDALONE.md',
+  'docs/TEAM_DEPLOYMENT.md',
+  'docs/TUNNELS.md'
+];
+const retiredDocumentationPatterns = [
+  { pattern: /(?:authenticated\s+)?MCP\s+`initialize`|MCP\s+initialize/i, label: 'retired MCP initialize guidance' },
+  { pattern: /preserve the MCP session|MCP session ID|MCP-Session-Id|mcp-session-id/i, label: 'retired stateful MCP session guidance' },
+  { pattern: /Public MCP uses no authentication by default|normal desktop MCP flow is no-auth|normal desktop flow uses no authentication/i, label: 'retired unauthenticated public MCP guidance' },
+  { pattern: /member token is returned|member tokens are printed/i, label: 'retired static member-token guidance' }
+];
+for (const file of documentationFiles) {
+  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  for (const item of retiredDocumentationPatterns) {
+    if (item.pattern.test(source)) failures.push({ file, output: item.label });
+  }
+}
+
+const documentationRequired = [
+  ['README.md', /server\/discover[\s\S]*2026-07-28|2026-07-28[\s\S]*server\/discover/, 'README must document MCP 2026 discovery'],
+  ['README.md', /Desktop public MCP defaults to OAuth/, 'README must document OAuth-default desktop public MCP'],
+  ['SECURITY.md', /Every remote\/public `\/mcp` request requires OAuth/, 'security policy must require OAuth on remote MCP'],
+  ['docs/AUTHENTICATION.md', /auth\.mode: "none" means \*\*loopback-only MCP\*\*/, 'authentication policy must define no-auth as loopback-only'],
+  ['docs/BOOTSTRAP.md', /Team and Control-plane presets therefore use OAuth by construction/, 'bootstrap docs must encode shared OAuth defaults'],
+  ['docs/HOST_INTEGRATION.md', /MCP 2026 verification is stateless/, 'host integration must document stateless MCP 2026'],
+  ['docs/STANDALONE.md', /`--authentication-mode none` with `--public-url` is rejected/, 'standalone docs must reject public no-auth'],
+  ['docs/TEAM_DEPLOYMENT.md', /single-use rotating token families/, 'team docs must document refresh-token rotation'],
+  ['docs/TUNNELS.md', /The MCP transport is stateless/, 'tunnel docs must document stateless public verification']
+];
+for (const [file, pattern, label] of documentationRequired) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
   if (!pattern.test(source)) failures.push({ file, output: label });
 }
@@ -187,4 +220,4 @@ if (failures.length) {
   for (const failure of failures) console.error(`\nRepository contract failed: ${failure.file}\n${failure.output}`);
   process.exit(1);
 }
-console.log(`Checked ${files.length} JavaScript files, local module targets, and current architecture contracts.`);
+console.log(`Checked ${files.length} JavaScript files, local module targets, current architecture contracts, and ${documentationFiles.length} security-critical documents.`);
