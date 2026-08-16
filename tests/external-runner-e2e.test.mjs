@@ -41,9 +41,9 @@ const localServer = http.createServer(async (req, res) => {
     if (rpc.method === 'server/discover') {
       result = {
         supportedVersions: [MCP_PROTOCOL_VERSION],
+        capabilities: { tools: {} },
         _meta: {
-          'io.modelcontextprotocol/serverInfo': { name: 'devmate', version: '3.4.4' },
-          'io.modelcontextprotocol/serverCapabilities': { tools: {} }
+          'io.modelcontextprotocol/serverInfo': { name: 'devmate', version: '3.4.4' }
         }
       };
     } else if (rpc.method === 'tools/call') {
