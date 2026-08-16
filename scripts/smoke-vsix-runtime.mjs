@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
+const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 const candidates = fs.readdirSync(root)
   .filter(name => /^devmate-.*\.vsix$/i.test(name))
   .map(name => ({ name, file: path.join(root, name), mtimeMs: fs.statSync(path.join(root, name)).mtimeMs }))
@@ -162,7 +163,7 @@ try {
   assert.match(publicMcpSource, /server\/discover/, 'VSIX shared preflight must verify MCP 2026 server discovery');
   assert.match(publicMcpSource, /method: 'tools\/list'/, 'VSIX shared preflight must verify tools/list');
   assert.match(publicMcpSource, /method: 'tools\/call'/, 'VSIX shared preflight must verify a real tool call');
-  assert.doesNotMatch(publicMcpSource, /mcp-session-id/i, 'VSIX shared preflight must remain stateless under MCP 2026');
+  assert.equal(publicMcpSource.toLowerCase().includes(retiredSessionHeader), false, 'VSIX shared preflight must remain stateless under MCP 2026');
 
   const gatewayBundleSource = fs.readFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'utf8');
   assert.match(gatewayBundleSource, /legacy\s*:\s*["']reject["']/, 'Packaged Gateway must reject legacy MCP transport eras');
