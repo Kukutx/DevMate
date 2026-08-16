@@ -47,8 +47,7 @@ edit('extension-entry-shared-tunnel.js', source => {
   return configFile;`, 'shared desktop secret initialization');
   next = once(next,
     '    token: preflightAccessToken(config, publicUrl),',
-    "    token: preflightAccessToken(config, publicUrl, path.join(runtimeStateDirectory, 'config.json')),
-",
+    "    token: preflightAccessToken(config, publicUrl, path.join(runtimeStateDirectory, 'config.json')),",
     'ngrok adoption preflight token'
   );
   return next;
