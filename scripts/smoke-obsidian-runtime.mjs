@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 const { RuntimeController } = require('../host/runtime-controller.js');
 const { resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 
 async function freePort() {
   const server = net.createServer();
@@ -43,7 +44,7 @@ assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the p
 assert.match(mainSource, /Starting DevMate: Gateway -> public connection -> MCP verification/, 'Obsidian Start must package the complete one-click lifecycle');
 assert.match(mainSource, /server\/discover/, 'Obsidian bundle must package MCP 2026 discovery');
 assert.match(mainSource, /2026-07-28/, 'Obsidian bundle must be pinned to MCP 2026-07-28');
-assert.doesNotMatch(mainSource, /MCP-Session-Id|mcp-session-id/, 'Obsidian bundle must not restore sessionful MCP transport state');
+assert.equal(mainSource.toLowerCase().includes(retiredSessionHeader), false, 'Obsidian bundle must not restore sessionful MCP transport state');
 assert.match(mainSource, /Verified public MCP URL copied|Verified public MCP endpoint/, 'Obsidian bundle must contain public MCP verification flow');
 assert.match(mainSource, /recordGeneration/, 'Obsidian bundle must bind public verification to provider generations');
 assert.match(mainSource, /verifiedForCurrentRecord/, 'Obsidian bundle must derive Ready from current-generation verification evidence');
