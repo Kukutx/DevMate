@@ -40,6 +40,7 @@ const localServer = http.createServer(async (req, res) => {
     let result;
     if (rpc.method === 'server/discover') {
       result = {
+        resultType: 'complete',
         supportedVersions: [MCP_PROTOCOL_VERSION],
         capabilities: { tools: {} },
         _meta: {
@@ -51,6 +52,7 @@ const localServer = http.createServer(async (req, res) => {
       assert.equal(rpc.params.arguments.workspaceId, 'app');
       await fsp.writeFile(path.join(workspace, 'artifacts', 'remote.json'), '{"ok":true}\n', 'utf8');
       result = {
+        resultType: 'complete',
         isError: false,
         content: [{ type: 'text', text: 'remote checks passed' }],
         structuredContent: { ok: true, reportPath: 'artifacts/remote.json' }
