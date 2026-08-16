@@ -3,26 +3,24 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-job-runtime-'));
 const workspace = path.join(root, 'workspace');
 const configPath = path.join(root, 'config.json');
 await fsp.mkdir(path.join(workspace, 'artifacts'), { recursive: true });
-await fsp.writeFile(configPath, JSON.stringify({
-  version: 11,
-  appVersion: '2.2.0',
-  instanceId: 'runtime-tests',
-  auth: { required: true, token: 'owner-token-long-enough' },
-  permissions: { profile: 'fullAccess' },
-  connection: { provider: 'ngrok', publicUrl: '' },
-  team: { members: [], requireWorkspaceLeaseForWrites: false },
-  requestPolicy: {},
-  runtime: { maxConcurrentJobs: 1 },
-  jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
-  activeWorkspaceId: 'app',
-  workspaces: [{ id: 'app', name: 'app', root: workspace, mode: 'workspace-write', reference: false }],
-  plugins: { enabled: [], settings: {} }
-}, null, 2));
+const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port: 8787, appVersion: configStore.DEFAULT_VERSION });
+config.instanceId = 'runtime-tests';
+config.permissions.profile = 'fullAccess';
+config.connection = { provider: 'ngrok', publicUrl: '' };
+config.team.requireWorkspaceLeaseForWrites = false;
+config.runtime.maxConcurrentJobs = 1;
+config.jobs.embeddedRunnerEnabled = true;
+config.jobs.allowJobGitSave = true;
+config.activeWorkspaceId = 'app';
+config.workspaces = [{ id: 'app', name: 'app', root: workspace, mode: 'workspace-write', reference: false }];
+config.plugins = { enabled: [], settings: {} };
+configStore.atomicWriteJson(configPath, config);
 process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
@@ -33,7 +31,7 @@ const { resetDurableStateForTests } = await import('../gateway/durable-state.mjs
 
 class MockServer {
   constructor() { this.tools = new Map(); }
-  registerTool(name, config, handler) { this.tools.set(name, { config, handler }); }
+  registerTool(name, toolConfig, handler) { this.tools.set(name, { config: toolConfig, handler }); }
   async connect() { return 'connected'; }
 }
 
