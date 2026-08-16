@@ -80,7 +80,16 @@ const retiredRuntimeTerms = [
   { value: ['Start the tunnel from ', 'VS Code'].join(''), label: 'retired VS Code-owned ingress instruction' },
   { value: ['--ms-enable-electron', 'run-as-node'].join('-'), label: 'unsupported private Electron Node flag' },
   { value: ['vscode-host', 'runtime-io.js'].join('/'), label: 'retired mutable VS Code runtime adapter' },
-  { value: ['vscode-host', 'spawn-layer.js'].join('/'), label: 'retired VS Code spawn-layer adapter' }
+  { value: ['vscode-host', 'spawn-layer.js'].join('/'), label: 'retired VS Code spawn-layer adapter' },
+  { value: '2025-03-26', label: 'retired MCP 2025-03-26 protocol revision' },
+  { value: '2025-11-25', label: 'retired MCP 2025-11-25 protocol revision' },
+  { value: 'mcp-session-id', label: 'retired sessionful MCP transport state' },
+  { value: 'NodeStreamableHTTPServerTransport', label: 'retired MCP v1 server transport' },
+  { value: '/oauth/register', label: 'retired OAuth dynamic client registration endpoint' },
+  { value: 'x-devmate-token', label: 'retired static DevMate ingress credential header' },
+  { value: 'dmt_', label: 'retired Team bearer credential prefix' },
+  { value: 'team-token', label: 'retired Team bearer principal source' },
+  { value: 'rotateTeamMemberToken', label: 'retired Team bearer token rotation API' }
 ];
 
 const files = discover();
@@ -109,6 +118,12 @@ for (const file of files) {
       for (const term of retiredRuntimeTerms) {
         if (source.includes(term.value)) failures.push({ file: fileName, output: term.label });
       }
+      if (
+        fileName !== 'gateway/server-extension-host.mjs' &&
+        /\.prototype\.(?:registerTool|connect)\s*=/.test(source)
+      ) {
+        failures.push({ file: fileName, output: 'MCP server prototype interception must be centralized in gateway/server-extension-host.mjs' });
+      }
     }
   }
 
@@ -133,12 +148,41 @@ if (failures.length) {
 const forbidden = [
   ['gateway/server.mjs', /writeFileSync\(CONFIG_PATH/, 'direct Gateway config write'],
   ['extension.js', /permissionProfile\(\) === 'fullAccess' \|\| .*allowDirectoryMutations/, 'directory permission bypass'],
-  ['gateway/team-tool-data.mjs', /map\.set\(item\.name/, 'ambiguous workspace scope map']
+  ['gateway/team-tool-data.mjs', /map\.set\(item\.name/, 'ambiguous workspace scope map'],
+  ['shared/auth-config.cjs', /\b(?:signingKey|approvalCode|ownerApprovalCode)\b/, 'OAuth secrets must never be part of the public authentication config schema']
 ];
 for (const [file, pattern, label] of forbidden) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
   if (pattern.test(source)) failures.push({ file, output: label });
 }
+
+const required = [
+  ['host/public-mcp.js', /const MCP_PROTOCOL_VERSION = '2026-07-28';/, 'public MCP verifier must be pinned to protocol 2026-07-28'],
+  ['scripts/devmate-runner.mjs', /versionNegotiation:\s*\{\s*mode:\s*\{\s*pin:\s*'2026-07-28'\s*\}\s*\}/, 'external Runner MCP client must reject protocol fallback'],
+  ['gateway/server.mjs', /createMcpHandler\(\(\) => createServer\(\), \{ legacy: 'reject' \}\)/, 'Gateway MCP server must reject legacy transport eras'],
+  ['gateway/server-extension-host.mjs', /prototype\.registerTool = function devmateRegisterTool/, 'Gateway must retain the single MCP tool interception host'],
+  ['shared/auth-config.cjs', /AUTHENTICATION_MODES = Object\.freeze\(\['none', 'oauth'\]\)/, 'authentication config must remain mode-only and OAuth-capable']
+];
+for (const [file, pattern, label] of required) {
+  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  if (!pattern.test(source)) failures.push({ file, output: label });
+}
+
+const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const currentMcpPackages = {
+  '@modelcontextprotocol/client': '2.0.0',
+  '@modelcontextprotocol/node': '2.0.0',
+  '@modelcontextprotocol/server': '2.0.0'
+};
+if (packageJson.dependencies?.['@modelcontextprotocol/sdk']) {
+  failures.push({ file: 'package.json', output: 'legacy monolithic @modelcontextprotocol/sdk dependency is forbidden' });
+}
+for (const [name, version] of Object.entries(currentMcpPackages)) {
+  if (packageJson.dependencies?.[name] !== version) {
+    failures.push({ file: 'package.json', output: `${name} must stay exactly pinned to current MCP v2 release ${version}` });
+  }
+}
+
 if (failures.length) {
   for (const failure of failures) console.error(`\nRepository contract failed: ${failure.file}\n${failure.output}`);
   process.exit(1);
