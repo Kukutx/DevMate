@@ -76,7 +76,7 @@ export function memberPublic(member) {
     expiresAt: member.expiresAt || null,
     disabled: !!member.disabled,
     lastUsedAt: member.lastUsedAt || null,
-    tokenVersion: member.tokenVersion || 1
+    authVersion: member.authVersion || 1
   };
 }
 
@@ -107,9 +107,9 @@ export function createTeamMember(config, input = {}) {
     name: String(input.name || id).trim().slice(0, 200) || id,
     role,
     workspaceIds,
-    salt,
-    tokenHash: hashSecret(secret, salt),
-    tokenVersion: 1,
+    loginSalt: salt,
+    loginHash: hashSecret(secret, salt),
+    authVersion: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
     expiresAt: parseExpiry(input.expiresAt),
@@ -117,20 +117,20 @@ export function createTeamMember(config, input = {}) {
     lastUsedAt: null
   };
   config.team.members.push(member);
-  return { member: memberPublic(member), token: `dmt_${id}_${secret}` };
+  return { member: memberPublic(member), loginCode: `dmc_${id}_${secret}` };
 }
 
-export function rotateTeamMemberToken(config, id) {
+export function rotateTeamMemberLoginCode(config, id) {
   normalizeInstanceConfig(config);
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
-  member.salt = salt;
-  member.tokenHash = hashSecret(secret, salt);
-  member.tokenVersion = (member.tokenVersion || 1) + 1;
+  member.loginSalt = salt;
+  member.loginHash = hashSecret(secret, salt);
+  member.authVersion = (member.authVersion || 1) + 1;
   member.updatedAt = new Date().toISOString();
-  return { member: memberPublic(member), token: `dmt_${member.id}_${secret}` };
+  return { member: memberPublic(member), loginCode: `dmc_${member.id}_${secret}` };
 }
 
 export function updateTeamMember(config, id, patch = {}) {
@@ -155,32 +155,31 @@ export function revokeTeamMember(config, id) {
   return memberPublic(member);
 }
 
-function parseTeamToken(token) {
-  const match = String(token || '').match(/^dmt_([a-z0-9_-]{1,120})_([A-Za-z0-9_-]{43})$/);
+function parseMemberLoginCode(code) {
+  const match = String(code || '').match(/^dmc_([a-z0-9_-]{1,120})_([A-Za-z0-9_-]{43})$/);
   return match ? { id: match[1], secret: match[2] } : null;
 }
 
-export function verifyAccessToken(token, config, { updateLastUsed = false } = {}) {
+export function verifyMemberLoginCode(code, config, { updateLastUsed = false } = {}) {
   normalizeInstanceConfig(config);
-  const raw = String(token || '').trim();
-  const parsed = parseTeamToken(raw);
+  const parsed = parseMemberLoginCode(String(code || '').trim());
   if (!parsed) return null;
   const member = config.team.members.find(item => item.id === parsed.id);
-  if (!member || member.disabled || !member.salt || !member.tokenHash) return null;
+  if (!member || member.disabled || !member.loginSalt || !member.loginHash) return null;
   if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
   if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) return null;
   const workspaceIds = Array.isArray(member.workspaceIds) ? member.workspaceIds.filter(id => typeof id === 'string' && id.trim()) : [];
   if (!workspaceIds.length) return null;
-  const candidate = hashSecret(parsed.secret, member.salt);
-  if (!timingSafeEqualText(candidate, member.tokenHash)) return null;
+  const candidate = hashSecret(parsed.secret, member.loginSalt);
+  if (!timingSafeEqualText(candidate, member.loginHash)) return null;
   if (updateLastUsed) member.lastUsedAt = new Date().toISOString();
   return {
     id: member.id,
     name: member.name,
     role: member.role,
     workspaceIds: [...new Set(workspaceIds.map(id => id.trim()))],
-    source: 'team-token',
-    tokenVersion: member.tokenVersion || 1
+    source: 'oauth-member',
+    authVersion: member.authVersion || 1
   };
 }
 
@@ -195,33 +194,47 @@ function principalInactive(id, detail = 'is no longer active') {
 }
 
 export function currentTeamPrincipal(principal, config) {
-  if (principal?.source !== 'team-token') return principal;
-  const member = config.team.members.find(item => item.id === principal.id);
-  if (!member) {
-    if (principal.tokenVersion !== undefined && principal.tokenVersion !== null) {
-      throw principalInactive(principal.id, 'no longer exists');
-    }
-    return principal; // Compatibility for legacy durable records and synthetic policy tests.
+  const source = principal?.source;
+  if (!['local', 'oauth-owner', 'oauth-member'].includes(source)) {
+    throw principalInactive(principal?.id, 'uses an unsupported authentication source');
   }
-  if (member.disabled || !member.salt || !member.tokenHash) throw principalInactive(principal.id);
+  if (source !== 'oauth-member') return principal;
+  const member = config.team.members.find(item => item.id === principal.id);
+  if (!member) throw principalInactive(principal.id, 'no longer exists');
+  if (member.disabled || !member.loginSalt || !member.loginHash) throw principalInactive(principal.id);
   if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
   if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) throw principalInactive(principal.id, 'has expired');
   const workspaceIds = Array.isArray(member.workspaceIds)
     ? [...new Set(member.workspaceIds.filter(id => typeof id === 'string').map(id => id.trim()).filter(Boolean))]
     : [];
   if (!workspaceIds.length) throw principalInactive(principal.id, 'has no active workspace scope');
-  const tokenVersion = member.tokenVersion || 1;
-  if (principal.tokenVersion !== undefined && principal.tokenVersion !== null && Number(principal.tokenVersion) !== tokenVersion) {
-    throw principalInactive(principal.id, 'credential was rotated');
+  const authVersion = member.authVersion || 1;
+  if (!Number.isSafeInteger(principal.authVersion) || principal.authVersion !== authVersion) {
+    throw principalInactive(principal.id, 'authorization was rotated');
   }
   return {
     id: member.id,
     name: member.name,
     role: member.role,
     workspaceIds,
-    source: 'team-token',
-    tokenVersion
+    source: 'oauth-member',
+    authVersion
   };
+}
+
+export function principalFromOAuthClaims(claims, config) {
+  normalizeInstanceConfig(config);
+  if (!claims || typeof claims !== 'object') return null;
+  if (claims.sub === 'owner') {
+    return { id: 'oauth-owner', name: 'OAuth owner', role: 'owner', workspaceIds: [], source: 'oauth-owner' };
+  }
+  const match = String(claims.sub || '').match(/^member:([a-z0-9_-]{1,120})$/);
+  if (!match) return null;
+  try {
+    return currentTeamPrincipal({ id: match[1], source: 'oauth-member', authVersion: Number(claims.av) }, config);
+  } catch {
+    return null;
+  }
 }
 
 function dangerousGitPush(value) {
@@ -326,9 +339,9 @@ function rawGitHighRisk(rawValues = []) {
 }
 
 function assertTeamOperationSafety(name, args, principal) {
-  if (principal?.source !== 'team-token') return;
+  if (principal?.source !== 'oauth-member') return;
   if ((name === 'run_command' || name === 'start_process') && dangerousCommand(args?.command)) {
-    throw new Error(`Team token ${principal.id} cannot run a high-risk command through ${name}`);
+    throw new Error(`Remote member ${principal.id} cannot run a high-risk command through ${name}`);
   }
   if (name === 'git_push' && (args?.force || args?.forceWithLease)) {
     throw new Error('Force push requires the owner role');
@@ -354,7 +367,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
     throw new Error(`Role ${effectivePrincipal.role} cannot use ${name}; required capability: ${capability}`);
   }
   const workspaceId = toolWorkspaceId(name, args, config);
-  if (workspaceId && effectivePrincipal.source === 'team-token' && !effectivePrincipal.workspaceIds.includes(workspaceId)) {
+  if (workspaceId && effectivePrincipal.source === 'oauth-member' && !effectivePrincipal.workspaceIds.includes(workspaceId)) {
     throw new Error(`Principal ${effectivePrincipal.id} is not allowed to access workspace ${workspaceId}`);
   }
   return { principal: effectivePrincipal, capability, workspaceId };
@@ -367,7 +380,7 @@ export const __test = {
   assertStructuredToolInputs,
   dangerousCommand,
   hashSecret,
-  parseTeamToken,
+  parseMemberLoginCode,
   rawGitHighRisk,
   requiredCapabilityForTool,
   scopedWorkspaceIds,

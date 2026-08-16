@@ -9,7 +9,7 @@ import {
   memberPublic,
   normalizeInstanceConfig,
   revokeTeamMember,
-  rotateTeamMemberToken,
+  rotateTeamMemberLoginCode,
   updateTeamMember
 } from './team-access.mjs';
 import {
@@ -126,7 +126,7 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_list', {
     title: 'List DevMate team members',
-    description: 'List member identities, roles, scopes, expiry, and token versions without exposing token hashes.',
+    description: 'List member identities, roles, scopes, expiry, and authorization versions without exposing token hashes.',
     inputSchema: {}, annotations: ro
   }, async () => {
     const config = normalizeInstanceConfig(readConfig());
@@ -135,7 +135,7 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_create', {
     title: 'Create DevMate team member',
-    description: 'Create a member identity with explicit workspace scope and return its token once. Requires owner.',
+    description: 'Create a member identity with explicit workspace scope and return its OAuth login code once. Requires owner.',
     inputSchema: {
       id: z.string().max(120).optional(), name: z.string().min(1).max(200), role: z.enum(TEAM_ROLES).optional(),
       workspaceIds: z.array(z.string().min(1).max(300)).min(1).max(100), expiresAt: z.string().datetime().optional()
@@ -145,7 +145,7 @@ export function registerTeamManagementTools(register, annotations) {
     const result = createTeamMember(config, { ...input, workspaceIds: workspaceIds(config, input.workspaceIds) });
     writeConfig(config);
     await audit('team_member_create', { principalId: principalNow().id, memberId: result.member.id, role: result.member.role, workspaceIds: result.member.workspaceIds });
-    return toolText({ ...result, warning: 'The token is shown once. Store it in an approved secret manager and do not commit it.' });
+    return toolText({ ...result, warning: 'The OAuth login code is shown once. Store it in an approved secret manager and do not commit it.' });
   });
 
   register('team_member_update', {
@@ -162,14 +162,14 @@ export function registerTeamManagementTools(register, annotations) {
   });
 
   register('team_member_rotate', {
-    title: 'Rotate DevMate team token', description: 'Invalidate the old member token and return a new token once. Requires owner.',
+    title: 'Rotate DevMate member login code', description: 'Invalidate the old OAuth member login code, revoke existing member authorization, and return a new login code once. Requires owner.',
     inputSchema: { id: z.string().min(1) }, annotations: rw
   }, async ({ id }) => {
     const config = normalizeInstanceConfig(readConfig());
-    const result = rotateTeamMemberToken(config, id);
+    const result = rotateTeamMemberLoginCode(config, id);
     writeConfig(config);
     await audit('team_member_rotate', { principalId: principalNow().id, memberId: id });
-    return toolText({ ...result, warning: 'The replacement token is shown once. Update the team secret and revoke old copies.' });
+    return toolText({ ...result, warning: 'The replacement OAuth login code is shown once. Update the member secret and remove old copies.' });
   });
 
   register('team_member_revoke', {
@@ -184,7 +184,7 @@ export function registerTeamManagementTools(register, annotations) {
   });
 
   register('team_activity_status', {
-    title: 'DevMate team activity', description: 'Show recent authenticated MCP clients, request counts, roles, and session IDs. Requires maintainer or owner.',
+    title: 'DevMate team activity', description: 'Show recent authenticated MCP clients, request counts, roles, and authenticated client identities. Requires maintainer or owner.',
     inputSchema: { activeWithinMinutes: z.number().int().min(1).max(1440).optional() }, annotations: ro
   }, async ({ activeWithinMinutes = 60 }) => toolText({ activities: activitySnapshot({ activeWithinMinutes }) }));
 }

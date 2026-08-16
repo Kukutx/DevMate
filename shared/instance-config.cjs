@@ -101,8 +101,8 @@ function normalizeInstanceConfig(config) {
     publicUrl: cleanPublicUrl(previousConnection.publicUrl)
   };
 
-  // Personal desktop use is intentionally direct. Older bearer-token config is
-  // discarded here; OAuth is the only optional public-app authentication mode.
+  // Local loopback access is OS-trusted. Remote MCP access uses OAuth only;
+  // authentication secrets live outside the instance configuration.
   config.auth = normalizeAuthentication(config);
 
   const team = object(config.team, 'team');

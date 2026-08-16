@@ -10,7 +10,7 @@ import {
   memberPublic,
   normalizeInstanceConfig,
   revokeTeamMember,
-  rotateTeamMemberToken
+  rotateTeamMemberLoginCode
 } from '../gateway/team-access.mjs';
 
 const { DEFAULT_VERSION, configureAuthentication, newInstanceConfig, readJson: readConfigJson, updateConfig } = configStore;
@@ -231,7 +231,7 @@ export function memberRotate(options = {}) {
   let result = null;
   updateConfig(file, current => {
     const config = normalizeInstanceConfig(current);
-    result = rotateTeamMemberToken(config, id);
+    result = rotateTeamMemberLoginCode(config, id);
     return config;
   });
   return result;
