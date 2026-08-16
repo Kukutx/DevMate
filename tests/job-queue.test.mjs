@@ -3,38 +3,35 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-jobs-'));
 const workspace = path.join(root, 'workspace');
 const configPath = path.join(root, 'config.json');
 await fsp.mkdir(workspace, { recursive: true });
-await fsp.writeFile(configPath, JSON.stringify({
-  appVersion: '2.2.0',
-  instanceId: 'job-tests',
-  auth: { required: true, token: 'owner-token-long-enough' },
-  permissions: { profile: 'fullAccess' },
-  deployment: { mode: 'team' },
-  team: { enabled: true, members: [], requireWorkspaceLeaseForWrites: true },
-  production: {},
-  runtime: { maxConcurrentJobs: 2 },
-  activeWorkspaceId: 'app',
-  workspaces: [{ id: 'app', name: 'app', root: workspace, mode: 'workspace-write', reference: false }]
-}, null, 2));
+const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port: 8787, appVersion: configStore.DEFAULT_VERSION });
+config.instanceId = 'job-tests';
+config.activeWorkspaceId = 'app';
+config.workspaces = [{ id: 'app', name: 'app', root: workspace, mode: 'workspace-write', reference: false }];
+config.permissions.profile = 'fullAccess';
+config.team.requireWorkspaceLeaseForWrites = true;
+config.runtime.maxConcurrentJobs = 2;
+await fsp.writeFile(configPath, JSON.stringify(config, null, 2));
 process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const queue = await import('../gateway/job-queue.mjs');
 const durable = await import('../gateway/durable-state.mjs');
 
-const alice = { id: 'alice', name: 'Alice', role: 'developer', source: 'team-token', workspaceIds: ['app'] };
-const owner = { id: 'personal-owner', name: 'Owner', role: 'owner', source: 'personal-token', workspaceIds: [] };
+const alice = { id: 'alice', name: 'Alice', role: 'developer', source: 'oauth-member', authVersion: 4, workspaceIds: ['app'] };
+const owner = { id: 'local-owner', name: 'Owner', role: 'owner', source: 'local', workspaceIds: [] };
 
 test.beforeEach(() => {
   durable.resetDurableStateForTests();
   queue.clearJobsForTests();
 });
 
-test('persists, claims, and completes a capability-matched job', () => {
+test('persists, claims, and completes a capability-matched job with current requester identity', () => {
   const submitted = queue.createJob({
     principal: alice,
     tool: 'run_smart_checks',
@@ -43,6 +40,9 @@ test('persists, claims, and completes a capability-matched job', () => {
     requiredCapabilities: ['core'],
     artifactPaths: ['artifacts/report.json']
   });
+  assert.equal(submitted.requestedBy.source, 'oauth-member');
+  assert.equal(submitted.requestedBy.authVersion, 4);
+  assert.equal(Object.hasOwn(submitted.requestedBy, 'tokenVersion'), false);
   queue.registerRunner({ id: 'runner-a', capabilities: ['core'], workspaceIds: ['app'], maxConcurrent: 1 });
   const claimed = queue.claimJob({ runnerId: 'runner-a' });
   assert.equal(claimed.id, submitted.id);
@@ -70,7 +70,7 @@ test('rejects credential-bearing durable arguments', () => {
   }), /credential-like/);
 });
 
-test('drain blocks new team jobs but preserves owner recovery', () => {
+test('drain blocks new OAuth-member jobs but preserves local owner recovery', () => {
   queue.startDrain({ principal: owner, reason: 'upgrade' });
   assert.throws(() => queue.createJob({ principal: alice, tool: 'run_smart_checks', args: {}, workspaceId: 'app', requiredCapabilities: ['core'] }), /draining/);
   const recovery = queue.createJob({ principal: owner, tool: 'project_snapshot', args: { workspaceId: 'app' }, workspaceId: 'app', requiredCapabilities: ['core'] });
