@@ -9,6 +9,7 @@ const { OperationCoordinator } = require('../../host/runtime/operation-coordinat
 const { RuntimeController, resolveStateDirectory, workspaceRuntimeId } = require('../../host/runtime-controller.js');
 const { configureAuthentication, updateConfig } = require('../../shared/config-store.cjs');
 const { preflightAccessToken } = require('../../shared/oauth-tokens.cjs');
+const { ensureOAuthSecrets, readOAuthSecrets } = require('../../shared/oauth-secrets.cjs');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { normalizeInstanceConfig } = require('../../shared/instance-config.cjs');
 const {
@@ -329,7 +330,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   preflightToken(publicUrl) {
     const config = this.controller?.readConfig?.();
-    return preflightAccessToken(config, publicUrl);
+    return preflightAccessToken(config, publicUrl, this.controller.configFile);
   }
 
   reconfigureRuntime(options = {}) {
@@ -417,6 +418,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       configureAuthentication(config, this.settings.authenticationMode);
       return config;
     });
+    if (this.settings.authenticationMode === 'oauth') ensureOAuthSecrets(this.controller.configFile);
 
     if (!this.settings.enabled) {
       this.sessionRequested = false;
@@ -840,8 +842,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     try {
       this.controller.ensureConfig();
       const config = this.controller.readConfig();
-      const approvalCode = String(config?.auth?.mode === 'oauth' ? config.auth.oauth?.approvalCode || '' : '');
-      if (!approvalCode) throw new Error('OAuth is not enabled. DevMate uses no authentication by default.');
+      if (config?.auth?.mode !== 'oauth') throw new Error('OAuth is disabled; this DevMate instance accepts MCP only from local loopback.');
+      const approvalCode = readOAuthSecrets(this.controller.configFile).ownerApprovalCode;
       await navigator.clipboard.writeText(approvalCode);
       new Notice('DevMate OAuth approval code copied. Paste it only into this DevMate authorization page.');
     } catch (error) {

@@ -2,6 +2,7 @@ import http from 'node:http';
 import { isMainThread, parentPort } from 'node:worker_threads';
 import { McpServer } from "@modelcontextprotocol/server";
 import permissionConfig from '../shared/permission-config.cjs';
+import oauthSecrets from '../shared/oauth-secrets.cjs';
 import portConfig from '../shared/port.cjs';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { shutdownCommandProcesses } from './command-process.mjs';
@@ -23,6 +24,7 @@ const { strictPort } = portConfig;
 const startupConfig = readConfig();
 strictPort(startupConfig.server?.port, { label: 'server.port' });
 validatePermissionConfig(startupConfig);
+if (startupConfig.auth?.mode === 'oauth') oauthSecrets.readOAuthSecrets(process.env.DEVMATE_CONFIG);
 acquireGatewayInstanceLock();
 
 const createdHttpServers = new Set();

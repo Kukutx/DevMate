@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import configStore from '../shared/config-store.cjs';
+import oauthSecrets from '../shared/oauth-secrets.cjs';
 import instanceConfig from '../shared/instance-config.cjs';
 import portConfig from '../shared/port.cjs';
 import {
@@ -14,6 +15,7 @@ import {
 } from '../gateway/team-access.mjs';
 
 const { DEFAULT_VERSION, configureAuthentication, newInstanceConfig, readJson: readConfigJson, updateConfig } = configStore;
+const { ensureOAuthSecrets, readOAuthSecrets } = oauthSecrets;
 const { CONNECTION_PROVIDERS } = instanceConfig;
 const { parsePortOption } = portConfig;
 
@@ -150,6 +152,7 @@ export function initConfig(options = {}) {
     : [];
 
   updateConfig(file, () => normalizeInstanceConfig(config));
+  if (config.auth.mode === 'oauth') ensureOAuthSecrets(file);
   return { file, config };
 }
 
@@ -165,7 +168,8 @@ export function doctor(options = {}) {
   const checks = [
     { key: 'config', ok: true, detail: file },
     { key: 'workspace', ok: !!workspace && !!fs.statSync(workspace.root, { throwIfNoEntry: false })?.isDirectory(), detail: workspace?.root || 'missing' },
-    { key: 'authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' },
+    { key: 'authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'oauth' },
+    { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'loopback-only' },
     { key: 'git', ...executableStatus('git') },
     { key: 'node', ok: true, detail: process.version }
   ];

@@ -9,6 +9,7 @@ const { preflightPublicMcp } = require('./host/public-mcp.js');
 const { strictPort } = require('./shared/port.cjs');
 const { publicConnectionStability } = require('./shared/connection-stability.cjs');
 const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
+const { ensureOAuthSecrets } = require('./shared/oauth-secrets.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
@@ -69,13 +70,14 @@ function ensureSharedDesktopConfig(stateDirectory) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
   if (!workspaceRoot) return null;
   const configFile = path.join(stateDirectory, 'config.json');
-  ensureInstanceConfig({
+  const config = ensureInstanceConfig({
     configFile,
     workspaceRoot,
     preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
     appVersion: VERSION,
     defaultConnectionProvider: 'ngrok'
   });
+  if (config.auth?.mode === 'oauth') ensureOAuthSecrets(configFile);
   return configFile;
 }
 
@@ -128,7 +130,7 @@ async function verifyAlreadyOnlineNgrokEndpoint({ publicUrl }) {
   if (!config) return false;
   const test = await preflightPublicMcp({
     publicUrl,
-    token: preflightAccessToken(config, publicUrl),
+    token: preflightAccessToken(config, publicUrl, path.join(runtimeStateDirectory, 'config.json')),
     clientName: 'devmate-ngrok-conflict-adoption',
     clientVersion: VERSION,
     timeoutMs: 5000

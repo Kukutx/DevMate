@@ -225,7 +225,7 @@ class PublicTunnelVerifier {
         publicUrl: record.publicUrl,
         expectedRecord: record,
         currentRecord: () => this.currentSession(this.readConfig()).record,
-        token: preflightAccessToken(config, record.publicUrl),
+        token: preflightAccessToken(config, record.publicUrl, this.configFile),
         clientName: 'devmate-vscode-runtime-recovery',
         clientVersion: this.appVersion,
         maxEvidenceAgeMs: this.verifiedMaxAgeMs,

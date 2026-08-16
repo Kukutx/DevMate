@@ -239,12 +239,12 @@
         },
         "devMate.authenticationMode": {
           "type": "string",
-          "default": "none",
+          "default": "oauth",
           "enum": [
             "none",
             "oauth"
           ],
-          "description": "MCP authentication mode. none is the direct private-use default; oauth is for a shared or published ChatGPT app."
+          "description": "MCP authentication mode. oauth is the secure default for public MCP access; none restricts MCP access to local loopback only."
         },
         "devMate.permissionProfile": {
           "type": "string",
