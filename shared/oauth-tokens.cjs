@@ -43,8 +43,20 @@ function unseal(value, prefix, key) {
   return parseBase64urlJson(parts[1]);
 }
 
+function normalizedUri(value, label) {
+  const raw = String(value || '').trim();
+  if (!raw) throw new Error(`${label} is required`);
+  const url = new URL(raw);
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
 function normalizedAudience(audience) {
-  return String(audience || '').replace(/\/$/, '');
+  return normalizedUri(audience, 'OAuth token audience');
+}
+
+function normalizedIssuer(issuer) {
+  return normalizedUri(issuer, 'OAuth token issuer');
 }
 
 function normalizedSubject(subject) {
@@ -60,39 +72,49 @@ function normalizedScope(scope) {
   return values.join(' ');
 }
 
+function addAuthVersion(payload, authVersion) {
+  if (authVersion == null) return payload;
+  const version = Number(authVersion);
+  if (!Number.isSafeInteger(version) || version < 1) throw new Error('OAuth auth version is invalid');
+  payload.av = version;
+  return payload;
+}
+
 function issueAccessToken(signingKey, {
   audience,
+  issuer,
   scope = 'devmate',
   subject,
   authVersion = null,
   ttlSeconds = 3600
 } = {}) {
-  const aud = normalizedAudience(audience);
-  if (!aud) throw new Error('OAuth token audience is required');
   const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    aud,
+  const payload = addAuthVersion({
+    aud: normalizedAudience(audience),
     exp: now + Math.max(60, Math.min(3600, Number(ttlSeconds) || 3600)),
     iat: now,
+    iss: normalizedIssuer(issuer),
     jti: crypto.randomBytes(16).toString('base64url'),
     scope: normalizedScope(scope),
     sub: normalizedSubject(subject)
-  };
-  if (authVersion != null) {
-    const version = Number(authVersion);
-    if (!Number.isSafeInteger(version) || version < 1) throw new Error('OAuth auth version is invalid');
-    payload.av = version;
-  }
+  }, authVersion);
   return seal('dmoa', payload, signingKey);
 }
 
-function verifyAccessToken(signingKey, token, audience) {
-  const expectedAudience = normalizedAudience(audience);
-  if (!expectedAudience) return null;
+function verifyAccessToken(signingKey, token, audience, issuer) {
+  let expectedAudience;
+  let expectedIssuer;
+  try {
+    expectedAudience = normalizedAudience(audience);
+    expectedIssuer = normalizedIssuer(issuer);
+  } catch {
+    return null;
+  }
   const payload = unseal(token, 'dmoa', signingKey);
   const now = Math.floor(Date.now() / 1000);
   if (
-    !payload || payload.aud !== expectedAudience || !Number.isInteger(payload.exp) || payload.exp <= now ||
+    !payload || payload.aud !== expectedAudience || payload.iss !== expectedIssuer ||
+    !Number.isInteger(payload.exp) || payload.exp <= now ||
     !Number.isInteger(payload.iat) || payload.iat > now + 60 || typeof payload.jti !== 'string' || !payload.jti ||
     typeof payload.sub !== 'string' || !payload.sub || typeof payload.scope !== 'string'
   ) return null;
@@ -102,6 +124,7 @@ function verifyAccessToken(signingKey, token, audience) {
 
 function issueRefreshToken(signingKey, {
   audience,
+  issuer,
   scope = 'devmate offline_access',
   subject,
   authVersion = null,
@@ -109,37 +132,38 @@ function issueRefreshToken(signingKey, {
   generation,
   ttlSeconds = 30 * 24 * 60 * 60
 } = {}) {
-  const aud = normalizedAudience(audience);
-  if (!aud) throw new Error('OAuth refresh-token audience is required');
   const fid = String(familyId || '').trim();
   const gen = Number(generation);
   if (!fid || !Number.isSafeInteger(gen) || gen < 1) throw new Error('OAuth refresh-token family state is required');
   const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    aud,
+  const payload = addAuthVersion({
+    aud: normalizedAudience(audience),
     exp: now + Math.max(3600, Math.min(90 * 24 * 60 * 60, Number(ttlSeconds) || 30 * 24 * 60 * 60)),
     fid,
     gen,
     iat: now,
+    iss: normalizedIssuer(issuer),
     jti: crypto.randomBytes(16).toString('base64url'),
     scope: normalizedScope(scope),
     sub: normalizedSubject(subject)
-  };
-  if (authVersion != null) {
-    const version = Number(authVersion);
-    if (!Number.isSafeInteger(version) || version < 1) throw new Error('OAuth auth version is invalid');
-    payload.av = version;
-  }
+  }, authVersion);
   return seal('dmor', payload, signingKey);
 }
 
-function verifyRefreshToken(signingKey, token, audience) {
-  const expectedAudience = normalizedAudience(audience);
-  if (!expectedAudience) return null;
+function verifyRefreshToken(signingKey, token, audience, issuer) {
+  let expectedAudience;
+  let expectedIssuer;
+  try {
+    expectedAudience = normalizedAudience(audience);
+    expectedIssuer = normalizedIssuer(issuer);
+  } catch {
+    return null;
+  }
   const payload = unseal(token, 'dmor', signingKey);
   const now = Math.floor(Date.now() / 1000);
   if (
-    !payload || payload.aud !== expectedAudience || !Number.isInteger(payload.exp) || payload.exp <= now ||
+    !payload || payload.aud !== expectedAudience || payload.iss !== expectedIssuer ||
+    !Number.isInteger(payload.exp) || payload.exp <= now ||
     !Number.isInteger(payload.iat) || payload.iat > now + 60 || typeof payload.jti !== 'string' || !payload.jti ||
     typeof payload.fid !== 'string' || !payload.fid || !Number.isSafeInteger(payload.gen) || payload.gen < 1 ||
     typeof payload.sub !== 'string' || !payload.sub || typeof payload.scope !== 'string'
@@ -150,12 +174,15 @@ function verifyRefreshToken(signingKey, token, audience) {
 
 function preflightAccessToken(config, publicUrl, configFile) {
   if (config?.auth?.mode !== 'oauth') return '';
-  const endpoint = new URL('/mcp', `${String(publicUrl || '').replace(/\/$/, '')}/`);
-  endpoint.search = '';
-  endpoint.hash = '';
+  const origin = new URL(String(publicUrl || ''));
+  origin.pathname = '/';
+  origin.search = '';
+  origin.hash = '';
+  const endpoint = new URL('/mcp', origin);
   const secrets = readOAuthSecrets(configFile);
   return issueAccessToken(secrets.signingKey, {
     audience: endpoint.toString(),
+    issuer: origin.toString(),
     scope: 'devmate',
     subject: 'owner',
     ttlSeconds: 600
