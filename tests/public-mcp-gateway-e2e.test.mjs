@@ -29,8 +29,9 @@ async function freePort() {
   });
 }
 
-function localPublicRequest(port, publicHost) {
+function localPublicRequest(port, publicHost, onRequest = () => {}) {
   return async (_publicUrl, options) => new Promise(resolve => {
+    onRequest(options);
     const body = options.body == null ? '' : String(options.body);
     const headers = { ...(options.headers || {}), host: publicHost };
     if (body) headers['content-length'] = Buffer.byteLength(body);
@@ -61,13 +62,18 @@ function localPublicRequest(port, publicHost) {
   });
 }
 
-test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/call against the real Gateway', async () => {
+function authorizationHeader(headers = {}) {
+  const entry = Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization');
+  return entry?.[1] == null ? '' : String(entry[1]);
+}
+
+async function runRealPublicPreflight(mode) {
   const root = process.cwd();
-  const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-public-preflight-'));
+  const temp = await fsp.mkdtemp(path.join(os.tmpdir(), `devmate-public-${mode}-`));
   const workspaceRoot = path.join(temp, 'workspace');
   const configPath = path.join(temp, 'config.json');
   const port = await freePort();
-  const publicHost = 'devmate-public.example';
+  const publicHost = `devmate-${mode}.example`;
   const publicUrl = `https://${publicHost}`;
   await fsp.mkdir(workspaceRoot, { recursive: true });
 
@@ -76,12 +82,16 @@ test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/
     port,
     appVersion: configStore.DEFAULT_VERSION
   });
-  config.auth = { mode: 'oauth' };
+  config.auth = { mode };
   config.connection.publicUrl = publicUrl;
   config.requestPolicy.allowedHosts = [publicHost];
   configStore.atomicWriteJson(configPath, config);
-  oauthSecrets.ensureOAuthSecrets(configPath);
-  const token = oauthTokens.preflightAccessToken(config, publicUrl, configPath);
+
+  let token = '';
+  if (mode === 'oauth') {
+    oauthSecrets.ensureOAuthSecrets(configPath);
+    token = oauthTokens.preflightAccessToken(config, publicUrl, configPath);
+  }
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: root,
@@ -93,6 +103,7 @@ test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/
   let stderr = '';
   child.stdout.on('data', chunk => { stdout += chunk; });
   child.stderr.on('data', chunk => { stderr += chunk; });
+  const authorizationHeaders = [];
 
   try {
     let ready = false;
@@ -112,9 +123,11 @@ test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/
     const result = await preflightPublicMcp({
       publicUrl,
       token,
-      clientName: 'devmate-public-e2e',
+      clientName: `devmate-public-${mode}-e2e`,
       clientVersion: configStore.DEFAULT_VERSION,
-      request: localPublicRequest(port, publicHost)
+      request: localPublicRequest(port, publicHost, options => {
+        authorizationHeaders.push(authorizationHeader(options.headers));
+      })
     });
 
     assert.equal(result.server?.name, 'devmate');
@@ -123,6 +136,7 @@ test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/
     assert.equal(result.protocolVersion, '2026-07-28');
     assert.equal(result.toolCallVerified, true);
     assert.equal(result.probeTool, 'gateway_status');
+    return { authorizationHeaders, token };
   } finally {
     if (child.exitCode === null) {
       child.kill();
@@ -130,4 +144,18 @@ test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/
     }
     await fsp.rm(temp, { recursive: true, force: true });
   }
+}
+
+test('public no-auth MCP 2026 discovery, tools/list, and gateway_status work against the real Gateway without Authorization', async () => {
+  const result = await runRealPublicPreflight('none');
+  assert.equal(result.token, '');
+  assert.ok(result.authorizationHeaders.length >= 3);
+  assert.deepEqual([...new Set(result.authorizationHeaders)], ['']);
+}, { timeout: 30000 });
+
+test('optional public OAuth still works against the real Gateway', async () => {
+  const result = await runRealPublicPreflight('oauth');
+  assert.match(result.token, /^dmoa\./);
+  assert.ok(result.authorizationHeaders.length >= 3);
+  assert.ok(result.authorizationHeaders.every(value => /^Bearer\s+dmoa\./.test(value)));
 }, { timeout: 30000 });
