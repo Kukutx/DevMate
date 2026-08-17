@@ -108,8 +108,8 @@ try {
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   assert.equal(
     manifest.contributes?.configuration?.properties?.['devMate.authenticationMode']?.default,
-    'oauth',
-    'Packaged VSIX must default desktop MCP authentication to OAuth'
+    'none',
+    'Packaged VSIX must default desktop MCP authentication to no-auth'
   );
 
   const requiredFiles = [
@@ -155,7 +155,7 @@ try {
   assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
   const verify = extensionSource.slice(verifyStart, verifyEnd);
   assert.match(verify, /return verifySharedPublicMcp\(\{/, 'VSIX verification must delegate to the shared single-flight verifier');
-  assert.match(verify, /token: preflightAccessToken\(data, publicUrl, configPath\(ctx\)\)/, 'VSIX verification must issue a short-lived OAuth owner token from private state');
+  assert.match(verify, /token: preflightAccessToken\(data, publicUrl, configPath\(ctx\)\)/, 'VSIX verification must derive an optional OAuth token from the selected authentication mode');
 
   const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
   assert.match(publicMcpSource, /MCP_PROTOCOL_VERSION = '2026-07-28'/, 'VSIX shared preflight must pin MCP 2026-07-28');
@@ -235,7 +235,8 @@ try {
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
-    oauthDefaultVerified: true,
+    noAuthDefaultVerified: true,
+    optionalOAuthPackaged: true,
     statelessMcp2026Verified: true,
     providerNativeConnectionRuntimePackaged: true,
     packagedDependencyClosureVerified: true,
