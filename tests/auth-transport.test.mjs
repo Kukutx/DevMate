@@ -13,8 +13,8 @@ const publicMcp = fs.readFileSync(path.join(root, 'host', 'public-mcp.js'), 'utf
 const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'main.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
-test('Gateway trusts verified loopback only and requires OAuth for remote MCP', () => {
-  assert.match(requestGuard, /if \(isLocalRequest\(req\)\) return fallbackLocalPrincipal\(\)/);
+test('Gateway accepts default public no-auth and retains optional OAuth for remote MCP', () => {
+  assert.match(requestGuard, /isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'/);
   assert.match(requestGuard, /config\.auth\?\.mode !== 'oauth'/);
   assert.match(requestGuard, /oauthAccessToken/);
   assert.match(requestGuard, /principalFromOAuthClaims/);
@@ -38,7 +38,7 @@ test('connection URLs never embed credentials and public verification uses MCP 2
   assert.doesNotMatch(publicMcp, /['"]initialize['"]|mcp-session-id|Mcp-Session-Id/i);
 });
 
-test('desktop hosts expose OAuth approval but no static Bearer-token setup', () => {
+test('desktop hosts default to no-auth while keeping OAuth approval as an optional capability', () => {
   assert.doesNotMatch(extension, /devMate\.copyToken/);
   assert.doesNotMatch(extension, /copyConnectionToken/);
   assert.equal(packageJson.contributes.commands.some(command => command.command === 'devMate.copyToken'), false);
@@ -49,5 +49,5 @@ test('desktop hosts expose OAuth approval but no static Bearer-token setup', () 
   assert.match(obsidian, /authenticationMode/);
   assert.match(extension, /copyOAuthApprovalCode/);
   assert.match(obsidian, /copyOAuthApprovalCode/);
-  assert.equal(packageJson.contributes.configuration.properties['devMate.authenticationMode'].default, 'oauth');
+  assert.equal(packageJson.contributes.configuration.properties['devMate.authenticationMode'].default, 'none');
 });
