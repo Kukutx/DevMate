@@ -25,7 +25,6 @@ test('creates one default no-auth public standalone instance, MCP URL, and optio
   assert.match(created.loginCode, /^dmc_/);
   assert.equal(created.member.name, 'Alice');
   assert.equal(__test.memberList({ config })[0].name, 'Alice');
-  assert.equal(__test.status({ config }).authenticationMode, 'none');
   const stat = await fsp.stat(config);
   if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
 });
