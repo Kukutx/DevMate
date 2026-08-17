@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import configStore from '../shared/config-store.cjs';
 
+const MCP_PROTOCOL_VERSION = '2026-07-28';
 const root = process.cwd();
 const port = Number(process.env.DEVMATE_SMOKE_PORT || 8798);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `devmate-smoke-${port}-`));
@@ -10,32 +12,49 @@ const configPath = path.join(tempRoot, 'config.json');
 const bundledGateway = path.join(root, 'gateway', 'server.bundle.mjs');
 const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundledGateway) ? 'gateway/server.bundle.mjs' : 'gateway/server.mjs');
 
-const config = {
-  version: 11,
-  appVersion: '3.4.4',
-  instanceId: `smoke-${Date.now()}`,
-  server: { port, mcpPath: '/mcp' },
-  runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },
-  maintenance: { backupRetentionDays: 30, auditRetentionDays: 30, maxBackupBytes: 268435456, maxAuditBytes: 5242880 },
-  connection: { lastPreflightAt: new Date().toISOString(), lastPublicHost: 'example.ngrok-free.app', lastMcpPath: '/mcp', lastToolCount: 49, lastServerName: 'devmate', lastError: '' },
-  auth: { mode: 'none' },
-  permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: false, confirmBeforePush: false, allowDirectoryMutations: true },
-  vscodeContext: {
-    capturedAt: new Date().toISOString(),
-    activeEditor: { path: 'README.md', languageId: 'markdown', lineCount: 1, isDirty: false, selection: { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }, selectedText: '' },
-    visibleEditors: [],
-    diagnostics: [{ path: 'README.md', severity: 'warning', message: 'smoke diagnostic', source: 'smoke', code: '', range: { start: { line: 1, character: 1 }, end: { line: 1, character: 2 } } }]
-  },
-  activeWorkspaceId: 'devmate',
-  workspaces: [
-    { id: 'devmate', name: 'devmate', root, mode: 'workspace-write', reference: false, role: 'active' }
-  ],
-  commands: [
-    { key: 'node-version', label: 'node --version', command: 'node --version', readOnly: true }
-  ]
+const config = configStore.newInstanceConfig({ workspaceRoot: root, port, appVersion: configStore.DEFAULT_VERSION });
+config.instanceId = `smoke-${Date.now()}`;
+config.runtime.defaultCommandTimeoutMs = 30000;
+config.runtime.maxOutputChars = 80000;
+config.permissions = {
+  ...config.permissions,
+  profile: 'fullAccess',
+  readOnly: false,
+  blockDangerousOperations: false,
+  confirmBeforePush: false,
+  allowDirectoryMutations: true
 };
+config.activeWorkspaceId = 'devmate';
+config.workspaces[0] = { ...config.workspaces[0], id: 'devmate', name: 'devmate', root, role: 'active' };
+config.commands = [{ key: 'node-version', label: 'node --version', command: 'node --version', readOnly: true }];
+const hostId = 'vscode-smoke';
+const capturedAt = new Date().toISOString();
+config.hostContexts[hostId] = {
+  hostId,
+  kind: 'editor',
+  capturedAt,
+  updatedAt: capturedAt,
+  activeEditor: {
+    path: 'README.md',
+    languageId: 'markdown',
+    lineCount: 1,
+    isDirty: false,
+    selection: { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } },
+    selectedText: ''
+  },
+  visibleEditors: [],
+  diagnostics: [{
+    path: 'README.md',
+    severity: 'warning',
+    message: 'smoke diagnostic',
+    source: 'smoke',
+    code: '',
+    range: { start: { line: 1, character: 1 }, end: { line: 1, character: 2 } }
+  }]
+};
+config.activeHostId = hostId;
 
-// Include a BOM deliberately. Windows-native tools can create this, and the gateway must tolerate it.
+// Include a BOM deliberately. Windows-native tools can create this, and the Gateway must tolerate it.
 fs.writeFileSync(configPath, `\uFEFF${JSON.stringify(config, null, 2)}`, 'utf8');
 
 const child = spawn(process.execPath, [gatewayScript], {
@@ -47,6 +66,7 @@ const child = spawn(process.execPath, [gatewayScript], {
 
 let stdout = '';
 let stderr = '';
+let requestId = 0;
 child.stdout.on('data', chunk => { stdout += chunk; });
 child.stderr.on('data', chunk => { stderr += chunk; });
 
@@ -82,15 +102,32 @@ async function waitReady() {
   throw new Error(`Gateway did not become ready.\nstdout=${stdout}\nstderr=${stderr}`);
 }
 
-async function rpc(method, params) {
+function requestMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': { name: 'devmate-smoke', version: configStore.DEFAULT_VERSION },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+
+async function rpc(method, params = {}) {
+  const name = method === 'tools/call' ? String(params?.name || '') : '';
   const headers = {
     'content-type': 'application/json',
-    accept: 'application/json, text/event-stream'
+    accept: 'application/json, text/event-stream',
+    'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+    'mcp-method': method,
+    ...(name ? { 'mcp-name': name } : {})
   };
   return fetchJson(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000), method, params })
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: ++requestId,
+      method,
+      params: { ...params, _meta: requestMeta() }
+    })
   });
 }
 
@@ -115,15 +152,14 @@ try {
   assert(publicHealth.response.ok && publicHealth.json?.status === 'ok', 'public health failed');
   assert(!Object.hasOwn(publicHealth.json, 'configPath'), 'public health leaked configPath');
 
-  const noAuth = await rpc('tools/list', {});
-  assert(noAuth.response.ok, `expected default no-auth MCP request to succeed, got ${noAuth.response.status}`);
+  const discovery = await rpc('server/discover');
+  assert(discovery.response.ok, `server/discover HTTP failed: ${discovery.text}`);
+  assert(discovery.json?.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION), `server/discover did not advertise ${MCP_PROTOCOL_VERSION}: ${discovery.text}`);
+  const serverInfo = discovery.json?.result?._meta?.['io.modelcontextprotocol/serverInfo'];
+  assert(serverInfo?.name === 'devmate', `server/discover did not identify DevMate: ${discovery.text}`);
 
-  const init = await rpc('initialize', {
-    protocolVersion: '2025-03-26',
-    capabilities: {},
-    clientInfo: { name: 'devmate-smoke', version: '1.15.0' }
-  });
-  assert(init.response.ok && init.json?.result?.serverInfo?.name === 'devmate', `initialize failed: ${init.text}`);
+  const noAuth = await rpc('tools/list', {});
+  assert(noAuth.response.ok, `expected loopback no-auth MCP request to succeed, got ${noAuth.response.status}`);
 
   const tools = await rpc('tools/list', {});
   assert(tools.response.ok && Array.isArray(tools.json?.result?.tools), `tools/list failed: ${tools.text}`);
@@ -155,7 +191,7 @@ try {
   assert(maintenance.response.ok && maintenance.text.includes('auditRetentionDays'), `maintenance_status failed: ${maintenance.text}`);
 
   const diagnostics = await rpc('tools/call', { name: 'connection_diagnostics', arguments: {} });
-  assert(diagnostics.response.ok && diagnostics.text.includes('example.ngrok-free.app') && diagnostics.text.includes('vscode'), `connection_diagnostics failed: ${diagnostics.text}`);
+  assert(diagnostics.response.ok && diagnostics.text.includes('ngrok') && diagnostics.text.includes(hostId), `connection_diagnostics failed: ${diagnostics.text}`);
 
   const statusPanel = await rpc('tools/call', { name: 'devmate_status_panel', arguments: {} });
   assert(statusPanel.response.ok && statusPanel.text.includes('DevMate status'), `devmate_status_panel failed: ${statusPanel.text}`);
@@ -226,7 +262,8 @@ try {
     ok: true,
     health: publicHealth.json.status,
     unauthStatus: noAuth.response.status,
-    server: init.json.result.serverInfo.name,
+    server: serverInfo.name,
+    protocolVersion: MCP_PROTOCOL_VERSION,
     toolCount: tools.json.result.tools.length
   }));
 } finally {
