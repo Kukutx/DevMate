@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authenticateGatewayRequest, __test } from '../gateway/request-guard.mjs';
 
-function loopbackOnlyConfig() {
+function noAuthConfig() {
   return {
     auth: { mode: 'none' },
     connection: { provider: 'ngrok', publicUrl: '' },
@@ -13,25 +13,27 @@ function loopbackOnlyConfig() {
   };
 }
 
-test('auth none means loopback-only owner access, never unauthenticated public ingress', () => {
-  const publicHost = authenticateGatewayRequest(
+test('auth none allows owner access from both public and loopback MCP ingress', () => {
+  const publicPrincipal = authenticateGatewayRequest(
     { headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '127.0.0.1' } },
     new URL('http://localhost/mcp'),
-    loopbackOnlyConfig()
+    noAuthConfig()
   );
-  assert.equal(publicHost, null);
+  assert.equal(publicPrincipal?.role, 'owner');
+  assert.equal(publicPrincipal?.source, 'local');
 
-  const spoofedLocalHost = authenticateGatewayRequest(
-    { headers: { host: 'localhost:8787' }, socket: { remoteAddress: '203.0.113.10' } },
+  const remotePrincipal = authenticateGatewayRequest(
+    { headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '203.0.113.10' } },
     new URL('http://localhost/mcp'),
-    loopbackOnlyConfig()
+    noAuthConfig()
   );
-  assert.equal(spoofedLocalHost, null);
+  assert.equal(remotePrincipal?.role, 'owner');
+  assert.equal(remotePrincipal?.source, 'local');
 
   const localPrincipal = authenticateGatewayRequest(
     { headers: { host: '127.0.0.1:8787' }, socket: { remoteAddress: '127.0.0.1' } },
     new URL('http://localhost/mcp'),
-    loopbackOnlyConfig()
+    noAuthConfig()
   );
   assert.equal(localPrincipal?.role, 'owner');
   assert.equal(localPrincipal?.source, 'local');
@@ -39,7 +41,7 @@ test('auth none means loopback-only owner access, never unauthenticated public i
   const mappedIpv4Principal = authenticateGatewayRequest(
     { headers: { host: 'localhost:8787' }, socket: { remoteAddress: '::ffff:127.0.0.1' } },
     new URL('http://localhost/mcp'),
-    loopbackOnlyConfig()
+    noAuthConfig()
   );
   assert.equal(mappedIpv4Principal?.role, 'owner');
   assert.equal(mappedIpv4Principal?.source, 'local');
