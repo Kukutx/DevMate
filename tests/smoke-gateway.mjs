@@ -111,7 +111,11 @@ function requestMeta() {
 }
 
 async function rpc(method, params = {}) {
-  const name = method === 'tools/call' ? String(params?.name || '') : '';
+  const name = method === 'tools/call'
+    ? String(params?.name || '')
+    : method === 'resources/read'
+      ? String(params?.uri || '')
+      : '';
   const headers = {
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
