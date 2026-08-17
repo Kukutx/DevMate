@@ -160,9 +160,13 @@ try {
   const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
   assert.match(publicMcpSource, /MCP_PROTOCOL_VERSION = '2026-07-28'/, 'VSIX shared preflight must pin MCP 2026-07-28');
   assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must attach a short-lived OAuth token when one is supplied');
-  assert.match(publicMcpSource, /server\/discover/, 'VSIX shared preflight must verify MCP 2026 server discovery');
-  assert.match(publicMcpSource, /method: 'tools\/list'/, 'VSIX shared preflight must verify tools/list');
-  assert.match(publicMcpSource, /method: 'tools\/call'/, 'VSIX shared preflight must verify a real tool call');
+  assert.match(publicMcpSource, /mcpPayload\(1, 'server\/discover', \{\}, clientName, clientVersion\)/, 'VSIX shared preflight must send MCP 2026 server discovery metadata');
+  assert.match(publicMcpSource, /protocolHeaders\('server\/discover', '', authHeaders\)/, 'VSIX shared preflight must bind server discovery to MCP 2026 wire headers');
+  assert.match(publicMcpSource, /mcpPayload\(2, 'tools\/list', \{\}, clientName, clientVersion\)/, 'VSIX shared preflight must verify tools/list');
+  assert.match(publicMcpSource, /protocolHeaders\('tools\/list', '', authHeaders\)/, 'VSIX shared preflight must bind tools/list to MCP 2026 wire headers');
+  assert.match(publicMcpSource, /mcpPayload\(3, 'tools\/call', \{ name: PREFLIGHT_PROBE_TOOL, arguments: \{\} \}, clientName, clientVersion\)/, 'VSIX shared preflight must verify a real tool call');
+  assert.match(publicMcpSource, /protocolHeaders\('tools\/call', PREFLIGHT_PROBE_TOOL, authHeaders\)/, 'VSIX shared preflight must bind the probe tool name to MCP 2026 wire headers');
+  assert.match(publicMcpSource, /PREFLIGHT_PROBE_TOOL = 'gateway_status'/, 'VSIX shared preflight must probe the real gateway_status tool');
   assert.equal(publicMcpSource.toLowerCase().includes(retiredSessionHeader), false, 'VSIX shared preflight must remain stateless under MCP 2026');
 
   const gatewayBundleSource = fs.readFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'utf8');
