@@ -8,7 +8,7 @@ The user-facing contract is:
 Start
   → Gateway available
   → configured public connection available
-  → OAuth-authenticated MCP server/discover succeeds
+  → MCP server/discover succeeds with the selected authentication mode
   → tools/list succeeds
   → gateway_status tools/call succeeds
   → Ready
@@ -24,7 +24,7 @@ Desktop hosts resolve one machine-wide state directory by default, regardless of
 VS Code ─────┐
              ├─ shared state directory
 Obsidian ────┘     ├─ config.json
-                   ├─ private OAuth state
+                   ├─ optional private OAuth state
                    ├─ one Gateway owner/attachment record
                    └─ one public-connection owner/attachment record
 ```
@@ -42,14 +42,14 @@ Both VS Code and Obsidian can own or attach to the same provider-native public c
     "publicUrl": ""
   },
   "auth": {
-    "mode": "oauth"
+    "mode": "none"
   }
 }
 ```
 
 Supported providers are `ngrok`, `cloudflare-quick`, `cloudflare-managed`, and `external`.
 
-Desktop public MCP defaults to OAuth. `auth.mode: "none"` is a loopback-only mode and cannot authorize public ingress. OAuth signing material and owner approval codes are host-private state, not public config fields.
+Desktop public MCP defaults to no authentication. `auth.mode: "none"` works for both local and public ingress. OAuth is optional and is used only when explicitly selected. OAuth signing material and owner approval codes are host-private state, not public config fields.
 
 Access control, request policy, Runner configuration, plugins and maintenance remain independent capabilities. Selecting a connection provider must not silently alter member access, Host restrictions, Runner topology or permission policy.
 
@@ -64,7 +64,7 @@ Both desktop hosts implement the same complete Start semantics:
 3. Start or attach to the shared Gateway.
 4. Start or attach to the configured provider-native public connection.
 5. Obtain the active HTTPS origin from that connection generation.
-6. Obtain a short-lived OAuth owner access token from private state for host verification.
+6. Use no token in default `none` mode, or obtain a short-lived OAuth owner access token from private state when OAuth is enabled.
 7. Send MCP `server/discover` pinned to protocol `2026-07-28`.
 8. Validate the advertised protocol and DevMate server identity.
 9. Call `tools/list`.
@@ -100,7 +100,7 @@ If the Gateway restarts, provider restarts, ownership transfers, configuration c
 
 The provider-native tunnel controller handles shared startup leases, ownership heartbeats, process exit detection, bounded restart, ownership transfer and fail-closed cleanup.
 
-A desktop host that has requested a session keeps that intent until explicit Stop. If an owned Gateway disappears or the complete generation changes, recovery runs the same complete Start lifecycle and re-verifies MCP. Recovery does not require a second user action.
+A desktop host that has requested a connection keeps that intent until explicit Stop. If an owned Gateway disappears or the complete generation changes, recovery runs the same complete Start lifecycle and re-verifies MCP. Recovery does not require a second user action.
 
 If a dynamic provider publishes a different hostname, DevMate can notify the user that the ChatGPT connector URL must be updated. That is an external connector consequence, not a reason to split DevMate startup into manual steps.
 
@@ -108,15 +108,15 @@ If a dynamic provider publishes a different hostname, DevMate can notify the use
 
 `Stop` is ownership-aware. A desktop host releases resources it owns and detaches from resources owned by another host. It does not intentionally leave an owned orphan Gateway process.
 
-`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current complete generation passes OAuth-authenticated MCP 2026 preflight.
+`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current complete generation passes MCP 2026 preflight using the selected authentication mode.
 
 ## Copy MCP URL
 
 `Copy MCP URL` never copies the internal loopback Gateway URL. It uses the active public connection and verifies the current complete generation before copying the `/mcp` endpoint.
 
-The copied URL contains no credential. ChatGPT performs OAuth against the DevMate authorization server. Static owner/member Bearer tokens and credential query parameters are not supported.
+The copied URL contains no credential. In default no-auth mode ChatGPT connects directly. If OAuth is explicitly enabled, ChatGPT performs OAuth against the DevMate authorization server. Static owner/member Bearer tokens and credential query parameters are not supported.
 
-## Provider and OAuth credentials
+## Provider and optional OAuth credentials
 
 Provider credentials are host-local secrets:
 
@@ -126,7 +126,7 @@ Provider credentials are host-local secrets:
 - Cloudflare Quick requires no tunnel credential.
 - External HTTPS ingress does not require DevMate to spawn a provider process.
 
-OAuth signing material and the owner approval code are stored in restrictive DevMate private state. Provider and OAuth secrets are not written into shared `config.json` or project files.
+When OAuth is enabled, OAuth signing material and the owner approval code are stored in restrictive DevMate private state. Provider and OAuth secrets are not written into shared `config.json` or project files.
 
 ## Obsidian host bridge
 
@@ -160,8 +160,8 @@ A provider configuration owned by another active desktop process is not silently
 1. One shared Gateway per state directory.
 2. One compatible provider-native public connection per state directory.
 3. Both VS Code and Obsidian may own or attach to those shared resources.
-4. Start is Gateway → public connection → OAuth MCP 2026 preflight → Ready.
-5. Public Ready requires OAuth; no-auth is loopback-only.
+4. Start is Gateway → public connection → MCP 2026 preflight using the selected authentication mode → Ready.
+5. Public Ready supports default no-auth and optional OAuth.
 6. MCP preflight is stateless and pinned to `2026-07-28`.
 7. Ready is complete-generation scoped, never URL-only or tunnel-only.
 8. Stop never destroys a resource owned by another host and never intentionally leaves a locally owned orphan process.
