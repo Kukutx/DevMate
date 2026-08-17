@@ -191,7 +191,15 @@ try {
   assert(maintenance.response.ok && maintenance.text.includes('auditRetentionDays'), `maintenance_status failed: ${maintenance.text}`);
 
   const diagnostics = await rpc('tools/call', { name: 'connection_diagnostics', arguments: {} });
-  assert(diagnostics.response.ok && diagnostics.text.includes('ngrok') && diagnostics.text.includes(hostId), `connection_diagnostics failed: ${diagnostics.text}`);
+  const diagnosticsData = diagnostics.json?.result?.structuredContent;
+  assert(
+    diagnostics.response.ok &&
+      diagnosticsData?.gateway?.authenticationMode === 'none' &&
+      diagnosticsData?.gateway?.permissionProfile === 'fullAccess' &&
+      diagnosticsData?.vscode?.contextPresent === true &&
+      diagnosticsData?.vscode?.activeEditor?.path === 'README.md',
+    `connection_diagnostics failed: ${diagnostics.text}`
+  );
 
   const statusPanel = await rpc('tools/call', { name: 'devmate_status_panel', arguments: {} });
   assert(statusPanel.response.ok && statusPanel.text.includes('DevMate status'), `devmate_status_panel failed: ${statusPanel.text}`);
