@@ -15,17 +15,6 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
 
 const drift = [];
 
-function updateText(relativePath, pattern, replacement, description) {
-  const file = path.join(root, relativePath);
-  const current = fs.readFileSync(file, 'utf8');
-  if (!pattern.test(current)) throw new Error(`Could not locate ${description} in ${relativePath}`);
-  pattern.lastIndex = 0;
-  const next = current.replace(pattern, replacement);
-  if (next === current) return;
-  if (checkOnly) drift.push(`${relativePath}: ${description}`);
-  else fs.writeFileSync(file, next, 'utf8');
-}
-
 function updateJson(relativePath, mutate, description) {
   const file = path.join(root, relativePath);
   const current = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -35,9 +24,6 @@ function updateJson(relativePath, mutate, description) {
   if (checkOnly) drift.push(`${relativePath}: ${description}`);
   else fs.writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
 }
-
-updateText('tests/smoke-gateway.mjs', /appVersion: '[^']+',/, `appVersion: '${version}',`, 'Gateway smoke version');
-updateText('tests/smoke-local-capabilities.mjs', /appVersion: '[^']+',/, `appVersion: '${version}',`, 'local smoke version');
 
 updateJson('obsidian-plugin/manifest.json', manifest => {
   manifest.version = version;
