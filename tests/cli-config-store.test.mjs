@@ -18,7 +18,7 @@ test('standalone CLI uses the shared configuration store without a compatibility
   assert.equal(command.includes('spawn('), false);
 });
 
-test('standalone local initialization writes the supported loopback-only schema atomically', () => {
+test('standalone initialization writes the supported default no-auth schema atomically', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-store-'));
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'state', 'config.json');
@@ -35,12 +35,12 @@ test('standalone local initialization writes the supported loopback-only schema 
   assert.equal('production' in persisted, false);
 });
 
-test('standalone initialization with a public URL enables OAuth and rejects an explicit no-auth downgrade', () => {
+test('standalone initialization with a public URL keeps no-auth by default and accepts explicit no-auth', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-public-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
 
-  const config = path.join(directory, 'oauth', 'config.json');
+  const config = path.join(directory, 'default', 'config.json');
   cli.initConfig({
     workspace,
     config,
@@ -48,22 +48,39 @@ test('standalone initialization with a public URL enables OAuth and rejects an e
     'public-url': 'https://devmate.example.com'
   });
   const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
-  assert.deepEqual(persisted.auth, { mode: 'oauth' });
+  assert.deepEqual(persisted.auth, { mode: 'none' });
   assert.equal(persisted.connection.publicUrl, 'https://devmate.example.com');
-  assert.equal(fs.existsSync(path.join(directory, 'oauth', 'state', 'oauth-secrets.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'default', 'state', 'oauth-secrets.json')), false);
 
-  const rejected = path.join(directory, 'rejected', 'config.json');
-  assert.throws(() => cli.initConfig({
+  const explicit = path.join(directory, 'explicit-none', 'config.json');
+  cli.initConfig({
     workspace,
-    config: rejected,
+    config: explicit,
     provider: 'external',
     'public-url': 'https://devmate.example.com',
     'authentication-mode': 'none'
-  }), /loopback-only/);
-  assert.equal(fs.existsSync(rejected), false);
+  });
+  assert.deepEqual(configStore.readJson(explicit, null, { strict: true, supportedVersion: true }).auth, { mode: 'none' });
 });
 
-test('member creation promotes a local standalone instance to OAuth and initializes private OAuth state', () => {
+test('standalone public OAuth remains available only when explicitly selected', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-oauth-'));
+  const workspace = path.join(directory, 'workspace');
+  const config = path.join(directory, 'oauth', 'config.json');
+  fs.mkdirSync(workspace);
+  cli.initConfig({
+    workspace,
+    config,
+    provider: 'external',
+    'public-url': 'https://devmate.example.com',
+    'authentication-mode': 'oauth'
+  });
+  const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
+  assert.deepEqual(persisted.auth, { mode: 'oauth' });
+  assert.equal(fs.existsSync(path.join(directory, 'oauth', 'state', 'oauth-secrets.json')), true);
+});
+
+test('member creation preserves no-auth and does not initialize OAuth state implicitly', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-member-'));
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'state', 'config.json');
@@ -72,9 +89,9 @@ test('member creation promotes a local standalone instance to OAuth and initiali
   const created = cli.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
   assert.match(created.loginCode, /^dmc_/);
   const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
-  assert.deepEqual(persisted.auth, { mode: 'oauth' });
+  assert.deepEqual(persisted.auth, { mode: 'none' });
   assert.equal(persisted.team.members.length, 1);
   assert.equal(persisted.team.members[0].authVersion, 1);
   assert.equal(JSON.stringify(persisted).includes(created.loginCode), false);
-  assert.equal(fs.existsSync(path.join(directory, 'state', 'state', 'oauth-secrets.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'state', 'state', 'oauth-secrets.json')), false);
 });
