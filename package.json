@@ -239,12 +239,12 @@
         },
         "devMate.authenticationMode": {
           "type": "string",
-          "default": "oauth",
+          "default": "none",
           "enum": [
             "none",
             "oauth"
           ],
-          "description": "MCP authentication mode. oauth is the secure default for public MCP access; none restricts MCP access to local loopback only."
+          "description": "MCP authentication mode. none is the default for local and public MCP access; oauth is optional."
         },
         "devMate.permissionProfile": {
           "type": "string",

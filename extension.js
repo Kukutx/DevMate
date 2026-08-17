@@ -100,7 +100,7 @@ function normalizeWorkspaceRoles(data){
 function syncCurrentWorkspace(data, root){
   return syncSharedWorkspace(data, root);
 }
-function authenticationMode(){ return cfg().get('authenticationMode') === 'none' ? 'none' : 'oauth'; }
+function authenticationMode(){ return cfg().get('authenticationMode') === 'oauth' ? 'oauth' : 'none'; }
 function nonce(){ return crypto.randomBytes(16).toString('base64'); }
 function permissionProfile(){ const v = cfg().get('permissionProfile'); return ['readOnly','balanced','fullAccess'].includes(v) ? v : 'fullAccess'; }
 function maintenanceConfig(){

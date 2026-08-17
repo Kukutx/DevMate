@@ -88,11 +88,8 @@ export function initConfig(options = {}) {
   const publicUrl = rawPublicUrl ? normalizeOrigin(rawPublicUrl, { httpsOnly: true }) : '';
   validateStandaloneIngress({ provider, publicUrl });
   const requestedAuthentication = options['authentication-mode'] === undefined
-    ? (publicUrl ? 'oauth' : undefined)
+    ? 'none'
     : String(options['authentication-mode']).trim().toLowerCase();
-  if (publicUrl && requestedAuthentication === 'none') {
-    throw new Error('--authentication-mode none is loopback-only and cannot be combined with --public-url');
-  }
 
   const config = newInstanceConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
   config.instanceId = `standalone-${Date.now().toString(36)}`;
@@ -175,8 +172,8 @@ export function doctor(options = {}) {
     { key: 'config', ok: true, detail: file },
     { key: 'workspace', ok: !!workspace && !!fs.statSync(workspace.root, { throwIfNoEntry: false })?.isDirectory(), detail: workspace?.root || 'missing' },
     { key: 'authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'oauth' },
-    { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'loopback-only' },
-    { key: 'member-auth', ok: !(config.team?.members || []).some(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())) || config.auth?.mode === 'oauth', detail: config.auth?.mode === 'oauth' ? 'oauth' : 'loopback-only' },
+    { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'optional' },
+    { key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-no-auth-mode' },
     { key: 'git', ...executableStatus('git') },
     { key: 'node', ok: true, detail: process.version }
   ];
@@ -187,7 +184,7 @@ export function doctor(options = {}) {
     checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.connection.publicUrl || ''), detail: config.connection.publicUrl || 'missing' });
   }
   if (config.connection.publicUrl) {
-    checks.push({ key: 'public-authentication', ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none' });
+    checks.push({ key: 'public-authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' });
   }
   if (config.requestPolicy.allowedHosts.length) {
     const configuredHost = config.connection.publicUrl ? new URL(config.connection.publicUrl).host.toLowerCase() : '';
@@ -232,11 +229,10 @@ export function memberCreate(options = {}) {
     const config = normalizeInstanceConfig(current);
     const name = String(options.name || '').trim();
     if (!name) throw new Error('--name is required');
-    if (config.auth?.mode !== 'oauth') configureAuthentication(config, 'oauth');
     result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });
     return config;
   });
-  ensureOAuthSecrets(file);
+  if (readConfig(file).auth?.mode === 'oauth') ensureOAuthSecrets(file);
   return result;
 }
 
@@ -247,11 +243,10 @@ export function memberRotate(options = {}) {
   let result = null;
   updateConfig(file, current => {
     const config = normalizeInstanceConfig(current);
-    if (config.auth?.mode !== 'oauth') configureAuthentication(config, 'oauth');
     result = rotateTeamMemberLoginCode(config, id);
     return config;
   });
-  ensureOAuthSecrets(file);
+  if (readConfig(file).auth?.mode === 'oauth') ensureOAuthSecrets(file);
   return result;
 }
 

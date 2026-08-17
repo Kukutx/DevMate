@@ -67,7 +67,7 @@ function touchTeamMemberBestEffort(principal) {
 
 export function authenticateGatewayRequest(req, url, config) {
   normalizeInstanceConfig(config);
-  if (isLocalRequest(req)) return fallbackLocalPrincipal();
+  if (isLocalRequest(req) || config.auth?.mode === 'none') return fallbackLocalPrincipal();
   if (config.auth?.mode !== 'oauth') return null;
   const token = String(req?.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
   const access = oauthAccessToken(config, token, req);

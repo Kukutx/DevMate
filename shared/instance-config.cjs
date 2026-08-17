@@ -101,7 +101,7 @@ function normalizeInstanceConfig(config) {
     publicUrl: cleanPublicUrl(previousConnection.publicUrl)
   };
 
-  // Local loopback access is OS-trusted. Remote MCP access uses OAuth only;
+  // No-auth is the default for local and public MCP access. OAuth remains optional;
   // authentication secrets live outside the instance configuration.
   config.auth = normalizeAuthentication(config);
 
