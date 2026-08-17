@@ -4,7 +4,7 @@ The `devmate` CLI runs the same current-schema Gateway without the VS Code or Ob
 
 ## Initialize one instance
 
-Local loopback-only instance:
+Default no-auth instance:
 
 ```bash
 npx devmate init \
@@ -12,7 +12,7 @@ npx devmate init \
   --config /srv/devmate/config.json
 ```
 
-A configuration without an explicit public URL defaults to `auth.mode: "none"`. This means **loopback-only MCP**.
+A configuration defaults to `auth.mode: "none"`. This works for loopback and configured public MCP.
 
 Public standalone instance:
 
@@ -25,7 +25,7 @@ npx devmate init \
   --restrict-public-host true
 ```
 
-Supplying a public URL defaults authentication to OAuth and creates protected OAuth secret state. `--authentication-mode none` with `--public-url` is rejected rather than producing a remotely unusable or insecure configuration.
+Public HTTPS ingress works with the default `none` mode; OAuth is optional. Use `--authentication-mode oauth` only when OAuth is explicitly wanted.
 
 There is no `--mode` option. Connection provider, member access, request policy, workspace-lease policy and Runner topology are independent capabilities.
 
@@ -45,9 +45,9 @@ npx devmate member-rotate --config /srv/devmate/config.json --id alice
 npx devmate member-revoke --config /srv/devmate/config.json --id alice
 ```
 
-`member-create` returns a one-time `dmc_` OAuth login code and ensures the instance uses OAuth, even if it began as a loopback-only local instance. Only the salted verifier and member `authVersion` are persisted.
+`member-create` returns a one-time `dmc_` OAuth login code without changing the selected authentication mode. Only the salted verifier and member `authVersion` are persisted.
 
-`member-rotate` rotates the OAuth login code, increments `authVersion`, and therefore invalidates previously issued member OAuth credentials. It also ensures OAuth/private OAuth state exists. There is no member static Bearer-token mode.
+`member-rotate` rotates the OAuth login code and increments `authVersion`; it does not enable OAuth automatically. There is no member static Bearer-token mode.
 
 ## Run the Gateway
 
@@ -65,7 +65,7 @@ Examples:
 - Cloudflare managed tunnel runs as a separate `cloudflared` service with its token supplied securely;
 - ngrok runs as a separately supervised Agent/service using the intended account configuration.
 
-Every remote `/mcp` request still requires OAuth regardless of the ingress provider.
+Remote `/mcp` uses the selected authentication mode: no-auth by default, or OAuth when explicitly enabled.
 
 ## MCP protocol
 
@@ -95,7 +95,7 @@ https://devmate.example.com/mcp
 
 It never embeds credentials.
 
-`doctor` validates current config/workspace state, OAuth private-state availability when required, member/auth consistency, public URL/auth consistency, and provider prerequisites relevant to the selected connection capability. It does not claim that a separately managed public ingress is live merely because configuration is valid.
+`doctor` validates current config/workspace state, OAuth private-state availability when OAuth is enabled, public URL configuration, and provider prerequisites relevant to the selected connection capability. It does not claim that a separately managed public ingress is live merely because configuration is valid.
 
 ## Service management
 
@@ -111,16 +111,16 @@ Use separate DevMate instances or isolated OS accounts/containers/VMs/machines f
 ## Bootstrap examples
 
 ```bash
-# Owner-only local development: loopback-only
+# Owner development: no-auth by default
 npx devmate bootstrap --preset personal --workspace /srv/project
 
-# Trusted member access: OAuth + lease enforcement by default
+# Trusted team preset: no-auth by default; OAuth can be selected explicitly
 npx devmate bootstrap \
   --preset team \
   --workspace /srv/project \
   --member-name Alice
 
-# Hardened central instance: OAuth + external Runner control
+# Central instance: no-auth by default + external Runner control
 npx devmate bootstrap \
   --preset control-plane \
   --workspace /srv/project \

@@ -24,9 +24,9 @@ Machine-local executable paths, provider credentials and restart preferences rem
 
 ## Public authentication boundary
 
-A public connection does not weaken MCP authentication. Remote `/mcp` requests require OAuth. `auth.mode: "none"` is accepted only from a genuine loopback socket with a loopback Host and therefore cannot be used through ngrok, Cloudflare or external HTTPS ingress.
+A public connection uses the selected MCP authentication mode. `auth.mode: "none"` is the default and works through ngrok, Cloudflare, or external HTTPS ingress. OAuth is optional and enabled explicitly.
 
-Desktop hosts default to OAuth. Standalone Personal/Runner configurations may use `none` when their MCP endpoint remains local.
+Desktop and standalone hosts default to no authentication.
 
 OAuth signing material and approval codes remain in private runtime state. Public URLs contain no credential and static owner/member Bearer tokens are not supported.
 
@@ -39,7 +39,7 @@ Start
   → start/attach Gateway
   → start/attach configured public connection
   → obtain HTTPS origin
-  → obtain short-lived OAuth verification token
+  → obtain a verification token only when OAuth is enabled
   → MCP server/discover (2026-07-28)
   → tools/list
   → gateway_status tools/call
@@ -92,7 +92,7 @@ A public URL is necessary but insufficient for Ready.
 
 After a provider publishes an HTTPS endpoint, DevMate performs current MCP preflight:
 
-1. Attach a short-lived OAuth owner access token generated from private state.
+1. Use no token in default `none` mode, or a short-lived owner access token when OAuth is enabled.
 2. Send `server/discover` with protocol pin `2026-07-28`.
 3. Require the server to advertise `2026-07-28` and identify itself as `devmate`.
 4. Call `tools/list`.
@@ -117,7 +117,7 @@ DevMate discovers dynamic ngrok endpoints through the current local Agent endpoi
 
 `cloudflare-quick` starts a native `cloudflared tunnel --url ...` quick tunnel and discovers the TryCloudflare HTTPS endpoint from provider output.
 
-The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh OAuth MCP 2026 preflight and may produce a new hostname.
+The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh MCP 2026 preflight and may produce a new hostname.
 
 Both desktop hosts coordinate one public preflight for each Gateway+tunnel generation. Fresh success evidence is reused briefly across the two hosts, then periodically revalidated. Temporary DNS, TLS, edge propagation, or timeout failures leave the current tunnel running and retry with bounded backoff instead of creating another hostname.
 
@@ -137,7 +137,7 @@ The token is supplied through the provider process environment, not command-line
 
 `external` is a first-class provider for an existing reverse proxy, load balancer, VPN gateway or externally managed tunnel.
 
-DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and still requires current OAuth MCP preflight before Ready.
+DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and still requires current MCP preflight using the selected authentication mode before Ready.
 
 The configured origin must be a clean HTTPS origin without credentials, path, query string or fragment.
 

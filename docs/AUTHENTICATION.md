@@ -1,15 +1,13 @@
 # Authentication policy
 
-DevMate uses one current authentication model for MCP 2026. Local operating-system trust and remote OAuth are separate boundaries; there is no static MCP credential mode.
+DevMate supports two current MCP 2026 authentication modes: `none` by default, and optional OAuth. There is no static MCP credential mode.
 
 ## Security boundary
 
-- Requests arriving from a verified loopback socket with a loopback Host are the local owner and do not need OAuth.
-- Any non-loopback `/mcp` request requires `auth.mode: "oauth"` and a valid OAuth access token.
-- `auth.mode: "none"` means **loopback-only MCP**. It never means unauthenticated public MCP.
-- OAuth is the default for VS Code and Obsidian desktop public access, Team bootstrap, Control-plane bootstrap, any bootstrap that creates a member, and standalone initialization with an explicit public URL.
-- Personal/Runner standalone presets remain loopback-only unless OAuth is deliberately enabled.
-- OAuth access tokens use the standard `Authorization: Bearer <access-token>` header. DevMate does not expose a user-configured static MCP Bearer credential.
+- `auth.mode: "none"` accepts both loopback and public MCP without an access token. It is the default.
+- No-auth requests receive owner-level DevMate access; Host allowlisting and ingress configuration remain independent controls.
+- `auth.mode: "oauth"` is optional and must be selected explicitly.
+- When OAuth is enabled, access tokens use the standard `Authorization: Bearer <access-token>` header. DevMate does not expose a user-configured static MCP Bearer credential.
 
 ## OAuth 2026 flow
 
@@ -52,7 +50,7 @@ Successful member authorization issues normal OAuth access/refresh tokens whose 
 
 Rotating a member login code increments `authVersion`, immediately invalidating existing member OAuth credentials. Disabling, revoking, expiring, changing scope, or changing authorization version also makes stale authorization unusable.
 
-Standalone `member-create` and `member-rotate` ensure OAuth mode and private OAuth state rather than allowing an active member to coexist with loopback-only authentication.
+Standalone `member-create` and `member-rotate` do not change the selected authentication mode. Member OAuth login codes become relevant only when OAuth is explicitly enabled.
 
 ## Secret storage
 
@@ -63,8 +61,8 @@ Member login-code verifiers and Runner credential verifiers remain one-way store
 ## Invariants
 
 - Credentials are never accepted from URL query parameters.
-- Remote MCP never falls back to local-owner access.
-- Public URL configuration cannot be combined with loopback-only `none` in standalone initialization.
+- No-auth public MCP intentionally maps to owner-level access.
+- Public URL configuration is valid with the default `none` mode or with optional OAuth.
 - Active shared member identity uses OAuth, never a static MCP credential.
 - Unsupported authentication fields fail closed.
 - OAuth tokens are issuer- and resource-bound.

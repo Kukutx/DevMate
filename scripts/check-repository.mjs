@@ -149,12 +149,11 @@ const required = [
   ['gateway/server.mjs', /createMcpHandler\(\(\) => createServer\(\), \{ legacy: 'reject' \}\)/, 'Gateway MCP server must reject legacy transport eras'],
   ['gateway/server-extension-host.mjs', /prototype\.registerTool = function devmateRegisterTool/, 'Gateway must retain the single MCP tool interception host'],
   ['shared/auth-config.cjs', /AUTHENTICATION_MODES = Object\.freeze\(\['none', 'oauth'\]\)/, 'authentication config must remain mode-only and OAuth-capable'],
-  ['scripts/devmate-command.mjs', /team:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'oauth'/, 'Team bootstrap must use OAuth by construction'],
-  ['scripts/devmate-command.mjs', /'control-plane':\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'oauth'/, 'Control-plane bootstrap must use OAuth by construction'],
-  ['scripts/devmate-command.mjs', /--member-name requires --authentication-mode oauth/, 'member-enabled bootstrap must reject no-auth'],
-  ['scripts/standalone-runtime.mjs', /publicUrl && requestedAuthentication === 'none'/, 'standalone public URL must reject loopback-only no-auth'],
-  ['scripts/standalone-runtime.mjs', /if \(config\.auth\?\.mode !== 'oauth'\) configureAuthentication\(config, 'oauth'\);[\s\S]*?createTeamMember/, 'standalone member creation must promote the instance to OAuth'],
-  ['scripts/standalone-runtime.mjs', /ensureOAuthSecrets\(file\);[\s\S]*?return result;/, 'standalone member identity changes must initialize private OAuth state']
+  ['shared/auth-config.cjs', /const mode = value === undefined \? 'none'/, 'authentication must default to none'],
+  ['gateway/request-guard.mjs', /isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'/, 'public no-auth MCP must map to owner access'],
+  ['shared/oauth-tokens.cjs', /if \(config\?\.auth\?\.mode !== 'oauth'\) return '';/, 'public preflight must support no-auth without a token'],
+  ['scripts/devmate-command.mjs', /team:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'none'/, 'Team bootstrap must default to no-auth'],
+  ['scripts/devmate-command.mjs', /'control-plane':\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'none'/, 'Control-plane bootstrap must default to no-auth'],
 ];
 for (const [file, pattern, label] of required) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
@@ -176,7 +175,6 @@ const documentationFiles = [
 const retiredDocumentationPatterns = [
   { pattern: /(?:authenticated\s+)?MCP\s+`initialize`|MCP\s+initialize/i, label: 'retired MCP initialize guidance' },
   { pattern: /preserve the MCP session|MCP session ID\b|MCP-Session-Id|mcp-session-id/i, label: 'retired stateful MCP session guidance' },
-  { pattern: /Public MCP uses no authentication by default|normal desktop MCP flow is no-auth|normal desktop flow uses no authentication/i, label: 'retired unauthenticated public MCP guidance' },
   { pattern: /member token is returned|member tokens are printed/i, label: 'retired static member-token guidance' }
 ];
 for (const file of documentationFiles) {
@@ -188,15 +186,15 @@ for (const file of documentationFiles) {
 
 const documentationRequired = [
   ['README.md', /server\/discover[\s\S]*2026-07-28|2026-07-28[\s\S]*server\/discover/, 'README must document MCP 2026 discovery'],
-  ['README.md', /Desktop public MCP defaults to OAuth/, 'README must document OAuth-default desktop public MCP'],
-  ['SECURITY.md', /Every remote\/public `\/mcp` request requires OAuth/, 'security policy must require OAuth on remote MCP'],
-  ['docs/AUTHENTICATION.md', /auth\.mode: "none"` means \*\*loopback-only MCP\*\*/, 'authentication policy must define no-auth as loopback-only'],
-  ['docs/BOOTSTRAP.md', /Team and Control-plane presets therefore use OAuth by construction/, 'bootstrap docs must encode shared OAuth defaults'],
+  ['README.md', /Desktop public MCP defaults to no authentication; OAuth is optional\./, 'README must document no-auth default'],
+  ['SECURITY.md', /Public MCP defaults to no authentication; OAuth is optional\./, 'security policy must document optional OAuth'],
+  ['docs/AUTHENTICATION.md', /`auth\.mode: \"none\"` accepts both loopback and public MCP without an access token\./, 'authentication policy must define public no-auth'],
+  ['docs/BOOTSTRAP.md', /All presets default to `none` unless OAuth is explicitly selected\./, 'bootstrap docs must encode no-auth defaults'],
+  ['docs/STANDALONE.md', /Public HTTPS ingress works with the default `none` mode; OAuth is optional\./, 'standalone docs must support public no-auth'],
+  ['obsidian-plugin/README.md', /Public MCP defaults to no authentication; OAuth is optional\./, 'Obsidian docs must describe no-auth default'],
   ['docs/HOST_INTEGRATION.md', /MCP 2026 verification is stateless/, 'host integration must document stateless MCP 2026'],
-  ['docs/STANDALONE.md', /`--authentication-mode none` with `--public-url` is rejected/, 'standalone docs must reject public no-auth'],
   ['docs/TEAM_DEPLOYMENT.md', /single-use rotating token families/, 'team docs must document refresh-token rotation'],
   ['docs/TUNNELS.md', /The MCP transport is stateless/, 'tunnel docs must document stateless public verification'],
-  ['obsidian-plugin/README.md', /OAuth-authenticated MCP server\/discover verified[\s\S]*MCP 2026 verification is stateless/, 'Obsidian docs must describe the current OAuth MCP 2026 lifecycle']
 ];
 for (const [file, pattern, label] of documentationRequired) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');

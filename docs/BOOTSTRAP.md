@@ -6,14 +6,14 @@
 
 | Preset | MCP authentication | Embedded Runner | External Runner API | Workspace lease default | Connection default |
 |---|---|---:|---:|---:|---|
-| `personal` | `none` — loopback-only | on | off | off | ngrok |
-| `team` | OAuth | on | off | on | ngrok |
-| `control-plane` | OAuth | off | on | on | external HTTPS |
-| `runner` | `none` — local loopback MCP | off | off | off | ngrok/local config |
+| `personal` | `none` — default | on | off | off | ngrok |
+| `team` | `none` — default; OAuth optional | on | off | on | ngrok |
+| `control-plane` | `none` — default; OAuth optional | off | on | on | external HTTPS |
+| `runner` | `none` — default | off | off | off | ngrok/local config |
 
 No preset writes historical `mode`, `deployment`, or `production` fields.
 
-`auth.mode: "none"` is not a public authentication mode. It accepts MCP only from a genuine loopback socket with a loopback Host. Team and Control-plane presets therefore use OAuth by construction.
+All presets default to `none` unless OAuth is explicitly selected. `auth.mode: "none"` works on both loopback and public MCP.
 
 ## Personal preset
 
@@ -21,7 +21,7 @@ No preset writes historical `mode`, `deployment`, or `production` fields.
 npx devmate bootstrap --preset personal --workspace /srv/project
 ```
 
-This creates one local owner instance. Its MCP endpoint is usable without authentication only over loopback.
+This creates one owner instance. Its MCP endpoint is usable without authentication over loopback or configured public ingress.
 
 ## Team preset
 
@@ -33,9 +33,9 @@ npx devmate bootstrap \
   --member-role developer
 ```
 
-The preset enables OAuth and workspace-lease enforcement by default. Member creation returns a one-time `dmc_` **OAuth login code**. DevMate stores only a salted verifier plus the member `authVersion`; it never stores the plaintext login code in `config.json`.
+The preset keeps no-auth as the default and enables workspace-lease enforcement by default. OAuth may be enabled explicitly. Member creation returns a one-time `dmc_` **OAuth login code**. DevMate stores only a salted verifier plus the member `authVersion`; it never stores the plaintext login code in `config.json`.
 
-Creating a member without a preset also makes OAuth mandatory. If `--member-name` is supplied with `--authentication-mode none`, bootstrap fails instead of producing a member record that cannot authenticate remotely.
+Creating a member does not change the selected authentication mode. The returned `dmc_` login code is used only if OAuth is explicitly enabled.
 
 ## Control-plane preset
 
@@ -53,7 +53,7 @@ npx devmate bootstrap \
 
 Defaults:
 
-- OAuth MCP authentication;
+- no-auth MCP by default; OAuth optional;
 - external HTTPS connection;
 - embedded Runner disabled;
 - external Runner control enabled;
@@ -100,7 +100,7 @@ npx devmate bootstrap \
   --external-runner-control true
 ```
 
-This remains one instance with a different capability composition. Authentication invariants still apply: a member-enabled bootstrap cannot be downgraded to `none`.
+This remains one instance with a different capability composition. Authentication remains independent: member records may coexist with `none`, and OAuth is enabled only when explicitly selected.
 
 Unknown preset names fail explicitly.
 
@@ -125,7 +125,7 @@ MCP endpoint URLs never contain credentials.
 npx devmate status --config /srv/devmate/config.json
 ```
 
-It also reports an invalid state if active members exist while authentication is not OAuth.
+Active member records do not make no-auth mode invalid; they are used for member identity only when OAuth is enabled.
 
 ## Commands
 

@@ -366,27 +366,23 @@ test('already verified current Gateway+tunnel generation performs no duplicate n
   }
 });
 
-test('public recovery refuses to preflight when OAuth is disabled', async () => {
+test('public recovery preflights no-auth mode without a token', async () => {
   const fx = fixture();
   try {
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     config.auth = { mode: 'none' };
     atomicWriteJson(fx.configFile, config);
-    let preflights = 0;
+    let call = null;
     const verifier = new PublicTunnelVerifier({
       stateDirectory: fx.stateDirectory,
       tunnelStatus: port => fx.status(port),
       readyGraceMs: 0,
       now: () => Date.parse('2026-08-08T01:01:00.000Z'),
-      preflight: async input => {
-        preflights += 1;
-        return successfulTest(input.publicUrl);
-      }
+      preflight: async input => { call = input; return successfulTest(input.publicUrl); }
     });
     const result = await verifier.check();
-    assert.equal(result.verified, false);
-    assert.equal(preflights, 0);
-    assert.equal(result.error?.code, 'DEVMATE_PUBLIC_MCP_OAUTH_REQUIRED');
+    assert.equal(result.verified, true);
+    assert.equal(call.token, '');
   } finally {
     fx.cleanup();
   }

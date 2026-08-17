@@ -49,7 +49,7 @@ test('default standalone bootstrap creates a direct loopback-only DevMate instan
   assert.deepEqual(status.warnings, []);
 });
 
-test('creating a member makes OAuth mandatory and persists only the login-code verifier', async t => {
+test('creating a member preserves default no-auth and persists only the login-code verifier', async t => {
   const current = await fixture('member');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({
@@ -58,12 +58,12 @@ test('creating a member makes OAuth mandatory and persists only the login-code v
     'member-name': 'Alice',
     'member-role': 'developer'
   });
-  assert.equal(result.authenticationMode, 'oauth');
+  assert.equal(result.authenticationMode, 'none');
   assert.match(result.member.loginCode, /^dmc_[a-z0-9_-]+_[A-Za-z0-9_-]{43}$/);
   const configText = await fsp.readFile(current.config, 'utf8');
   const config = JSON.parse(configText);
-  assert.deepEqual(config.auth, { mode: 'oauth' });
-  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), true);
+  assert.deepEqual(config.auth, { mode: 'none' });
+  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), false);
   assert.equal(config.team.members.length, 1);
   assert.equal(typeof config.team.members[0].loginHash, 'string');
   assert.equal(typeof config.team.members[0].loginSalt, 'string');
@@ -74,16 +74,13 @@ test('creating a member makes OAuth mandatory and persists only the login-code v
   assert.equal(config.jobs.embeddedRunnerEnabled, false);
 });
 
-test('member bootstrap cannot be combined with no-auth', async t => {
+test('member bootstrap works with the default no-auth mode', async t => {
   const current = await fixture('member-no-auth');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
-  assert.throws(() => __test.bootstrap({
-    workspace: current.workspace,
-    config: current.config,
-    'member-name': 'Alice',
-    'authentication-mode': 'none'
-  }), /requires --authentication-mode oauth/);
-  assert.equal(await exists(current.config), false);
+  const result = __test.bootstrap({ workspace: current.workspace, config: current.config, 'member-name': 'Alice' });
+  assert.equal(result.authenticationMode, 'none');
+  assert.match(result.member.loginCode, /^dmc_/);
+  assert.deepEqual((await readConfig(current.config)).auth, { mode: 'none' });
 });
 
 test('bootstrap presets encode their security boundary explicitly', async t => {
@@ -97,9 +94,9 @@ test('bootstrap presets encode their security boundary explicitly', async t => {
 
   const team = await fixture('preset-team'); fixtures.push(team);
   const teamResult = __test.bootstrap({ preset: 'team', workspace: team.workspace, config: team.config });
-  assert.equal(teamResult.authenticationMode, 'oauth');
+  assert.equal(teamResult.authenticationMode, 'none');
   assert.equal(teamResult.execution.embeddedRunnerEnabled, true);
-  assert.equal(await exists(path.join(team.root, 'state', 'oauth-secrets.json')), true);
+  assert.equal(await exists(path.join(team.root, 'state', 'oauth-secrets.json')), false);
 
   const control = await fixture('preset-control'); fixtures.push(control);
   const controlResult = __test.bootstrap({
@@ -108,10 +105,10 @@ test('bootstrap presets encode their security boundary explicitly', async t => {
     config: control.config,
     'public-url': 'https://devmate.example.com'
   });
-  assert.equal(controlResult.authenticationMode, 'oauth');
+  assert.equal(controlResult.authenticationMode, 'none');
   assert.equal(controlResult.connection.provider, 'external');
   assert.equal(controlResult.execution.embeddedRunnerEnabled, false);
-  assert.equal(await exists(path.join(control.root, 'state', 'oauth-secrets.json')), true);
+  assert.equal(await exists(path.join(control.root, 'state', 'oauth-secrets.json')), false);
 
   const runner = await fixture('preset-runner'); fixtures.push(runner);
   const runnerResult = __test.bootstrap({ preset: 'runner', workspace: runner.workspace, config: runner.config });
@@ -134,11 +131,11 @@ test('external Runner control composes with OAuth members, connection provider a
     'runner-concurrency': '2',
     'embedded-runner': 'false'
   });
-  assert.equal(result.authenticationMode, 'oauth');
+  assert.equal(result.authenticationMode, 'none');
   assert.match(result.member.loginCode, /^dmc_/);
   assert.match(result.runner.token, /^dmr_/);
   const config = await readConfig(current.config);
-  assert.deepEqual(config.auth, { mode: 'oauth' });
+  assert.deepEqual(config.auth, { mode: 'none' });
   assert.equal(config.connection.provider, 'external');
   assert.equal(config.connection.publicUrl, 'https://devmate.example.com');
   assert.equal(config.jobs.embeddedRunnerEnabled, false);
@@ -147,7 +144,7 @@ test('external Runner control composes with OAuth members, connection provider a
   assert.deepEqual(config.runnerControl.credentials[0].workspaceIds, ['workspace']);
   assert.equal(config.runnerControl.credentials[0].tokenHash.includes(result.runner.token), false);
   assert.equal(JSON.stringify(config).includes(result.member.loginCode), false);
-  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), true);
+  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), false);
   const status = __test.status({ config: current.config });
   assert.equal(status.ok, true);
   assert.equal(status.execution.externalRunnerControlEnabled, true);

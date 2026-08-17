@@ -8,8 +8,8 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - A provider-native connection, reverse proxy, VPN, or other HTTPS ingress exposes the intended public MCP endpoint.
 - `/control/health` and `/control/metrics` remain local-control surfaces and must not be exposed as public MCP endpoints.
 - MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
-- `auth.mode: "none"` is **loopback-only**. It requires both a loopback socket peer and a loopback Host and is never valid public authentication.
-- Every remote/public `/mcp` request requires OAuth.
+- `auth.mode: "none"` is valid for both loopback and public MCP and grants owner-level access without an access token.
+- Public MCP defaults to no authentication; OAuth is optional.
 - `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
 - Runner control requests have their own bounded body, rate and protocol-version requirements.
 
@@ -29,8 +29,8 @@ The Gateway, desktop preflight, packaged VSIX/Obsidian smoke tests, and external
 
 ## OAuth credentials and identities
 
-- Desktop public MCP defaults to OAuth.
-- Public MCP accepts OAuth access tokens only; it never accepts copied static owner/member credentials.
+- Desktop public MCP defaults to no authentication. OAuth is optional and only used when explicitly enabled.
+- When OAuth is enabled, MCP accepts OAuth access tokens; copied static owner/member credentials remain unsupported.
 - OAuth signing material and the rotating owner approval code live under private DevMate state with restrictive permissions, not in `config.json`.
 - OAuth client identity uses Client ID Metadata Documents (CIMD). The retired dynamic client-registration endpoint is not exposed.
 - CIMD metadata must use a clean HTTPS client ID, safe redirects, bounded metadata, and public-network destinations; private/loopback/link-local metadata targets are rejected.
@@ -75,7 +75,7 @@ Never place OAuth, member login codes, Runner, provider, preview, or artifact-se
 
 VS Code and Obsidian can each own or attach to the same machine-wide Gateway and provider-native public connection.
 
-`Ready` is valid only for the **current complete Gateway + provider generation** after OAuth-authenticated MCP `server/discover`, `tools/list`, and `gateway_status` succeed. A Gateway restart, provider restart, ownership transfer, or endpoint generation change invalidates old Ready evidence even when the public hostname is unchanged.
+`Ready` is valid only for the **current complete Gateway + provider generation** after MCP `server/discover`, `tools/list`, and `gateway_status` succeed using the configured authentication mode. A Gateway restart, provider restart, ownership transfer, or endpoint generation change invalidates old Ready evidence even when the public hostname is unchanged.
 
 Desktop Stop is ownership-aware:
 
