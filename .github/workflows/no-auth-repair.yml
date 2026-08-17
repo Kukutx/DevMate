@@ -24,135 +24,71 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import json
+          import json, re
 
-          def replace(path, old, new):
-              p = Path(path)
-              s = p.read_text()
-              if old not in s:
-                  raise SystemExit(f'missing expected block in {path}: {old[:100]!r}')
+          def replace(path, old, new, minimum=1):
+              p = Path(path); s = p.read_text(); n = s.count(old)
+              if n < minimum: raise SystemExit(f'{path}: expected >= {minimum} matches, found {n}: {old[:100]!r}')
               p.write_text(s.replace(old, new))
+              print(f'{path}: replaced {n}')
+
+          def sub(path, pattern, repl, count=1):
+              p = Path(path); s = p.read_text(); out, n = re.subn(pattern, repl, s, count=count, flags=re.S)
+              if n != count: raise SystemExit(f'{path}: expected {count} regex matches, found {n}: {pattern[:100]!r}')
+              p.write_text(out)
+              print(f'{path}: regex replaced {n}')
 
           replace('gateway/request-guard.mjs',
-          """  if (isLocalRequest(req)) return fallbackLocalPrincipal();
-            if (config.auth?.mode !== 'oauth') return null;
-          """,
-          """  if (isLocalRequest(req) || config.auth?.mode === 'none') return fallbackLocalPrincipal();
-            if (config.auth?.mode !== 'oauth') return null;
-          """)
+            "if (isLocalRequest(req)) return fallbackLocalPrincipal();\n  if (config.auth?.mode !== 'oauth') return null;",
+            "if (isLocalRequest(req) || config.auth?.mode === 'none') return fallbackLocalPrincipal();\n  if (config.auth?.mode !== 'oauth') return null;")
 
-          replace('shared/oauth-tokens.cjs',
-          """  if (config?.auth?.mode !== 'oauth') {
-              const error = new Error('Public MCP preflight requires OAuth authentication');
-              error.code = 'DEVMATE_PUBLIC_MCP_OAUTH_REQUIRED';
-              throw error;
-            }
-          """,
-          """  if (config?.auth?.mode !== 'oauth') return '';
-          """)
+          sub('shared/oauth-tokens.cjs',
+            r"  if \(config\?\.auth\?\.mode !== 'oauth'\) \{\n    const error = new Error\('Public MCP preflight requires OAuth authentication'\);\n    error\.code = 'DEVMATE_PUBLIC_MCP_OAUTH_REQUIRED';\n    throw error;\n  \}",
+            "  if (config?.auth?.mode !== 'oauth') return '';")
 
           replace('extension.js',
-          "function authenticationMode(){ return cfg().get('authenticationMode') === 'none' ? 'none' : 'oauth'; }",
-          "function authenticationMode(){ return cfg().get('authenticationMode') === 'oauth' ? 'oauth' : 'none'; }")
+            "function authenticationMode(){ return cfg().get('authenticationMode') === 'none' ? 'none' : 'oauth'; }",
+            "function authenticationMode(){ return cfg().get('authenticationMode') === 'oauth' ? 'oauth' : 'none'; }")
 
           replace('shared/instance-config.cjs',
-          """  // Local loopback access is OS-trusted. Remote MCP access uses OAuth only;
-            // authentication secrets live outside the instance configuration.
-          """,
-          """  // No-auth is the default for local and public MCP access. OAuth remains optional;
-            // authentication secrets live outside the instance configuration.
-          """)
+            "// Local loopback access is OS-trusted. Remote MCP access uses OAuth only;\n  // authentication secrets live outside the instance configuration.",
+            "// No-auth is the default for local and public MCP access. OAuth remains optional;\n  // authentication secrets live outside the instance configuration.")
 
-          p = Path('package.json')
-          data = json.loads(p.read_text())
+          p = Path('package.json'); data = json.loads(p.read_text())
           auth = data['contributes']['configuration']['properties']['devMate.authenticationMode']
           auth['default'] = 'none'
           auth['description'] = 'MCP authentication mode. none is the default for local and public MCP access; oauth is optional.'
           p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+          print('package.json: authenticationMode default=none')
+
+          sub('scripts/standalone-runtime.mjs',
+            r"  const requestedAuthentication = options\['authentication-mode'\] === undefined\n    \? \(publicUrl \? 'oauth' : undefined\)\n    : String\(options\['authentication-mode'\]\)\.trim\(\)\.toLowerCase\(\);\n  if \(publicUrl && requestedAuthentication === 'none'\) \{\n    throw new Error\('--authentication-mode none is loopback-only and cannot be combined with --public-url'\);\n  \}",
+            "  const requestedAuthentication = options['authentication-mode'] === undefined\n    ? 'none'\n    : String(options['authentication-mode']).trim().toLowerCase();")
 
           replace('scripts/standalone-runtime.mjs',
-          """  const requestedAuthentication = options['authentication-mode'] === undefined
-              ? (publicUrl ? 'oauth' : undefined)
-              : String(options['authentication-mode']).trim().toLowerCase();
-            if (publicUrl && requestedAuthentication === 'none') {
-              throw new Error('--authentication-mode none is loopback-only and cannot be combined with --public-url');
-            }
-          """,
-          """  const requestedAuthentication = options['authentication-mode'] === undefined
-              ? 'none'
-              : String(options['authentication-mode']).trim().toLowerCase();
-          """)
-
+            "detail: config.auth?.mode === 'oauth' ? 'required' : 'loopback-only'",
+            "detail: config.auth?.mode === 'oauth' ? 'required' : 'optional'")
+          sub('scripts/standalone-runtime.mjs',
+            r"\{ key: 'member-auth', ok: !\(config\.team\?\.members \|\| \[\]\)\.some\(item => !item\.disabled && \(!item\.expiresAt \|\| Date\.parse\(item\.expiresAt\) > Date\.now\(\)\)\) \|\| config\.auth\?\.mode === 'oauth', detail: config\.auth\?\.mode === 'oauth' \? 'oauth' : 'loopback-only' \}",
+            "{ key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-no-auth-mode' }")
           replace('scripts/standalone-runtime.mjs',
-          """    { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'loopback-only' },
-              { key: 'member-auth', ok: !(config.team?.members || []).some(item => !item.disabled && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())) || config.auth?.mode === 'oauth', detail: config.auth?.mode === 'oauth' ? 'oauth' : 'loopback-only' },
-          """,
-          """    { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'optional' },
-              { key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-no-auth-mode' },
-          """)
+            "checks.push({ key: 'public-authentication', ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none' });",
+            "checks.push({ key: 'public-authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' });")
 
-          replace('scripts/standalone-runtime.mjs',
-          """  if (config.connection.publicUrl) {
-              checks.push({ key: 'public-authentication', ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none' });
-            }
-          """,
-          """  if (config.connection.publicUrl) {
-              checks.push({ key: 'public-authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' });
-            }
-          """)
+          replace('scripts/standalone-runtime.mjs', "    if (config.auth?.mode !== 'oauth') configureAuthentication(config, 'oauth');\n", "", minimum=2)
+          replace('scripts/standalone-runtime.mjs', "  ensureOAuthSecrets(file);\n  return result;", "  if (readConfig(file).auth?.mode === 'oauth') ensureOAuthSecrets(file);\n  return result;", minimum=2)
 
-          replace('scripts/standalone-runtime.mjs',
-          """    if (config.auth?.mode !== 'oauth') configureAuthentication(config, 'oauth');
-              result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });
-              return config;
-            });
-            ensureOAuthSecrets(file);
-            return result;
-          """,
-          """    result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });
-              return config;
-            });
-            if (readConfig(file).auth?.mode === 'oauth') ensureOAuthSecrets(file);
-            return result;
-          """)
-
-          replace('scripts/standalone-runtime.mjs',
-          """    if (config.auth?.mode !== 'oauth') configureAuthentication(config, 'oauth');
-              result = rotateTeamMemberLoginCode(config, id);
-              return config;
-            });
-            ensureOAuthSecrets(file);
-            return result;
-          """,
-          """    result = rotateTeamMemberLoginCode(config, id);
-              return config;
-            });
-            if (readConfig(file).auth?.mode === 'oauth') ensureOAuthSecrets(file);
-            return result;
-          """)
-
-          replace('scripts/devmate-command.mjs', "'authentication-mode': 'oauth',", "'authentication-mode': 'none',")
-
-          replace('scripts/devmate-command.mjs',
-          """  if (memberName) {
-              if (effective['authentication-mode'] === undefined) effective['authentication-mode'] = 'oauth';
-              if (effective['authentication-mode'] !== 'oauth') {
-                throw new Error('--member-name requires --authentication-mode oauth because member access is an OAuth identity flow');
-              }
-            }
-          """,
-          """)
-
-          replace('scripts/devmate-command.mjs',
-          "  if (activeMembers.length && config.auth?.mode !== 'oauth') warnings.push('Active members require OAuth authentication.');\n",
-          "")
-
-          replace('scripts/devmate-command.mjs',
-          "Standalone personal/runner bootstrap uses loopback-only no-auth. Team/control-plane presets and any bootstrap that creates a member use OAuth. Public remote MCP access always requires OAuth.\\n",
-          "All bootstrap presets default to no-auth, including public MCP. OAuth remains available only when explicitly selected with --authentication-mode oauth.\\n")
-
-          for file in ['gateway/request-guard.mjs','shared/oauth-tokens.cjs','extension.js','shared/instance-config.cjs','scripts/standalone-runtime.mjs','scripts/devmate-command.mjs']:
-              print(file)
+          p = Path('scripts/devmate-command.mjs'); s = p.read_text()
+          if s.count("'authentication-mode': 'oauth'") < 2: raise SystemExit('devmate-command: missing oauth preset defaults')
+          s = s.replace("'authentication-mode': 'oauth'", "'authentication-mode': 'none'")
+          s, n = re.subn(r"  if \(memberName\) \{\n    if \(effective\['authentication-mode'\] === undefined\) effective\['authentication-mode'\] = 'oauth';\n    if \(effective\['authentication-mode'\] !== 'oauth'\) \{\n      throw new Error\('--member-name requires --authentication-mode oauth because member access is an OAuth identity flow'\);\n    \}\n  \}\n", '', s)
+          if n != 1: raise SystemExit(f'devmate-command: member oauth enforcement matches={n}')
+          s = s.replace("  if (activeMembers.length && config.auth?.mode !== 'oauth') warnings.push('Active members require OAuth authentication.');\n", '')
+          s = s.replace(
+            "Standalone personal/runner bootstrap uses loopback-only no-auth. Team/control-plane presets and any bootstrap that creates a member use OAuth. Public remote MCP access always requires OAuth.\\n",
+            "All bootstrap presets default to no-auth, including public MCP. OAuth remains available only when explicitly selected with --authentication-mode oauth.\\n")
+          p.write_text(s)
+          print('scripts/devmate-command.mjs: no-auth defaults restored')
       - name: Syntax check changed runtime files
         run: |
           node --check gateway/request-guard.mjs
