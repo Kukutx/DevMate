@@ -4,39 +4,34 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-runner-control-'));
 const configPath = path.join(temp, 'config.json');
 process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
-const baseConfig = {
-  version: 11,
-  appVersion: '3.3.0',
-  instanceId: 'runner-control-tests',
-  auth: { required: true, token: 'owner-token-long-enough' },
-  permissions: { profile: 'fullAccess' },
-  connection: { provider: 'external', publicUrl: 'https://devmate.example.com' },
-  team: {
-    members: [],
-    requireWorkspaceLeaseForWrites: false,
-    approvals: { enabled: false }
-  },
-  requestPolicy: { allowedHosts: [] },
-  runnerControl: { enabled: true, credentials: [] },
-  runtime: { maxConcurrentJobs: 1 },
-  jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
-  activeWorkspaceId: 'app',
-  workspaces: [{
-    id: 'app',
-    name: 'app',
-    root: temp,
-    mode: 'workspace-write',
-    reference: false
-  }],
-  plugins: { enabled: [], settings: {} },
-  maintenance: { auditRetentionDays: 30 }
+const baseConfig = configStore.newInstanceConfig({
+  workspaceRoot: temp,
+  appVersion: configStore.DEFAULT_VERSION
+});
+baseConfig.instanceId = 'runner-control-tests';
+baseConfig.activeWorkspaceId = 'app';
+baseConfig.workspaces[0] = {
+  ...baseConfig.workspaces[0],
+  id: 'app',
+  name: 'app',
+  role: 'active'
 };
+baseConfig.permissions.profile = 'fullAccess';
+baseConfig.team.requireWorkspaceLeaseForWrites = false;
+baseConfig.team.approvals = { ...baseConfig.team.approvals, enabled: false };
+baseConfig.requestPolicy.allowedHosts = [];
+baseConfig.runnerControl.enabled = true;
+baseConfig.runtime.maxConcurrentJobs = 1;
+baseConfig.jobs.embeddedRunnerEnabled = true;
+baseConfig.jobs.allowJobGitSave = true;
+baseConfig.maintenance.auditRetentionDays = 30;
 
 const runnerAccess = await import('../gateway/runner-access.mjs');
 const created = runnerAccess.createRunnerCredential(baseConfig, {
@@ -45,7 +40,7 @@ const created = runnerAccess.createRunnerCredential(baseConfig, {
   capabilities: ['core', 'external'],
   maxConcurrent: 2
 });
-await fsp.writeFile(configPath, JSON.stringify(baseConfig, null, 2), 'utf8');
+configStore.atomicWriteJson(configPath, baseConfig);
 
 const durable = await import('../gateway/durable-state.mjs');
 const {
@@ -77,11 +72,11 @@ registerJobTarget('project_snapshot', {
 }, async () => ({ structuredContent: { ok: true } }));
 
 const principal = {
-  id: 'reviewer',
-  name: 'Reviewer',
-  role: 'reviewer',
-  source: 'team-token',
-  workspaceIds: ['app']
+  id: 'local-owner',
+  name: 'Local owner',
+  role: 'owner',
+  source: 'local',
+  workspaceIds: []
 };
 const queued = createJob({
   principal,
@@ -116,7 +111,7 @@ const runner = {
   capabilities: ['core', 'external'],
   workspaceIds: ['app'],
   maxConcurrent: 2,
-  version: '3.3.0',
+  version: configStore.DEFAULT_VERSION,
   platform: 'linux',
   arch: 'x64',
   labels: { hostname: 'runner-one' }
@@ -167,7 +162,7 @@ test('registers, claims, renews, and completes a strictly scoped remote job', as
   assert.deepEqual(heartbeat.json.runner.capabilities, ['core', 'external']);
   assert.deepEqual(heartbeat.json.runner.workspaceIds, ['app']);
   assert.equal(heartbeat.json.runner.maxConcurrent, 2);
-  assert.equal(heartbeat.json.runner.version, '3.3.0');
+  assert.equal(heartbeat.json.runner.version, configStore.DEFAULT_VERSION);
 
   const claimed = await request('/jobs/claim', created.token, { runner, leaseSeconds: 60 });
   assert.equal(claimed.response.status, 200);
@@ -190,7 +185,7 @@ test('registers, claims, renews, and completes a strictly scoped remote job', as
   assert.equal(renewed.json.renewed, true);
   assert.equal(renewed.json.cancelRequested, false);
   const runnerAfterRenew = listRunners().find(item => item.id === created.credential.id);
-  assert.equal(runnerAfterRenew.version, '3.3.0');
+  assert.equal(runnerAfterRenew.version, configStore.DEFAULT_VERSION);
   assert.equal(runnerAfterRenew.platform, 'linux');
   assert.equal(runnerAfterRenew.labels.hostname, 'runner-one');
 
@@ -298,5 +293,7 @@ test.after(async () => {
   resetRunnerControlState();
   await new Promise(resolve => server.close(resolve));
   await drainAllAuditLogs();
+  delete process.env.DEVMATE_CONFIG;
+  delete process.env.DEVMATE_DISABLE_INSTANCE_LOCK;
   await fsp.rm(temp, { recursive: true, force: true });
 });

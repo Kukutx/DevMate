@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 const { RuntimeController } = require('../host/runtime-controller.js');
 const { resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 
 async function freePort() {
   const server = net.createServer();
@@ -41,7 +42,9 @@ assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle mu
 assert.match(mainSource, /SharedTunnelRecordStore/, 'Obsidian bundle must contain the shared provider ownership record store');
 assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the provider-native public connection lifecycle');
 assert.match(mainSource, /Starting DevMate: Gateway -> public connection -> MCP verification/, 'Obsidian Start must package the complete one-click lifecycle');
-assert.match(mainSource, /MCP-Session-Id|mcp-session-id/, 'Obsidian bundle must preserve MCP session-aware public preflight');
+assert.match(mainSource, /server\/discover/, 'Obsidian bundle must package MCP 2026 discovery');
+assert.match(mainSource, /2026-07-28/, 'Obsidian bundle must be pinned to MCP 2026-07-28');
+assert.equal(mainSource.toLowerCase().includes(retiredSessionHeader), false, 'Obsidian bundle must not restore sessionful MCP transport state');
 assert.match(mainSource, /Verified public MCP URL copied|Verified public MCP endpoint/, 'Obsidian bundle must contain public MCP verification flow');
 assert.match(mainSource, /recordGeneration/, 'Obsidian bundle must bind public verification to provider generations');
 assert.match(mainSource, /verifiedForCurrentRecord/, 'Obsidian bundle must derive Ready from current-generation verification evidence');
@@ -52,6 +55,7 @@ assert.match(mainSource, /DEVMATE_NGROK_AUTHENTICATION/, 'Obsidian bundle must c
 assert.match(mainSource, /DevMate requires ngrok 3\.30\.0\+/, 'Obsidian bundle must contain the current ngrok Agent API version gate');
 assert.match(mainSource, /DEVMATE_OBSIDIAN_CREDENTIAL_DECRYPT_FAILED/, 'Obsidian bundle must fail closed when an encrypted provider credential cannot be decrypted');
 assert.match(mainSource, /NGROK_AUTHTOKEN/, 'Obsidian bundle must preserve the shared ngrok environment/account path');
+assert.match(mainSource, /oauth-secrets\.json/, 'Obsidian bundle must keep OAuth signing and approval secrets in private state');
 assert.doesNotMatch(mainSource, /ObsidianNgrokRuntime/, 'Obsidian bundle must not restore the retired ngrok-only runtime wrapper');
 
 const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath });
@@ -87,7 +91,7 @@ try {
   assert.equal(secondStop.stopped, true);
   assert.equal(fs.existsSync(instanceLock), false, `Gateway instance lock remained after restart stop: ${instanceLock}`);
 
-  console.log(`Obsidian child-process + provider-native generation-aware connection bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
+  console.log(`Obsidian child-process + provider-native MCP 2026 bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
 } finally {
   await controller.dispose({ stopOwned: true }).catch(() => {});
   fs.rmSync(temporaryRoot, { recursive: true, force: true });

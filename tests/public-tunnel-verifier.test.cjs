@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { atomicWriteJson, readJson } = require('../shared/config-store.cjs');
+const configStore = require('../shared/config-store.cjs');
+const oauthSecrets = require('../shared/oauth-secrets.cjs');
+const { atomicWriteJson, readJson } = configStore;
 const { gatewayGeneration } = require('../shared/public-ingress-verification.cjs');
 const { PublicTunnelVerifier } = require('../vscode-host/public-tunnel-verifier.js');
 const oauthTokens = require('../shared/oauth-tokens.cjs');
@@ -33,20 +35,23 @@ function writeGatewayLock(stateDirectory, overrides = {}) {
 function fixture() {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-public-verifier-'));
   const configFile = path.join(stateDirectory, 'config.json');
-  const config = {
-    version: 11,
-    instanceId: 'instance-a',
-    server: { port: 8787, mcpPath: '/mcp' },
-    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } },
-    connection: {
-      lastPreflightAt: '2026-08-08T00:00:00.000Z',
-      lastPublicHost: 'old.example.com',
-      lastMcpPath: '/mcp',
-      lastToolCount: 10,
-      lastServerName: 'devmate'
-    }
-  };
+  const config = configStore.newInstanceConfig({
+    workspaceRoot: stateDirectory,
+    port: 8787,
+    appVersion: configStore.DEFAULT_VERSION,
+    defaultConnectionProvider: 'cloudflare-quick'
+  });
+  config.instanceId = 'instance-a';
+  config.auth = { mode: 'oauth' };
+  Object.assign(config.connection, {
+    lastPreflightAt: '2026-08-08T00:00:00.000Z',
+    lastPublicHost: 'old.example.com',
+    lastMcpPath: '/mcp',
+    lastToolCount: 10,
+    lastServerName: 'devmate'
+  });
   atomicWriteJson(configFile, config);
+  const secrets = oauthSecrets.ensureOAuthSecrets(configFile);
   writeGatewayLock(stateDirectory);
   let record = {
     ownerId: 'owner-a',
@@ -60,6 +65,7 @@ function fixture() {
   return {
     stateDirectory,
     configFile,
+    secrets,
     get record() { return record; },
     set record(value) { record = value; },
     status(port) {
@@ -78,7 +84,7 @@ function successfulTest(publicUrl, toolCount = 42) {
     toolCount,
     toolCallVerified: true,
     probeTool: 'gateway_status',
-    server: { name: 'devmate', version: '3.4.4' }
+    server: { name: 'devmate', version: configStore.DEFAULT_VERSION }
   };
 }
 
@@ -90,7 +96,7 @@ test('new Gateway+tunnel generation uses short-lived OAuth for preflight and ato
     const verifier = new PublicTunnelVerifier({
       stateDirectory: fx.stateDirectory,
       tunnelStatus: port => fx.status(port),
-      appVersion: '3.4.4',
+      appVersion: configStore.DEFAULT_VERSION,
       readyGraceMs: 0,
       now: () => Date.parse('2026-08-08T01:01:00.000Z'),
       preflight: async input => {
@@ -103,9 +109,10 @@ test('new Gateway+tunnel generation uses short-lived OAuth for preflight and ato
     assert.equal(result.verified, true);
     assert.equal(result.changedHost, true);
     assert.ok(oauthTokens.verifyAccessToken(
-      readJson(fx.configFile, null, { strict: true, supportedVersion: true }),
+      fx.secrets.signingKey,
       call.token,
-      'https://new.example.com/mcp'
+      'https://new.example.com/mcp',
+      'https://new.example.com'
     ));
     assert.equal(call.clientName, 'devmate-vscode-runtime-recovery');
     assert.equal(call.publicUrl, 'https://new.example.com');
@@ -359,26 +366,27 @@ test('already verified current Gateway+tunnel generation performs no duplicate n
   }
 });
 
-test('direct no-auth config performs recovery preflight without a bearer token', async () => {
+test('public recovery refuses to preflight when OAuth is disabled', async () => {
   const fx = fixture();
   try {
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     config.auth = { mode: 'none' };
     atomicWriteJson(fx.configFile, config);
-    let observedToken = null;
+    let preflights = 0;
     const verifier = new PublicTunnelVerifier({
       stateDirectory: fx.stateDirectory,
       tunnelStatus: port => fx.status(port),
       readyGraceMs: 0,
       now: () => Date.parse('2026-08-08T01:01:00.000Z'),
       preflight: async input => {
-        observedToken = input.token;
+        preflights += 1;
         return successfulTest(input.publicUrl);
       }
     });
     const result = await verifier.check();
-    assert.equal(result.verified, true);
-    assert.equal(observedToken, '');
+    assert.equal(result.verified, false);
+    assert.equal(preflights, 0);
+    assert.equal(result.error?.code, 'DEVMATE_PUBLIC_MCP_OAUTH_REQUIRED');
   } finally {
     fx.cleanup();
   }

@@ -84,7 +84,7 @@ function publicPrincipal(principal) {
     role: principal?.role || 'observer',
     source: principal?.source || 'unknown',
     workspaceIds: Array.isArray(principal?.workspaceIds) ? [...principal.workspaceIds] : [],
-    tokenVersion: Number.isInteger(principal?.tokenVersion) ? principal.tokenVersion : null
+    authVersion: Number.isInteger(principal?.authVersion) ? principal.authVersion : null
   };
 }
 
@@ -195,7 +195,7 @@ export function createJob({ principal, tool, args = {}, workspaceId = null, titl
   const bytes = argumentBytes(args);
   if (bytes > 256 * 1024) throw new Error(`Job arguments exceed the 256 KiB limit (${bytes} bytes)`);
   const store = recover(readStore());
-  if (store.drain.active && principal?.source === 'team-token') throw new Error(`DevMate is draining: ${store.drain.reason || 'maintenance in progress'}`);
+  if (store.drain.active && principal?.source === 'oauth-member') throw new Error(`DevMate is draining: ${store.drain.reason || 'maintenance in progress'}`);
   assertCanActivateJob(store);
   const job = {
     id: `job-${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`,
@@ -471,7 +471,7 @@ export function jobQueueCapacityStatus() {
 }
 
 export function assertDrainAllows({ principal, capability, tool }) {
-  if (principal?.source !== 'team-token') return;
+  if (principal?.source !== 'oauth-member') return;
   const drain = drainStatus();
   if (!drain.active) return;
   if (String(tool || '').startsWith('deployment_drain_') || String(tool || '').startsWith('job_') && ['job_status', 'job_list', 'job_artifacts'].includes(tool)) return;

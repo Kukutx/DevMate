@@ -239,12 +239,12 @@
         },
         "devMate.authenticationMode": {
           "type": "string",
-          "default": "none",
+          "default": "oauth",
           "enum": [
             "none",
             "oauth"
           ],
-          "description": "MCP authentication mode. none is the direct private-use default; oauth is for a shared or published ChatGPT app."
+          "description": "MCP authentication mode. oauth is the secure default for public MCP access; none restricts MCP access to local loopback only."
         },
         "devMate.permissionProfile": {
           "type": "string",
@@ -352,7 +352,9 @@
     "devmate-runner": "./scripts/devmate-runner.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

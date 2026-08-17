@@ -8,6 +8,8 @@ import path from 'node:path';
 import test from 'node:test';
 import configStore from '../shared/config-store.cjs';
 
+const MCP_PROTOCOL_VERSION = '2026-07-28';
+
 function delay(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
@@ -41,7 +43,15 @@ function assertToolSuccess(result, label) {
   assert.notEqual(result.json?.result?.isError, true, `${label} tool failed: ${result.text}`);
 }
 
-test('real direct no-auth MCP closes work-session, write, finish, and rollback lifecycle', async () => {
+function requestMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': { name: 'personal-e2e', version: configStore.DEFAULT_VERSION },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+
+test('real loopback no-auth MCP closes work-session, write, finish, and rollback lifecycle', async () => {
   const root = process.cwd();
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-personal-e2e-'));
   const workspaceRoot = path.join(temp, 'workspace');
@@ -49,18 +59,13 @@ test('real direct no-auth MCP closes work-session, write, finish, and rollback l
   const port = await freePort();
   await fsp.mkdir(workspaceRoot, { recursive: true });
 
-  const config = configStore.newInstanceConfig({ workspaceRoot, port, appVersion: '3.4.4' });
+  const config = configStore.newInstanceConfig({ workspaceRoot, port, appVersion: configStore.DEFAULT_VERSION });
   config.instanceId = `personal-e2e-${Date.now()}`;
   config.auth = { mode: 'none' };
-  config.connection = { provider: 'external', publicUrl: 'https://personal-e2e.example.com' };
+  config.connection = { provider: 'ngrok', publicUrl: '' };
   config.activeWorkspaceId = 'app';
-  config.workspaces[0] = {
-    ...config.workspaces[0],
-    id: 'app',
-    name: 'Application',
-    role: 'active'
-  };
-  await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+  config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'Application', role: 'active' };
+  configStore.atomicWriteJson(configPath, config);
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: root,
@@ -72,11 +77,21 @@ test('real direct no-auth MCP closes work-session, write, finish, and rollback l
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
 
-  const rpc = (method, params) => fetchJson(`http://127.0.0.1:${port}/mcp`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000), method, params })
-  });
+  let requestId = 0;
+  const rpc = (method, params = {}) => {
+    const name = method === 'tools/call' ? String(params?.name || '') : '';
+    return fetchJson(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+        'mcp-method': method,
+        ...(name ? { 'mcp-name': name } : {})
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++requestId, method, params: { ...params, _meta: requestMeta() } })
+    });
+  };
   const callTool = (name, args) => rpc('tools/call', { name, arguments: args });
 
   try {
@@ -93,27 +108,19 @@ test('real direct no-auth MCP closes work-session, write, finish, and rollback l
     }
     assert.equal(ready, true, `Gateway not ready: ${output}`);
 
-    const initialized = await rpc('initialize', {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'personal-e2e', version: '1.0.0' }
-    });
-    assert.equal(initialized.json?.result?.serverInfo?.name, 'devmate', initialized.text);
+    const discovery = await rpc('server/discover');
+    assert.equal(discovery.response.ok, true, discovery.text);
+    assert.ok(discovery.json?.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION), discovery.text);
 
     const started = await callTool('work_session_start', {
-      workspaceId: 'app',
-      title: 'Personal E2E session',
-      purpose: 'verify lifecycle closure',
-      ttlSeconds: 300
+      workspaceId: 'app', title: 'Personal E2E session', purpose: 'verify lifecycle closure', ttlSeconds: 300
     });
     assertToolSuccess(started, 'work_session_start');
     const session = structured(started)?.session;
     assert.ok(session?.id);
 
     const written = await callTool('create_file', {
-      workspaceId: 'app',
-      path: 'during-session.txt',
-      content: 'written in direct personal mode'
+      workspaceId: 'app', path: 'during-session.txt', content: 'written in direct personal mode'
     });
     assertToolSuccess(written, 'create_file');
     assert.equal(fs.readFileSync(path.join(workspaceRoot, 'during-session.txt'), 'utf8'), 'written in direct personal mode');
@@ -125,10 +132,9 @@ test('real direct no-auth MCP closes work-session, write, finish, and rollback l
     assertToolSuccess(rollback, 'work_session_rollback');
     assert.equal(fs.existsSync(path.join(workspaceRoot, 'during-session.txt')), false);
   } finally {
-    if (child.exitCode === null) {
-      child.kill();
-      await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(3000)]);
-    }
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    if (child.exitCode === null) child.kill();
+    if (child.exitCode === null) await Promise.race([exited, delay(3000)]);
     await fsp.rm(temp, { recursive: true, force: true });
   }
 }, { timeout: 30000 });

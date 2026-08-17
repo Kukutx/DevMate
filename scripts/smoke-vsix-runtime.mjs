@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
+const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 const candidates = fs.readdirSync(root)
   .filter(name => /^devmate-.*\.vsix$/i.test(name))
   .map(name => ({ name, file: path.join(root, name), mtimeMs: fs.statSync(path.join(root, name)).mtimeMs }))
@@ -105,6 +106,11 @@ try {
   const manifest = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
   assert.equal(manifest.name, 'devmate');
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
+  assert.equal(
+    manifest.contributes?.configuration?.properties?.['devMate.authenticationMode']?.default,
+    'oauth',
+    'Packaged VSIX must default desktop MCP authentication to OAuth'
+  );
 
   const requiredFiles = [
     'extension.js',
@@ -117,6 +123,9 @@ try {
     'host/public-mcp.js',
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
+    'shared/auth-config.cjs',
+    'shared/oauth-secrets.cjs',
+    'shared/oauth-tokens.cjs',
     'shared/config-store.cjs',
     'shared/connection-stability.cjs',
     'shared/public-ingress-verification.cjs',
@@ -146,12 +155,22 @@ try {
   assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
   const verify = extensionSource.slice(verifyStart, verifyEnd);
   assert.match(verify, /return verifySharedPublicMcp\(\{/, 'VSIX verification must delegate to the shared single-flight verifier');
-  assert.match(verify, /token: preflightAccessToken\(data, publicUrl\)/, 'VSIX verification must use no credential by default and a short-lived OAuth token only when OAuth is enabled');
+  assert.match(verify, /token: preflightAccessToken\(data, publicUrl, configPath\(ctx\)\)/, 'VSIX verification must issue a short-lived OAuth owner token from private state');
 
   const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
+  assert.match(publicMcpSource, /MCP_PROTOCOL_VERSION = '2026-07-28'/, 'VSIX shared preflight must pin MCP 2026-07-28');
   assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must attach a short-lived OAuth token when one is supplied');
-  assert.match(publicMcpSource, /'mcp-session-id'/, 'VSIX shared preflight must carry MCP session state');
-  assert.match(publicMcpSource, /method: 'tools\/list'/, 'VSIX shared preflight must verify tools/list');
+  assert.match(publicMcpSource, /mcpPayload\(1, 'server\/discover', \{\}, clientName, clientVersion\)/, 'VSIX shared preflight must send MCP 2026 server discovery metadata');
+  assert.match(publicMcpSource, /protocolHeaders\('server\/discover', '', authHeaders\)/, 'VSIX shared preflight must bind server discovery to MCP 2026 wire headers');
+  assert.match(publicMcpSource, /mcpPayload\(2, 'tools\/list', \{\}, clientName, clientVersion\)/, 'VSIX shared preflight must verify tools/list');
+  assert.match(publicMcpSource, /protocolHeaders\('tools\/list', '', authHeaders\)/, 'VSIX shared preflight must bind tools/list to MCP 2026 wire headers');
+  assert.match(publicMcpSource, /mcpPayload\(3, 'tools\/call', \{ name: PREFLIGHT_PROBE_TOOL, arguments: \{\} \}, clientName, clientVersion\)/, 'VSIX shared preflight must verify a real tool call');
+  assert.match(publicMcpSource, /protocolHeaders\('tools\/call', PREFLIGHT_PROBE_TOOL, authHeaders\)/, 'VSIX shared preflight must bind the probe tool name to MCP 2026 wire headers');
+  assert.match(publicMcpSource, /PREFLIGHT_PROBE_TOOL = 'gateway_status'/, 'VSIX shared preflight must probe the real gateway_status tool');
+  assert.equal(publicMcpSource.toLowerCase().includes(retiredSessionHeader), false, 'VSIX shared preflight must remain stateless under MCP 2026');
+
+  const gatewayBundleSource = fs.readFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'utf8');
+  assert.match(gatewayBundleSource, /legacy\s*:\s*["']reject["']/, 'Packaged Gateway must reject legacy MCP transport eras');
 
   const requireFromVsix = createRequire(packageFile);
   const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
@@ -216,8 +235,8 @@ try {
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
-    publicMcpAuthContractVerified: true,
-    completeSessionVerificationPackaged: true,
+    oauthDefaultVerified: true,
+    statelessMcp2026Verified: true,
     providerNativeConnectionRuntimePackaged: true,
     packagedDependencyClosureVerified: true,
     privateElectronFlagsAbsent: true

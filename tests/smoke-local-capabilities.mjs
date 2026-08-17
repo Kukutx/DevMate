@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import configStore from '../shared/config-store.cjs';
 
+const MCP_PROTOCOL_VERSION = '2026-07-28';
 const root = process.cwd();
 const port = Number(process.env.DEVMATE_LOCAL_SMOKE_PORT || 8799);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-local-smoke-'));
@@ -11,22 +13,21 @@ fs.mkdirSync(trustedRoot, { recursive: true });
 const configPath = path.join(tempRoot, 'config.json');
 const gatewayScript = path.join(root, 'gateway', 'server.bundle.mjs');
 
-fs.writeFileSync(configPath, JSON.stringify({
-  version: 11,
-  appVersion: '3.4.4',
-  instanceId: `local-smoke-${Date.now()}`,
-  server: { port, mcpPath: '/mcp' },
-  runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000 },
-  maintenance: { backupRetentionDays: 30, auditRetentionDays: 30, maxBackupBytes: 268435456, maxAuditBytes: 5242880 },
-  auth: { mode: 'none' },
-  permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: false, confirmBeforePush: false, allowDirectoryMutations: true },
-  activeWorkspaceId: 'devmate',
-  workspaces: [{ id: 'devmate', name: 'devmate', root, mode: 'workspace-write', reference: false, role: 'active' }],
-  trustedWritableRoots: [],
-  commands: [],
-  vscodeContext: { capturedAt: new Date().toISOString(), activeEditor: null, visibleEditors: [], diagnostics: [] },
-  connection: {}
-}, null, 2));
+const config = configStore.newInstanceConfig({ workspaceRoot: root, port, appVersion: configStore.DEFAULT_VERSION });
+config.instanceId = `local-smoke-${Date.now()}`;
+config.runtime.defaultCommandTimeoutMs = 30000;
+config.runtime.maxOutputChars = 80000;
+config.permissions = {
+  ...config.permissions,
+  profile: 'fullAccess',
+  readOnly: false,
+  blockDangerousOperations: false,
+  confirmBeforePush: false,
+  allowDirectoryMutations: true
+};
+config.activeWorkspaceId = 'devmate';
+config.workspaces[0] = { ...config.workspaces[0], id: 'devmate', name: 'devmate', root, role: 'active' };
+configStore.atomicWriteJson(configPath, config);
 
 const child = spawn(process.execPath, [gatewayScript], {
   cwd: root,
@@ -36,6 +37,7 @@ const child = spawn(process.execPath, [gatewayScript], {
 });
 let stdout = '';
 let stderr = '';
+let requestId = 0;
 child.stdout.on('data', chunk => { stdout += chunk; });
 child.stderr.on('data', chunk => { stderr += chunk; });
 
@@ -58,19 +60,35 @@ async function waitReady() {
     await delay(200);
     try {
       const result = await fetchJson(`http://127.0.0.1:${port}/control/health`);
-      if (result.response.ok && result.json?.name === 'devmate') return;
+      if (result.response.ok && result.json?.name === 'devmate' && result.json?.instanceId === config.instanceId) return;
     } catch {}
   }
   throw new Error(`Gateway did not become ready.\nstdout=${stdout}\nstderr=${stderr}`);
 }
-async function rpc(method, params) {
+function requestMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': { name: 'devmate-local-smoke', version: configStore.DEFAULT_VERSION },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+async function rpc(method, params = {}) {
+  const name = method === 'tools/call' ? String(params?.name || '') : '';
   return fetchJson(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      accept: 'application/json, text/event-stream'
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+      'mcp-method': method,
+      ...(name ? { 'mcp-name': name } : {})
     },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 100000), method, params })
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: ++requestId,
+      method,
+      params: { ...params, _meta: requestMeta() }
+    })
   });
 }
 function toolPayload(result) {
@@ -85,11 +103,10 @@ async function callTool(name, args = {}) {
 
 try {
   await waitReady();
-  const init = await rpc('initialize', {
-    protocolVersion: '2025-03-26', capabilities: {},
-    clientInfo: { name: 'devmate-local-smoke', version: '3.4.4' }
-  });
-  assert(init.response.ok && init.json?.result?.serverInfo?.name === 'devmate', `initialize failed: ${init.text}`);
+  const discovery = await rpc('server/discover');
+  assert(discovery.response.ok, `server/discover HTTP failed: ${discovery.text}`);
+  assert(discovery.json?.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION), `server/discover did not advertise ${MCP_PROTOCOL_VERSION}: ${discovery.text}`);
+  assert(discovery.json?.result?._meta?.['io.modelcontextprotocol/serverInfo']?.name === 'devmate', `server/discover did not identify DevMate: ${discovery.text}`);
 
   const tools = await rpc('tools/list', {});
   const names = new Set((tools.json?.result?.tools || []).map(tool => tool.name));
@@ -121,7 +138,7 @@ try {
   const removed = await callTool('remove_trusted_root', { id: trusted.root.id });
   assert(removed.removed === true, 'trusted root removal failed');
 
-  console.log(JSON.stringify({ ok: true, toolCount: names.size, processId: started.process.id, trustedRootId: trusted.root.id }));
+  console.log(JSON.stringify({ ok: true, protocolVersion: MCP_PROTOCOL_VERSION, toolCount: names.size, processId: started.process.id, trustedRootId: trusted.root.id }));
 } finally {
   await stopGateway();
   fs.rmSync(tempRoot, { recursive: true, force: true });

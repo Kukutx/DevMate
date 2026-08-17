@@ -23,16 +23,17 @@ test('VS Code Start remains Gateway -> tunnel -> current-generation MCP verifica
   assert.match(block, /rollbackFailedStart/);
 });
 
-test('VS Code explicit verification binds evidence to the exact current complete session generation', () => {
+test('VS Code explicit verification binds evidence to the exact current tunnel generation and private OAuth secret state', () => {
   const start = extension.indexOf('async function verifyCurrentTunnel');
   const end = extension.indexOf('function recordConnectionFailure', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
   assert.match(block, /return verifySharedPublicMcp\(\{/);
   assert.match(block, /stateDirectory: path\.dirname\(configPath\(ctx\)\)/);
+  assert.match(block, /configFile: configPath\(ctx\)/);
   assert.match(block, /expectedRecord/);
   assert.match(block, /currentRecord: \(\) => currentTunnelRecord\(expectedRecord\?\.port\)/);
-  assert.match(block, /token: preflightAccessToken\(data, publicUrl\)/);
+  assert.match(block, /token: preflightAccessToken\(data, publicUrl, configPath\(ctx\)\)/);
   assert.match(block, /clientName: 'devmate-vscode-preflight'/);
 });
 
@@ -82,7 +83,7 @@ test('temporary public failures preserve the current URL for automatic recovery'
   assert.match(block, /showWarningMessage\(summary/);
 });
 
-test('VS Code product copy distinguishes a session-only endpoint from a persistent ChatGPT app address', () => {
+test('VS Code product copy distinguishes a temporary public connection from a persistent ChatGPT app address', () => {
   assert.match(extension, /publicConnectionStability/);
   assert.match(extension, /temporary session MCP URL/);
   assert.match(extension, /persistent ChatGPT MCP URL/);

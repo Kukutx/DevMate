@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   jobTargetNames,
   jobTargetPolicy,
+  ownerOnlyTool,
   requiredCapabilityForTool,
   toolWorkspaceId,
   validateToolRegistration
@@ -76,6 +77,13 @@ test('classifies every workspace-controlled command entry as execute', () => {
   ]) {
     assert.equal(requiredCapabilityForTool(name, { destructiveHint: true }), 'execute', name);
   }
+});
+
+test('reserves global audit and backup recovery surfaces for owners', () => {
+  for (const name of ['read_audit_log', 'list_backups', 'restore_backup']) {
+    assert.equal(ownerOnlyTool(name), true, name);
+  }
+  assert.equal(ownerOnlyTool('write_file'), false);
 });
 
 test('routes Web Godot jobs to Browser QA capable runners', () => {

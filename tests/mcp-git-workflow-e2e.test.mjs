@@ -7,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import configStore from '../shared/config-store.cjs';
 
+const MCP_PROTOCOL_VERSION = '2026-07-28';
+
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -45,16 +47,33 @@ async function waitReady(port, child, output) {
   throw new Error(`Gateway did not become ready: ${output()}`);
 }
 
+function requestMeta() {
+  return {
+    'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+    'io.modelcontextprotocol/clientInfo': { name: 'mcp-git-e2e', version: '1' },
+    'io.modelcontextprotocol/clientCapabilities': {}
+  };
+}
+
 function rpcClient(port) {
   let id = 0;
   return async (method, params = {}) => {
+    const name = method === 'tools/call' ? String(params?.name || '') : '';
     const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
       headers: {
         accept: 'application/json, text/event-stream',
-        'content-type': 'application/json'
+        'content-type': 'application/json',
+        'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+        'mcp-method': method,
+        ...(name ? { 'mcp-name': name } : {})
       },
-      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params })
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: ++id,
+        method,
+        params: { ...params, _meta: requestMeta() }
+      })
     });
     const text = await response.text();
     let json = null;
@@ -63,7 +82,7 @@ function rpcClient(port) {
   };
 }
 
-test('MCP Git can push repeatedly, surface a failed push, recover, and remain callable', async t => {
+test('MCP Git can push repeatedly, surface failures, recover, and fail closed across every save phase', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-mcp-git-'));
   const workspace = path.join(temp, 'workspace');
   const remote = path.join(temp, 'remote.git');
@@ -81,10 +100,10 @@ test('MCP Git can push repeatedly, surface a failed push, recover, and remain ca
   git(workspace, ['push', '-u', 'origin', 'master']);
 
   const port = await freePort();
-  const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: '3.4.4' });
+  const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: configStore.DEFAULT_VERSION });
   config.permissions.confirmBeforePush = false;
   config.requestPolicy.requestTimeoutMs = 30000;
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  configStore.atomicWriteJson(configPath, config);
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: process.cwd(),
@@ -104,13 +123,11 @@ test('MCP Git can push repeatedly, surface a failed push, recover, and remain ca
 
   await waitReady(port, child, () => `${stdout}\n${stderr}`);
   const rpc = rpcClient(port);
-  const init = await rpc('initialize', {
-    protocolVersion: '2025-03-26',
-    capabilities: {},
-    clientInfo: { name: 'mcp-git-e2e', version: '1' }
-  });
-  assert.equal(init.response.ok, true, init.text);
-  assert.equal(init.json?.result?.serverInfo?.name, 'devmate');
+  const discover = await rpc('server/discover');
+  assert.equal(discover.response.ok, true, discover.text);
+  assert.ok(discover.json?.result?.supportedVersions?.includes(MCP_PROTOCOL_VERSION), discover.text);
+  assert.equal(typeof discover.json?.result?.capabilities, 'object', discover.text);
+  assert.equal(discover.json?.result?._meta?.['io.modelcontextprotocol/serverInfo']?.name, 'devmate', discover.text);
 
   const initialStatus = await rpc('tools/call', { name: 'git_status', arguments: {} });
   assert.equal(initialStatus.response.ok, true, initialStatus.text);
@@ -208,6 +225,23 @@ test('MCP Git can push repeatedly, surface a failed push, recover, and remain ca
   assert.equal(finalStatus.json?.result?.structuredContent?.exitCode, 0, finalStatus.text);
   assert.equal(finalStatus.json?.result?.structuredContent?.stdout.trim(), '## master...origin/master', finalStatus.text);
 
+  const noChangeSave = await rpc('tools/call', {
+    name: 'git_save',
+    arguments: {
+      message: 'must not push after commit failure',
+      all: true,
+      push: true,
+      remote: 'origin',
+      branch: 'master'
+    }
+  });
+  assert.equal(noChangeSave.response.ok, true, noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.isError, true, noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.structuredContent?.failedPhase, 'commit', noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.structuredContent?.stage?.exitCode, 0, noChangeSave.text);
+  assert.notEqual(noChangeSave.json?.result?.structuredContent?.commit?.exitCode, 0, noChangeSave.text);
+  assert.equal(noChangeSave.json?.result?.structuredContent?.push, null, noChangeSave.text);
+
   const finalGatewayStatus = await rpc('tools/call', { name: 'gateway_status', arguments: {} });
   assert.equal(finalGatewayStatus.response.ok, true, finalGatewayStatus.text);
   assert.notEqual(finalGatewayStatus.json?.result?.isError, true, finalGatewayStatus.text);
@@ -219,4 +253,47 @@ test('MCP Git can push repeatedly, surface a failed push, recover, and remain ca
   assert.match(remoteLog, /MCP Git failed push recovery/);
   assert.match(remoteLog, /MCP Git second save/);
   assert.match(remoteLog, /MCP Git first save/);
+
+  fs.writeFileSync(path.join(workspace, 'prestage.txt'), 'prestage\n', 'utf8');
+  git(workspace, ['add', 'prestage.txt']);
+  const beforeFailedStageHead = git(workspace, ['rev-parse', 'HEAD']);
+  const failedStageSave = await rpc('tools/call', {
+    name: 'git_save',
+    arguments: {
+      message: 'must not commit after stage failure',
+      paths: ['definitely-missing-path.txt'],
+      all: false,
+      push: false
+    }
+  });
+  assert.equal(failedStageSave.response.ok, true, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.isError, true, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.structuredContent?.failedPhase, 'stage', failedStageSave.text);
+  assert.notEqual(failedStageSave.json?.result?.structuredContent?.stage?.exitCode, 0, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.structuredContent?.commit, null, failedStageSave.text);
+  assert.equal(failedStageSave.json?.result?.structuredContent?.push, null, failedStageSave.text);
+  assert.equal(git(workspace, ['rev-parse', 'HEAD']), beforeFailedStageHead, 'failed stage must not create a commit');
+  assert.match(git(workspace, ['diff', '--cached', '--name-only']), /prestage\.txt/, 'pre-existing staged work must remain staged');
+
+  const indexLock = path.join(workspace, '.git', 'index.lock');
+  fs.writeFileSync(indexLock, 'intentional test lock\n', 'utf8');
+  let failedCommitStage;
+  try {
+    failedCommitStage = await rpc('tools/call', {
+      name: 'git_commit',
+      arguments: {
+        message: 'must not commit after git_commit stage failure',
+        all: true
+      }
+    });
+  } finally {
+    fs.rmSync(indexLock, { force: true });
+  }
+  assert.equal(failedCommitStage.response.ok, true, failedCommitStage.text);
+  assert.equal(failedCommitStage.json?.result?.isError, true, failedCommitStage.text);
+  assert.equal(failedCommitStage.json?.result?.structuredContent?.failedPhase, 'stage', failedCommitStage.text);
+  assert.notEqual(failedCommitStage.json?.result?.structuredContent?.stage?.exitCode, 0, failedCommitStage.text);
+  assert.equal(failedCommitStage.json?.result?.structuredContent?.commit, null, failedCommitStage.text);
+  assert.equal(git(workspace, ['rev-parse', 'HEAD']), beforeFailedStageHead, 'git_commit stage failure must not create a commit');
+  assert.match(git(workspace, ['diff', '--cached', '--name-only']), /prestage\.txt/, 'git_commit stage failure must preserve existing staged work');
 }, { timeout: 60000 });

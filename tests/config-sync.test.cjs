@@ -43,7 +43,7 @@ test('merges host-owned fields without replacing shared capability state', () =>
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
     server: { port: 8788, mcpPath: '/mcp' },
-    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } },
+    auth: { mode: 'oauth' },
     connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com', lastPreflightAt: 'current' },
     team: { requireWorkspaceLeaseForWrites: true, defaultMemberRole: 'developer', maxMembers: 100, members: [{ id: 'alice' }] },
     requestPolicy: { allowedHosts: ['team.example.com'], requestsPerMinute: 120 },
@@ -79,6 +79,7 @@ test('partial extension updates preserve existing workspaces and shared connecti
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
+    auth: { mode: 'oauth' },
     connection: { provider: 'external', publicUrl: 'https://prod.example.com', lastPreflightAt: 'verified' },
     team: { members: [{ id: 'maintainer' }], requireWorkspaceLeaseForWrites: true },
     requestPolicy: { allowedHosts: ['prod.example.com'] },
@@ -90,8 +91,8 @@ test('partial extension updates preserve existing workspaces and shared connecti
   };
   const merged = mergeExtensionConfig(current, {
     version: SUPPORTED_CONFIG_VERSION,
-    connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale-candidate' },
-    hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
+    hostContexts: { vscode: { capturedAt: 'now' } },
+    activeHostId: 'vscode'
   });
   assert.deepEqual(merged.workspaces, current.workspaces);
   assert.deepEqual(merged.connection, current.connection);
@@ -102,15 +103,15 @@ test('partial extension updates preserve existing workspaces and shared connecti
   assert.equal(Object.hasOwn(merged, 'vscodeContext'), false);
 });
 
-test('pure merge never manufactures shared nested state', () => {
+test('pure merge accepts only current auth shape and never manufactures shared nested state', () => {
   const merged = mergeExtensionConfig({}, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { mode: 'none', forgedPolicy: true },
+    auth: { mode: 'oauth' },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000, maxConcurrentJobs: 99 },
     connection: { provider: 'external', publicUrl: 'https://forged.example.com' },
-    team: { requireWorkspaceLeaseForWrites: true, members: [{ id: 'forged-member' }], forgedPolicy: true },
+    team: { requireWorkspaceLeaseForWrites: true, members: [{ id: 'forged-member' }] },
     requestPolicy: { allowedHosts: ['forged.example.com'] },
     workspaces: [{ id: 'app' }, { id: 'forged', trusted: true, role: 'trusted' }],
     jobs: { embeddedRunnerEnabled: false },
@@ -121,7 +122,7 @@ test('pure merge never manufactures shared nested state', () => {
   });
   assert.equal(merged.instanceId, 'new');
   assert.deepEqual(merged.server, { port: 8787, mcpPath: '/mcp' });
-  assert.deepEqual(merged.auth, { mode: 'none' });
+  assert.deepEqual(merged.auth, { mode: 'oauth' });
   assert.deepEqual(merged.runtime, { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 });
   assert.deepEqual(merged.workspaces, [{ id: 'app' }]);
   for (const key of [
@@ -132,35 +133,47 @@ test('pure merge never manufactures shared nested state', () => {
   }
 });
 
+test('retired auth fields are rejected instead of silently stripped or preserved', () => {
+  for (const auth of [
+    { mode: 'oauth', oauth: { signingKey: 'legacy', approvalCode: 'legacy' } },
+    { mode: 'none', token: 'legacy-static-token' },
+    { mode: 'oauth', forgedPolicy: true }
+  ]) {
+    assert.throws(
+      () => mergeExtensionConfig({}, { version: SUPPORTED_CONFIG_VERSION, auth }),
+      /Unsupported authentication fields/
+    );
+  }
+});
+
 test('generic VS Code writer refuses to recreate a missing shared config', () => {
   const file = tempFile();
   assert.throws(() => writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new-identity',
-    auth: { mode: 'none' },
+    auth: { mode: 'oauth' },
     hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   }), error => error?.code === 'DEVMATE_SHARED_CONFIG_MISSING');
   assert.equal(fs.existsSync(file), false);
 });
 
-test('writes host context through the shared locked atomic store without replacing connection', () => {
+test('writes host context through the shared locked atomic store without replacing connection or auth', () => {
   const file = tempFile();
   atomicWriteJson(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'one',
     server: { port: 8787, mcpPath: '/mcp' },
-    auth: { mode: 'oauth', oauth: { signingKey: 'a'.repeat(32), approvalCode: 'b'.repeat(16) } },
+    auth: { mode: 'oauth' },
     connection: { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' }
   });
   writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
-    connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
     hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   });
   const config = readExtensionConfig(file);
   assert.equal(config.instanceId, 'one');
-  assert.equal(config.auth.mode, 'oauth');
+  assert.deepEqual(config.auth, { mode: 'oauth' });
   assert.deepEqual(config.connection, { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' });
   assert.deepEqual(config.hostContexts.vscode, { capturedAt: 'now' });
   assert.equal(config.activeHostId, 'vscode');

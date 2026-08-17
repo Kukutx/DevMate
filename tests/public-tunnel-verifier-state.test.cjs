@@ -5,21 +5,24 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { atomicWriteJson } = require('../shared/config-store.cjs');
+const configStore = require('../shared/config-store.cjs');
+const oauthSecrets = require('../shared/oauth-secrets.cjs');
 const { PublicTunnelVerifier } = require('../vscode-host/public-tunnel-verifier.js');
 
 function harness(record) {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-verifier-state-'));
   const configFile = path.join(stateDirectory, 'config.json');
-  atomicWriteJson(configFile, {
-    version: 11,
-    instanceId: 'instance-a',
-    server: { port: 8787, mcpPath: '/mcp' },
-    auth: { required: true, token: 'owner' },
-    connection: {}
+  const config = configStore.newInstanceConfig({
+    workspaceRoot: stateDirectory,
+    port: 8787,
+    appVersion: configStore.DEFAULT_VERSION
   });
+  config.instanceId = 'instance-a';
+  config.auth = { mode: 'oauth' };
+  configStore.atomicWriteJson(configFile, config);
+  oauthSecrets.ensureOAuthSecrets(configFile);
   fs.mkdirSync(path.join(stateDirectory, 'state'), { recursive: true });
-  atomicWriteJson(path.join(stateDirectory, 'state', 'gateway.lock'), {
+  configStore.atomicWriteJson(path.join(stateDirectory, 'state', 'gateway.lock'), {
     version: 1,
     runtimeOwnerId: 'gateway-a',
     pid: process.pid,

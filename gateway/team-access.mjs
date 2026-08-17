@@ -76,7 +76,7 @@ export function memberPublic(member) {
     expiresAt: member.expiresAt || null,
     disabled: !!member.disabled,
     lastUsedAt: member.lastUsedAt || null,
-    tokenVersion: member.tokenVersion || 1
+    authVersion: member.authVersion || 1
   };
 }
 
@@ -107,9 +107,9 @@ export function createTeamMember(config, input = {}) {
     name: String(input.name || id).trim().slice(0, 200) || id,
     role,
     workspaceIds,
-    salt,
-    tokenHash: hashSecret(secret, salt),
-    tokenVersion: 1,
+    loginSalt: salt,
+    loginHash: hashSecret(secret, salt),
+    authVersion: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
     expiresAt: parseExpiry(input.expiresAt),
@@ -117,20 +117,20 @@ export function createTeamMember(config, input = {}) {
     lastUsedAt: null
   };
   config.team.members.push(member);
-  return { member: memberPublic(member), token: `dmt_${id}_${secret}` };
+  return { member: memberPublic(member), loginCode: `dmc_${id}_${secret}` };
 }
 
-export function rotateTeamMemberToken(config, id) {
+export function rotateTeamMemberLoginCode(config, id) {
   normalizeInstanceConfig(config);
   const member = config.team.members.find(item => item.id === id);
   if (!member) throw new Error(`Team member not found: ${id}`);
   const secret = base64url(crypto.randomBytes(32));
   const salt = base64url(crypto.randomBytes(16));
-  member.salt = salt;
-  member.tokenHash = hashSecret(secret, salt);
-  member.tokenVersion = (member.tokenVersion || 1) + 1;
+  member.loginSalt = salt;
+  member.loginHash = hashSecret(secret, salt);
+  member.authVersion = (member.authVersion || 1) + 1;
   member.updatedAt = new Date().toISOString();
-  return { member: memberPublic(member), token: `dmt_${member.id}_${secret}` };
+  return { member: memberPublic(member), loginCode: `dmc_${member.id}_${secret}` };
 }
 
 export function updateTeamMember(config, id, patch = {}) {
@@ -155,32 +155,31 @@ export function revokeTeamMember(config, id) {
   return memberPublic(member);
 }
 
-function parseTeamToken(token) {
-  const match = String(token || '').match(/^dmt_([a-z0-9_-]{1,120})_([A-Za-z0-9_-]{43})$/);
+function parseMemberLoginCode(code) {
+  const match = String(code || '').match(/^dmc_([a-z0-9_-]{1,120})_([A-Za-z0-9_-]{43})$/);
   return match ? { id: match[1], secret: match[2] } : null;
 }
 
-export function verifyAccessToken(token, config, { updateLastUsed = false } = {}) {
+export function verifyMemberLoginCode(code, config, { updateLastUsed = false } = {}) {
   normalizeInstanceConfig(config);
-  const raw = String(token || '').trim();
-  const parsed = parseTeamToken(raw);
+  const parsed = parseMemberLoginCode(String(code || '').trim());
   if (!parsed) return null;
   const member = config.team.members.find(item => item.id === parsed.id);
-  if (!member || member.disabled || !member.salt || !member.tokenHash) return null;
+  if (!member || member.disabled || !member.loginSalt || !member.loginHash) return null;
   if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
   if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) return null;
   const workspaceIds = Array.isArray(member.workspaceIds) ? member.workspaceIds.filter(id => typeof id === 'string' && id.trim()) : [];
   if (!workspaceIds.length) return null;
-  const candidate = hashSecret(parsed.secret, member.salt);
-  if (!timingSafeEqualText(candidate, member.tokenHash)) return null;
+  const candidate = hashSecret(parsed.secret, member.loginSalt);
+  if (!timingSafeEqualText(candidate, member.loginHash)) return null;
   if (updateLastUsed) member.lastUsedAt = new Date().toISOString();
   return {
     id: member.id,
     name: member.name,
     role: member.role,
     workspaceIds: [...new Set(workspaceIds.map(id => id.trim()))],
-    source: 'team-token',
-    tokenVersion: member.tokenVersion || 1
+    source: 'oauth-member',
+    authVersion: member.authVersion || 1
   };
 }
 
@@ -195,56 +194,154 @@ function principalInactive(id, detail = 'is no longer active') {
 }
 
 export function currentTeamPrincipal(principal, config) {
-  if (principal?.source !== 'team-token') return principal;
-  const member = config.team.members.find(item => item.id === principal.id);
-  if (!member) {
-    if (principal.tokenVersion !== undefined && principal.tokenVersion !== null) {
-      throw principalInactive(principal.id, 'no longer exists');
-    }
-    return principal; // Compatibility for legacy durable records and synthetic policy tests.
+  const source = principal?.source;
+  if (!['local', 'oauth-owner', 'oauth-member'].includes(source)) {
+    throw principalInactive(principal?.id, 'uses an unsupported authentication source');
   }
-  if (member.disabled || !member.salt || !member.tokenHash) throw principalInactive(principal.id);
+  if (source !== 'oauth-member') return principal;
+  const member = config.team.members.find(item => item.id === principal.id);
+  if (!member) throw principalInactive(principal.id, 'no longer exists');
+  if (member.disabled || !member.loginSalt || !member.loginHash) throw principalInactive(principal.id);
   if (!TEAM_ROLES.includes(member.role)) throw new Error(`Unknown team role: ${member.role}`);
   if (member.expiresAt && Date.parse(member.expiresAt) <= Date.now()) throw principalInactive(principal.id, 'has expired');
   const workspaceIds = Array.isArray(member.workspaceIds)
     ? [...new Set(member.workspaceIds.filter(id => typeof id === 'string').map(id => id.trim()).filter(Boolean))]
     : [];
   if (!workspaceIds.length) throw principalInactive(principal.id, 'has no active workspace scope');
-  const tokenVersion = member.tokenVersion || 1;
-  if (principal.tokenVersion !== undefined && principal.tokenVersion !== null && Number(principal.tokenVersion) !== tokenVersion) {
-    throw principalInactive(principal.id, 'credential was rotated');
+  const authVersion = member.authVersion || 1;
+  if (!Number.isSafeInteger(principal.authVersion) || principal.authVersion !== authVersion) {
+    throw principalInactive(principal.id, 'authorization was rotated');
   }
   return {
     id: member.id,
     name: member.name,
     role: member.role,
     workspaceIds,
-    source: 'team-token',
-    tokenVersion
+    source: 'oauth-member',
+    authVersion
   };
+}
+
+export function principalFromOAuthClaims(claims, config) {
+  normalizeInstanceConfig(config);
+  if (!claims || typeof claims !== 'object') return null;
+  if (claims.sub === 'owner') {
+    return { id: 'oauth-owner', name: 'OAuth owner', role: 'owner', workspaceIds: [], source: 'oauth-owner' };
+  }
+  const match = String(claims.sub || '').match(/^member:([a-z0-9_-]{1,120})$/);
+  if (!match) return null;
+  try {
+    return currentTeamPrincipal({ id: match[1], source: 'oauth-member', authVersion: Number(claims.av) }, config);
+  } catch {
+    return null;
+  }
 }
 
 function dangerousGitPush(value) {
   if (!/\bgit\s+push\b/.test(value)) return false;
   return /(?:^|\s)-f(?:\s|$)/.test(value) ||
-    /(?:^|\s)--force(?:-with-lease)?(?:=\S+)?(?:\s|$)/.test(value) ||
-    /(?:^|\s)\+[^\s]+/.test(value);
+    /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)--(?:delete|mirror|prune)(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)\+[^\s]+/.test(value) ||
+    /\s:[^\s]+/.test(value);
 }
 
 function dangerousCommand(command) {
-  const value = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const raw = String(command || '').replace(/\s+/g, ' ').trim();
+  const value = raw.toLowerCase();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(value) ||
     /\bremove-item\b.*\b-recurse\b.*\b-force\b/.test(value) ||
     /\brmdir\b.*\s\/s\b/.test(value) || /\bdel\b.*\s\/s\b/.test(value) ||
     /\bformat\b\s+[a-z]:/.test(value) || /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(value) ||
-    /\bgit\s+reset\b.*--hard\b/.test(value) || /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(value) ||
+    /\bgit\s+reset\b/.test(value) || /\bgit\s+clean\b/.test(value) || /\bgit\s+restore\b/.test(value) ||
+    /\bgit\s+checkout\b.*\s--(?:\s|$)/.test(value) ||
+    /\bgit\s+checkout\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(value) ||
+    /\bgit\s+checkout\b.*\s-B(?:\s|$)/.test(raw) ||
+    /\bgit\s+branch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(value) ||
+    /\bgit\s+branch\b.*\s(?:-D|-M|-C)(?:\s|$)/.test(raw) ||
+    /\bgit\s+switch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$)|\s--discard-changes(?:\s|$))/.test(value) ||
+    /\bgit\s+switch\b.*\s-C(?:\s|$)/.test(raw) ||
     dangerousGitPush(value);
 }
 
+function structuredGitOperandUnsafe(value, { forceRefspec = false } = {}) {
+  if (value === undefined || value === null) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  return text.startsWith('-') || (forceRefspec && text.startsWith('+'));
+}
+
+function structuredGitBranchUnsafe(value) {
+  if (value === undefined || value === null) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  if (structuredGitOperandUnsafe(text, { forceRefspec: true })) return true;
+  if (text === '@' || text.startsWith('/') || text.endsWith('/') || text.endsWith('.') || text.includes('..') || text.includes('//') || text.includes('@{')) return true;
+  const forbidden = new Set([' ', '~', '^', ':', '?', '*', '[', '\\']);
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (code < 32 || code === 127 || forbidden.has(char)) return true;
+  }
+  return text.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.lock'));
+}
+
+function assertStructuredGitOperands(name, args = {}) {
+  const pushOrPull = name === 'git_push' || name === 'git_pull' || (name === 'git_save' && args?.push);
+  if (pushOrPull) {
+    if (structuredGitOperandUnsafe(args?.remote, { forceRefspec: true }) || structuredGitBranchUnsafe(args?.branch)) {
+      throw new Error('Structured Git remote/branch fields cannot smuggle options or force refspecs');
+    }
+  }
+  if (name === 'git_branch' && structuredGitBranchUnsafe(args?.name)) {
+    throw new Error('Structured Git branch names cannot be option-like or refspec-like');
+  }
+  if (name === 'git_checkout' && structuredGitBranchUnsafe(args?.branch)) {
+    throw new Error('Structured Git checkout targets cannot be option-like or refspec-like');
+  }
+}
+
+function assertStructuredProjectScript(name, args = {}) {
+  if (name !== 'run_project_script' || args?.script === undefined) return;
+  const script = String(args.script);
+  if (!/^[A-Za-z0-9_.@][A-Za-z0-9_.:@/-]{0,199}$/.test(script)) {
+    throw new Error('Project script name must be a single option-safe package script identifier');
+  }
+}
+
+function assertStructuredToolInputs(name, args = {}) {
+  assertStructuredGitOperands(name, args);
+  assertStructuredProjectScript(name, args);
+}
+
+function rawGitHighRisk(rawValues = []) {
+  const raw = rawValues.map(value => String(value));
+  const values = raw.map(value => value.toLowerCase());
+  const command = values.find(value => !value.startsWith('-')) || '';
+  if (command === 'reset' || command === 'clean' || command === 'restore') return true;
+  if (command === 'checkout') {
+    if (values.includes('--') || raw.includes('-B')) return true;
+    if (values.some(value => value === '-f' || value === '--force')) return true;
+  }
+  if (command === 'switch') {
+    if (raw.includes('-C')) return true;
+    if (values.some(value => value === '-f' || value === '--force' || value === '--discard-changes')) return true;
+  }
+  if (command === 'branch') {
+    if (raw.some(value => ['-D', '-M', '-C'].includes(value))) return true;
+    if (values.some(value => value === '-f' || value === '--force')) return true;
+  }
+  if (command !== 'push') return false;
+  return values.includes('-f') ||
+    values.some(value => /^--force(?:-with-lease|-if-includes)?(?:=|$)/.test(value)) ||
+    values.some(value => /^--(?:delete|mirror|prune)(?:=|$)/.test(value)) ||
+    values.some(value => value.startsWith('+') && value.length > 1) ||
+    values.some(value => /^:[^:]/.test(value));
+}
+
 function assertTeamOperationSafety(name, args, principal) {
-  if (principal?.source !== 'team-token') return;
+  if (principal?.source !== 'oauth-member') return;
   if ((name === 'run_command' || name === 'start_process') && dangerousCommand(args?.command)) {
-    throw new Error(`Team token ${principal.id} cannot run a high-risk command through ${name}`);
+    throw new Error(`Remote member ${principal.id} cannot run a high-risk command through ${name}`);
   }
   if (name === 'git_push' && (args?.force || args?.forceWithLease)) {
     throw new Error('Force push requires the owner role');
@@ -252,17 +349,8 @@ function assertTeamOperationSafety(name, args, principal) {
   if (name === 'git_branch' && args?.action === 'delete' && args?.force) {
     throw new Error('Forced branch deletion requires the owner role');
   }
-  if (name === 'git_raw') {
-    const values = (args?.args || []).map(value => String(value).toLowerCase());
-    const command = values.find(value => !value.startsWith('-')) || '';
-    const forcePush = command === 'push' && (
-      values.includes('-f') ||
-      values.some(value => /^--force(?:-with-lease)?(?:=|$)/.test(value)) ||
-      values.some(value => value.startsWith('+') && value.length > 1)
-    );
-    if ((command === 'reset' && values.includes('--hard')) || command === 'clean' || forcePush) {
-      throw new Error('High-risk raw Git operations require the owner role');
-    }
+  if (name === 'git_raw' && rawGitHighRisk(args?.args || [])) {
+    throw new Error('High-risk raw Git operations require the owner role');
   }
 }
 
@@ -270,6 +358,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
   normalizeInstanceConfig(config);
   const effectivePrincipal = currentTeamPrincipal(principal || fallbackLocalPrincipal(), config);
   const capability = requiredCapabilityForTool(name, annotations, args);
+  assertStructuredToolInputs(name, args);
   assertTeamOperationSafety(name, args, effectivePrincipal);
   if (ownerOnlyTool(name) && effectivePrincipal.role !== 'owner') {
     throw new Error(`Tool ${name} requires the owner role`);
@@ -278,7 +367,7 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
     throw new Error(`Role ${effectivePrincipal.role} cannot use ${name}; required capability: ${capability}`);
   }
   const workspaceId = toolWorkspaceId(name, args, config);
-  if (workspaceId && effectivePrincipal.source === 'team-token' && !effectivePrincipal.workspaceIds.includes(workspaceId)) {
+  if (workspaceId && effectivePrincipal.source === 'oauth-member' && !effectivePrincipal.workspaceIds.includes(workspaceId)) {
     throw new Error(`Principal ${effectivePrincipal.id} is not allowed to access workspace ${workspaceId}`);
   }
   return { principal: effectivePrincipal, capability, workspaceId };
@@ -286,11 +375,17 @@ export function authorizeToolCall({ name, annotations, args, config, principal }
 
 export const __test = {
   ROLE_CAPABILITIES,
+  assertStructuredGitOperands,
+  assertStructuredProjectScript,
+  assertStructuredToolInputs,
   dangerousCommand,
   hashSecret,
-  parseTeamToken,
+  parseMemberLoginCode,
+  rawGitHighRisk,
   requiredCapabilityForTool,
   scopedWorkspaceIds,
+  structuredGitBranchUnsafe,
+  structuredGitOperandUnsafe,
   timingSafeEqualText,
   toolWorkspaceId,
   uniqueMemberId

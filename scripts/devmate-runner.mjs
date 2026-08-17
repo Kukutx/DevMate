@@ -4,8 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import configStore from '../shared/config-store.cjs';
 import { terminateProcessTree } from '../gateway/command-process.mjs';
 import { isLoopbackHostname } from '../gateway/http-host-policy.mjs';
@@ -200,7 +199,7 @@ function localMcpClient(config) {
       );
       const nextClient = new Client(
         { name: 'devmate-external-runner', version: config.appVersion || 'unknown' },
-        { capabilities: {} }
+        { capabilities: {}, versionNegotiation: { mode: { pin: '2026-07-28' } } }
       );
       await nextClient.connect(nextTransport, { timeout: 30000 });
       transport = nextTransport;
@@ -216,7 +215,6 @@ function localMcpClient(config) {
       const timeoutMs = jobTimeout(timeout);
       return client.callTool(
         { name, arguments: args || {} },
-        undefined,
         { signal, timeout: timeoutMs, maxTotalTimeout: timeoutMs }
       );
     },

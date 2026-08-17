@@ -13,6 +13,7 @@ const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
 const { configureAuthentication, updateConfig } = require('./shared/config-store.cjs');
 const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
+const { ensureOAuthSecrets } = require('./shared/oauth-secrets.cjs');
 const { setLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
 const {
   recordGeneration,
@@ -99,7 +100,7 @@ function normalizeWorkspaceRoles(data){
 function syncCurrentWorkspace(data, root){
   return syncSharedWorkspace(data, root);
 }
-function authenticationMode(){ return cfg().get('authenticationMode') === 'oauth' ? 'oauth' : 'none'; }
+function authenticationMode(){ return cfg().get('authenticationMode') === 'none' ? 'none' : 'oauth'; }
 function nonce(){ return crypto.randomBytes(16).toString('base64'); }
 function permissionProfile(){ const v = cfg().get('permissionProfile'); return ['readOnly','balanced','fullAccess'].includes(v) ? v : 'fullAccess'; }
 function maintenanceConfig(){
@@ -243,6 +244,7 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   data.activeHostId = hostId;
   delete data.vscodeContext;
   configureAuthentication(data, authenticationMode());
+  if(data.auth.mode === 'oauth') ensureOAuthSecrets(p);
   data.permissions ||= {};
   data.permissions.profile = permissionProfile();
   data.permissions.readOnly = permissionProfile() === 'readOnly';
@@ -354,8 +356,8 @@ async function copyContextBundle(ctx){
 async function copyOAuthApprovalCode(ctx){
   try{
     const data = syncConfig(ctx,false);
-    const approvalCode = String(data?.auth?.mode === 'oauth' ? data.auth.oauth?.approvalCode || '' : '');
-    if(!approvalCode) throw new Error('OAuth is not enabled. DevMate uses no authentication by default.');
+    if(data?.auth?.mode !== 'oauth') throw new Error('OAuth is disabled; this DevMate instance accepts MCP only from local loopback.');
+    const approvalCode = ensureOAuthSecrets(configPath(ctx)).ownerApprovalCode;
     await vscode.env.clipboard.writeText(approvalCode);
     vscode.window.showInformationMessage('DevMate OAuth approval code copied. Paste it only into this DevMate authorization page.');
   }catch(e){
@@ -527,7 +529,7 @@ async function verifyCurrentTunnel(publicUrl, expectedRecord, ctx=globalContext)
     publicUrl,
     expectedRecord,
     currentRecord: () => currentTunnelRecord(expectedRecord?.port),
-    token: preflightAccessToken(data, publicUrl),
+    token: preflightAccessToken(data, publicUrl, configPath(ctx)),
     clientName: 'devmate-vscode-preflight',
     clientVersion: VERSION,
     logger: log

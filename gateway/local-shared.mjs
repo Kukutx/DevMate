@@ -70,20 +70,31 @@ export function dangerousGuardEnabled(config) {
 function dangerousGitPush(value) {
   if (!/\bgit\s+push\b/.test(value)) return false;
   return /(?:^|\s)-f(?:\s|$)/.test(value) ||
-    /(?:^|\s)--force(?:-with-lease)?(?:=\S+)?(?:\s|$)/.test(value) ||
-    /(?:^|\s)\+[^\s]+/.test(value);
+    /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)--(?:delete|mirror|prune)(?:=\S+)?(?:\s|$)/.test(value) ||
+    /(?:^|\s)\+[^\s]+/.test(value) ||
+    /\s:[^\s]+/.test(value);
 }
 
 export function isDangerousCommand(command) {
-  const normalized = String(command || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const raw = String(command || '').replace(/\s+/g, ' ').trim();
+  const normalized = raw.toLowerCase();
   return /\brm\s+(-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b/.test(normalized) ||
     /\bremove-item\b.*\b-recurse\b.*\b-force\b/.test(normalized) ||
     /\brmdir\b.*\s\/s\b/.test(normalized) ||
     /\bdel\b.*\s\/s\b/.test(normalized) ||
     /\bformat\b\s+[a-z]:/.test(normalized) ||
     /\bshutdown\b|\brestart-computer\b|\bstop-computer\b/.test(normalized) ||
-    /\bgit\s+reset\b.*--hard\b/.test(normalized) ||
-    /\bgit\s+clean\b.*-[^\s]*[fdx]/.test(normalized) ||
+    /\bgit\s+reset\b/.test(normalized) ||
+    /\bgit\s+clean\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$)|\s-[^\s]*f[^\s]*)/.test(normalized) ||
+    /\bgit\s+restore\b/.test(normalized) ||
+    /\bgit\s+checkout\b.*\s--(?:\s|$)/.test(normalized) ||
+    /\bgit\s+checkout\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(normalized) ||
+    /\bgit\s+checkout\b.*\s-B(?:\s|$)/.test(raw) ||
+    /\bgit\s+branch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$))/.test(normalized) ||
+    /\bgit\s+branch\b.*\s(?:-D|-M|-C)(?:\s|$)/.test(raw) ||
+    /\bgit\s+switch\b.*(?:\s-f(?:\s|$)|\s--force(?:\s|$)|\s--discard-changes(?:\s|$))/.test(normalized) ||
+    /\bgit\s+switch\b.*\s-C(?:\s|$)/.test(raw) ||
     dangerousGitPush(normalized);
 }
 export function assertCommandAllowed(config, command) {
@@ -94,10 +105,12 @@ export function assertCommandAllowed(config, command) {
 }
 export function redactSensitiveString(value) {
   return String(value ?? '')
-    .replace(/([?&](?:token|key|secret|password|auth|authorization)=)[^&\s]+/gi, '$1redacted')
-    .replace(/(\b(?:token|secret|password|authorization|api[_-]?key|authToken)\s*[:=]\s*)[^\s&"'`]+/gi, '$1redacted')
+    .replace(/([?&](?:authorization|auth[_-]?token|token|access[_-]?token|refresh[_-]?token|api[_-]?key|key|secret|password|authtoken|client[_-]?secret|claim[_-]?token|owner[_-]?token)=)[^&\s]+/gi, '$1redacted')
+    .replace(/(\bauthorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
     .replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1redacted')
-    .replace(/(\b(?:--password|--token|--api-key|--secret)\s+)[^\s]+/gi, '$1redacted')
+    .replace(/((?:^|\s)--(?:authorization|auth[-_]?token|password|token|access[-_]?token|refresh[-_]?token|api[-_]?key|secret|authtoken|client[-_]?secret|claim[-_]?token|owner[-_]?token))(?:\s+|=)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1=redacted')
+    .replace(/(\bauthorization\s*[:=]\s*)(?!Bearer\b)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1redacted')
+    .replace(/(\b(?:auth[_-]?token|token|access[_-]?token|refresh[_-]?token|secret|password|api[_-]?key|authtoken|client[_-]?secret|claim[_-]?token|owner[_-]?token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1redacted')
     .replace(/\b(?:dmt|dmr)_[a-z0-9_-]{1,120}_[A-Za-z0-9_-]{43}\b/gi, 'devmate-token-redacted')
     .replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, 'sk-redacted');
 }

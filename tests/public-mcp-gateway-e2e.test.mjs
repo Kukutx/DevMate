@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,9 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const configStore = require('../shared/config-store.cjs');
+const oauthSecrets = require('../shared/oauth-secrets.cjs');
+const oauthTokens = require('../shared/oauth-tokens.cjs');
 const { parseJsonPayload, preflightPublicMcp } = require('../host/public-mcp.js');
 
 function delay(ms) {
@@ -25,34 +29,59 @@ async function freePort() {
   });
 }
 
-test('public preflight closes direct no-auth initialize, tools/list, and tools/call against the real Gateway', async () => {
+function localPublicRequest(port, publicHost) {
+  return async (_publicUrl, options) => new Promise(resolve => {
+    const body = options.body == null ? '' : String(options.body);
+    const headers = { ...(options.headers || {}), host: publicHost };
+    if (body) headers['content-length'] = Buffer.byteLength(body);
+    const request = http.request({
+      hostname: '127.0.0.1',
+      port,
+      path: '/mcp',
+      method: options.method,
+      headers
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      response.on('end', () => {
+        const responseBody = Buffer.concat(chunks).toString('utf8');
+        resolve({
+          ok: response.statusCode >= 200 && response.statusCode < 300,
+          status: response.statusCode,
+          headers: response.headers || {},
+          body: responseBody,
+          json: parseJsonPayload(responseBody),
+          bytes: Buffer.byteLength(responseBody)
+        });
+      });
+    });
+    request.on('error', error => resolve({ ok: false, error: error.message || String(error), bytes: 0 }));
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+test('public preflight uses OAuth and MCP 2026 discovery, tools/list, and tools/call against the real Gateway', async () => {
   const root = process.cwd();
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-public-preflight-'));
   const workspaceRoot = path.join(temp, 'workspace');
   const configPath = path.join(temp, 'config.json');
   const port = await freePort();
+  const publicHost = 'devmate-public.example';
+  const publicUrl = `https://${publicHost}`;
   await fsp.mkdir(workspaceRoot, { recursive: true });
 
-  const config = {
-    version: 11,
-    appVersion: '3.4.4',
-    instanceId: `public-preflight-${Date.now()}`,
-    server: { port, mcpPath: '/mcp' },
-    runtime: { defaultCommandTimeoutMs: 30000, maxOutputChars: 80000, maxConcurrentJobs: 2 },
-    maintenance: { backupRetentionDays: 30, auditRetentionDays: 30, maxBackupBytes: 268435456, maxAuditBytes: 5242880 },
-    connection: { provider: 'ngrok', publicUrl: '' },
-    auth: { mode: 'none' },
-    permissions: { profile: 'fullAccess', readOnly: false, blockDangerousOperations: true, confirmBeforePush: true, allowDirectoryMutations: false },
-    team: { members: [], requireWorkspaceLeaseForWrites: false, defaultMemberRole: 'developer', maxMembers: 100, approvals: { enabled: false, requiredCapabilities: [], requiredTools: [], separationOfDuties: true } },
-    requestPolicy: { allowedHosts: [], maxRequestBytes: 2097152, requestsPerMinute: 120, maxConcurrentRequests: 24, maxConcurrentPerPrincipal: 4, requestTimeoutMs: 900000 },
-    jobs: { embeddedRunnerEnabled: true, allowJobGitSave: true },
-    runnerControl: { enabled: false, credentials: [] },
-    activeWorkspaceId: 'app',
-    workspaces: [{ id: 'app', name: 'Application', root: workspaceRoot, mode: 'workspace-write', reference: false, role: 'active' }],
-    commands: [],
-    plugins: { enabled: [], settings: {} }
-  };
-  await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+  const config = configStore.newInstanceConfig({
+    workspaceRoot,
+    port,
+    appVersion: configStore.DEFAULT_VERSION
+  });
+  config.auth = { mode: 'oauth' };
+  config.connection.publicUrl = publicUrl;
+  config.requestPolicy.allowedHosts = [publicHost];
+  configStore.atomicWriteJson(configPath, config);
+  oauthSecrets.ensureOAuthSecrets(configPath);
+  const token = oauthTokens.preflightAccessToken(config, publicUrl, configPath);
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: root,
@@ -80,35 +109,18 @@ test('public preflight closes direct no-auth initialize, tools/list, and tools/c
     }
     assert.equal(ready, true, `Gateway did not become ready.\nstdout=${stdout}\nstderr=${stderr}`);
 
-    const request = async (_publicUrl, options) => {
-      const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
-        method: options.method,
-        headers: options.headers,
-        body: options.body
-      });
-      const body = await response.text();
-      const headers = Object.fromEntries([...response.headers.entries()].map(([key, value]) => [key.toLowerCase(), value]));
-      return {
-        ok: response.ok,
-        status: response.status,
-        headers,
-        body,
-        json: parseJsonPayload(body),
-        bytes: Buffer.byteLength(body)
-      };
-    };
-
     const result = await preflightPublicMcp({
-      publicUrl: 'https://devmate-public.example',
-      token: '',
+      publicUrl,
+      token,
       clientName: 'devmate-public-e2e',
-      clientVersion: '3.4.4',
-      request
+      clientVersion: configStore.DEFAULT_VERSION,
+      request: localPublicRequest(port, publicHost)
     });
 
     assert.equal(result.server?.name, 'devmate');
     assert.ok(result.toolCount > 0);
-    assert.equal(result.mcpUrl, 'https://devmate-public.example/mcp');
+    assert.equal(result.mcpUrl, `${publicUrl}/mcp`);
+    assert.equal(result.protocolVersion, '2026-07-28');
     assert.equal(result.toolCallVerified, true);
     assert.equal(result.probeTool, 'gateway_status');
   } finally {

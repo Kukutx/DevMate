@@ -12,7 +12,7 @@ const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
 const packageJson = require('../package.json');
 const DEFAULT_VERSION = packageJson.version;
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
-const SUPPORTED_CONFIG_VERSION = 11;
+const SUPPORTED_CONFIG_VERSION = 12;
 
 function normalizedWorkspaceRoot(root) {
   const resolved = path.resolve(String(root || '.'));

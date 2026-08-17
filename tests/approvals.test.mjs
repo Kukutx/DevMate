@@ -22,8 +22,8 @@ process.env.DEVMATE_CONFIG = configPath;
 
 const approvals = await import('../gateway/approvals.mjs');
 
-const alice = { id: 'alice', name: 'Alice', role: 'maintainer', source: 'team-token', workspaceIds: ['app'] };
-const bob = { id: 'bob', name: 'Bob', role: 'maintainer', source: 'team-token', workspaceIds: ['app'] };
+const alice = { id: 'alice', name: 'Alice', role: 'maintainer', source: 'oauth-member', authVersion: 3, workspaceIds: ['app'] };
+const bob = { id: 'bob', name: 'Bob', role: 'maintainer', source: 'oauth-member', authVersion: 2, workspaceIds: ['app'] };
 const call = {
   config,
   principal: alice,

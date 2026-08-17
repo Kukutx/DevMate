@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const configStore = require('../shared/config-store.cjs');
 
 const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -14,15 +15,33 @@ test('legacy MCP token transport is absent', () => {
   assert.doesNotMatch(source, /searchParams\.get\('token'\)/);
 });
 
-test('credential rotation does not implicitly reactivate revoked identities', () => {
-  for (const relative of ['gateway/team-access.mjs', 'gateway/runner-access.mjs']) {
-    const source = read(relative);
-    const rotateStart = source.search(/export function rotate(?:TeamMemberToken|RunnerCredentialToken)/);
-    assert.ok(rotateStart >= 0, relative);
-    const nextExport = source.indexOf('\nexport function ', rotateStart + 20);
-    const body = source.slice(rotateStart, nextExport < 0 ? source.length : nextExport);
-    assert.doesNotMatch(body, /disabled\s*=\s*false/, relative);
-  }
+test('credential rotation does not implicitly reactivate revoked identities', async () => {
+  const teamAccess = await import('../gateway/team-access.mjs');
+  const runnerAccess = await import('../gateway/runner-access.mjs');
+  const config = configStore.newInstanceConfig({ workspaceRoot: root, appVersion: configStore.DEFAULT_VERSION });
+  const workspaceId = config.activeWorkspaceId;
+
+  const member = teamAccess.createTeamMember(config, {
+    id: 'revoked-member',
+    name: 'Revoked member',
+    role: 'developer',
+    workspaceIds: [workspaceId]
+  });
+  teamAccess.revokeTeamMember(config, member.member.id);
+  const rotatedMember = teamAccess.rotateTeamMemberLoginCode(config, member.member.id);
+  assert.equal(rotatedMember.member.disabled, true);
+  assert.equal(teamAccess.verifyMemberLoginCode(rotatedMember.loginCode, config), null);
+
+  const runner = runnerAccess.createRunnerCredential(config, {
+    id: 'revoked-runner',
+    name: 'Revoked runner',
+    workspaceIds: [workspaceId],
+    capabilities: ['core', 'external']
+  });
+  runnerAccess.revokeRunnerCredential(config, runner.credential.id);
+  const rotatedRunner = runnerAccess.rotateRunnerCredentialToken(config, runner.credential.id);
+  assert.equal(rotatedRunner.credential.disabled, true);
+  assert.equal(runnerAccess.verifyRunnerToken(rotatedRunner.token, config), null);
 });
 
 test('workspace resolution is ID-first and rejects ambiguous names', async () => {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { audit, readConfig } from './local-shared.mjs';
+import { audit, readConfig, redactSensitiveString } from './local-shared.mjs';
 import { requestContext, runWithRequestSignal, runWithWorkSessionContext } from './request-context.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
@@ -123,40 +123,97 @@ function markGitFailure(name, result) {
   return syncTextContent(result);
 }
 
-function filterResult(name, result, principal) {
-  if (!principal?.workspaceIds?.length || !result?.structuredContent) return result;
-  const allowed = new Set(principal.workspaceIds);
-  const data = result.structuredContent;
+function redactCommandResultPayload(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) redactCommandResultPayload(item, seen);
+    return value;
+  }
+  const commandShape = typeof value.command === 'string' && (
+    Object.hasOwn(value, 'exitCode') ||
+    Object.hasOwn(value, 'timedOut') ||
+    Object.hasOwn(value, 'stdout') ||
+    Object.hasOwn(value, 'stderr')
+  );
+  if (commandShape) {
+    for (const key of ['command', 'stdout', 'stderr', 'error']) {
+      if (typeof value[key] === 'string') value[key] = redactSensitiveString(value[key]);
+    }
+  }
+  for (const child of Object.values(value)) redactCommandResultPayload(child, seen);
+  return value;
+}
 
-  if (['list_workspaces', 'gateway_status'].includes(name)) {
-    data.workspaces = filterArray(data.workspaces, allowed, 'id');
-    if (data.activeWorkspace && !allowed.has(data.activeWorkspace.id)) data.activeWorkspace = null;
-    if (data.activeWorkspaceId && !allowed.has(data.activeWorkspaceId)) data.activeWorkspaceId = null;
+function redactProcessOutputEvents(name, value) {
+  if (name !== 'read_process_output' || !Array.isArray(value?.events)) return value;
+  for (const event of value.events) {
+    if (typeof event?.text === 'string') event.text = redactSensitiveString(event.text);
   }
-  if (['connection_diagnostics', 'devmate_status_panel'].includes(name) && data.workspace) {
-    if (data.workspace.active && !allowed.has(data.workspace.active.id)) data.workspace.active = null;
-    data.workspace.count = allowed.size;
-    data.workspace.references = 0;
-    if (name === 'devmate_status_panel' && result._meta?.diagnostics) result._meta.diagnostics = data;
+  return value;
+}
+
+function sanitizeResultPayload(name, value) {
+  redactCommandResultPayload(value);
+  redactProcessOutputEvents(name, value);
+  return value;
+}
+
+function sanitizeToolResult(name, result) {
+  if (!result || typeof result !== 'object') return result;
+  if (result.structuredContent) sanitizeResultPayload(name, result.structuredContent);
+  if (Array.isArray(result.content)) {
+    for (const item of result.content) {
+      if (item?.type !== 'text' || typeof item.text !== 'string') continue;
+      try {
+        const parsed = JSON.parse(item.text);
+        sanitizeResultPayload(name, parsed);
+        item.text = JSON.stringify(parsed, null, 2);
+      } catch {
+        item.text = redactSensitiveString(item.text);
+      }
+    }
   }
-  if (name === 'list_processes') {
-    data.processes = filterArray(data.processes, allowed);
-    data.running = Array.isArray(data.processes)
-      ? data.processes.filter(item => ['running', 'stopping'].includes(item.status)).length
-      : 0;
+  return result;
+}
+
+function filterResult(name, result, principal) {
+  if (!result?.structuredContent) return sanitizeToolResult(name, result);
+  if (principal?.workspaceIds?.length) {
+    const allowed = new Set(principal.workspaceIds);
+    const data = result.structuredContent;
+
+    if (['list_workspaces', 'gateway_status'].includes(name)) {
+      data.workspaces = filterArray(data.workspaces, allowed, 'id');
+      if (data.activeWorkspace && !allowed.has(data.activeWorkspace.id)) data.activeWorkspace = null;
+      if (data.activeWorkspaceId && !allowed.has(data.activeWorkspaceId)) data.activeWorkspaceId = null;
+    }
+    if (['connection_diagnostics', 'devmate_status_panel'].includes(name) && data.workspace) {
+      if (data.workspace.active && !allowed.has(data.workspace.active.id)) data.workspace.active = null;
+      data.workspace.count = allowed.size;
+      data.workspace.references = 0;
+      if (name === 'devmate_status_panel' && result._meta?.diagnostics) result._meta.diagnostics = data;
+    }
+    if (name === 'list_processes') {
+      data.processes = filterArray(data.processes, allowed);
+      data.running = Array.isArray(data.processes)
+        ? data.processes.filter(item => ['running', 'stopping'].includes(item.status)).length
+        : 0;
+    }
+    if (name === 'web_preview_status') {
+      data.previews = filterArray(data.previews, allowed);
+      if (data.preview && !allowed.has(data.preview.workspaceId)) data.preview = null;
+    }
+    if (name === 'local_capabilities_status') {
+      data.trustedWritableRoots = filterArray(data.trustedWritableRoots, allowed, 'id');
+      data.persistentProcesses = filterArray(data.persistentProcesses, allowed);
+    }
+    if (name === 'list_trusted_roots') {
+      data.roots = filterArray(data.roots, allowed, 'id');
+    }
+    syncTextContent(result);
   }
-  if (name === 'web_preview_status') {
-    data.previews = filterArray(data.previews, allowed);
-    if (data.preview && !allowed.has(data.preview.workspaceId)) data.preview = null;
-  }
-  if (name === 'local_capabilities_status') {
-    data.trustedWritableRoots = filterArray(data.trustedWritableRoots, allowed, 'id');
-    data.persistentProcesses = filterArray(data.persistentProcesses, allowed);
-  }
-  if (name === 'list_trusted_roots') {
-    data.roots = filterArray(data.roots, allowed, 'id');
-  }
-  return syncTextContent(result);
+  return sanitizeToolResult(name, result);
 }
 
 export function wrapAuthorizedTool(name, config, handler) {
@@ -222,7 +279,7 @@ export function wrapAuthorizedTool(name, config, handler) {
         authorized.principal
       );
       const session = authorized.workspaceId
-        ? touchWorkSession(authorized.principal.id, authorized.workspaceId)
+        ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true })
         : null;
       const workSessionId = session?.id || active?.id || null;
       const toolStatus = result?.isError === true ? 'error' : 'success';
@@ -297,8 +354,12 @@ export const __test = {
   inferredWorkspace,
   markGitFailure,
   publicDeployment,
+  redactCommandResultPayload,
+  redactProcessOutputEvents,
   readiness,
   registerTeamTools,
+  sanitizeResultPayload,
+  sanitizeToolResult,
   syncTextContent,
   workspaceIds,
   wrapAuthorizedTool

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const {
+  SUPPORTED_CONFIG_VERSION,
   atomicWriteJson,
   updateConfig
 } = require('../shared/config-store.cjs');
@@ -19,7 +20,7 @@ test('does not replace config.json when a locked mutation makes no content chang
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'config.json');
   atomicWriteJson(file, {
-    version: 11,
+    version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable-instance',
     server: { port: 8787 }
   });
