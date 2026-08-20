@@ -11,6 +11,7 @@ const configStore = require('../shared/config-store.cjs');
 const { RuntimeController } = require('../host/runtime-controller.js');
 
 const root = path.resolve(import.meta.dirname, '..');
+const PRODUCTION_AUDIT_CAP_BYTES = 5 * 1024 * 1024;
 
 async function freePort() {
   const server = net.createServer();
@@ -41,14 +42,14 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
     backupRetentionDays: 30,
     auditRetentionDays: 30,
     maxBackupBytes: 1024 * 1024,
-    maxAuditBytes: 256 * 1024
+    maxAuditBytes: PRODUCTION_AUDIT_CAP_BYTES
   };
 
   fs.mkdirSync(backupRoot, { recursive: true });
   fs.writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf8');
 
   const auditTime = new Date().toISOString();
-  const auditLines = Array.from({ length: 20000 }, (_, index) => JSON.stringify({
+  const auditLines = Array.from({ length: 30000 }, (_, index) => JSON.stringify({
     time: auditTime,
     action: 'write_file',
     index,
@@ -82,7 +83,7 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
     assert.ok(readyMs < 10000, `Gateway Ready exceeded startup budget: ${readyMs}ms`);
 
     const prunedAuditBytes = fs.statSync(auditLog).size;
-    assert.ok(prunedAuditBytes <= 256 * 1024, `audit log was not pruned: ${prunedAuditBytes} bytes`);
+    assert.ok(prunedAuditBytes <= PRODUCTION_AUDIT_CAP_BYTES, `audit log was not pruned: ${prunedAuditBytes} bytes`);
   } finally {
     await controller.dispose({ stopOwned: true }).catch(() => {});
     fs.rmSync(stateDirectory, { recursive: true, force: true });
