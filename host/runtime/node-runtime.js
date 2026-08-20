@@ -74,6 +74,7 @@ function probeGatewayRuntime(executable, {
     encoding: 'utf8',
     windowsHide: true,
     timeout: Math.max(1000, Number(timeoutMs) || GATEWAY_PROBE_TIMEOUT_MS),
+    killSignal: 'SIGKILL',
     env: {
       ...env,
       ELECTRON_RUN_AS_NODE: '1',
