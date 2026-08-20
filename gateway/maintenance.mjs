@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -42,26 +41,28 @@ async function lstatOrNull(file) {
   try { return await fsp.lstat(file); } catch { return null; }
 }
 
-async function directorySizeBytes(root) {
+async function directoryStats(root) {
   const st = await lstatOrNull(root);
-  if (!st) return 0;
-  if (!st.isDirectory()) return st.size;
-  let total = st.size;
+  if (!st) return { bytes: 0, files: 0 };
+  if (!st.isDirectory()) return { bytes: st.size, files: 1 };
+
+  let bytes = st.size;
+  let files = 0;
   let entries = [];
-  try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { return total; }
+  try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { return { bytes, files }; }
   for (const entry of entries) {
     const child = path.join(root, entry.name);
-    if (entry.isSymbolicLink()) {
-      const linkStat = await lstatOrNull(child);
-      total += linkStat?.size || 0;
-    } else if (entry.isDirectory()) {
-      total += await directorySizeBytes(child);
-    } else {
-      const childStat = await lstatOrNull(child);
-      total += childStat?.size || 0;
+    if (entry.isDirectory()) {
+      const nested = await directoryStats(child);
+      bytes += nested.bytes;
+      files += nested.files;
+      continue;
     }
+    const childStat = await lstatOrNull(child);
+    bytes += childStat?.size || 0;
+    files += 1;
   }
-  return total;
+  return { bytes, files };
 }
 
 async function safeRemoveChild(root, target) {
@@ -82,30 +83,17 @@ async function listBackupSets(backupRoot) {
     const full = path.join(backupRoot, entry.name);
     const st = await statOrNull(full);
     if (!st) continue;
+    const stats = await directoryStats(full);
     sets.push({
       name: entry.name,
       path: full,
       mtimeMs: st.mtimeMs,
-      sizeBytes: await directorySizeBytes(full)
+      sizeBytes: stats.bytes,
+      fileCount: stats.files
     });
   }
   sets.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name));
   return sets;
-}
-
-async function countFiles(root) {
-  let count = 0;
-  async function scan(dir) {
-    let entries = [];
-    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) await scan(full);
-      else count++;
-    }
-  }
-  await scan(root);
-  return count;
 }
 
 export async function stateSummary(paths) {
@@ -118,7 +106,7 @@ export async function stateSummary(paths) {
   } catch {}
   return {
     backupSets: backupSets.length,
-    backupFiles: await countFiles(paths.backupRoot),
+    backupFiles: backupSets.reduce((sum, item) => sum + item.fileCount, 0),
     backupBytes: backupSets.reduce((sum, item) => sum + item.sizeBytes, 0),
     auditEntries,
     auditBytes: auditStat?.size || 0
@@ -128,30 +116,36 @@ export async function stateSummary(paths) {
 export async function pruneBackups(backupRoot, options = {}, nowMs = Date.now()) {
   const opts = maintenanceOptions(options);
   await fsp.mkdir(backupRoot, { recursive: true });
-  let sets = await listBackupSets(backupRoot);
+  const sets = await listBackupSets(backupRoot);
   const beforeBytes = sets.reduce((sum, item) => sum + item.sizeBytes, 0);
   const beforeSets = sets.length;
   const cutoff = nowMs - opts.backupRetentionDays * DAY_MS;
   const deleted = [];
+  const remaining = [];
+
   for (const item of sets) {
-    if (item.mtimeMs >= cutoff) continue;
-    await safeRemoveChild(backupRoot, item.path);
-    deleted.push({ path: item.path, reason: 'age', sizeBytes: item.sizeBytes });
+    if (item.mtimeMs < cutoff) {
+      await safeRemoveChild(backupRoot, item.path);
+      deleted.push({ path: item.path, reason: 'age', sizeBytes: item.sizeBytes });
+    } else {
+      remaining.push(item);
+    }
   }
-  sets = (await listBackupSets(backupRoot)).sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name));
-  let total = sets.reduce((sum, item) => sum + item.sizeBytes, 0);
-  for (const item of sets) {
-    if (total <= opts.maxBackupBytes) break;
+
+  let total = remaining.reduce((sum, item) => sum + item.sizeBytes, 0);
+  let firstKept = 0;
+  while (total > opts.maxBackupBytes && firstKept < remaining.length) {
+    const item = remaining[firstKept++];
     await safeRemoveChild(backupRoot, item.path);
     total -= item.sizeBytes;
     deleted.push({ path: item.path, reason: 'size', sizeBytes: item.sizeBytes });
   }
-  const afterSets = await listBackupSets(backupRoot);
+
   return {
     beforeSets,
-    afterSets: afterSets.length,
+    afterSets: remaining.length - firstKept,
     beforeBytes,
-    afterBytes: afterSets.reduce((sum, item) => sum + item.sizeBytes, 0),
+    afterBytes: total,
     deleted
   };
 }
@@ -171,9 +165,17 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
       return true;
     }
   });
-  while (kept.length && Buffer.byteLength(`${kept.join('\n')}\n`, 'utf8') > opts.maxAuditBytes) {
-    kept.shift();
+
+  let totalBytes = 0;
+  let firstKept = kept.length;
+  while (firstKept > 0) {
+    const bytes = Buffer.byteLength(kept[firstKept - 1], 'utf8') + 1;
+    if (totalBytes + bytes > opts.maxAuditBytes) break;
+    totalBytes += bytes;
+    firstKept -= 1;
   }
+  if (firstKept) kept = kept.slice(firstKept);
+
   const next = kept.length ? `${kept.join('\n')}\n` : '';
   const changed = next !== original;
   if (changed) {
@@ -192,7 +194,7 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
     beforeEntries: lines.length,
     afterEntries: kept.length,
     beforeBytes: stat.size,
-    afterBytes: Buffer.byteLength(next, 'utf8'),
+    afterBytes: totalBytes,
     removedEntries: lines.length - kept.length,
     changed
   };

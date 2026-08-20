@@ -84,6 +84,34 @@ test('pruneAuditLog trims oldest entries when the audit log exceeds maxAuditByte
   }
 });
 
+test('pruneAuditLog handles a large accumulated log without repeated whole-log rescans', async () => {
+  const dir = await tempDir();
+  try {
+    const auditLog = path.join(dir, 'audit.jsonl');
+    const lines = Array.from({ length: 20000 }, (_, index) => JSON.stringify({
+      time: '2026-06-18T00:00:00.000Z',
+      index,
+      action: 'write_file',
+      payload: 'x'.repeat(220)
+    }));
+    await writeFile(auditLog, `${lines.join('\n')}\n`);
+
+    const result = await pruneAuditLog(auditLog, {
+      auditRetentionDays: 30,
+      maxAuditBytes: 256 * 1024
+    }, Date.parse('2026-06-19T00:00:00.000Z'));
+    const text = await fsp.readFile(auditLog, 'utf8');
+
+    assert(result.beforeEntries === 20000);
+    assert(result.afterBytes <= 256 * 1024);
+    assert(result.removedEntries > 10000);
+    assert(!text.includes('"index":0,'));
+    assert(text.includes('"index":19999,'));
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('pruneBackups removes expired backup sets and trims oldest sets by size', async () => {
   const dir = await tempDir();
   try {
@@ -115,6 +143,10 @@ test('pruneBackups removes expired backup sets and trims oldest sets by size', a
     await assert.rejects(fsp.stat(oldSet));
     await assert.rejects(fsp.stat(middleSet));
     await fsp.stat(newestSet);
+
+    const summary = await stateSummary({ backupRoot, auditLog: path.join(dir, 'audit.jsonl') });
+    assert.equal(summary.backupSets, 1);
+    assert.equal(summary.backupFiles, 1);
   } finally {
     await fsp.rm(dir, { recursive: true, force: true });
   }
