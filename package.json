@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
-  "version": "3.4.4",
+  "version": "3.5.0",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {
@@ -10,7 +10,7 @@
     "url": "https://github.com/Kukutx/DevMate.git"
   },
   "engines": {
-    "vscode": "^1.132.0",
+    "vscode": "^1.133.0",
     "node": ">=24"
   },
   "categories": [
@@ -340,6 +340,7 @@
     "vscode:prepublish": "npm run build",
     "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs",
     "test:unit": "node scripts/run-tests.mjs",
+    "test:vscode-host": "node scripts/test-vscode-host.mjs",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package",
     "package:obsidian": "npm run build:obsidian",
@@ -358,9 +359,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.28.1",
-    "js-yaml": "^4.3.1"
+    "esbuild": "^0.28.2",
+    "js-yaml": "^5.3.0"
   },
   "license": "MIT",
   "overrides": {
