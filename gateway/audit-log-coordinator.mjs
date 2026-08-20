@@ -70,8 +70,8 @@ async function enqueue(auditLog, operation, { trackHealth = true } = {}) {
   }
 }
 
-export function withAuditLogLock(auditLog, operation) {
-  return enqueue(auditLog, operation, { trackHealth: true });
+export function withAuditLogLock(auditLog, operation, { trackHealth = true } = {}) {
+  return enqueue(auditLog, operation, { trackHealth });
 }
 
 export function drainAuditLog(auditLog) {
