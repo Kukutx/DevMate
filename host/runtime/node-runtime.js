@@ -8,6 +8,7 @@ const MINIMUM_NODE_MAJOR = 24;
 const PROBE_TIMEOUT_MS = 5000;
 const GATEWAY_PROBE_TIMEOUT_MS = 5000;
 const GATEWAY_RUNTIME_PROBE_KIND = 'devmate-gateway-runtime-probe';
+const GATEWAY_RUNTIME_CONTRACT_VERSION = 1;
 
 function nodeMajor(value) {
   const match = String(value || '').trim().match(/^v?(\d+)(?:\.|$)/);
@@ -161,13 +162,17 @@ function probeGatewayRuntime(executable, {
     };
   }
   const payload = jsonLines(result.stdout).reverse().find(value => value.kind === GATEWAY_RUNTIME_PROBE_KIND) || null;
-  if (!payload?.ok) {
+  if (
+    !payload?.ok ||
+    payload.contractVersion !== GATEWAY_RUNTIME_CONTRACT_VERSION ||
+    payload.platformCapabilities !== true
+  ) {
     return {
       ok: false,
       requestedExecutable,
       gatewayEntry: entry,
       stage: 'gateway-bootstrap',
-      reason: 'Gateway bootstrap probe returned no valid capability result'
+      reason: `Gateway bootstrap probe did not satisfy runtime contract v${GATEWAY_RUNTIME_CONTRACT_VERSION}`
     };
   }
   if (nodeMajor(payload.node) < minimumMajor) {
@@ -184,6 +189,7 @@ function probeGatewayRuntime(executable, {
     requestedExecutable,
     gatewayEntry: entry,
     stage: 'gateway-bootstrap',
+    contractVersion: payload.contractVersion,
     nodeVersion: String(payload.node),
     electronVersion: payload.electron ? String(payload.electron) : null
   };
@@ -268,6 +274,7 @@ module.exports = {
   PROBE_TIMEOUT_MS,
   GATEWAY_PROBE_TIMEOUT_MS,
   GATEWAY_RUNTIME_PROBE_KIND,
+  GATEWAY_RUNTIME_CONTRACT_VERSION,
   nodeMajor,
   packagedGatewayCandidates,
   probeNodeRuntime,
