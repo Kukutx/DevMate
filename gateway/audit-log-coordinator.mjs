@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const queues = new Map();
-const degraded = new Set();
+const healthKnownClean = new Set();
 
 function auditKey(auditLog) {
   return path.resolve(String(auditLog || ''));
@@ -14,7 +14,9 @@ function healthFile(auditLog) {
 }
 
 async function writeHealthError(auditLog, error) {
+  const key = auditKey(auditLog);
   const file = healthFile(auditLog);
+  healthKnownClean.delete(key);
   const payload = {
     version: 1,
     status: 'degraded',
@@ -41,9 +43,9 @@ async function writeHealthError(auditLog, error) {
 
 async function clearHealthError(auditLog) {
   const key = auditKey(auditLog);
-  if (!degraded.has(key)) return;
-  degraded.delete(key);
+  if (healthKnownClean.has(key)) return;
   try { await fsp.rm(healthFile(auditLog), { force: true }); } catch {}
+  healthKnownClean.add(key);
 }
 
 async function enqueue(auditLog, operation, { trackHealth = true } = {}) {
@@ -57,7 +59,6 @@ async function enqueue(auditLog, operation, { trackHealth = true } = {}) {
       await clearHealthError(auditLog);
       return result;
     } catch (error) {
-      degraded.add(key);
       await writeHealthError(auditLog, error);
       throw error;
     }
@@ -94,4 +95,4 @@ export function auditLogQueueSize() {
   return queues.size;
 }
 
-export const __test = { auditKey, degraded, enqueue, healthFile, queues };
+export const __test = { auditKey, enqueue, healthFile, healthKnownClean, queues };
