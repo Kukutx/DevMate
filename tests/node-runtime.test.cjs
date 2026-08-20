@@ -61,6 +61,7 @@ test('Gateway capability probe is the only runtime eligibility check', () => {
   assert.equal(result.executable, '/runtime/node');
   assert.equal(result.nodeVersion, '24.18.0');
   assert.deepEqual(spawnSyncImpl.calls[0].args, [gatewayEntry]);
+  assert.equal(spawnSyncImpl.calls[0].options.killSignal, 'SIGKILL');
   assert.equal(spawnSyncImpl.calls[0].options.env.ELECTRON_RUN_AS_NODE, '1');
   assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_RUNTIME_PROBE, '1');
   assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_CONFIG, '');
