@@ -40,6 +40,37 @@ test('startup progress records bounded durable stages and temporary maintenance 
     assert(stages.includes('maintenance'));
   } finally {
     delete process.env.DEVMATE_RUNTIME_OWNER_ID;
+    delete process.env.DEVMATE_CONFIG;
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a failed nested startup stage remains the reported failure stage', async () => {
+  const dir = await tempDir();
+  try {
+    const configPath = path.join(dir, 'config.json');
+    await fsp.writeFile(configPath, '{}\n', 'utf8');
+    process.env.DEVMATE_CONFIG = configPath;
+    process.env.DEVMATE_RUNTIME_OWNER_ID = 'startup-progress-failure-owner';
+
+    const progress = await import(`../gateway/startup-progress.mjs?failure=${Date.now()}`);
+    progress.beginStartupProgress('server_module');
+    const failure = new Error('maintenance failed');
+    failure.code = 'EIO';
+    await assert.rejects(
+      progress.withStartupStage('maintenance', async () => { throw failure; }),
+      /maintenance failed/
+    );
+    progress.failStartupProgress(failure);
+
+    const file = path.join(dir, 'state', 'gateway-startup.json');
+    const snapshot = JSON.parse(await fsp.readFile(file, 'utf8'));
+    assert.equal(snapshot.status, 'failed');
+    assert.equal(snapshot.failedStage, 'maintenance');
+    assert.equal(snapshot.error.code, 'EIO');
+  } finally {
+    delete process.env.DEVMATE_RUNTIME_OWNER_ID;
+    delete process.env.DEVMATE_CONFIG;
     await fsp.rm(dir, { recursive: true, force: true });
   }
 });
