@@ -1,21 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
 const { resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const { DiagnosticsStore, redactValue } = require('../host/runtime/diagnostics-store.js');
+const { runtimeStateDiagnosticPaths, runtimeStateDiagnostics } = require('../host/runtime/state-diagnostics.js');
 const { gatewayCandidates, runtimeConfigPath, workspaceFolders } = require('./runtime-context.js');
-
-function readJsonOrNull(file) {
-  try {
-    const stat = fs.statSync(file, { throwIfNoEntry: false });
-    if (!stat?.isFile() || stat.size > 256 * 1024) return null;
-    const value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
 
 class VscodeRuntimeDiagnostics {
   constructor({ vscode, context, runtimeContext, output, resolveNodeRuntimeImpl = resolveNodeRuntime, runtimeSnapshot = () => null }) {
@@ -76,10 +65,8 @@ class VscodeRuntimeDiagnostics {
 
   snapshot({ autoStart = false, startupMode = '', enabled = true, lastSelfCheck = null } = {}) {
     const stateDirectory = this.runtimeContext.globalStorageUri.fsPath;
-    const stateRoot = path.join(stateDirectory, 'state');
-    const startupProgressFile = path.join(stateRoot, 'gateway-startup.json');
-    const auditHealthFile = path.join(stateRoot, 'audit-health.json');
-    const runtimeMaintenanceHealthFile = path.join(stateRoot, 'runtime-maintenance.json');
+    const statePaths = runtimeStateDiagnosticPaths(stateDirectory);
+    const stateDiagnostics = runtimeStateDiagnostics(stateDirectory);
     let config = null;
     try { config = JSON.parse(fs.readFileSync(runtimeConfigPath(this.runtimeContext), 'utf8').replace(/^\uFEFF/, '')); } catch {}
     let runtime = null;
@@ -101,11 +88,13 @@ class VscodeRuntimeDiagnostics {
       paths: {
         extensionPath: this.context.extensionPath, stateDirectory,
         configFile: runtimeConfigPath(this.runtimeContext), gatewayCandidates: gatewayCandidates(this.runtimeContext), logFile: this.store.logFile,
-        startupProgressFile, auditHealthFile, runtimeMaintenanceHealthFile
+        startupProgressFile: statePaths.startupProgressFile,
+        auditHealthFile: statePaths.auditHealthFile,
+        runtimeMaintenanceHealthFile: statePaths.runtimeMaintenanceHealthFile
       },
-      startupProgress: redactValue(readJsonOrNull(startupProgressFile)),
-      auditHealth: redactValue(readJsonOrNull(auditHealthFile)),
-      runtimeMaintenanceHealth: redactValue(readJsonOrNull(runtimeMaintenanceHealthFile)),
+      startupProgress: redactValue(stateDiagnostics.startupProgress),
+      auditHealth: redactValue(stateDiagnostics.auditHealth),
+      runtimeMaintenanceHealth: redactValue(stateDiagnostics.runtimeMaintenanceHealth),
       lastSelfCheck: redactValue(lastSelfCheck), runtime: redactValue(runtime), lastFailure: this.store.lastFailure, config: redactValue(config)
     };
   }
