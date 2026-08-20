@@ -15,7 +15,7 @@ function harness(resolveNodeRuntimeImpl) {
   const workspaceRoot = temp('devmate-runtime-diagnostics-workspace-');
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
   fs.mkdirSync(path.dirname(gatewayEntry), { recursive: true });
-  fs.writeFileSync(gatewayEntry, 'x'.repeat(120000));
+  fs.writeFileSync(gatewayEntry, 'gateway-runtime-contract-fixture\n');
   const context = {
     extensionPath,
     extension: { packageJSON: { version: '3.3.0' } },
