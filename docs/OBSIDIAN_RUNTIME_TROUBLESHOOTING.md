@@ -6,13 +6,15 @@ There is no embedded Gateway Worker path.
 
 ## Runtime requirement
 
-The Gateway requires a usable Node.js 24+ runtime. Obsidian resolves it in this order:
+The Gateway requires a Gateway-compatible Node.js 24+ runtime. Obsidian uses the same capability-based resolver as VS Code and evaluates candidates in this order:
 
 1. explicitly configured Node executable;
-2. the Obsidian/Electron executable when its embedded Node runtime is current and can run as Node;
-3. `node` from `PATH`.
+2. standalone `node` from `PATH`;
+3. the Obsidian/Electron executable only as a final Electron-as-Node fallback.
 
-Every candidate is probed before launch. If no current runtime is usable, Start fails with diagnostics instead of falling back to a renderer Worker or an older compatibility runtime.
+Reporting Node 24+ is not sufficient. Every candidate must first pass the Node metadata probe and then execute the packaged Obsidian Gateway entry in side-effect-free runtime-probe mode. Only a candidate that returns the `devmate-gateway-runtime-probe` capability marker can be selected.
+
+If no candidate satisfies the full Gateway runtime contract, Start fails with `DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE` diagnostics instead of falling back to a renderer Worker, an older compatibility runtime, or an unverified Electron host.
 
 ## Expected Start lifecycle
 
@@ -20,6 +22,7 @@ Every candidate is probed before launch. If no current runtime is usable, Start 
 
 ```text
 Obsidian bridge/context
+→ verified Gateway runtime
 → shared Gateway start/attach
 → configured public connection start/attach
 → authenticated MCP initialize
@@ -56,13 +59,13 @@ Credential-shaped values are redacted before persistence.
 
 1. Press **Start** once.
 2. If Start fails, copy diagnostics before changing settings.
-3. Confirm a usable Node.js 24+ runtime is available.
+3. Confirm a Gateway-compatible Node.js 24+ runtime is available; a version-only probe is not sufficient.
 4. Confirm the plugin package contains the expected Gateway bundle/runtime files.
 5. Run connection diagnostics and verify the configured provider/executable/credential requirements.
 6. Change the preferred Gateway port only when diagnostics report a real port conflict.
 7. If VS Code is using the same desktop state, verify that Obsidian attaches rather than spawning duplicate resources.
 
-Repeated Restart is not a repair strategy for a missing bundle, invalid current config, missing Node runtime, provider credential failure, or incompatible shared provider configuration.
+Repeated Restart is not a repair strategy for a missing bundle, invalid current config, missing/incompatible Node runtime, provider credential failure, or incompatible shared provider configuration.
 
 ## Gateway is healthy but DevMate is not Ready
 
