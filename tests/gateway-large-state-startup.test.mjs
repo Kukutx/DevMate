@@ -5,13 +5,14 @@ import path from 'node:path';
 import net from 'node:net';
 import test from 'node:test';
 import { createRequire } from 'node:module';
+import { stateSummary } from '../gateway/maintenance.mjs';
 
 const require = createRequire(import.meta.url);
 const configStore = require('../shared/config-store.cjs');
+const { DEFAULT_MAINTENANCE } = require('../shared/maintenance-config.cjs');
 const { RuntimeController } = require('../host/runtime-controller.js');
 
 const root = path.resolve(import.meta.dirname, '..');
-const PRODUCTION_AUDIT_CAP_BYTES = 5 * 1024 * 1024;
 
 async function freePort() {
   const server = net.createServer();
@@ -24,7 +25,7 @@ async function freePort() {
   return port;
 }
 
-test('Gateway reaches Ready with a large accumulated maintenance state', { timeout: 30000 }, async () => {
+test('Gateway reaches Ready with large audit and backup maintenance state', { timeout: 30000 }, async () => {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-large-state-'));
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-large-state-workspace-'));
   const configFile = path.join(stateDirectory, 'config.json');
@@ -39,10 +40,10 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
     appVersion: configStore.DEFAULT_VERSION
   });
   config.maintenance = {
-    backupRetentionDays: 30,
-    auditRetentionDays: 30,
+    backupRetentionDays: DEFAULT_MAINTENANCE.backupRetentionDays,
+    auditRetentionDays: DEFAULT_MAINTENANCE.auditRetentionDays,
     maxBackupBytes: 1024 * 1024,
-    maxAuditBytes: PRODUCTION_AUDIT_CAP_BYTES
+    maxAuditBytes: DEFAULT_MAINTENANCE.maxAuditBytes
   };
 
   fs.mkdirSync(backupRoot, { recursive: true });
@@ -57,10 +58,15 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
   }));
   fs.writeFileSync(auditLog, `${auditLines.join('\n')}\n`, 'utf8');
 
+  const nowMs = Date.now();
+  const expiredMs = nowMs - 45 * 24 * 60 * 60 * 1000;
   for (let index = 0; index < 250; index += 1) {
     const set = path.join(backupRoot, `set-${String(index).padStart(3, '0')}`);
-    fs.mkdirSync(set, { recursive: true });
-    fs.writeFileSync(path.join(set, 'snapshot.txt'), `backup-${index}`);
+    fs.mkdirSync(path.join(set, 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(set, 'nested', 'snapshot.bin'), Buffer.alloc(8 * 1024, index % 251));
+    const mtimeMs = index < 50 ? expiredMs + index : nowMs - (250 - index) * 1000;
+    const date = new Date(mtimeMs);
+    fs.utimesSync(set, date, date);
   }
 
   const controller = new RuntimeController({
@@ -82,8 +88,12 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
     assert.equal(result.port, port);
     assert.ok(readyMs < 10000, `Gateway Ready exceeded startup budget: ${readyMs}ms`);
 
-    const prunedAuditBytes = fs.statSync(auditLog).size;
-    assert.ok(prunedAuditBytes <= PRODUCTION_AUDIT_CAP_BYTES, `audit log was not pruned: ${prunedAuditBytes} bytes`);
+    const summary = await stateSummary({ backupRoot, auditLog });
+    assert.ok(summary.auditBytes <= DEFAULT_MAINTENANCE.maxAuditBytes, `audit log was not pruned: ${summary.auditBytes} bytes`);
+    assert.ok(summary.backupBytes <= config.maintenance.maxBackupBytes, `backup state was not pruned: ${summary.backupBytes} bytes`);
+    assert(summary.backupSets > 0 && summary.backupSets < 200, `unexpected retained backup set count: ${summary.backupSets}`);
+    assert.equal(fs.existsSync(path.join(backupRoot, 'set-000')), false, 'expired backup set survived age pruning');
+    assert.equal(fs.existsSync(path.join(backupRoot, 'set-249')), true, 'newest backup set was not retained');
   } finally {
     await controller.dispose({ stopOwned: true }).catch(() => {});
     fs.rmSync(stateDirectory, { recursive: true, force: true });

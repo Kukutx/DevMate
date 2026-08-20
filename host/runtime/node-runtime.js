@@ -3,7 +3,8 @@
 const { spawnSync } = require('node:child_process');
 
 const MINIMUM_NODE_MAJOR = 24;
-const PROBE_TIMEOUT_MS = 5000;
+const PROBE_TIMEOUT_MS = 2000;
+const PROBE_MAX_BUFFER_BYTES = 64 * 1024;
 
 function nodeMajor(value) {
   const match = String(value || '').trim().match(/^v?(\d+)(?:\.|$)/);
@@ -26,7 +27,9 @@ function probeNodeRuntime(executable, {
   ], {
     encoding: 'utf8',
     windowsHide: true,
-    timeout: Math.max(1000, Number(timeoutMs) || PROBE_TIMEOUT_MS),
+    timeout: Math.max(500, Number(timeoutMs) || PROBE_TIMEOUT_MS),
+    killSignal: 'SIGKILL',
+    maxBuffer: PROBE_MAX_BUFFER_BYTES,
     env: { ...env, ELECTRON_RUN_AS_NODE: '1' }
   });
   if (result.error) {
@@ -80,19 +83,23 @@ function probeNodeRuntime(executable, {
 function resolveNodeRuntime({
   preferredExecutable = '',
   processExecutable = process.execPath,
-  processNodeVersion = process.versions.node,
   spawnSyncImpl = spawnSync,
   minimumMajor = MINIMUM_NODE_MAJOR
 } = {}) {
   const candidates = [];
+  const seen = new Set();
   const add = (value, source) => {
     const executable = String(value || '').trim();
-    if (!executable || candidates.some(item => item.executable === executable)) return;
+    if (!executable) return;
+    const key = process.platform === 'win32' ? executable.toLowerCase() : executable;
+    if (seen.has(key)) return;
+    seen.add(key);
     candidates.push({ executable, source });
   };
+
   add(preferredExecutable, 'configured');
-  if (nodeMajor(processNodeVersion) >= minimumMajor) add(processExecutable, 'host');
   add('node', 'path');
+  add(processExecutable, 'host');
 
   const attempts = [];
   for (const candidate of candidates) {
@@ -110,6 +117,7 @@ function resolveNodeRuntime({
 
 module.exports = {
   MINIMUM_NODE_MAJOR,
+  PROBE_MAX_BUFFER_BYTES,
   PROBE_TIMEOUT_MS,
   nodeMajor,
   probeNodeRuntime,

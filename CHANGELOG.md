@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.5.0
+
+- Fixed Gateway startup failures caused by accumulated audit and backup state, and added idle runtime high-water maintenance so state remains bounded after startup.
+- Added durable startup-stage and degraded health diagnostics shared by VS Code and Obsidian, including cross-restart recovery and generation fencing.
+- Moved the embedded Runner behind ordered MCP capability initialization so queued Jobs cannot execute before reviewed targets are registered.
+- Prefer standalone Node.js over editor Electron runtimes, tightly bound runtime probes, and added real VS Code Extension Host startup coverage.
+- Strengthened large-state, packaged VSIX, Obsidian, Docker, Godot, Node Current, and security regression coverage while updating the stable development toolchain.
+
 ## 3.4.4
 
 - Restored the direct private-use contract across every desktop entrypoint: ngrok is the fresh-instance default, public MCP uses no authentication by default, and Start/Stop/Restart/Copy MCP URL remain the primary lifecycle.

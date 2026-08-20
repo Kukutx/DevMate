@@ -1,3 +1,4 @@
+import { installEmbeddedRunnerCapability } from './embedded-runner-capability.mjs';
 import { installHostContextCapabilities } from './host-context-capabilities.mjs';
 import { installLocalCapabilities } from './local-capabilities.mjs';
 import { installObsidianHostCapabilities } from './obsidian-host-capabilities.mjs';
@@ -32,6 +33,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
     order: 40,
     initialize: server => registerPluginHost(server, plugins)
   });
+  installEmbeddedRunnerCapability(McpServerClass);
   return serverExtensionHostStatus(McpServerClass);
 }
 

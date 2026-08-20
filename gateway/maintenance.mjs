@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import maintenanceConfig from '../shared/maintenance-config.cjs';
 import { withAuditLogLock } from './audit-log-coordinator.mjs';
+import { withStartupStage } from './startup-progress.mjs';
 
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -201,14 +202,16 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
 }
 
 export function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {
-  return withAuditLogLock(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs));
+  return withAuditLogLock(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs), { trackHealth: false });
 }
 
-export async function pruneState(paths, options = {}, nowMs = Date.now()) {
-  await fsp.mkdir(paths.stateRoot, { recursive: true });
-  await fsp.mkdir(paths.backupRoot, { recursive: true });
-  const opts = maintenanceOptions(options);
-  const backups = await pruneBackups(paths.backupRoot, opts, nowMs);
-  const audit = await pruneAuditLog(paths.auditLog, opts, nowMs);
-  return { options: opts, backups, audit };
+export function pruneState(paths, options = {}, nowMs = Date.now()) {
+  return withStartupStage('maintenance', async () => {
+    await fsp.mkdir(paths.stateRoot, { recursive: true });
+    await fsp.mkdir(paths.backupRoot, { recursive: true });
+    const opts = maintenanceOptions(options);
+    const backups = await pruneBackups(paths.backupRoot, opts, nowMs);
+    const audit = await pruneAuditLog(paths.auditLog, opts, nowMs);
+    return { options: opts, backups, audit };
+  });
 }

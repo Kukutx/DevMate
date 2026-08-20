@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const { DiagnosticsStore, redactValue } = require('../host/runtime/diagnostics-store.js');
+const { runtimeStateDiagnosticPaths, runtimeStateDiagnostics } = require('../host/runtime/state-diagnostics.js');
 const { gatewayCandidates, runtimeConfigPath, workspaceFolders } = require('./runtime-context.js');
 
 class VscodeRuntimeDiagnostics {
@@ -42,7 +43,6 @@ class VscodeRuntimeDiagnostics {
     add('extension-path', fs.statSync(this.context.extensionPath, { throwIfNoEntry: false })?.isDirectory(), this.context.extensionPath);
     add('state-directory', fs.statSync(stateDirectory, { throwIfNoEntry: false })?.isDirectory(), stateDirectory);
     add('gateway-bundle', !!gateway, gateway || candidates.join(' | '));
-    add('gateway-bundle-size', !!gateway && fs.statSync(gateway).size > 100000, gateway ? `${fs.statSync(gateway).size} bytes` : 'missing');
     add('gateway-launch-mode', true, 'child_process');
     add('config-file', fs.statSync(configFile, { throwIfNoEntry: false })?.isFile(), configFile);
     add('workspace', workspaceFolders(this.vscode).length > 0, `${workspaceFolders(this.vscode).length} folder(s)`);
@@ -64,6 +64,9 @@ class VscodeRuntimeDiagnostics {
   }
 
   snapshot({ autoStart = false, startupMode = '', enabled = true, lastSelfCheck = null } = {}) {
+    const stateDirectory = this.runtimeContext.globalStorageUri.fsPath;
+    const statePaths = runtimeStateDiagnosticPaths(stateDirectory);
+    const stateDiagnostics = runtimeStateDiagnostics(stateDirectory);
     let config = null;
     try { config = JSON.parse(fs.readFileSync(runtimeConfigPath(this.runtimeContext), 'utf8').replace(/^\uFEFF/, '')); } catch {}
     let runtime = null;
@@ -83,9 +86,15 @@ class VscodeRuntimeDiagnostics {
       },
       workspace: { folders: workspaceFolders(this.vscode), workspaceFile: this.vscode.workspace.workspaceFile?.fsPath || null },
       paths: {
-        extensionPath: this.context.extensionPath, stateDirectory: this.runtimeContext.globalStorageUri.fsPath,
-        configFile: runtimeConfigPath(this.runtimeContext), gatewayCandidates: gatewayCandidates(this.runtimeContext), logFile: this.store.logFile
+        extensionPath: this.context.extensionPath, stateDirectory,
+        configFile: runtimeConfigPath(this.runtimeContext), gatewayCandidates: gatewayCandidates(this.runtimeContext), logFile: this.store.logFile,
+        startupProgressFile: statePaths.startupProgressFile,
+        auditHealthFile: statePaths.auditHealthFile,
+        runtimeMaintenanceHealthFile: statePaths.runtimeMaintenanceHealthFile
       },
+      startupProgress: redactValue(stateDiagnostics.startupProgress),
+      auditHealth: redactValue(stateDiagnostics.auditHealth),
+      runtimeMaintenanceHealth: redactValue(stateDiagnostics.runtimeMaintenanceHealth),
       lastSelfCheck: redactValue(lastSelfCheck), runtime: redactValue(runtime), lastFailure: this.store.lastFailure, config: redactValue(config)
     };
   }

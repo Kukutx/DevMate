@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const directory = path.join(root, '.github', 'workflows');
@@ -15,7 +15,7 @@ for (const name of files) {
   const source = fs.readFileSync(file, 'utf8');
   let document;
   try {
-    document = yaml.load(source, { filename: file, json: true });
+    document = load(source, { filename: file, json: true, maxDepth: 100, maxAliases: 1000 });
   } catch (error) {
     throw new Error(`${name} is not valid YAML: ${error.message}`);
   }

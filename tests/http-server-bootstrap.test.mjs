@@ -82,17 +82,24 @@ test('rejects invalid bootstrap dependencies without mutating the HTTP module', 
   assert.equal(httpModule.createServer, originalCreateServer);
 });
 
-test('Gateway runtime restores the process-global HTTP factory after all bootstrap initialization', () => {
+test('Gateway runtime restores HTTP bootstrap after server initialization and never starts jobs before target registration', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const source = fs.readFileSync(path.join(root, 'gateway', 'server-runtime.mjs'), 'utf8');
-  assert.match(source, /installHttpServerBootstrap\(http,/);
-  assert.doesNotMatch(source, /http\.createServer\s*=/);
+  const runtimeSource = fs.readFileSync(path.join(root, 'gateway', 'server-runtime.mjs'), 'utf8');
+  const platformSource = fs.readFileSync(path.join(root, 'gateway', 'platform-capabilities.mjs'), 'utf8');
+  const embeddedRunnerSource = fs.readFileSync(path.join(root, 'gateway', 'embedded-runner-capability.mjs'), 'utf8');
 
-  const bootstrapStart = source.lastIndexOf('\ntry {');
+  assert.match(runtimeSource, /installHttpServerBootstrap\(http,/);
+  assert.doesNotMatch(runtimeSource, /http\.createServer\s*=/);
+  assert.doesNotMatch(runtimeSource, /startJobRuntime\(\)/, 'process startup must not run durable jobs before MCP targets register');
+
+  const bootstrapStart = runtimeSource.lastIndexOf('\ntry {');
   assert.ok(bootstrapStart > 0);
-  const bootstrapBlock = source.slice(bootstrapStart);
+  const bootstrapBlock = runtimeSource.slice(bootstrapStart);
   assert.match(bootstrapBlock, /installPlatformCapabilities\(McpServer\)/);
-  assert.match(bootstrapBlock, /startJobRuntime\(\)/);
   assert.match(bootstrapBlock, /await import\('\.\/server\.mjs'\)/);
-  assert.match(bootstrapBlock, /finally\s*\{\s*httpBootstrap\.restore\(\);\s*\}/s);
+  assert.match(bootstrapBlock, /finally\s*\{\s*httpBootstrap\?\.restore\(\);\s*\}/s);
+
+  assert.match(platformSource, /installEmbeddedRunnerCapability\(McpServerClass\)/);
+  assert.match(embeddedRunnerSource, /order:\s*100/);
+  assert.match(embeddedRunnerSource, /startJobRuntime\(\)/);
 });

@@ -1,12 +1,47 @@
 import path from 'node:path';
+import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
 
 const queues = new Map();
+const healthKnownClean = new Set();
 
-export async function withAuditLogLock(auditLog, operation) {
+function auditKey(auditLog) {
+  const value = String(auditLog || '').trim();
+  if (!value) throw new Error('Audit log path is required');
+  return path.resolve(value);
+}
+
+function healthFile(auditLog) {
+  return path.join(path.dirname(auditKey(auditLog)), 'audit-health.json');
+}
+
+async function writeHealthError(auditLog, error) {
+  const key = auditKey(auditLog);
+  healthKnownClean.delete(key);
+  await writeDegradedHealth(healthFile(auditLog), error);
+}
+
+async function clearHealthError(auditLog) {
+  const key = auditKey(auditLog);
+  if (healthKnownClean.has(key)) return;
+  await clearHealthMarker(healthFile(auditLog));
+  healthKnownClean.add(key);
+}
+
+async function enqueue(auditLog, operation, { trackHealth = true } = {}) {
   if (typeof operation !== 'function') throw new TypeError('Audit log operation must be a function');
-  const key = path.resolve(String(auditLog || ''));
+  const key = auditKey(auditLog);
   const previous = queues.get(key) || Promise.resolve();
-  const run = previous.catch(() => {}).then(operation);
+  const run = previous.catch(() => {}).then(async () => {
+    if (!trackHealth) return operation();
+    try {
+      const result = await operation();
+      await clearHealthError(auditLog);
+      return result;
+    } catch (error) {
+      await writeHealthError(auditLog, error);
+      throw error;
+    }
+  });
   queues.set(key, run);
   try {
     return await run;
@@ -15,8 +50,12 @@ export async function withAuditLogLock(auditLog, operation) {
   }
 }
 
+export function withAuditLogLock(auditLog, operation, { trackHealth = true } = {}) {
+  return enqueue(auditLog, operation, { trackHealth });
+}
+
 export function drainAuditLog(auditLog) {
-  return withAuditLogLock(auditLog, async () => {});
+  return enqueue(auditLog, async () => {}, { trackHealth: false });
 }
 
 export async function drainAllAuditLogs() {
@@ -35,4 +74,4 @@ export function auditLogQueueSize() {
   return queues.size;
 }
 
-export const __test = { queues };
+export const __test = { auditKey, enqueue, healthFile, healthKnownClean, queues };

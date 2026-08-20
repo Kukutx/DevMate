@@ -23,9 +23,9 @@ test('package and lock file require current production host baselines', () => {
   const packageJson = require('../package.json');
   const packageLock = require('../package-lock.json');
   assert.equal(packageJson.engines.node, '>=24');
-  assert.equal(packageJson.engines.vscode, '^1.132.0');
+  assert.equal(packageJson.engines.vscode, '^1.133.0');
   assert.equal(packageLock.packages[''].engines.node, '>=24');
-  assert.equal(packageLock.packages[''].engines.vscode, '^1.132.0');
+  assert.equal(packageLock.packages[''].engines.vscode, '^1.133.0');
 });
 
 test('CI, release, and Docker use Node 24 without legacy extension files', () => {
