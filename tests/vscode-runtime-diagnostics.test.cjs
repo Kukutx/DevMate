@@ -13,8 +13,9 @@ function harness(resolveNodeRuntimeImpl) {
   const extensionPath = temp('devmate-runtime-diagnostics-extension-');
   const stateDirectory = temp('devmate-runtime-diagnostics-state-');
   const workspaceRoot = temp('devmate-runtime-diagnostics-workspace-');
-  fs.mkdirSync(path.join(extensionPath, 'gateway'), { recursive: true });
-  fs.writeFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'x'.repeat(120000));
+  const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
+  fs.mkdirSync(path.dirname(gatewayEntry), { recursive: true });
+  fs.writeFileSync(gatewayEntry, 'x'.repeat(120000));
   const context = {
     extensionPath,
     extension: { packageJSON: { version: '3.3.0' } },
@@ -28,17 +29,20 @@ function harness(resolveNodeRuntimeImpl) {
     },
     env: { clipboard: { async writeText() {} } }
   };
-  return new VscodeRuntimeDiagnostics({
-    vscode,
-    context,
-    runtimeContext: context,
-    output: { appendLine() {} },
-    resolveNodeRuntimeImpl
-  });
+  return {
+    diagnostics: new VscodeRuntimeDiagnostics({
+      vscode,
+      context,
+      runtimeContext: context,
+      output: { appendLine() {} },
+      resolveNodeRuntimeImpl
+    }),
+    gatewayEntry
+  };
 }
 
 test('VS Code self-check fails when the actual Gateway Node runtime probe fails', () => {
-  const diagnostics = harness(() => { throw new Error('no usable Node runtime'); });
+  const { diagnostics } = harness(() => { throw new Error('no usable Node runtime'); });
   const result = diagnostics.selfCheck();
   assert.equal(result.ok, false);
   const runtime = result.checks.find(item => item.id === 'gateway-node-runtime');
@@ -46,15 +50,21 @@ test('VS Code self-check fails when the actual Gateway Node runtime probe fails'
   assert.match(runtime.detail, /no usable Node runtime/);
 });
 
-test('VS Code self-check reports the exact selected Gateway runtime', () => {
-  const diagnostics = harness(() => ({
-    source: 'path',
-    executable: 'C:\\Program Files\\nodejs\\node.exe',
-    nodeVersion: '24.18.0',
-    electronVersion: null
-  }));
+test('VS Code self-check probes the exact Gateway artifact it reports', () => {
+  let probeOptions = null;
+  const { diagnostics, gatewayEntry } = harness(options => {
+    probeOptions = options;
+    return {
+      source: 'path',
+      executable: 'C:\\Program Files\\nodejs\\node.exe',
+      nodeVersion: '24.18.0',
+      electronVersion: null
+    };
+  });
   const result = diagnostics.selfCheck();
   assert.equal(result.ok, true);
   assert.equal(result.gatewayRuntime.source, 'path');
   assert.equal(result.gatewayRuntime.nodeVersion, '24.18.0');
+  assert.equal(path.resolve(probeOptions.gatewayEntry), path.resolve(gatewayEntry));
+  assert.equal(path.resolve(result.gateway), path.resolve(gatewayEntry));
 });
