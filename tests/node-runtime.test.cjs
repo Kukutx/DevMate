@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const test = require('node:test');
 const {
   MINIMUM_NODE_MAJOR,
@@ -12,7 +11,7 @@ const {
   resolveNodeRuntime
 } = require('../host/runtime/node-runtime.js');
 
-const gatewayEntry = path.resolve('test-gateway-runtime-probe.mjs');
+const gatewayEntry = __filename;
 
 function fakeSpawn(handler) {
   const calls = [];
@@ -43,7 +42,8 @@ function gatewaySuccess(node = '24.18.0', electron = null) {
       node,
       electron,
       platform: process.platform,
-      arch: process.arch
+      arch: process.arch,
+      platformCapabilities: true
     })}\n`,
     stderr: ''
   };
@@ -83,6 +83,15 @@ test('Gateway capability probe is side-effect isolated and requires the Gateway 
   });
   assert.equal(invalid.ok, false);
   assert.match(invalid.reason, /no valid capability result/i);
+});
+
+test('missing packaged Gateway fails before probing any runtime candidate', () => {
+  const spawnSyncImpl = fakeSpawn(() => versionSuccess('24.18.0', '/runtime/node'));
+  assert.throws(
+    () => resolveNodeRuntime({ gatewayEntry: `${__filename}.missing`, spawnSyncImpl }),
+    error => error.code === 'DEVMATE_GATEWAY_RUNTIME_PROBE_MISSING' && /runtime probe entry is missing/i.test(error.message)
+  );
+  assert.equal(spawnSyncImpl.calls.length, 0);
 });
 
 test('automatic resolution prefers standalone Node and does not bind Gateway lifecycle to VS Code', () => {
