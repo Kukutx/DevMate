@@ -32,6 +32,8 @@ test('startup progress records bounded durable stages and temporary maintenance 
     assert.equal(snapshot.status, 'server_module_loaded');
     assert.equal(snapshot.finalStage, 'server_module_loaded');
     assert.equal(snapshot.currentStage, null);
+    assert.equal(snapshot.degraded, false);
+    assert.deepEqual(snapshot.stageFailures, []);
     assert(snapshot.totalDurationMs >= 0);
     const stages = snapshot.completedStages.map(item => item.stage);
     assert(stages.includes('runtime_config'));
@@ -45,7 +47,7 @@ test('startup progress records bounded durable stages and temporary maintenance 
   }
 });
 
-test('a failed nested startup stage remains the reported failure stage', async () => {
+test('a fatal nested startup error reports the actual failed substage', async () => {
   const dir = await tempDir();
   try {
     const configPath = path.join(dir, 'config.json');
@@ -67,7 +69,43 @@ test('a failed nested startup stage remains the reported failure stage', async (
     const snapshot = JSON.parse(await fsp.readFile(file, 'utf8'));
     assert.equal(snapshot.status, 'failed');
     assert.equal(snapshot.failedStage, 'maintenance');
+    assert.equal(snapshot.degraded, true);
+    assert.equal(snapshot.stageFailures.at(-1).stage, 'maintenance');
+    assert.equal(snapshot.stageFailures.at(-1).error.code, 'EIO');
     assert.equal(snapshot.error.code, 'EIO');
+  } finally {
+    delete process.env.DEVMATE_RUNTIME_OWNER_ID;
+    delete process.env.DEVMATE_CONFIG;
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a swallowed nested failure remains visible as degraded startup evidence', async () => {
+  const dir = await tempDir();
+  try {
+    const configPath = path.join(dir, 'config.json');
+    await fsp.writeFile(configPath, '{}\n', 'utf8');
+    process.env.DEVMATE_CONFIG = configPath;
+    process.env.DEVMATE_RUNTIME_OWNER_ID = 'startup-progress-degraded-owner';
+
+    const progress = await import(`../gateway/startup-progress.mjs?degraded=${Date.now()}`);
+    progress.beginStartupProgress('server_module');
+    try {
+      await progress.withStartupStage('maintenance', async () => {
+        const error = new Error('maintenance unavailable');
+        error.code = 'EACCES';
+        throw error;
+      });
+    } catch {}
+    progress.completeStartupProgress('server_module_loaded');
+
+    const file = path.join(dir, 'state', 'gateway-startup.json');
+    const snapshot = JSON.parse(await fsp.readFile(file, 'utf8'));
+    assert.equal(snapshot.status, 'server_module_loaded');
+    assert.equal(snapshot.degraded, true);
+    assert.equal(snapshot.stageFailures.length, 1);
+    assert.equal(snapshot.stageFailures[0].stage, 'maintenance');
+    assert.equal(snapshot.stageFailures[0].error.code, 'EACCES');
   } finally {
     delete process.env.DEVMATE_RUNTIME_OWNER_ID;
     delete process.env.DEVMATE_CONFIG;
