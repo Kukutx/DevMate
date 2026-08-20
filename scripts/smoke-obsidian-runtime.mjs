@@ -61,7 +61,7 @@ assert.doesNotMatch(mainSource, /ObsidianNgrokRuntime/, 'Obsidian bundle must no
 
 const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath, gatewayEntry });
 assert.ok(Number.parseInt(nodeRuntime.nodeVersion.split('.')[0], 10) >= 24);
-assert.equal(nodeRuntime.gatewayProbe?.ok, true);
+assert.equal(nodeRuntime.contractVersion, 1);
 assert.equal(path.resolve(nodeRuntime.gatewayEntry), path.resolve(gatewayEntry));
 
 const controller = new RuntimeController({
