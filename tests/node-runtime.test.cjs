@@ -5,6 +5,7 @@ const test = require('node:test');
 const {
   MINIMUM_NODE_MAJOR,
   PROBE_MAX_BUFFER_BYTES,
+  PROBE_TIMEOUT_MS,
   nodeMajor,
   probeNodeRuntime,
   resolveNodeRuntime
@@ -32,23 +33,24 @@ function success(node, execPath, electron = null) {
 
 test('parses current Node majors strictly', () => {
   assert.equal(MINIMUM_NODE_MAJOR, 24);
-  assert.equal(nodeMajor('24.18.0'), 24);
-  assert.equal(nodeMajor('v25.1.0'), 25);
+  assert.equal(PROBE_TIMEOUT_MS, 2000);
+  assert.equal(nodeMajor('24.19.0'), 24);
+  assert.equal(nodeMajor('v26.7.0'), 26);
   assert.equal(nodeMajor('23.9.0'), 23);
   assert.equal(nodeMajor('invalid'), 0);
 });
 
-test('runtime probes are bounded and force-terminated on timeout', () => {
-  const spawnSyncImpl = fakeSpawn({ host: success('24.18.0', '/runtime/node', '38.0.0') });
+test('runtime probes are tightly bounded and force-terminated on timeout', () => {
+  const spawnSyncImpl = fakeSpawn({ host: success('24.19.0', '/runtime/node', '43.4.0') });
   const result = probeNodeRuntime('host', { spawnSyncImpl });
   assert.equal(result.ok, true);
   assert.equal(result.executable, '/runtime/node');
-  assert.equal(result.nodeVersion, '24.18.0');
+  assert.equal(result.nodeVersion, '24.19.0');
   const options = spawnSyncImpl.calls[0].options;
   assert.equal(options.env.ELECTRON_RUN_AS_NODE, '1');
   assert.equal(options.killSignal, 'SIGKILL');
   assert.equal(options.maxBuffer, PROBE_MAX_BUFFER_BYTES);
-  assert.ok(options.timeout <= 5000);
+  assert.equal(options.timeout, PROBE_TIMEOUT_MS);
   assert.equal(spawnSyncImpl.calls[0].args.includes('--ms-enable-electron-run-as-node'), false);
 });
 
@@ -56,7 +58,7 @@ test('standalone Node is preferred over the editor host runtime', () => {
   const code = 'A:\\Software Development\\Microsoft VS Code\\Code.exe';
   const spawnSyncImpl = fakeSpawn({
     node: success('24.19.0', 'C:\\Program Files\\nodejs\\node.exe'),
-    [code]: success('24.18.1', code, '42.8.1')
+    [code]: success('24.19.0', code, '43.4.0')
   });
   const selected = resolveNodeRuntime({ processExecutable: code, spawnSyncImpl });
   assert.equal(selected.source, 'path');
@@ -68,7 +70,7 @@ test('host runtime remains a verified fallback when standalone Node is unavailab
   const code = 'A:\\Software Development\\Microsoft VS Code\\Code.exe';
   const spawnSyncImpl = fakeSpawn({
     node: { status: 1, stdout: '', stderr: 'not found' },
-    [code]: success('24.18.1', code, '42.8.1')
+    [code]: success('24.19.0', code, '43.4.0')
   });
   const selected = resolveNodeRuntime({ processExecutable: code, spawnSyncImpl });
   assert.equal(selected.source, 'host');
