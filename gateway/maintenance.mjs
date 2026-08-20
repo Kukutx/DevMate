@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -167,11 +166,13 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
     }
   });
 
-  const lineBytes = kept.map(line => Buffer.byteLength(line, 'utf8') + 1);
-  let totalBytes = lineBytes.reduce((sum, bytes) => sum + bytes, 0);
-  let firstKept = 0;
-  while (totalBytes > opts.maxAuditBytes && firstKept < kept.length) {
-    totalBytes -= lineBytes[firstKept++];
+  let totalBytes = 0;
+  let firstKept = kept.length;
+  while (firstKept > 0) {
+    const bytes = Buffer.byteLength(kept[firstKept - 1], 'utf8') + 1;
+    if (totalBytes + bytes > opts.maxAuditBytes) break;
+    totalBytes += bytes;
+    firstKept -= 1;
   }
   if (firstKept) kept = kept.slice(firstKept);
 
