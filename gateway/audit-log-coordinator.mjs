@@ -5,8 +5,12 @@ import crypto from 'node:crypto';
 const queues = new Map();
 const degraded = new Set();
 
+function auditKey(auditLog) {
+  return path.resolve(String(auditLog || ''));
+}
+
 function healthFile(auditLog) {
-  return path.join(path.dirname(path.resolve(String(auditLog || ''))), 'audit-health.json');
+  return path.join(path.dirname(auditKey(auditLog)), 'audit-health.json');
 }
 
 async function writeHealthError(auditLog, error) {
@@ -36,17 +40,18 @@ async function writeHealthError(auditLog, error) {
 }
 
 async function clearHealthError(auditLog) {
-  const key = path.resolve(String(auditLog || ''));
+  const key = auditKey(auditLog);
   if (!degraded.has(key)) return;
   degraded.delete(key);
   try { await fsp.rm(healthFile(auditLog), { force: true }); } catch {}
 }
 
-export async function withAuditLogLock(auditLog, operation) {
+async function enqueue(auditLog, operation, { trackHealth = true } = {}) {
   if (typeof operation !== 'function') throw new TypeError('Audit log operation must be a function');
-  const key = path.resolve(String(auditLog || ''));
+  const key = auditKey(auditLog);
   const previous = queues.get(key) || Promise.resolve();
   const run = previous.catch(() => {}).then(async () => {
+    if (!trackHealth) return operation();
     try {
       const result = await operation();
       await clearHealthError(auditLog);
@@ -65,8 +70,12 @@ export async function withAuditLogLock(auditLog, operation) {
   }
 }
 
+export function withAuditLogLock(auditLog, operation) {
+  return enqueue(auditLog, operation, { trackHealth: true });
+}
+
 export function drainAuditLog(auditLog) {
-  return withAuditLogLock(auditLog, async () => {});
+  return enqueue(auditLog, async () => {}, { trackHealth: false });
 }
 
 export async function drainAllAuditLogs() {
@@ -85,4 +94,4 @@ export function auditLogQueueSize() {
   return queues.size;
 }
 
-export const __test = { degraded, healthFile, queues };
+export const __test = { auditKey, degraded, enqueue, healthFile, queues };
