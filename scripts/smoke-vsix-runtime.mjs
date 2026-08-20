@@ -178,6 +178,8 @@ try {
   const nodeRuntime = resolveNodeRuntime();
   const port = await freePort();
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
+  assert.equal(nodeRuntime.contractVersion, 1, 'Packaged runtime resolver must enforce the current Gateway contract');
+  assert.equal(path.resolve(nodeRuntime.gatewayEntry), path.resolve(gatewayEntry), 'Packaged runtime resolver must probe the same Gateway artifact the controller launches');
   const controllerOptions = {
     workspaceRoot,
     stateDirectory,
