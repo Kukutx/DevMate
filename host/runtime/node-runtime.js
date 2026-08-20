@@ -3,12 +3,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const gatewayRuntimeContract = require('../../shared/gateway-runtime-contract.cjs');
 
 const MINIMUM_NODE_MAJOR = 24;
 const PROBE_TIMEOUT_MS = 5000;
 const GATEWAY_PROBE_TIMEOUT_MS = 5000;
-const GATEWAY_RUNTIME_PROBE_KIND = 'devmate-gateway-runtime-probe';
-const GATEWAY_RUNTIME_CONTRACT_VERSION = 1;
+const GATEWAY_RUNTIME_PROBE_KIND = gatewayRuntimeContract.kind;
+const GATEWAY_RUNTIME_CONTRACT_VERSION = gatewayRuntimeContract.version;
 
 function nodeMajor(value) {
   const match = String(value || '').trim().match(/^v?(\d+)(?:\.|$)/);
