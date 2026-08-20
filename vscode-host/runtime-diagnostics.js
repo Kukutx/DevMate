@@ -47,7 +47,7 @@ class VscodeRuntimeDiagnostics {
     add('config-file', fs.statSync(configFile, { throwIfNoEntry: false })?.isFile(), configFile);
     add('workspace', workspaceFolders(this.vscode).length > 0, `${workspaceFolders(this.vscode).length} folder(s)`);
     try {
-      const runtime = this.resolveNodeRuntime();
+      const runtime = this.resolveNodeRuntime({ gatewayEntry: gateway });
       this.gatewayRuntime = { source: runtime.source, executable: runtime.executable, nodeVersion: runtime.nodeVersion, electronVersion: runtime.electronVersion || null };
       this.gatewayRuntimeError = '';
       add('gateway-node-runtime', true, `Node ${runtime.nodeVersion} via ${runtime.source}: ${runtime.executable}`);
