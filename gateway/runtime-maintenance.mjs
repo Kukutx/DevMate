@@ -1,6 +1,6 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
 import { maintenanceOptions, pruneAuditLog, pruneBackups } from './maintenance.mjs';
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { jobRuntimeStatus } from './job-runtime.mjs';
@@ -34,10 +34,20 @@ function runtimeIdle() {
   }
 }
 
+function isInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 function normalizePaths(paths = {}) {
-  const stateRoot = path.resolve(String(paths.stateRoot || ''));
+  const rawStateRoot = String(paths.stateRoot || '').trim();
+  if (!rawStateRoot) throw new Error('Runtime maintenance stateRoot is required');
+  const stateRoot = path.resolve(rawStateRoot);
+  if (stateRoot === path.parse(stateRoot).root) throw new Error('Runtime maintenance stateRoot cannot be a filesystem root');
   const backupRoot = path.resolve(String(paths.backupRoot || path.join(stateRoot, 'backups')));
   const auditLog = path.resolve(String(paths.auditLog || path.join(stateRoot, 'audit.jsonl')));
+  if (!isInside(stateRoot, backupRoot)) throw new Error('Runtime maintenance backupRoot must be inside stateRoot');
+  if (!isInside(stateRoot, auditLog)) throw new Error('Runtime maintenance auditLog must be inside stateRoot');
   return { stateRoot, backupRoot, auditLog };
 }
 
@@ -54,43 +64,18 @@ function isCurrent(runConfig) {
   return !!configured && configured.generation === runConfig?.generation;
 }
 
-async function persistHealthError(file, error) {
-  const payload = {
-    version: 1,
-    status: 'degraded',
-    updatedAt: now(),
-    error: {
-      name: String(error?.name || 'Error').slice(0, 120),
-      code: error?.code ? String(error.code).slice(0, 120) : null,
-      message: String(error?.message || error).slice(0, 2000)
-    }
-  };
-  try {
-    await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-    try {
-      await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-      try { await fsp.chmod(tmp, 0o600); } catch {}
-      await fsp.rename(tmp, file);
-      try { await fsp.chmod(file, 0o600); } catch {}
-    } finally {
-      try { await fsp.rm(tmp, { force: true }); } catch {}
-    }
-  } catch {}
+async function markHealthClean(file, runConfig) {
+  if (healthKnownClean && isCurrent(runConfig)) return;
+  await clearHealthMarker(file);
+  if (isCurrent(runConfig)) healthKnownClean = true;
 }
 
-async function markHealthClean(file) {
-  if (healthKnownClean) return;
-  try { await fsp.rm(file, { force: true }); } catch {}
-  healthKnownClean = true;
-}
-
-function recordSuccess(runConfig, healthPath, result, backupMtimeMs = null) {
-  if (!isCurrent(runConfig)) return Promise.resolve();
+async function recordSuccess(runConfig, healthPath, result, backupMtimeMs = null) {
+  if (!isCurrent(runConfig)) return;
   if (backupMtimeMs != null) lastBackupRootMtimeMs = backupMtimeMs;
   lastResult = result;
   lastError = null;
-  return markHealthClean(healthPath);
+  await markHealthClean(healthPath, runConfig);
 }
 
 export function runtimeMaintenanceStatus() {
@@ -109,7 +94,12 @@ export function runtimeMaintenanceStatus() {
 
 export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
   if (!configured) return { skipped: true, reason: 'not-configured' };
-  if (running) return running.promise;
+  if (running) {
+    if (running.generation === configured.generation) return running.promise;
+    await running.promise.catch(() => {});
+    if (!configured) return { skipped: true, reason: 'not-configured' };
+    return runRuntimeMaintenanceOnce({ force });
+  }
   if (!force && !runtimeIdle()) return { skipped: true, reason: 'busy' };
 
   const runConfig = configured;
@@ -166,7 +156,7 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
         code: error?.code ? String(error.code) : null,
         message: String(error?.message || error).slice(0, 2000)
       };
-      await persistHealthError(healthPath, error);
+      await writeDegradedHealth(healthPath, error);
     }
     throw error;
   }).finally(() => {
@@ -183,13 +173,15 @@ export function startRuntimeMaintenance({
   getOptions = null,
   intervalMs = DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS
 } = {}) {
+  const normalizedPaths = normalizePaths(paths);
+  const normalizedIntervalMs = Math.max(5_000, Number(intervalMs) || DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS);
   stopRuntimeMaintenance();
   configured = {
     generation,
-    paths: normalizePaths(paths),
+    paths: normalizedPaths,
     options,
     getOptions,
-    intervalMs: Math.max(5_000, Number(intervalMs) || DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS)
+    intervalMs: normalizedIntervalMs
   };
   lastBackupRootMtimeMs = null;
   lastResult = null;
@@ -220,6 +212,7 @@ export const __test = {
   currentOptions,
   healthFile,
   isCurrent,
+  isInside,
   normalizePaths,
   runtimeIdle
 };
