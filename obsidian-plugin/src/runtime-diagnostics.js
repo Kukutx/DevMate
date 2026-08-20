@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { runtimeStateDiagnostics } = require('../../host/runtime/state-diagnostics.js');
 
 const MAX_LOG_BYTES = 512 * 1024;
 const MAX_MEMORY_LINES = 200;
@@ -119,6 +120,7 @@ class RuntimeDiagnostics {
       },
       status: status || null,
       lastFailure: this.lastFailure,
+      gatewayState: runtimeStateDiagnostics(this.stateDirectory),
       runtime: snapshot,
       logFile: this.logFile
     };
