@@ -32,7 +32,7 @@ if (process.env.DEVMATE_RUNTIME_PROBE === '1') {
     electron: process.versions.electron || null,
     platform: process.platform,
     arch: process.arch,
-    platformCapabilities: !!capabilities
+    platformCapabilities: capabilities?.installed === true
   })}\n`;
   await new Promise(resolve => process.stdout.write(payload, resolve));
   process.exit(0);
