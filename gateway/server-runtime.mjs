@@ -20,11 +20,13 @@ import { shutdownJobRuntime, startJobRuntime } from './job-runtime.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 
 const RUNTIME_PROBE_KIND = 'devmate-gateway-runtime-probe';
+const RUNTIME_CONTRACT_VERSION = 1;
 
 if (process.env.DEVMATE_RUNTIME_PROBE === '1') {
   const capabilities = installPlatformCapabilities(McpServer);
   const payload = `${JSON.stringify({
     kind: RUNTIME_PROBE_KIND,
+    contractVersion: RUNTIME_CONTRACT_VERSION,
     ok: true,
     node: process.versions.node,
     electron: process.versions.electron || null,
