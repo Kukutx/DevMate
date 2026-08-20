@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { RuntimeController } = require('../host/runtime-controller.js');
-const { resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
+const { MINIMUM_NODE_MAJOR, nodeMajor, resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 
@@ -59,7 +59,10 @@ assert.match(mainSource, /oauth-secrets\.json/, 'Obsidian bundle must keep OAuth
 assert.doesNotMatch(mainSource, /ObsidianNgrokRuntime/, 'Obsidian bundle must not restore the retired ngrok-only runtime wrapper');
 
 const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath });
-assert.match(nodeRuntime.nodeVersion, /^24\./);
+assert.ok(
+  nodeMajor(nodeRuntime.nodeVersion) >= MINIMUM_NODE_MAJOR,
+  `Obsidian runtime requires Node ${MINIMUM_NODE_MAJOR}+; found ${nodeRuntime.nodeVersion}`
+);
 
 const controller = new RuntimeController({
   workspaceRoot: temporaryRoot,
