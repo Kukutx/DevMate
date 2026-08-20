@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { VscodeHostLifecycle } = require('../vscode-host/lifecycle.js');
+const gatewayRuntimeContract = require('../shared/gateway-runtime-contract.cjs');
 
 function temporaryDirectory(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -15,12 +16,17 @@ function disposable() {
   return { dispose() {} };
 }
 
+function gatewayFixture() {
+  const body = `if (process.env.DEVMATE_RUNTIME_PROBE === '1') {\n  process.stdout.write(JSON.stringify({ kind: ${JSON.stringify(gatewayRuntimeContract.kind)}, contractVersion: ${gatewayRuntimeContract.version}, ok: true, node: process.versions.node, electron: process.versions.electron || null, platformCapabilities: true }) + '\\n');\n  process.exit(0);\n}\n`;
+  return `${body}/*${'x'.repeat(120000)}*/\n`;
+}
+
 function createHarness({ platform }) {
   const extensionPath = temporaryDirectory('devmate-vscode-lifecycle-extension-');
   const workspaceRoot = temporaryDirectory('devmate-vscode-lifecycle-workspace-');
   const stateDirectory = temporaryDirectory('devmate-vscode-lifecycle-state-');
   fs.mkdirSync(path.join(extensionPath, 'gateway'), { recursive: true });
-  fs.writeFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'x'.repeat(120000));
+  fs.writeFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), gatewayFixture());
 
   const settings = {
     autoStart: false,
@@ -109,16 +115,16 @@ test('normal VS Code host shutdown preserves the shared DevMate session', async 
   const harness = createHarness({ platform });
   await harness.lifecycle.activate(harness.context);
   await harness.lifecycle.deactivate();
-  assert.deepEqual(deactivationOptions, { preserveSession: true });
+  assert.equal(deactivationOptions?.shutdownBaseRuntime, false);
 });
 
 test('activation rollback still requests a full platform cleanup', async () => {
   let deactivationOptions = null;
   const platform = {
-    async activate() { throw new Error('synthetic activation failure'); },
+    async activate() { throw new Error('synthetic rollback'); },
     async deactivate(options) { deactivationOptions = options; }
   };
   const harness = createHarness({ platform });
-  await assert.rejects(harness.lifecycle.activate(harness.context), /synthetic activation failure/);
-  assert.deepEqual(deactivationOptions, { preserveSession: false });
+  await assert.rejects(harness.lifecycle.activate(harness.context), /synthetic rollback/);
+  assert.equal(deactivationOptions?.shutdownBaseRuntime, true);
 });
