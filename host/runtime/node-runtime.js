@@ -3,7 +3,7 @@
 const { spawnSync } = require('node:child_process');
 
 const MINIMUM_NODE_MAJOR = 24;
-const PROBE_TIMEOUT_MS = 5000;
+const PROBE_TIMEOUT_MS = 2000;
 const PROBE_MAX_BUFFER_BYTES = 64 * 1024;
 
 function nodeMajor(value) {
@@ -27,7 +27,7 @@ function probeNodeRuntime(executable, {
   ], {
     encoding: 'utf8',
     windowsHide: true,
-    timeout: Math.max(1000, Number(timeoutMs) || PROBE_TIMEOUT_MS),
+    timeout: Math.max(500, Number(timeoutMs) || PROBE_TIMEOUT_MS),
     killSignal: 'SIGKILL',
     maxBuffer: PROBE_MAX_BUFFER_BYTES,
     env: { ...env, ELECTRON_RUN_AS_NODE: '1' }
