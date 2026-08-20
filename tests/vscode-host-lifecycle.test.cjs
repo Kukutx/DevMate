@@ -115,16 +115,16 @@ test('normal VS Code host shutdown preserves the shared DevMate session', async 
   const harness = createHarness({ platform });
   await harness.lifecycle.activate(harness.context);
   await harness.lifecycle.deactivate();
-  assert.equal(deactivationOptions?.shutdownBaseRuntime, false);
+  assert.deepEqual(deactivationOptions, { preserveSession: true });
 });
 
 test('activation rollback still requests a full platform cleanup', async () => {
   let deactivationOptions = null;
   const platform = {
-    async activate() { throw new Error('synthetic rollback'); },
+    async activate() { throw new Error('synthetic activation failure'); },
     async deactivate(options) { deactivationOptions = options; }
   };
   const harness = createHarness({ platform });
-  await assert.rejects(harness.lifecycle.activate(harness.context), /synthetic rollback/);
-  assert.equal(deactivationOptions?.shutdownBaseRuntime, true);
+  await assert.rejects(harness.lifecycle.activate(harness.context), /synthetic activation failure/);
+  assert.deepEqual(deactivationOptions, { preserveSession: false });
 });
