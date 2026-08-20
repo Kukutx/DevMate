@@ -22,14 +22,15 @@ import { installRunnerControlPlane, resetRunnerControlState } from './runner-con
 const RUNTIME_PROBE_KIND = 'devmate-gateway-runtime-probe';
 
 if (process.env.DEVMATE_RUNTIME_PROBE === '1') {
-  process.stdout.write(`${JSON.stringify({
+  const payload = `${JSON.stringify({
     kind: RUNTIME_PROBE_KIND,
     ok: true,
     node: process.versions.node,
     electron: process.versions.electron || null,
     platform: process.platform,
     arch: process.arch
-  })}\n`);
+  })}\n`;
+  await new Promise(resolve => process.stdout.write(payload, resolve));
   process.exit(0);
 }
 
