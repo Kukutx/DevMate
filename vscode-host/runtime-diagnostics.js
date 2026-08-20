@@ -42,7 +42,6 @@ class VscodeRuntimeDiagnostics {
     add('extension-path', fs.statSync(this.context.extensionPath, { throwIfNoEntry: false })?.isDirectory(), this.context.extensionPath);
     add('state-directory', fs.statSync(stateDirectory, { throwIfNoEntry: false })?.isDirectory(), stateDirectory);
     add('gateway-bundle', !!gateway, gateway || candidates.join(' | '));
-    add('gateway-bundle-size', !!gateway && fs.statSync(gateway).size > 100000, gateway ? `${fs.statSync(gateway).size} bytes` : 'missing');
     add('gateway-launch-mode', true, 'child_process');
     add('config-file', fs.statSync(configFile, { throwIfNoEntry: false })?.isFile(), configFile);
     add('workspace', workspaceFolders(this.vscode).length > 0, `${workspaceFolders(this.vscode).length} folder(s)`);
