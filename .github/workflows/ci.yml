@@ -17,8 +17,9 @@ concurrency:
 
 jobs:
   verify:
+    name: Windows, VS Code 1.133, Node 24 LTS
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -53,6 +54,9 @@ jobs:
       - name: Package VSIX
         run: npm run package:vsix
 
+      - name: Real VS Code Extension Host E2E
+        run: npm run test:vscode-host
+
       - name: Smoke test packaged VSIX runtime
         run: node scripts/smoke-vsix-runtime.mjs
 
@@ -76,6 +80,51 @@ jobs:
         with:
           name: devmate-obsidian
           path: obsidian-plugin/dist/**
+
+  node-current:
+    name: Node 26 Current compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node Current
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit complete dependency tree
+        run: npm audit --audit-level=moderate
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Discovered unit and policy tests
+        run: npm run test:unit
+
+      - name: Smoke test gateway
+        run: npm run smoke:gateway
+
+      - name: Package and smoke VSIX
+        run: |
+          npm run package:vsix
+          node scripts/smoke-vsix-runtime.mjs
+
+      - name: Build and smoke Obsidian runtime
+        run: |
+          npm run build:obsidian
+          node scripts/smoke-obsidian-runtime.mjs
 
   godot-real:
     name: Linux and Real Godot 4.7.1
