@@ -5,6 +5,7 @@ const test = require('node:test');
 const {
   MINIMUM_NODE_MAJOR,
   GATEWAY_RUNTIME_PROBE_KIND,
+  GATEWAY_RUNTIME_CONTRACT_VERSION,
   nodeMajor,
   probeNodeRuntime,
   probeGatewayRuntime,
@@ -38,6 +39,7 @@ function gatewaySuccess(node = '24.18.0', electron = null) {
     status: 0,
     stdout: `${JSON.stringify({
       kind: GATEWAY_RUNTIME_PROBE_KIND,
+      contractVersion: GATEWAY_RUNTIME_CONTRACT_VERSION,
       ok: true,
       node,
       electron,
@@ -51,6 +53,7 @@ function gatewaySuccess(node = '24.18.0', electron = null) {
 
 test('parses current Node majors strictly', () => {
   assert.equal(MINIMUM_NODE_MAJOR, 24);
+  assert.equal(GATEWAY_RUNTIME_CONTRACT_VERSION, 1);
   assert.equal(nodeMajor('24.18.0'), 24);
   assert.equal(nodeMajor('v25.1.0'), 25);
   assert.equal(nodeMajor('23.9.0'), 23);
@@ -67,11 +70,12 @@ test('probes Electron-as-Node version metadata without private Electron flags', 
   assert.equal(spawnSyncImpl.calls[0].args.includes('--ms-enable-electron-run-as-node'), false);
 });
 
-test('Gateway capability probe is side-effect isolated and requires the Gateway contract marker', () => {
+test('Gateway capability probe is side-effect isolated and requires the exact versioned contract', () => {
   const spawnSyncImpl = fakeSpawn(() => gatewaySuccess('24.18.0', '42.8.0'));
   const result = probeGatewayRuntime('/runtime/node', { gatewayEntry, spawnSyncImpl });
   assert.equal(result.ok, true);
   assert.equal(result.stage, 'gateway-bootstrap');
+  assert.equal(result.contractVersion, 1);
   assert.equal(spawnSyncImpl.calls[0].args[0], gatewayEntry);
   assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_RUNTIME_PROBE, '1');
   assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_CONFIG, '');
@@ -79,10 +83,20 @@ test('Gateway capability probe is side-effect isolated and requires the Gateway 
 
   const invalid = probeGatewayRuntime('/runtime/node', {
     gatewayEntry,
-    spawnSyncImpl: fakeSpawn(() => ({ status: 0, stdout: '{"ok":true}\n', stderr: '' }))
+    spawnSyncImpl: fakeSpawn(() => ({
+      status: 0,
+      stdout: `${JSON.stringify({
+        kind: GATEWAY_RUNTIME_PROBE_KIND,
+        contractVersion: 2,
+        ok: true,
+        node: '24.18.0',
+        platformCapabilities: true
+      })}\n`,
+      stderr: ''
+    }))
   });
   assert.equal(invalid.ok, false);
-  assert.match(invalid.reason, /no valid capability result/i);
+  assert.match(invalid.reason, /runtime contract v1/i);
 });
 
 test('missing packaged Gateway fails before probing any runtime candidate', () => {
