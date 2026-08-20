@@ -17,8 +17,7 @@ function disposable() {
 }
 
 function gatewayFixture() {
-  const body = `if (process.env.DEVMATE_RUNTIME_PROBE === '1') {\n  process.stdout.write(JSON.stringify({ kind: ${JSON.stringify(gatewayRuntimeContract.kind)}, contractVersion: ${gatewayRuntimeContract.version}, ok: true, node: process.versions.node, electron: process.versions.electron || null, platformCapabilities: true }) + '\\n');\n  process.exit(0);\n}\n`;
-  return `${body}/*${'x'.repeat(120000)}*/\n`;
+  return `if (process.env.DEVMATE_RUNTIME_PROBE === '1') {\n  process.stdout.write(JSON.stringify({ kind: ${JSON.stringify(gatewayRuntimeContract.kind)}, contractVersion: ${gatewayRuntimeContract.version}, ok: true, node: process.versions.node, execPath: process.execPath, electron: process.versions.electron || null, platformCapabilities: true }) + '\\n');\n  process.exit(0);\n}\n`;
 }
 
 function createHarness({ platform }) {
