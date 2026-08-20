@@ -1,12 +1,13 @@
-import fsp from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
 
 const queues = new Map();
 const healthKnownClean = new Set();
 
 function auditKey(auditLog) {
-  return path.resolve(String(auditLog || ''));
+  const value = String(auditLog || '').trim();
+  if (!value) throw new Error('Audit log path is required');
+  return path.resolve(value);
 }
 
 function healthFile(auditLog) {
@@ -15,36 +16,14 @@ function healthFile(auditLog) {
 
 async function writeHealthError(auditLog, error) {
   const key = auditKey(auditLog);
-  const file = healthFile(auditLog);
   healthKnownClean.delete(key);
-  const payload = {
-    version: 1,
-    status: 'degraded',
-    updatedAt: new Date().toISOString(),
-    error: {
-      name: String(error?.name || 'Error').slice(0, 120),
-      code: error?.code ? String(error.code).slice(0, 120) : null,
-      message: String(error?.message || error).slice(0, 2000)
-    }
-  };
-  try {
-    await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-    try {
-      await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-      try { await fsp.chmod(tmp, 0o600); } catch {}
-      await fsp.rename(tmp, file);
-      try { await fsp.chmod(file, 0o600); } catch {}
-    } finally {
-      try { await fsp.rm(tmp, { force: true }); } catch {}
-    }
-  } catch {}
+  await writeDegradedHealth(healthFile(auditLog), error);
 }
 
 async function clearHealthError(auditLog) {
   const key = auditKey(auditLog);
   if (healthKnownClean.has(key)) return;
-  try { await fsp.rm(healthFile(auditLog), { force: true }); } catch {}
+  await clearHealthMarker(healthFile(auditLog));
   healthKnownClean.add(key);
 }
 
