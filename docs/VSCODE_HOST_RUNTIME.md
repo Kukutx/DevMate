@@ -27,25 +27,26 @@ The Gateway bundle is self-contained. The installed VSIX accepts only `gateway/s
 
 ## Gateway runtime contract
 
-A process is not accepted as the Gateway runtime merely because it reports a compatible embedded Node version. Runtime selection is capability-based and deterministic:
+A process is not accepted as the Gateway runtime because it reports an embedded Node version. Runtime selection is capability-based and deterministic:
 
 1. an explicitly configured Node executable, when present;
 2. standalone `node` from the machine path;
 3. the desktop host executable only as a final Electron-as-Node fallback.
 
-Every candidate must pass both stages of the same contract:
+Every candidate receives exactly one eligibility check:
 
 ```text
-Node 24+ metadata probe
-→ packaged Gateway bootstrap probe
+candidate executable
+→ execute the packaged Gateway in runtime-probe mode
+→ validate contract v1 + platform capabilities + Node 24+
 → eligible runtime
 ```
 
-The bootstrap probe executes the actual packaged Gateway entry with `DEVMATE_RUNTIME_PROBE=1`. It loads the Gateway dependency/bootstrap graph and must return the `devmate-gateway-runtime-probe` capability marker. Probe mode exits before reading instance configuration, acquiring the Gateway lock, starting jobs, or listening on a port.
+The probe executes the actual packaged Gateway entry with `DEVMATE_RUNTIME_PROBE=1`. The Gateway itself reports the Node version and executable that actually loaded it. Probe mode loads the Gateway dependency/bootstrap graph, validates platform capability registration, and exits before reading instance configuration, acquiring the Gateway lock, starting jobs, or listening on a port.
 
-This prevents an editor executable such as `Code.exe` from being selected only because `-p process.versions.node` succeeds. If an Electron host can genuinely execute the packaged Gateway it remains a valid fallback; otherwise it is rejected before the normal Start lifecycle begins. Unsupported private Electron CLI flags are not used.
+There is no separate `-p process.versions.node` preflight. This prevents an editor executable such as `Code.exe` from being selected because it merely looks like a compatible Node runtime. If an Electron host can genuinely execute the packaged Gateway it remains a valid fallback; otherwise it is rejected before the normal Start lifecycle begins. Unsupported private Electron CLI flags are not used.
 
-Failure is fail-closed. If no candidate satisfies the complete contract, startup reports `DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE` with per-candidate probe stage/reason diagnostics rather than launching an unverified process and waiting for the Gateway Ready timeout.
+Failure is fail-closed. If no candidate satisfies the complete contract, startup reports `DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE` with per-candidate contract-probe diagnostics rather than launching an unverified process and waiting for the Gateway Ready timeout.
 
 ## Complete Start and Ready
 
