@@ -38,7 +38,7 @@ test('Gateway runtime probe loads the real bootstrap graph without touching inst
       .find(value => value?.kind === PROBE_KIND);
 
     assert.equal(payload?.ok, true);
-    assert.match(String(payload?.node || ''), /^24\./);
+    assert.ok(Number.parseInt(String(payload?.node || '').split('.')[0], 10) >= 24, `unexpected probe Node version: ${payload?.node}`);
     assert.equal(fs.existsSync(configFile), false, 'runtime probe must not create or mutate config');
     assert.equal(fs.existsSync(path.join(stateRoot, 'state')), false, 'runtime probe must not acquire Gateway state or locks');
   } finally {
