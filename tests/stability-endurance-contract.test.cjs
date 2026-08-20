@@ -37,12 +37,20 @@ test('config reads are pure and VS Code publishes an isolated host context', () 
   assert.equal(fs.existsSync(path.join(root, 'vscode-host', 'context-mirror.js')), false);
 });
 
-test('idle embedded jobs are opt-in and worker polling never heartbeats an existing runner', () => {
+test('idle embedded jobs are opt-in, start only after capability registration, and worker polling avoids heartbeat churn', () => {
   const instance = source('shared/instance-config.cjs');
   const runtime = source('gateway/job-runtime.mjs');
   const serverRuntime = source('gateway/server-runtime.mjs');
+  const embeddedRunner = source('gateway/embedded-runner-capability.mjs');
+  const platform = source('gateway/platform-capabilities.mjs');
+
   assert.equal(instance.includes("strictBoolean(jobs.embeddedRunnerEnabled, false, 'jobs.embeddedRunnerEnabled')"), true);
-  assert.equal(serverRuntime.includes('readConfig().jobs?.embeddedRunnerEnabled === true'), true);
+  assert.equal(serverRuntime.includes('startJobRuntime()'), false);
+  assert.equal(platform.includes('installEmbeddedRunnerCapability(McpServerClass)'), true);
+  assert.equal(embeddedRunner.includes("config.jobs?.embeddedRunnerEnabled === true"), true);
+  assert.equal(embeddedRunner.includes('order: 100'), true);
+  assert.equal(embeddedRunner.includes('startJobRuntime()'), true);
+
   const workerStart = runtime.indexOf('export async function runJobWorkerOnce');
   const workerEnd = runtime.indexOf('export function startJobRuntime', workerStart);
   const worker = runtime.slice(workerStart, workerEnd);
