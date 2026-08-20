@@ -1,19 +1,24 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const test = require('node:test');
 const {
   MINIMUM_NODE_MAJOR,
+  GATEWAY_RUNTIME_PROBE_KIND,
   nodeMajor,
   probeNodeRuntime,
+  probeGatewayRuntime,
   resolveNodeRuntime
 } = require('../host/runtime/node-runtime.js');
 
-function fakeSpawn(results) {
+const gatewayEntry = path.resolve('test-gateway-runtime-probe.mjs');
+
+function fakeSpawn(handler) {
   const calls = [];
   const fn = (command, args, options) => {
     calls.push({ command, args, options });
-    const value = results[command];
+    const value = handler(command, args, options, calls.length - 1);
     if (value instanceof Error) return { error: value, status: null, stdout: '', stderr: '' };
     return value || { status: 1, stdout: '', stderr: 'missing' };
   };
@@ -21,10 +26,25 @@ function fakeSpawn(results) {
   return fn;
 }
 
-function success(node, execPath, electron = null) {
+function versionSuccess(node, execPath, electron = null) {
   return {
     status: 0,
     stdout: `${JSON.stringify({ node, execPath, electron })}\n`,
+    stderr: ''
+  };
+}
+
+function gatewaySuccess(node = '24.18.0', electron = null) {
+  return {
+    status: 0,
+    stdout: `${JSON.stringify({
+      kind: GATEWAY_RUNTIME_PROBE_KIND,
+      ok: true,
+      node,
+      electron,
+      platform: process.platform,
+      arch: process.arch
+    })}\n`,
     stderr: ''
   };
 }
@@ -37,73 +57,123 @@ test('parses current Node majors strictly', () => {
   assert.equal(nodeMajor('invalid'), 0);
 });
 
-test('probes Electron-as-Node with bounded current environment', () => {
-  const spawnSyncImpl = fakeSpawn({ host: success('24.18.0', '/runtime/node', '38.0.0') });
+test('probes Electron-as-Node version metadata without private Electron flags', () => {
+  const spawnSyncImpl = fakeSpawn(() => versionSuccess('24.18.0', '/runtime/node', '42.8.0'));
   const result = probeNodeRuntime('host', { spawnSyncImpl });
   assert.equal(result.ok, true);
   assert.equal(result.executable, '/runtime/node');
   assert.equal(result.nodeVersion, '24.18.0');
   assert.equal(spawnSyncImpl.calls[0].options.env.ELECTRON_RUN_AS_NODE, '1');
   assert.equal(spawnSyncImpl.calls[0].args.includes('--ms-enable-electron-run-as-node'), false);
-  assert.ok(spawnSyncImpl.calls[0].options.timeout <= 5000);
 });
 
-test('VS Code host runtime is probed with environment-only Node mode and falls back cleanly', () => {
+test('Gateway capability probe is side-effect isolated and requires the Gateway contract marker', () => {
+  const spawnSyncImpl = fakeSpawn(() => gatewaySuccess('24.18.0', '42.8.0'));
+  const result = probeGatewayRuntime('/runtime/node', { gatewayEntry, spawnSyncImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.stage, 'gateway-bootstrap');
+  assert.equal(spawnSyncImpl.calls[0].args[0], gatewayEntry);
+  assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_RUNTIME_PROBE, '1');
+  assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_CONFIG, '');
+  assert.equal(spawnSyncImpl.calls[0].options.env.DEVMATE_DISABLE_INSTANCE_LOCK, '1');
+
+  const invalid = probeGatewayRuntime('/runtime/node', {
+    gatewayEntry,
+    spawnSyncImpl: fakeSpawn(() => ({ status: 0, stdout: '{"ok":true}\n', stderr: '' }))
+  });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.reason, /no valid capability result/i);
+});
+
+test('automatic resolution prefers standalone Node and does not bind Gateway lifecycle to VS Code', () => {
   const code = 'A:\\Software Development\\Microsoft VS Code\\Code.exe';
-  const host = fakeSpawn({ [code]: success('24.18.0', code, '39.2.3') });
+  const node = 'C:\\Program Files\\nodejs\\node.exe';
+  const spawnSyncImpl = fakeSpawn((command, args) => {
+    if (command === 'node' && args[0] === '-p') return versionSuccess('24.18.0', node);
+    if (command === node && args[0] === gatewayEntry) return gatewaySuccess();
+    if (command === code) throw new Error('VS Code host must not be probed when standalone Node satisfies the contract');
+    return null;
+  });
   const selected = resolveNodeRuntime({
     processExecutable: code,
     processNodeVersion: '24.18.0',
-    spawnSyncImpl: host
+    spawnSyncImpl,
+    gatewayEntry
+  });
+  assert.equal(selected.source, 'path');
+  assert.equal(selected.executable, node);
+  assert.equal(selected.gatewayProbe.ok, true);
+  assert.deepEqual(spawnSyncImpl.calls.map(call => call.command), ['node', node]);
+});
+
+test('host Electron is only a fallback and must run the packaged Gateway probe successfully', () => {
+  const code = 'A:\\Software Development\\Microsoft VS Code\\Code.exe';
+  const spawnSyncImpl = fakeSpawn((command, args) => {
+    if (command === 'node') return { status: 1, stdout: '', stderr: 'node not found' };
+    if (command === code && args[0] === '-p') return versionSuccess('24.18.0', code, '42.8.0');
+    if (command === code && args[0] === gatewayEntry) return gatewaySuccess('24.18.0', '42.8.0');
+    return null;
+  });
+  const selected = resolveNodeRuntime({
+    processExecutable: code,
+    processNodeVersion: '24.18.0',
+    spawnSyncImpl,
+    gatewayEntry
   });
   assert.equal(selected.source, 'host');
-  assert.equal(host.calls[0].options.env.ELECTRON_RUN_AS_NODE, '1');
-  assert.equal(host.calls[0].args.some(arg => String(arg).includes('ms-enable-electron')), false);
-
-  const fallback = fakeSpawn({
-    [code]: { status: 9, stdout: '', stderr: 'bad option' },
-    node: success('24.18.0', 'C:\\Program Files\\nodejs\\node.exe')
-  });
-  const fallbackSelected = resolveNodeRuntime({
-    processExecutable: code,
-    processNodeVersion: '24.18.0',
-    spawnSyncImpl: fallback
-  });
-  assert.equal(fallbackSelected.source, 'path');
-  assert.deepEqual(fallback.calls.map(call => call.command), [code, 'node']);
+  assert.equal(selected.gatewayProbe.ok, true);
+  assert.deepEqual(spawnSyncImpl.calls.map(call => call.command), ['node', code, code]);
 });
 
-test('auto resolution skips an old embedded Node and uses system Node 24', () => {
-  const spawnSyncImpl = fakeSpawn({
-    node: success('24.18.0', 'C:\\Program Files\\nodejs\\node.exe')
+test('a host that reports Node 24 but cannot bootstrap Gateway is rejected instead of hanging at Start', () => {
+  const code = 'A:\\Software Development\\Microsoft VS Code\\Code.exe';
+  const spawnSyncImpl = fakeSpawn((command, args) => {
+    if (command === 'node') return { status: 1, stdout: '', stderr: 'node not found' };
+    if (command === code && args[0] === '-p') return versionSuccess('24.18.0', code, '42.8.0');
+    if (command === code && args[0] === gatewayEntry) {
+      const timeout = new Error('spawnSync Code.exe ETIMEDOUT');
+      timeout.code = 'ETIMEDOUT';
+      return timeout;
+    }
+    return null;
   });
-  const result = resolveNodeRuntime({
-    processExecutable: 'obsidian.exe',
-    processNodeVersion: '22.17.0',
-    spawnSyncImpl
-  });
-  assert.equal(result.source, 'path');
-  assert.equal(result.nodeVersion, '24.18.0');
-  assert.deepEqual(spawnSyncImpl.calls.map(call => call.command), ['node']);
+
+  assert.throws(
+    () => resolveNodeRuntime({
+      processExecutable: code,
+      processNodeVersion: '24.18.0',
+      spawnSyncImpl,
+      gatewayEntry
+    }),
+    error => {
+      assert.equal(error.code, 'DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE');
+      assert.match(error.message, /Gateway-compatible Node\.js 24\+/);
+      assert.equal(error.attempts.at(-1).source, 'host');
+      assert.equal(error.attempts.at(-1).stage, 'gateway-bootstrap');
+      assert.match(error.attempts.at(-1).reason, /ETIMEDOUT/);
+      return true;
+    }
+  );
 });
 
-test('configured Node wins and invalid runtimes fail closed with diagnostics', () => {
-  const configured = fakeSpawn({ custom: success('25.0.0', '/custom/node') });
+test('configured runtime remains authoritative only when it satisfies the same Gateway contract', () => {
+  const configured = '/custom/node';
+  const system = '/system/node';
+  const spawnSyncImpl = fakeSpawn((command, args) => {
+    if (command === configured && args[0] === '-p') return versionSuccess('25.0.0', configured);
+    if (command === configured && args[0] === gatewayEntry) return gatewaySuccess('25.0.0');
+    if (command === 'node' && args[0] === '-p') return versionSuccess('24.18.0', system);
+    if (command === system && args[0] === gatewayEntry) return gatewaySuccess();
+    return null;
+  });
   const selected = resolveNodeRuntime({
-    preferredExecutable: 'custom',
+    preferredExecutable: configured,
     processExecutable: 'host',
     processNodeVersion: '24.0.0',
-    spawnSyncImpl: configured
+    spawnSyncImpl,
+    gatewayEntry
   });
   assert.equal(selected.source, 'configured');
-  assert.equal(selected.executable, '/custom/node');
-
-  const unavailable = fakeSpawn({
-    host: success('23.9.0', '/host/node'),
-    node: success('22.12.0', '/path/node')
-  });
-  assert.throws(
-    () => resolveNodeRuntime({ processExecutable: 'host', processNodeVersion: '24.0.0', spawnSyncImpl: unavailable }),
-    error => error.code === 'DEVMATE_NODE_RUNTIME_UNAVAILABLE' && /Node\.js 24\+/.test(error.message)
-  );
+  assert.equal(selected.executable, configured);
+  assert.deepEqual(spawnSyncImpl.calls.map(call => call.command), [configured, configured]);
 });
