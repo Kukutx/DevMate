@@ -6,7 +6,7 @@ const { spawnSync } = require('node:child_process');
 
 const MINIMUM_NODE_MAJOR = 24;
 const PROBE_TIMEOUT_MS = 5000;
-const GATEWAY_PROBE_TIMEOUT_MS = 7000;
+const GATEWAY_PROBE_TIMEOUT_MS = 5000;
 const GATEWAY_RUNTIME_PROBE_KIND = 'devmate-gateway-runtime-probe';
 
 function nodeMajor(value) {
@@ -93,16 +93,23 @@ function packagedGatewayCandidates(baseDirectory = __dirname) {
   ];
 }
 
+function existingFile(candidate, statSync = fs.statSync) {
+  try {
+    return statSync(candidate, { throwIfNoEntry: false })?.isFile() ? candidate : '';
+  } catch {
+    return '';
+  }
+}
+
 function resolveGatewayProbeEntry(explicitEntry = '', {
   baseDirectory = __dirname,
   statSync = fs.statSync
 } = {}) {
   const explicit = String(explicitEntry || '').trim();
-  if (explicit) return path.resolve(explicit);
+  if (explicit) return existingFile(path.resolve(explicit), statSync);
   for (const candidate of packagedGatewayCandidates(baseDirectory)) {
-    try {
-      if (statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate;
-    } catch {}
+    const found = existingFile(candidate, statSync);
+    if (found) return found;
   }
   return '';
 }
@@ -190,10 +197,13 @@ function resolveNodeRuntime({
   minimumMajor = MINIMUM_NODE_MAJOR,
   gatewayEntry = resolveGatewayProbeEntry()
 } = {}) {
-  const verifiedGatewayEntry = resolveGatewayProbeEntry(gatewayEntry);
+  const requestedGatewayEntry = String(gatewayEntry || '').trim();
+  const verifiedGatewayEntry = resolveGatewayProbeEntry(requestedGatewayEntry);
   if (!verifiedGatewayEntry) {
-    const error = new Error('DevMate packaged Gateway runtime probe entry is missing');
+    const detail = requestedGatewayEntry ? `: ${path.resolve(requestedGatewayEntry)}` : '';
+    const error = new Error(`DevMate packaged Gateway runtime probe entry is missing${detail}`);
     error.code = 'DEVMATE_GATEWAY_RUNTIME_PROBE_MISSING';
+    error.gatewayEntry = requestedGatewayEntry || null;
     throw error;
   }
 
