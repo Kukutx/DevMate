@@ -11,9 +11,11 @@ export const AUDIT_HIGH_WATER_RATIO = 1.25;
 let timer = null;
 let running = null;
 let configured = null;
+let generation = 0;
 let lastBackupRootMtimeMs = null;
 let lastResult = null;
 let lastError = null;
+let healthKnownClean = false;
 
 function now() {
   return new Date().toISOString();
@@ -39,13 +41,17 @@ function normalizePaths(paths = {}) {
   return { stateRoot, backupRoot, auditLog };
 }
 
-function currentOptions() {
-  const raw = typeof configured?.getOptions === 'function' ? configured.getOptions() : configured?.options;
+function currentOptions(runConfig = configured) {
+  const raw = typeof runConfig?.getOptions === 'function' ? runConfig.getOptions() : runConfig?.options;
   return maintenanceOptions(raw || {});
 }
 
 function healthFile(stateRoot) {
   return path.join(stateRoot, 'runtime-maintenance.json');
+}
+
+function isCurrent(runConfig) {
+  return !!configured && configured.generation === runConfig?.generation;
 }
 
 async function persistHealthError(file, error) {
@@ -73,14 +79,26 @@ async function persistHealthError(file, error) {
   } catch {}
 }
 
-async function clearHealthError(file) {
+async function markHealthClean(file) {
+  if (healthKnownClean) return;
   try { await fsp.rm(file, { force: true }); } catch {}
+  healthKnownClean = true;
+}
+
+function recordSuccess(runConfig, healthPath, result, backupMtimeMs = null) {
+  if (!isCurrent(runConfig)) return Promise.resolve();
+  if (backupMtimeMs != null) lastBackupRootMtimeMs = backupMtimeMs;
+  lastResult = result;
+  lastError = null;
+  return markHealthClean(healthPath);
 }
 
 export function runtimeMaintenanceStatus() {
   return {
     enabled: !!timer,
     running: !!running,
+    generation: configured?.generation || generation,
+    runningGeneration: running?.generation || null,
     intervalMs: configured?.intervalMs || null,
     auditHighWaterRatio: AUDIT_HIGH_WATER_RATIO,
     lastBackupRootMtimeMs,
@@ -91,14 +109,16 @@ export function runtimeMaintenanceStatus() {
 
 export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
   if (!configured) return { skipped: true, reason: 'not-configured' };
-  if (running) return running;
+  if (running) return running.promise;
   if (!force && !runtimeIdle()) return { skipped: true, reason: 'busy' };
 
   const runConfig = configured;
+  const previousBackupMtimeMs = lastBackupRootMtimeMs;
   const healthPath = healthFile(runConfig.paths.stateRoot);
-  running = (async () => {
+  let promise;
+  promise = (async () => {
     const startedAt = Date.now();
-    const options = currentOptions();
+    const options = currentOptions(runConfig);
     const { backupRoot, auditLog } = runConfig.paths;
     const [auditStat, backupRootStat] = await Promise.all([
       statOrNull(auditLog),
@@ -108,7 +128,7 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
     const auditHighWater = Math.ceil(options.maxAuditBytes * AUDIT_HIGH_WATER_RATIO);
     const auditNeedsPrune = force ? auditBytes > options.maxAuditBytes : auditBytes > auditHighWater;
     const backupMtimeMs = backupRootStat?.mtimeMs || 0;
-    const backupChanged = force || lastBackupRootMtimeMs == null || backupMtimeMs !== lastBackupRootMtimeMs;
+    const backupChanged = force || previousBackupMtimeMs == null || backupMtimeMs !== previousBackupMtimeMs;
 
     if (!auditNeedsPrune && !backupChanged) {
       const skipped = {
@@ -119,9 +139,7 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
         auditHighWater,
         backupMtimeMs
       };
-      lastResult = skipped;
-      if (lastError) await clearHealthError(healthPath);
-      lastError = null;
+      await recordSuccess(runConfig, healthPath, skipped);
       return skipped;
     }
 
@@ -134,27 +152,29 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
     if (auditNeedsPrune) result.audit = await pruneAuditLog(auditLog, options);
     if (backupChanged) result.backups = await pruneBackups(backupRoot, options);
     const afterBackupStat = await statOrNull(backupRoot);
-    lastBackupRootMtimeMs = afterBackupStat?.mtimeMs || 0;
+    const afterBackupMtimeMs = afterBackupStat?.mtimeMs || 0;
     result.completedAt = now();
     result.durationMs = Date.now() - startedAt;
-    lastResult = result;
-    if (lastError) await clearHealthError(healthPath);
-    lastError = null;
+    await recordSuccess(runConfig, healthPath, result, afterBackupMtimeMs);
     return result;
   })().catch(async error => {
-    lastError = {
-      at: now(),
-      name: String(error?.name || 'Error'),
-      code: error?.code ? String(error.code) : null,
-      message: String(error?.message || error).slice(0, 2000)
-    };
-    await persistHealthError(healthPath, error);
+    if (isCurrent(runConfig)) {
+      healthKnownClean = false;
+      lastError = {
+        at: now(),
+        name: String(error?.name || 'Error'),
+        code: error?.code ? String(error.code) : null,
+        message: String(error?.message || error).slice(0, 2000)
+      };
+      await persistHealthError(healthPath, error);
+    }
     throw error;
   }).finally(() => {
-    running = null;
+    if (running?.promise === promise) running = null;
   });
 
-  return running;
+  running = { generation: runConfig.generation, promise };
+  return promise;
 }
 
 export function startRuntimeMaintenance({
@@ -165,12 +185,16 @@ export function startRuntimeMaintenance({
 } = {}) {
   stopRuntimeMaintenance();
   configured = {
+    generation,
     paths: normalizePaths(paths),
     options,
     getOptions,
     intervalMs: Math.max(5_000, Number(intervalMs) || DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS)
   };
   lastBackupRootMtimeMs = null;
+  lastResult = null;
+  lastError = null;
+  healthKnownClean = false;
   timer = setInterval(() => {
     void runRuntimeMaintenanceOnce().catch(() => {});
   }, configured.intervalMs);
@@ -182,17 +206,20 @@ export function stopRuntimeMaintenance() {
   if (timer) clearInterval(timer);
   timer = null;
   configured = null;
+  generation += 1;
   lastBackupRootMtimeMs = null;
+  healthKnownClean = false;
 }
 
 export async function drainRuntimeMaintenance() {
   if (!running) return null;
-  return running.catch(() => null);
+  return running.promise.catch(() => null);
 }
 
 export const __test = {
   currentOptions,
   healthFile,
+  isCurrent,
   normalizePaths,
   runtimeIdle
 };
