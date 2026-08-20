@@ -15,8 +15,14 @@ function temporaryDirectory(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-test('runtime diagnostics redact credentials and persist a bounded local log', () => {
+test('runtime diagnostics redact credentials, persist a bounded log, and expose shared Gateway state', () => {
   const state = temporaryDirectory('devmate-diagnostics-');
+  const stateRoot = path.join(state, 'state');
+  fs.mkdirSync(stateRoot, { recursive: true });
+  fs.writeFileSync(path.join(stateRoot, 'gateway-startup.json'), JSON.stringify({ status: 'starting', currentStage: 'maintenance' }));
+  fs.writeFileSync(path.join(stateRoot, 'audit-health.json'), JSON.stringify({ status: 'degraded', error: { code: 'EIO' } }));
+  fs.writeFileSync(path.join(stateRoot, 'runtime-maintenance.json'), JSON.stringify({ status: 'degraded', error: { code: 'EPERM' } }));
+
   const diagnostics = new RuntimeDiagnostics({ stateDirectory: state, pluginVersion: '3.0.1', vaultRoot: state });
   diagnostics.append('Gateway URL http://127.0.0.1:8787/mcp?token=very-secret');
   diagnostics.append('Authorization: Bearer another-secret');
@@ -32,8 +38,12 @@ test('runtime diagnostics redact credentials and persist a bounded local log', (
   assert.match(report, /\[redacted\]/);
   assert.doesNotMatch(report, /very-secret|another-secret|structured-secret/);
   assert.match(report, /worker_threads/);
+  assert.match(report, /"currentStage": "maintenance"/);
+  assert.match(report, /"code": "EIO"/);
+  assert.match(report, /"code": "EPERM"/);
   assert.equal(fs.existsSync(diagnostics.logFile), true);
   assert.equal(diagnostics.lastFailure.code, 'TEST_FAILURE');
+  fs.rmSync(state, { recursive: true, force: true });
 });
 
 test('diagnostic normalization handles multiline messages', () => {
