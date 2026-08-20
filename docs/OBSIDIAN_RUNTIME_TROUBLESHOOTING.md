@@ -12,9 +12,9 @@ The Gateway requires a Gateway-compatible Node.js 24+ runtime. Obsidian uses the
 2. standalone `node` from `PATH`;
 3. the Obsidian/Electron executable only as a final Electron-as-Node fallback.
 
-Reporting Node 24+ is not sufficient. Every candidate must first pass the Node metadata probe and then execute the packaged Obsidian Gateway entry in side-effect-free runtime-probe mode. Only a candidate that returns the `devmate-gateway-runtime-probe` capability marker can be selected.
+There is no separate version-only eligibility probe. Every candidate must execute the packaged Obsidian Gateway entry in side-effect-free runtime-probe mode. The Gateway itself reports the Node version and executable that actually loaded it, and only a candidate that returns the exact versioned `devmate-gateway-runtime-probe` contract with Node 24+ and platform capabilities can be selected.
 
-If no candidate satisfies the full Gateway runtime contract, Start fails with `DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE` diagnostics instead of falling back to a renderer Worker, an older compatibility runtime, or an unverified Electron host.
+If no candidate satisfies the Gateway runtime contract, Start fails with `DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE` diagnostics instead of falling back to a renderer Worker, an older compatibility runtime, or an unverified Electron host.
 
 ## Expected Start lifecycle
 
@@ -59,7 +59,7 @@ Credential-shaped values are redacted before persistence.
 
 1. Press **Start** once.
 2. If Start fails, copy diagnostics before changing settings.
-3. Confirm a Gateway-compatible Node.js 24+ runtime is available; a version-only probe is not sufficient.
+3. Confirm a Gateway-compatible Node.js 24+ runtime is available; only the real Gateway contract probe determines compatibility.
 4. Confirm the plugin package contains the expected Gateway bundle/runtime files.
 5. Run connection diagnostics and verify the configured provider/executable/credential requirements.
 6. Change the preferred Gateway port only when diagnostics report a real port conflict.
