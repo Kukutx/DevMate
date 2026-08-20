@@ -1,13 +1,13 @@
 {
   "name": "devmate-obsidian",
   "private": true,
-  "version": "3.4.4",
+  "version": "3.5.0",
   "description": "Obsidian desktop host for DevMate",
   "scripts": {
     "build": "node esbuild.config.mjs",
     "check": "node --check src/main.js && node --check ../host/runtime-controller.js"
   },
   "devDependencies": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.2"
   }
 }
