@@ -47,8 +47,9 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
   fs.mkdirSync(backupRoot, { recursive: true });
   fs.writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf8');
 
+  const auditTime = new Date().toISOString();
   const auditLines = Array.from({ length: 20000 }, (_, index) => JSON.stringify({
-    time: '2026-08-20T00:00:00.000Z',
+    time: auditTime,
     action: 'write_file',
     index,
     payload: 'x'.repeat(220)
@@ -56,7 +57,7 @@ test('Gateway reaches Ready with a large accumulated maintenance state', { timeo
   fs.writeFileSync(auditLog, `${auditLines.join('\n')}\n`, 'utf8');
 
   for (let index = 0; index < 250; index += 1) {
-    const set = path.join(backupRoot, `2026-08-20T00-00-${String(index).padStart(3, '0')}`);
+    const set = path.join(backupRoot, `set-${String(index).padStart(3, '0')}`);
     fs.mkdirSync(set, { recursive: true });
     fs.writeFileSync(path.join(set, 'snapshot.txt'), `backup-${index}`);
   }
