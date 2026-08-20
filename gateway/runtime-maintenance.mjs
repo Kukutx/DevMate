@@ -1,5 +1,6 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { maintenanceOptions, pruneAuditLog, pruneBackups } from './maintenance.mjs';
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { jobRuntimeStatus } from './job-runtime.mjs';
@@ -43,6 +44,39 @@ function currentOptions() {
   return maintenanceOptions(raw || {});
 }
 
+function healthFile(stateRoot) {
+  return path.join(stateRoot, 'runtime-maintenance.json');
+}
+
+async function persistHealthError(file, error) {
+  const payload = {
+    version: 1,
+    status: 'degraded',
+    updatedAt: now(),
+    error: {
+      name: String(error?.name || 'Error').slice(0, 120),
+      code: error?.code ? String(error.code).slice(0, 120) : null,
+      message: String(error?.message || error).slice(0, 2000)
+    }
+  };
+  try {
+    await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    try {
+      await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+      try { await fsp.chmod(tmp, 0o600); } catch {}
+      await fsp.rename(tmp, file);
+      try { await fsp.chmod(file, 0o600); } catch {}
+    } finally {
+      try { await fsp.rm(tmp, { force: true }); } catch {}
+    }
+  } catch {}
+}
+
+async function clearHealthError(file) {
+  try { await fsp.rm(file, { force: true }); } catch {}
+}
+
 export function runtimeMaintenanceStatus() {
   return {
     enabled: !!timer,
@@ -60,10 +94,12 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
   if (running) return running;
   if (!force && !runtimeIdle()) return { skipped: true, reason: 'busy' };
 
+  const runConfig = configured;
+  const healthPath = healthFile(runConfig.paths.stateRoot);
   running = (async () => {
     const startedAt = Date.now();
     const options = currentOptions();
-    const { backupRoot, auditLog } = configured.paths;
+    const { backupRoot, auditLog } = runConfig.paths;
     const [auditStat, backupRootStat] = await Promise.all([
       statOrNull(auditLog),
       statOrNull(backupRoot)
@@ -84,6 +120,7 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
         backupMtimeMs
       };
       lastResult = skipped;
+      if (lastError) await clearHealthError(healthPath);
       lastError = null;
       return skipped;
     }
@@ -101,15 +138,17 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
     result.completedAt = now();
     result.durationMs = Date.now() - startedAt;
     lastResult = result;
+    if (lastError) await clearHealthError(healthPath);
     lastError = null;
     return result;
-  })().catch(error => {
+  })().catch(async error => {
     lastError = {
       at: now(),
       name: String(error?.name || 'Error'),
       code: error?.code ? String(error.code) : null,
       message: String(error?.message || error).slice(0, 2000)
     };
+    await persistHealthError(healthPath, error);
     throw error;
   }).finally(() => {
     running = null;
@@ -153,6 +192,7 @@ export async function drainRuntimeMaintenance() {
 
 export const __test = {
   currentOptions,
+  healthFile,
   normalizePaths,
   runtimeIdle
 };
