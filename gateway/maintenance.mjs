@@ -202,7 +202,7 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
 }
 
 export function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {
-  return withAuditLogLock(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs));
+  return withAuditLogLock(auditLog, () => pruneAuditLogUnlocked(auditLog, options, nowMs), { trackHealth: false });
 }
 
 export function pruneState(paths, options = {}, nowMs = Date.now()) {
