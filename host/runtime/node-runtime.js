@@ -6,7 +6,6 @@ const { spawnSync } = require('node:child_process');
 const gatewayRuntimeContract = require('../../shared/gateway-runtime-contract.cjs');
 
 const MINIMUM_NODE_MAJOR = 24;
-const PROBE_TIMEOUT_MS = 5000;
 const GATEWAY_PROBE_TIMEOUT_MS = 5000;
 const GATEWAY_RUNTIME_PROBE_KIND = gatewayRuntimeContract.kind;
 const GATEWAY_RUNTIME_CONTRACT_VERSION = gatewayRuntimeContract.version;
@@ -25,67 +24,6 @@ function jsonLines(value) {
     } catch {}
   }
   return out;
-}
-
-function probeNodeRuntime(executable, {
-  spawnSyncImpl = spawnSync,
-  minimumMajor = MINIMUM_NODE_MAJOR,
-  timeoutMs = PROBE_TIMEOUT_MS,
-  env = process.env
-} = {}) {
-  const requestedExecutable = String(executable || '').trim();
-  if (!requestedExecutable) {
-    return { ok: false, requestedExecutable, stage: 'node-version', reason: 'empty executable' };
-  }
-  const result = spawnSyncImpl(requestedExecutable, [
-    '-p',
-    "JSON.stringify({node:process.versions.node,execPath:process.execPath,electron:process.versions.electron||null})"
-  ], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: Math.max(1000, Number(timeoutMs) || PROBE_TIMEOUT_MS),
-    env: { ...env, ELECTRON_RUN_AS_NODE: '1' }
-  });
-  if (result.error) {
-    return {
-      ok: false,
-      requestedExecutable,
-      stage: 'node-version',
-      reason: result.error.message || String(result.error)
-    };
-  }
-  if (result.status !== 0) {
-    return {
-      ok: false,
-      requestedExecutable,
-      stage: 'node-version',
-      reason: String(result.stderr || result.stdout || `exit ${result.status}`).trim()
-    };
-  }
-  const payload = jsonLines(result.stdout).reverse().find(value => value.node) || null;
-  if (!payload) {
-    return { ok: false, requestedExecutable, stage: 'node-version', reason: 'runtime probe returned no Node version' };
-  }
-  const major = nodeMajor(payload.node);
-  if (major < minimumMajor) {
-    return {
-      ok: false,
-      requestedExecutable,
-      executable: String(payload.execPath || requestedExecutable),
-      nodeVersion: String(payload.node || ''),
-      electronVersion: payload.electron ? String(payload.electron) : null,
-      stage: 'node-version',
-      reason: `Node ${minimumMajor}+ required; found ${payload.node}`
-    };
-  }
-  return {
-    ok: true,
-    requestedExecutable,
-    executable: String(payload.execPath || requestedExecutable),
-    nodeVersion: String(payload.node),
-    electronVersion: payload.electron ? String(payload.electron) : null,
-    stage: 'node-version'
-  };
 }
 
 function packagedGatewayCandidates(baseDirectory = __dirname) {
@@ -126,11 +64,12 @@ function probeGatewayRuntime(executable, {
   const requestedExecutable = String(executable || '').trim();
   const entry = String(gatewayEntry || '').trim();
   if (!requestedExecutable) {
-    return { ok: false, requestedExecutable, gatewayEntry: entry, stage: 'gateway-bootstrap', reason: 'empty executable' };
+    return { ok: false, requestedExecutable, gatewayEntry: entry, stage: 'gateway-contract', reason: 'empty executable' };
   }
   if (!entry) {
-    return { ok: false, requestedExecutable, gatewayEntry: entry, stage: 'gateway-bootstrap', reason: 'packaged Gateway probe entry is unavailable' };
+    return { ok: false, requestedExecutable, gatewayEntry: entry, stage: 'gateway-contract', reason: 'packaged Gateway probe entry is unavailable' };
   }
+
   const result = spawnSyncImpl(requestedExecutable, [entry], {
     encoding: 'utf8',
     windowsHide: true,
@@ -139,9 +78,7 @@ function probeGatewayRuntime(executable, {
       ...env,
       ELECTRON_RUN_AS_NODE: '1',
       DEVMATE_RUNTIME_PROBE: '1',
-      DEVMATE_CONFIG: '',
-      DEVMATE_DISABLE_EMBEDDED_RUNNER: '1',
-      DEVMATE_DISABLE_INSTANCE_LOCK: '1'
+      DEVMATE_CONFIG: ''
     }
   });
   if (result.error) {
@@ -149,7 +86,7 @@ function probeGatewayRuntime(executable, {
       ok: false,
       requestedExecutable,
       gatewayEntry: entry,
-      stage: 'gateway-bootstrap',
+      stage: 'gateway-contract',
       reason: result.error.message || String(result.error)
     };
   }
@@ -158,10 +95,11 @@ function probeGatewayRuntime(executable, {
       ok: false,
       requestedExecutable,
       gatewayEntry: entry,
-      stage: 'gateway-bootstrap',
+      stage: 'gateway-contract',
       reason: String(result.stderr || result.stdout || `exit ${result.status}`).trim()
     };
   }
+
   const payload = jsonLines(result.stdout).reverse().find(value => value.kind === GATEWAY_RUNTIME_PROBE_KIND) || null;
   if (
     !payload?.ok ||
@@ -172,8 +110,8 @@ function probeGatewayRuntime(executable, {
       ok: false,
       requestedExecutable,
       gatewayEntry: entry,
-      stage: 'gateway-bootstrap',
-      reason: `Gateway bootstrap probe did not satisfy runtime contract v${GATEWAY_RUNTIME_CONTRACT_VERSION}`
+      stage: 'gateway-contract',
+      reason: `Gateway runtime probe did not satisfy contract v${GATEWAY_RUNTIME_CONTRACT_VERSION}`
     };
   }
   if (nodeMajor(payload.node) < minimumMajor) {
@@ -181,15 +119,17 @@ function probeGatewayRuntime(executable, {
       ok: false,
       requestedExecutable,
       gatewayEntry: entry,
-      stage: 'gateway-bootstrap',
-      reason: `Gateway bootstrap reported unsupported Node ${payload.node || 'unknown'}`
+      stage: 'gateway-contract',
+      reason: `Gateway runtime reported unsupported Node ${payload.node || 'unknown'}; Node ${minimumMajor}+ is required`
     };
   }
+
   return {
     ok: true,
     requestedExecutable,
+    executable: String(payload.execPath || requestedExecutable),
     gatewayEntry: entry,
-    stage: 'gateway-bootstrap',
+    stage: 'gateway-contract',
     contractVersion: payload.contractVersion,
     nodeVersion: String(payload.node),
     electronVersion: payload.electron ? String(payload.electron) : null
@@ -199,7 +139,6 @@ function probeGatewayRuntime(executable, {
 function resolveNodeRuntime({
   preferredExecutable = '',
   processExecutable = process.execPath,
-  processNodeVersion = process.versions.node,
   spawnSyncImpl = spawnSync,
   minimumMajor = MINIMUM_NODE_MAJOR,
   gatewayEntry = resolveGatewayProbeEntry()
@@ -221,47 +160,34 @@ function resolveNodeRuntime({
     candidates.push({ executable, source });
   };
 
-  // Explicit user configuration remains authoritative. Otherwise prefer a
-  // standalone Node runtime whose lifecycle is independent of the editor host.
+  // Explicit configuration is authoritative. Otherwise prefer a standalone
+  // Node process whose lifecycle is independent from the desktop host. The
+  // host executable remains a final fallback, but it receives no special trust.
   add(preferredExecutable, 'configured');
   add('node', 'path');
-  if (nodeMajor(processNodeVersion) >= minimumMajor) add(processExecutable, 'host');
+  add(processExecutable, 'host');
 
   const attempts = [];
   for (const candidate of candidates) {
-    const basic = probeNodeRuntime(candidate.executable, { spawnSyncImpl, minimumMajor });
-    const attempt = { source: candidate.source, ...basic };
-    if (!basic.ok) {
-      attempts.push(attempt);
-      continue;
-    }
-
-    const gateway = probeGatewayRuntime(basic.executable || candidate.executable, {
+    const probe = probeGatewayRuntime(candidate.executable, {
       gatewayEntry: verifiedGatewayEntry,
       spawnSyncImpl,
       minimumMajor
     });
-    attempt.gatewayProbe = gateway;
-    if (!gateway.ok) {
-      attempt.ok = false;
-      attempt.stage = gateway.stage;
-      attempt.reason = gateway.reason;
-      attempts.push(attempt);
-      continue;
-    }
-
+    const attempt = { source: candidate.source, ...probe };
     attempts.push(attempt);
+    if (!probe.ok) continue;
+
     return {
-      ...basic,
+      ...probe,
       source: candidate.source,
       gatewayEntry: verifiedGatewayEntry,
-      gatewayProbe: gateway,
       attempts
     };
   }
 
   const detail = attempts
-    .map(item => `${item.source}:${item.requestedExecutable} [${item.stage || 'probe'}] (${item.reason || 'unavailable'})`)
+    .map(item => `${item.source}:${item.requestedExecutable} (${item.reason || 'unavailable'})`)
     .join('; ');
   const error = new Error(`DevMate requires a Gateway-compatible Node.js ${minimumMajor}+ runtime${detail ? `: ${detail}` : ''}`);
   error.code = 'DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE';
@@ -272,13 +198,11 @@ function resolveNodeRuntime({
 
 module.exports = {
   MINIMUM_NODE_MAJOR,
-  PROBE_TIMEOUT_MS,
   GATEWAY_PROBE_TIMEOUT_MS,
   GATEWAY_RUNTIME_PROBE_KIND,
   GATEWAY_RUNTIME_CONTRACT_VERSION,
   nodeMajor,
   packagedGatewayCandidates,
-  probeNodeRuntime,
   probeGatewayRuntime,
   resolveGatewayProbeEntry,
   resolveNodeRuntime
