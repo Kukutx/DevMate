@@ -38,7 +38,8 @@ for (const file of [pluginMain, gatewayEntry]) {
 const mainSource = fs.readFileSync(pluginMain, 'utf8');
 assert.doesNotMatch(mainSource, /node:worker_threads|createWorkerSpawn|new Worker\s*\(/, 'Obsidian bundle must not depend on Worker threads');
 assert.match(mainSource, /child_process/, 'Obsidian bundle must contain the child-process Gateway runtime');
-assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Node runtime diagnostics');
+assert.match(mainSource, /DEVMATE_GATEWAY_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Gateway runtime contract diagnostics');
+assert.match(mainSource, /devmate-gateway-runtime-probe/, 'Obsidian bundle must contain the Gateway bootstrap capability contract');
 assert.match(mainSource, /SharedTunnelRecordStore/, 'Obsidian bundle must contain the shared provider ownership record store');
 assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the provider-native public connection lifecycle');
 assert.match(mainSource, /Starting DevMate: Gateway -> public connection -> MCP verification/, 'Obsidian Start must package the complete one-click lifecycle');
@@ -58,8 +59,10 @@ assert.match(mainSource, /NGROK_AUTHTOKEN/, 'Obsidian bundle must preserve the s
 assert.match(mainSource, /oauth-secrets\.json/, 'Obsidian bundle must keep OAuth signing and approval secrets in private state');
 assert.doesNotMatch(mainSource, /ObsidianNgrokRuntime/, 'Obsidian bundle must not restore the retired ngrok-only runtime wrapper');
 
-const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath });
-assert.match(nodeRuntime.nodeVersion, /^24\./);
+const nodeRuntime = resolveNodeRuntime({ preferredExecutable: process.execPath, gatewayEntry });
+assert.ok(Number.parseInt(nodeRuntime.nodeVersion.split('.')[0], 10) >= 24);
+assert.equal(nodeRuntime.gatewayProbe?.ok, true);
+assert.equal(path.resolve(nodeRuntime.gatewayEntry), path.resolve(gatewayEntry));
 
 const controller = new RuntimeController({
   workspaceRoot: temporaryRoot,
