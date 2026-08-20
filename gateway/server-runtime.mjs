@@ -27,6 +27,7 @@ if (process.env.DEVMATE_RUNTIME_PROBE === '1') {
     contractVersion: gatewayRuntimeContract.version,
     ok: true,
     node: process.versions.node,
+    execPath: process.execPath,
     electron: process.versions.electron || null,
     platform: process.platform,
     arch: process.arch,
@@ -128,4 +129,3 @@ try {
 } finally {
   httpBootstrap.restore();
 }
-
