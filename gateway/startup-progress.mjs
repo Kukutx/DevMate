@@ -12,6 +12,8 @@ let active = false;
 let currentStage = '';
 let currentStageStartedAtMs = 0;
 let completedStages = [];
+let stageFailures = [];
+let lastNestedFailure = null;
 
 function iso(ms = Date.now()) {
   return new Date(ms).toISOString();
@@ -38,6 +40,8 @@ function writeSnapshot(extra = {}) {
     currentStage: currentStage || null,
     currentStageStartedAt: currentStageStartedAtMs ? iso(currentStageStartedAtMs) : null,
     completedStages: completedStages.slice(-24),
+    stageFailures: stageFailures.slice(-8),
+    degraded: stageFailures.length > 0,
     ...extra
   };
   try {
@@ -53,19 +57,22 @@ function writeSnapshot(extra = {}) {
   }
 }
 
-function finishCurrentStage(atMs = Date.now()) {
+function finishCurrentStage(atMs = Date.now(), detail = {}) {
   if (!currentStage || !currentStageStartedAtMs) return;
   completedStages.push({
     stage: currentStage,
     startedAt: iso(currentStageStartedAtMs),
     completedAt: iso(atMs),
-    durationMs: Math.max(0, atMs - currentStageStartedAtMs)
+    durationMs: Math.max(0, atMs - currentStageStartedAtMs),
+    ...detail
   });
 }
 
 export function beginStartupProgress(stage = 'runtime_config') {
   active = !!PROGRESS_FILE;
   completedStages = [];
+  stageFailures = [];
+  lastNestedFailure = null;
   currentStage = '';
   currentStageStartedAtMs = 0;
   if (active) enterStartupStage(stage);
@@ -94,9 +101,24 @@ export async function withStartupStage(stage, operation) {
   if (!active) return operation();
   const previous = currentStage;
   enterStartupStage(stage);
-  const result = await operation();
-  if (active && previous) enterStartupStage(previous);
-  return result;
+  try {
+    const result = await operation();
+    if (active && previous) enterStartupStage(previous);
+    return result;
+  } catch (error) {
+    if (active) {
+      const atMs = Date.now();
+      const failedStage = currentStage || String(stage || '').trim() || null;
+      finishCurrentStage(atMs, { status: 'failed', error: boundedError(error) });
+      const failure = { stage: failedStage, failedAt: iso(atMs), error: boundedError(error) };
+      stageFailures.push(failure);
+      lastNestedFailure = { stage: failedStage, error };
+      currentStage = previous || '';
+      currentStageStartedAtMs = previous ? atMs : 0;
+      writeSnapshot();
+    }
+    throw error;
+  }
 }
 
 export function completeStartupProgress(finalStage = 'server_module_loaded') {
@@ -117,8 +139,15 @@ export function completeStartupProgress(finalStage = 'server_module_loaded') {
 export function failStartupProgress(error) {
   if (!active) return false;
   const atMs = Date.now();
-  finishCurrentStage(atMs);
-  const failedStage = currentStage || null;
+  const nested = lastNestedFailure?.error === error ? lastNestedFailure : null;
+  const failedStage = nested?.stage || currentStage || null;
+  if (currentStage && nested) {
+    finishCurrentStage(atMs, { status: 'aborted' });
+  } else if (currentStage) {
+    const detail = { status: 'failed', error: boundedError(error) };
+    finishCurrentStage(atMs, detail);
+    stageFailures.push({ stage: currentStage, failedAt: iso(atMs), error: detail.error });
+  }
   currentStage = '';
   currentStageStartedAtMs = 0;
   active = false;
