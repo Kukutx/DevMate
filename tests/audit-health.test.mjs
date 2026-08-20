@@ -3,13 +3,13 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { withAuditLogLock } from '../gateway/audit-log-coordinator.mjs';
+import { drainAuditLog, withAuditLogLock } from '../gateway/audit-log-coordinator.mjs';
 
 async function tempDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-audit-health-'));
 }
 
-test('audit coordinator persists degradation only after a real operation failure and clears it on recovery', async () => {
+test('audit coordinator persists degradation until a real audit operation succeeds', async () => {
   const dir = await tempDir();
   try {
     const auditLog = path.join(dir, 'audit.jsonl');
@@ -28,6 +28,9 @@ test('audit coordinator persists degradation only after a real operation failure
     assert.equal(degraded.status, 'degraded');
     assert.equal(degraded.error.code, 'EIO');
     assert.match(degraded.error.message, /simulated audit write failure/);
+
+    await drainAuditLog(auditLog);
+    assert.equal((await fsp.stat(healthFile)).isFile(), true, 'queue drain must not clear audit degradation');
 
     await withAuditLogLock(auditLog, async () => {
       await fsp.writeFile(auditLog, '{"ok":true}\n', 'utf8');
