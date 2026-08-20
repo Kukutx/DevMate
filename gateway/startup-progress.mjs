@@ -94,11 +94,9 @@ export async function withStartupStage(stage, operation) {
   if (!active) return operation();
   const previous = currentStage;
   enterStartupStage(stage);
-  try {
-    return await operation();
-  } finally {
-    if (active && previous) enterStartupStage(previous);
-  }
+  const result = await operation();
+  if (active && previous) enterStartupStage(previous);
+  return result;
 }
 
 export function completeStartupProgress(finalStage = 'server_module_loaded') {
