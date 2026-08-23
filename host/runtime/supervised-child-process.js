@@ -61,15 +61,28 @@ function createSupervisedChildProcess({
         options: serializableSpawnOptions(options)
       };
       const send = () => {
-        if (!supervisor.connected || typeof supervisor.send !== 'function') return;
+        if (!supervisor.connected || typeof supervisor.send !== 'function') return false;
         try {
           supervisor.send(payload, error => {
             if (!error) return;
             try { supervisor.kill(); } catch {}
           });
+          return true;
         } catch {
           try { supervisor.kill(); } catch {}
+          return false;
         }
+      };
+      // Generic RuntimeController escalation calls forceTerminate() before it
+      // would otherwise SIGKILL a child. A provider supervisor must never be
+      // SIGKILLed merely because its provider tree has not yet been confirmed
+      // dead; keeping the supervisor alive preserves the fail-closed ownership
+      // fence and lets it continue cleanup retries.
+      supervisor.forceTerminate = () => {
+        if (supervisor.connected && typeof supervisor.send === 'function') {
+          try { supervisor.send({ type: 'devmate:provider-stop' }); } catch {}
+        }
+        try { supervisor.kill('SIGTERM'); } catch {}
       };
       if (supervisor.pid) send();
       else supervisor.once?.('spawn', send);
