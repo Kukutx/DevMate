@@ -6,6 +6,7 @@ import tokens from '../shared/oauth-tokens.cjs';
 import oauthSecrets from '../shared/oauth-secrets.cjs';
 import { CONFIG_PATH, mutateConfig, readConfig } from './local-shared.mjs';
 import { hostAllowed, isLoopbackHostname } from './http-host-policy.mjs';
+import { publicAddress } from './public-ip-policy.mjs';
 import { normalizeInstanceConfig, principalFromOAuthClaims, verifyMemberLoginCode } from './team-access.mjs';
 import {
   consumeAuthorizationCode,
@@ -119,35 +120,6 @@ function isRedirectUriAllowed(value) {
   } catch {
     return false;
   }
-}
-
-function ipv4Public(address) {
-  const parts = String(address).split('.').map(Number);
-  if (parts.length !== 4 || parts.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return false;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && (b === 0 || b === 168)) return false;
-  if (a === 198 && (b === 18 || b === 19)) return false;
-  if ((a === 192 && b === 0) || (a === 192 && b === 0) || (a === 198 && b === 51) || (a === 203 && b === 0)) return false;
-  return true;
-}
-
-function ipv6Public(address) {
-  const value = String(address || '').toLowerCase().split('%')[0];
-  if (!value || value === '::' || value === '::1') return false;
-  if (value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value) || value.startsWith('ff')) return false;
-  if (value.startsWith('2001:db8:')) return false;
-  const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return ipv4Public(mapped[1]);
-  return true;
-}
-
-function publicAddress(address) {
-  const family = net.isIP(String(address || ''));
-  return family === 4 ? ipv4Public(address) : family === 6 ? ipv6Public(address) : false;
 }
 
 function cimdUrl(value) {
