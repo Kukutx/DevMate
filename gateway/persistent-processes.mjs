@@ -105,9 +105,21 @@ export async function killProcessTree(record, force = false, {
 export async function shutdownPersistentProcesses() {
   await Promise.allSettled(runningProcesses().map(record => killProcessTree(record, true)));
 }
-export async function startPersistentProcess({ workspaceId, command, cwd = '.', label = '', environment = {}, autoStopAfterMs }) {
+
+async function startPersistentChild({
+  workspaceId,
+  command,
+  executable,
+  args = [],
+  shell,
+  cwd = '.',
+  label = '',
+  environment = {},
+  autoStopAfterMs
+}) {
   const config = syncTrustedRootsIntoConfig();
-  assertCommandAllowed(config, command);
+  if (shell) assertCommandAllowed(config, command);
+  else assertCanMutate(config, 'Persistent executable execution');
   const workspace = getWritableWorkspace(config, workspaceId);
   const directory = resolveWorkspaceCwd(workspace, cwd);
   pruneProcessRegistry();
@@ -116,12 +128,15 @@ export async function startPersistentProcess({ workspaceId, command, cwd = '.', 
     throw new Error(`Persistent process limit reached (${limits.maxProcesses}). Stop a process before starting another.`);
   }
   const id = `proc-${Date.now().toString(36)}-${nextNumber++}-${crypto.randomBytes(2).toString('hex')}`;
-  const child = spawn(command, [], {
-    cwd: directory, shell: true, windowsHide: true, detached: process.platform !== 'win32',
+  const spawnCommand = shell ? command : executable;
+  const spawnArgs = shell ? [] : args.map(value => String(value));
+  const child = spawn(spawnCommand, spawnArgs, {
+    cwd: directory, shell, windowsHide: true, detached: process.platform !== 'win32',
     env: { ...process.env, ...environment }, stdio: ['pipe', 'pipe', 'pipe']
   });
+  const displayCommand = shell ? String(command) : [String(executable), ...spawnArgs].join(' ');
   const record = {
-    id, label: String(label || '').trim() || command.slice(0, 80), command, cwd: directory,
+    id, label: String(label || '').trim() || displayCommand.slice(0, 80), command: displayCommand, cwd: directory,
     workspaceId: workspace.id, workspaceName: workspace.name, child, pid: child.pid || null,
     status: 'running', startedAt: now(), finishedAt: null, exitCode: null, signal: null, error: null,
     sequence: 0, firstSequence: 1, events: [], outputBytes: 0,
@@ -143,11 +158,24 @@ export async function startPersistentProcess({ workspaceId, command, cwd = '.', 
   });
   if (autoStopAfterMs) record.autoStopTimer = setTimeout(() => { void killProcessTree(record, false); }, autoStopAfterMs);
   await audit('start_process', {
-    processId: id, workspace: workspace.id, command,
-    cwd: normalizeSlash(path.relative(workspace.root, directory)), pid: child.pid || null
+    processId: id, workspace: workspace.id, command: displayCommand,
+    cwd: normalizeSlash(path.relative(workspace.root, directory)), pid: child.pid || null,
+    shell: !!shell
   });
   return processPublic(record);
 }
+
+export async function startPersistentProcess({ workspaceId, command, cwd = '.', label = '', environment = {}, autoStopAfterMs }) {
+  return startPersistentChild({ workspaceId, command, shell: true, cwd, label, environment, autoStopAfterMs });
+}
+
+export async function startPersistentExecutable({ workspaceId, executable, args = [], cwd = '.', label = '', environment = {}, autoStopAfterMs }) {
+  const target = String(executable || '').trim();
+  if (!target) throw new Error('Persistent executable is required');
+  if (!Array.isArray(args)) throw new TypeError('Persistent executable args must be an array');
+  return startPersistentChild({ workspaceId, executable: target, args, shell: false, cwd, label, environment, autoStopAfterMs });
+}
+
 export function listPersistentProcesses(includeFinished = true) {
   pruneProcessRegistry();
   return [...registry.values()]
@@ -195,4 +223,4 @@ export async function stopPersistentProcess(id, force = false, forget = false, t
     forgotten: !registry.has(id), process: registry.has(id) ? processPublic(record) : null
   };
 }
-export const __test = { processOwned, registry };
+export const __test = { processOwned, registry, startPersistentChild };
