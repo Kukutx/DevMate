@@ -378,7 +378,7 @@ class RuntimeController {
             DEVMATE_RUNTIME_PARENT_PID: String(process.pid)
           },
           windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe']
+          stdio: ['ignore', 'pipe', 'pipe', 'ipc']
         });
       } catch (error) {
         launch.endedAt = now();
@@ -532,20 +532,18 @@ class RuntimeController {
     return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
   }
 
-  dispose({ stopOwned = false } = {}) {
+  dispose() {
     return this.operations.run('dispose', async () => {
       if (this.disposed) return { disposed: true, alreadyDisposed: true };
-      if (stopOwned) {
-        const result = await this.stopInternal();
-        if (!result.stopped && result.reason === 'process-exit-timeout') return result;
-      } else if (this.activeOwnedChild()) {
-        return { disposed: false, reason: 'owned-process-running' };
+      const stopped = await this.stopInternal();
+      if (this.activeOwnedChild()) {
+        return { disposed: false, reason: stopped.reason || 'process-exit-timeout', stop: stopped };
       }
       this.child = null;
       this.owned = false;
       this.phase = 'disposed';
       this.disposed = true;
-      return { disposed: true };
+      return { disposed: true, stop: stopped };
     });
   }
 }
