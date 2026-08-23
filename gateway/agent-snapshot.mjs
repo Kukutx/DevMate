@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { mutateDurableDocument, readDurableNamespace } from './durable-state.mjs';
 
 const CONFIG_PATH = String(process.env.DEVMATE_CONFIG || '').trim();
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
@@ -10,6 +11,7 @@ export const AGENT_TASK_ROOT = AGENT_STATE_ROOT ? path.join(AGENT_STATE_ROOT, 't
 export const SNAPSHOT_MAX_FILES = 20_000;
 export const SNAPSHOT_MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const SNAPSHOT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+const COLLABORATION_NAMESPACE = 'codex-collaboration';
 const TASK_ID = /^codex-[a-z0-9-]{6,120}$/i;
 
 const SKIP_DIRS = new Set([
@@ -133,6 +135,62 @@ function safeChild(root, rel) {
   return full;
 }
 
+function snapshotState(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== 1 || !Array.isArray(raw.tasks)) return null;
+  const tasks = new Map();
+  for (const task of raw.tasks) {
+    const id = String(task?.id || '').trim();
+    if (!TASK_ID.test(id) || tasks.has(id)) return null;
+    tasks.set(id, task);
+  }
+  return tasks;
+}
+
+function retainSnapshot(task) {
+  return task?.snapshotAvailable === true && !['completed', 'applied'].includes(String(task?.status || ''));
+}
+
+export async function reconcileAgentSnapshotStorage() {
+  ensureRoots();
+  const tasks = snapshotState(readDurableNamespace(COLLABORATION_NAMESPACE, null));
+  if (!tasks) return { skipped: true, removed: [], failed: [] };
+  await fsp.mkdir(AGENT_TASK_ROOT, { recursive: true, mode: 0o700 });
+  const entries = await fsp.readdir(AGENT_TASK_ROOT, { withFileTypes: true });
+  const removed = [];
+  const failed = [];
+  const cleanupIds = new Set([...tasks].filter(([, task]) => !retainSnapshot(task)).map(([id]) => id));
+
+  for (const entry of entries) {
+    if (!TASK_ID.test(entry.name)) continue;
+    if (tasks.has(entry.name) && !cleanupIds.has(entry.name)) continue;
+    const full = path.join(AGENT_TASK_ROOT, entry.name);
+    try {
+      const stat = await fsp.lstat(full).catch(() => null);
+      if (stat) await fsp.rm(full, { recursive: stat.isDirectory(), force: true });
+      removed.push(entry.name);
+    } catch (error) {
+      failed.push({ taskId: entry.name, error: String(error?.message || error).slice(0, 1000) });
+    }
+  }
+
+  const failedIds = new Set(failed.map(item => item.taskId));
+  mutateDurableDocument(document => {
+    const current = snapshotState(document.namespaces?.[COLLABORATION_NAMESPACE]);
+    if (!current) return document;
+    for (const task of current.values()) {
+      if (retainSnapshot(task)) continue;
+      if (failedIds.has(task.id)) {
+        task.snapshotCleanupPending = true;
+        continue;
+      }
+      task.snapshotAvailable = false;
+      task.snapshotCleanupPending = false;
+    }
+    return document;
+  });
+  return { skipped: false, removed, failed };
+}
+
 async function stableReadFile(file, initialStat) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const before = attempt === 0 ? initialStat : await fsp.lstat(file);
@@ -208,8 +266,14 @@ export async function createAgentSnapshot({ taskId, workspace }) {
   const rootStat = await fsp.stat(workspace.root).catch(() => null);
   if (!rootStat?.isDirectory()) throw codedError('Workspace root is unavailable', 'codex_snapshot_workspace_unavailable');
   const workspaceReal = await fsp.realpath(workspace.root);
+  const recovery = await reconcileAgentSnapshotStorage();
+  if (recovery.failed.length) {
+    throw codedError(`Codex snapshot cleanup is blocked for ${recovery.failed.length} task(s)`, 'codex_snapshot_cleanup_blocked', { failed: recovery.failed });
+  }
   await fsp.mkdir(AGENT_TASK_ROOT, { recursive: true, mode: 0o700 });
-  if (fs.existsSync(paths.root)) throw codedError(`Codex task snapshot already exists: ${taskId}`, 'codex_snapshot_exists');
+  if (fs.existsSync(paths.root)) {
+    await fsp.rm(paths.root, { recursive: true, force: true });
+  }
   await fsp.mkdir(paths.baseline, { recursive: true, mode: 0o700 });
   await fsp.mkdir(paths.work, { recursive: true, mode: 0o700 });
 
@@ -461,13 +525,16 @@ export async function removeAgentSnapshot(taskId) {
 export const __test = {
   BLOCKED_BASENAMES,
   BLOCKED_EXTENSIONS,
+  COLLABORATION_NAMESPACE,
   SKIP_DIRS,
   TASK_ID,
   blockedPath,
   isEnvironmentFile,
   isSafeEnvExample,
   normalizeRelative,
+  retainSnapshot,
   safeChild,
   sha256,
+  snapshotState,
   taskPaths
 };
