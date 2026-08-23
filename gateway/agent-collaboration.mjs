@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { z } from 'zod';
 import { mutateDurableDocument, readDurableNamespace } from './durable-state.mjs';
 import { mutateConfig, readConfig, toolText } from './local-shared.mjs';
@@ -6,6 +7,7 @@ import { resolveWorkspace } from './workspace-resolver.mjs';
 import { registerServerInitializer } from './server-extension-host.mjs';
 import { safeFileMutationHandler } from './file-mutation-safety.mjs';
 import {
+  AGENT_TASK_ROOT,
   agentProposalChanges,
   assertAgentProposalConflictFree,
   createAgentSnapshot,
@@ -25,6 +27,8 @@ const CONTINUABLE_STATUSES = new Set(['proposal_ready', 'completed', 'failed', '
 const MAX_TASKS = 20;
 const MAX_TITLE = 200;
 const MAX_OUTPUT = 20_000;
+
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function emptyState() {
   return { version: 1, activeTaskId: null, tasks: [] };
@@ -98,9 +102,7 @@ function publicTask(task) {
 }
 
 function collaborationConfig(config = readConfig()) {
-  return {
-    enabled: config?.agent?.codexCollaborationEnabled === true
-  };
+  return { enabled: config?.agent?.codexCollaborationEnabled === true };
 }
 
 function requireEnabled() {
@@ -186,7 +188,7 @@ function reserveContinuation(taskId, workspaceId) {
 function markFailure(taskId, error) {
   try {
     return updateTask(taskId, (task, state) => {
-      task.status = error?.code === 'codex_turn_idle_timeout' || error?.code === 'codex_turn_timeout' || error?.code === 'codex_transport_closed'
+      task.status = ['codex_turn_idle_timeout', 'codex_turn_timeout', 'codex_transport_closed', 'codex_stopped'].includes(error?.code)
         ? 'interrupted'
         : 'failed';
       task.error = String(error?.message || error).slice(0, 4000);
@@ -213,8 +215,7 @@ async function finalizeTurn(taskId, result) {
       blocked: proposal.blocked.slice(0, 500)
     };
     task.completedAt = now();
-    if (hasChanges) task.status = 'proposal_ready';
-    else task.status = failedTurn ? 'failed' : 'completed';
+    task.status = hasChanges ? 'proposal_ready' : failedTurn ? 'failed' : 'completed';
     if (failedTurn && result.error) task.error = String(result.error).slice(0, 4000);
     releaseActive(state, task);
   });
@@ -225,16 +226,32 @@ async function finalizeTurn(taskId, result) {
   return updated;
 }
 
+async function captureActiveTurn(taskId, runtime, threadId, turnPromise) {
+  let settled = false;
+  void turnPromise.finally(() => { settled = true; }).catch(() => {});
+  for (let attempt = 0; attempt < 300 && !settled; attempt += 1) {
+    const active = runtime.status().activeTurn;
+    if (active?.threadId === threadId && active.turnId) {
+      updateTask(taskId, current => {
+        current.status = 'running';
+        current.turnId = active.turnId;
+      });
+      return;
+    }
+    await delay(100);
+  }
+}
+
 async function executeTurn({ task, workspace, prompt }) {
   const runtime = codexRuntime();
   try {
-    const snapshot = task.snapshotAvailable
-      ? await readAgentSnapshotManifest(task.id).then(() => ({ cwd: null }))
-      : await createAgentSnapshot({ taskId: task.id, workspace });
-    const manifest = await readAgentSnapshotManifest(task.id);
-    const cwd = snapshot.cwd || (await import('./agent-snapshot.mjs')).__test.taskPaths(task.id).work;
-    updateTask(task.id, current => { current.snapshotAvailable = true; });
-
+    if (!task.snapshotAvailable) {
+      await createAgentSnapshot({ taskId: task.id, workspace });
+      updateTask(task.id, current => { current.snapshotAvailable = true; });
+    } else {
+      await readAgentSnapshotManifest(task.id);
+    }
+    const cwd = path.join(AGENT_TASK_ROOT, task.id, 'workspace');
     const thread = await runtime.ensureThread({ threadId: task.threadId || '', cwd });
     updateTask(task.id, current => {
       current.threadId = thread.threadId;
@@ -242,17 +259,9 @@ async function executeTurn({ task, workspace, prompt }) {
       current.error = null;
     });
 
-    const result = await runtime.runTurn({
-      threadId: thread.threadId,
-      cwd,
-      prompt,
-      onStarted: info => {
-        updateTask(task.id, current => {
-          current.status = 'running';
-          current.turnId = info.turnId;
-        });
-      }
-    });
+    const turnPromise = runtime.runTurn({ threadId: thread.threadId, cwd, prompt });
+    await captureActiveTurn(task.id, runtime, thread.threadId, turnPromise);
+    const result = await turnPromise;
     return finalizeTurn(task.id, result);
   } catch (error) {
     markFailure(task.id, error);
@@ -373,14 +382,13 @@ export async function applyCodexProposal({ workspaceId, taskId }) {
     }
   } catch (error) {
     const rollbackFailures = await rollbackApplied(workspace.id, applied);
-    const wrapped = codedError(
+    throw codedError(
       rollbackFailures.length
         ? `Codex proposal apply failed and ${rollbackFailures.length} rollback operation(s) also failed`
         : `Codex proposal apply failed and completed operations were rolled back: ${error?.message || error}`,
       rollbackFailures.length ? 'codex_proposal_rollback_degraded' : 'codex_proposal_apply_failed',
       { cause: error, rollbackFailures }
     );
-    throw wrapped;
   }
 
   const updated = updateTask(task.id, current => {
@@ -447,7 +455,7 @@ function registerCodexTools(server) {
   }), rw, async args => toolText({ task: publicTask(await continueCodexTask(args)) }));
   register('codex_task_steer', 'Steer Codex task', 'Steer the currently active Codex turn without creating a new thread.', z.object({
     workspaceId: z.string().min(1), taskId: z.string().min(1), prompt: z.string().min(1).max(20_000)
-  }), rw, async args => toolText({ task: publicTask((await steerCodexTask(args))) }));
+  }), rw, async args => toolText({ task: publicTask(await steerCodexTask(args)) }));
   register('codex_task_interrupt', 'Interrupt Codex task', 'Interrupt the currently active Codex turn and preserve resumable task state.', z.object({
     workspaceId: z.string().min(1), taskId: z.string().min(1)
   }), rw, async args => toolText(await interruptCodexTask(args)));
@@ -500,6 +508,7 @@ export const __test = {
   ACTIVE_STATUSES,
   CONTINUABLE_STATUSES,
   MAX_TASKS,
+  captureActiveTurn,
   collaborationConfig,
   emptyState,
   normalizeState,
