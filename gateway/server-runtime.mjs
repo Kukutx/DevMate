@@ -76,6 +76,15 @@ try {
     throw error;
   }
 
+  enterStartupStage('codex_apply_recovery');
+  const codexApplyRecovery = await codexCollaboration.recoverCodexApplyAfterFileTransactions();
+  if (codexApplyRecovery.blocked.length) {
+    const error = new Error(`DevMate Codex proposal recovery is blocked for ${codexApplyRecovery.blocked.length} task(s)`);
+    error.code = 'DEVMATE_CODEX_APPLY_RECOVERY_BLOCKED';
+    error.blocked = codexApplyRecovery.blocked;
+    throw error;
+  }
+
   enterStartupStage('platform_capabilities');
   const createdHttpServers = new Set();
   httpBootstrap = installHttpServerBootstrap(http, {
