@@ -4,6 +4,7 @@ const childProcess = require('node:child_process');
 const path = require('node:path');
 const vscode = require('vscode');
 const { normalizeNgrokUrl, validateAuthtoken } = require('./ngrok-support');
+const { withConnectionMutationLease } = require('./vscode-host/connection-mutation-lease.js');
 const {
   activeNgrokConnection,
   configuredNgrokUrl,
@@ -59,6 +60,18 @@ function poolingEnabled() {
 
 function log(message) {
   setupOutput?.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
+}
+
+function withNgrokConnectionMutation(label, operation) {
+  if (!sharedConfigFile) {
+    const error = new Error('DevMate shared configuration is unavailable for ngrok mutation');
+    error.code = 'DEVMATE_NGROK_SHARED_STATE_UNAVAILABLE';
+    throw error;
+  }
+  return withConnectionMutationLease({
+    stateDirectory: path.dirname(sharedConfigFile),
+    hostId: `vscode-ngrok-${String(label || 'mutation').replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 80)}-${process.pid}`
+  }, operation);
 }
 
 async function openExternal(url) {
@@ -142,7 +155,7 @@ async function chooseDomain({ includeKeep = true, current = configuredUrl() } = 
     },
     {
       label: '$(globe) Configure a stable URL',
-      description: 'Optional developer/deployment choice; the URL must belong to the selected ngrok account',
+      description: 'Optional developer/deployment choice; the URL must belong to the selected account',
       value: 'custom'
     }
   ];
@@ -192,33 +205,36 @@ async function commitNgrokConfiguration(context, {
   domain,
   pooling = false
 } = {}) {
-  const previous = {
-    token: managedAuthtoken,
-    useManagedAccount: usesManagedAccount(),
-    machineUrl: machineConfiguredUrl(),
-    pooling: poolingEnabled(),
-    activeConnection: activeNgrokConnection(sharedConfigFile)
-  };
+  return withNgrokConnectionMutation('configuration', async () => {
+    const previous = {
+      token: await context.secrets.get(SECRET_KEY) || '',
+      useManagedAccount: usesManagedAccount(),
+      machineUrl: machineConfiguredUrl(),
+      pooling: poolingEnabled(),
+      activeConnection: activeNgrokConnection(sharedConfigFile)
+    };
 
-  await prepareNgrokCredentialMutation('ngrok configuration change');
-  try {
-    if (token !== undefined) {
-      await context.secrets.store(SECRET_KEY, validateAuthtoken(token));
-      managedAuthtoken = validateAuthtoken(token);
-    }
-    if (useManagedAccount !== undefined) await updatePreference('ngrokUseManagedAccount', !!useManagedAccount);
-    if (domain?.changed) await persistConfiguredUrl(domain.url);
-    if (pooling !== undefined) await updatePreference('ngrokPoolingEnabled', !!pooling);
-  } catch (error) {
-    try { await restoreSecret(context, previous.token); } catch {}
-    try { await updatePreference('ngrokUseManagedAccount', previous.useManagedAccount); } catch {}
+    await prepareNgrokCredentialMutation('ngrok configuration change');
     try {
-      if (previous.activeConnection) writeActiveNgrokUrl(sharedConfigFile, previous.activeConnection.publicUrl);
-    } catch {}
-    try { await updatePreference('ngrokUrl', previous.machineUrl); } catch {}
-    try { await updatePreference('ngrokPoolingEnabled', previous.pooling); } catch {}
-    throw error;
-  }
+      if (token !== undefined) {
+        const validated = validateAuthtoken(token);
+        await context.secrets.store(SECRET_KEY, validated);
+        managedAuthtoken = validated;
+      }
+      if (useManagedAccount !== undefined) await updatePreference('ngrokUseManagedAccount', !!useManagedAccount);
+      if (domain?.changed) await persistConfiguredUrl(domain.url);
+      if (pooling !== undefined) await updatePreference('ngrokPoolingEnabled', !!pooling);
+    } catch (error) {
+      try { await restoreSecret(context, previous.token); } catch {}
+      try { await updatePreference('ngrokUseManagedAccount', previous.useManagedAccount); } catch {}
+      try {
+        if (previous.activeConnection) writeActiveNgrokUrl(sharedConfigFile, previous.activeConnection.publicUrl);
+      } catch {}
+      try { await updatePreference('ngrokUrl', previous.machineUrl); } catch {}
+      try { await updatePreference('ngrokPoolingEnabled', previous.pooling); } catch {}
+      throw error;
+    }
+  });
 }
 
 function checkNgrokInstalled() {
@@ -393,10 +409,23 @@ async function clearManagedAccount(context) {
     'Delete and Use Global Config'
   );
   if (confirm !== 'Delete and Use Global Config') return;
-  const stopState = await prepareNgrokCredentialMutation('ngrok managed-account removal');
-  await context.secrets.delete(SECRET_KEY);
-  managedAuthtoken = '';
-  await updatePreference('ngrokUseManagedAccount', false);
+
+  const stopState = await withNgrokConnectionMutation('managed-account-removal', async () => {
+    const previousToken = await context.secrets.get(SECRET_KEY) || '';
+    const previousUseManaged = usesManagedAccount();
+    const mutationStopState = await prepareNgrokCredentialMutation('ngrok managed-account removal');
+    try {
+      await context.secrets.delete(SECRET_KEY);
+      managedAuthtoken = '';
+      await updatePreference('ngrokUseManagedAccount', false);
+      return mutationStopState;
+    } catch (error) {
+      try { await restoreSecret(context, previousToken); } catch {}
+      try { await updatePreference('ngrokUseManagedAccount', previousUseManaged); } catch {}
+      throw error;
+    }
+  });
+
   vscode.window.showInformationMessage(stopState.reason === 'stopped'
     ? 'Deleted the DevMate-managed ngrok credential and stopped the active managed connection.'
     : 'Deleted the DevMate-managed ngrok credential.');
@@ -439,8 +468,10 @@ async function maybePromptForNgrokSetup(context) {
   );
   if (action === 'Quick Setup') await vscode.commands.executeCommand('devMate.ngrokSetup');
   if (action === 'Use Global Config') {
-    await prepareNgrokCredentialMutation('ngrok account source change');
-    await updatePreference('ngrokUseManagedAccount', false);
+    await withNgrokConnectionMutation('account-source-change', async () => {
+      await prepareNgrokCredentialMutation('ngrok account source change');
+      await updatePreference('ngrokUseManagedAccount', false);
+    });
   }
 }
 
@@ -497,9 +528,11 @@ function runtimeDiagnostics() {
 
 module.exports = {
   activate,
+  commitNgrokConfiguration,
   deactivate,
   runtimeDiagnostics,
   loadBaseExtension,
   prepareNgrokCredentialMutation,
-  setupForConnection
+  setupForConnection,
+  withNgrokConnectionMutation
 };
