@@ -416,7 +416,7 @@ export class CodexAppServer extends EventEmitter {
           threadId: state.threadId,
           turnId: state.turnId,
           status: String(turn.status || 'completed'),
-          error: turn.error ? sanitizeText(JSON.stringify(turn.error), 8000) : null,
+          error: turn.error ? sanitizeRpcData(turn.error) : null,
           output: state.output,
           notificationCount: state.notifications,
           completedAt: new Date().toISOString()
