@@ -215,6 +215,34 @@ test('startup recovery blocks an interrupted replacement when the target was rec
   }
 });
 
+test('startup recovery does not resurrect the old file when a committed replacement target disappeared while DevMate was down', async () => {
+  const fx = await fixture();
+  try {
+    const target = path.join(fx.workspace, 'target.txt');
+    await fsp.writeFile(target, 'old-content');
+    const journal = __test.preparedJournal({
+      kind: 'write-file', transactionRoot: fx.transactionRoot,
+      workspaceRoot: fx.workspace, target, targetExisted: true
+    });
+    await fsp.writeFile(journal.temporary, 'committed-content');
+    await fsp.rename(target, journal.rollback);
+    await fsp.rename(journal.temporary, target);
+    await fsp.rm(target);
+
+    const recovery = await recoverFileTransactions({ transactionRoot: fx.transactionRoot, workspaceRoots: [fx.workspace] });
+    assert.equal(recovery.recovered.length, 0);
+    assert.equal(recovery.blocked.length, 1);
+    assert.equal(recovery.blocked[0].code, 'FILE_TRANSACTION_RECOVERY_BLOCKED');
+    assert.match(recovery.blocked[0].message, /target disappeared/);
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(await fsp.readFile(journal.rollback, 'utf8'), 'old-content');
+    assert.equal(fs.existsSync(journal.temporary), false);
+    assert.equal(fs.existsSync(journal.journalFile), true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('a crash immediately after preparing a new-file journal is safely discarded', async () => {
   const fx = await fixture();
   try {
