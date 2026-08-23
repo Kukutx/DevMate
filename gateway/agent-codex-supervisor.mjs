@@ -3,6 +3,7 @@ import { terminateProcessTree } from './command-process.mjs';
 
 const EXECUTABLE_KEY = 'DEVMATE_CODEX_SUPERVISOR_EXECUTABLE';
 const ARGS_KEY = 'DEVMATE_CODEX_SUPERVISOR_ARGS';
+const CLEANUP_RETRY_MS = 2000;
 const CLEANUP = Object.freeze({ graceMs: 1500, forceMs: 2500 });
 
 let child = null;
@@ -11,6 +12,14 @@ let shutdownPromise = null;
 
 function fail(message) {
   try { process.stderr.write(`DevMate Codex supervisor: ${message}\n`); } catch {}
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, Math.max(1, Number(ms) || CLEANUP_RETRY_MS)));
+}
+
+function childActive(value) {
+  return !!value && value.exitCode == null && value.signalCode == null;
 }
 
 function launchSpec() {
@@ -36,29 +45,44 @@ async function shutdown(reason = 'shutdown', requestedExitCode = 0) {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
   shutdownPromise = (async () => {
-    let exitCode = requestedExitCode;
     const current = child;
-    child = null;
-    if (current && current.exitCode == null && current.signalCode == null) {
-      try {
-        process.stdin.unpipe(current.stdin);
-        try { current.stdin?.end(); } catch {}
-        const result = await terminateProcessTree(current, CLEANUP);
-        if (result.exitConfirmed === false) {
-          exitCode = 1;
-          fail(`could not confirm Codex process exit during ${reason}`);
-        }
-      } catch (error) {
-        exitCode = 1;
-        fail(`Codex cleanup failed during ${reason}: ${error?.message || error}`);
-      }
+    let attempts = 0;
+    if (current) {
+      try { process.stdin.unpipe(current.stdin); } catch {}
+      try { current.stdin?.end(); } catch {}
     }
+
+    // This supervisor is the lifetime fence for the detached Codex app-server.
+    // Do not exit the fence while process-tree termination remains ambiguous.
+    // The Gateway may time out waiting for us, but it must keep this supervisor
+    // alive rather than orphaning an unconfirmed delegated process.
+    while (childActive(current)) {
+      attempts += 1;
+      let confirmed = false;
+      try {
+        const result = await terminateProcessTree(current, CLEANUP);
+        confirmed = result.exitConfirmed !== false;
+        if (!confirmed) fail(`could not confirm Codex process exit during ${reason} (attempt ${attempts})`);
+      } catch (error) {
+        fail(`Codex cleanup failed during ${reason} (attempt ${attempts}): ${error?.message || error}`);
+      }
+      if (confirmed || !childActive(current)) break;
+      await delay(CLEANUP_RETRY_MS);
+    }
+
+    if (child === current) child = null;
     try {
-      if (process.connected) process.send?.({ type: 'devmate:codex-supervisor-stopped', reason, exitCode });
+      if (process.connected) process.send?.({
+        type: 'devmate:codex-supervisor-stopped',
+        reason,
+        exitCode: requestedExitCode,
+        exitConfirmed: true,
+        cleanupAttempts: attempts
+      });
     } catch {}
-    process.exitCode = exitCode;
-    setImmediate(() => process.exit(exitCode));
-    return { reason, exitCode };
+    process.exitCode = requestedExitCode;
+    setImmediate(() => process.exit(requestedExitCode));
+    return { reason, exitCode: requestedExitCode, exitConfirmed: true, cleanupAttempts: attempts };
   })();
   return shutdownPromise;
 }
