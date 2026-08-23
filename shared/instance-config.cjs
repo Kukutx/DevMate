@@ -151,8 +151,9 @@ function normalizeInstanceConfig(config) {
     policyGeneration: strictInteger(previousConnection.policyGeneration, 0, 0, Number.MAX_SAFE_INTEGER, 'connection.policyGeneration')
   };
 
-  // No-auth is the default for local and public MCP access. OAuth remains optional;
-  // authentication secrets live outside the instance configuration.
+  // Missing authentication state normalizes to OAuth. Explicit `none` is retained only
+  // for trusted loopback use; public MCP ingress still requires OAuth at request time.
+  // Authentication secrets live outside the instance configuration.
   config.auth = normalizeAuthentication(config);
 
   const team = object(config.team, 'team');
