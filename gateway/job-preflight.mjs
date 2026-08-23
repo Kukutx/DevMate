@@ -1,8 +1,8 @@
 import { readConfig } from './local-shared.mjs';
 import { ensureToolApproval } from './approvals.mjs';
 import {
+  acquireExternalJobWorkspaceHold,
   forgetExternalJobWorkspaceHold,
-  rememberExternalJobWorkspaceHold,
   releaseExternalJobWorkspaceHold
 } from './external-job-workspace-holds.mjs';
 import { jobTarget } from './job-runtime.mjs';
@@ -69,28 +69,33 @@ export function preflightQueuedJob(job, options = {}) {
   const holdWorkspaceLease = options.holdWorkspaceLease === undefined
     ? !!externalClaim
     : options.holdWorkspaceLease === true;
-  const leaseHold = holdWorkspaceLease
-    ? acquireWorkspaceLeaseHold({
+  let leaseHold = null;
+  let mapped = false;
+  if (holdWorkspaceLease && externalClaim && job?.runnerId && job?.id) {
+    const external = acquireExternalJobWorkspaceHold({
+      jobId: job.id,
+      runnerId: job.runnerId,
       workspaceId: authorized.workspaceId,
       principal: authorized.principal,
       capability: authorized.capability,
       config,
       holdMs: Math.max(60_000, Number(job?.timeoutMs) || 900_000) + 60_000,
       purpose: `job:${job?.id || target.name}`
-    })
-    : null;
+    });
+    leaseHold = external.hold;
+    mapped = !!leaseHold;
+  } else if (holdWorkspaceLease) {
+    leaseHold = acquireWorkspaceLeaseHold({
+      workspaceId: authorized.workspaceId,
+      principal: authorized.principal,
+      capability: authorized.capability,
+      config,
+      holdMs: Math.max(60_000, Number(job?.timeoutMs) || 900_000) + 60_000,
+      purpose: `job:${job?.id || target.name}`
+    });
+  }
 
-  let mapped = false;
   try {
-    if (leaseHold && externalClaim && job?.runnerId && job?.id) {
-      rememberExternalJobWorkspaceHold({
-        jobId: job.id,
-        runnerId: job.runnerId,
-        hold: leaseHold
-      });
-      mapped = true;
-    }
-
     // Consume a one-shot approval only after the mutation boundary is fully
     // established. If approval fails, the hold is released below.
     const approval = ensureToolApproval({
