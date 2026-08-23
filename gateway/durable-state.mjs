@@ -57,6 +57,15 @@ function invalidDocument(message) {
   return error;
 }
 
+function corruptDocument(error) {
+  const wrapped = new Error(`DevMate durable state could not be read safely and was preserved for recovery: ${String(error?.message || error)}`);
+  wrapped.code = 'durable_state_corrupt';
+  wrapped.statePath = RUNTIME_STATE_PATH || null;
+  wrapped.causeCode = error?.code || null;
+  wrapped.cause = error;
+  return wrapped;
+}
+
 function normalizeDocument(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw invalidDocument('root must be a JSON object');
@@ -165,7 +174,8 @@ function readDocument() {
   }
   try {
     const stat = fs.statSync(RUNTIME_STATE_PATH, { throwIfNoEntry: false });
-    if (stat?.size > MAX_DURABLE_STATE_BYTES) {
+    if (!stat?.isFile()) throw invalidDocument('runtime-state path must be a regular file');
+    if (stat.size > MAX_DURABLE_STATE_BYTES) {
       const error = new Error(`DevMate durable state exceeds the ${MAX_DURABLE_STATE_BYTES} byte limit (${stat.size} bytes)`);
       error.code = 'durable_state_too_large';
       throw error;
@@ -173,12 +183,10 @@ function readDocument() {
     cache = normalizeDocument(JSON.parse(fs.readFileSync(RUNTIME_STATE_PATH, 'utf8').replace(/^\uFEFF/, '')));
     return cache;
   } catch (error) {
-    if (['unsupported_state_version', 'durable_state_too_large'].includes(error?.code)) throw error;
-    const quarantine = `${RUNTIME_STATE_PATH}.corrupt-${Date.now()}`;
-    try { fs.renameSync(RUNTIME_STATE_PATH, quarantine); } catch {}
-    cache = emptyDocument();
-    cache.recovery = { quarantinedPath: quarantine, error: String(error?.message || error) };
-    return cache;
+    if (['unsupported_state_version', 'invalid_state_version', 'invalid_state_document', 'durable_state_too_large'].includes(error?.code)) {
+      throw error;
+    }
+    throw corruptDocument(error);
   }
 }
 
@@ -547,6 +555,7 @@ export function resetDurableStateForTests() {
 export const __test = {
   atomicWrite,
   cleanupCompatibleReplacementCandidates,
+  corruptDocument,
   durableFileCompatibility,
   emptyDocument,
   validDurableFile,
