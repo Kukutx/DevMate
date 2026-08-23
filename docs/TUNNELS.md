@@ -24,9 +24,9 @@ Machine-local executable paths, provider credentials and restart preferences rem
 
 ## Public authentication boundary
 
-A public connection uses the selected MCP authentication mode. `auth.mode: "none"` is the default and works through ngrok, Cloudflare, or external HTTPS ingress. OAuth is optional and enabled explicitly.
+Public MCP defaults to OAuth. `auth.mode: "none"` is a trusted-loopback-only option and does not authorize requests arriving through ngrok, Cloudflare, external HTTPS ingress, or another remote/public path.
 
-Desktop and standalone hosts default to no authentication.
+Desktop and standalone public-capable configurations default to OAuth. Provider selection never weakens the authentication boundary.
 
 OAuth signing material and approval codes remain in private runtime state. Public URLs contain no credential and static owner/member Bearer tokens are not supported.
 
@@ -39,7 +39,7 @@ Start
   → start/attach Gateway
   → start/attach configured public connection
   → obtain HTTPS origin
-  → obtain a verification token only when OAuth is enabled
+  → obtain short-lived OAuth verification token
   → MCP server/discover (2026-07-28)
   → tools/list
   → gateway_status tools/call
@@ -92,7 +92,7 @@ A public URL is necessary but insufficient for Ready.
 
 After a provider publishes an HTTPS endpoint, DevMate performs current MCP preflight:
 
-1. Use no token in default `none` mode, or a short-lived owner access token when OAuth is enabled.
+1. Obtain a short-lived OAuth owner access token from protected local state.
 2. Send `server/discover` with protocol pin `2026-07-28`.
 3. Require the server to advertise `2026-07-28` and identify itself as `devmate`.
 4. Call `tools/list`.
@@ -100,6 +100,8 @@ After a provider publishes an HTTPS endpoint, DevMate performs current MCP prefl
 6. Persist successful evidence for the current Gateway + provider generation.
 
 The MCP transport is stateless. No MCP session identifier is created, propagated, or cached.
+
+Explicit `auth.mode: "none"` remains valid for trusted loopback-only MCP workflows, but those local calls are not public-generation verification and cannot authorize a remote request.
 
 If the Gateway restarts, provider restarts, ownership changes, or a new provider `readyAt` is published, previous verification becomes stale even when the hostname is identical. The host returns to recovery/verifying until the new complete generation passes preflight.
 
@@ -117,7 +119,7 @@ DevMate discovers dynamic ngrok endpoints through the current local Agent endpoi
 
 `cloudflare-quick` starts a native `cloudflared tunnel --url ...` quick tunnel and discovers the TryCloudflare HTTPS endpoint from provider output.
 
-The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh MCP 2026 preflight and may produce a new hostname.
+The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh OAuth-authenticated MCP 2026 preflight and may produce a new hostname.
 
 Both desktop hosts coordinate one public preflight for each Gateway+tunnel generation. Fresh success evidence is reused briefly across the two hosts, then periodically revalidated. Temporary DNS, TLS, edge propagation, or timeout failures leave the current tunnel running and retry with bounded backoff instead of creating another hostname.
 
@@ -137,7 +139,7 @@ The token is supplied through the provider process environment, not command-line
 
 `external` is a first-class provider for an existing reverse proxy, load balancer, VPN gateway or externally managed tunnel.
 
-DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and still requires current MCP preflight using the selected authentication mode before Ready.
+DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and requires OAuth-authenticated current MCP preflight before Ready.
 
 The configured origin must be a clean HTTPS origin without credentials, path, query string or fragment.
 
