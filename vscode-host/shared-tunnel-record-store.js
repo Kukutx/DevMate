@@ -14,6 +14,7 @@ const DEFAULT_RUNTIME_LEASE_MS = 120000;
 const MAX_RUNTIME_RECORD_BYTES = 64 * 1024;
 const MAX_CONFIGURATION_TEXT = 4096;
 const MAX_RUNTIME_LEASE_MS = 24 * 60 * 60 * 1000;
+const SUPERVISOR_CLEANUP_GRACE_MS = 30000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -87,6 +88,7 @@ function normalizeRuntimeRecord(record) {
   const hostId = String(record.hostId || '').trim();
   const hostPid = Number(record.hostPid);
   const childPid = record.childPid == null ? null : Number(record.childPid);
+  const childKind = record.childKind == null || record.childKind === '' ? null : String(record.childKind).trim().toLowerCase();
   const port = Number(record.port);
   const rawProvider = String(record.provider || '').trim().toLowerCase();
   let provider;
@@ -107,6 +109,8 @@ function normalizeRuntimeRecord(record) {
     hostId.length > 0 && hostId.length <= 256 &&
     Number.isInteger(hostPid) && hostPid > 0 &&
     (childPid == null || (Number.isInteger(childPid) && childPid > 0)) &&
+    (childKind == null || childKind === 'supervisor') &&
+    (childKind !== 'supervisor' || childPid != null) &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
     rawProvider === provider &&
     /^[a-f0-9]{64}$/.test(key) &&
@@ -123,6 +127,7 @@ function normalizeRuntimeRecord(record) {
     hostId,
     hostPid,
     childPid,
+    childKind,
     port,
     provider,
     configurationKey: key,
@@ -290,6 +295,18 @@ class SharedTunnelRecordStore {
       gatewayGeneration: gatewayGeneration(readGatewayInstanceLock(this.stateDirectory))
     };
     if (!includeStale && runtimeRecordStale(value, { leaseMs: this.leaseMs })) {
+      const activityAt = Math.max(Date.parse(value.heartbeatAt || '') || 0, Number(value.mtimeMs) || 0);
+      const withinCleanupGrace = activityAt > 0 && Date.now() - activityAt < SUPERVISOR_CLEANUP_GRACE_MS;
+      if (value.childKind === 'supervisor' && processAlive(value.childPid) && withinCleanupGrace) {
+        const error = runtimeRecordError(
+          'Previous DevMate tunnel supervisor is still cleaning up after its host exited',
+          'DEVMATE_TUNNEL_SUPERVISOR_CLEANUP_PENDING',
+          this.recordFile
+        );
+        error.childPid = value.childPid;
+        error.ownerId = value.ownerId;
+        throw error;
+      }
       try {
         fs.rmSync(this.recordFile, { force: true });
       } catch (error) {
@@ -318,6 +335,7 @@ class SharedTunnelRecordStore {
       hostId: String(patch.hostId || current?.hostId || 'desktop'),
       hostPid: process.pid,
       childPid: patch.childPid ?? current?.childPid ?? null,
+      childKind: patch.childKind === undefined ? current?.childKind ?? null : patch.childKind,
       port: Number(patch.port ?? current?.port ?? 0),
       provider: normalizeProvider(providerValue),
       configurationKey: String(patch.configurationKey || current?.configurationKey || ''),
@@ -369,6 +387,7 @@ module.exports = {
   MAX_RUNTIME_RECORD_BYTES,
   RUNTIME_RECORD_NAME,
   RUNTIME_RECORD_VERSION,
+  SUPERVISOR_CLEANUP_GRACE_MS,
   SharedTunnelRecordStore,
   configurationKey,
   normalizeRuntimeRecord,
