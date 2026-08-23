@@ -9,14 +9,30 @@ export const WORKSPACE_LEASE_HOLD_MIN_MS = 60 * 1000;
 export const WORKSPACE_LEASE_HOLD_MAX_MS = 2 * 60 * 60 * 1000;
 const NAMESPACE = WORKSPACE_LEASE_NAMESPACE;
 const leases = new Map();
+const LEASE_CAPABILITIES = new Set(['write', 'execute', 'git', 'publish']);
 
 function nowIso(now = Date.now()) { return new Date(now).toISOString(); }
 function roleCanForce(role) { return role === 'owner' || role === 'maintainer'; }
 
+function leaseStateError(message, detail = {}) {
+  const error = new Error(`Workspace lease durable state is invalid: ${message}`);
+  error.code = 'workspace_lease_state_invalid';
+  Object.assign(error, detail);
+  return error;
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validTimestamp(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
 function leaseRequired({ workspaceId, principal, capability, config }) {
   return !!workspaceId &&
     config?.team?.requireWorkspaceLeaseForWrites === true &&
-    ['write', 'execute', 'git', 'publish'].includes(capability) &&
+    LEASE_CAPABILITIES.has(capability) &&
     principal?.source !== 'local';
 }
 
@@ -37,11 +53,51 @@ function leaseHolds(lease) {
   return Array.isArray(lease?.operationHolds) ? lease.operationHolds : [];
 }
 
+function normalizeLeaseHold(hold, lease, index, seen) {
+  if (!hold || typeof hold !== 'object' || Array.isArray(hold)) {
+    throw leaseStateError(`operation hold ${index} for workspace ${lease.workspaceId} must be an object`, { workspaceId: lease.workspaceId, holdIndex: index });
+  }
+  if (!nonEmpty(hold.id) || seen.has(hold.id)) {
+    throw leaseStateError(`operation hold ${index} for workspace ${lease.workspaceId} has an invalid or duplicate id`, { workspaceId: lease.workspaceId, holdIndex: index });
+  }
+  if (hold.leaseId !== lease.id || hold.workspaceId !== lease.workspaceId || hold.principalId !== lease.principalId) {
+    throw leaseStateError(`operation hold ${hold.id} is not bound to its owning lease`, { workspaceId: lease.workspaceId, holdId: hold.id });
+  }
+  if (!LEASE_CAPABILITIES.has(hold.capability)) {
+    throw leaseStateError(`operation hold ${hold.id} has an invalid capability`, { workspaceId: lease.workspaceId, holdId: hold.id });
+  }
+  if (!validTimestamp(hold.acquiredAt) || !validTimestamp(hold.expiresAt)) {
+    throw leaseStateError(`operation hold ${hold.id} has invalid timestamps`, { workspaceId: lease.workspaceId, holdId: hold.id });
+  }
+  seen.add(hold.id);
+  return { ...hold };
+}
+
+function normalizeLease(item, index) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw leaseStateError(`lease ${index} must be an object`, { leaseIndex: index });
+  }
+  if (!nonEmpty(item.id) || !nonEmpty(item.workspaceId) || !nonEmpty(item.principalId)) {
+    throw leaseStateError(`lease ${index} is missing identity`, { leaseIndex: index });
+  }
+  if (!validTimestamp(item.acquiredAt) || !validTimestamp(item.expiresAt)) {
+    throw leaseStateError(`lease ${item.id} has invalid timestamps`, { leaseId: item.id, workspaceId: item.workspaceId });
+  }
+  if (item.renewedAt != null && !validTimestamp(item.renewedAt)) {
+    throw leaseStateError(`lease ${item.id} has an invalid renewedAt timestamp`, { leaseId: item.id, workspaceId: item.workspaceId });
+  }
+  if (item.operationHolds != null && !Array.isArray(item.operationHolds)) {
+    throw leaseStateError(`lease ${item.id} operationHolds must be an array`, { leaseId: item.id, workspaceId: item.workspaceId });
+  }
+  const lease = { ...item, operationHolds: [] };
+  const seen = new Set();
+  lease.operationHolds = leaseHolds(item).map((hold, holdIndex) => normalizeLeaseHold(hold, lease, holdIndex, seen));
+  return lease;
+}
+
 function pruneLeaseHolds(lease, now = Date.now()) {
   const before = leaseHolds(lease);
-  const next = before.filter(hold =>
-    hold?.id && hold?.principalId && Number.isFinite(Date.parse(hold.expiresAt || '')) && Date.parse(hold.expiresAt) > now
-  );
+  const next = before.filter(hold => Date.parse(hold.expiresAt) > now);
   lease.operationHolds = next;
   return next.length !== before.length;
 }
@@ -64,9 +120,17 @@ function publicLease(lease) {
 }
 
 function leaseMap(values) {
-  return new Map((Array.isArray(values) ? values : [])
-    .filter(item => item?.workspaceId)
-    .map(item => [item.workspaceId, { ...item, operationHolds: leaseHolds(item).map(hold => ({ ...hold })) }]));
+  if (values == null) return new Map();
+  if (!Array.isArray(values)) throw leaseStateError('workspace lease namespace must be an array');
+  const output = new Map();
+  values.forEach((item, index) => {
+    const lease = normalizeLease(item, index);
+    if (output.has(lease.workspaceId)) {
+      throw leaseStateError(`workspace ${lease.workspaceId} has duplicate lease records`, { workspaceId: lease.workspaceId });
+    }
+    output.set(lease.workspaceId, lease);
+  });
+  return output;
 }
 
 function documentLeaseMap(document) {
@@ -332,13 +396,18 @@ export function clearWorkspaceLeases() {
 }
 
 export const __test = {
+  LEASE_CAPABILITIES,
   acquireWorkspaceLeaseHoldInDocument,
   acquireWorkspaceLeaseInDocument,
   activeHoldUntil,
   assertNoActiveOperations,
   documentLeaseMap,
+  leaseMap,
   leaseRequired,
+  leaseStateError,
   leases,
+  normalizeLease,
+  normalizeLeaseHold,
   operationHoldMs,
   pruneLeaseHolds,
   pruneLeaseMap,
