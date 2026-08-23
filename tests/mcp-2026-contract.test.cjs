@@ -75,7 +75,8 @@ test('OAuth secrets and refresh replay state use dedicated boundaries', () => {
   assert.match(state, /reuse_detected/);
   assert.match(state, /authorizationCodes/);
   assert.match(state, /families/);
-  assert.match(runtime, /readOAuthSecrets\(process\.env\.DEVMATE_CONFIG\)/);
+  assert.match(runtime, /const CONFIG_PATH = String\(process\.env\.DEVMATE_CONFIG/);
+  assert.match(runtime, /oauthSecrets\.readOAuthSecrets\(CONFIG_PATH\)/);
 });
 
 test('Capability Host remains the only MCP prototype interception layer', () => {
