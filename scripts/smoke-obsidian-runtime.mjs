@@ -37,6 +37,9 @@ for (const file of [pluginMain, gatewayEntry, codexSupervisor]) {
 }
 
 const mainSource = fs.readFileSync(pluginMain, 'utf8');
+const codexSupervisorSource = fs.readFileSync(codexSupervisor, 'utf8');
+assert.doesNotMatch(codexSupervisorSource, /\.\/command-process\.mjs/, 'Obsidian Codex supervisor must be bundled with its process-tree dependencies');
+assert.match(codexSupervisorSource, /terminateProcessTree/, 'Obsidian Codex supervisor bundle must retain bounded process-tree cleanup');
 assert.doesNotMatch(mainSource, /node:worker_threads|createWorkerSpawn|new Worker\s*\(/, 'Obsidian bundle must not depend on Worker threads');
 assert.match(mainSource, /child_process/, 'Obsidian bundle must contain the child-process Gateway runtime');
 assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Node runtime diagnostics');

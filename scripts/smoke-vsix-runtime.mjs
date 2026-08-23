@@ -143,7 +143,11 @@ try {
 
   const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
   const entryFile = path.join(extensionPath, manifest.main.replace(/^\.\//, ''));
-  const dependencyFiles = assertDependencyClosure(entryFile, extensionPath);
+  const codexSupervisorFile = path.join(extensionPath, 'gateway', 'agent-codex-supervisor.mjs');
+  const dependencyFiles = new Set([
+    ...assertDependencyClosure(entryFile, extensionPath),
+    ...assertDependencyClosure(codexSupervisorFile, extensionPath)
+  ]);
   assertNoPrivateElectronNodeFlags(dependencyFiles);
   assert.match(extensionSource, /resolveNodeRuntime/, 'VSIX must resolve a verified Node runtime before launching the Gateway');
   assert.match(extensionSource, /host\/runtime\/network\.js/, 'VSIX must use the shared Gateway health contract');

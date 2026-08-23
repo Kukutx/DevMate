@@ -38,10 +38,17 @@ await buildGatewayBundle({
   root,
   outfile: path.join(output, 'gateway', 'server.mjs')
 });
-fs.copyFileSync(
-  path.join(root, 'gateway', 'agent-codex-supervisor.mjs'),
-  path.join(output, 'gateway', 'agent-codex-supervisor.mjs')
-);
+
+await build({
+  entryPoints: [path.join(root, 'gateway', 'agent-codex-supervisor.mjs')],
+  outfile: path.join(output, 'gateway', 'agent-codex-supervisor.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node24',
+  sourcemap: false,
+  logLevel: 'info'
+});
 
 for (const file of ['manifest.json', 'styles.css', 'versions.json']) {
   fs.copyFileSync(path.join(directory, file), path.join(output, file));
