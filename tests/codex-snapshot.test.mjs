@@ -32,6 +32,11 @@ const workspaceRecord = {
   reference: false
 };
 
+function comparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 test('Codex snapshot is isolated, omits real workspace path metadata, excludes credentials and symlinks, and produces bounded text proposals', async () => {
   const created = await snapshot.createAgentSnapshot({ taskId, workspace: workspaceRecord });
   assert.equal(path.resolve(created.cwd).startsWith(path.resolve(workspace) + path.sep), false);
@@ -106,7 +111,8 @@ test('proposal conflict validation protects dirty real-workspace state from stal
   const modify = proposal.changes.find(item => item.path === 'app.js');
   assert.ok(modify);
   const target = await snapshot.assertAgentProposalConflictFree({ workspaceRoot: workspace, change: modify });
-  assert.equal(path.resolve(target), path.resolve(workspace, 'app.js'));
+  const canonicalTarget = await fsp.realpath(path.join(workspace, 'app.js'));
+  assert.equal(comparablePath(target), comparablePath(canonicalTarget));
 
   await fsp.writeFile(path.join(workspace, 'app.js'), 'export const value = 99;\n', 'utf8');
   await assert.rejects(
