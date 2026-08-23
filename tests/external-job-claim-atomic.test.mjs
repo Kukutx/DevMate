@@ -29,12 +29,7 @@ const { claimExternalJob } = await import('../gateway/external-job-claim.mjs');
 
 const principal = { id: 'alice', name: 'Alice', role: 'developer', source: 'team-token', workspaceIds: ['app'] };
 
-test.beforeEach(() => {
-  durable.resetDurableStateForTests();
-  queue.clearJobsForTests();
-});
-
-test('persists Job ownership and claim proof in one durable document update', () => {
+function submitAndRegister() {
   const submitted = queue.createJob({
     principal,
     tool: 'project_snapshot',
@@ -43,6 +38,16 @@ test('persists Job ownership and claim proof in one durable document update', ()
     requiredCapabilities: ['core']
   });
   queue.registerRunner({ id: 'runner-a', capabilities: ['core'], workspaceIds: ['app'] });
+  return submitted;
+}
+
+test.beforeEach(() => {
+  durable.resetDurableStateForTests();
+  queue.clearJobsForTests();
+});
+
+test('persists Job ownership and claim proof in one durable document update', () => {
+  const submitted = submitAndRegister();
   const claimed = claimExternalJob({ runnerId: 'runner-a', leaseSeconds: 60 });
   assert.equal(claimed.job.id, submitted.id);
   assert.equal(claimed.job.status, 'running');
@@ -81,6 +86,38 @@ test('retains monotonically increasing generations across retries', () => {
   assert.equal(first.claim.generation, 1);
   assert.equal(second.claim.generation, 2);
   assert.notEqual(first.claim.token, second.claim.token);
+});
+
+test('malformed Job state cannot disable drain or be normalized during an external claim', () => {
+  const submitted = submitAndRegister();
+  durable.mutateDurableDocument(document => {
+    document.namespaces.jobs.drain.active = 'yes';
+  });
+  durable.resetDurableStateForTests();
+  assert.throws(
+    () => claimExternalJob({ runnerId: 'runner-a' }),
+    error => error?.code === 'external_job_claim_state_invalid'
+  );
+  durable.resetDurableStateForTests();
+  const stored = durable.readDurableNamespace('jobs', null);
+  assert.equal(stored.drain.active, 'yes');
+  assert.equal(stored.jobs.find(item => item.id === submitted.id).status, 'queued');
+});
+
+test('malformed Runner claim state aborts the entire external claim mutation', () => {
+  const submitted = submitAndRegister();
+  const malformed = { version: 1, claims: {}, generations: null };
+  durable.writeDurableNamespace('runner-claims', malformed);
+  durable.resetDurableStateForTests();
+  assert.throws(
+    () => claimExternalJob({ runnerId: 'runner-a' }),
+    error => error?.code === 'runner_claim_state_invalid'
+  );
+  durable.resetDurableStateForTests();
+  assert.deepEqual(durable.readDurableNamespace('runner-claims', null), malformed);
+  const stored = durable.readDurableNamespace('jobs', null).jobs.find(item => item.id === submitted.id);
+  assert.equal(stored.status, 'queued');
+  assert.equal(stored.runnerId, null);
 });
 
 test('does not persist partial durable mutations when the mutator throws', () => {
