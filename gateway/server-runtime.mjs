@@ -29,8 +29,7 @@ const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
 const STATE_ROOT = CONFIG_DIR ? path.join(CONFIG_DIR, 'state') : '';
 const BACKUP_ROOT = STATE_ROOT ? path.join(STATE_ROOT, 'backups') : '';
 const AUDIT_LOG = STATE_ROOT ? path.join(STATE_ROOT, 'audit.jsonl') : '';
-const DESKTOP_PARENT_PID = Number(process.env.DEVMATE_RUNTIME_PARENT_PID || 0);
-const DESKTOP_MANAGED = Number.isInteger(DESKTOP_PARENT_PID) && DESKTOP_PARENT_PID > 0;
+const DESKTOP_LIFECYCLE_FENCE = process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE === '1';
 const LIFECYCLE_WATCH_MS = 500;
 
 beginStartupProgress('runtime_config');
@@ -40,7 +39,7 @@ try {
   const startupConfig = readConfig();
   strictPort(startupConfig.server?.port, { label: 'server.port' });
   validatePermissionConfig(startupConfig);
-  if (DESKTOP_MANAGED && startupConfig.lifecycle?.desiredState !== 'running') {
+  if (DESKTOP_LIFECYCLE_FENCE && startupConfig.lifecycle?.desiredState !== 'running') {
     const error = new Error('Desktop Gateway launch was cancelled because the shared DevMate lifecycle is stopped');
     error.code = 'DEVMATE_GATEWAY_LIFECYCLE_STOPPED';
     throw error;
@@ -150,7 +149,7 @@ try {
   enterStartupStage('server_module');
   await import('./server.mjs');
 
-  if (DESKTOP_MANAGED) {
+  if (DESKTOP_LIFECYCLE_FENCE) {
     lifecycleWatch = setInterval(() => {
       if (shutdownPromise) return;
       try {
