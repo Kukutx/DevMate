@@ -6,6 +6,7 @@ const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
 const { configureAuthentication } = require('./auth-config.cjs');
+const { enforcePolicyGenerations, policyGenerationBaseline } = require('./config-policy-invariants.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
@@ -365,6 +366,7 @@ function replaceConfig(file, value) {
     const current = readConfigState(target);
     if (current.exists !== source.exists || current.hash !== source.hash) throw configConflict(target);
     assertSupportedConfigVersion(value, target);
+    if (current.exists) enforcePolicyGenerations(policyGenerationBaseline(current.value), value, target);
     atomicWriteJson(target, value);
     return readConfigSnapshot(target);
   });
@@ -381,6 +383,7 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
       const beforeState = readConfigState(target);
       const current = attachConfigSnapshot(beforeState.value, target, beforeState);
       const beforeJson = JSON.stringify(current);
+      const policyBefore = beforeState.exists ? policyGenerationBaseline(current) : null;
       const changed = mutator(current);
       if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
       if (changed === false) return current;
@@ -394,6 +397,7 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
         if (attempt === attempts - 1) throw configConflict(target);
         continue;
       }
+      if (beforeState.exists) enforcePolicyGenerations(policyBefore, next, target);
       if (beforeState.exists && JSON.stringify(next) === beforeJson) return current;
       atomicWriteJson(target, next);
       return readConfigSnapshot(target);
@@ -445,7 +449,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       maxConcurrentJobs: 2
     },
     maintenance: { ...DEFAULT_MAINTENANCE },
-    connection: { provider, publicUrl: '' },
+    connection: { provider, publicUrl: '', policyGeneration: 0 },
     auth: { mode: 'none' },
     permissions: {
       profile: 'fullAccess',
