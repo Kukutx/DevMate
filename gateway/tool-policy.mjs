@@ -10,14 +10,16 @@ const ADMIN_TOOLS = new Set([
   'plugin_enable', 'plugin_disable', 'plugin_configure', 'configure_local_capabilities', 'published_preview_list',
   'add_trusted_root', 'remove_trusted_root',
   'job_runtime_configure', 'deployment_drain_start', 'deployment_drain_cancel',
-  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
+  'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke',
+  'codex_collaboration_status', 'codex_collaboration_configure'
 ]);
 
 const OWNER_ONLY_TOOLS = new Set([
   'team_configure', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',
   'team_approval_configure',
   'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke',
-  'read_audit_log', 'list_backups', 'restore_backup'
+  'read_audit_log', 'list_backups', 'restore_backup',
+  'codex_collaboration_status', 'codex_collaboration_configure'
 ]);
 
 const PUBLISH_TOOLS = new Set([
@@ -35,13 +37,14 @@ const VALIDATE_TOOLS = new Set([
 ]);
 
 const EXECUTE_TOOLS = new Set([
-  'run_command', 'run_configured_command', 'run_project_script', 'run_smart_checks', 'start_process', 'send_process_input', 'stop_process', 'godot_run'
+  'run_command', 'run_configured_command', 'run_project_script', 'run_smart_checks', 'start_process', 'send_process_input', 'stop_process', 'godot_run',
+  'codex_task_start', 'codex_task_continue', 'codex_task_steer', 'codex_task_interrupt'
 ]);
 
 const WRITE_TOOLS = new Set([
   'write_file', 'create_file', 'apply_patch', 'delete_file', 'move_file', 'restore_backup',
   'godot_qa_bridge_install', 'godot_qa_bridge_remove', 'godot_quick_setup',
-  'godot_performance_baseline_update', 'godot_automation_bootstrap', 'job_cancel'
+  'godot_performance_baseline_update', 'godot_automation_bootstrap', 'job_cancel', 'codex_proposal_apply'
 ]);
 
 const NON_WORKSPACE_TOOLS = new Set([
@@ -56,7 +59,8 @@ const NON_WORKSPACE_TOOLS = new Set([
   'job_target_catalog', 'job_runtime_configure', 'job_submit', 'job_list', 'job_status', 'job_artifacts', 'job_cancel', 'job_retry', 'runner_status',
   'deployment_drain_status', 'deployment_drain_start', 'deployment_drain_cancel',
   'runner_control_status', 'runner_control_configure', 'runner_credential_list', 'runner_credential_create',
-  'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke'
+  'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke',
+  'codex_collaboration_status', 'codex_collaboration_configure'
 ]);
 
 function jobPolicy(requiredCapabilities, pluginId = null) {
