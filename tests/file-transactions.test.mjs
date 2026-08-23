@@ -188,6 +188,54 @@ test('startup recovery finishes a committed move without resurrecting the old de
   }
 });
 
+test('startup recovery restores the old file when replacement crashed before the prepared write committed', async () => {
+  const fx = await fixture();
+  try {
+    const target = path.join(fx.workspace, 'target.txt');
+    await fsp.writeFile(target, 'old-content');
+    const journal = __test.preparedJournal({
+      kind: 'write-file', transactionRoot: fx.transactionRoot,
+      workspaceRoot: fx.workspace, target, targetExisted: true
+    });
+    await fsp.writeFile(journal.temporary, 'prepared-content');
+    await fsp.rename(target, journal.rollback);
+
+    const recovery = await recoverFileTransactions({ transactionRoot: fx.transactionRoot, workspaceRoots: [fx.workspace] });
+    assert.deepEqual(recovery.blocked, []);
+    assert.equal(recovery.recovered[0].action, 'rollback-interrupted-write');
+    assert.equal(await fsp.readFile(target, 'utf8'), 'old-content');
+    assert.equal(fs.existsSync(journal.rollback), false);
+    assert.equal(fs.existsSync(journal.temporary), false);
+    assert.deepEqual(await journals(fx.transactionRoot), []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('startup recovery finishes a committed file replacement after the prepared write was consumed', async () => {
+  const fx = await fixture();
+  try {
+    const target = path.join(fx.workspace, 'target.txt');
+    await fsp.writeFile(target, 'old-content');
+    const journal = __test.preparedJournal({
+      kind: 'write-file', transactionRoot: fx.transactionRoot,
+      workspaceRoot: fx.workspace, target, targetExisted: true
+    });
+    await fsp.writeFile(journal.temporary, 'committed-content');
+    await fsp.rename(target, journal.rollback);
+    await fsp.rename(journal.temporary, target);
+
+    const recovery = await recoverFileTransactions({ transactionRoot: fx.transactionRoot, workspaceRoots: [fx.workspace] });
+    assert.deepEqual(recovery.blocked, []);
+    assert.equal(recovery.recovered[0].action, 'finish-committed-write');
+    assert.equal(await fsp.readFile(target, 'utf8'), 'committed-content');
+    assert.equal(fs.existsSync(journal.rollback), false);
+    assert.deepEqual(await journals(fx.transactionRoot), []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('startup recovery blocks an interrupted replacement when the target was recreated before the prepared write committed', async () => {
   const fx = await fixture();
   try {
