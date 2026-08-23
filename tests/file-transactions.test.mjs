@@ -8,6 +8,7 @@ import {
   atomicCopyFile,
   atomicWriteText,
   recoverFileTransactions,
+  transactionalDelete,
   transactionalMove,
   __test
 } from '../gateway/file-transactions.mjs';
@@ -87,6 +88,52 @@ test('directory overwrite move replaces the destination without a delete-before-
     assert.equal(fs.existsSync(source), false);
     assert.equal(await fsp.readFile(path.join(target, 'new.txt'), 'utf8'), 'new');
     assert.equal(fs.existsSync(path.join(target, 'old.txt')), false);
+    assert.deepEqual(await journals(fx.transactionRoot), []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('transactional delete does not commit until its durable backup callback succeeds', async () => {
+  const fx = await fixture();
+  try {
+    const target = path.join(fx.workspace, 'delete-me.txt');
+    await fsp.writeFile(target, 'preserve');
+    await assert.rejects(
+      transactionalDelete({
+        transactionRoot: fx.transactionRoot,
+        workspaceRoot: fx.workspace,
+        target,
+        backup: async staged => {
+          assert.equal(await fsp.readFile(staged, 'utf8'), 'preserve');
+          throw new Error('backup device unavailable');
+        }
+      }),
+      /backup device unavailable/
+    );
+    assert.equal(await fsp.readFile(target, 'utf8'), 'preserve');
+    assert.deepEqual(await journals(fx.transactionRoot), []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('startup recovery restores a delete interrupted after staging the target', async () => {
+  const fx = await fixture();
+  try {
+    const target = path.join(fx.workspace, 'delete-me.txt');
+    await fsp.writeFile(target, 'preserve');
+    const journal = __test.preparedJournal({
+      kind: 'delete-path', transactionRoot: fx.transactionRoot,
+      workspaceRoot: fx.workspace, target, targetExisted: true
+    });
+    await fsp.rename(target, journal.rollback);
+
+    const recovery = await recoverFileTransactions({ transactionRoot: fx.transactionRoot, workspaceRoots: [fx.workspace] });
+    assert.deepEqual(recovery.blocked, []);
+    assert.equal(recovery.recovered[0].action, 'rollback-interrupted-delete');
+    assert.equal(await fsp.readFile(target, 'utf8'), 'preserve');
+    assert.equal(fs.existsSync(journal.rollback), false);
     assert.deepEqual(await journals(fx.transactionRoot), []);
   } finally {
     await fx.cleanup();
@@ -180,12 +227,20 @@ test('tampered journals outside current workspace scope fail closed and remain f
   }
 });
 
-test('transaction paths cannot traverse a workspace symlink parent', { skip: process.platform === 'win32' }, async () => {
+test('transaction paths reject a direct symlink target and a symlink parent', { skip: process.platform === 'win32' }, async () => {
   const fx = await fixture();
   const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-file-tx-symlink-'));
   try {
+    const outsideFile = path.join(outside, 'outside.txt');
+    await fsp.writeFile(outsideFile, 'outside');
+    const direct = path.join(fx.workspace, 'direct.txt');
     const link = path.join(fx.workspace, 'link');
+    await fsp.symlink(outsideFile, direct, 'file');
     await fsp.symlink(outside, link, 'dir');
+    assert.throws(
+      () => __test.assertWorkspacePath(fx.workspace, direct),
+      error => error?.code === 'FILE_TRANSACTION_SYMLINK_TARGET'
+    );
     assert.throws(
       () => __test.assertWorkspacePath(fx.workspace, path.join(link, 'escape.txt')),
       error => error?.code === 'FILE_TRANSACTION_PATH_ESCAPE'
