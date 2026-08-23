@@ -469,7 +469,7 @@ async function activate(context) {
     log(`ngrok setup integration ready. Account source: ${usesManagedAccount() ? 'managed' : 'machine'}; managed token: ${managedAuthtoken ? 'configured' : 'not configured'}.`);
     void maybePromptForNgrokSetup(context);
   } catch (error) {
-    try { if (baseExtension?.deactivate) await baseExtension.deactivate(); } catch {}
+    try { if (baseExtension?.deactivate) await baseExtension.deactivate({ preserveSession: false }); } catch {}
     activationAttempted = false;
     activated = false;
     sharedConfigFile = '';
@@ -477,10 +477,10 @@ async function activate(context) {
   }
 }
 
-async function deactivate() {
+async function deactivate(options = {}) {
   if (!activationAttempted && !activated) return;
   try {
-    if (activationAttempted && baseExtension?.deactivate) await baseExtension.deactivate();
+    if (activationAttempted && baseExtension?.deactivate) await baseExtension.deactivate(options);
   } finally {
     activationAttempted = false;
     activated = false;
