@@ -4,92 +4,65 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { releaseOwnedHostRuntime } = require('../host/runtime/host-shutdown.js');
+const auth = require('../shared/auth-config.cjs');
 
 const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('host shutdown releases its owned tunnel and Gateway independently', async () => {
-  const calls = [];
-  const result = await releaseOwnedHostRuntime({
-    stopTunnel: async () => {
-      calls.push('tunnel');
-      return { stopped: false, reason: 'managed-by-another-host' };
-    },
-    stopAuxiliary: async () => {
-      calls.push('auxiliary');
-      return { stopped: true, reason: 'terminated' };
-    },
-    stopGateway: async () => {
-      calls.push('gateway');
-      return { stopped: true, reason: 'terminated' };
-    }
-  });
+test('routine host authentication refresh preserves the established shared policy', () => {
+  const config = { auth: { mode: 'oauth' }, hostRuntime: { authenticationPolicyInitialized: true } };
+  auth.configureAuthentication(config, 'none');
+  assert.deepEqual(config.auth, { mode: 'oauth' });
 
-  assert.deepEqual(calls, ['tunnel', 'auxiliary', 'gateway']);
-  assert.equal(result.ok, true);
-  assert.equal(result.detached, true);
-  assert.equal(result.sharedStillActive, true);
-  assert.equal(result.gateway.stopped, true);
+  auth.configureAuthentication(config, 'none', { replace: true });
+  assert.deepEqual(config.auth, { mode: 'none' });
+  assert.equal(auth.authenticationPolicyInitialized(config), true);
 });
 
-test('Gateway release still runs when owned tunnel shutdown fails', async () => {
-  const calls = [];
-  const result = await releaseOwnedHostRuntime({
-    stopTunnel: async () => {
-      calls.push('tunnel');
-      throw new Error('provider did not exit');
-    },
-    stopGateway: async () => {
-      calls.push('gateway');
-      return { stopped: true };
-    }
-  });
-
-  assert.deepEqual(calls, ['tunnel', 'gateway']);
-  assert.equal(result.ok, false);
-  assert.equal(result.gateway.stopped, true);
-  assert.match(result.tunnel.reason, /provider did not exit/);
+test('first desktop authentication request establishes shared policy exactly once', () => {
+  const config = { auth: { mode: 'none' }, hostRuntime: {} };
+  auth.configureAuthentication(config, 'oauth');
+  assert.deepEqual(config.auth, { mode: 'oauth' });
+  assert.equal(auth.authenticationPolicyInitialized(config), true);
+  auth.configureAuthentication(config, 'none');
+  assert.deepEqual(config.auth, { mode: 'oauth' });
 });
 
-test('attached host shutdown never destroys resources owned by another host', async () => {
-  const result = await releaseOwnedHostRuntime({
-    stopTunnel: async () => ({ stopped: false, reason: 'managed-by-another-host' }),
-    stopGateway: async () => ({ stopped: false, attached: true, reason: 'managed-by-another-host' })
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.sharedStillActive, true);
+test('desktop controller adapters cannot dispose locally owned runtime by orphaning it', () => {
+  const adapters = source('host/runtime-controller.js');
+  assert.match(adapters, /class RuntimeController extends processRuntime\.RuntimeController/);
+  assert.match(adapters, /async dispose\(_options = \{\}\)[\s\S]*const stopped = await this\.stop\(\)[\s\S]*super\.dispose\(\{ stopOwned: false \}\)/);
+  assert.match(adapters, /class DesktopTunnelController extends tunnelRuntime\.TunnelController/);
+  assert.match(adapters, /tunnelRuntime\.TunnelController = DesktopTunnelController/);
 });
 
-test('desktop host shutdown contract forbids preserve-by-orphan semantics', () => {
+test('both product hosts load ownership-safe runtime adapter before TunnelController consumers', () => {
   const vscode = source('extension.js');
-  const obsidian = source('obsidian-plugin/src/main.js');
-
-  assert.match(vscode, /releaseOwnedHostRuntime/);
-  assert.match(vscode, /host-deactivation-handoff/);
-  assert.doesNotMatch(vscode, /host-deactivation-preserves-shared-session/);
-
-  const unloadStart = obsidian.indexOf('async onunload()');
-  const unloadEnd = obsidian.indexOf('async saveSettings()', unloadStart);
-  const unload = obsidian.slice(unloadStart, unloadEnd);
-  assert.match(unload, /releaseOwnedHostRuntime/);
-  assert.match(unload, /this\.tunnelController\?\.stop\(\)/);
-  assert.match(unload, /this\.controller\?\.stop\(\)/);
-  assert.ok(unload.indexOf('this.tunnelController?.stop()') < unload.indexOf('this.tunnelController?.dispose'));
-  assert.ok(unload.indexOf('this.controller?.stop()') < unload.indexOf('this.controller?.dispose'));
-});
-
-test('routine desktop context refresh cannot rewrite shared authentication policy', () => {
-  const vscode = source('extension.js');
-  const syncStart = vscode.indexOf('function syncConfig(');
-  const syncEnd = vscode.indexOf('function scheduleContextRefresh', syncStart);
-  const syncBlock = vscode.slice(syncStart, syncEnd);
-  assert.doesNotMatch(syncBlock, /configureAuthentication\(/);
+  const runtimeImport = vscode.indexOf("require('./host/runtime-controller.js')");
+  const tunnelRuntimeImport = vscode.indexOf("require('./vscode-host/tunnel-runtime.js')");
+  assert.ok(runtimeImport >= 0 && tunnelRuntimeImport > runtimeImport);
 
   const obsidian = source('obsidian-plugin/src/main.js');
-  const reconfigureStart = obsidian.indexOf('async reconfigureRuntimeInternal');
-  const reconfigureEnd = obsidian.indexOf('scheduleReconfigure()', reconfigureStart);
-  const reconfigureBlock = obsidian.slice(reconfigureStart, reconfigureEnd);
-  assert.doesNotMatch(reconfigureBlock, /configureAuthentication\(/);
-  assert.match(obsidian, /async configureAuthenticationMode\(/);
+  const obsidianRuntime = obsidian.indexOf("require('../../host/runtime-controller.js')");
+  const obsidianTunnel = obsidian.indexOf("require('../../vscode-host/tunnel-controller.js')");
+  assert.ok(obsidianRuntime >= 0 && obsidianTunnel > obsidianRuntime);
+});
+
+test('host close remains distinct from explicit shared Stop', () => {
+  const lifecycle = source('vscode-host/lifecycle.js');
+  assert.match(lifecycle, /deactivate\(\{ preserveSession = true \} = \{\}\)/);
+  const platform = source('extension.js');
+  assert.match(platform, /preserveSession[\s\S]*host-deactivation-preserves-shared-session/);
+  assert.match(source('host/runtime-controller.js'), /const stopped = await this\.stop\(\)/);
+});
+
+test('explicit desktop authentication settings write through the shared policy boundary', () => {
+  const lifecycle = source('vscode-host/lifecycle.js');
+  assert.match(lifecycle, /setDesktopAuthenticationMode/);
+  assert.match(lifecycle, /AUTHENTICATION_SETTING = 'devMate\.authenticationMode'/);
+
+  const obsidianSettings = source('obsidian-plugin/src/settings.js');
+  assert.match(obsidianSettings, /setDesktopAuthenticationMode/);
+  assert.match(obsidianSettings, /this\.plugin\.controller\.configFile/);
+  assert.match(obsidianSettings, /const sharedAuthentication = this\.plugin\.controller\?\.readConfig/);
 });
