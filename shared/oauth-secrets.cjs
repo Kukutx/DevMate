@@ -41,16 +41,21 @@ function normalizeDocument(value) {
   };
 }
 
-function readDocument(file, { required = true } = {}) {
+function parseDocument(file) {
   const stat = fs.statSync(file, { throwIfNoEntry: false });
-  if (!stat) {
+  if (!stat) return null;
+  if (!stat.isFile() || stat.size > MAX_SECRET_BYTES) throw new Error('OAuth secret storage is invalid');
+  return normalizeDocument(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')));
+}
+
+function readDocument(file, { required = true } = {}) {
+  const value = parseDocument(file);
+  if (!value) {
     if (!required) return null;
     const error = new Error('OAuth secrets are not initialized for this DevMate instance');
     error.code = 'oauth_secrets_missing';
     throw error;
   }
-  if (!stat.isFile() || stat.size > MAX_SECRET_BYTES) throw new Error('OAuth secret storage is invalid');
-  const value = normalizeDocument(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')));
   try { fs.chmodSync(file, 0o600); } catch {}
   return value;
 }
@@ -64,6 +69,64 @@ function fsyncDirectory(directory) {
   } finally {
     if (fd != null) try { fs.closeSync(fd); } catch {}
   }
+}
+
+function replacementCandidates(file) {
+  const directory = path.dirname(file);
+  const prefix = `${path.basename(file)}.replace-`;
+  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
+    .map(entry => {
+      const candidate = path.join(directory, entry.name);
+      const stat = fs.statSync(candidate, { throwIfNoEntry: false });
+      return stat ? { file: candidate, mtimeMs: stat.mtimeMs } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+function validReplacement(file) {
+  try { return !!parseDocument(file); }
+  catch { return false; }
+}
+
+function cleanupValidReplacements(candidates, except = '') {
+  for (const candidate of candidates) {
+    if (candidate.file === except || !validReplacement(candidate.file)) continue;
+    try { fs.rmSync(candidate.file, { force: true }); } catch {}
+  }
+}
+
+function recoverOAuthSecretsReplacement(file) {
+  ensureDirectory(file);
+  const candidates = replacementCandidates(file);
+  let current = null;
+  let currentError = null;
+  try { current = parseDocument(file); }
+  catch (error) { currentError = error; }
+
+  if (current) {
+    cleanupValidReplacements(candidates);
+    try { fs.chmodSync(file, 0o600); } catch {}
+    return current;
+  }
+
+  const replacement = candidates.find(candidate => validReplacement(candidate.file));
+  if (!replacement) {
+    if (currentError) throw currentError;
+    return null;
+  }
+
+  if (fs.existsSync(file)) {
+    const corrupt = `${file}.corrupt-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    fs.renameSync(file, corrupt);
+  }
+  fs.renameSync(replacement.file, file);
+  try { fs.chmodSync(file, 0o600); } catch {}
+  fsyncDirectory(path.dirname(file));
+  cleanupValidReplacements(candidates, replacement.file);
+  return readDocument(file);
 }
 
 function atomicWrite(file, document) {
@@ -122,20 +185,26 @@ function ensureOAuthSecrets(configFile) {
   const file = oauthSecretsPath(configFile);
   ensureDirectory(file);
   return withFileLockSync(file, () => {
-    const existing = readDocument(file, { required: false });
+    const existing = recoverOAuthSecretsReplacement(file);
     if (existing) return existing;
     return atomicWrite(file, freshDocument());
   });
 }
 
 function readOAuthSecrets(configFile) {
-  return readDocument(oauthSecretsPath(configFile));
+  const file = oauthSecretsPath(configFile);
+  ensureDirectory(file);
+  return withFileLockSync(file, () => {
+    const recovered = recoverOAuthSecretsReplacement(file);
+    if (!recovered) return readDocument(file);
+    return recovered;
+  });
 }
 
 function rotateOwnerApprovalCode(configFile, expectedCode) {
   const file = oauthSecretsPath(configFile);
   return withFileLockSync(file, () => {
-    const current = readDocument(file);
+    const current = recoverOAuthSecretsReplacement(file) || readDocument(file);
     const expected = Buffer.from(String(expectedCode || ''), 'utf8');
     const actual = Buffer.from(current.ownerApprovalCode, 'utf8');
     if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
@@ -159,5 +228,6 @@ module.exports = {
   ensureOAuthSecrets,
   oauthSecretsPath,
   readOAuthSecrets,
+  recoverOAuthSecretsReplacement,
   rotateOwnerApprovalCode
 };
