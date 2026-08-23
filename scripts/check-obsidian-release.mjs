@@ -23,7 +23,7 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) errors.push('
 
 if (checkDist) {
   const dist = path.join(pluginRoot, 'dist');
-  for (const relative of ['main.js', 'manifest.json', 'styles.css', 'versions.json', 'gateway/server.mjs']) {
+  for (const relative of ['main.js', 'manifest.json', 'styles.css', 'versions.json', 'gateway/server.mjs', 'gateway/agent-codex-supervisor.mjs']) {
     const file = path.join(dist, relative);
     if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) errors.push(`missing Obsidian release file: ${relative}`);
   }

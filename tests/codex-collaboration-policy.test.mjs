@@ -90,7 +90,7 @@ test('production runtime loads collaboration after singleton ownership and recov
   const runtime = await fsp.readFile(new URL('../gateway/server-runtime.mjs', import.meta.url), 'utf8');
   const collaborationSource = await fsp.readFile(new URL('../gateway/agent-collaboration.mjs', import.meta.url), 'utf8');
   const acquire = runtime.indexOf('acquireGatewayInstanceLock();');
-  const load = runtime.indexOf("codexCollaboration = await import('./agent-collaboration.mjs');");
+  const load = runtime.search(/codexCollaboration = await import\('\.\/agent-collaboration\.mjs'\);/);
   const runtimeRecovery = runtime.indexOf('codexCollaboration.recoverCodexCollaborationAfterRestart();', load);
   const fileRecovery = runtime.indexOf('const fileRecovery = await recoverFileTransactions({', load);
   const applyRecovery = runtime.indexOf('const codexApplyRecovery = await codexCollaboration.recoverCodexApplyAfterFileTransactions();', fileRecovery);

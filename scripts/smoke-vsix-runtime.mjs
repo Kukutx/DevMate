@@ -106,11 +106,9 @@ try {
   const manifest = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
   assert.equal(manifest.name, 'devmate');
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
-  assert.equal(
-    manifest.contributes?.configuration?.properties?.['devMate.authenticationMode']?.default,
-    'none',
-    'Packaged VSIX must default desktop MCP authentication to no-auth'
-  );
+  const authenticationMode = manifest.contributes?.configuration?.properties?.['devMate.authenticationMode'];
+  assert.equal(authenticationMode?.default, 'oauth', 'Packaged VSIX must default desktop MCP authentication to OAuth');
+  assert.deepEqual(authenticationMode?.enum, ['none', 'oauth'], 'Packaged VSIX must retain explicit loopback no-auth and OAuth options');
 
   const requiredFiles = [
     'extension.js',
@@ -135,6 +133,7 @@ try {
     'host/runtime/operation-coordinator.js',
     'host/runtime/process-controller.js',
     'host/runtime/startup-lease.js',
+    'gateway/agent-codex-supervisor.mjs',
     'gateway/server.bundle.mjs'
   ];
   for (const relative of requiredFiles) {
@@ -235,10 +234,11 @@ try {
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
-    noAuthDefaultVerified: true,
-    optionalOAuthPackaged: true,
+    oauthDefaultVerified: true,
+    loopbackNoAuthOptionVerified: true,
     statelessMcp2026Verified: true,
     providerNativeConnectionRuntimePackaged: true,
+    codexSupervisorPackaged: true,
     packagedDependencyClosureVerified: true,
     privateElectronFlagsAbsent: true
   }));

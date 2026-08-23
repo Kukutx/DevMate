@@ -30,8 +30,9 @@ const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-b
 const distRoot = path.join(root, 'obsidian-plugin', 'dist');
 const pluginMain = path.join(distRoot, 'main.js');
 const gatewayEntry = path.join(distRoot, 'gateway', 'server.mjs');
+const codexSupervisor = path.join(distRoot, 'gateway', 'agent-codex-supervisor.mjs');
 const instanceLock = path.join(stateDirectory, 'state', 'gateway.lock');
-for (const file of [pluginMain, gatewayEntry]) {
+for (const file of [pluginMain, gatewayEntry, codexSupervisor]) {
   if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error(`Built Obsidian file is missing: ${file}`);
 }
 

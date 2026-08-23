@@ -109,6 +109,42 @@ test('Codex app-server is parent-supervised, shell-free, deny-all, snapshot-scop
   }
 });
 
+test('concurrent Codex stop calls share one process-tree termination', async () => {
+  const fake = fakeAppServer();
+  const cwd = await snapshotDir();
+  let releaseTermination;
+  const terminationGate = new Promise(resolve => { releaseTermination = resolve; });
+  let terminationCalls = 0;
+  const runtime = new CodexAppServer({
+    executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex',
+    spawnFn: () => fake.child,
+    terminateFn: async child => {
+      terminationCalls += 1;
+      await terminationGate;
+      child.exitCode = 0;
+      return { terminated: true, forced: false, exitConfirmed: true };
+    }
+  });
+  try {
+    await runtime.start({ cwd });
+    const first = runtime.stop();
+    const second = runtime.stop();
+    assert.equal(first, second);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(terminationCalls, 1);
+    releaseTermination();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    assert.deepEqual(firstResult, secondResult);
+    assert.equal(firstResult.exitConfirmed, true);
+    assert.equal(runtime.status().running, false);
+  } finally {
+    releaseTermination?.();
+    fake.child.exitCode ??= 0;
+    await runtime.stop();
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('an active Codex turn fails immediately when the app-server transport closes', async () => {
   const fake = fakeAppServer({ completeTurn: false });
   const cwd = await snapshotDir();

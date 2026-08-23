@@ -120,10 +120,11 @@ function messageTurnId(params) {
 }
 
 export class CodexAppServer extends EventEmitter {
-  constructor({ executable = codexExecutable(), spawnFn = spawn } = {}) {
+  constructor({ executable = codexExecutable(), spawnFn = spawn, terminateFn = terminateProcessTree } = {}) {
     super();
     this.executable = executable;
     this.spawnFn = spawnFn;
+    this.terminateFn = terminateFn;
     this.child = null;
     this.codexPid = null;
     this.stdoutBuffer = '';
@@ -134,6 +135,7 @@ export class CodexAppServer extends EventEmitter {
     this.activeTurn = null;
     this.startedAt = null;
     this.stopping = false;
+    this.stopPromise = null;
     this.processCwd = null;
   }
 
@@ -157,6 +159,10 @@ export class CodexAppServer extends EventEmitter {
 
   async start({ cwd } = {}) {
     const processCwd = normalizeSnapshotCwd(cwd);
+    if (this.stopPromise) {
+      const stopped = await this.stopPromise;
+      if (stopped.exitConfirmed === false) throw codedError('Codex app-server could not stop before restart', 'codex_stop_unconfirmed');
+    }
     if (this.child && this.child.exitCode == null && this.child.signalCode == null) {
       if (this.initialized && samePath(this.processCwd, processCwd)) return this;
       if (this.activeTurn) throw codedError('Codex app-server cannot change snapshot cwd during an active turn', 'codex_runtime_cwd_conflict');
@@ -459,7 +465,17 @@ export class CodexAppServer extends EventEmitter {
     this.emit('transport-error', error);
   }
 
-  async stop() {
+  stop() {
+    if (this.stopPromise) return this.stopPromise;
+    const stopPromise = this.#stopInternal();
+    this.stopPromise = stopPromise;
+    void stopPromise.finally(() => {
+      if (this.stopPromise === stopPromise) this.stopPromise = null;
+    }).catch(() => {});
+    return stopPromise;
+  }
+
+  async #stopInternal() {
     if (!this.child) {
       this.processCwd = null;
       this.codexPid = null;
@@ -471,7 +487,7 @@ export class CodexAppServer extends EventEmitter {
     this.activeTurn = null;
     try { child.send?.({ type: 'devmate:codex-stop' }); } catch {}
     try { child.stdin?.end(); } catch {}
-    const termination = await terminateProcessTree(child, { graceMs: 2000, forceMs: 3500 }).catch(error => ({
+    const termination = await this.terminateFn(child, { graceMs: 2000, forceMs: 3500 }).catch(error => ({
       terminated: false,
       forced: false,
       exitConfirmed: false,
@@ -490,8 +506,10 @@ export class CodexAppServer extends EventEmitter {
 }
 
 let runtime = null;
+let runtimeShutdownPromise = null;
 
 export function codexRuntime() {
+  if (runtimeShutdownPromise) throw codedError('Codex app-server is stopping', 'codex_runtime_stopping');
   runtime ||= new CodexAppServer();
   return runtime;
 }
@@ -509,16 +527,25 @@ export function codexRuntimeStatus() {
   };
 }
 
-export async function shutdownCodexRuntime() {
-  if (!runtime) return { stopped: false, exitConfirmed: true };
+export function shutdownCodexRuntime() {
+  if (runtimeShutdownPromise) return runtimeShutdownPromise;
+  if (!runtime) return Promise.resolve({ stopped: false, exitConfirmed: true });
   const current = runtime;
-  const result = await current.stop();
-  if (result.exitConfirmed !== false && runtime === current) runtime = null;
-  return result;
+  const shutdownPromise = (async () => {
+    const result = await current.stop();
+    if (result.exitConfirmed !== false && runtime === current) runtime = null;
+    return result;
+  })();
+  runtimeShutdownPromise = shutdownPromise;
+  void shutdownPromise.finally(() => {
+    if (runtimeShutdownPromise === shutdownPromise) runtimeShutdownPromise = null;
+  }).catch(() => {});
+  return shutdownPromise;
 }
 
 export function resetCodexRuntimeForTests() {
   runtime = null;
+  runtimeShutdownPromise = null;
 }
 
 export const __test = {

@@ -92,7 +92,7 @@ jobs:
           (
             cd obsidian-plugin/dist
             zip -q -9 "$GITHUB_WORKSPACE/release/devmate-obsidian-${version}.zip" \
-              main.js manifest.json versions.json styles.css gateway/server.mjs
+              main.js manifest.json versions.json styles.css gateway/server.mjs gateway/agent-codex-supervisor.mjs
           )
           (
             cd release
