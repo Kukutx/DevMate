@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { readGatewayInstanceLock } = require('../host/runtime/instance-lock-cleanup.js');
-const { atomicWriteJson } = require('../shared/config-store.cjs');
+const { atomicWriteJsonFile } = require('../shared/atomic-json-file.cjs');
 const { gatewayGeneration } = require('../shared/public-ingress-verification.cjs');
 const { normalizeProvider, normalizePublicUrl } = require('../tunnel-provider.js');
 
@@ -354,7 +354,7 @@ class SharedTunnelRecordStore {
         this.recordFile
       );
     }
-    atomicWriteJson(this.recordFile, normalized);
+    atomicWriteJsonFile(this.recordFile, normalized, { maxBytes: MAX_RUNTIME_RECORD_BYTES });
     return {
       ...normalized,
       gatewayGeneration: gatewayGeneration(readGatewayInstanceLock(this.stateDirectory))
