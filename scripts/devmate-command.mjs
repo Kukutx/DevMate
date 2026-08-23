@@ -20,20 +20,20 @@ const { DEFAULT_VERSION, updateConfig } = configStore;
 
 const BOOTSTRAP_PRESETS = Object.freeze({
   personal: Object.freeze({
-    'authentication-mode': 'none',
+    'authentication-mode': 'oauth',
     'embedded-runner': true,
     'external-runner-control': false,
     'require-workspace-lease-for-writes': false
   }),
   team: Object.freeze({
-    'authentication-mode': 'none',
+    'authentication-mode': 'oauth',
     'embedded-runner': true,
     'external-runner-control': false,
     'require-workspace-lease-for-writes': true
   }),
   'control-plane': Object.freeze({
     provider: 'external',
-    'authentication-mode': 'none',
+    'authentication-mode': 'oauth',
     'embedded-runner': false,
     'external-runner-control': true,
     'require-workspace-lease-for-writes': true,
@@ -156,7 +156,7 @@ function bootstrap(options = {}) {
     ok: true,
     ...(resolved.preset ? { preset: resolved.preset } : {}),
     config: initialized.file,
-    authenticationMode: finalConfig.auth?.mode || 'none',
+    authenticationMode: finalConfig.auth?.mode || 'oauth',
     mcpUrl: mcpUrl({ config: initialized.file, url: finalConfig.connection.publicUrl || undefined }),
     connection: { ...finalConfig.connection },
     access: {
@@ -192,6 +192,9 @@ function status(options = {}) {
     (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
     !config.connection.publicUrl
   ) warnings.push(`${config.connection.provider} requires a public HTTPS URL.`);
+  if (config.connection.publicUrl && config.auth?.mode !== 'oauth') {
+    warnings.push('Public MCP ingress requires OAuth; auth.mode=none is loopback-only.');
+  }
 
   return {
     ok: warnings.length === 0,
@@ -220,7 +223,7 @@ function status(options = {}) {
 }
 
 function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nAll bootstrap presets default to no-auth, including public MCP. OAuth remains available only when explicitly selected with --authentication-mode oauth.\n`;
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nPublic-capable bootstrap presets default to OAuth. The runner preset is loopback-only and retains no-auth unless explicitly overridden.\n`;
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -237,7 +240,7 @@ async function main(argv = process.argv.slice(2)) {
     return console.log(JSON.stringify({
       ok: true,
       config: result.file,
-      authenticationMode: result.config.auth?.mode || 'none',
+      authenticationMode: result.config.auth?.mode || 'oauth',
       mcpUrl: mcpUrl({ ...options, config: result.file })
     }, null, 2));
   }
