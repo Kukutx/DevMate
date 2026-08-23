@@ -235,6 +235,13 @@ async function recoverWriteJournal(journal, paths) {
     return { id: journal.id, action: 'finish-committed-write' };
   }
   if (rollbackExists && !targetExists) {
+    if (!temporaryExists) {
+      throw transactionError(
+        'Interrupted file replacement target disappeared after the prepared write was committed',
+        'FILE_TRANSACTION_RECOVERY_BLOCKED',
+        journal
+      );
+    }
     try {
       await fsp.rename(paths.rollback, paths.target);
       fsyncDirectory(path.dirname(paths.target));
