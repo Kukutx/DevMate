@@ -137,6 +137,67 @@ test('failed workspace-hold release preserves the durable mapping for later reco
   assert.equal(leases.workspaceLease('app').activeOperations, 0);
 });
 
+test('malformed external hold state fails closed and remains intact', () => {
+  const malformed = {
+    version: 1,
+    records: {
+      'job-corrupt': {
+        jobId: 'job-corrupt',
+        runnerId: 'runner-a',
+        hold: {
+          id: '',
+          leaseId: 'lease-a',
+          workspaceId: 'app',
+          principalId: 'alice',
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    }
+  };
+  durable.writeDurableNamespace(externalHolds.__test.NAMESPACE, malformed);
+  durable.resetDurableStateForTests();
+  assert.throws(
+    () => externalHolds.externalJobWorkspaceHold('job-corrupt'),
+    error => error?.code === 'external_job_workspace_hold_state_invalid'
+  );
+  durable.resetDurableStateForTests();
+  assert.deepEqual(
+    durable.readDurableNamespace(externalHolds.__test.NAMESPACE, null),
+    malformed,
+    'invalid external hold evidence must not be silently deleted'
+  );
+});
+
+test('external hold capacity never evicts a live mapping', () => {
+  const timestamp = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const records = {};
+  for (let index = 0; index <= externalHolds.__test.MAX_RECORDS; index += 1) {
+    const jobId = `job-${index}`;
+    records[jobId] = {
+      jobId,
+      runnerId: 'runner-a',
+      hold: {
+        id: `hold-${index}`,
+        leaseId: `lease-${index}`,
+        workspaceId: `workspace-${index}`,
+        principalId: 'alice',
+        expiresAt
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+  }
+  const store = externalHolds.__test.normalizeStore({ version: 1, records });
+  assert.throws(
+    () => externalHolds.__test.prune(store),
+    error => error?.code === 'external_job_workspace_hold_capacity'
+  );
+  assert.equal(Object.keys(store.records).length, externalHolds.__test.MAX_RECORDS + 1);
+});
+
 test('revoking an external claim releases its durable workspace hold', () => {
   const alice = principal();
   const job = externalJob(alice, 'job-external-revoke');
