@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { readLifecycleIntent } = require('../shared/lifecycle-intent.cjs');
+const { withConnectionMutationLease } = require('./connection-mutation-lease.js');
 const { TunnelController } = require('./tunnel-controller.js');
 
 const DEFAULT_LIFECYCLE_WATCH_MS = 500;
@@ -18,6 +19,10 @@ class DesktopTunnelController extends TunnelController {
     super(options);
     this.lifecycleConfigFile = path.join(this.stateDirectory, 'config.json');
     this.lifecycleWatchMs = Math.max(100, Number(options.lifecycleWatchMs) || DEFAULT_LIFECYCLE_WATCH_MS);
+    this.connectionMutationTimeoutMs = Math.max(
+      2000,
+      Number(options.connectionMutationTimeoutMs) || this.startTimeoutMs + this.readyTimeoutMs + 5000
+    );
     this.lifecycleWatch = null;
     this.lifecycleCleanup = null;
   }
@@ -69,16 +74,22 @@ class DesktopTunnelController extends TunnelController {
   }
 
   async start(port) {
-    this.assertLifecycleRunning();
-    const result = await super.start(port);
-    try {
+    return withConnectionMutationLease({
+      stateDirectory: this.stateDirectory,
+      hostId: `${this.hostId}-start`,
+      timeoutMs: this.connectionMutationTimeoutMs
+    }, async () => {
       this.assertLifecycleRunning();
-    } catch (error) {
-      await super.stop().catch(() => {});
-      throw error;
-    }
-    this.startLifecycleWatch();
-    return result;
+      const result = await super.start(port);
+      try {
+        this.assertLifecycleRunning();
+      } catch (error) {
+        await super.stop().catch(() => {});
+        throw error;
+      }
+      this.startLifecycleWatch();
+      return result;
+    });
   }
 
   async stop() {
@@ -111,7 +122,8 @@ class DesktopTunnelController extends TunnelController {
       ...snapshot,
       desktopLifecycle: intent,
       lifecycleWatchMs: this.lifecycleWatchMs,
-      lifecycleCleanupInFlight: !!this.lifecycleCleanup
+      lifecycleCleanupInFlight: !!this.lifecycleCleanup,
+      connectionMutationTimeoutMs: this.connectionMutationTimeoutMs
     };
   }
 }
