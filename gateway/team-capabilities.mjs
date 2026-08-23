@@ -265,16 +265,6 @@ export function wrapAuthorizedTool(name, config, handler) {
       : null;
     let leaseHold = null;
     try {
-      const approval = ensureToolApproval({
-        config: current,
-        principal: authorized.principal,
-        tool: name,
-        capability: authorized.capability,
-        workspaceId: authorized.workspaceId,
-        args: authorizationArgs
-      });
-      if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
-
       if (leaseProtected) {
         leaseHold = acquireWorkspaceLeaseHold({
           workspaceId: authorized.workspaceId,
@@ -284,6 +274,16 @@ export function wrapAuthorizedTool(name, config, handler) {
           purpose: name
         });
       }
+
+      const approval = ensureToolApproval({
+        config: current,
+        principal: authorized.principal,
+        tool: name,
+        capability: authorized.capability,
+        workspaceId: authorized.workspaceId,
+        args: authorizationArgs
+      });
+      if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
       const invocationSignal = rest[0]?.signal || requestContext()?.signal || null;
       let rawResult;
