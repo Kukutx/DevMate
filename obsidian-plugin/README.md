@@ -9,7 +9,7 @@ DevMate: Start
   → Obsidian bridge ready
   → Gateway started or attached
   → public connection started or attached
-  → MCP server/discover verified with the selected authentication mode
+  → MCP server/discover verified with OAuth for public ingress
   → tools/list verified
   → gateway_status tools/call verified
   → Ready
@@ -25,7 +25,7 @@ DevMate: Start
 2. Start or attach to the shared DevMate Gateway.
 3. Start or attach to the configured provider-native public connection.
 4. Obtain the active public HTTPS origin.
-5. Use no token in default no-auth mode, or obtain a short-lived owner access token when OAuth is enabled.
+5. Obtain a short-lived owner access token from protected local state when OAuth is enabled for the public connection.
 6. Send MCP `server/discover` pinned to protocol `2026-07-28` and verify the DevMate server identity.
 7. Call `tools/list`.
 8. Call the read-only `gateway_status` tool as an execution probe.
@@ -53,10 +53,10 @@ Stopping one attached host does not kill a compatible shared resource owned by t
 
 ## Authentication
 
-Public MCP defaults to no authentication; OAuth is optional.
+Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
 
-- `auth.mode: "none"` is the default for local and public MCP.
-- `auth.mode: "oauth"` is available when explicitly enabled.
+- `auth.mode: "oauth"` is the desktop/public default.
+- `auth.mode: "none"` is an explicit loopback-only option; remote requests are rejected rather than promoted to owner.
 - OAuth signing material and the rotating owner approval code live in protected DevMate state, not shared `config.json` and not the vault.
 - The copied `/mcp` URL contains no credential.
 - Static owner/member Bearer credentials and credential query parameters are not supported.
@@ -93,7 +93,7 @@ Cloudflare managed requires a stable public HTTPS origin and a managed tunnel to
 
 ### External HTTPS ingress
 
-External is for an existing reverse proxy, load balancer, VPN endpoint, or separately managed tunnel. DevMate does not spawn an ingress child process, but it still coordinates shared connection ownership and requires MCP 2026 verification using the selected authentication mode before Ready.
+External is for an existing reverse proxy, load balancer, VPN endpoint, or separately managed tunnel. DevMate does not spawn an ingress child process, but it still coordinates shared connection ownership and requires MCP 2026 verification with OAuth before public Ready.
 
 ## Automatic recovery
 
@@ -107,7 +107,7 @@ If a dynamic provider changes hostname, the ChatGPT connector may need its URL u
 
 The plugin keeps the useful lifecycle and support commands:
 
-- **DevMate: Start** — complete Gateway → public connection → MCP 2026 verification using the selected authentication mode → Ready lifecycle.
+- **DevMate: Start** — complete Gateway → public connection → MCP 2026 verification → Ready lifecycle.
 - **DevMate: Stop** — release resources owned by this host without killing another host's shared ownership.
 - **DevMate: Restart** — restart the complete lifecycle and return only after current-generation verification succeeds.
 - **DevMate: Copy MCP URL** — verify the current complete runtime generation and copy its credential-free `/mcp` URL.
@@ -154,7 +154,7 @@ Important user settings include:
 - provider-specific stable public URL where applicable
 - optional provider executable paths
 - optional encrypted provider credentials
-- **Authentication mode** — `none` is the default for local/public MCP; OAuth is optional
+- **Authentication mode** — OAuth is the public default; `none` is loopback-only
 - **Restart connection after unexpected exit**
 - **Maximum connection restarts**
 - **Shared state directory override**
@@ -174,7 +174,7 @@ Internal transport details are not required for routine use.
 ## Security
 
 - The Gateway binds to loopback internally by default.
-- Public MCP defaults to no authentication; OAuth is optional.
+- Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
 - MCP is pinned to `2026-07-28`, uses `server/discover`, and is stateless at the transport layer.
 - OAuth and provider secrets stay out of MCP URLs, the vault, and shared public config.
 - Optional provider credentials use OS-backed encrypted storage when available.
