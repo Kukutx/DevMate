@@ -26,7 +26,7 @@ test('VS Code entry initializes shared instance config before the provider-nativ
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
 
   const sharedConfig = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
-  assert.match(sharedConfig, /connection: \{ provider, publicUrl: '' \}/);
+  assert.match(sharedConfig, /connection: \{ provider, publicUrl: '', policyGeneration: 0 \}/);
   assert.match(sharedConfig, /defaultConnectionProvider = 'ngrok'/);
 
   const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
