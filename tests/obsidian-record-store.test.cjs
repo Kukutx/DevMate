@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { JsonRecordStore } = require('../obsidian-plugin/src/bridge/record-store.js');
+const { JsonRecordStore, pruneRecordQuarantine } = require('../obsidian-plugin/src/bridge/record-store.js');
 
 test('writes restrictive records and prunes bounded history', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-record-store-'));
@@ -46,6 +46,39 @@ test('recovers a record after an interrupted Windows-style replacement', () => {
     assert.equal(store.read(record.id).value, 'preserve-me');
     assert.equal(fs.existsSync(target), true);
     assert.equal(fs.existsSync(replacement), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('bounds Obsidian record quarantine without touching replacement evidence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-record-quarantine-'));
+  try {
+    const directory = path.join(root, 'records');
+    fs.mkdirSync(directory, { recursive: true });
+    const oldA = path.join(directory, 'obs_a.json.corrupt-old-a');
+    const oldB = path.join(directory, 'obs_b.json.corrupt-old-b');
+    const recent = path.join(directory, 'obs_c.json.corrupt-recent');
+    const replacement = path.join(directory, 'obs_c.json.replace-preserve');
+    for (const file of [oldA, oldB, recent, replacement]) fs.writeFileSync(file, 'x'.repeat(40));
+    const old = new Date('2026-05-01T00:00:00.000Z');
+    const current = new Date('2026-06-18T00:00:00.000Z');
+    fs.utimesSync(oldA, old, old);
+    fs.utimesSync(oldB, old, old);
+    fs.utimesSync(recent, current, current);
+    fs.utimesSync(replacement, old, old);
+
+    const result = pruneRecordQuarantine(directory, {
+      retentionMs: 30 * 24 * 60 * 60 * 1000,
+      maxFiles: 1,
+      maxBytes: 50
+    }, Date.parse('2026-06-19T00:00:00.000Z'));
+
+    assert.equal(result.afterFiles, 1);
+    assert.equal(fs.existsSync(oldA), false);
+    assert.equal(fs.existsSync(oldB), false);
+    assert.equal(fs.existsSync(recent), true);
+    assert.equal(fs.existsSync(replacement), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
