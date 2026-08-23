@@ -30,6 +30,9 @@ async function run() {
   const extensionPath = extension.extensionPath;
   const { resolveNodeRuntime } = require(path.join(extensionPath, 'host', 'runtime', 'node-runtime.js'));
   const { RuntimeController } = require(path.join(extensionPath, 'host', 'runtime-controller.js'));
+  const { updateConfig } = require(path.join(extensionPath, 'shared', 'config-store.cjs'));
+  const { configureAuthentication } = require(path.join(extensionPath, 'shared', 'auth-config.cjs'));
+  const { setLifecycleIntent } = require(path.join(extensionPath, 'shared', 'lifecycle-intent.cjs'));
   const runtime = resolveNodeRuntime();
   assert.equal(runtime.source, 'path');
   assert.match(runtime.nodeVersion, /^24\./);
@@ -49,6 +52,19 @@ async function run() {
   });
 
   try {
+    // This test drives RuntimeController directly instead of the normal VS Code
+    // Start wrapper. Establish the same explicit local-only lifecycle state first
+    // so lifecycle fencing remains production-realistic.
+    controller.ensureConfig();
+    updateConfig(controller.configFile, config => {
+      configureAuthentication(config, 'none', { replace: true });
+      return config;
+    });
+    setLifecycleIntent(controller.configFile, 'running', {
+      requestedBy: 'vscode-extension-host-e2e',
+      reason: 'real extension host runtime ownership smoke'
+    });
+
     const started = await controller.start({ timeoutMs: 10000 });
     assert.equal(started.started, true);
     assert.equal(started.owned, true);
