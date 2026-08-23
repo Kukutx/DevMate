@@ -30,6 +30,14 @@ function lifecycleStoppedError() {
   return error;
 }
 
+function publicAuthenticationRequiredError(config) {
+  const mode = authenticationMode(config?.auth?.mode);
+  const error = new Error(`Public MCP verification requires OAuth; authentication mode ${mode} is loopback-only`);
+  error.code = 'DEVMATE_PUBLIC_MCP_AUTH_REQUIRED';
+  error.authMode = mode;
+  return error;
+}
+
 function authPolicySnapshot(config) {
   return Object.freeze({
     mode: authenticationMode(config?.auth?.mode),
@@ -168,6 +176,7 @@ async function verifySharedPublicMcp({
     const config = readJson(configFile, null, { strict: true, supportedVersion: true });
     if (!config) throw new Error('DevMate shared config is unavailable during public verification');
     if (config.lifecycle?.desiredState !== 'running') throw lifecycleStoppedError();
+    if (authenticationMode(config?.auth?.mode) !== 'oauth') throw publicAuthenticationRequiredError(config);
     if (expectedAuthPolicy && !authPolicyMatches(config, expectedAuthPolicy)) {
       throw authPolicyChangedError(expectedAuthPolicy, config);
     }
@@ -213,6 +222,7 @@ async function verifySharedPublicMcp({
     });
   } catch (error) {
     if (
+      error?.code === 'DEVMATE_PUBLIC_MCP_AUTH_REQUIRED' ||
       error?.code === 'DEVMATE_PUBLIC_MCP_AUTH_POLICY_CHANGED' ||
       error?.code === 'DEVMATE_PUBLIC_MCP_CONNECTION_POLICY_CHANGED' ||
       error?.code === 'DEVMATE_PUBLIC_MCP_CONNECTION_POLICY_MISMATCH' ||
@@ -248,6 +258,7 @@ async function verifySharedPublicMcp({
             if (recordGeneration(currentRecord()) !== generation) return false;
             const currentConfig = readJson(configFile, null, { strict: true, supportedVersion: true });
             return currentConfig?.lifecycle?.desiredState === 'running' &&
+              authenticationMode(currentConfig?.auth?.mode) === 'oauth' &&
               authPolicyMatches(currentConfig, expectedAuthPolicy) &&
               connectionPolicyMatches(currentConfig, expectedConnectionPolicy) &&
               runtimeMatchesConnection(currentConfig, currentRecord()).matches;
@@ -280,6 +291,7 @@ async function verifySharedPublicMcp({
     inspect(expectedAuthPolicy, expectedConnectionPolicy);
     updateConfig(configFile, config => {
       if (isCurrent() !== true || config?.lifecycle?.desiredState !== 'running') return config;
+      if (authenticationMode(config?.auth?.mode) !== 'oauth') return config;
       if (!authPolicyMatches(config, expectedAuthPolicy)) return config;
       if (!connectionPolicyMatches(config, expectedConnectionPolicy)) return config;
       const record = currentRecord();
@@ -321,6 +333,7 @@ module.exports = {
   connectionPolicyMismatchError,
   evidenceResult,
   lifecycleStoppedError,
+  publicAuthenticationRequiredError,
   recordVerificationFailure,
   staleGenerationError,
   verificationEvidenceFresh,
