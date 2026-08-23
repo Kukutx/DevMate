@@ -523,8 +523,17 @@ class RuntimeController {
     return this.operations.run('restart', async () => {
       if (this.disposed) throw new Error('Runtime controller is disposed');
       const stopped = await this.stopInternal();
-      if (!stopped.stopped && stopped.reason === 'managed-by-another-host') {
-        return { restarted: false, attached: true, reason: stopped.reason };
+      if (!stopped.stopped) {
+        if (stopped.reason === 'managed-by-another-host') {
+          return { restarted: false, attached: true, reason: stopped.reason };
+        }
+        if (stopped.reason !== 'not-running') {
+          const error = new Error(`DevMate Gateway restart refused because the existing runtime did not stop cleanly: ${stopped.reason || 'unknown stop failure'}`);
+          error.code = 'DEVMATE_GATEWAY_RESTART_STOP_FAILED';
+          error.stop = stopped;
+          error.diagnostics = this.diagnosticSnapshot();
+          throw error;
+        }
       }
       return { restarted: true, ...(await this.startInternal()) };
     });
