@@ -54,6 +54,11 @@ async function prepareModifyTask({ file = 'app.js', before = 'export const value
 }
 
 async function clearFixture() {
+  // resetDurableStateForTests intentionally clears only in-process caches/locks; the
+  // persisted namespace must also be reset so each crash-recovery case starts from
+  // a genuinely empty durable collaboration state.
+  durable.resetDurableStateForTests();
+  durable.writeDurableNamespace('codex-collaboration', { version: 1, activeTaskId: null, tasks: [] });
   durable.resetDurableStateForTests();
   await fsp.rm(snapshot.AGENT_TASK_ROOT, { recursive: true, force: true }).catch(() => {});
   const entries = await fsp.readdir(workspace).catch(() => []);
