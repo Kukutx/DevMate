@@ -10,10 +10,15 @@ const workspace = path.join(temp, 'workspace');
 const outside = path.join(temp, 'outside.txt');
 process.env.DEVMATE_CONFIG = path.join(temp, 'config.json');
 await fsp.mkdir(workspace, { recursive: true });
+await fsp.mkdir(path.join(workspace, '.aws'), { recursive: true });
 await fsp.writeFile(outside, 'outside-secret\n', 'utf8');
 await fsp.writeFile(path.join(workspace, 'app.js'), 'export const value = 1;\n', 'utf8');
 await fsp.writeFile(path.join(workspace, 'remove.md'), '# remove me\n', 'utf8');
+await fsp.writeFile(path.join(workspace, '.gitignore'), 'node_modules/\n', 'utf8');
 await fsp.writeFile(path.join(workspace, '.env'), 'TOKEN=must-not-copy\n', 'utf8');
+await fsp.writeFile(path.join(workspace, 'prod.env'), 'TOKEN=also-must-not-copy\n', 'utf8');
+await fsp.writeFile(path.join(workspace, '.npmrc'), '//registry.npmjs.org/:_authToken=must-not-copy\n', 'utf8');
+await fsp.writeFile(path.join(workspace, '.aws', 'credentials'), '[default]\naws_secret_access_key=must-not-copy\n', 'utf8');
 await fsp.writeFile(path.join(workspace, 'asset.bin'), Buffer.from([1, 2, 3]));
 let symlinkCreated = false;
 try {
@@ -37,15 +42,26 @@ function comparablePath(value) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-test('Codex snapshot is isolated, omits real workspace path metadata, excludes credentials and symlinks, and produces bounded text proposals', async () => {
+test('Codex snapshot is isolated, text-minimized, excludes credential-prone paths and produces bounded proposals', async () => {
+  assert.equal(snapshot.proposalTextPath('.gitignore'), true);
+  assert.equal(snapshot.proposalTextPath('.npmrc'), false);
+  assert.equal(snapshot.proposalTextPath('prod.env'), false);
+
   const created = await snapshot.createAgentSnapshot({ taskId, workspace: workspaceRecord });
   assert.equal(path.resolve(created.cwd).startsWith(path.resolve(workspace) + path.sep), false);
   assert.equal(await fsp.readFile(path.join(created.cwd, 'app.js'), 'utf8'), 'export const value = 1;\n');
+  assert.equal(await fsp.readFile(path.join(created.cwd, '.gitignore'), 'utf8'), 'node_modules/\n');
   assert.equal(fs.existsSync(path.join(created.cwd, '.env')), false);
+  assert.equal(fs.existsSync(path.join(created.cwd, 'prod.env')), false);
+  assert.equal(fs.existsSync(path.join(created.cwd, '.npmrc')), false);
+  assert.equal(fs.existsSync(path.join(created.cwd, '.aws')), false);
+  assert.equal(fs.existsSync(path.join(created.cwd, 'asset.bin')), false);
+  assert.ok(created.omittedFileCount >= 1);
   if (symlinkCreated) assert.equal(fs.existsSync(path.join(created.cwd, 'outside-link.txt')), false);
 
   const manifest = await snapshot.readAgentSnapshotManifest(taskId);
   assert.equal(Object.hasOwn(manifest, 'workspaceRoot'), false);
+  assert.equal(manifest.files.every(item => item.text === true), true);
   const manifestText = await fsp.readFile(path.join(snapshot.AGENT_TASK_ROOT, taskId, 'manifest.json'), 'utf8');
   assert.equal(manifestText.includes(path.resolve(workspace)), false);
 
@@ -57,15 +73,16 @@ test('Codex snapshot is isolated, omits real workspace path metadata, excludes c
   await fsp.rm(path.join(created.cwd, 'remove.md'));
   await fsp.writeFile(path.join(created.cwd, 'new-file.ts'), 'export const added = true;\n', 'utf8');
   await fsp.writeFile(path.join(created.cwd, 'asset.bin'), Buffer.from([9, 9, 9]));
+  await fsp.writeFile(path.join(created.cwd, '.npmrc'), '//registry.npmjs.org/:_authToken=generated-secret\n', 'utf8');
 
   const proposal = await snapshot.agentProposalChanges(taskId);
   assert.deepEqual(
     proposal.changes.map(item => [item.path, item.kind]),
     [['app.js', 'modify'], ['new-file.ts', 'create'], ['remove.md', 'delete']]
   );
-  assert.equal(proposal.blocked.length, 1);
-  assert.equal(proposal.blocked[0].path, 'asset.bin');
-  assert.match(proposal.blocked[0].reason, /non-text/);
+  assert.deepEqual(proposal.blocked.map(item => item.path), ['.npmrc', 'asset.bin']);
+  assert.match(proposal.blocked.find(item => item.path === '.npmrc')?.reason || '', /protected path/);
+  assert.match(proposal.blocked.find(item => item.path === 'asset.bin')?.reason || '', /non-text/);
   assert.equal(Number.isInteger(proposal.changes.find(item => item.path === 'remove.md')?.mode), true);
 
   assert.equal(await fsp.readFile(path.join(workspace, 'app.js'), 'utf8'), 'export const value = 1;\n');
