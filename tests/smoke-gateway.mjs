@@ -14,6 +14,7 @@ const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundl
 
 const config = configStore.newInstanceConfig({ workspaceRoot: root, port, appVersion: configStore.DEFAULT_VERSION });
 config.instanceId = `smoke-${Date.now()}`;
+config.auth = { mode: 'none' };
 config.runtime.defaultCommandTimeoutMs = 30000;
 config.runtime.maxOutputChars = 80000;
 config.permissions = {
