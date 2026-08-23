@@ -291,6 +291,30 @@ test('startup recovery does not resurrect the old file when a committed replacem
   }
 });
 
+test('startup recovery keeps the journal when a prepared-write cleanup cannot be completed', async () => {
+  const fx = await fixture();
+  try {
+    const target = path.join(fx.workspace, 'target.txt');
+    await fsp.writeFile(target, 'unchanged');
+    const journal = __test.preparedJournal({
+      kind: 'write-file', transactionRoot: fx.transactionRoot,
+      workspaceRoot: fx.workspace, target, targetExisted: true
+    });
+    await fsp.mkdir(journal.temporary);
+
+    const recovery = await recoverFileTransactions({ transactionRoot: fx.transactionRoot, workspaceRoots: [fx.workspace] });
+    assert.equal(recovery.recovered.length, 0);
+    assert.equal(recovery.blocked.length, 1);
+    assert.equal(recovery.blocked[0].code, 'FILE_TRANSACTION_RECOVERY_BLOCKED');
+    assert.match(recovery.blocked[0].message, /Could not remove prepared write/);
+    assert.equal(await fsp.readFile(target, 'utf8'), 'unchanged');
+    assert.equal(fs.statSync(journal.temporary).isDirectory(), true);
+    assert.equal(fs.existsSync(journal.journalFile), true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('a crash immediately after preparing a new-file journal is safely discarded', async () => {
   const fx = await fixture();
   try {
