@@ -14,16 +14,23 @@ const TASK_ID = /^codex-[a-z0-9-]{6,120}$/i;
 
 const SKIP_DIRS = new Set([
   '.git', '.godot', '.next', '.nuxt', '.cache', '.dart_tool', '.firebase', '.terraform',
+  '.devmate', '.codex', '.openai', '.direnv', '.ssh', '.gnupg', '.aws', '.azure', '.docker', '.kube',
+  '.npm', '.yarn', '.m2', '.gradle',
   'node_modules', 'coverage', 'dist', 'build', 'bin', 'obj', '.venv', 'venv', '__pycache__',
   'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys',
   'service-account', 'service_accounts'
 ]);
 const BLOCKED_BASENAMES = new Set([
-  '.env', 'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
+  '.env', '.envrc', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.netrc', '_netrc',
+  '.git-credentials', '.gitconfig', 'pip.conf', 'nuget.config', 'local.properties',
+  'keystore.properties', 'key.properties', 'gradle.properties',
+  'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
   'service-account.json', 'service_account.json', 'service-account-key.json',
   'service_account_key.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
 ]);
-const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3']);
+const BLOCKED_EXTENSIONS = new Set([
+  '.pem', '.key', '.pfx', '.p12', '.jks', '.keystore', '.db', '.sqlite', '.sqlite3', '.log'
+]);
 const TEXT_EXTENSIONS = new Set([
   '.md', '.mdx', '.txt', '.json', '.jsonc', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx',
   '.cjs', '.mjs', '.css', '.scss', '.sass', '.less', '.html', '.xml', '.cs', '.csproj', '.sln',
@@ -32,9 +39,13 @@ const TEXT_EXTENSIONS = new Set([
   '.svelte', '.gd', '.godot', '.gdshader', '.gdshaderinc', '.shader', '.tscn', '.tres', '.uid'
 ]);
 const TEXT_BASENAMES = new Set([
-  'README', 'README.md', 'LICENSE', 'Dockerfile', 'Makefile', 'package.json', 'package-lock.json',
-  'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'pubspec.yaml', 'pubspec.lock', 'global.json',
-  'Directory.Packages.props', 'AGENTS.md', 'CONTRIBUTING.md'
+  'README', 'README.md', 'LICENSE', 'Dockerfile', 'Makefile', 'CMakeLists.txt',
+  'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb',
+  'pubspec.yaml', 'pubspec.lock', 'global.json', 'Directory.Packages.props',
+  'AGENTS.md', 'CONTRIBUTING.md', '.gitignore', '.gitattributes', '.dockerignore', '.editorconfig',
+  '.prettierignore', '.eslintignore', '.npmignore', '.nvmrc', '.node-version', '.python-version', '.tool-versions',
+  'Gemfile', 'Rakefile', 'Pipfile', 'Pipfile.lock', 'go.mod', 'go.sum', 'Cargo.lock',
+  'Package.resolved', 'Podfile', 'Podfile.lock'
 ]);
 
 function ensureRoots() {
@@ -82,12 +93,22 @@ function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
+function isSafeEnvExample(base) {
+  const value = String(base || '').toLowerCase();
+  return value.endsWith('.env.example') || value.endsWith('.env.sample') || value.endsWith('.env.template');
+}
+
+function isEnvironmentFile(base) {
+  const value = String(base || '').toLowerCase();
+  if (isSafeEnvExample(value)) return false;
+  return value === '.env' || value === '.envrc' || value === 'env.local' || value.startsWith('.env.') || value.endsWith('.env');
+}
+
 function blockedPath(rel) {
   const parts = String(rel || '').replace(/\\/g, '/').split('/').filter(Boolean);
   if (parts.some(part => SKIP_DIRS.has(part.toLowerCase()))) return true;
   const base = (parts.at(-1) || '').toLowerCase();
-  if (BLOCKED_BASENAMES.has(base)) return true;
-  if (base.startsWith('.env.') && !base.endsWith('.example') && !base.endsWith('.sample')) return true;
+  if (BLOCKED_BASENAMES.has(base) || isEnvironmentFile(base)) return true;
   return BLOCKED_EXTENSIONS.has(path.extname(base).toLowerCase());
 }
 
@@ -96,7 +117,7 @@ export function proposalTextPath(rel) {
   if (blockedPath(normalized)) return false;
   const base = path.basename(normalized);
   if (TEXT_BASENAMES.has(base)) return true;
-  if (base.toLowerCase().endsWith('.env.example') || base.toLowerCase().endsWith('.env.sample')) return true;
+  if (isSafeEnvExample(base)) return true;
   return TEXT_EXTENSIONS.has(path.extname(base).toLowerCase());
 }
 
@@ -116,7 +137,7 @@ async function stableReadFile(file, initialStat) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const before = attempt === 0 ? initialStat : await fsp.lstat(file);
     if (!before.isFile() || before.isSymbolicLink()) {
-      throw codedError(`Snapshot source is not a regular file: ${file}`, 'codex_snapshot_unsafe_source');
+      throw codedError('Snapshot source changed into an unsafe filesystem object', 'codex_snapshot_unsafe_source');
     }
     if (before.size > SNAPSHOT_MAX_FILE_BYTES) return null;
     const buffer = await fsp.readFile(file);
@@ -127,7 +148,7 @@ async function stableReadFile(file, initialStat) {
       (before.ino == null || after.ino == null || before.ino === after.ino)
     ) return { buffer, stat: after };
   }
-  throw codedError(`Workspace changed repeatedly while snapshotting: ${file}`, 'codex_snapshot_source_unstable');
+  throw codedError('Workspace changed repeatedly while creating the Codex snapshot', 'codex_snapshot_source_unstable');
 }
 
 async function writeSnapshotFile(destination, buffer, mode) {
@@ -136,22 +157,30 @@ async function writeSnapshotFile(destination, buffer, mode) {
   try { await fsp.chmod(destination, mode & 0o777); } catch {}
 }
 
-async function walkWorkspace(sourceRoot, visitor, rel = '') {
+async function walkWorkspace(sourceRoot, visitor, rel = '', { reportBlocked = false } = {}) {
   const directory = rel ? safeChild(sourceRoot, rel) : path.resolve(sourceRoot);
   const entries = await fsp.readdir(directory, { withFileTypes: true });
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-    if (blockedPath(childRel)) continue;
     const child = safeChild(sourceRoot, childRel);
+    if (blockedPath(childRel)) {
+      if (reportBlocked) {
+        const stat = await fsp.lstat(child).catch(() => null);
+        if (stat && !stat.isSymbolicLink()) {
+          await visitor({ rel: childRel, full: child, stat, directory: stat.isDirectory(), blocked: true });
+        }
+      }
+      continue;
+    }
     const stat = await fsp.lstat(child);
     if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
-      await visitor({ rel: childRel, full: child, stat, directory: true });
-      await walkWorkspace(sourceRoot, visitor, childRel);
+      await visitor({ rel: childRel, full: child, stat, directory: true, blocked: false });
+      await walkWorkspace(sourceRoot, visitor, childRel, { reportBlocked });
       continue;
     }
     if (!stat.isFile()) continue;
-    await visitor({ rel: childRel, full: child, stat, directory: false });
+    await visitor({ rel: childRel, full: child, stat, directory: false, blocked: false });
   }
 }
 
@@ -186,6 +215,7 @@ export async function createAgentSnapshot({ taskId, workspace }) {
 
   const files = [];
   const skippedLarge = [];
+  let omittedFileCount = 0;
   let totalBytes = 0;
   try {
     await walkWorkspace(workspaceReal, async item => {
@@ -194,6 +224,10 @@ export async function createAgentSnapshot({ taskId, workspace }) {
           fsp.mkdir(safeChild(paths.baseline, item.rel), { recursive: true, mode: 0o700 }),
           fsp.mkdir(safeChild(paths.work, item.rel), { recursive: true, mode: 0o700 })
         ]);
+        return;
+      }
+      if (!proposalTextPath(item.rel)) {
+        omittedFileCount += 1;
         return;
       }
       if (files.length >= SNAPSHOT_MAX_FILES) {
@@ -215,7 +249,7 @@ export async function createAgentSnapshot({ taskId, workspace }) {
         sha256: sha256(read.buffer),
         bytes: read.buffer.length,
         mode: read.stat.mode & 0o777,
-        text: proposalTextPath(item.rel)
+        text: true
       });
     });
     const manifest = {
@@ -225,6 +259,7 @@ export async function createAgentSnapshot({ taskId, workspace }) {
       createdAt: new Date().toISOString(),
       files,
       skippedLarge,
+      omittedFileCount,
       fileCount: files.length,
       totalBytes
     };
@@ -237,6 +272,7 @@ export async function createAgentSnapshot({ taskId, workspace }) {
       baseline: paths.baseline,
       fileCount: files.length,
       totalBytes,
+      omittedFileCount,
       skippedLarge: [...skippedLarge]
     };
   } catch (error) {
@@ -284,6 +320,10 @@ async function currentSnapshotFiles(taskId) {
   const paths = taskPaths(taskId);
   const values = new Map();
   await walkWorkspace(paths.work, async item => {
+    if (item.blocked) {
+      values.set(item.rel, { path: item.rel, blocked: true, directory: item.directory, text: false });
+      return;
+    }
     if (item.directory) return;
     if (item.stat.size > SNAPSHOT_MAX_FILE_BYTES) {
       values.set(item.rel, { path: item.rel, tooLarge: true, bytes: item.stat.size, text: proposalTextPath(item.rel) });
@@ -298,7 +338,7 @@ async function currentSnapshotFiles(taskId) {
       mode: read.stat.mode & 0o777,
       text: proposalTextPath(item.rel)
     });
-  });
+  }, '', { reportBlocked: true });
   return values;
 }
 
@@ -313,10 +353,14 @@ export async function agentProposalChanges(taskId) {
     const after = current.get(rel);
     if (!after) {
       const value = { path: rel, kind: 'delete', beforeSha256: before.sha256, afterSha256: null, bytes: 0, mode: before.mode };
-      (before.text ? changes : blocked).push({ ...value, reason: before.text ? undefined : 'non-text file changes cannot be applied' });
+      changes.push(value);
       continue;
     }
     current.delete(rel);
+    if (after.blocked) {
+      blocked.push({ path: rel, kind: 'modify', reason: 'protected path changes cannot be applied' });
+      continue;
+    }
     if (after.tooLarge) {
       blocked.push({ path: rel, kind: 'modify', reason: 'changed file exceeds proposal size limit' });
       continue;
@@ -336,10 +380,14 @@ export async function agentProposalChanges(taskId) {
     }
     if (after.sha256 === before.sha256) continue;
     const value = { path: rel, kind: 'modify', beforeSha256: before.sha256, afterSha256: after.sha256, bytes: after.bytes, mode: after.mode };
-    (before.text && after.text ? changes : blocked).push({ ...value, reason: before.text && after.text ? undefined : 'non-text file changes cannot be applied' });
+    (after.text ? changes : blocked).push({ ...value, reason: after.text ? undefined : 'non-text file changes cannot be applied' });
   }
 
   for (const [rel, after] of current) {
+    if (after.blocked) {
+      blocked.push({ path: rel, kind: 'create', reason: 'protected path changes cannot be applied' });
+      continue;
+    }
     if (after.tooLarge || !after.text) {
       blocked.push({ path: rel, kind: 'create', reason: after.tooLarge ? 'new file exceeds proposal size limit' : 'non-text file changes cannot be applied' });
       continue;
@@ -416,6 +464,8 @@ export const __test = {
   SKIP_DIRS,
   TASK_ID,
   blockedPath,
+  isEnvironmentFile,
+  isSafeEnvExample,
   normalizeRelative,
   safeChild,
   sha256,
