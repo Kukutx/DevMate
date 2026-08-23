@@ -21,6 +21,12 @@ function staleGenerationError() {
   return error;
 }
 
+function lifecycleStoppedError() {
+  const error = new Error('Public MCP verification was cancelled because the shared DevMate lifecycle is stopped');
+  error.code = 'DEVMATE_PUBLIC_MCP_LIFECYCLE_STOPPED';
+  return error;
+}
+
 function evidenceResult(config, record) {
   const origin = String(record?.publicUrl || config?.connection?.lastPublicOrigin || '').replace(/\/$/, '');
   return {
@@ -39,6 +45,7 @@ function evidenceResult(config, record) {
 }
 
 function verificationEvidenceFresh(config, record, gatewayLock, maxAgeMs, at = Date.now()) {
+  if (config?.lifecycle?.desiredState !== 'running') return false;
   if (!verifiedForCurrentRecord(config, record, gatewayLock)) return false;
   const verifiedAt = Date.parse(config?.connection?.lastPreflightAt || '');
   const maximumAge = Math.max(1000, Number(maxAgeMs) || DEFAULT_EVIDENCE_MAX_AGE_MS);
@@ -47,7 +54,7 @@ function verificationEvidenceFresh(config, record, gatewayLock, maxAgeMs, at = D
 
 function recordVerificationFailure(configFile, currentRecord, generation, error, now = Date.now, isCurrent = () => true, currentGatewayLock = () => null, probeStartedAt = 0) {
   return updateConfig(configFile, config => {
-    if (isCurrent() !== true) return config;
+    if (isCurrent() !== true || config?.lifecycle?.desiredState !== 'running') return config;
     const record = currentRecord();
     if (recordGeneration(record) !== generation) return config;
     const successfulAt = Date.parse(config?.connection?.lastPreflightAt || '');
@@ -92,6 +99,7 @@ async function verifySharedPublicMcp({
     if (recordGeneration(record) !== generation) throw staleGenerationError();
     const config = readJson(configFile, null, { strict: true, supportedVersion: true });
     if (!config) throw new Error('DevMate shared config is unavailable during public verification');
+    if (config.lifecycle?.desiredState !== 'running') throw lifecycleStoppedError();
     return {
       config,
       record,
@@ -151,8 +159,13 @@ async function verifySharedPublicMcp({
         timeoutMs: requestTimeoutMs,
         readyTimeoutMs: timeout,
         shouldContinue: () => {
-          try { return recordGeneration(currentRecord()) === generation; }
-          catch { return false; }
+          try {
+            if (recordGeneration(currentRecord()) !== generation) return false;
+            const currentConfig = readJson(configFile, null, { strict: true, supportedVersion: true });
+            return currentConfig?.lifecycle?.desiredState === 'running';
+          } catch {
+            return false;
+          }
         }
       });
     } catch (error) {
@@ -167,7 +180,7 @@ async function verifySharedPublicMcp({
     const stamp = new Date(now()).toISOString();
     inspect();
     updateConfig(configFile, config => {
-      if (isCurrent() !== true) return config;
+      if (isCurrent() !== true || config?.lifecycle?.desiredState !== 'running') return config;
       const record = currentRecord();
       if (recordGeneration(record) !== generation) return config;
       config.connection = {
@@ -198,6 +211,7 @@ module.exports = {
   DEFAULT_EVIDENCE_MAX_AGE_MS,
   VERIFICATION_LOCK_NAME,
   evidenceResult,
+  lifecycleStoppedError,
   recordVerificationFailure,
   staleGenerationError,
   verificationEvidenceFresh,
