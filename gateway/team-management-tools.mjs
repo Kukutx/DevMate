@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import instanceConfig from '../shared/instance-config.cjs';
 import publicHostPolicy from '../shared/public-host-policy.cjs';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { activitySnapshot } from './request-guard.mjs';
@@ -22,32 +23,42 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
-const { normalizeAllowedHosts } = publicHostPolicy;
+const { setConnectionPolicy } = instanceConfig;
+const { normalizeAllowedHosts, reconcileAllowedHosts } = publicHostPolicy;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   const config = normalizeInstanceConfig(inputConfig);
   const previousProvider = config.connection.provider;
-  if (patch.tunnelProvider) config.connection.provider = patch.tunnelProvider;
-
-  const providerChanged = patch.tunnelProvider !== undefined && patch.tunnelProvider !== previousProvider;
+  const previousPublicUrl = config.connection.publicUrl;
+  const provider = patch.tunnelProvider === undefined ? previousProvider : patch.tunnelProvider;
+  const providerChanged = provider !== previousProvider;
+  let publicUrl = previousPublicUrl;
   if (patch.publicUrl !== undefined) {
-    config.connection.publicUrl = cleanOrigin(patch.publicUrl, false);
-  } else if (providerChanged || config.connection.provider === 'cloudflare-quick') {
-    config.connection.publicUrl = '';
+    publicUrl = cleanOrigin(patch.publicUrl, false);
+  } else if (providerChanged || provider === 'cloudflare-quick') {
+    publicUrl = '';
   }
 
   const connectionTouched = patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
   if (
     connectionTouched &&
-    (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
-    !config.connection.publicUrl
+    (provider === 'cloudflare-managed' || provider === 'external') &&
+    !publicUrl
   ) {
-    throw new Error(`${config.connection.provider} requires a public HTTPS URL`);
+    throw new Error(`${provider} requires a public HTTPS URL`);
   }
 
   if (patch.allowedHosts !== undefined) {
     config.requestPolicy.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
+  } else if (connectionTouched) {
+    config.requestPolicy.allowedHosts = reconcileAllowedHosts({
+      currentAllowedHosts: config.requestPolicy.allowedHosts || [],
+      previousPublicUrl,
+      nextPublicUrl: publicUrl
+    });
   }
+
+  if (connectionTouched) setConnectionPolicy(config, { provider, publicUrl });
 
   if (patch.requireWorkspaceLeaseForWrites !== undefined) {
     config.team.requireWorkspaceLeaseForWrites = patch.requireWorkspaceLeaseForWrites;
@@ -163,28 +174,6 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_rotate', {
     title: 'Rotate DevMate member login code', description: 'Invalidate the old OAuth member login code, revoke existing member authorization, and return a new login code once. Requires owner.',
-    inputSchema: { id: z.string().min(1) }, annotations: rw
-  }, async ({ id }) => {
-    const config = normalizeInstanceConfig(readConfig());
-    const result = rotateTeamMemberLoginCode(config, id);
-    writeConfig(config);
-    await audit('team_member_rotate', { principalId: principalNow().id, memberId: id });
-    return toolText({ ...result, warning: 'The replacement OAuth login code is shown once. Update the member secret and remove old copies.' });
+    inputSchema: { id: z.string().min(1), annotations: rw }
   });
-
-  register('team_member_revoke', {
-    title: 'Revoke DevMate team member', description: 'Disable a member identity immediately. Requires owner.',
-    inputSchema: { id: z.string().min(1) }, annotations: { ...rw, idempotentHint: true }
-  }, async ({ id }) => {
-    const config = normalizeInstanceConfig(readConfig());
-    const member = revokeTeamMember(config, id);
-    writeConfig(config);
-    await audit('team_member_revoke', { principalId: principalNow().id, memberId: id });
-    return toolText({ member });
-  });
-
-  register('team_activity_status', {
-    title: 'DevMate team activity', description: 'Show recent authenticated MCP clients, request counts, roles, and authenticated client identities. Requires maintainer or owner.',
-    inputSchema: { activeWithinMinutes: z.number().int().min(1).max(1440).optional() }, annotations: ro
-  }, async ({ activeWithinMinutes = 60 }) => toolText({ activities: activitySnapshot({ activeWithinMinutes }) }));
 }
