@@ -50,7 +50,7 @@ test('VS Code wrapper chain forwards preserveSession instead of reconstructing l
   assert.doesNotMatch(lifecycle, /host-deactivation-handoff/);
 });
 
-test('desktop child processes have parent-death fencing', () => {
+test('desktop child processes have parent-death fencing and fail closed on unconfirmed provider cleanup', () => {
   const gatewayController = source('host/runtime/process-controller.js');
   const gatewayRuntime = source('gateway/server-runtime.mjs');
   const tunnel = source('vscode-host/tunnel-controller.js');
@@ -61,6 +61,10 @@ test('desktop child processes have parent-death fencing', () => {
   assert.match(tunnel, /createSupervisedChildProcess/);
   assert.match(supervisor, /process\.once\(['"]disconnect['"]/);
   assert.match(supervisor, /terminateProcessTree/);
+  assert.match(supervisor, /result\?\.exitConfirmed === false/);
+  assert.match(supervisor, /exitCode = 1/);
+  assert.match(supervisor, /provider\.once\(['"]error['"][\s\S]*shutdown\(['"]provider-error['"], 1\)/);
+  assert.match(supervisor, /provider\.once\(['"]close['"]/);
 });
 
 test('explicit desktop authentication settings write through the shared policy boundary', () => {
