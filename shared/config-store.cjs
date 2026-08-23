@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
-const { configureAuthentication } = require('./auth-config.cjs');
+const { configureAuthentication, DEFAULT_AUTHENTICATION_MODE } = require('./auth-config.cjs');
 const { enforcePolicyGenerations, policyGenerationBaseline } = require('./config-policy-invariants.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
@@ -450,7 +450,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
     },
     maintenance: { ...DEFAULT_MAINTENANCE },
     connection: { provider, publicUrl: '', policyGeneration: 0 },
-    auth: { mode: 'none' },
+    auth: { mode: DEFAULT_AUTHENTICATION_MODE },
     permissions: {
       profile: 'fullAccess',
       readOnly: false,
