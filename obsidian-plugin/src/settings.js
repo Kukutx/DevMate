@@ -77,13 +77,9 @@ function tokenSetting(containerEl, plugin, {
       try {
         const secret = validate(raw);
         if (!encryptionAvailable()) throw new Error('OS-backed encryption is unavailable in this Obsidian environment.');
-        plugin.settings[settingKey] = encryptSecret(secret);
-        await plugin.saveSettings();
+        await plugin.configureTunnelCredential(settingKey, encryptSecret(secret));
         text.inputEl.value = '';
         new Notice(`${title} saved securely.`);
-        plugin.invalidateTunnelSecrets();
-        plugin.scheduleReconfigure();
-        this?.display?.();
       } catch (error) {
         new Notice(`Could not save ${title}: ${error.message || error}`);
       }
@@ -94,11 +90,12 @@ function tokenSetting(containerEl, plugin, {
     .setButtonText('Clear')
     .setDisabled(!configured)
     .onClick(async () => {
-      plugin.settings[settingKey] = '';
-      await plugin.saveSettings();
-      plugin.invalidateTunnelSecrets();
-      plugin.scheduleReconfigure();
-      new Notice(`${title} cleared.`);
+      try {
+        await plugin.configureTunnelCredential(settingKey, '');
+        new Notice(`${title} cleared.`);
+      } catch (error) {
+        new Notice(`Could not clear ${title}: ${error.message || error}`);
+      }
     }));
 }
 
