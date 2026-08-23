@@ -321,6 +321,19 @@ export async function agentProposalChanges(taskId) {
       blocked.push({ path: rel, kind: 'modify', reason: 'changed file exceeds proposal size limit' });
       continue;
     }
+    if ((Number(after.mode) & 0o777) !== (Number(before.mode) & 0o777)) {
+      blocked.push({
+        path: rel,
+        kind: 'modify',
+        beforeSha256: before.sha256,
+        afterSha256: after.sha256,
+        bytes: after.bytes,
+        beforeMode: Number(before.mode) & 0o777,
+        afterMode: Number(after.mode) & 0o777,
+        reason: 'permission mode changes cannot be applied automatically'
+      });
+      continue;
+    }
     if (after.sha256 === before.sha256) continue;
     const value = { path: rel, kind: 'modify', beforeSha256: before.sha256, afterSha256: after.sha256, bytes: after.bytes, mode: after.mode };
     (before.text && after.text ? changes : blocked).push({ ...value, reason: before.text && after.text ? undefined : 'non-text file changes cannot be applied' });
