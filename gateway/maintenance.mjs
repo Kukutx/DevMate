@@ -54,7 +54,8 @@ function escapeRegex(value) {
 function recoveryLocations(paths = {}) {
   const stateRoot = path.resolve(String(paths.stateRoot || ''));
   const configDirectory = path.dirname(stateRoot);
-  const configFile = path.resolve(String(paths.configFile || path.join(configDirectory, 'config.json')));
+  const configuredFile = String(paths.configFile || process.env.DEVMATE_CONFIG || path.join(configDirectory, 'config.json'));
+  const configFile = path.resolve(configuredFile);
   if (path.dirname(configFile) !== configDirectory) {
     throw new Error('Maintenance configFile must share the parent directory of stateRoot');
   }
