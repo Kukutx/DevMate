@@ -122,6 +122,7 @@ try {
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
     'shared/auth-config.cjs',
+    'shared/lifecycle-intent.cjs',
     'shared/oauth-secrets.cjs',
     'shared/oauth-tokens.cjs',
     'shared/config-store.cjs',
@@ -178,6 +179,9 @@ try {
   const requireFromVsix = createRequire(packageFile);
   const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
   const { resolveNodeRuntime } = requireFromVsix('./host/runtime/node-runtime.js');
+  const { updateConfig } = requireFromVsix('./shared/config-store.cjs');
+  const { configureAuthentication } = requireFromVsix('./shared/auth-config.cjs');
+  const { setLifecycleIntent } = requireFromVsix('./shared/lifecycle-intent.cjs');
   const nodeRuntime = resolveNodeRuntime();
   const port = await freePort();
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
@@ -191,6 +195,19 @@ try {
   };
   vscodeController = new RuntimeController({ ...controllerOptions, hostId: 'vscode-artifact' });
   secondController = new RuntimeController({ ...controllerOptions, hostId: 'second-artifact-host' });
+
+  // This artifact-level smoke exercises RuntimeController directly rather than
+  // the user-facing Start command, so establish the same explicit local-only
+  // lifecycle/auth state that the host wrapper would establish first.
+  vscodeController.ensureConfig();
+  updateConfig(vscodeController.configFile, config => {
+    configureAuthentication(config, 'none', { replace: true });
+    return config;
+  });
+  setLifecycleIntent(vscodeController.configFile, 'running', {
+    requestedBy: 'vsix-runtime-smoke',
+    reason: 'packaged runtime ownership smoke'
+  });
 
   const [vscodeStart, secondStart] = await Promise.all([
     vscodeController.start({ timeoutMs: 20000 }),
