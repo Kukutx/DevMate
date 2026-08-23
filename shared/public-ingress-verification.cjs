@@ -1,5 +1,7 @@
 'use strict';
 
+const { authenticationMode, authenticationPolicyGeneration } = require('./auth-config.cjs');
+
 function cleanHttpsOrigin(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -100,8 +102,10 @@ function runtimeMatchesConnection(config, record, publicUrl = cleanHttpsOrigin(r
 
 function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   const connection = config?.connection || {};
-  const authMode = String(config?.auth?.mode || 'oauth').trim().toLowerCase();
+  const authMode = authenticationMode(config?.auth?.mode);
+  const authGeneration = authenticationPolicyGeneration(config);
   if (authMode !== 'oauth' || String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;
+  if (!Number.isSafeInteger(connection.lastAuthGeneration) || connection.lastAuthGeneration !== authGeneration) return false;
   const preflightAt = Date.parse(connection.lastPreflightAt || '');
   if (!Number.isFinite(preflightAt)) return false;
   const failureAt = Date.parse(connection.lastErrorAt || '');
@@ -141,13 +145,19 @@ function successfulVerificationPatch(
   stamp = new Date().toISOString(),
   record = null,
   gatewayLock = null,
-  authMode = 'oauth'
+  authMode = 'oauth',
+  authGeneration = 0
 ) {
   const tunnelGeneration = recordGeneration(record);
   const currentGatewayGeneration = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
+  const normalizedAuthGeneration = Number(authGeneration);
+  if (!Number.isSafeInteger(normalizedAuthGeneration) || normalizedAuthGeneration < 0) {
+    throw new Error(`Invalid authentication generation for public verification evidence: ${String(authGeneration)}`);
+  }
   return {
     lastPreflightAt: stamp,
-    lastAuthMode: String(authMode || '').trim().toLowerCase(),
+    lastAuthMode: authenticationMode(authMode),
+    lastAuthGeneration: normalizedAuthGeneration,
     lastPublicOrigin: String(test?.publicOrigin || publicUrl || '').trim(),
     lastPublicHost: hostOf(test?.publicOrigin || publicUrl),
     lastMcpPath: '/mcp',
