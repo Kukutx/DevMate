@@ -12,7 +12,7 @@ async function tempRoot(t, prefix = 'devmate-cli-') {
   return root;
 }
 
-test('creates one default no-auth public standalone instance, MCP URL, and optional member login code', async t => {
+test('creates one default OAuth public standalone instance, MCP URL, and optional member login code', async t => {
   const root = await tempRoot(t);
   const config = path.join(root, 'state', 'config.json');
   const result = __test.initConfig({ config, workspace: root, provider: 'external', 'public-url': 'devmate.example.com' });
@@ -20,7 +20,7 @@ test('creates one default no-auth public standalone instance, MCP URL, and optio
   assert.equal(result.config.connection.publicUrl, 'https://devmate.example.com');
   assert.equal('deployment' in result.config, false);
   assert.equal(__test.mcpUrl({ config }), 'https://devmate.example.com/mcp');
-  assert.equal(result.config.auth.mode, 'none');
+  assert.equal(result.config.auth.mode, 'oauth');
   const created = __test.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
   assert.match(created.loginCode, /^dmc_/);
   assert.equal(created.member.name, 'Alice');
@@ -29,7 +29,7 @@ test('creates one default no-auth public standalone instance, MCP URL, and optio
   if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
 });
 
-test('bootstrap presets supply default no-auth and current capability defaults without persisting a runtime mode', async t => {
+test('bootstrap presets encode public OAuth and runner-local no-auth without persisting a runtime mode', async t => {
   const personalRoot = await tempRoot(t, 'devmate-personal-');
   const personal = __test.bootstrap({
     preset: 'personal',
@@ -37,7 +37,7 @@ test('bootstrap presets supply default no-auth and current capability defaults w
     config: path.join(personalRoot, 'config.json')
   });
   assert.equal(personal.preset, 'personal');
-  assert.equal(personal.authenticationMode, 'none');
+  assert.equal(personal.authenticationMode, 'oauth');
   assert.equal(personal.access.workspaceLeasesRequired, false);
   assert.equal(personal.execution.embeddedRunnerEnabled, true);
   assert.equal(personal.execution.externalRunnerControlEnabled, false);
@@ -50,7 +50,7 @@ test('bootstrap presets supply default no-auth and current capability defaults w
     'member-name': 'Alice'
   });
   assert.equal(team.preset, 'team');
-  assert.equal(team.authenticationMode, 'none');
+  assert.equal(team.authenticationMode, 'oauth');
   assert.equal(team.access.ownerOnly, false);
   assert.equal(team.access.workspaceLeasesRequired, true);
   assert.match(team.member.loginCode, /^dmc_/);
@@ -64,7 +64,7 @@ test('bootstrap presets supply default no-auth and current capability defaults w
     'runner-name': 'Builder'
   });
   assert.equal(control.preset, 'control-plane');
-  assert.equal(control.authenticationMode, 'none');
+  assert.equal(control.authenticationMode, 'oauth');
   assert.equal(control.connection.provider, 'external');
   assert.equal(control.execution.embeddedRunnerEnabled, false);
   assert.equal(control.execution.externalRunnerControlEnabled, true);
@@ -89,8 +89,11 @@ test('bootstrap presets supply default no-auth and current capability defaults w
     assert.equal(Object.hasOwn(saved, 'mode'), false);
     assert.equal(Object.hasOwn(saved, 'deployment'), false);
     assert.equal(Object.hasOwn(saved, 'production'), false);
-    assert.deepEqual(saved.auth, { mode: 'none' });
   }
+  assert.deepEqual(JSON.parse(await fsp.readFile(personal.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(team.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(control.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(runnerHost.config, 'utf8')).auth, { mode: 'none' });
 });
 
 test('explicit bootstrap options override preset defaults and unknown presets fail closed', async t => {
@@ -107,6 +110,27 @@ test('explicit bootstrap options override preset defaults and unknown presets fa
   assert.equal(result.access.workspaceLeasesRequired, false);
   assert.equal(result.execution.externalRunnerControlEnabled, true);
   assert.throws(() => __test.bootstrapPreset('production'), /Unknown bootstrap preset/);
+});
+
+test('public standalone rejects explicit no-auth while loopback-only no-auth remains available', async t => {
+  const root = await tempRoot(t, 'devmate-auth-boundary-');
+  assert.throws(() => __test.initConfig({
+    config: path.join(root, 'public.json'),
+    workspace: root,
+    provider: 'external',
+    'public-url': 'https://devmate.example.com',
+    'authentication-mode': 'none'
+  }), /requires .*oauth.*loopback-only/i);
+
+  const localConfig = path.join(root, 'local.json');
+  const local = __test.initConfig({
+    config: localConfig,
+    workspace: root,
+    provider: 'ngrok',
+    'authentication-mode': 'none'
+  });
+  assert.equal(local.config.connection.publicUrl, '');
+  assert.equal(local.config.auth.mode, 'none');
 });
 
 test('rejects invalid connection inputs instead of silently falling back', () => {
