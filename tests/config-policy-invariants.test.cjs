@@ -15,6 +15,7 @@ const {
 } = require('../shared/config-store.cjs');
 const { configureAuthentication, authenticationPolicyGeneration } = require('../shared/auth-config.cjs');
 const { connectionPolicyGeneration, setConnectionPolicy } = require('../shared/instance-config.cjs');
+const { readLifecycleIntent, setLifecycleIntent } = require('../shared/lifecycle-intent.cjs');
 
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-policy-invariant-'));
@@ -51,6 +52,19 @@ test('updateConfig repairs a direct authentication writer that forgot to advance
   } finally { fx.cleanup(); }
 });
 
+test('updateConfig repairs a direct lifecycle writer that forgot to advance generation', () => {
+  const fx = fixture();
+  try {
+    const updated = updateConfig(fx.file, config => {
+      config.lifecycle ||= {};
+      config.lifecycle.desiredState = 'running';
+      return config;
+    });
+    assert.equal(updated.lifecycle.desiredState, 'running');
+    assert.equal(updated.lifecycle.generation, 1);
+  } finally { fx.cleanup(); }
+});
+
 test('canonical policy helpers are accepted without double-incrementing generations', () => {
   const fx = fixture();
   try {
@@ -61,10 +75,17 @@ test('canonical policy helpers are accepted without double-incrementing generati
     });
     assert.equal(connectionPolicyGeneration(updated), 1);
     assert.equal(authenticationPolicyGeneration(updated), 2);
+
+    const lifecycle = setLifecycleIntent(fx.file, 'running', { requestedBy: 'test', reason: 'canonical helper' });
+    assert.equal(lifecycle.changed, true);
+    assert.equal(lifecycle.generation, 1);
+    const repeated = setLifecycleIntent(fx.file, 'running', { requestedBy: 'test', reason: 'same state' });
+    assert.equal(repeated.changed, false);
+    assert.equal(readLifecycleIntent(fx.file).generation, 1);
   } finally { fx.cleanup(); }
 });
 
-test('connection metadata writes do not advance policy generations', () => {
+test('connection metadata writes do not advance policy or lifecycle generations', () => {
   const fx = fixture();
   try {
     const before = readJson(fx.file, null, { strict: true, supportedVersion: true });
@@ -74,6 +95,7 @@ test('connection metadata writes do not advance policy generations', () => {
     });
     assert.equal(connectionPolicyGeneration(updated), connectionPolicyGeneration(before));
     assert.equal(authenticationPolicyGeneration(updated), authenticationPolicyGeneration(before));
+    assert.equal(updated.lifecycle?.generation ?? 0, before.lifecycle?.generation ?? 0);
   } finally { fx.cleanup(); }
 });
 
@@ -89,6 +111,12 @@ test('same-policy generation jumps are rejected as unjustified', () => {
       config.hostRuntime.authenticationPolicyGeneration += 1;
       return config;
     }), error => error?.code === 'authentication_policy_generation_unjustified');
+
+    assert.throws(() => updateConfig(fx.file, config => {
+      config.lifecycle ||= { desiredState: 'stopped', generation: 0 };
+      config.lifecycle.generation += 1;
+      return config;
+    }), error => error?.code === 'lifecycle_generation_unjustified');
   } finally { fx.cleanup(); }
 });
 
@@ -106,6 +134,13 @@ test('policy changes cannot forge a rollback or multi-step generation jump', () 
       config.hostRuntime.authenticationPolicyGeneration = 9;
       return config;
     }), error => error?.code === 'authentication_policy_generation_invalid_transition');
+
+    assert.throws(() => updateConfig(fx.file, config => {
+      config.lifecycle ||= {};
+      config.lifecycle.desiredState = 'running';
+      config.lifecycle.generation = 9;
+      return config;
+    }), error => error?.code === 'lifecycle_generation_invalid_transition');
   } finally { fx.cleanup(); }
 });
 
@@ -114,25 +149,27 @@ test('replaceConfig applies the same invariant to snapshot-based writers', () =>
   try {
     const snapshot = readConfigSnapshot(fx.file);
     snapshot.connection.provider = 'cloudflare-quick';
+    snapshot.lifecycle ||= {};
+    snapshot.lifecycle.desiredState = 'running';
     const updated = replaceConfig(fx.file, snapshot);
     assert.equal(updated.connection.provider, 'cloudflare-quick');
     assert.equal(connectionPolicyGeneration(updated), 1);
+    assert.equal(updated.lifecycle.generation, 1);
   } finally { fx.cleanup(); }
 });
 
-test('a deliberate new instance identity may start a fresh policy generation namespace', () => {
+test('an existing instance identity cannot be replaced to reset policy generations', () => {
   const fx = fixture();
   try {
-    updateConfig(fx.file, config => {
-      setConnectionPolicy(config, { provider: 'cloudflare-quick', publicUrl: '' });
-      return config;
-    });
-    const replaced = updateConfig(fx.file, () => {
-      const fresh = newInstanceConfig({ workspaceRoot: fx.dir, defaultConnectionProvider: 'ngrok' });
-      configureAuthentication(fresh, 'oauth', { replace: true });
+    const before = readJson(fx.file, null, { strict: true, supportedVersion: true });
+    assert.throws(() => updateConfig(fx.file, () => {
+      const fresh = newInstanceConfig({ workspaceRoot: fx.dir, defaultConnectionProvider: 'cloudflare-quick' });
+      configureAuthentication(fresh, 'none', { replace: true });
       return fresh;
-    });
-    assert.equal(replaced.connection.policyGeneration, 0);
-    assert.equal(connectionPolicyGeneration(replaced), 0);
+    }), error => error?.code === 'config_instance_identity_change_forbidden');
+    const after = readJson(fx.file, null, { strict: true, supportedVersion: true });
+    assert.equal(after.instanceId, before.instanceId);
+    assert.equal(connectionPolicyGeneration(after), connectionPolicyGeneration(before));
+    assert.equal(authenticationPolicyGeneration(after), authenticationPolicyGeneration(before));
   } finally { fx.cleanup(); }
 });
