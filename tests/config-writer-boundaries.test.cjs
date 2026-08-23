@@ -44,7 +44,7 @@ test('live production config writers cannot bypass the locked config store with 
 
 test('lifecycle desired state has one authoritative production writer', () => {
   assert.deepEqual(
-    offenders(/\.lifecycle\.desiredState\s*=/, { allow: ['shared/lifecycle-intent.cjs'] }),
+    offenders(/\.lifecycle\.desiredState\s*=(?!=)/, { allow: ['shared/lifecycle-intent.cjs'] }),
     [],
     'lifecycle.desiredState must be written through setLifecycleIntent so recovery tokens and generation fencing stay coherent'
   );
@@ -52,7 +52,7 @@ test('lifecycle desired state has one authoritative production writer', () => {
 
 test('authentication mode has one authoritative policy writer', () => {
   assert.deepEqual(
-    offenders(/\.auth\.mode\s*=/, { allow: ['shared/auth-config.cjs'] }),
+    offenders(/\.auth\.mode\s*=(?!=)/, { allow: ['shared/auth-config.cjs'] }),
     [],
     'auth.mode must be written through configureAuthentication; config-store invariants are defense-in-depth, not the primary API'
   );
