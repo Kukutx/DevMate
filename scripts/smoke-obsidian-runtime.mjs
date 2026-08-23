@@ -29,15 +29,19 @@ const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-bu
 const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-bundle-state-'));
 const distRoot = path.join(root, 'obsidian-plugin', 'dist');
 const pluginMain = path.join(distRoot, 'main.js');
+const providerSupervisor = path.join(distRoot, 'provider-supervisor.cjs');
 const gatewayEntry = path.join(distRoot, 'gateway', 'server.mjs');
 const codexSupervisor = path.join(distRoot, 'gateway', 'agent-codex-supervisor.mjs');
 const instanceLock = path.join(stateDirectory, 'state', 'gateway.lock');
-for (const file of [pluginMain, gatewayEntry, codexSupervisor]) {
+for (const file of [pluginMain, providerSupervisor, gatewayEntry, codexSupervisor]) {
   if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error(`Built Obsidian file is missing: ${file}`);
 }
 
 const mainSource = fs.readFileSync(pluginMain, 'utf8');
+const providerSupervisorSource = fs.readFileSync(providerSupervisor, 'utf8');
 const codexSupervisorSource = fs.readFileSync(codexSupervisor, 'utf8');
+assert.doesNotMatch(providerSupervisorSource, /\.\/process-tree\.js/, 'Obsidian provider supervisor must be bundled with its process-tree dependencies');
+assert.match(providerSupervisorSource, /terminateProcessTree/, 'Obsidian provider supervisor bundle must retain bounded process-tree cleanup');
 assert.doesNotMatch(codexSupervisorSource, /\.\/command-process\.mjs/, 'Obsidian Codex supervisor must be bundled with its process-tree dependencies');
 assert.match(codexSupervisorSource, /terminateProcessTree/, 'Obsidian Codex supervisor bundle must retain bounded process-tree cleanup');
 assert.doesNotMatch(mainSource, /node:worker_threads|createWorkerSpawn|new Worker\s*\(/, 'Obsidian bundle must not depend on Worker threads');
