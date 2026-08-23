@@ -52,6 +52,13 @@ function issue(job) {
   });
 }
 
+function principal() {
+  const config = team.normalizeInstanceConfig(configStore.readJson(configPath, null, { strict: true }));
+  const alice = team.principalFromOAuthClaims({ sub: 'member:alice', av: config.team.members[0].authVersion }, config);
+  assert.ok(alice);
+  return alice;
+}
+
 test.beforeEach(() => {
   durable.resetDurableStateForTests();
   leases.clearWorkspaceLeases();
@@ -67,9 +74,7 @@ test.beforeEach(() => {
 });
 
 test('external preflight automatically holds the requester workspace until claim consumption', () => {
-  const config = team.normalizeInstanceConfig(configStore.readJson(configPath, null, { strict: true }));
-  const alice = team.principalFromOAuthClaims({ sub: 'member:alice', av: config.team.members[0].authVersion }, config);
-  assert.ok(alice);
+  const alice = principal();
   const job = externalJob(alice, 'job-external-complete');
   const proof = issue(job);
 
@@ -94,9 +99,46 @@ test('external preflight automatically holds the requester workspace until claim
   assert.equal(leases.releaseWorkspaceLease({ workspaceId: 'app', principal: alice }).released, true);
 });
 
+test('duplicate external preflight cannot replace or orphan the original workspace hold', () => {
+  const alice = principal();
+  const job = externalJob(alice, 'job-external-duplicate');
+  issue(job);
+  const first = preflightQueuedJob(job);
+  const original = externalHolds.externalJobWorkspaceHold(job.id);
+  assert.equal(original?.hold?.id, first.leaseHold.id);
+  assert.equal(leases.workspaceLease('app').activeOperations, 1);
+
+  assert.throws(
+    () => preflightQueuedJob(job),
+    error => error?.code === 'external_job_workspace_hold_conflict'
+  );
+  assert.equal(externalHolds.externalJobWorkspaceHold(job.id)?.hold?.id, original.hold.id);
+  assert.equal(leases.workspaceLease('app').activeOperations, 1, 'the newly acquired duplicate hold must be released');
+});
+
+test('failed workspace-hold release preserves the durable mapping for later recovery', () => {
+  const alice = principal();
+  const job = externalJob(alice, 'job-external-release-retry');
+  issue(job);
+  const result = preflightQueuedJob(job);
+  const record = externalHolds.externalJobWorkspaceHold(job.id);
+  assert.ok(record);
+
+  assert.equal(leases.releaseWorkspaceLeaseHold({
+    workspaceId: result.leaseHold.workspaceId,
+    holdId: result.leaseHold.id,
+    leaseId: result.leaseHold.leaseId,
+    principalId: result.leaseHold.principalId
+  }), true);
+  assert.equal(externalHolds.releaseExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId }), false);
+  assert.equal(externalHolds.externalJobWorkspaceHold(job.id)?.hold?.id, record.hold.id);
+
+  assert.equal(externalHolds.forgetExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId }), true);
+  assert.equal(leases.workspaceLease('app').activeOperations, 0);
+});
+
 test('revoking an external claim releases its durable workspace hold', () => {
-  const config = team.normalizeInstanceConfig(configStore.readJson(configPath, null, { strict: true }));
-  const alice = team.principalFromOAuthClaims({ sub: 'member:alice', av: config.team.members[0].authVersion }, config);
+  const alice = principal();
   const job = externalJob(alice, 'job-external-revoke');
   issue(job);
   preflightQueuedJob(job);
