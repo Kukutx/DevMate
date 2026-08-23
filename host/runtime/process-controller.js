@@ -124,9 +124,11 @@ class RuntimeController {
     logger = () => {},
     nodeExecutable = process.execPath,
     spawnImpl = spawn,
+    lifecycleFence = false,
     childExitTimeoutMs = CHILD_EXIT_TIMEOUT_MS,
     childForceExitTimeoutMs = CHILD_FORCE_EXIT_TIMEOUT_MS
   }) {
+    if (typeof lifecycleFence !== 'boolean') throw new TypeError('lifecycleFence must be a boolean');
     this.workspaceRoot = requiredPath(workspaceRoot, 'workspaceRoot');
     this.stateDirectory = requiredPath(stateDirectory, 'stateDirectory');
     this.gatewayEntry = requiredPath(gatewayEntry, 'gatewayEntry');
@@ -137,6 +139,7 @@ class RuntimeController {
     this.logger = logger;
     this.nodeExecutable = nodeExecutable;
     this.spawnImpl = spawnImpl;
+    this.lifecycleFence = lifecycleFence;
     this.childExitTimeoutMs = Math.max(100, Number(childExitTimeoutMs) || CHILD_EXIT_TIMEOUT_MS);
     this.childForceExitTimeoutMs = Math.max(100, Number(childForceExitTimeoutMs) || CHILD_FORCE_EXIT_TIMEOUT_MS);
     this.child = null;
@@ -197,6 +200,7 @@ class RuntimeController {
       stateDirectory: this.stateDirectory,
       gatewayEntry: this.gatewayEntry,
       configFile: this.configFile,
+      lifecycleFence: this.lifecycleFence,
       phase: this.phase,
       disposed: this.disposed,
       owned: this.owned,
@@ -375,7 +379,8 @@ class RuntimeController {
             DEVMATE_CONFIG: this.configFile,
             DEVMATE_PUBLIC_HEALTH_DETAILS: '0',
             DEVMATE_RUNTIME_OWNER_ID: runtimeOwnerId,
-            DEVMATE_RUNTIME_PARENT_PID: String(process.pid)
+            DEVMATE_RUNTIME_PARENT_PID: String(process.pid),
+            DEVMATE_DESKTOP_LIFECYCLE_FENCE: this.lifecycleFence ? '1' : '0'
           },
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe', 'ipc']
