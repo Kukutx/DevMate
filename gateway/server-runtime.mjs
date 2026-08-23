@@ -22,6 +22,7 @@ import { drainRuntimeMaintenance, startRuntimeMaintenance, stopRuntimeMaintenanc
 import { beginStartupProgress, completeStartupProgress, enterStartupStage, failStartupProgress } from './startup-progress.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 import { recoverFileTransactions } from './file-transactions.mjs';
+import { reconcileAgentSnapshotStorage } from './agent-snapshot.mjs';
 import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
 
 const { validatePermissionConfig } = permissionConfig;
@@ -59,6 +60,15 @@ try {
   enterStartupStage('codex_collaboration_recovery');
   codexCollaboration = await import('./agent-collaboration.mjs');
   codexCollaboration.recoverCodexCollaborationAfterRestart();
+
+  enterStartupStage('codex_snapshot_recovery');
+  const snapshotRecovery = await reconcileAgentSnapshotStorage();
+  if (snapshotRecovery.failed.length) {
+    const error = new Error(`DevMate Codex snapshot cleanup is blocked for ${snapshotRecovery.failed.length} task(s)`);
+    error.code = 'DEVMATE_CODEX_SNAPSHOT_RECOVERY_BLOCKED';
+    error.failed = snapshotRecovery.failed;
+    throw error;
+  }
 
   enterStartupStage('file_transaction_recovery');
   const workspaceRoots = [
