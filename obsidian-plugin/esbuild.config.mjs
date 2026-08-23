@@ -23,6 +23,17 @@ await build({
   logLevel: 'info'
 });
 
+await build({
+  entryPoints: [path.join(root, 'host', 'runtime', 'provider-supervisor.js')],
+  outfile: path.join(output, 'provider-supervisor.cjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node24',
+  sourcemap: false,
+  logLevel: 'info'
+});
+
 await buildGatewayBundle({
   root,
   outfile: path.join(output, 'gateway', 'server.mjs')
