@@ -1,8 +1,13 @@
 import { readConfig } from './local-shared.mjs';
 import { ensureToolApproval } from './approvals.mjs';
+import { rememberExternalJobWorkspaceHold } from './external-job-workspace-holds.mjs';
 import { jobTarget } from './job-runtime.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
-import { acquireWorkspaceLeaseHold, assertWorkspaceLease } from './workspace-leases.mjs';
+import {
+  acquireWorkspaceLeaseHold,
+  assertWorkspaceLease,
+  releaseWorkspaceLeaseHold
+} from './workspace-leases.mjs';
 
 export function preflightQueuedJob(job, { holdWorkspaceLease = false } = {}) {
   const target = jobTarget(job?.tool);
@@ -45,5 +50,24 @@ export function preflightQueuedJob(job, { holdWorkspaceLease = false } = {}) {
       purpose: `job:${job?.id || target.name}`
     })
     : null;
+  if (leaseHold && job?.runnerId && job?.id) {
+    try {
+      rememberExternalJobWorkspaceHold({
+        jobId: job.id,
+        runnerId: job.runnerId,
+        hold: leaseHold
+      });
+    } catch (error) {
+      try {
+        releaseWorkspaceLeaseHold({
+          workspaceId: leaseHold.workspaceId,
+          holdId: leaseHold.id,
+          leaseId: leaseHold.leaseId,
+          principalId: leaseHold.principalId
+        });
+      } catch {}
+      throw error;
+    }
+  }
   return { target, authorized, approval, leaseHold };
 }
