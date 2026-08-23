@@ -6,14 +6,14 @@
 
 | Preset | MCP authentication | Embedded Runner | External Runner API | Workspace lease default | Connection default |
 |---|---|---:|---:|---:|---|
-| `personal` | `none` — default | on | off | off | ngrok |
-| `team` | `none` — default; OAuth optional | on | off | on | ngrok |
-| `control-plane` | `none` — default; OAuth optional | off | on | on | external HTTPS |
-| `runner` | `none` — default | off | off | off | ngrok/local config |
+| `personal` | `oauth` | on | off | off | ngrok |
+| `team` | `oauth` | on | off | on | ngrok |
+| `control-plane` | `oauth` | off | on | on | external HTTPS |
+| `runner` | `none` — loopback only | off | off | off | local config |
 
 No preset writes historical `mode`, `deployment`, or `production` fields.
 
-All presets default to `none` unless OAuth is explicitly selected. `auth.mode: "none"` works on both loopback and public MCP.
+Public-capable presets default to `oauth`; the Runner-local preset uses `none` for loopback-only MCP.
 
 ## Personal preset
 
@@ -21,7 +21,7 @@ All presets default to `none` unless OAuth is explicitly selected. `auth.mode: "
 npx devmate bootstrap --preset personal --workspace /srv/project
 ```
 
-This creates one owner instance. Its MCP endpoint is usable without authentication over loopback or configured public ingress.
+This creates one owner instance with OAuth ready for the normal ChatGPT-facing public MCP connection. Direct loopback requests remain trusted local-owner access.
 
 ## Team preset
 
@@ -33,9 +33,9 @@ npx devmate bootstrap \
   --member-role developer
 ```
 
-The preset keeps no-auth as the default and enables workspace-lease enforcement by default. OAuth may be enabled explicitly. Member creation returns a one-time `dmc_` **OAuth login code**. DevMate stores only a salted verifier plus the member `authVersion`; it never stores the plaintext login code in `config.json`.
+The preset enables OAuth and workspace-lease enforcement by default. Member creation returns a one-time `dmc_` **OAuth login code**. DevMate stores only a salted verifier plus the member `authVersion`; it never stores the plaintext login code in `config.json`.
 
-Creating a member does not change the selected authentication mode. The returned `dmc_` login code is used only if OAuth is explicitly enabled.
+Creating a member does not create a second authentication system. The returned `dmc_` login code is accepted only by the OAuth authorization page and never directly by `/mcp`.
 
 ## Control-plane preset
 
@@ -53,7 +53,7 @@ npx devmate bootstrap \
 
 Defaults:
 
-- no-auth MCP by default; OAuth optional;
+- OAuth MCP;
 - external HTTPS connection;
 - embedded Runner disabled;
 - external Runner control enabled;
@@ -80,7 +80,7 @@ devmate-runner \
   --concurrency 2
 ```
 
-The Runner-host preset disables both the local embedded queue and the central external Runner-control API. Its local MCP surface is loopback-only. The external Agent authenticates separately to the central `/runner/v1` endpoint with the scoped `dmr_` credential.
+The Runner-host preset disables both the local embedded queue and the central external Runner-control API. Its local MCP surface is loopback-only, so `auth.mode: "none"` is appropriate there. The external Agent authenticates separately to the central `/runner/v1` endpoint with the scoped `dmr_` credential.
 
 ## OAuth secret boundary
 
@@ -100,7 +100,7 @@ npx devmate bootstrap \
   --external-runner-control true
 ```
 
-This remains one instance with a different capability composition. Authentication remains independent: member records may coexist with `none`, and OAuth is enabled only when explicitly selected.
+This remains one instance with a different capability composition. Authentication remains independent from Runner topology and workspace-lease policy. Selecting `none` explicitly is supported only for trusted loopback use; remote MCP requests are rejected in that mode.
 
 Unknown preset names fail explicitly.
 
@@ -125,7 +125,7 @@ MCP endpoint URLs never contain credentials.
 npx devmate status --config /srv/devmate/config.json
 ```
 
-Active member records do not make no-auth mode invalid; they are used for member identity only when OAuth is enabled.
+If a configuration has a public URL while `auth.mode` is `none`, status reports it as an invalid public-authentication combination rather than treating the URL itself as a credential.
 
 ## Commands
 
