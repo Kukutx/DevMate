@@ -5,7 +5,7 @@ import net from 'node:net';
 import tokens from '../shared/oauth-tokens.cjs';
 import oauthSecrets from '../shared/oauth-secrets.cjs';
 import { CONFIG_PATH, mutateConfig, readConfig } from './local-shared.mjs';
-import { isLoopbackHostname } from './http-host-policy.mjs';
+import { hostAllowed, isLoopbackHostname } from './http-host-policy.mjs';
 import { normalizeInstanceConfig, principalFromOAuthClaims, verifyMemberLoginCode } from './team-access.mjs';
 import {
   consumeAuthorizationCode,
@@ -23,6 +23,14 @@ const CIMD_FETCH_TIMEOUT_MS = 5000;
 const MAX_OAUTH_REQUEST_BYTES = 64 * 1024;
 const MAX_CIMD_BYTES = 64 * 1024;
 const MAX_CIMD_CACHE = 500;
+const OAUTH_REQUEST_PATHS = new Set([
+  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-protected-resource/mcp',
+  '/.well-known/oauth-authorization-server',
+  '/oauth/authorize',
+  '/oauth/token',
+  '/oauth/revoke'
+]);
 const cimdCache = new Map();
 
 function json(res, status, value) {
@@ -67,6 +75,10 @@ function originFor(req) {
 
 function mcpAudience(req) {
   return `${originFor(req)}/mcp`;
+}
+
+function oauthRequestPath(url) {
+  return OAUTH_REQUEST_PATHS.has(String(url?.pathname || ''));
 }
 
 function authorizationServerMetadata(origin) {
@@ -467,7 +479,11 @@ export function oauthAccessToken(config, token, req) {
 }
 
 export async function handleOAuthRequest(req, res, url, config) {
-  if (config.auth?.mode !== 'oauth') return false;
+  if (config.auth?.mode !== 'oauth' || !oauthRequestPath(url)) return false;
+  if (!hostAllowed(req, config)) {
+    json(res, 421, { error: 'invalid_request', error_description: 'OAuth request host is not allowed' });
+    return true;
+  }
   const origin = originFor(req);
   if (req.method === 'GET' && (url.pathname === '/.well-known/oauth-protected-resource' || url.pathname === '/.well-known/oauth-protected-resource/mcp')) {
     json(res, 200, protectedResourceMetadata(req));
@@ -527,8 +543,10 @@ export async function handleOAuthRequest(req, res, url, config) {
 }
 
 export const __test = {
+  OAUTH_REQUEST_PATHS,
   authorizationServerMetadata,
   cimdUrl,
+  oauthRequestPath,
   originFor,
   protectedResourceMetadata,
   publicAddress,
