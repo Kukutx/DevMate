@@ -28,7 +28,7 @@ test('Obsidian-first and VS-Code-first shared config both use the same ngrok con
     try {
       const first = controller(value, order[0][0], order[0][1]);
       const created = first.ensureConfig();
-      assert.deepEqual(created.connection, { provider: 'ngrok', publicUrl: '' });
+      assert.deepEqual(created.connection, { provider: 'ngrok', publicUrl: '', policyGeneration: 0 });
       assert.equal(created.server.port, 8787);
 
       const second = controller(value, order[1][0], order[1][1]);
@@ -57,7 +57,7 @@ test('a later host never rewrites explicit shared connection or access capabilit
 
     const vscode = controller(value, 'vscode', 9999);
     const reused = vscode.ensureConfig();
-    assert.deepEqual(reused.connection, { provider: 'external', publicUrl: 'https://team.example.test' });
+    assert.deepEqual(reused.connection, { provider: 'external', publicUrl: 'https://team.example.test', policyGeneration: 1 });
     assert.equal(reused.team.requireWorkspaceLeaseForWrites, true);
     assert.equal(reused.server.port, 8787);
   } finally {
