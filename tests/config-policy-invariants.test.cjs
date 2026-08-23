@@ -1,0 +1,138 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const {
+  atomicWriteJson,
+  newInstanceConfig,
+  readConfigSnapshot,
+  readJson,
+  replaceConfig,
+  updateConfig
+} = require('../shared/config-store.cjs');
+const { configureAuthentication, authenticationPolicyGeneration } = require('../shared/auth-config.cjs');
+const { connectionPolicyGeneration, setConnectionPolicy } = require('../shared/instance-config.cjs');
+
+function fixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-policy-invariant-'));
+  const file = path.join(dir, 'config.json');
+  const config = newInstanceConfig({ workspaceRoot: dir, defaultConnectionProvider: 'ngrok' });
+  configureAuthentication(config, 'oauth', { replace: true });
+  atomicWriteJson(file, config);
+  return { dir, file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('updateConfig repairs a direct connection writer that forgot to advance generation', () => {
+  const fx = fixture();
+  try {
+    const updated = updateConfig(fx.file, config => {
+      config.connection.provider = 'cloudflare-quick';
+      config.connection.publicUrl = '';
+      return config;
+    });
+    assert.equal(updated.connection.provider, 'cloudflare-quick');
+    assert.equal(connectionPolicyGeneration(updated), 1);
+  } finally { fx.cleanup(); }
+});
+
+test('updateConfig repairs a direct authentication writer that forgot to advance generation', () => {
+  const fx = fixture();
+  try {
+    const before = readJson(fx.file, null, { strict: true, supportedVersion: true });
+    const updated = updateConfig(fx.file, config => {
+      config.auth.mode = 'none';
+      return config;
+    });
+    assert.equal(updated.auth.mode, 'none');
+    assert.equal(authenticationPolicyGeneration(updated), authenticationPolicyGeneration(before) + 1);
+  } finally { fx.cleanup(); }
+});
+
+test('canonical policy helpers are accepted without double-incrementing generations', () => {
+  const fx = fixture();
+  try {
+    const updated = updateConfig(fx.file, config => {
+      setConnectionPolicy(config, { provider: 'external', publicUrl: 'https://devmate.example.com' });
+      configureAuthentication(config, 'none', { replace: true });
+      return config;
+    });
+    assert.equal(connectionPolicyGeneration(updated), 1);
+    assert.equal(authenticationPolicyGeneration(updated), 2);
+  } finally { fx.cleanup(); }
+});
+
+test('connection metadata writes do not advance policy generations', () => {
+  const fx = fixture();
+  try {
+    const before = readJson(fx.file, null, { strict: true, supportedVersion: true });
+    const updated = updateConfig(fx.file, config => {
+      config.connection.lastCopiedAt = new Date().toISOString();
+      return config;
+    });
+    assert.equal(connectionPolicyGeneration(updated), connectionPolicyGeneration(before));
+    assert.equal(authenticationPolicyGeneration(updated), authenticationPolicyGeneration(before));
+  } finally { fx.cleanup(); }
+});
+
+test('same-policy generation jumps are rejected as unjustified', () => {
+  const fx = fixture();
+  try {
+    assert.throws(() => updateConfig(fx.file, config => {
+      config.connection.policyGeneration += 1;
+      return config;
+    }), error => error?.code === 'connection_policy_generation_unjustified');
+
+    assert.throws(() => updateConfig(fx.file, config => {
+      config.hostRuntime.authenticationPolicyGeneration += 1;
+      return config;
+    }), error => error?.code === 'authentication_policy_generation_unjustified');
+  } finally { fx.cleanup(); }
+});
+
+test('policy changes cannot forge a rollback or multi-step generation jump', () => {
+  const fx = fixture();
+  try {
+    assert.throws(() => updateConfig(fx.file, config => {
+      config.connection.provider = 'cloudflare-quick';
+      config.connection.policyGeneration = 9;
+      return config;
+    }), error => error?.code === 'connection_policy_generation_invalid_transition');
+
+    assert.throws(() => updateConfig(fx.file, config => {
+      config.auth.mode = 'none';
+      config.hostRuntime.authenticationPolicyGeneration = 9;
+      return config;
+    }), error => error?.code === 'authentication_policy_generation_invalid_transition');
+  } finally { fx.cleanup(); }
+});
+
+test('replaceConfig applies the same invariant to snapshot-based writers', () => {
+  const fx = fixture();
+  try {
+    const snapshot = readConfigSnapshot(fx.file);
+    snapshot.connection.provider = 'cloudflare-quick';
+    const updated = replaceConfig(fx.file, snapshot);
+    assert.equal(updated.connection.provider, 'cloudflare-quick');
+    assert.equal(connectionPolicyGeneration(updated), 1);
+  } finally { fx.cleanup(); }
+});
+
+test('a deliberate new instance identity may start a fresh policy generation namespace', () => {
+  const fx = fixture();
+  try {
+    updateConfig(fx.file, config => {
+      setConnectionPolicy(config, { provider: 'cloudflare-quick', publicUrl: '' });
+      return config;
+    });
+    const replaced = updateConfig(fx.file, () => {
+      const fresh = newInstanceConfig({ workspaceRoot: fx.dir, defaultConnectionProvider: 'ngrok' });
+      configureAuthentication(fresh, 'oauth', { replace: true });
+      return fresh;
+    });
+    assert.equal(replaced.connection.policyGeneration, 0);
+    assert.equal(connectionPolicyGeneration(replaced), 0);
+  } finally { fx.cleanup(); }
+});
