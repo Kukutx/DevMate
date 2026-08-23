@@ -1,6 +1,7 @@
 'use strict';
 
 const AUTHENTICATION_MODES = Object.freeze(['none', 'oauth']);
+const DEFAULT_AUTHENTICATION_MODE = 'oauth';
 
 function object(value, label) {
   if (value === undefined) return {};
@@ -9,7 +10,7 @@ function object(value, label) {
 }
 
 function authenticationMode(value) {
-  const mode = value === undefined ? 'none' : String(value).trim().toLowerCase();
+  const mode = value === undefined ? DEFAULT_AUTHENTICATION_MODE : String(value).trim().toLowerCase();
   if (!AUTHENTICATION_MODES.includes(mode)) throw new Error(`Unknown DevMate authentication mode: ${String(value)}`);
   return mode;
 }
@@ -36,6 +37,7 @@ function configureAuthentication(config, requestedMode) {
 
 module.exports = {
   AUTHENTICATION_MODES,
+  DEFAULT_AUTHENTICATION_MODE,
   authenticationMode,
   configureAuthentication,
   normalizeAuthentication
