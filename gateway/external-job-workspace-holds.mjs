@@ -1,5 +1,10 @@
 import { mutateDurableDocument, readDurableNamespace } from './durable-state.mjs';
-import { releaseWorkspaceLeaseHold } from './workspace-leases.mjs';
+import {
+  acquireWorkspaceLeaseHoldInDocument,
+  releaseWorkspaceLeaseHoldInDocument,
+  releaseWorkspaceLeaseHold,
+  syncWorkspaceLeasesFromDurableState
+} from './workspace-leases.mjs';
 
 const NAMESPACE = 'external-job-workspace-holds';
 const VERSION = 1;
@@ -50,6 +55,79 @@ function sameHold(left, right) {
     String(left.principalId || '') === String(right.principalId || '');
 }
 
+function holdRecord(id, runner, hold, existing = null) {
+  return {
+    jobId: id,
+    runnerId: runner,
+    hold: {
+      id: String(hold.id),
+      leaseId: String(hold.leaseId),
+      workspaceId: String(hold.workspaceId),
+      principalId: String(hold.principalId),
+      expiresAt: String(hold.expiresAt || '')
+    },
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function assertRecordOwner(existing, id, runner) {
+  if (!existing) return;
+  if (existing.runnerId !== runner) {
+    throw new Error(`External job ${id} workspace hold belongs to runner ${existing.runnerId}`);
+  }
+}
+
+function holdConflict(id) {
+  const error = new Error(`External job ${id} already has a different workspace hold`);
+  error.code = 'external_job_workspace_hold_conflict';
+  return error;
+}
+
+export function acquireExternalJobWorkspaceHold({
+  jobId,
+  runnerId,
+  workspaceId,
+  principal,
+  capability,
+  config,
+  holdMs = null,
+  purpose = ''
+}) {
+  const id = String(jobId || '').trim();
+  const runner = String(runnerId || '').trim();
+  if (!id || !runner) throw new Error('External job workspace hold requires jobId and runnerId');
+  let hold = null;
+  let record = null;
+  mutateDurableDocument(document => {
+    const store = prune(normalizeStore(document.namespaces?.[NAMESPACE]));
+    const existing = store.records[id];
+    assertRecordOwner(existing, id, runner);
+    if (existing) throw holdConflict(id);
+
+    hold = acquireWorkspaceLeaseHoldInDocument(document, {
+      workspaceId,
+      principal,
+      capability,
+      config,
+      holdMs,
+      purpose
+    });
+    if (hold) {
+      record = holdRecord(id, runner, hold);
+      store.records[id] = record;
+    }
+    document.namespaces ||= {};
+    document.namespaces[NAMESPACE] = store;
+    return document;
+  });
+  syncWorkspaceLeasesFromDurableState();
+  return {
+    hold: hold ? JSON.parse(JSON.stringify(hold)) : null,
+    record: record ? JSON.parse(JSON.stringify(record)) : null
+  };
+}
+
 export function rememberExternalJobWorkspaceHold({ jobId, runnerId, hold }) {
   const id = String(jobId || '').trim();
   const runner = String(runnerId || '').trim();
@@ -60,33 +138,15 @@ export function rememberExternalJobWorkspaceHold({ jobId, runnerId, hold }) {
   mutateDurableDocument(document => {
     const store = prune(normalizeStore(document.namespaces?.[NAMESPACE]));
     const existing = store.records[id];
+    assertRecordOwner(existing, id, runner);
     if (existing) {
-      if (existing.runnerId !== runner) {
-        throw new Error(`External job ${id} workspace hold belongs to runner ${existing.runnerId}`);
-      }
-      if (!sameHold(existing.hold, hold)) {
-        const error = new Error(`External job ${id} already has a different workspace hold`);
-        error.code = 'external_job_workspace_hold_conflict';
-        throw error;
-      }
+      if (!sameHold(existing.hold, hold)) throw holdConflict(id);
       record = existing;
       document.namespaces ||= {};
       document.namespaces[NAMESPACE] = store;
       return document;
     }
-    record = {
-      jobId: id,
-      runnerId: runner,
-      hold: {
-        id: String(hold.id),
-        leaseId: String(hold.leaseId),
-        workspaceId: String(hold.workspaceId),
-        principalId: String(hold.principalId),
-        expiresAt: String(hold.expiresAt || '')
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    record = holdRecord(id, runner, hold);
     store.records[id] = record;
     document.namespaces ||= {};
     document.namespaces[NAMESPACE] = store;
@@ -114,6 +174,33 @@ export function forgetExternalJobWorkspaceHold({ jobId, runnerId = '' }) {
 }
 
 export function releaseExternalJobWorkspaceHold({ jobId, runnerId = '' }) {
+  const id = String(jobId || '').trim();
+  if (!id) return false;
+  let released = false;
+  mutateDurableDocument(document => {
+    const store = prune(normalizeStore(document.namespaces?.[NAMESPACE]));
+    const record = store.records[id];
+    if (!record || (runnerId && record.runnerId !== String(runnerId))) {
+      document.namespaces ||= {};
+      document.namespaces[NAMESPACE] = store;
+      return document;
+    }
+    released = releaseWorkspaceLeaseHoldInDocument(document, {
+      workspaceId: record.hold.workspaceId,
+      holdId: record.hold.id,
+      leaseId: record.hold.leaseId,
+      principalId: record.hold.principalId
+    });
+    if (released) delete store.records[id];
+    document.namespaces ||= {};
+    document.namespaces[NAMESPACE] = store;
+    return document;
+  });
+  syncWorkspaceLeasesFromDurableState();
+  return released;
+}
+
+export function releaseRememberedWorkspaceHoldDirectly({ jobId, runnerId = '' }) {
   const record = externalJobWorkspaceHold(jobId);
   if (!record || (runnerId && record.runnerId !== String(runnerId))) return false;
   const released = releaseWorkspaceLeaseHold({
@@ -139,6 +226,7 @@ export const __test = {
   NAMESPACE,
   VERSION,
   emptyStore,
+  holdRecord,
   normalizeStore,
   prune,
   sameHold
