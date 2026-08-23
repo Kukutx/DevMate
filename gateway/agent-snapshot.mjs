@@ -160,6 +160,18 @@ async function writeManifest(file, value) {
   await fsp.writeFile(file, payload, { flag: 'wx', mode: 0o600 });
 }
 
+async function replaceManifest(file, value) {
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(5).toString('hex')}.tmp`;
+  const payload = `${JSON.stringify(value, null, 2)}\n`;
+  try {
+    await fsp.writeFile(temporary, payload, { flag: 'wx', mode: 0o600 });
+    await fsp.rename(temporary, file);
+    try { await fsp.chmod(file, 0o600); } catch {}
+  } finally {
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
 export async function createAgentSnapshot({ taskId, workspace }) {
   ensureRoots();
   if (!workspace?.root || !workspace?.id) throw new TypeError('A resolved workspace is required');
@@ -210,7 +222,6 @@ export async function createAgentSnapshot({ taskId, workspace }) {
       version: 1,
       taskId: paths.id,
       workspaceId: workspace.id,
-      workspaceRoot: workspaceReal,
       createdAt: new Date().toISOString(),
       files,
       skippedLarge,
@@ -241,7 +252,32 @@ export async function readAgentSnapshotManifest(taskId) {
   if (!value || value.version !== 1 || value.taskId !== paths.id || !Array.isArray(value.files)) {
     throw codedError('Codex snapshot manifest is invalid', 'codex_snapshot_manifest_invalid');
   }
+  if (Object.hasOwn(value, 'workspaceRoot')) {
+    delete value.workspaceRoot;
+    await replaceManifest(paths.manifest, value);
+  }
   return value;
+}
+
+export async function readAgentBaselineFile(taskId, rel) {
+  const paths = taskPaths(taskId);
+  const normalized = normalizeRelative(rel);
+  const manifest = await readAgentSnapshotManifest(taskId);
+  const entry = manifest.files.find(item => item?.path === normalized) || null;
+  if (!entry?.text || !/^[a-f0-9]{64}$/i.test(String(entry.sha256 || ''))) {
+    throw codedError(`Baseline file is unavailable or not an allowed text path: ${normalized}`, 'codex_baseline_file_invalid');
+  }
+  const full = safeChild(paths.baseline, normalized);
+  const stat = await fsp.lstat(full).catch(() => null);
+  if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > SNAPSHOT_MAX_FILE_BYTES) {
+    throw codedError(`Baseline file is not a safe regular file: ${normalized}`, 'codex_baseline_file_invalid');
+  }
+  const buffer = await fsp.readFile(full);
+  const actualSha256 = sha256(buffer);
+  if (actualSha256 !== entry.sha256) {
+    throw codedError(`Baseline file integrity check failed: ${normalized}`, 'codex_baseline_integrity_failed');
+  }
+  return { text: buffer.toString('utf8'), sha256: entry.sha256, mode: Number(entry.mode) & 0o777 };
 }
 
 async function currentSnapshotFiles(taskId) {
@@ -276,7 +312,7 @@ export async function agentProposalChanges(taskId) {
   for (const [rel, before] of baseline) {
     const after = current.get(rel);
     if (!after) {
-      const value = { path: rel, kind: 'delete', beforeSha256: before.sha256, afterSha256: null, bytes: 0 };
+      const value = { path: rel, kind: 'delete', beforeSha256: before.sha256, afterSha256: null, bytes: 0, mode: before.mode };
       (before.text ? changes : blocked).push({ ...value, reason: before.text ? undefined : 'non-text file changes cannot be applied' });
       continue;
     }
