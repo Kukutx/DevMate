@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { CodexAppServer, __test as runtimeTest } from '../gateway/agent-codex-runtime.mjs';
 
-function fakeAppServer() {
+function fakeAppServer({ completeTurn = true } = {}) {
   const child = new EventEmitter();
   child.pid = 424242;
   child.exitCode = null;
@@ -32,10 +32,12 @@ function fakeAppServer() {
       if (message.method === 'thread/start') send({ jsonrpc: '2.0', id: message.id, result: { thread: { id: 'thread-1' } } });
       if (message.method === 'turn/start') {
         send({ jsonrpc: '2.0', id: message.id, result: { turn: { id: 'turn-1' } } });
-        setTimeout(() => {
-          send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { turnId: 'turn-1', delta: 'proposal ready' } });
-          send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
-        }, 10);
+        if (completeTurn) {
+          setTimeout(() => {
+            send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { turnId: 'turn-1', delta: 'proposal ready' } });
+            send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
+          }, 10);
+        }
       }
       if (message.method === 'turn/interrupt') send({ jsonrpc: '2.0', id: message.id, result: {} });
     }
@@ -101,6 +103,36 @@ test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, an
   }
 });
 
+test('an active Codex turn fails immediately when the app-server transport closes', async () => {
+  const fake = fakeAppServer({ completeTurn: false });
+  const cwd = await snapshotDir();
+  const runtime = new CodexAppServer({ executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex', spawnFn: () => fake.child });
+  try {
+    await runtime.start({ cwd });
+    const thread = await runtime.ensureThread({ cwd });
+    const started = Date.now();
+    const turn = runtime.runTurn({
+      threadId: thread.threadId,
+      cwd,
+      prompt: 'Wait for transport loss.',
+      timeoutMs: 60_000,
+      idleTimeoutMs: 60_000
+    });
+    setTimeout(() => {
+      fake.child.exitCode = 1;
+      fake.child.emit('close', 1, null);
+    }, 20);
+    await assert.rejects(turn, error => error?.code === 'codex_transport_closed');
+    assert.ok(Date.now() - started < 2000, 'transport loss must not wait for idle/total timeout');
+    assert.equal(runtime.listenerCount('transport-error'), 0);
+    assert.equal(runtime.listenerCount('notification'), 0);
+  } finally {
+    fake.child.exitCode ??= 0;
+    await runtime.stop();
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('Codex environment is allowlisted and never inherits common credential variables', () => {
   const clean = runtimeTest.cleanEnvironment({
     PATH: '/safe/bin',
@@ -128,11 +160,31 @@ test('Codex environment is allowlisted and never inherits common credential vari
   assert.equal(clean.GCM_INTERACTIVE, 'Never');
 });
 
+test('Codex RPC diagnostic data is bounded and credential-redacted', () => {
+  const safe = runtimeTest.sanitizeRpcData({ authorization: 'Bearer sk-supersecret', token: 'abc123', detail: 'ok' });
+  assert.doesNotMatch(safe, /sk-supersecret|abc123/);
+  assert.match(safe, /redacted/);
+});
+
 test('Codex app-server refuses to start outside an explicit existing snapshot cwd', async () => {
   const fake = fakeAppServer();
   const runtime = new CodexAppServer({ executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex', spawnFn: () => fake.child });
   await assert.rejects(runtime.start(), error => error?.code === 'codex_snapshot_cwd_invalid');
   await assert.rejects(runtime.start({ cwd: path.join(os.tmpdir(), 'definitely-missing-devmate-codex-cwd') }), error => error?.code === 'codex_snapshot_cwd_invalid');
+});
+
+test('Codex steer enforces its bound even when called below the MCP schema layer', async () => {
+  const fake = fakeAppServer();
+  const cwd = await snapshotDir();
+  const runtime = new CodexAppServer({ executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex', spawnFn: () => fake.child });
+  try {
+    await runtime.start({ cwd });
+    await assert.rejects(runtime.steer('thread-1', 'turn-1', 'x'.repeat(20_001)), error => error?.code === 'codex_prompt_too_large');
+  } finally {
+    fake.child.exitCode = 0;
+    await runtime.stop();
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test('Codex server requests are explicitly rejected instead of hanging approval flow', async () => {
