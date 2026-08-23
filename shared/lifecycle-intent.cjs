@@ -41,12 +41,38 @@ function setLifecycleIntent(configFile, desiredState, { requestedBy = '', reason
   return snapshot;
 }
 
+function lifecycleRecoveryToken(configFile) {
+  const snapshot = readLifecycleIntent(configFile);
+  if (snapshot.desiredState !== 'running') return null;
+  return Object.freeze({
+    desiredState: 'running',
+    generation: Number(snapshot.generation)
+  });
+}
+
+function assertLifecycleRecoveryToken(configFile, token) {
+  const current = readLifecycleIntent(configFile);
+  const valid = !!token &&
+    token.desiredState === 'running' &&
+    current.desiredState === 'running' &&
+    Number(current.generation) === Number(token.generation);
+  if (valid) return current;
+  const error = new Error('DevMate recovery was cancelled because the shared lifecycle intent changed');
+  error.code = 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED';
+  error.expectedGeneration = token?.generation ?? null;
+  error.currentGeneration = current.generation;
+  error.currentDesiredState = current.desiredState;
+  throw error;
+}
+
 function lifecycleGenerationChanged(previous, current) {
   return !previous || Number(previous.generation) !== Number(current?.generation);
 }
 
 module.exports = {
+  assertLifecycleRecoveryToken,
   lifecycleGenerationChanged,
+  lifecycleRecoveryToken,
   lifecycleSnapshot,
   readLifecycleIntent,
   setLifecycleIntent
