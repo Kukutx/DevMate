@@ -99,6 +99,7 @@ try {
       try { resetRequestGuardState(); } catch {}
       try { releaseGatewayInstanceLock(); } catch {}
       try { parentPort?.postMessage({ type: 'devmate:shutdown-complete', reason }); } catch {}
+      try { if (process.connected) process.send?.({ type: 'devmate:shutdown-complete', reason }); } catch {}
     })();
     await shutdownPromise;
     return shutdownPromise;
@@ -111,6 +112,17 @@ try {
   process.once('SIGINT', () => shutdownAndExit('SIGINT'));
   process.once('SIGTERM', () => shutdownAndExit('SIGTERM'));
   process.once('exit', () => { try { releaseGatewayInstanceLock(); } catch {} });
+
+  if (typeof process.send === 'function') {
+    process.once('disconnect', () => shutdownAndExit('parent-disconnect'));
+    process.on('message', message => {
+      if (message?.type !== 'devmate:shutdown') return;
+      const expectedOwner = String(process.env.DEVMATE_RUNTIME_OWNER_ID || '');
+      const requestedOwner = String(message.runtimeOwnerId || '');
+      if (requestedOwner && expectedOwner && requestedOwner !== expectedOwner) return;
+      shutdownAndExit(message.signal || 'parent-message');
+    });
+  }
 
   if (!isMainThread && parentPort) {
     parentPort.on('message', message => {
