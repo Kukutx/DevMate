@@ -32,7 +32,8 @@ test('recovers the newest valid Windows replacement without resetting identity o
 
   const recovered = ensureInstanceConfig({ configFile, workspaceRoot, preferredPort: 9999 });
   assert.equal(recovered.instanceId, original.instanceId);
-  assert.deepEqual(recovered.auth, { mode: 'none' });
+  assert.deepEqual(recovered.auth, original.auth);
+  assert.deepEqual(recovered.auth, { mode: 'oauth' });
   assert.deepEqual(recovered.custom, { preserved: true });
   assert.equal(recovered.server.port, 9234);
   assert.equal(fs.existsSync(replacement), false);
