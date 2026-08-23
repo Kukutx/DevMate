@@ -26,6 +26,8 @@ const collaboration = await import('../gateway/agent-collaboration.mjs');
 
 test.beforeEach(async () => {
   durable.resetDurableStateForTests();
+  durable.writeDurableNamespace('codex-collaboration', { version: 1, activeTaskId: null, tasks: [] });
+  durable.resetDurableStateForTests();
   await collaboration.configureCodexCollaboration(false);
   collaboration.recoverCodexCollaborationAfterRestart();
 });
@@ -87,14 +89,13 @@ test('only one active Codex task is reserved and stale runtime state is interrup
 test('production runtime loads collaboration after singleton ownership and recovers apply only after file journals', async () => {
   const runtime = await fsp.readFile(new URL('../gateway/server-runtime.mjs', import.meta.url), 'utf8');
   const collaborationSource = await fsp.readFile(new URL('../gateway/agent-collaboration.mjs', import.meta.url), 'utf8');
-  const acquire = runtime.indexOf('acquireGatewayInstanceLock()');
-  const dynamicImport = runtime.indexOf('await import(');
-  const collaborationPath = runtime.search(/agent-collaboration\.mjs/);
-  const load = dynamicImport >= 0 && collaborationPath > dynamicImport ? dynamicImport : -1;
-  const fileRecovery = runtime.indexOf('recoverFileTransactions');
-  const applyRecovery = runtime.indexOf('recoverCodexApplyAfterFileTransactions');
-  const install = runtime.indexOf('installCodexCollaborationCapability(McpServer)');
-  assert.ok(acquire >= 0 && load > acquire && fileRecovery > load && applyRecovery > fileRecovery && install > applyRecovery);
+  const acquire = runtime.indexOf('acquireGatewayInstanceLock();');
+  const load = runtime.indexOf("codexCollaboration = await import('./agent-collaboration.mjs');");
+  const runtimeRecovery = runtime.indexOf('codexCollaboration.recoverCodexCollaborationAfterRestart();', load);
+  const fileRecovery = runtime.indexOf('const fileRecovery = await recoverFileTransactions({', load);
+  const applyRecovery = runtime.indexOf('const codexApplyRecovery = await codexCollaboration.recoverCodexApplyAfterFileTransactions();', fileRecovery);
+  const install = runtime.indexOf('codexCollaboration.installCodexCollaborationCapability(McpServer);', applyRecovery);
+  assert.ok(acquire >= 0 && load > acquire && runtimeRecovery > load && fileRecovery > runtimeRecovery && applyRecovery > fileRecovery && install > applyRecovery);
   assert.equal(/\bAPPLY\b/.test(collaborationSource), false);
   assert.match(collaborationSource, /expectedSha256: change\.beforeSha256/);
   assert.match(collaborationSource, /recoverCodexApplyAfterFileTransactions/);
