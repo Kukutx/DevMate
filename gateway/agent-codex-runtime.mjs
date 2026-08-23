@@ -46,6 +46,12 @@ function sanitizeText(value, max = MAX_AGENT_OUTPUT_CHARS) {
   return redactSensitiveString(String(value || '')).slice(-max);
 }
 
+function sanitizeRpcData(value) {
+  if (value == null) return null;
+  try { return sanitizeText(JSON.stringify(value), 8000); }
+  catch { return '[unserializable]'; }
+}
+
 function codexExecutable() {
   const configured = String(process.env.DEVMATE_CODEX_PATH || '').trim();
   if (configured) {
@@ -95,7 +101,7 @@ function requestError(value) {
   const message = value?.error?.message || value?.message || 'Codex app-server request failed';
   return codedError(sanitizeText(message, 4000), 'codex_rpc_error', {
     rpcCode: value?.error?.code ?? null,
-    rpcData: value?.error?.data ?? null
+    rpcData: sanitizeRpcData(value?.error?.data)
   });
 }
 
@@ -348,12 +354,14 @@ export class CodexAppServer extends EventEmitter {
     return new Promise((resolve, reject) => {
       let settled = false;
       let idleTimer = null;
+      let totalTimer = null;
       const finish = (error, value) => {
         if (settled) return;
         settled = true;
-        clearTimeout(totalTimer);
+        if (totalTimer) clearTimeout(totalTimer);
         if (idleTimer) clearTimeout(idleTimer);
         this.off('notification', onNotification);
+        this.off('transport-error', onTransportError);
         if (error) reject(error);
         else resolve(value);
       };
@@ -389,9 +397,11 @@ export class CodexAppServer extends EventEmitter {
           completedAt: new Date().toISOString()
         });
       };
+      const onTransportError = error => finish(error instanceof Error ? error : codedError('Codex app-server transport closed', 'codex_transport_closed'));
       this.on('notification', onNotification);
+      this.on('transport-error', onTransportError);
       resetIdle();
-      const totalTimer = setTimeout(() => {
+      totalTimer = setTimeout(() => {
         const error = codedError(`Codex turn ${state.turnId} exceeded its execution limit`, 'codex_turn_timeout');
         void this.interrupt(state.threadId, state.turnId).catch(() => {});
         finish(error);
@@ -403,6 +413,7 @@ export class CodexAppServer extends EventEmitter {
   async steer(threadId, turnId, prompt) {
     const text = String(prompt || '').trim();
     if (!text) throw codedError('Steering text is required', 'codex_prompt_required');
+    if (text.length > 20_000) throw codedError('Steering text exceeds 20000 characters', 'codex_prompt_too_large');
     if (!this.activeTurn || this.activeTurn.threadId !== threadId || this.activeTurn.turnId !== turnId) throw codedError('Codex turn is not active in this Gateway process', 'codex_turn_not_active');
     return this.request('turn/steer', { threadId, input: [{ type: 'text', text, textElements: [] }] });
   }
@@ -503,5 +514,6 @@ export const __test = {
   messageTurnId,
   normalizeSnapshotCwd,
   samePath,
+  sanitizeRpcData,
   sanitizeText
 };
