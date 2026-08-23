@@ -93,11 +93,10 @@ function samePath(left, right) {
 
 function requestError(value) {
   const message = value?.error?.message || value?.message || 'Codex app-server request failed';
-  const error = codedError(sanitizeText(message, 4000), 'codex_rpc_error', {
+  return codedError(sanitizeText(message, 4000), 'codex_rpc_error', {
     rpcCode: value?.error?.code ?? null,
     rpcData: value?.error?.data ?? null
   });
-  return error;
 }
 
 function messageTurnId(params) {
@@ -140,10 +139,10 @@ export class CodexAppServer extends EventEmitter {
   async start({ cwd } = {}) {
     const processCwd = normalizeSnapshotCwd(cwd);
     if (this.child && this.child.exitCode == null && this.child.signalCode == null) {
-      if (samePath(this.processCwd, processCwd)) return this;
+      if (this.initialized && samePath(this.processCwd, processCwd)) return this;
       if (this.activeTurn) throw codedError('Codex app-server cannot change snapshot cwd during an active turn', 'codex_runtime_cwd_conflict');
       const stopped = await this.stop();
-      if (stopped.exitConfirmed === false) throw codedError('Codex app-server could not stop before changing snapshot cwd', 'codex_stop_unconfirmed');
+      if (stopped.exitConfirmed === false) throw codedError('Codex app-server could not stop before restart', 'codex_stop_unconfirmed');
     }
     this.stopping = false;
     this.stdoutBuffer = '';
@@ -172,6 +171,10 @@ export class CodexAppServer extends EventEmitter {
         expected ? 'codex_stopped' : 'codex_transport_closed',
         { exitCode: code, signal: signal || null }
       ));
+      if (this.child === child && child.exitCode != null) {
+        this.child = null;
+        this.processCwd = null;
+      }
     });
     try {
       await this.request('initialize', {
@@ -237,9 +240,7 @@ export class CodexAppServer extends EventEmitter {
       });
       return;
     }
-    if (message?.method) {
-      this.emit('notification', { method: String(message.method), params: message.params || {} });
-    }
+    if (message?.method) this.emit('notification', { method: String(message.method), params: message.params || {} });
   }
 
   #write(message) {
@@ -247,16 +248,12 @@ export class CodexAppServer extends EventEmitter {
       throw codedError('Codex app-server transport is not available', 'codex_transport_closed');
     }
     const line = `${JSON.stringify(message)}\n`;
-    if (Buffer.byteLength(line, 'utf8') > MAX_STDIO_LINE_BYTES) {
-      throw codedError('Codex JSON-RPC request exceeds line limit', 'codex_request_too_large');
-    }
+    if (Buffer.byteLength(line, 'utf8') > MAX_STDIO_LINE_BYTES) throw codedError('Codex JSON-RPC request exceeds line limit', 'codex_request_too_large');
     this.child.stdin.write(line);
   }
 
   request(method, params = {}, { timeoutMs = RPC_TIMEOUT_MS } = {}) {
-    if (this.pending.size >= MAX_PENDING_REQUESTS) {
-      return Promise.reject(codedError('Codex app-server pending request limit reached', 'codex_rpc_overloaded'));
-    }
+    if (this.pending.size >= MAX_PENDING_REQUESTS) return Promise.reject(codedError('Codex app-server pending request limit reached', 'codex_rpc_overloaded'));
     const id = this.nextRequestId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -298,7 +295,8 @@ export class CodexAppServer extends EventEmitter {
       return { threadId, resumed: true, response };
     } catch (firstError) {
       if (firstError?.code !== 'codex_rpc_timeout' && firstError?.code !== 'codex_transport_closed') throw firstError;
-      await this.stop();
+      const stopped = await this.stop();
+      if (stopped.exitConfirmed === false) throw codedError('Codex app-server could not stop before thread resume retry', 'codex_stop_unconfirmed');
       await this.start({ cwd: safeCwd });
       const response = await this.request('thread/resume', { threadId, ...common }, { timeoutMs: RESUME_TIMEOUT_MS });
       return { threadId, resumed: true, response, restarted: true };
@@ -308,9 +306,7 @@ export class CodexAppServer extends EventEmitter {
   async runTurn({ threadId, cwd, prompt, timeoutMs = TURN_TIMEOUT_MS, idleTimeoutMs = TURN_IDLE_TIMEOUT_MS }) {
     if (this.activeTurn) throw codedError('Only one Codex turn may run at a time', 'codex_turn_active');
     const safeCwd = normalizeSnapshotCwd(cwd);
-    if (!this.child || !samePath(this.processCwd, safeCwd)) {
-      throw codedError('Codex app-server is not bound to this snapshot cwd', 'codex_runtime_cwd_mismatch');
-    }
+    if (!this.child || !this.initialized || !samePath(this.processCwd, safeCwd)) throw codedError('Codex app-server is not bound to this snapshot cwd', 'codex_runtime_cwd_mismatch');
     const text = String(prompt || '').trim();
     if (!text) throw codedError('Codex task prompt is required', 'codex_prompt_required');
     if (text.length > 100_000) throw codedError('Codex task prompt exceeds 100000 characters', 'codex_prompt_too_large');
@@ -376,9 +372,7 @@ export class CodexAppServer extends EventEmitter {
         state.notifications += 1;
         state.lastEventAt = new Date().toISOString();
         resetIdle();
-        if (method === 'item/agentMessage/delta' && typeof params?.delta === 'string') {
-          state.output = boundedAppend(state.output, sanitizeText(params.delta));
-        }
+        if (method === 'item/agentMessage/delta' && typeof params?.delta === 'string') state.output = boundedAppend(state.output, sanitizeText(params.delta));
         if (method === 'item/completed' && params?.item?.type === 'agentMessage') {
           const text = params.item.text || params.item.content || '';
           if (typeof text === 'string' && text) state.output = sanitizeText(text);
@@ -409,13 +403,8 @@ export class CodexAppServer extends EventEmitter {
   async steer(threadId, turnId, prompt) {
     const text = String(prompt || '').trim();
     if (!text) throw codedError('Steering text is required', 'codex_prompt_required');
-    if (!this.activeTurn || this.activeTurn.threadId !== threadId || this.activeTurn.turnId !== turnId) {
-      throw codedError('Codex turn is not active in this Gateway process', 'codex_turn_not_active');
-    }
-    return this.request('turn/steer', {
-      threadId,
-      input: [{ type: 'text', text, textElements: [] }]
-    });
+    if (!this.activeTurn || this.activeTurn.threadId !== threadId || this.activeTurn.turnId !== turnId) throw codedError('Codex turn is not active in this Gateway process', 'codex_turn_not_active');
+    return this.request('turn/steer', { threadId, input: [{ type: 'text', text, textElements: [] }] });
   }
 
   async interrupt(threadId, turnId) {
@@ -447,7 +436,6 @@ export class CodexAppServer extends EventEmitter {
     }
     const child = this.child;
     this.stopping = true;
-    this.child = null;
     this.initialized = false;
     this.activeTurn = null;
     try { child.stdin?.end(); } catch {}
@@ -458,7 +446,12 @@ export class CodexAppServer extends EventEmitter {
       error: sanitizeText(error?.message || error, 2000)
     }));
     this.stopping = false;
-    if (termination.exitConfirmed !== false) this.processCwd = null;
+    if (termination.exitConfirmed !== false) {
+      if (this.child === child) this.child = null;
+      this.processCwd = null;
+    } else if (!this.child) {
+      this.child = child;
+    }
     return { stopped: true, ...termination };
   }
 }
