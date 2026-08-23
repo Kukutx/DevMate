@@ -18,22 +18,21 @@ function releasePreflightHold(job, leaseHold, mapped) {
   if (!leaseHold) return;
   if (mapped) {
     try {
-      releaseExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId });
-      return;
+      if (releaseExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId })) return;
     } catch {
-      // Fall through to the direct hold release. The durable mapping is then
-      // forgotten best-effort so a later cleanup cannot target a reused lease.
+      // Fall through to direct release without discarding the durable mapping.
     }
   }
+  let released = false;
   try {
-    releaseWorkspaceLeaseHold({
+    released = releaseWorkspaceLeaseHold({
       workspaceId: leaseHold.workspaceId,
       holdId: leaseHold.id,
       leaseId: leaseHold.leaseId,
       principalId: leaseHold.principalId
     });
   } finally {
-    if (mapped) {
+    if (mapped && released) {
       try { forgetExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId }); } catch {}
     }
   }
