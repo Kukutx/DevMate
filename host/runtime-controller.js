@@ -9,6 +9,10 @@ const processRuntime = require('./runtime/process-controller.js');
 const { ensureDesktopAuthenticationPolicy } = require('../shared/desktop-auth-policy.cjs');
 
 class RuntimeController extends processRuntime.RuntimeController {
+  constructor(options = {}) {
+    super({ ...options, lifecycleFence: options.lifecycleFence !== false });
+  }
+
   ensureConfig() {
     const fresh = !fs.existsSync(this.configFile);
     super.ensureConfig();
