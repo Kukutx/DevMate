@@ -295,16 +295,17 @@ class SharedTunnelRecordStore {
       gatewayGeneration: gatewayGeneration(readGatewayInstanceLock(this.stateDirectory))
     };
     if (!includeStale && runtimeRecordStale(value, { leaseMs: this.leaseMs })) {
-      const activityAt = Math.max(Date.parse(value.heartbeatAt || '') || 0, Number(value.mtimeMs) || 0);
-      const withinCleanupGrace = activityAt > 0 && Date.now() - activityAt < SUPERVISOR_CLEANUP_GRACE_MS;
-      if (value.childKind === 'supervisor' && processAlive(value.childPid) && withinCleanupGrace) {
+      if (value.childKind === 'supervisor' && processAlive(value.childPid)) {
+        const activityAt = Math.max(Date.parse(value.heartbeatAt || '') || 0, Number(value.mtimeMs) || 0);
         const error = runtimeRecordError(
-          'Previous DevMate tunnel supervisor is still cleaning up after its host exited',
+          'Previous DevMate tunnel supervisor is still alive and cleanup ownership remains fenced',
           'DEVMATE_TUNNEL_SUPERVISOR_CLEANUP_PENDING',
           this.recordFile
         );
         error.childPid = value.childPid;
         error.ownerId = value.ownerId;
+        error.staleForMs = activityAt > 0 ? Math.max(0, Date.now() - activityAt) : null;
+        error.legacyCleanupGraceMs = SUPERVISOR_CLEANUP_GRACE_MS;
         throw error;
       }
       try {
