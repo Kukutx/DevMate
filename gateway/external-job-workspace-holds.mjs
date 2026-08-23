@@ -2,7 +2,6 @@ import { mutateDurableDocument, readDurableNamespace } from './durable-state.mjs
 import {
   acquireWorkspaceLeaseHoldInDocument,
   releaseWorkspaceLeaseHoldInDocument,
-  releaseWorkspaceLeaseHold,
   syncWorkspaceLeasesFromDurableState
 } from './workspace-leases.mjs';
 
@@ -197,19 +196,6 @@ export function releaseExternalJobWorkspaceHold({ jobId, runnerId = '' }) {
     return document;
   });
   syncWorkspaceLeasesFromDurableState();
-  return released;
-}
-
-export function releaseRememberedWorkspaceHoldDirectly({ jobId, runnerId = '' }) {
-  const record = externalJobWorkspaceHold(jobId);
-  if (!record || (runnerId && record.runnerId !== String(runnerId))) return false;
-  const released = releaseWorkspaceLeaseHold({
-    workspaceId: record.hold.workspaceId,
-    holdId: record.hold.id,
-    leaseId: record.hold.leaseId,
-    principalId: record.hold.principalId
-  });
-  if (released) forgetExternalJobWorkspaceHold({ jobId, runnerId: record.runnerId });
   return released;
 }
 
