@@ -410,6 +410,22 @@ export function configuredGatewayInstanceLeaseMs(config, requestedLeaseMs = null
   );
 }
 
+function gatewayInstanceLockConflict(current) {
+  const owner = current?.runtimeOwnerId || `pid-${current?.pid || 'initializing'}`;
+  const conflict = new Error(`Another DevMate gateway is already using this state directory (owner=${owner}, instanceId=${current?.instanceId || 'unknown'})`);
+  conflict.code = 'gateway_instance_lock_timeout';
+  conflict.currentLock = current ? {
+    pid: current.pid || null,
+    threadId: current.threadId ?? null,
+    runtimeOwnerId: current.runtimeOwnerId || null,
+    instanceId: current.instanceId || null,
+    acquiredAt: current.acquiredAt || null,
+    heartbeatAt: current.mtimeMs ? new Date(current.mtimeMs).toISOString() : current.heartbeatAt || null,
+    leaseMs: current.leaseMs || null
+  } : null;
+  return conflict;
+}
+
 export function acquireGatewayInstanceLock({
   timeoutMs = INSTANCE_LOCK_ACQUIRE_TIMEOUT_MS,
   leaseMs = null
@@ -469,25 +485,11 @@ export function acquireGatewayInstanceLock({
       if (gatewayInstanceLockRecoverable(state, { leaseMs: payload.leaseMs })) {
         if (quarantineGatewayInstanceLock()) continue;
       }
-      if (Date.now() >= deadline) {
-        const owner = current?.runtimeOwnerId || `pid-${current?.pid || 'initializing'}`;
-        const conflict = new Error(`Another DevMate gateway is already using this state directory (owner=${owner}, instanceId=${current?.instanceId || 'unknown'})`);
-        conflict.code = 'gateway_instance_lock_timeout';
-        conflict.currentLock = current ? {
-          pid: current.pid || null,
-          threadId: current.threadId ?? null,
-          runtimeOwnerId: current.runtimeOwnerId || null,
-          instanceId: current.instanceId || null,
-          acquiredAt: current.acquiredAt || null,
-          heartbeatAt: current.mtimeMs ? new Date(current.mtimeMs).toISOString() : current.heartbeatAt || null,
-          leaseMs: current.leaseMs || null
-        } : null;
-        throw conflict;
-      }
+      if (Date.now() >= deadline) throw gatewayInstanceLockConflict(current);
       sleepSync(100);
     }
   }
-  throw new Error('Could not acquire the DevMate gateway instance lock');
+  throw gatewayInstanceLockConflict(readGatewayInstanceLock());
 }
 
 export function releaseGatewayInstanceLock() {
@@ -549,6 +551,7 @@ export const __test = {
   emptyDocument,
   validDurableFile,
   fsyncDirectory,
+  gatewayInstanceLockConflict,
   gatewayInstanceLockRecoverable,
   gatewayInstanceLockStale,
   invalidDocument,
