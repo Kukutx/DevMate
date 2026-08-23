@@ -42,6 +42,14 @@ export function externalJobWorkspaceHold(jobId) {
   return record ? JSON.parse(JSON.stringify(record)) : null;
 }
 
+function sameHold(left, right) {
+  return !!left && !!right &&
+    String(left.id || '') === String(right.id || '') &&
+    String(left.leaseId || '') === String(right.leaseId || '') &&
+    String(left.workspaceId || '') === String(right.workspaceId || '') &&
+    String(left.principalId || '') === String(right.principalId || '');
+}
+
 export function rememberExternalJobWorkspaceHold({ jobId, runnerId, hold }) {
   const id = String(jobId || '').trim();
   const runner = String(runnerId || '').trim();
@@ -52,8 +60,19 @@ export function rememberExternalJobWorkspaceHold({ jobId, runnerId, hold }) {
   mutateDurableDocument(document => {
     const store = prune(normalizeStore(document.namespaces?.[NAMESPACE]));
     const existing = store.records[id];
-    if (existing && existing.runnerId !== runner) {
-      throw new Error(`External job ${id} workspace hold belongs to runner ${existing.runnerId}`);
+    if (existing) {
+      if (existing.runnerId !== runner) {
+        throw new Error(`External job ${id} workspace hold belongs to runner ${existing.runnerId}`);
+      }
+      if (!sameHold(existing.hold, hold)) {
+        const error = new Error(`External job ${id} already has a different workspace hold`);
+        error.code = 'external_job_workspace_hold_conflict';
+        throw error;
+      }
+      record = existing;
+      document.namespaces ||= {};
+      document.namespaces[NAMESPACE] = store;
+      return document;
     }
     record = {
       jobId: id,
@@ -65,7 +84,7 @@ export function rememberExternalJobWorkspaceHold({ jobId, runnerId, hold }) {
         principalId: String(hold.principalId),
         expiresAt: String(hold.expiresAt || '')
       },
-      createdAt: existing?.createdAt || new Date().toISOString(),
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
     store.records[id] = record;
@@ -103,7 +122,7 @@ export function releaseExternalJobWorkspaceHold({ jobId, runnerId = '' }) {
     leaseId: record.hold.leaseId,
     principalId: record.hold.principalId
   });
-  forgetExternalJobWorkspaceHold({ jobId, runnerId: record.runnerId });
+  if (released) forgetExternalJobWorkspaceHold({ jobId, runnerId: record.runnerId });
   return released;
 }
 
@@ -121,5 +140,6 @@ export const __test = {
   VERSION,
   emptyStore,
   normalizeStore,
-  prune
+  prune,
+  sameHold
 };
