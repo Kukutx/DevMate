@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { terminateProcessTree } from './command-process.mjs';
 import { redactSensitiveString } from './local-shared.mjs';
@@ -11,6 +12,14 @@ const TURN_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_STDIO_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_AGENT_OUTPUT_CHARS = 200_000;
+const SAFE_ENV_KEYS = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'TERM', 'COLORTERM', 'LANG',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'CODEX_HOME',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NO_COLOR', 'FORCE_COLOR'
+]);
+const SENSITIVE_ENV_KEY = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|CREDENTIAL|AUTHORIZATION|COOKIE|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SESSION|AUTH[_-]?SOCK)/i;
 
 const DEVELOPER_INSTRUCTIONS = [
   'You are a supervised engineering agent inside DevMate Codex Collaboration.',
@@ -49,17 +58,37 @@ function codexExecutable() {
   return process.platform === 'win32' ? 'codex.exe' : 'codex';
 }
 
-function cleanEnvironment() {
-  const env = { ...process.env };
-  delete env.DEVMATE_CONFIG;
-  delete env.DEVMATE_RUNTIME_OWNER_ID;
-  delete env.DEVMATE_DESKTOP_LIFECYCLE_FENCE;
-  for (const key of Object.keys(env)) {
-    if (/^DEVMATE_.*(?:TOKEN|SECRET|PASSWORD|KEY)$/i.test(key)) delete env[key];
+function cleanEnvironment(source = process.env) {
+  const env = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    const upper = key.toUpperCase();
+    if (SENSITIVE_ENV_KEY.test(upper)) continue;
+    if (!SAFE_ENV_KEYS.has(upper) && !/^LC_[A-Z0-9_]+$/.test(upper)) continue;
+    if (value == null) continue;
+    env[key] = String(value);
   }
   env.GIT_TERMINAL_PROMPT = '0';
   env.GCM_INTERACTIVE = 'Never';
   return env;
+}
+
+function normalizeSnapshotCwd(cwd) {
+  const requested = String(cwd || '').trim();
+  if (!requested || !path.isAbsolute(requested)) {
+    throw codedError('Codex app-server requires an absolute snapshot cwd', 'codex_snapshot_cwd_invalid');
+  }
+  const stat = fs.lstatSync(requested, { throwIfNoEntry: false });
+  if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+    throw codedError('Codex snapshot cwd must be an existing real directory', 'codex_snapshot_cwd_invalid');
+  }
+  return fs.realpathSync.native(requested);
+}
+
+function samePath(left, right) {
+  if (!left || !right) return false;
+  return process.platform === 'win32'
+    ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+    : path.resolve(left) === path.resolve(right);
 }
 
 function requestError(value) {
@@ -89,6 +118,7 @@ export class CodexAppServer extends EventEmitter {
     this.activeTurn = null;
     this.startedAt = null;
     this.stopping = false;
+    this.processCwd = null;
   }
 
   status() {
@@ -107,13 +137,19 @@ export class CodexAppServer extends EventEmitter {
     };
   }
 
-  async start() {
-    if (this.child && this.child.exitCode == null && this.child.signalCode == null) return this;
+  async start({ cwd } = {}) {
+    const processCwd = normalizeSnapshotCwd(cwd);
+    if (this.child && this.child.exitCode == null && this.child.signalCode == null) {
+      if (samePath(this.processCwd, processCwd)) return this;
+      if (this.activeTurn) throw codedError('Codex app-server cannot change snapshot cwd during an active turn', 'codex_runtime_cwd_conflict');
+      const stopped = await this.stop();
+      if (stopped.exitConfirmed === false) throw codedError('Codex app-server could not stop before changing snapshot cwd', 'codex_stop_unconfirmed');
+    }
     this.stopping = false;
     this.stdoutBuffer = '';
     this.stderr = '';
     const child = this.spawnFn(this.executable, ['app-server', '--stdio'], {
-      cwd: process.cwd(),
+      cwd: processCwd,
       env: cleanEnvironment(),
       shell: false,
       windowsHide: true,
@@ -121,6 +157,7 @@ export class CodexAppServer extends EventEmitter {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     this.child = child;
+    this.processCwd = processCwd;
     this.startedAt = new Date().toISOString();
     child.stdout?.on('data', chunk => this.#consumeStdout(chunk));
     child.stderr?.on('data', chunk => {
@@ -136,13 +173,18 @@ export class CodexAppServer extends EventEmitter {
         { exitCode: code, signal: signal || null }
       ));
     });
-    await this.request('initialize', {
-      clientInfo: { name: 'devmate-codex-collaboration', title: 'DevMate Codex Collaboration', version: '3.5.0' },
-      capabilities: { experimentalApi: false, requestAttestation: false }
-    }, { timeoutMs: RPC_TIMEOUT_MS });
-    this.notify('initialized', {});
-    this.initialized = true;
-    return this;
+    try {
+      await this.request('initialize', {
+        clientInfo: { name: 'devmate-codex-collaboration', title: 'DevMate Codex Collaboration', version: '3.5.0' },
+        capabilities: { experimentalApi: false, requestAttestation: false }
+      }, { timeoutMs: RPC_TIMEOUT_MS });
+      this.notify('initialized', {});
+      this.initialized = true;
+      return this;
+    } catch (error) {
+      await this.stop().catch(() => {});
+      throw error;
+    }
   }
 
   #consumeStdout(chunk) {
@@ -237,9 +279,10 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async ensureThread({ threadId = '', cwd }) {
-    await this.start();
+    const safeCwd = normalizeSnapshotCwd(cwd);
+    await this.start({ cwd: safeCwd });
     const common = {
-      cwd,
+      cwd: safeCwd,
       approvalPolicy: 'never',
       sandbox: 'workspace-write',
       developerInstructions: DEVELOPER_INSTRUCTIONS
@@ -256,7 +299,7 @@ export class CodexAppServer extends EventEmitter {
     } catch (firstError) {
       if (firstError?.code !== 'codex_rpc_timeout' && firstError?.code !== 'codex_transport_closed') throw firstError;
       await this.stop();
-      await this.start();
+      await this.start({ cwd: safeCwd });
       const response = await this.request('thread/resume', { threadId, ...common }, { timeoutMs: RESUME_TIMEOUT_MS });
       return { threadId, resumed: true, response, restarted: true };
     }
@@ -264,16 +307,20 @@ export class CodexAppServer extends EventEmitter {
 
   async runTurn({ threadId, cwd, prompt, timeoutMs = TURN_TIMEOUT_MS, idleTimeoutMs = TURN_IDLE_TIMEOUT_MS }) {
     if (this.activeTurn) throw codedError('Only one Codex turn may run at a time', 'codex_turn_active');
+    const safeCwd = normalizeSnapshotCwd(cwd);
+    if (!this.child || !samePath(this.processCwd, safeCwd)) {
+      throw codedError('Codex app-server is not bound to this snapshot cwd', 'codex_runtime_cwd_mismatch');
+    }
     const text = String(prompt || '').trim();
     if (!text) throw codedError('Codex task prompt is required', 'codex_prompt_required');
     if (text.length > 100_000) throw codedError('Codex task prompt exceeds 100000 characters', 'codex_prompt_too_large');
     const started = await this.request('turn/start', {
       threadId,
-      cwd,
+      cwd: safeCwd,
       approvalPolicy: 'never',
       sandboxPolicy: {
         type: 'workspaceWrite',
-        writableRoots: [cwd],
+        writableRoots: [safeCwd],
         networkAccess: false,
         excludeTmpdirEnvVar: false,
         excludeSlashTmp: false
@@ -394,7 +441,10 @@ export class CodexAppServer extends EventEmitter {
   }
 
   async stop() {
-    if (!this.child) return { stopped: false, exitConfirmed: true };
+    if (!this.child) {
+      this.processCwd = null;
+      return { stopped: false, exitConfirmed: true };
+    }
     const child = this.child;
     this.stopping = true;
     this.child = null;
@@ -408,6 +458,7 @@ export class CodexAppServer extends EventEmitter {
       error: sanitizeText(error?.message || error, 2000)
     }));
     this.stopping = false;
+    if (termination.exitConfirmed !== false) this.processCwd = null;
     return { stopped: true, ...termination };
   }
 }
@@ -433,8 +484,9 @@ export function codexRuntimeStatus() {
 export async function shutdownCodexRuntime() {
   if (!runtime) return { stopped: false, exitConfirmed: true };
   const current = runtime;
-  runtime = null;
-  return current.stop();
+  const result = await current.stop();
+  if (result.exitConfirmed !== false && runtime === current) runtime = null;
+  return result;
 }
 
 export function resetCodexRuntimeForTests() {
@@ -448,11 +500,15 @@ export const __test = {
   MAX_STDIO_LINE_BYTES,
   RESUME_TIMEOUT_MS,
   RPC_TIMEOUT_MS,
+  SAFE_ENV_KEYS,
+  SENSITIVE_ENV_KEY,
   TURN_IDLE_TIMEOUT_MS,
   TURN_TIMEOUT_MS,
   boundedAppend,
   cleanEnvironment,
   codexExecutable,
   messageTurnId,
+  normalizeSnapshotCwd,
+  samePath,
   sanitizeText
 };
