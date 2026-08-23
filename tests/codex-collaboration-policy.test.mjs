@@ -45,6 +45,42 @@ test('Codex Collaboration is OFF by default and rejects malformed shared prefere
   );
 });
 
+test('Codex durable collaboration state fails closed without discarding apply recovery evidence', () => {
+  assert.deepEqual(collaboration.__test.normalizeState(undefined), { version: 1, activeTaskId: null, tasks: [] });
+
+  const malformed = {
+    version: 1,
+    activeTaskId: 'codex-corrupt-apply',
+    tasks: [{
+      id: 'codex-corrupt-apply',
+      workspaceId: baseConfig.activeWorkspaceId,
+      title: 'Corrupt apply',
+      status: 'applying',
+      apply: {
+        version: 1,
+        status: 'applying',
+        changes: [],
+        appliedCount: 0,
+        inFlightIndex: null,
+        recoveryFailures: []
+      }
+    }]
+  };
+
+  durable.writeDurableNamespace('codex-collaboration', malformed);
+  durable.resetDurableStateForTests();
+  assert.throws(
+    () => collaboration.codexCollaborationStatus(),
+    error => error?.code === 'codex_collaboration_state_invalid' && /recovery transaction|transaction metadata/.test(error.message)
+  );
+  durable.resetDurableStateForTests();
+  assert.deepEqual(
+    durable.readDurableNamespace('codex-collaboration', null),
+    malformed,
+    'malformed recovery evidence must remain intact for diagnosis/recovery instead of being replaced with empty state'
+  );
+});
+
 test('Codex tools use existing owner, workspace, execute, and write capability boundaries', () => {
   const config = instanceConfig.normalizeInstanceConfig(configStore.newInstanceConfig({
     workspaceRoot: workspace,
