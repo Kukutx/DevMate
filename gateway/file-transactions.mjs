@@ -30,9 +30,11 @@ function fsyncDirectory(directory) {
   }
 }
 
-function realDirectoryInside(workspaceRoot, directory) {
+function realExistingAncestorInside(workspaceRoot, directory) {
   const root = fs.realpathSync.native(path.resolve(workspaceRoot));
-  const current = fs.realpathSync.native(path.resolve(directory));
+  let existing = path.resolve(directory);
+  while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);
+  const current = fs.realpathSync.native(existing);
   if (!isInside(root, current)) {
     const error = new Error(`File transaction path escapes workspace root: ${directory}`);
     error.code = 'FILE_TRANSACTION_PATH_ESCAPE';
@@ -49,7 +51,7 @@ function assertWorkspacePath(workspaceRoot, target) {
     error.code = 'FILE_TRANSACTION_PATH_ESCAPE';
     throw error;
   }
-  realDirectoryInside(root, path.dirname(full));
+  realExistingAncestorInside(root, path.dirname(full));
   return full;
 }
 
@@ -198,10 +200,10 @@ async function recoverWriteJournal(journal, paths) {
     return { id: journal.id, action: temporaryExists ? 'discard-uncommitted-write' : 'finish-direct-write' };
   }
 
-  if (journal.targetExisted === false && temporaryExists) {
+  if (journal.targetExisted === false) {
     await removeIfPresent(paths.temporary);
     removeJournal(journal);
-    return { id: journal.id, action: 'discard-uncommitted-create' };
+    return { id: journal.id, action: temporaryExists ? 'discard-uncommitted-create' : 'discard-prepared-create' };
   }
 
   throw transactionError('Interrupted file replacement has an ambiguous filesystem state', 'FILE_TRANSACTION_RECOVERY_BLOCKED', journal);
@@ -347,6 +349,7 @@ export async function atomicWriteText({ transactionRoot, workspaceRoot, target, 
   const journal = preparedJournal({ kind: 'write-file', transactionRoot, workspaceRoot, target, targetExisted });
   try {
     await fsp.mkdir(path.dirname(journal.target), { recursive: true });
+    assertWorkspacePath(workspaceRoot, journal.target);
     await writeTempFile(journal, handle => handle.writeFile(String(content ?? ''), { encoding }));
     return await commitPreparedWrite(journal);
   } catch (error) {
@@ -364,6 +367,7 @@ export async function atomicCopyFile({ transactionRoot, workspaceRoot, source, t
   const journal = preparedJournal({ kind: 'write-file', transactionRoot, workspaceRoot, target, targetExisted });
   try {
     await fsp.mkdir(path.dirname(journal.target), { recursive: true });
+    assertWorkspacePath(workspaceRoot, journal.target);
     await writeTempFile(journal, async handle => {
       const input = await fsp.open(path.resolve(source), 'r');
       try {
@@ -397,6 +401,7 @@ export async function transactionalMove({ transactionRoot, workspaceRoot, source
   const targetExists = fs.existsSync(cleanTarget);
   if (targetExists && !overwrite) throw new Error('Destination exists; pass overwrite=true');
   await fsp.mkdir(path.dirname(cleanTarget), { recursive: true });
+  assertWorkspacePath(workspaceRoot, cleanTarget);
   if (!targetExists) {
     await fsp.rename(cleanSource, cleanTarget);
     fsyncDirectory(path.dirname(cleanSource));
