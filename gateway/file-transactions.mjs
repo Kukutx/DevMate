@@ -293,10 +293,18 @@ function preparedJournal({ kind, transactionRoot, workspaceRoot, target, source 
   return journal;
 }
 
-async function writeTempFile(journal, writer) {
+function targetWriteMode(journal, fallback = 0o666) {
+  if (!journal?.targetExisted) return fallback;
+  const stat = fs.statSync(journal.target, { throwIfNoEntry: false });
+  if (!stat?.isFile()) throw transactionError('Existing write target changed before commit', 'FILE_TRANSACTION_RECOVERY_BLOCKED', journal);
+  return stat.mode & 0o777;
+}
+
+async function writeTempFile(journal, writer, { mode = null } = {}) {
   let handle = null;
   try {
-    handle = await fsp.open(journal.temporary, 'wx', 0o600);
+    const createMode = mode == null ? targetWriteMode(journal) : mode;
+    handle = await fsp.open(journal.temporary, 'wx', createMode);
     await writer(handle);
     try { await handle.sync(); } catch {}
     await handle.close();
@@ -368,6 +376,9 @@ export async function atomicCopyFile({ transactionRoot, workspaceRoot, source, t
   try {
     await fsp.mkdir(path.dirname(journal.target), { recursive: true });
     assertWorkspacePath(workspaceRoot, journal.target);
+    const sourceStat = await fsp.stat(path.resolve(source));
+    if (!sourceStat.isFile()) throw new Error('Atomic copy source must be a file');
+    const mode = targetExisted ? targetWriteMode(journal) : (sourceStat.mode & 0o777);
     await writeTempFile(journal, async handle => {
       const input = await fsp.open(path.resolve(source), 'r');
       try {
@@ -376,13 +387,18 @@ export async function atomicCopyFile({ transactionRoot, workspaceRoot, source, t
         while (true) {
           const { bytesRead } = await input.read(buffer, 0, buffer.length, position);
           if (!bytesRead) break;
-          await handle.write(buffer.subarray(0, bytesRead));
+          let offset = 0;
+          while (offset < bytesRead) {
+            const { bytesWritten } = await handle.write(buffer, offset, bytesRead - offset);
+            if (!bytesWritten) throw new Error('Atomic copy made no forward progress');
+            offset += bytesWritten;
+          }
           position += bytesRead;
         }
       } finally {
         await input.close();
       }
-    });
+    }, { mode });
     return await commitPreparedWrite(journal);
   } catch (error) {
     if (error?.code === 'FILE_TRANSACTION_RECOVERY_BLOCKED') throw error;
@@ -464,5 +480,6 @@ export const __test = {
   recoverMoveJournal,
   recoverWriteJournal,
   siblingPath,
+  targetWriteMode,
   validateJournalPaths
 };
