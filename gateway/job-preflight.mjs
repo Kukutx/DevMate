@@ -1,7 +1,12 @@
 import { readConfig } from './local-shared.mjs';
 import { ensureToolApproval } from './approvals.mjs';
-import { rememberExternalJobWorkspaceHold } from './external-job-workspace-holds.mjs';
+import {
+  forgetExternalJobWorkspaceHold,
+  rememberExternalJobWorkspaceHold,
+  releaseExternalJobWorkspaceHold
+} from './external-job-workspace-holds.mjs';
 import { jobTarget } from './job-runtime.mjs';
+import { activeRunnerClaim } from './runner-claim-fencing.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import {
   acquireWorkspaceLeaseHold,
@@ -9,7 +14,32 @@ import {
   releaseWorkspaceLeaseHold
 } from './workspace-leases.mjs';
 
-export function preflightQueuedJob(job, { holdWorkspaceLease = false } = {}) {
+function releasePreflightHold(job, leaseHold, mapped) {
+  if (!leaseHold) return;
+  if (mapped) {
+    try {
+      releaseExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId });
+      return;
+    } catch {
+      // Fall through to the direct hold release. The durable mapping is then
+      // forgotten best-effort so a later cleanup cannot target a reused lease.
+    }
+  }
+  try {
+    releaseWorkspaceLeaseHold({
+      workspaceId: leaseHold.workspaceId,
+      holdId: leaseHold.id,
+      leaseId: leaseHold.leaseId,
+      principalId: leaseHold.principalId
+    });
+  } finally {
+    if (mapped) {
+      try { forgetExternalJobWorkspaceHold({ jobId: job.id, runnerId: job.runnerId }); } catch {}
+    }
+  }
+}
+
+export function preflightQueuedJob(job, options = {}) {
   const target = jobTarget(job?.tool);
   if (!target) {
     const error = new Error(`Job target is not currently available: ${job?.tool || 'unknown'}`);
@@ -32,14 +62,14 @@ export function preflightQueuedJob(job, { holdWorkspaceLease = false } = {}) {
     capability: authorized.capability,
     config
   });
-  const approval = ensureToolApproval({
-    config,
-    principal: authorized.principal,
-    tool: target.name,
-    capability: authorized.capability,
-    workspaceId: authorized.workspaceId,
-    args
-  });
+
+  // External claims are the only queued execution path that leaves this
+  // Gateway process. Infer that boundary from the durable claim so callers
+  // cannot accidentally omit the operation-duration workspace hold.
+  const externalClaim = activeRunnerClaim(job?.id, job?.runnerId);
+  const holdWorkspaceLease = options.holdWorkspaceLease === undefined
+    ? !!externalClaim
+    : options.holdWorkspaceLease === true;
   const leaseHold = holdWorkspaceLease
     ? acquireWorkspaceLeaseHold({
       workspaceId: authorized.workspaceId,
@@ -50,24 +80,33 @@ export function preflightQueuedJob(job, { holdWorkspaceLease = false } = {}) {
       purpose: `job:${job?.id || target.name}`
     })
     : null;
-  if (leaseHold && job?.runnerId && job?.id) {
-    try {
+
+  let mapped = false;
+  try {
+    if (leaseHold && externalClaim && job?.runnerId && job?.id) {
       rememberExternalJobWorkspaceHold({
         jobId: job.id,
         runnerId: job.runnerId,
         hold: leaseHold
       });
-    } catch (error) {
-      try {
-        releaseWorkspaceLeaseHold({
-          workspaceId: leaseHold.workspaceId,
-          holdId: leaseHold.id,
-          leaseId: leaseHold.leaseId,
-          principalId: leaseHold.principalId
-        });
-      } catch {}
-      throw error;
+      mapped = true;
     }
+
+    // Consume a one-shot approval only after the mutation boundary is fully
+    // established. If approval fails, the hold is released below.
+    const approval = ensureToolApproval({
+      config,
+      principal: authorized.principal,
+      tool: target.name,
+      capability: authorized.capability,
+      workspaceId: authorized.workspaceId,
+      args
+    });
+    return { target, authorized, approval, leaseHold };
+  } catch (error) {
+    releasePreflightHold(job, leaseHold, mapped);
+    throw error;
   }
-  return { target, authorized, approval, leaseHold };
 }
+
+export const __test = { releasePreflightHold };
