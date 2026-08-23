@@ -369,11 +369,22 @@ function targetWriteMode(journal, fallback = 0o666) {
   return stat.mode & 0o777;
 }
 
+function normalizeWriteMode(value) {
+  if (value == null) return null;
+  if (!Number.isInteger(value) || value < 0 || value > 0o777) {
+    throw new TypeError('File write mode must be an integer between 0 and 0777');
+  }
+  return value;
+}
+
 async function writeTempFile(journal, writer, { mode = null } = {}) {
   let handle = null;
   try {
     const createMode = mode == null ? targetWriteMode(journal) : mode;
     handle = await fsp.open(journal.temporary, 'wx', createMode);
+    if (mode != null) {
+      try { await handle.chmod(createMode); } catch {}
+    }
     await writer(handle);
     try { await handle.sync(); } catch {}
     await handle.close();
@@ -440,15 +451,21 @@ export async function atomicWriteText({
   target,
   content,
   encoding = 'utf8',
-  createDirs = true
+  createDirs = true,
+  mode = null
 } = {}) {
   const cleanTarget = assertWorkspacePath(workspaceRoot, target);
   const targetExisted = !!fs.lstatSync(cleanTarget, { throwIfNoEntry: false });
+  const requestedMode = normalizeWriteMode(mode);
   const journal = preparedJournal({ kind: 'write-file', transactionRoot, workspaceRoot, target: cleanTarget, targetExisted });
   try {
     if (createDirs) await fsp.mkdir(path.dirname(journal.target), { recursive: true });
     assertWorkspacePath(workspaceRoot, journal.target);
-    await writeTempFile(journal, handle => handle.writeFile(String(content ?? ''), { encoding }));
+    await writeTempFile(
+      journal,
+      handle => handle.writeFile(String(content ?? ''), { encoding }),
+      { mode: targetExisted ? null : requestedMode }
+    );
     return await commitPreparedWrite(journal);
   } catch (error) {
     return recoverAfterFailure(journal, workspaceRoot, transactionRoot, 'File write failed and recovery requires manual intervention', error);
@@ -595,6 +612,7 @@ export const __test = {
   STALE_JOURNAL_TEMP_MS,
   assertWorkspacePath,
   journalPath,
+  normalizeWriteMode,
   parseJournal,
   preparedJournal,
   recoverDeleteJournal,
