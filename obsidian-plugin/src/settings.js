@@ -4,6 +4,7 @@ const { Notice, PluginSettingTab, Setting } = require('obsidian');
 const { normalizeNgrokUrl, validateAuthtoken } = require('../../ngrok-support.js');
 const { normalizePublicOrigin } = require('../../host/public-mcp.js');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
+const { setDesktopAuthenticationMode } = require('../../shared/desktop-auth-policy.cjs');
 const { PROVIDERS, tunnelMaxRestarts, tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
 const { cloudflaredInstallCommand, installCloudflared } = require('../../vscode-host/tunnel-executable.js');
 const { encryptSecret, encryptionAvailable } = require('./secret-store.js');
@@ -177,17 +178,28 @@ class DevMateSettingTab extends PluginSettingTab {
       .setName('ChatGPT app address')
       .setDesc(stability.message);
 
+    const sharedAuthentication = this.plugin.controller?.readConfig?.()?.auth?.mode;
+    const authentication = sharedAuthentication === 'none' ? 'none' : 'oauth';
     new Setting(containerEl)
       .setName('MCP authentication')
       .setDesc('OAuth is the default for public MCP. None is only for trusted loopback-only access and will not authorize remote requests.')
       .addDropdown(dropdown => dropdown
         .addOption('oauth', 'OAuth (recommended)')
         .addOption('none', 'None (loopback only)')
-        .setValue(this.plugin.settings.authenticationMode)
+        .setValue(authentication)
         .onChange(async value => {
-          this.plugin.settings.authenticationMode = value === 'none' ? 'none' : 'oauth';
-          await this.plugin.saveSettings();
-          this.plugin.scheduleReconfigure();
+          const mode = value === 'none' ? 'none' : 'oauth';
+          try {
+            if (!this.plugin.controller?.configFile) throw new Error('Shared DevMate configuration is not ready');
+            setDesktopAuthenticationMode(this.plugin.controller.configFile, mode);
+            this.plugin.settings.authenticationMode = mode;
+            await this.plugin.saveSettings();
+            this.plugin.clearPublicVerification();
+            await this.plugin.reconfigureRuntime();
+          } catch (error) {
+            new Notice(`Could not change DevMate authentication: ${error.message || error}`);
+            this.display();
+          }
         }));
 
     if (provider === 'ngrok') {
