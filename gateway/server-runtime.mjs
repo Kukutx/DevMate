@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import permissionConfig from '../shared/permission-config.cjs';
 import oauthSecrets from '../shared/oauth-secrets.cjs';
 import portConfig from '../shared/port.cjs';
+import { recoverCodexCollaborationAfterRestart, shutdownCodexCollaboration } from './agent-collaboration.mjs';
 import { shutdownPersistentProcesses } from './local-capabilities.mjs';
 import { shutdownCommandProcesses } from './command-process.mjs';
 import { drainAllAuditLogs } from './audit-log-coordinator.mjs';
@@ -54,6 +55,9 @@ try {
   enterStartupStage('instance_lock');
   acquireGatewayInstanceLock();
   instanceLockAcquired = true;
+
+  enterStartupStage('codex_collaboration_recovery');
+  recoverCodexCollaborationAfterRestart();
 
   enterStartupStage('file_transaction_recovery');
   const workspaceRoots = [
@@ -137,6 +141,7 @@ try {
       await cleanupStep(failures, 'drain-runtime-maintenance', () => drainRuntimeMaintenance());
       await cleanupStep(failures, 'close-http', () => Promise.all([...createdHttpServers].map(server => closeHttpServer(server))));
       await cleanupStep(failures, 'drain-audit', () => drainAllAuditLogs());
+      await cleanupStep(failures, 'codex-collaboration', () => shutdownCodexCollaboration());
       await cleanupStep(failures, 'jobs', () => shutdownJobRuntime());
       await cleanupStep(failures, 'plugins', () => shutdownPluginServices());
       await cleanupStep(failures, 'team', () => shutdownTeamServices());
