@@ -185,6 +185,14 @@ function normalizeInstanceConfig(config) {
   jobs.allowJobGitSave = strictBoolean(jobs.allowJobGitSave, true, 'jobs.allowJobGitSave');
   jobs.embeddedRunnerEnabled = strictBoolean(jobs.embeddedRunnerEnabled, false, 'jobs.embeddedRunnerEnabled');
   config.jobs = jobs;
+
+  const agent = object(config.agent, 'agent');
+  agent.codexCollaborationEnabled = strictBoolean(
+    agent.codexCollaborationEnabled,
+    false,
+    'agent.codexCollaborationEnabled'
+  );
+  config.agent = agent;
   return config;
 }
 
