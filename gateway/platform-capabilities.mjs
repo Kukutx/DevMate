@@ -1,4 +1,3 @@
-import { installCodexCollaborationCapability } from './agent-collaboration.mjs';
 import { installEmbeddedRunnerCapability } from './embedded-runner-capability.mjs';
 import { installFileMutationSafety } from './file-mutation-safety.mjs';
 import { installHostContextCapabilities } from './host-context-capabilities.mjs';
@@ -31,7 +30,6 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
   installHostContextCapabilities(McpServerClass);
   installObsidianHostCapabilities(McpServerClass);
   installLocalCapabilities(McpServerClass);
-  installCodexCollaborationCapability(McpServerClass);
   registerServerInitializer(McpServerClass, {
     id: 'devmate.plugin-host',
     order: 40,
