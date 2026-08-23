@@ -27,6 +27,7 @@ try {
 } catch {}
 
 const snapshot = await import('../gateway/agent-snapshot.mjs');
+const durable = await import('../gateway/durable-state.mjs');
 
 const taskId = 'codex-snapshot-test-123456';
 const workspaceRecord = {
@@ -88,6 +89,37 @@ test('Codex snapshot is isolated, text-minimized, excludes credential-prone path
   assert.equal(await fsp.readFile(path.join(workspace, 'app.js'), 'utf8'), 'export const value = 1;\n');
   assert.equal(fs.existsSync(path.join(workspace, 'new-file.ts')), false);
   assert.equal(fs.existsSync(path.join(workspace, 'remove.md')), true);
+});
+
+test('snapshot recovery removes orphan, partial and terminal residue while retaining resumable state', async () => {
+  const partialId = 'codex-partial-test-123456';
+  const terminalId = 'codex-terminal-test-123456';
+  const orphanId = 'codex-orphan-test-123456';
+  for (const id of [partialId, terminalId, orphanId]) {
+    await fsp.mkdir(path.join(snapshot.AGENT_TASK_ROOT, id, 'workspace'), { recursive: true });
+    await fsp.writeFile(path.join(snapshot.AGENT_TASK_ROOT, id, 'workspace', 'residue.txt'), 'residue\n', 'utf8');
+  }
+  durable.writeDurableNamespace('codex-collaboration', {
+    version: 1,
+    activeTaskId: null,
+    tasks: [
+      { id: taskId, workspaceId: 'app', status: 'proposal_ready', snapshotAvailable: true, snapshotCleanupPending: false },
+      { id: partialId, workspaceId: 'app', status: 'interrupted', snapshotAvailable: false, snapshotCleanupPending: false },
+      { id: terminalId, workspaceId: 'app', status: 'completed', snapshotAvailable: true, snapshotCleanupPending: false }
+    ]
+  });
+
+  const recovered = await snapshot.reconcileAgentSnapshotStorage();
+  assert.deepEqual(recovered.failed, []);
+  assert.equal(fs.existsSync(path.join(snapshot.AGENT_TASK_ROOT, taskId)), true);
+  assert.equal(fs.existsSync(path.join(snapshot.AGENT_TASK_ROOT, partialId)), false);
+  assert.equal(fs.existsSync(path.join(snapshot.AGENT_TASK_ROOT, terminalId)), false);
+  assert.equal(fs.existsSync(path.join(snapshot.AGENT_TASK_ROOT, orphanId)), false);
+
+  const state = durable.readDurableNamespace('codex-collaboration', null);
+  assert.equal(state.tasks.find(item => item.id === taskId)?.snapshotAvailable, true);
+  assert.equal(state.tasks.find(item => item.id === partialId)?.snapshotAvailable, false);
+  assert.equal(state.tasks.find(item => item.id === terminalId)?.snapshotAvailable, false);
 });
 
 test('baseline integrity is verified before it can be used for rollback', async () => {
