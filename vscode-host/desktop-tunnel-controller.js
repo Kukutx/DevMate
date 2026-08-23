@@ -88,9 +88,19 @@ class DesktopTunnelController extends TunnelController {
   }
 
   async dispose(options = {}) {
-    this.stopLifecycleWatch();
     if (this.lifecycleCleanup) await this.lifecycleCleanup.catch(() => null);
-    return super.dispose(options);
+    const result = await super.dispose(options);
+    if (result?.disposed === true) {
+      this.stopLifecycleWatch();
+    } else {
+      // A clean host detach may deliberately leave an owned shared provider alive
+      // until another host adopts it or this process exits. Keep the lifecycle
+      // fence active so a remote explicit Stop still converges immediately.
+      try {
+        if (this.lifecycleIntent().desiredState === 'running') this.startLifecycleWatch();
+      } catch {}
+    }
+    return result;
   }
 
   diagnosticSnapshot(port = this.port) {
