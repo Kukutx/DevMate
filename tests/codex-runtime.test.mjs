@@ -49,14 +49,15 @@ async function snapshotDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-codex-runtime-snapshot-'));
 }
 
-test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, and completes a bounded turn', async () => {
+test('Codex app-server is parent-supervised, shell-free, deny-all, snapshot-scoped, network-off, and completes a bounded turn', async () => {
   const fake = fakeAppServer();
   const spawned = [];
   const cwd = await snapshotDir();
   const previousConfig = process.env.DEVMATE_CONFIG;
   process.env.DEVMATE_CONFIG = 'must-not-reach-codex';
+  const codexExecutable = process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex';
   const runtime = new CodexAppServer({
-    executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex',
+    executable: codexExecutable,
     spawnFn(executable, args, options) {
       spawned.push({ executable, args, options });
       return fake.child;
@@ -65,10 +66,14 @@ test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, an
   try {
     await runtime.start({ cwd });
     assert.equal(spawned.length, 1);
-    assert.deepEqual(spawned[0].args, ['app-server', '--stdio']);
+    assert.equal(spawned[0].executable, process.execPath);
+    assert.deepEqual(spawned[0].args, [runtimeTest.CODEX_SUPERVISOR_PATH]);
     assert.equal(spawned[0].options.shell, false);
+    assert.deepEqual(spawned[0].options.stdio, ['pipe', 'pipe', 'pipe', 'ipc']);
     assert.equal(path.resolve(spawned[0].options.cwd), path.resolve(cwd));
     assert.equal(spawned[0].options.env.DEVMATE_CONFIG, undefined);
+    assert.equal(spawned[0].options.env.DEVMATE_CODEX_SUPERVISOR_EXECUTABLE, codexExecutable);
+    assert.deepEqual(JSON.parse(spawned[0].options.env.DEVMATE_CODEX_SUPERVISOR_ARGS), ['app-server', '--stdio']);
 
     const thread = await runtime.ensureThread({ cwd });
     assert.equal(thread.threadId, 'thread-1');
@@ -93,6 +98,7 @@ test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, an
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false
     });
+    assert.equal(runtime.status().supervised, true);
     assert.equal(runtime.status().strongOsReadIsolation, false);
   } finally {
     fake.child.exitCode = 0;
