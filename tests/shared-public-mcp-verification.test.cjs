@@ -6,8 +6,9 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { authenticationPolicyGeneration, configureAuthentication } = require('../shared/auth-config.cjs');
-const { DEFAULT_VERSION, atomicWriteJson, newInstanceConfig, readJson } = require('../shared/config-store.cjs');
+const { DEFAULT_VERSION, atomicWriteJson, newInstanceConfig, readJson, updateConfig } = require('../shared/config-store.cjs');
 const { setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
+const { connectionPolicyGeneration, setConnectionPolicy } = require('../shared/instance-config.cjs');
 const {
   recordVerificationFailure,
   verifySharedPublicMcp
@@ -65,7 +66,8 @@ function verificationPatch(fx, stamp) {
     fx.record,
     null,
     config.auth.mode,
-    authenticationPolicyGeneration(config)
+    authenticationPolicyGeneration(config),
+    connectionPolicyGeneration(config)
   );
 }
 
@@ -113,6 +115,7 @@ test('desktop hosts share one network preflight for the same connection and auth
     assert.equal([a.reused, b.reused].filter(Boolean).length, 1);
     const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     assert.equal(persisted.connection.lastAuthGeneration, authenticationPolicyGeneration(persisted));
+    assert.equal(persisted.connection.lastConnectionPolicyGeneration, connectionPolicyGeneration(persisted));
   } finally {
     fx.cleanup();
   }
@@ -219,6 +222,74 @@ test('OAuth-none-OAuth ABA during preflight cannot stamp old evidence onto the n
     assert.notEqual(persisted.connection.lastAuthGeneration, authenticationPolicyGeneration(persisted));
   } finally {
     complete?.();
+    fx.cleanup();
+  }
+});
+
+test('connection A-B-A during preflight cannot stamp old evidence onto the restored policy values', async () => {
+  const fx = fixture();
+  let started;
+  const preflightStarted = new Promise(resolve => { started = resolve; });
+  let complete;
+  const hold = new Promise(resolve => { complete = resolve; });
+
+  try {
+    const verification = verifySharedPublicMcp({
+      stateDirectory: fx.stateDirectory,
+      configFile: fx.configFile,
+      publicUrl: fx.record.publicUrl,
+      expectedRecord: fx.record,
+      currentRecord: () => fx.record,
+      preflight: async input => {
+        started();
+        await hold;
+        return success(input.publicUrl);
+      }
+    });
+
+    await preflightStarted;
+    const before = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    const beforeGeneration = connectionPolicyGeneration(before);
+    updateConfig(fx.configFile, config => {
+      setConnectionPolicy(config, { provider: 'ngrok', publicUrl: '' });
+      return config;
+    });
+    updateConfig(fx.configFile, config => {
+      setConnectionPolicy(config, { provider: 'cloudflare-quick', publicUrl: '' });
+      return config;
+    });
+    const after = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(after.connection.provider, 'cloudflare-quick');
+    assert.equal(after.connection.publicUrl, '');
+    assert.equal(connectionPolicyGeneration(after), beforeGeneration + 2);
+
+    complete();
+    await assert.rejects(verification, error => error?.code === 'DEVMATE_PUBLIC_MCP_CONNECTION_POLICY_CHANGED');
+    const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(verifiedForCurrentRecord(persisted, fx.record), false);
+    assert.notEqual(persisted.connection.lastConnectionPolicyGeneration, connectionPolicyGeneration(persisted));
+  } finally {
+    complete?.();
+    fx.cleanup();
+  }
+});
+
+test('verification refuses a live tunnel that no longer matches the configured connection policy', async () => {
+  const fx = fixture();
+  try {
+    updateConfig(fx.configFile, config => {
+      setConnectionPolicy(config, { provider: 'ngrok', publicUrl: '' });
+      return config;
+    });
+    await assert.rejects(verifySharedPublicMcp({
+      stateDirectory: fx.stateDirectory,
+      configFile: fx.configFile,
+      publicUrl: fx.record.publicUrl,
+      expectedRecord: fx.record,
+      currentRecord: () => fx.record,
+      preflight: async input => success(input.publicUrl)
+    }), error => error?.code === 'DEVMATE_PUBLIC_MCP_CONNECTION_POLICY_MISMATCH');
+  } finally {
     fx.cleanup();
   }
 });
