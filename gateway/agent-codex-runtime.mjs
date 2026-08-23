@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { terminateProcessTree } from './command-process.mjs';
 import { redactSensitiveString } from './local-shared.mjs';
 
@@ -12,6 +13,7 @@ const TURN_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_STDIO_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_AGENT_OUTPUT_CHARS = 200_000;
+const CODEX_SUPERVISOR_PATH = fileURLToPath(new URL('./agent-codex-supervisor.mjs', import.meta.url));
 const SAFE_ENV_KEYS = new Set([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR',
   'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
@@ -78,6 +80,14 @@ function cleanEnvironment(source = process.env) {
   return env;
 }
 
+function supervisedEnvironment(executable) {
+  return {
+    ...cleanEnvironment(),
+    DEVMATE_CODEX_SUPERVISOR_EXECUTABLE: String(executable),
+    DEVMATE_CODEX_SUPERVISOR_ARGS: JSON.stringify(['app-server', '--stdio'])
+  };
+}
+
 function normalizeSnapshotCwd(cwd) {
   const requested = String(cwd || '').trim();
   if (!requested || !path.isAbsolute(requested)) {
@@ -115,6 +125,7 @@ export class CodexAppServer extends EventEmitter {
     this.executable = executable;
     this.spawnFn = spawnFn;
     this.child = null;
+    this.codexPid = null;
     this.stdoutBuffer = '';
     this.stderr = '';
     this.nextRequestId = 1;
@@ -130,7 +141,9 @@ export class CodexAppServer extends EventEmitter {
     return {
       running: !!this.child && this.child.exitCode == null && this.child.signalCode == null,
       initialized: this.initialized,
-      pid: this.child?.pid || null,
+      pid: this.codexPid || null,
+      supervisorPid: this.child?.pid || null,
+      supervised: true,
       startedAt: this.startedAt,
       activeTurn: this.activeTurn ? {
         threadId: this.activeTurn.threadId,
@@ -153,30 +166,36 @@ export class CodexAppServer extends EventEmitter {
     this.stopping = false;
     this.stdoutBuffer = '';
     this.stderr = '';
-    const child = this.spawnFn(this.executable, ['app-server', '--stdio'], {
+    this.codexPid = null;
+    const child = this.spawnFn(process.execPath, [CODEX_SUPERVISOR_PATH], {
       cwd: processCwd,
-      env: cleanEnvironment(),
+      env: supervisedEnvironment(this.executable),
       shell: false,
       windowsHide: true,
       detached: process.platform !== 'win32',
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     });
     this.child = child;
     this.processCwd = processCwd;
     this.startedAt = new Date().toISOString();
+    child.on?.('message', message => {
+      if (message?.type === 'devmate:codex-started' && Number.isInteger(message.pid) && message.pid > 0) this.codexPid = message.pid;
+      if (message?.type === 'devmate:codex-exit') this.codexPid = null;
+    });
     child.stdout?.on('data', chunk => this.#consumeStdout(chunk));
     child.stderr?.on('data', chunk => {
       this.stderr = boundedAppend(this.stderr, sanitizeText(chunk, 20_000), 20_000);
     });
-    child.once('error', error => this.#failTransport(codedError(`Could not start Codex app-server: ${error.message}`, 'codex_spawn_failed')));
+    child.once('error', error => this.#failTransport(codedError(`Could not start Codex supervisor: ${error.message}`, 'codex_spawn_failed')));
     child.once('close', (code, signal) => {
       const expected = this.stopping;
       const detail = this.stderr ? `: ${this.stderr.slice(-2000)}` : '';
       this.#failTransport(codedError(
-        `Codex app-server exited${code != null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}${detail}`,
+        `Codex app-server supervisor exited${code != null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}${detail}`,
         expected ? 'codex_stopped' : 'codex_transport_closed',
         { exitCode: code, signal: signal || null }
       ));
+      this.codexPid = null;
       if (this.child === child && child.exitCode != null) {
         this.child = null;
         this.processCwd = null;
@@ -443,14 +462,16 @@ export class CodexAppServer extends EventEmitter {
   async stop() {
     if (!this.child) {
       this.processCwd = null;
+      this.codexPid = null;
       return { stopped: false, exitConfirmed: true };
     }
     const child = this.child;
     this.stopping = true;
     this.initialized = false;
     this.activeTurn = null;
+    try { child.send?.({ type: 'devmate:codex-stop' }); } catch {}
     try { child.stdin?.end(); } catch {}
-    const termination = await terminateProcessTree(child, { graceMs: 1000, forceMs: 2500 }).catch(error => ({
+    const termination = await terminateProcessTree(child, { graceMs: 2000, forceMs: 3500 }).catch(error => ({
       terminated: false,
       forced: false,
       exitConfirmed: false,
@@ -460,6 +481,7 @@ export class CodexAppServer extends EventEmitter {
     if (termination.exitConfirmed !== false) {
       if (this.child === child) this.child = null;
       this.processCwd = null;
+      this.codexPid = null;
     } else if (!this.child) {
       this.child = child;
     }
@@ -479,6 +501,8 @@ export function codexRuntimeStatus() {
     running: false,
     initialized: false,
     pid: null,
+    supervisorPid: null,
+    supervised: true,
     startedAt: null,
     activeTurn: null,
     strongOsReadIsolation: false
@@ -498,6 +522,7 @@ export function resetCodexRuntimeForTests() {
 }
 
 export const __test = {
+  CODEX_SUPERVISOR_PATH,
   DEVELOPER_INSTRUCTIONS,
   MAX_AGENT_OUTPUT_CHARS,
   MAX_PENDING_REQUESTS,
@@ -515,5 +540,6 @@ export const __test = {
   normalizeSnapshotCwd,
   samePath,
   sanitizeRpcData,
-  sanitizeText
+  sanitizeText,
+  supervisedEnvironment
 };
