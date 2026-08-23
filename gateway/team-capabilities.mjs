@@ -5,7 +5,11 @@ import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
 import { activeWorkSession, touchWorkSession } from './work-sessions.mjs';
-import { assertWorkspaceLease } from './workspace-leases.mjs';
+import {
+  acquireWorkspaceLeaseHold,
+  assertWorkspaceLease,
+  releaseWorkspaceLeaseHold
+} from './workspace-leases.mjs';
 import { clearPreviewShares } from './published-previews.mjs';
 import { ensureToolApproval } from './approvals.mjs';
 import { registerApprovalTools } from './approval-tools.mjs';
@@ -239,7 +243,8 @@ export function wrapAuthorizedTool(name, config, handler) {
       });
     }
 
-    if (!name.startsWith('workspace_lease_')) {
+    const leaseProtected = !name.startsWith('workspace_lease_');
+    if (leaseProtected) {
       assertWorkspaceLease({
         workspaceId: authorized.workspaceId,
         principal: authorized.principal,
@@ -258,6 +263,7 @@ export function wrapAuthorizedTool(name, config, handler) {
     const active = authorized.workspaceId
       ? activeWorkSession(authorized.principal.id, authorized.workspaceId)
       : null;
+    let leaseHold = null;
     try {
       const approval = ensureToolApproval({
         config: current,
@@ -269,10 +275,33 @@ export function wrapAuthorizedTool(name, config, handler) {
       });
       if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
+      if (leaseProtected) {
+        leaseHold = acquireWorkspaceLeaseHold({
+          workspaceId: authorized.workspaceId,
+          principal: authorized.principal,
+          capability: authorized.capability,
+          config: current,
+          purpose: name
+        });
+      }
+
       const invocationSignal = rest[0]?.signal || requestContext()?.signal || null;
-      const rawResult = await runWithRequestSignal(invocationSignal, () =>
-        runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest))
-      );
+      let rawResult;
+      try {
+        rawResult = await runWithRequestSignal(invocationSignal, () =>
+          runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest))
+        );
+      } finally {
+        if (leaseHold) {
+          releaseWorkspaceLeaseHold({
+            workspaceId: leaseHold.workspaceId,
+            holdId: leaseHold.id,
+            leaseId: leaseHold.leaseId,
+            principalId: leaseHold.principalId
+          });
+          leaseHold = null;
+        }
+      }
       const result = filterResult(
         name,
         markGitFailure(name, rawResult),
@@ -300,6 +329,17 @@ export function wrapAuthorizedTool(name, config, handler) {
       }, { workSessionId });
       return result;
     } catch (error) {
+      if (leaseHold) {
+        try {
+          releaseWorkspaceLeaseHold({
+            workspaceId: leaseHold.workspaceId,
+            holdId: leaseHold.id,
+            leaseId: leaseHold.leaseId,
+            principalId: leaseHold.principalId
+          });
+        } catch {}
+        leaseHold = null;
+      }
       const session = authorized.workspaceId
         ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
         : null;
