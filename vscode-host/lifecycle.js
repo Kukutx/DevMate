@@ -3,7 +3,6 @@
 const fs = require('node:fs');
 const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
 const { ensureDesktopAuthenticationPolicy, setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
-const { readLifecycleIntent, setLifecycleIntent } = require('../shared/lifecycle-intent.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { connectionErrorSummary } = require('../host/public-mcp.js');
@@ -284,29 +283,10 @@ class VscodeHostLifecycle {
       this.lifecycleGeneration += 1;
       if (this.startupTimer) clearTimeout(this.startupTimer);
       this.startupTimer = null;
-      const configFile = this.runtimeContext ? runtimeConfigPath(this.runtimeContext) : '';
-      let previousIntent = null;
-      if (preserveSession && configFile) {
-        try { previousIntent = readLifecycleIntent(configFile); } catch {}
-      }
       let platformResult = null;
       try {
         if (this.platformActivationAttempted) platformResult = await this.platformExtension.deactivate({ preserveSession });
       } finally {
-        if (preserveSession && configFile && previousIntent?.desiredState === 'running') {
-          try {
-            const current = readLifecycleIntent(configFile);
-            if (current.desiredState !== 'running') {
-              setLifecycleIntent(configFile, 'running', {
-                requestedBy: 'vscode-host-handoff',
-                reason: 'host-deactivation-handoff'
-              });
-              this.diagnostics?.append('Preserved shared running intent for another desktop host to recover.');
-            }
-          } catch (error) {
-            this.diagnostics?.append(`Could not preserve shared running intent during host handoff: ${error.message || error}`, 'error');
-          }
-        }
         this.platformActivationAttempted = false;
         this.platformActivated = false;
         this.diagnostics?.append('DevMate VS Code host deactivated.');
