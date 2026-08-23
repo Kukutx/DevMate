@@ -59,10 +59,16 @@ async function snapshotDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-codex-runtime-snapshot-'));
 }
 
+function comparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 test('Codex app-server is parent-supervised, shell-free, deny-all, snapshot-scoped, network-off, and completes a bounded turn', async () => {
   const fake = fakeAppServer();
   const spawned = [];
   const cwd = await snapshotDir();
+  const canonicalCwd = await fsp.realpath(cwd);
   const previousConfig = process.env.DEVMATE_CONFIG;
   process.env.DEVMATE_CONFIG = 'must-not-reach-codex';
   const codexExecutable = process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex';
@@ -80,7 +86,7 @@ test('Codex app-server is parent-supervised, shell-free, deny-all, snapshot-scop
     assert.deepEqual(spawned[0].args, [runtimeTest.CODEX_SUPERVISOR_PATH]);
     assert.equal(spawned[0].options.shell, false);
     assert.deepEqual(spawned[0].options.stdio, ['pipe', 'pipe', 'pipe', 'ipc']);
-    assert.equal(path.resolve(spawned[0].options.cwd), path.resolve(cwd));
+    assert.equal(comparablePath(spawned[0].options.cwd), comparablePath(canonicalCwd));
     assert.equal(spawned[0].options.env.DEVMATE_CONFIG, undefined);
     assert.equal(spawned[0].options.env.DEVMATE_CODEX_SUPERVISOR_EXECUTABLE, codexExecutable);
     assert.deepEqual(JSON.parse(spawned[0].options.env.DEVMATE_CODEX_SUPERVISOR_ARGS), ['app-server', '--stdio']);
@@ -93,17 +99,17 @@ test('Codex app-server is parent-supervised, shell-free, deny-all, snapshot-scop
     assert.match(result.output, /proposal ready/);
 
     const startThread = fake.requests.find(item => item.method === 'thread/start');
-    assert.equal(path.resolve(startThread.params.cwd), path.resolve(cwd));
+    assert.equal(comparablePath(startThread.params.cwd), comparablePath(canonicalCwd));
     assert.equal(startThread.params.approvalPolicy, 'never');
     assert.equal(startThread.params.sandbox, 'workspace-write');
     assert.match(startThread.params.developerInstructions, /isolated snapshot workspace/);
 
     const startTurn = fake.requests.find(item => item.method === 'turn/start');
-    assert.equal(path.resolve(startTurn.params.cwd), path.resolve(cwd));
+    assert.equal(comparablePath(startTurn.params.cwd), comparablePath(canonicalCwd));
     assert.equal(startTurn.params.approvalPolicy, 'never');
     assert.deepEqual(startTurn.params.sandboxPolicy, {
       type: 'workspaceWrite',
-      writableRoots: [path.resolve(cwd)],
+      writableRoots: [canonicalCwd],
       networkAccess: false,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false
