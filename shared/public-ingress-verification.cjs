@@ -1,6 +1,7 @@
 'use strict';
 
 const { authenticationMode, authenticationPolicyGeneration } = require('./auth-config.cjs');
+const { connectionPolicyGeneration } = require('./instance-config.cjs');
 
 function cleanHttpsOrigin(value) {
   const raw = String(value || '').trim();
@@ -104,8 +105,10 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   const connection = config?.connection || {};
   const authMode = authenticationMode(config?.auth?.mode);
   const authGeneration = authenticationPolicyGeneration(config);
+  const policyGeneration = connectionPolicyGeneration(config);
   if (authMode !== 'oauth' || String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;
   if (!Number.isSafeInteger(connection.lastAuthGeneration) || connection.lastAuthGeneration !== authGeneration) return false;
+  if (!Number.isSafeInteger(connection.lastConnectionPolicyGeneration) || connection.lastConnectionPolicyGeneration !== policyGeneration) return false;
   const preflightAt = Date.parse(connection.lastPreflightAt || '');
   if (!Number.isFinite(preflightAt)) return false;
   const failureAt = Date.parse(connection.lastErrorAt || '');
@@ -127,6 +130,7 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
 function verifiedForCurrentRecord(config, record, gatewayLock = null) {
   const tunnelGeneration = recordGeneration(record);
   if (!tunnelGeneration) return false;
+  if (!runtimeMatchesConnection(config, record).matches) return false;
   const persistedTunnelGeneration = String(config?.connection?.lastTunnelGeneration || '').trim();
   if (persistedTunnelGeneration && persistedTunnelGeneration !== tunnelGeneration) return false;
 
@@ -146,18 +150,24 @@ function successfulVerificationPatch(
   record = null,
   gatewayLock = null,
   authMode = 'oauth',
-  authGeneration = 0
+  authGeneration = 0,
+  policyGeneration = 0
 ) {
   const tunnelGeneration = recordGeneration(record);
   const currentGatewayGeneration = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
   const normalizedAuthGeneration = Number(authGeneration);
+  const normalizedPolicyGeneration = Number(policyGeneration);
   if (!Number.isSafeInteger(normalizedAuthGeneration) || normalizedAuthGeneration < 0) {
     throw new Error(`Invalid authentication generation for public verification evidence: ${String(authGeneration)}`);
+  }
+  if (!Number.isSafeInteger(normalizedPolicyGeneration) || normalizedPolicyGeneration < 0) {
+    throw new Error(`Invalid connection policy generation for public verification evidence: ${String(policyGeneration)}`);
   }
   return {
     lastPreflightAt: stamp,
     lastAuthMode: authenticationMode(authMode),
     lastAuthGeneration: normalizedAuthGeneration,
+    lastConnectionPolicyGeneration: normalizedPolicyGeneration,
     lastPublicOrigin: String(test?.publicOrigin || publicUrl || '').trim(),
     lastPublicHost: hostOf(test?.publicOrigin || publicUrl),
     lastMcpPath: '/mcp',
