@@ -8,7 +8,7 @@ import {
 import { executeCommand } from '../command-process.mjs';
 import { resolveWorkspace } from '../workspace-resolver.mjs';
 import {
-  listPersistentProcesses, readPersistentOutput, startPersistentProcess, stopPersistentProcess
+  listPersistentProcesses, readPersistentOutput, startPersistentExecutable, stopPersistentProcess
 } from '../persistent-processes.mjs';
 
 const DEFAULT_TIMEOUT_MS = 180000;
@@ -72,12 +72,6 @@ export async function runExecutable(executable, args = [], options = {}) {
     stdoutTruncated: result.stdoutTruncated,
     stderrTruncated: result.stderrTruncated
   };
-}
-
-function quoteShellArg(value) {
-  const text = String(value);
-  if (process.platform === 'win32') return `"${text.replace(/"/g, '\\"')}"`;
-  return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
 function executableAllowed(manifest, executable) {
@@ -190,8 +184,7 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
       async start(executable, args, { workspaceId, cwd = '.', label = '', environment = {}, autoStopAfterMs } = {}) {
         assertCanMutate(readConfig(), `${manifest.name} persistent process execution`);
         if (!executableAllowed(manifest, executable)) throw new Error(`Executable is not allowed for ${manifest.id}: ${path.basename(String(executable || ''))}`);
-        const command = [quoteShellArg(executable), ...args.map(quoteShellArg)].join(' ');
-        return startPersistentProcess({ workspaceId, command, cwd, label, environment, autoStopAfterMs });
+        return startPersistentExecutable({ workspaceId, executable, args, cwd, label, environment, autoStopAfterMs });
       }
     },
     processes: {
@@ -202,4 +195,4 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
   };
 }
 
-export const __test = { executableAllowed, isInside, quoteShellArg, truncate };
+export const __test = { executableAllowed, isInside, truncate };
