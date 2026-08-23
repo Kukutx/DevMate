@@ -74,14 +74,18 @@ function setLifecycleIntent(configFile, desiredState, { requestedBy = '', reason
   let snapshot = null;
   updateConfig(file, config => {
     normalizeInstanceConfig(config);
-    const changed = config.lifecycle.desiredState !== desiredState;
+    if (config.lifecycle.desiredState === desiredState) {
+      snapshot = lifecycleSnapshot(config);
+      snapshot.changed = false;
+      return config;
+    }
     config.lifecycle.desiredState = desiredState;
     config.lifecycle.generation += 1;
     config.lifecycle.updatedAt = new Date().toISOString();
     config.lifecycle.requestedBy = String(requestedBy || '').slice(0, 256) || null;
     config.lifecycle.reason = String(reason || '').slice(0, 500);
     snapshot = lifecycleSnapshot(config);
-    snapshot.changed = changed;
+    snapshot.changed = true;
     return config;
   });
   return snapshot;
