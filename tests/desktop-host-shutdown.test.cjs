@@ -28,32 +28,39 @@ test('first desktop authentication request establishes shared policy exactly onc
   assert.deepEqual(config.auth, { mode: 'oauth' });
 });
 
-test('desktop controller adapters cannot dispose locally owned runtime by orphaning it', () => {
-  const adapters = source('host/runtime-controller.js');
-  assert.match(adapters, /class RuntimeController extends processRuntime\.RuntimeController/);
-  assert.match(adapters, /async dispose\(_options = \{\}\)[\s\S]*const stopped = await this\.stop\(\)[\s\S]*super\.dispose\(\{ stopOwned: false \}\)/);
-  assert.match(adapters, /class DesktopTunnelController extends tunnelRuntime\.TunnelController/);
-  assert.match(adapters, /tunnelRuntime\.TunnelController = DesktopTunnelController/);
+test('base desktop controllers cannot successfully dispose a locally owned process without stopping it', () => {
+  const gateway = source('host/runtime/process-controller.js');
+  assert.match(gateway, /dispose\(\)[\s\S]*const stopped = await this\.stopInternal\(\)/);
+  assert.doesNotMatch(gateway, /owned-process-running/);
+
+  const tunnel = source('vscode-host/tunnel-controller.js');
+  assert.match(tunnel, /async dispose\(\)[\s\S]*const stopped = await this\.stop\(\)/);
+  assert.doesNotMatch(tunnel, /async dispose\(\{ stopOwned/);
 });
 
-test('both product hosts load ownership-safe runtime adapter before TunnelController consumers', () => {
-  const vscode = source('extension.js');
-  const runtimeImport = vscode.indexOf("require('./host/runtime-controller.js')");
-  const tunnelRuntimeImport = vscode.indexOf("require('./vscode-host/tunnel-runtime.js')");
-  assert.ok(runtimeImport >= 0 && tunnelRuntimeImport > runtimeImport);
-
-  const obsidian = source('obsidian-plugin/src/main.js');
-  const obsidianRuntime = obsidian.indexOf("require('../../host/runtime-controller.js')");
-  const obsidianTunnel = obsidian.indexOf("require('../../vscode-host/tunnel-controller.js')");
-  assert.ok(obsidianRuntime >= 0 && obsidianTunnel > obsidianRuntime);
-});
-
-test('host close remains distinct from explicit shared Stop', () => {
+test('VS Code wrapper chain forwards preserveSession instead of reconstructing lifecycle intent after teardown', () => {
+  const platform = source('extension-entry-platform.js');
+  const setup = source('extension-entry.js');
   const lifecycle = source('vscode-host/lifecycle.js');
+
+  assert.match(platform, /async function deactivate\(options = \{\}\)[\s\S]*innerExtension\.deactivate\(options\)/);
+  assert.match(setup, /async function deactivate\(options = \{\}\)[\s\S]*baseExtension\.deactivate\(options\)/);
   assert.match(lifecycle, /deactivate\(\{ preserveSession = true \} = \{\}\)/);
-  const platform = source('extension.js');
-  assert.match(platform, /preserveSession[\s\S]*host-deactivation-preserves-shared-session/);
-  assert.match(source('host/runtime-controller.js'), /const stopped = await this\.stop\(\)/);
+  assert.match(lifecycle, /platformExtension\.deactivate\(\{ preserveSession \}\)/);
+  assert.doesNotMatch(lifecycle, /host-deactivation-handoff/);
+});
+
+test('desktop child processes have parent-death fencing', () => {
+  const gatewayController = source('host/runtime/process-controller.js');
+  const gatewayRuntime = source('gateway/server-runtime.mjs');
+  const tunnel = source('vscode-host/tunnel-controller.js');
+  const supervisor = source('host/runtime/provider-supervisor.js');
+
+  assert.match(gatewayController, /stdio:\s*\[['"]ignore['"],\s*['"]pipe['"],\s*['"]pipe['"],\s*['"]ipc['"]\]/);
+  assert.match(gatewayRuntime, /process\.once\(['"]disconnect['"],\s*\(\) => shutdownAndExit\(['"]parent-disconnect['"]\)\)/);
+  assert.match(tunnel, /createSupervisedChildProcess/);
+  assert.match(supervisor, /process\.once\(['"]disconnect['"]/);
+  assert.match(supervisor, /terminateProcessTree/);
 });
 
 test('explicit desktop authentication settings write through the shared policy boundary', () => {
