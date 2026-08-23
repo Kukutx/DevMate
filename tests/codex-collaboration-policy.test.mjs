@@ -122,16 +122,18 @@ test('only one active Codex task is reserved and stale runtime state is interrup
   assert.match(status.tasks[0].error, /Previous Gateway exited/);
 });
 
-test('production runtime loads collaboration after singleton ownership and recovers apply only after file journals', async () => {
+test('production runtime loads collaboration after singleton ownership and reconciles snapshots before file/apply recovery', async () => {
   const runtime = await fsp.readFile(new URL('../gateway/server-runtime.mjs', import.meta.url), 'utf8');
   const collaborationSource = await fsp.readFile(new URL('../gateway/agent-collaboration.mjs', import.meta.url), 'utf8');
   const acquire = runtime.indexOf('acquireGatewayInstanceLock();');
   const load = runtime.search(/codexCollaboration = await import\('\.\/agent-collaboration\.mjs'\);/);
   const runtimeRecovery = runtime.indexOf('codexCollaboration.recoverCodexCollaborationAfterRestart();', load);
-  const fileRecovery = runtime.indexOf('const fileRecovery = await recoverFileTransactions({', load);
+  const snapshotRecovery = runtime.indexOf('const snapshotRecovery = await reconcileAgentSnapshotStorage();', runtimeRecovery);
+  const fileRecovery = runtime.indexOf('const fileRecovery = await recoverFileTransactions({', snapshotRecovery);
   const applyRecovery = runtime.indexOf('const codexApplyRecovery = await codexCollaboration.recoverCodexApplyAfterFileTransactions();', fileRecovery);
   const install = runtime.indexOf('codexCollaboration.installCodexCollaborationCapability(McpServer);', applyRecovery);
-  assert.ok(acquire >= 0 && load > acquire && runtimeRecovery > load && fileRecovery > runtimeRecovery && applyRecovery > fileRecovery && install > applyRecovery);
+  assert.ok(acquire >= 0 && load > acquire && runtimeRecovery > load && snapshotRecovery > runtimeRecovery && fileRecovery > snapshotRecovery && applyRecovery > fileRecovery && install > applyRecovery);
+  assert.match(runtime, /DEVMATE_CODEX_SNAPSHOT_RECOVERY_BLOCKED/);
   assert.equal(/\bAPPLY\b/.test(collaborationSource), false);
   assert.match(collaborationSource, /expectedSha256: change\.beforeSha256/);
   assert.match(collaborationSource, /recoverCodexApplyAfterFileTransactions/);
