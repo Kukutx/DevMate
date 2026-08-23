@@ -24,7 +24,7 @@ import {
 } from './team-tool-data.mjs';
 
 const { setConnectionPolicy } = instanceConfig;
-const { normalizeAllowedHosts, reconcileAllowedHosts } = publicHostPolicy;
+const { normalizeAllowedHosts } = publicHostPolicy;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
   const config = normalizeInstanceConfig(inputConfig);
@@ -50,12 +50,6 @@ export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
 
   if (patch.allowedHosts !== undefined) {
     config.requestPolicy.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
-  } else if (connectionTouched) {
-    config.requestPolicy.allowedHosts = reconcileAllowedHosts({
-      currentAllowedHosts: config.requestPolicy.allowedHosts || [],
-      previousPublicUrl,
-      nextPublicUrl: publicUrl
-    });
   }
 
   if (connectionTouched) setConnectionPolicy(config, { provider, publicUrl });
