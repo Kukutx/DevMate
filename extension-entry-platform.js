@@ -5,6 +5,7 @@ const vscode = require('vscode');
 const path = require('path');
 const { normalizeNgrokUrl } = require('./ngrok-support.js');
 const { normalizePublicUrl } = require('./tunnel-provider');
+const { withConnectionMutationLease } = require('./vscode-host/connection-mutation-lease.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const {
   applyInstancePatch,
@@ -41,6 +42,13 @@ function log(message) {
 
 function configPath(context) {
   return path.join(context.globalStorageUri.fsPath, 'config.json');
+}
+
+function withPlatformConnectionMutation(context, label, operation) {
+  return withConnectionMutationLease({
+    stateDirectory: context.globalStorageUri.fsPath,
+    hostId: `vscode-${String(label || 'connection').replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 80)}-${process.pid}`
+  }, operation);
 }
 
 function setting(name, fallback) {
@@ -105,21 +113,23 @@ async function updateSetting(name, value) {
 }
 
 async function commitConnectionSettings(context, localUpdates, sharedPatch) {
-  const previous = new Map();
-  const applied = [];
-  try {
-    for (const [name, value] of Object.entries(localUpdates)) {
-      previous.set(name, setting(name, undefined));
-      await updateSetting(name, value);
-      applied.push(name);
+  return withPlatformConnectionMutation(context, 'connection-settings', async () => {
+    const previous = new Map();
+    const applied = [];
+    try {
+      for (const [name, value] of Object.entries(localUpdates)) {
+        previous.set(name, setting(name, undefined));
+        await updateSetting(name, value);
+        applied.push(name);
+      }
+      applyInstancePatch(configPath(context), sharedPatch);
+    } catch (error) {
+      for (const name of applied.reverse()) {
+        try { await updateSetting(name, previous.get(name)); } catch {}
+      }
+      throw error;
     }
-    applyInstancePatch(configPath(context), sharedPatch);
-  } catch (error) {
-    for (const name of applied.reverse()) {
-      try { await updateSetting(name, previous.get(name)); } catch {}
-    }
-    throw error;
-  }
+  });
 }
 
 async function restoreCloudflareToken(context, previousToken) {
@@ -129,20 +139,22 @@ async function restoreCloudflareToken(context, previousToken) {
 }
 
 async function commitCloudflareConnection(context, token, localUpdates, sharedPatch) {
-  const previousToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
-  try {
-    await storeCloudflareToken(context, token);
-    await commitConnectionSettings(context, localUpdates, sharedPatch);
-  } catch (error) {
+  return withPlatformConnectionMutation(context, 'cloudflare-connection', async () => {
+    const previousToken = await context.secrets.get(CLOUDFLARE_TOKEN_SECRET) || '';
     try {
-      await restoreCloudflareToken(context, previousToken);
-      log('Restored the previous Cloudflare Tunnel token after connection configuration failed.');
-    } catch (rollbackError) {
-      error.secretRollbackError = rollbackError?.message || String(rollbackError);
-      log(`Could not restore the previous Cloudflare Tunnel token: ${error.secretRollbackError}`);
+      await storeCloudflareToken(context, token);
+      await commitConnectionSettings(context, localUpdates, sharedPatch);
+    } catch (error) {
+      try {
+        await restoreCloudflareToken(context, previousToken);
+        log('Restored the previous Cloudflare Tunnel token after connection configuration failed.');
+      } catch (rollbackError) {
+        error.secretRollbackError = rollbackError?.message || String(rollbackError);
+        log(`Could not restore the previous Cloudflare Tunnel token: ${error.secretRollbackError}`);
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 
 async function prepareConnectionMutation() {
@@ -338,9 +350,12 @@ async function configureConnection(context) {
     publicUrl
   };
 
-  const stopState = await prepareConnectionMutation();
-  if (cloudflareToken) await commitCloudflareConnection(context, cloudflareToken, localUpdates, sharedPatch);
-  else await commitConnectionSettings(context, localUpdates, sharedPatch);
+  const stopState = await withPlatformConnectionMutation(context, 'connection-setup', async () => {
+    const mutationStopState = await prepareConnectionMutation();
+    if (cloudflareToken) await commitCloudflareConnection(context, cloudflareToken, localUpdates, sharedPatch);
+    else await commitConnectionSettings(context, localUpdates, sharedPatch);
+    return mutationStopState;
+  });
 
   if (stopState.remoteOwner) {
     vscode.window.showInformationMessage('DevMate connection settings saved. The active shared connection will converge to the new configuration automatically when its current generation ends.');
@@ -413,8 +428,11 @@ async function activate(context) {
   register(context, 'devMate.cloudflareSetToken', async () => {
     const token = await promptCloudflareTokenValue();
     if (!token) return;
-    const stopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token change');
-    await storeCloudflareToken(context, token);
+    const stopState = await withPlatformConnectionMutation(context, 'cloudflare-token-set', async () => {
+      const mutationStopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token change');
+      await storeCloudflareToken(context, token);
+      return mutationStopState;
+    });
     if (stopState.remoteOwner) {
       vscode.window.showInformationMessage('Cloudflare Tunnel token saved securely. The next managed connection generation will use it.');
     } else if (stopState.reason === 'stopped') {
@@ -425,9 +443,12 @@ async function activate(context) {
     }
   });
   register(context, 'devMate.cloudflareClearToken', async () => {
-    const stopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token removal');
-    await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
-    cloudflareTunnelToken = '';
+    const stopState = await withPlatformConnectionMutation(context, 'cloudflare-token-clear', async () => {
+      const mutationStopState = await prepareCloudflareCredentialMutation(context, 'Cloudflare Tunnel token removal');
+      await context.secrets.delete(CLOUDFLARE_TOKEN_SECRET);
+      cloudflareTunnelToken = '';
+      return mutationStopState;
+    });
     vscode.window.showInformationMessage(stopState.reason === 'stopped'
       ? 'Cloudflare Tunnel token removed and the managed connection was stopped.'
       : 'Cloudflare Tunnel token removed from VS Code Secret Storage.');
@@ -467,5 +488,6 @@ module.exports = {
   localTunnelSettings,
   prepareCloudflareCredentialMutation,
   prepareConnectionMutation,
-  tunnelSettings
+  tunnelSettings,
+  withPlatformConnectionMutation
 };
