@@ -11,6 +11,7 @@ import {
   agentProposalChanges,
   assertAgentProposalConflictFree,
   createAgentSnapshot,
+  readAgentBaselineFile,
   readAgentProposalFile,
   readAgentSnapshotManifest,
   removeAgentSnapshot
@@ -22,11 +23,14 @@ import {
 } from './agent-codex-runtime.mjs';
 
 const NAMESPACE = 'codex-collaboration';
-const ACTIVE_STATUSES = new Set(['preparing', 'running']);
+const RUNTIME_ACTIVE_STATUSES = new Set(['preparing', 'running']);
+const APPLY_ACTIVE_STATUSES = new Set(['applying', 'rolling_back', 'recovery_blocked']);
+const ACTIVE_STATUSES = new Set([...RUNTIME_ACTIVE_STATUSES, ...APPLY_ACTIVE_STATUSES]);
 const CONTINUABLE_STATUSES = new Set(['proposal_ready', 'completed', 'failed', 'interrupted']);
 const MAX_TASKS = 20;
 const MAX_TITLE = 200;
 const MAX_OUTPUT = 20_000;
+let collaborationEpoch = 0;
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
@@ -80,6 +84,19 @@ function taskById(state, taskId) {
   return state.tasks.find(item => item.id === String(taskId || '')) || null;
 }
 
+function publicApply(apply) {
+  if (!apply) return null;
+  return {
+    status: apply.status || null,
+    startedAt: apply.startedAt || null,
+    updatedAt: apply.updatedAt || null,
+    changeCount: Array.isArray(apply.changes) ? apply.changes.length : 0,
+    appliedCount: Number.isInteger(apply.appliedCount) ? apply.appliedCount : 0,
+    inFlightIndex: Number.isInteger(apply.inFlightIndex) ? apply.inFlightIndex : null,
+    recoveryFailures: Array.isArray(apply.recoveryFailures) ? clone(apply.recoveryFailures).slice(0, 100) : []
+  };
+}
+
 function publicTask(task) {
   if (!task) return null;
   return {
@@ -97,7 +114,9 @@ function publicTask(task) {
     error: task.error || null,
     output: task.output || '',
     proposal: task.proposal ? clone(task.proposal) : null,
-    snapshotAvailable: task.snapshotAvailable === true
+    snapshotAvailable: task.snapshotAvailable === true,
+    snapshotCleanupPending: task.snapshotCleanupPending === true,
+    apply: publicApply(task.apply)
   };
 }
 
@@ -108,6 +127,17 @@ function collaborationConfig(config = readConfig()) {
 function requireEnabled() {
   if (!collaborationConfig().enabled) {
     throw codedError('Codex Collaboration is OFF. Enable it before delegating a task.', 'codex_collaboration_disabled');
+  }
+}
+
+function captureEnabledEpoch() {
+  requireEnabled();
+  return collaborationEpoch;
+}
+
+function requireEnabledEpoch(epoch) {
+  if (epoch !== collaborationEpoch || !collaborationConfig().enabled) {
+    throw codedError('Codex Collaboration was turned OFF while the task was preparing.', 'codex_collaboration_disabled');
   }
 }
 
@@ -142,7 +172,9 @@ function reserveNewTask({ workspaceId, title }) {
       error: null,
       output: '',
       proposal: null,
-      snapshotAvailable: false
+      snapshotAvailable: false,
+      snapshotCleanupPending: false,
+      apply: null
     };
     state.tasks.push(task);
     if (state.tasks.length > MAX_TASKS) state.tasks = state.tasks.slice(-MAX_TASKS);
@@ -179,6 +211,7 @@ function reserveContinuation(taskId, workspaceId) {
     task.error = null;
     task.turnId = null;
     task.turnStatus = null;
+    task.apply = null;
     task.updatedAt = now();
     state.activeTaskId = task.id;
     return clone(task);
@@ -188,7 +221,8 @@ function reserveContinuation(taskId, workspaceId) {
 function markFailure(taskId, error) {
   try {
     return updateTask(taskId, (task, state) => {
-      task.status = ['codex_turn_idle_timeout', 'codex_turn_timeout', 'codex_transport_closed', 'codex_stopped'].includes(error?.code)
+      if (APPLY_ACTIVE_STATUSES.has(task.status)) return;
+      task.status = ['codex_turn_idle_timeout', 'codex_turn_timeout', 'codex_transport_closed', 'codex_stopped', 'codex_collaboration_disabled'].includes(error?.code)
         ? 'interrupted'
         : 'failed';
       task.error = String(error?.message || error).slice(0, 4000);
@@ -197,6 +231,23 @@ function markFailure(taskId, error) {
     });
   } catch {
     return null;
+  }
+}
+
+async function cleanupTaskSnapshot(taskId) {
+  try {
+    await removeAgentSnapshot(taskId);
+    updateTask(taskId, task => {
+      task.snapshotAvailable = false;
+      task.snapshotCleanupPending = false;
+    });
+    return true;
+  } catch (error) {
+    updateTask(taskId, task => {
+      task.snapshotCleanupPending = true;
+      task.error ||= `Snapshot cleanup pending: ${String(error?.message || error).slice(0, 1000)}`;
+    });
+    return false;
   }
 }
 
@@ -216,13 +267,11 @@ async function finalizeTurn(taskId, result) {
     };
     task.completedAt = now();
     task.status = hasChanges ? 'proposal_ready' : failedTurn ? 'failed' : 'completed';
+    task.apply = null;
     if (failedTurn && result.error) task.error = String(result.error).slice(0, 4000);
     releaseActive(state, task);
   });
-  if (!hasChanges && !failedTurn) {
-    await removeAgentSnapshot(taskId).catch(() => {});
-    updateTask(taskId, task => { task.snapshotAvailable = false; });
-  }
+  if (!hasChanges && !failedTurn) await cleanupTaskSnapshot(taskId);
   return updated;
 }
 
@@ -242,17 +291,20 @@ async function captureActiveTurn(taskId, runtime, threadId, turnPromise) {
   }
 }
 
-async function executeTurn({ task, workspace, prompt }) {
+async function executeTurn({ task, workspace, prompt, epoch }) {
   const runtime = codexRuntime();
   try {
+    requireEnabledEpoch(epoch);
     if (!task.snapshotAvailable) {
       await createAgentSnapshot({ taskId: task.id, workspace });
       updateTask(task.id, current => { current.snapshotAvailable = true; });
     } else {
       await readAgentSnapshotManifest(task.id);
     }
+    requireEnabledEpoch(epoch);
     const cwd = path.join(AGENT_TASK_ROOT, task.id, 'workspace');
     const thread = await runtime.ensureThread({ threadId: task.threadId || '', cwd });
+    requireEnabledEpoch(epoch);
     updateTask(task.id, current => {
       current.threadId = thread.threadId;
       current.status = 'running';
@@ -261,28 +313,31 @@ async function executeTurn({ task, workspace, prompt }) {
 
     const turnPromise = runtime.runTurn({ threadId: thread.threadId, cwd, prompt });
     await captureActiveTurn(task.id, runtime, thread.threadId, turnPromise);
+    requireEnabledEpoch(epoch);
     const result = await turnPromise;
+    requireEnabledEpoch(epoch);
     return finalizeTurn(task.id, result);
   } catch (error) {
+    if (error?.code === 'codex_collaboration_disabled') await shutdownCodexRuntime().catch(() => {});
     markFailure(task.id, error);
     throw error;
   }
 }
 
 export async function startCodexTask({ workspaceId, title = '', prompt }) {
-  requireEnabled();
+  const epoch = captureEnabledEpoch();
   const config = readConfig();
   const workspace = writableWorkspace(config, workspaceId);
   const task = reserveNewTask({ workspaceId: workspace.id, title });
-  return executeTurn({ task, workspace, prompt });
+  return executeTurn({ task, workspace, prompt, epoch });
 }
 
 export async function continueCodexTask({ workspaceId, taskId, prompt }) {
-  requireEnabled();
+  const epoch = captureEnabledEpoch();
   const config = readConfig();
   const workspace = writableWorkspace(config, workspaceId);
   const task = reserveContinuation(taskId, workspace.id);
-  return executeTurn({ task, workspace, prompt });
+  return executeTurn({ task, workspace, prompt, epoch });
 }
 
 export async function steerCodexTask({ workspaceId, taskId, prompt }) {
@@ -301,6 +356,7 @@ export async function interruptCodexTask({ workspaceId, taskId }) {
   const task = taskById(state, taskId);
   if (!task) throw codedError(`Codex task not found: ${taskId}`, 'codex_task_not_found');
   if (task.workspaceId !== workspaceId) throw codedError('Codex task belongs to a different workspace', 'codex_task_workspace_mismatch');
+  if (APPLY_ACTIVE_STATUSES.has(task.status)) throw codedError('Codex proposal apply/recovery cannot be interrupted mid-transaction', 'codex_apply_active');
   let runtimeResult = { interrupted: false };
   if (task.threadId && task.turnId) runtimeResult = await codexRuntime().interrupt(task.threadId, task.turnId).catch(() => ({ interrupted: false }));
   const updated = updateTask(task.id, (current, currentState) => {
@@ -321,24 +377,182 @@ export async function codexProposal({ workspaceId, taskId }) {
   return { task: publicTask(task), ...proposal };
 }
 
-async function rollbackApplied(workspaceId, applied) {
-  const failures = [];
-  const restore = safeFileMutationHandler('restore_backup');
+function sha256Text(text) {
+  return crypto.createHash('sha256').update(String(text ?? ''), 'utf8').digest('hex');
+}
+
+async function classifyWorkspaceChange(workspaceRoot, change) {
+  try {
+    await assertAgentProposalConflictFree({ workspaceRoot, change });
+    return 'before';
+  } catch {}
+  const afterProbe = change.kind === 'delete'
+    ? { ...change, kind: 'create', beforeSha256: null, afterSha256: null }
+    : { ...change, kind: 'modify', beforeSha256: change.afterSha256 };
+  try {
+    await assertAgentProposalConflictFree({ workspaceRoot, change: afterProbe });
+    return 'after';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function reserveApply(taskId, workspaceId, changes) {
+  return mutateState(state => {
+    if (state.activeTaskId && state.activeTaskId !== taskId) {
+      throw codedError(`Codex task ${state.activeTaskId} is already active`, 'codex_task_active');
+    }
+    const task = taskById(state, taskId);
+    if (!task) throw codedError(`Codex task not found: ${taskId}`, 'codex_task_not_found');
+    if (task.workspaceId !== workspaceId) throw codedError('Codex task belongs to a different workspace', 'codex_task_workspace_mismatch');
+    if (task.status !== 'proposal_ready' || !task.snapshotAvailable || task.apply) {
+      throw codedError(`Codex proposal is not ready from status ${task.status}`, 'codex_proposal_not_ready');
+    }
+    const timestamp = now();
+    task.status = 'applying';
+    task.error = null;
+    task.apply = {
+      version: 1,
+      status: 'applying',
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      changes: clone(changes),
+      appliedCount: 0,
+      inFlightIndex: null,
+      recoveryFailures: []
+    };
+    state.activeTaskId = task.id;
+    return clone(task);
+  });
+}
+
+function updateApplyProgress(taskId, updater) {
+  return updateTask(taskId, task => {
+    if (!task.apply || !APPLY_ACTIVE_STATUSES.has(task.status)) {
+      throw codedError('Codex apply transaction state is unavailable', 'codex_apply_state_invalid');
+    }
+    updater(task.apply, task);
+    task.apply.updatedAt = now();
+  });
+}
+
+async function applyOneChange(taskId, workspace, change) {
+  const create = safeFileMutationHandler('create_file');
+  const write = safeFileMutationHandler('write_file');
   const remove = safeFileMutationHandler('delete_file');
-  for (const item of [...applied].reverse()) {
-    try {
-      if (item.kind === 'create') {
-        await remove({ workspaceId, path: item.path, recursive: false });
-      } else if (item.backup) {
-        await restore({ workspaceId, backupPath: item.backup, targetPath: item.path, overwrite: true });
-      } else {
-        failures.push({ path: item.path, error: 'No rollback backup was returned' });
-      }
-    } catch (error) {
-      failures.push({ path: item.path, error: String(error?.message || error).slice(0, 1000) });
+  if (change.kind === 'create') {
+    const content = await readAgentProposalFile(taskId, change.path);
+    if (sha256Text(content) !== change.afterSha256) throw codedError(`Codex proposal changed while applying: ${change.path}`, 'codex_proposal_changed');
+    await create({ workspaceId: workspace.id, path: change.path, content, overwrite: false, createDirs: true, mode: change.mode ?? null });
+  } else if (change.kind === 'modify') {
+    const content = await readAgentProposalFile(taskId, change.path);
+    if (sha256Text(content) !== change.afterSha256) throw codedError(`Codex proposal changed while applying: ${change.path}`, 'codex_proposal_changed');
+    await write({
+      workspaceId: workspace.id,
+      path: change.path,
+      content,
+      append: false,
+      createDirs: false,
+      expectedSha256: change.beforeSha256
+    });
+  } else if (change.kind === 'delete') {
+    await remove({ workspaceId: workspace.id, path: change.path, recursive: false, expectedSha256: change.beforeSha256 });
+  } else {
+    throw codedError(`Unsupported Codex proposal change kind: ${change.kind}`, 'codex_proposal_invalid');
+  }
+  if (await classifyWorkspaceChange(workspace.root, change) !== 'after') {
+    throw codedError(`Codex proposal mutation could not be verified after apply: ${change.path}`, 'codex_proposal_apply_verify_failed');
+  }
+}
+
+async function rollbackOneChange(taskId, workspace, change) {
+  const create = safeFileMutationHandler('create_file');
+  const write = safeFileMutationHandler('write_file');
+  const remove = safeFileMutationHandler('delete_file');
+  const state = await classifyWorkspaceChange(workspace.root, change);
+  if (state === 'before') return { restored: false, alreadyBefore: true };
+  if (state !== 'after') throw codedError(`Workspace diverged while recovering Codex apply: ${change.path}`, 'codex_apply_recovery_conflict', { path: change.path });
+
+  if (change.kind === 'create') {
+    await remove({ workspaceId: workspace.id, path: change.path, recursive: false, expectedSha256: change.afterSha256 });
+  } else {
+    const baseline = await readAgentBaselineFile(taskId, change.path);
+    if (change.kind === 'modify') {
+      await write({
+        workspaceId: workspace.id,
+        path: change.path,
+        content: baseline.text,
+        append: false,
+        createDirs: false,
+        expectedSha256: change.afterSha256
+      });
+    } else if (change.kind === 'delete') {
+      await create({
+        workspaceId: workspace.id,
+        path: change.path,
+        content: baseline.text,
+        overwrite: false,
+        createDirs: true,
+        mode: baseline.mode
+      });
     }
   }
-  return failures;
+  if (await classifyWorkspaceChange(workspace.root, change) !== 'before') {
+    throw codedError(`Codex apply rollback could not verify restored state: ${change.path}`, 'codex_apply_recovery_verify_failed', { path: change.path });
+  }
+  return { restored: true, alreadyBefore: false };
+}
+
+async function rollbackApplyTransaction(taskId, workspace, { strictInFlight = true, reason = 'Codex apply was rolled back' } = {}) {
+  const current = taskById(readState(), taskId);
+  if (!current?.apply || !Array.isArray(current.apply.changes)) {
+    throw codedError('Codex apply transaction state is unavailable', 'codex_apply_state_invalid');
+  }
+  updateApplyProgress(taskId, (apply, task) => {
+    apply.status = 'rolling_back';
+    task.status = 'rolling_back';
+  });
+
+  const apply = taskById(readState(), taskId).apply;
+  const indexes = [];
+  for (let index = 0; index < Math.min(apply.appliedCount || 0, apply.changes.length); index += 1) indexes.push(index);
+  if (Number.isInteger(apply.inFlightIndex) && apply.inFlightIndex >= 0 && apply.inFlightIndex < apply.changes.length && !indexes.includes(apply.inFlightIndex)) {
+    indexes.push(apply.inFlightIndex);
+  }
+  indexes.sort((a, b) => b - a);
+  const failures = [];
+
+  for (const index of indexes) {
+    const change = apply.changes[index];
+    try {
+      const state = await classifyWorkspaceChange(workspace.root, change);
+      const definitelyApplied = index < (apply.appliedCount || 0);
+      if (state === 'before') continue;
+      if (state === 'unknown' && !definitelyApplied && !strictInFlight) continue;
+      if (state === 'unknown') throw codedError(`Workspace state is ambiguous for ${change.path}`, 'codex_apply_recovery_conflict');
+      await rollbackOneChange(taskId, workspace, change);
+    } catch (error) {
+      failures.push({ index, path: change.path, code: error?.code || null, error: String(error?.message || error).slice(0, 1000) });
+    }
+  }
+
+  if (failures.length) {
+    updateApplyProgress(taskId, (next, task) => {
+      next.status = 'recovery_blocked';
+      next.recoveryFailures = failures;
+      task.status = 'recovery_blocked';
+      task.error = `Codex apply recovery is blocked for ${failures.length} change(s)`;
+    });
+    return { recovered: false, blocked: failures };
+  }
+
+  const updated = updateTask(taskId, (task, state) => {
+    task.status = 'proposal_ready';
+    task.error = reason;
+    task.apply = null;
+    releaseActive(state, task);
+  });
+  return { recovered: true, blocked: [], task: publicTask(updated) };
 }
 
 export async function applyCodexProposal({ workspaceId, taskId }) {
@@ -349,7 +563,7 @@ export async function applyCodexProposal({ workspaceId, taskId }) {
   const task = taskById(state, taskId);
   if (!task) throw codedError(`Codex task not found: ${taskId}`, 'codex_task_not_found');
   if (task.workspaceId !== workspace.id) throw codedError('Codex task belongs to a different workspace', 'codex_task_workspace_mismatch');
-  if (task.status !== 'proposal_ready' || !task.snapshotAvailable) throw codedError(`Codex proposal is not ready from status ${task.status}`, 'codex_proposal_not_ready');
+  if (task.status !== 'proposal_ready' || !task.snapshotAvailable || task.apply) throw codedError(`Codex proposal is not ready from status ${task.status}`, 'codex_proposal_not_ready');
 
   const proposal = await agentProposalChanges(task.id);
   if (proposal.blocked.length) {
@@ -357,62 +571,72 @@ export async function applyCodexProposal({ workspaceId, taskId }) {
   }
   if (!proposal.changes.length) throw codedError('Codex proposal has no changes to apply', 'codex_proposal_empty');
 
-  for (const change of proposal.changes) {
-    await assertAgentProposalConflictFree({ workspaceRoot: workspace.root, change });
-  }
+  for (const change of proposal.changes) await assertAgentProposalConflictFree({ workspaceRoot: workspace.root, change });
+  reserveApply(task.id, workspace.id, proposal.changes);
 
-  const create = safeFileMutationHandler('create_file');
-  const write = safeFileMutationHandler('write_file');
-  const remove = safeFileMutationHandler('delete_file');
-  const applied = [];
   try {
-    for (const change of proposal.changes) {
-      if (change.kind === 'create') {
-        const content = await readAgentProposalFile(task.id, change.path);
-        await create({ workspaceId: workspace.id, path: change.path, content, overwrite: false, createDirs: true });
-        applied.push({ kind: 'create', path: change.path, backup: null });
-      } else if (change.kind === 'modify') {
-        const content = await readAgentProposalFile(task.id, change.path);
-        const result = await write({ workspaceId: workspace.id, path: change.path, content, append: false, createDirs: false });
-        applied.push({ kind: 'modify', path: change.path, backup: result?.structuredContent?.backup || null });
-      } else if (change.kind === 'delete') {
-        const result = await remove({ workspaceId: workspace.id, path: change.path, recursive: false });
-        applied.push({ kind: 'delete', path: change.path, backup: result?.structuredContent?.backup || null });
-      }
+    for (let index = 0; index < proposal.changes.length; index += 1) {
+      updateApplyProgress(task.id, apply => { apply.inFlightIndex = index; });
+      await applyOneChange(task.id, workspace, proposal.changes[index]);
+      updateApplyProgress(task.id, apply => {
+        apply.appliedCount = index + 1;
+        apply.inFlightIndex = null;
+      });
     }
   } catch (error) {
-    const rollbackFailures = await rollbackApplied(workspace.id, applied);
-    throw codedError(
-      rollbackFailures.length
-        ? `Codex proposal apply failed and ${rollbackFailures.length} rollback operation(s) also failed`
-        : `Codex proposal apply failed and completed operations were rolled back: ${error?.message || error}`,
-      rollbackFailures.length ? 'codex_proposal_rollback_degraded' : 'codex_proposal_apply_failed',
-      { cause: error, rollbackFailures }
-    );
+    const rollback = await rollbackApplyTransaction(task.id, workspace, {
+      strictInFlight: false,
+      reason: `Codex proposal apply failed and applied changes were rolled back: ${String(error?.message || error).slice(0, 2000)}`
+    });
+    if (!rollback.recovered) {
+      throw codedError(
+        `Codex proposal apply failed and recovery is blocked for ${rollback.blocked.length} change(s)`,
+        'codex_proposal_recovery_blocked',
+        { cause: error, recoveryFailures: rollback.blocked }
+      );
+    }
+    throw codedError(`Codex proposal apply failed and completed changes were rolled back: ${error?.message || error}`, 'codex_proposal_apply_failed', { cause: error });
   }
 
-  const updated = updateTask(task.id, current => {
+  const updated = updateTask(task.id, (current, currentState) => {
     current.status = 'applied';
     current.appliedAt = now();
+    current.apply = null;
+    current.error = null;
     current.proposal = {
       changeCount: proposal.changes.length,
       blockedCount: 0,
       changes: proposal.changes.slice(0, 500),
       blocked: []
     };
+    releaseActive(currentState, current);
   });
-  await removeAgentSnapshot(task.id).catch(() => {});
-  updateTask(task.id, current => { current.snapshotAvailable = false; });
-  return { task: publicTask(updated), applied: applied.map(item => ({ kind: item.kind, path: item.path })) };
+  await cleanupTaskSnapshot(task.id);
+  return { task: publicTask(updated), applied: proposal.changes.map(item => ({ kind: item.kind, path: item.path })) };
 }
 
-export function configureCodexCollaboration(enabled) {
+export async function configureCodexCollaboration(enabled) {
   if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
+  collaborationEpoch += 1;
   const config = mutateConfig(current => {
     current.agent ||= {};
     current.agent.codexCollaborationEnabled = enabled;
     return current;
   });
+  if (!enabled) {
+    await shutdownCodexRuntime().catch(() => {});
+    mutateState(state => {
+      for (const task of state.tasks) {
+        if (!RUNTIME_ACTIVE_STATUSES.has(task.status)) continue;
+        task.status = 'interrupted';
+        task.error = 'Codex Collaboration was turned OFF';
+        task.turnStatus = null;
+        task.updatedAt = now();
+        releaseActive(state, task);
+      }
+      return true;
+    });
+  }
   return { enabled: config.agent?.codexCollaborationEnabled === true };
 }
 
@@ -427,6 +651,7 @@ export function codexCollaborationStatus() {
       maxActiveTasks: 1,
       realWorkspaceDirectWriteByCodex: false,
       applyRequiresSnapshotConflictCheck: true,
+      applyCrashRecovery: true,
       strongOsReadIsolation: false
     }
   };
@@ -442,11 +667,7 @@ function registerCodexTools(server) {
   register('codex_collaboration_status', 'Codex Collaboration status', 'Inspect the optional supervised Codex collaboration runtime and recent tasks.', z.object({}), ro,
     async () => toolText(codexCollaborationStatus()));
   register('codex_collaboration_configure', 'Configure Codex Collaboration', 'Turn supervised Codex collaboration on or off without changing other DevMate behavior.', z.object({ enabled: z.boolean() }), rw,
-    async ({ enabled }) => {
-      const result = configureCodexCollaboration(enabled);
-      if (!enabled) await shutdownCodexRuntime();
-      return toolText(result);
-    });
+    async ({ enabled }) => toolText(await configureCodexCollaboration(enabled)));
   register('codex_task_start', 'Start Codex task', 'Delegate one engineering task to Codex inside an isolated DevMate snapshot.', z.object({
     workspaceId: z.string().min(1), title: z.string().max(MAX_TITLE).optional(), prompt: z.string().min(1).max(100_000)
   }), rw, async args => toolText({ task: publicTask(await startCodexTask(args)) }));
@@ -478,13 +699,16 @@ export function installCodexCollaborationCapability(McpServerClass) {
 export async function shutdownCodexCollaboration() {
   const state = readState();
   if (state.activeTaskId) {
-    try {
-      updateTask(state.activeTaskId, (task, current) => {
-        task.status = 'interrupted';
-        task.error = 'Gateway stopped while Codex task was active';
-        releaseActive(current, task);
-      });
-    } catch {}
+    const active = taskById(state, state.activeTaskId);
+    if (active && RUNTIME_ACTIVE_STATUSES.has(active.status)) {
+      try {
+        updateTask(active.id, (task, current) => {
+          task.status = 'interrupted';
+          task.error = 'Gateway stopped while Codex task was active';
+          releaseActive(current, task);
+        });
+      } catch {}
+    }
   }
   return shutdownCodexRuntime();
 }
@@ -492,30 +716,68 @@ export async function shutdownCodexCollaboration() {
 export function recoverCodexCollaborationAfterRestart() {
   mutateState(state => {
     for (const task of state.tasks) {
-      if (!ACTIVE_STATUSES.has(task.status)) continue;
+      if (!RUNTIME_ACTIVE_STATUSES.has(task.status)) continue;
       task.status = 'interrupted';
       task.error = 'Previous Gateway exited while Codex task was active';
       task.updatedAt = now();
+      releaseActive(state, task);
     }
-    state.activeTaskId = null;
     return true;
   });
+}
+
+export async function recoverCodexApplyAfterFileTransactions() {
+  const config = readConfig();
+  const state = readState();
+  const recovered = [];
+  const blocked = [];
+  for (const task of state.tasks) {
+    if (!APPLY_ACTIVE_STATUSES.has(task.status) || !task.apply) continue;
+    let workspace;
+    try {
+      workspace = writableWorkspace(config, task.workspaceId);
+      const result = await rollbackApplyTransaction(task.id, workspace, {
+        strictInFlight: true,
+        reason: 'Previous Gateway exited during Codex proposal apply; the workspace was restored to the pre-apply snapshot state'
+      });
+      if (result.recovered) recovered.push({ taskId: task.id });
+      else blocked.push({ taskId: task.id, failures: result.blocked });
+    } catch (error) {
+      const failure = { taskId: task.id, code: error?.code || null, error: String(error?.message || error).slice(0, 2000) };
+      blocked.push(failure);
+      try {
+        updateApplyProgress(task.id, (apply, current) => {
+          apply.status = 'recovery_blocked';
+          apply.recoveryFailures = [failure];
+          current.status = 'recovery_blocked';
+          current.error = `Codex apply recovery is blocked: ${failure.error}`;
+        });
+      } catch {}
+    }
+  }
+  return { recovered, blocked };
 }
 
 recoverCodexCollaborationAfterRestart();
 
 export const __test = {
   ACTIVE_STATUSES,
+  APPLY_ACTIVE_STATUSES,
   CONTINUABLE_STATUSES,
   MAX_TASKS,
+  RUNTIME_ACTIVE_STATUSES,
   captureActiveTurn,
+  classifyWorkspaceChange,
   collaborationConfig,
   emptyState,
   normalizeState,
   publicTask,
   readState,
   registerCodexTools,
+  reserveApply,
   reserveContinuation,
   reserveNewTask,
+  rollbackApplyTransaction,
+  updateApplyProgress,
   writableWorkspace
 };
