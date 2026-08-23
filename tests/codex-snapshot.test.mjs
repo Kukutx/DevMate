@@ -79,6 +79,28 @@ test('baseline integrity is verified before it can be used for rollback', async 
   await fsp.writeFile(baselinePath, original, 'utf8');
 });
 
+test('permission-only snapshot proposals are explicit blocked changes instead of silent no-ops', { skip: process.platform === 'win32' }, async () => {
+  const modeTaskId = 'codex-mode-test-123456';
+  const rel = 'mode-script.sh';
+  const real = path.join(workspace, rel);
+  await fsp.writeFile(real, '#!/bin/sh\necho safe\n', 'utf8');
+  await fsp.chmod(real, 0o644);
+  try {
+    const created = await snapshot.createAgentSnapshot({ taskId: modeTaskId, workspace: workspaceRecord });
+    await fsp.chmod(path.join(created.cwd, rel), 0o755);
+    const proposal = await snapshot.agentProposalChanges(modeTaskId);
+    assert.equal(proposal.changes.some(item => item.path === rel), false);
+    const blocked = proposal.blocked.find(item => item.path === rel);
+    assert.ok(blocked);
+    assert.match(blocked.reason, /permission mode changes/);
+    assert.equal(blocked.beforeMode, 0o644);
+    assert.equal(blocked.afterMode, 0o755);
+  } finally {
+    await snapshot.removeAgentSnapshot(modeTaskId).catch(() => {});
+    await fsp.rm(real, { force: true });
+  }
+});
+
 test('proposal conflict validation protects dirty real-workspace state from stale Codex changes', async () => {
   const proposal = await snapshot.agentProposalChanges(taskId);
   const modify = proposal.changes.find(item => item.path === 'app.js');
