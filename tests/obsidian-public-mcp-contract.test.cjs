@@ -28,19 +28,26 @@ test('Obsidian Start owns the complete lifecycle and recovery never rewrites sha
   assert.match(block, /lifecycleCancelled[\s\S]*this\.controller\.stop\(\)/);
 });
 
-test('Obsidian Ready is bound to the current Gateway+tunnel generation and auth mode', () => {
+test('Obsidian Ready is bound to current Gateway, tunnel, auth and connection policy generations', () => {
   const main = source('obsidian-plugin/src/main.js');
   const shared = source('host/shared-public-mcp-verification.js');
+  const evidence = source('shared/public-ingress-verification.cjs');
   assert.match(main, /recordGeneration/);
   assert.match(main, /verifiedForCurrentRecord/);
   assert.match(main, /verifySharedPublicMcp/);
   assert.match(main, /publicConnectionStability/);
   assert.match(main, /const generation = recordGeneration\(initialRecord\)/);
   assert.match(main, /expectedRecord: initialRecord/);
+  assert.match(shared, /authPolicySnapshot\(config\)/);
+  assert.match(shared, /connectionPolicySnapshot\(config\)/);
+  assert.match(shared, /connectionPolicyMatches\(currentConfig, expectedConnectionPolicy\)/);
   assert.match(shared, /successfulVerificationPatch\(/);
-  assert.match(shared, /currentGatewayLock\(\)/);
-  assert.match(shared, /config\.auth\?\.mode \|\| 'oauth'/);
+  assert.match(shared, /expectedAuthPolicy\.generation/);
+  assert.match(shared, /expectedConnectionPolicy\.generation/);
   assert.match(shared, /recordGeneration\(record\) !== generation/);
+  assert.match(evidence, /lastAuthGeneration/);
+  assert.match(evidence, /lastConnectionPolicyGeneration/);
+  assert.match(evidence, /runtimeMatchesConnection\(config, record\)\.matches/);
   assert.match(main, /const verified = !!tunnel\.record && verifiedForCurrentRecord\(config, tunnel\.record\)/);
   assert.doesNotMatch(main, /lastVerifiedPublicUrl\s*===\s*tunnel\.publicUrl/);
 });
