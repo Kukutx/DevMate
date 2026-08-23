@@ -20,7 +20,7 @@ const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
 const { currentWorkspaceRoot, resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
-const { TunnelController } = require('./vscode-host/tunnel-controller.js');
+const { DesktopTunnelController } = require('./vscode-host/desktop-tunnel-controller.js');
 const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const {
   clearTunnelController,
@@ -306,7 +306,7 @@ async function activateInternal(context) {
     runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
     localTunnelSettings();
     ensureSharedDesktopConfig(runtimeStateDirectory);
-    runtime = new TunnelController({
+    runtime = new DesktopTunnelController({
       stateDirectory: runtimeStateDirectory,
       settings: () => tunnelSettings(runtimeStateDirectory),
       getSecrets: () => tunnelSecrets(context),
