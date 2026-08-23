@@ -86,14 +86,14 @@ test('configuration-conflict cleanup is retried while stale runtime remains but 
   }
 });
 
-test('VS Code conflict cleanup stops the stale owner and delegates restart to requested-session recovery', () => {
+test('VS Code conflict cleanup stops the stale owner and delegates restart to shared running-session recovery', () => {
   const root = path.resolve(__dirname, '..');
   const wrapper = fs.readFileSync(path.join(root, 'extension-entry-shared-tunnel.js'), 'utf8');
   assert.match(wrapper, /onConfigurationConflict: async \(\) => stopConfigurationConflict\(\)/);
   assert.match(wrapper, /const result = await runtime\.stop\(\)/);
   assert.match(wrapper, /shared connection configuration changed/);
-  assert.match(wrapper, /tunnelSessionRequested\(\)/);
-  assert.match(wrapper, /requested DevMate session will recover with the current shared connection configuration/);
+  assert.match(wrapper, /sharedSessionRequested\(\)/);
+  assert.match(wrapper, /shared running session will recover with the current connection configuration/);
   const start = wrapper.indexOf('async function stopConfigurationConflict');
   const end = wrapper.indexOf('function createPublicVerifier', start);
   assert.ok(start >= 0 && end > start);
