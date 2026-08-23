@@ -58,19 +58,26 @@ test('VS Code wrapper chain forwards preserveSession instead of reconstructing l
   assert.doesNotMatch(lifecycle, /host-deactivation-handoff/);
 });
 
-test('desktop child processes have parent-death fencing and fail closed on unconfirmed provider cleanup', () => {
+test('desktop child processes have parent-death fencing and provider cleanup keeps the ownership fence alive until confirmed', () => {
   const gatewayController = source('host/runtime/process-controller.js');
   const gatewayRuntime = source('gateway/server-runtime.mjs');
   const tunnel = source('vscode-host/tunnel-controller.js');
+  const supervised = source('host/runtime/supervised-child-process.js');
   const supervisor = source('host/runtime/provider-supervisor.js');
+  const sharedTunnel = source('vscode-host/shared-tunnel-record-store.js');
 
   assert.match(gatewayController, /stdio:\s*\[['"]ignore['"],\s*['"]pipe['"],\s*['"]pipe['"],\s*['"]ipc['"]\]/);
   assert.match(gatewayRuntime, /process\.once\(['"]disconnect['"],\s*\(\) => shutdownAndExit\(['"]parent-disconnect['"]\)\)/);
   assert.match(tunnel, /createSupervisedChildProcess/);
   assert.match(supervisor, /process\.once\(['"]disconnect['"]/);
   assert.match(supervisor, /terminateProcessTree/);
-  assert.match(supervisor, /result\?\.exitConfirmed === false/);
-  assert.match(supervisor, /exitCode = 1/);
+  assert.match(supervisor, /while \(childActive\(child\)\)/);
+  assert.match(supervisor, /await delay\(CLEANUP_RETRY_MS\)/);
+  assert.match(supervised, /supervisor\.forceTerminate = \(\) =>/);
+  assert.match(supervised, /devmate:provider-stop/);
+  assert.doesNotMatch(supervised, /forceTerminate[\s\S]{0,400}SIGKILL/);
+  assert.match(sharedTunnel, /value\.childKind === ['"]supervisor['"] && processAlive\(value\.childPid\)/);
+  assert.match(sharedTunnel, /DEVMATE_TUNNEL_SUPERVISOR_CLEANUP_PENDING/);
   assert.match(supervisor, /provider\.once\(['"]error['"][\s\S]*shutdown\(['"]provider-error['"], 1\)/);
   assert.match(supervisor, /provider\.once\(['"]close['"]/);
 });
