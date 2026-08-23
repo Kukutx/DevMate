@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
+const { ensureDesktopAuthenticationPolicy, setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { connectionErrorSummary } = require('../host/public-mcp.js');
@@ -14,6 +15,7 @@ const {
 } = require('./runtime-context.js');
 
 const RELOAD_SETTINGS = ['devMate.sharedStateDirectory'];
+const AUTHENTICATION_SETTING = 'devMate.authenticationMode';
 
 class VscodeHostLifecycle {
   constructor({ vscode, platformExtension = null, runtimeSnapshot = null }) {
@@ -57,13 +59,26 @@ class VscodeHostLifecycle {
     this.runtimeContext = createRuntimeContext(this.vscode, context);
     this.workspaceRootAtActivation = currentWorkspaceRoot(this.vscode);
     if (this.workspaceRootAtActivation) {
+      const configFile = runtimeConfigPath(this.runtimeContext);
+      const fresh = !fs.existsSync(configFile);
       ensureInstanceConfig({
-        configFile: runtimeConfigPath(this.runtimeContext),
+        configFile,
         workspaceRoot: this.workspaceRootAtActivation,
         preferredPort: Number(setting(this.vscode, 'port', 8787)),
         appVersion: context.extension?.packageJSON?.version || APP_VERSION,
         defaultConnectionProvider: 'ngrok'
       });
+      const policy = ensureDesktopAuthenticationPolicy(configFile, { fresh });
+      const localMode = setting(this.vscode, 'authenticationMode', 'oauth') === 'none' ? 'none' : 'oauth';
+      if (localMode !== policy.mode) {
+        try {
+          await this.vscode.workspace.getConfiguration('devMate').update(
+            'authenticationMode',
+            policy.mode,
+            this.vscode.ConfigurationTarget?.Global ?? true
+          );
+        } catch {}
+      }
     }
 
     this.output = this.vscode.window.createOutputChannel('DevMate Host');
@@ -101,6 +116,22 @@ class VscodeHostLifecycle {
 
   registerHostListeners(context) {
     context.subscriptions.push(this.vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration(AUTHENTICATION_SETTING) && this.runtimeContext) {
+        try {
+          const requested = setting(this.vscode, 'authenticationMode', 'oauth') === 'none' ? 'none' : 'oauth';
+          const policy = setDesktopAuthenticationMode(runtimeConfigPath(this.runtimeContext), requested);
+          this.diagnostics?.append(`Shared MCP authentication changed explicitly to ${policy.mode}.`);
+          if (this.active) {
+            this.vscode.commands.executeCommand('devMate.start', { quiet: true }).then(
+              () => {},
+              error => this.diagnostics?.recordFailure(error, { phase: 'authentication-change' })
+            );
+          }
+        } catch (error) {
+          this.diagnostics?.recordFailure(error, { phase: 'authentication-change' });
+        }
+      }
+
       if (!RELOAD_SETTINGS.some(name => event.affectsConfiguration(name))) return;
       this.diagnostics?.append('A host-level setting changed and requires a VS Code window reload.');
       this.vscode.window.showInformationMessage(
@@ -271,4 +302,4 @@ class VscodeHostLifecycle {
   }
 }
 
-module.exports = { RELOAD_SETTINGS, VscodeHostLifecycle };
+module.exports = { AUTHENTICATION_SETTING, RELOAD_SETTINGS, VscodeHostLifecycle };
