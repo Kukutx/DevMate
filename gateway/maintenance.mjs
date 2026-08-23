@@ -2,11 +2,24 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import maintenanceConfig from '../shared/maintenance-config.cjs';
+import recoveryArtifactStore from '../shared/recovery-artifacts.cjs';
 import { withAuditLogLock } from './audit-log-coordinator.mjs';
 import { withStartupStage } from './startup-progress.mjs';
 
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
+const {
+  DEFAULT_MAX_RECOVERY_BYTES,
+  DEFAULT_MAX_RECOVERY_FILES,
+  DEFAULT_RECOVERY_RETENTION_DAYS,
+  pruneRecoveryArtifacts,
+  recoveryArtifacts
+} = recoveryArtifactStore;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const STATE_RECOVERY_MATCHERS = Object.freeze([
+  /^runtime-state\.json\.corrupt-/,
+  /^oauth-secrets\.json\.corrupt-/,
+  /^tunnel\.runtime\.json\.(?:corrupt|invalid-json|invalid-record|oversized)-/
+]);
 
 export { DEFAULT_MAINTENANCE };
 
@@ -32,6 +45,58 @@ export function maintenanceOptions(input = {}) {
 function isInside(root, target) {
   const rel = path.relative(root, target);
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function recoveryLocations(paths = {}) {
+  const stateRoot = path.resolve(String(paths.stateRoot || ''));
+  const configDirectory = path.dirname(stateRoot);
+  const configFile = path.resolve(String(paths.configFile || path.join(configDirectory, 'config.json')));
+  if (path.dirname(configFile) !== configDirectory) {
+    throw new Error('Maintenance configFile must share the parent directory of stateRoot');
+  }
+  const configBase = escapeRegex(path.basename(configFile));
+  return {
+    stateRoot,
+    configDirectory,
+    configFile,
+    configMatchers: [
+      new RegExp(`^${configBase}\\.(?:corrupt|replaced)-`),
+      new RegExp(`^${configBase}\\.legacy-v\\d+-.*\\.json$`)
+    ]
+  };
+}
+
+export function recoveryStateSummary(paths = {}) {
+  const locations = recoveryLocations(paths);
+  const config = recoveryArtifacts(locations.configDirectory, locations.configMatchers);
+  const state = recoveryArtifacts(locations.stateRoot, STATE_RECOVERY_MATCHERS);
+  const configBytes = config.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const stateBytes = state.reduce((sum, item) => sum + item.sizeBytes, 0);
+  return {
+    configFiles: config.length,
+    configBytes,
+    stateFiles: state.length,
+    stateBytes,
+    totalFiles: config.length + state.length,
+    totalBytes: configBytes + stateBytes
+  };
+}
+
+export function pruneRecoveryState(paths = {}, nowMs = Date.now()) {
+  const locations = recoveryLocations(paths);
+  const options = {
+    retentionDays: DEFAULT_RECOVERY_RETENTION_DAYS,
+    maxFiles: DEFAULT_MAX_RECOVERY_FILES,
+    maxBytes: DEFAULT_MAX_RECOVERY_BYTES
+  };
+  return {
+    config: pruneRecoveryArtifacts(locations.configDirectory, { ...options, matchers: locations.configMatchers }, nowMs),
+    state: pruneRecoveryArtifacts(locations.stateRoot, { ...options, matchers: STATE_RECOVERY_MATCHERS }, nowMs)
+  };
 }
 
 async function statOrNull(file) {
@@ -100,6 +165,7 @@ async function listBackupSets(backupRoot) {
 export async function stateSummary(paths) {
   const backupSets = await listBackupSets(paths.backupRoot);
   const auditStat = await statOrNull(paths.auditLog);
+  const recovery = recoveryStateSummary(paths);
   let auditEntries = 0;
   try {
     const text = await fsp.readFile(paths.auditLog, 'utf8');
@@ -110,7 +176,9 @@ export async function stateSummary(paths) {
     backupFiles: backupSets.reduce((sum, item) => sum + item.fileCount, 0),
     backupBytes: backupSets.reduce((sum, item) => sum + item.sizeBytes, 0),
     auditEntries,
-    auditBytes: auditStat?.size || 0
+    auditBytes: auditStat?.size || 0,
+    recoveryFiles: recovery.totalFiles,
+    recoveryBytes: recovery.totalBytes
   };
 }
 
@@ -210,8 +278,9 @@ export function pruneState(paths, options = {}, nowMs = Date.now()) {
     await fsp.mkdir(paths.stateRoot, { recursive: true });
     await fsp.mkdir(paths.backupRoot, { recursive: true });
     const opts = maintenanceOptions(options);
+    const recovery = pruneRecoveryState(paths, nowMs);
     const backups = await pruneBackups(paths.backupRoot, opts, nowMs);
     const audit = await pruneAuditLog(paths.auditLog, opts, nowMs);
-    return { options: opts, backups, audit };
+    return { options: opts, recovery, backups, audit };
   });
 }
