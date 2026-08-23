@@ -1,7 +1,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import { isMainThread, parentPort } from 'node:worker_threads';
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer } from '@modelcontextprotocol/server';
 import permissionConfig from '../shared/permission-config.cjs';
 import oauthSecrets from '../shared/oauth-secrets.cjs';
 import portConfig from '../shared/port.cjs';
@@ -21,6 +21,8 @@ import { shutdownJobRuntime } from './job-runtime.mjs';
 import { drainRuntimeMaintenance, startRuntimeMaintenance, stopRuntimeMaintenance } from './runtime-maintenance.mjs';
 import { beginStartupProgress, completeStartupProgress, enterStartupStage, failStartupProgress } from './startup-progress.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
+import { recoverFileTransactions } from './file-transactions.mjs';
+import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
 
 const { validatePermissionConfig } = permissionConfig;
 const { strictPort } = portConfig;
@@ -29,12 +31,15 @@ const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
 const STATE_ROOT = CONFIG_DIR ? path.join(CONFIG_DIR, 'state') : '';
 const BACKUP_ROOT = STATE_ROOT ? path.join(STATE_ROOT, 'backups') : '';
 const AUDIT_LOG = STATE_ROOT ? path.join(STATE_ROOT, 'audit.jsonl') : '';
+const FILE_TRANSACTION_ROOT = STATE_ROOT ? path.join(STATE_ROOT, 'file-transactions') : '';
+const SHUTDOWN_HEALTH = STATE_ROOT ? path.join(STATE_ROOT, 'shutdown-health.json') : '';
 const DESKTOP_LIFECYCLE_FENCE = process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE === '1';
 const LIFECYCLE_WATCH_MS = 500;
 
 beginStartupProgress('runtime_config');
 
 let httpBootstrap = null;
+let instanceLockAcquired = false;
 try {
   const startupConfig = readConfig();
   strictPort(startupConfig.server?.port, { label: 'server.port' });
@@ -44,10 +49,27 @@ try {
     error.code = 'DEVMATE_GATEWAY_LIFECYCLE_STOPPED';
     throw error;
   }
-  if (startupConfig.auth?.mode === 'oauth') oauthSecrets.readOAuthSecrets(process.env.DEVMATE_CONFIG);
+  if (startupConfig.auth?.mode === 'oauth') oauthSecrets.readOAuthSecrets(CONFIG_PATH);
 
   enterStartupStage('instance_lock');
   acquireGatewayInstanceLock();
+  instanceLockAcquired = true;
+
+  enterStartupStage('file_transaction_recovery');
+  const workspaceRoots = [
+    ...(Array.isArray(startupConfig.workspaces) ? startupConfig.workspaces : []).map(item => item?.root),
+    ...(Array.isArray(startupConfig.trustedWritableRoots) ? startupConfig.trustedWritableRoots : []).map(item => item?.root || item?.path || item)
+  ].filter(Boolean);
+  const fileRecovery = await recoverFileTransactions({
+    transactionRoot: FILE_TRANSACTION_ROOT,
+    workspaceRoots
+  });
+  if (fileRecovery.blocked.length) {
+    const error = new Error(`DevMate file transaction recovery is blocked for ${fileRecovery.blocked.length} transaction(s)`);
+    error.code = 'DEVMATE_FILE_TRANSACTION_RECOVERY_BLOCKED';
+    error.blocked = fileRecovery.blocked;
+    throw error;
+  }
 
   enterStartupStage('platform_capabilities');
   const createdHttpServers = new Set();
@@ -89,39 +111,77 @@ try {
     });
   }
 
+  async function cleanupStep(failures, label, fn) {
+    try {
+      await fn();
+    } catch (error) {
+      const failure = {
+        label,
+        code: error?.code ? String(error.code) : null,
+        message: String(error?.message || error).slice(0, 2000)
+      };
+      failures.push(failure);
+      console.error(`DevMate shutdown cleanup failed (${label}): ${failure.message}`);
+    }
+  }
+
   let lifecycleWatch = null;
   let shutdownPromise = null;
   async function shutdown(reason = '') {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
+      const failures = [];
       if (lifecycleWatch) clearInterval(lifecycleWatch);
       lifecycleWatch = null;
-      try { stopRuntimeMaintenance(); } catch {}
-      try { await drainRuntimeMaintenance(); } catch {}
-      try { await Promise.all([...createdHttpServers].map(server => closeHttpServer(server))); } catch {}
-      try { await drainAllAuditLogs(); } catch {}
-      try { await shutdownJobRuntime(); } catch {}
-      try { await shutdownPluginServices(); } catch {}
-      try { await shutdownTeamServices(); } catch {}
-      try { await shutdownPersistentProcesses(); } catch {}
-      try { await shutdownCommandProcesses(); } catch {}
-      try { resetRunnerControlState(); } catch {}
-      try { resetRequestGuardState(); } catch {}
-      try { releaseGatewayInstanceLock(); } catch {}
-      try { parentPort?.postMessage({ type: 'devmate:shutdown-complete', reason }); } catch {}
-      try { if (process.connected) process.send?.({ type: 'devmate:shutdown-complete', reason }); } catch {}
+      await cleanupStep(failures, 'stop-runtime-maintenance', async () => stopRuntimeMaintenance());
+      await cleanupStep(failures, 'drain-runtime-maintenance', () => drainRuntimeMaintenance());
+      await cleanupStep(failures, 'close-http', () => Promise.all([...createdHttpServers].map(server => closeHttpServer(server))));
+      await cleanupStep(failures, 'drain-audit', () => drainAllAuditLogs());
+      await cleanupStep(failures, 'jobs', () => shutdownJobRuntime());
+      await cleanupStep(failures, 'plugins', () => shutdownPluginServices());
+      await cleanupStep(failures, 'team', () => shutdownTeamServices());
+      await cleanupStep(failures, 'persistent-processes', () => shutdownPersistentProcesses());
+      await cleanupStep(failures, 'command-processes', () => shutdownCommandProcesses());
+      await cleanupStep(failures, 'runner-control', async () => resetRunnerControlState());
+      await cleanupStep(failures, 'request-guard', async () => resetRequestGuardState());
+      await cleanupStep(failures, 'instance-lock', async () => {
+        releaseGatewayInstanceLock();
+        instanceLockAcquired = false;
+      });
+      await cleanupStep(failures, 'parent-port-notify', async () => parentPort?.postMessage({ type: 'devmate:shutdown-complete', reason, degraded: failures.length > 0 }));
+      await cleanupStep(failures, 'parent-process-notify', async () => {
+        if (process.connected) process.send?.({ type: 'devmate:shutdown-complete', reason, degraded: failures.length > 0 });
+      });
+
+      if (failures.length) {
+        const error = new Error(`DevMate shutdown completed with ${failures.length} cleanup failure(s)`);
+        error.code = 'DEVMATE_SHUTDOWN_DEGRADED';
+        error.failures = failures;
+        await writeDegradedHealth(SHUTDOWN_HEALTH, error);
+      } else {
+        await clearHealthMarker(SHUTDOWN_HEALTH);
+      }
+      return { reason, failures };
     })();
-    await shutdownPromise;
     return shutdownPromise;
   }
 
   function shutdownAndExit(reason) {
-    void shutdown(reason).finally(() => process.exit(0));
+    void shutdown(reason).then(
+      result => process.exit(result.failures.length ? 1 : 0),
+      error => {
+        console.error(`DevMate shutdown failed: ${error?.message || error}`);
+        process.exit(1);
+      }
+    );
   }
 
   process.once('SIGINT', () => shutdownAndExit('SIGINT'));
   process.once('SIGTERM', () => shutdownAndExit('SIGTERM'));
-  process.once('exit', () => { try { releaseGatewayInstanceLock(); } catch {} });
+  process.once('exit', () => {
+    if (!instanceLockAcquired) return;
+    try { releaseGatewayInstanceLock(); } catch {}
+  });
 
   if (typeof process.send === 'function') {
     process.once('disconnect', () => shutdownAndExit('parent-disconnect'));
@@ -154,17 +214,24 @@ try {
       if (shutdownPromise) return;
       try {
         if (readConfig().lifecycle?.desiredState !== 'running') shutdownAndExit('lifecycle-stopped');
-      } catch {}
+      } catch (error) {
+        console.error(`DevMate lifecycle config became unavailable: ${error?.message || error}`);
+        shutdownAndExit('lifecycle-config-unavailable');
+      }
     }, LIFECYCLE_WATCH_MS);
     lifecycleWatch.unref?.();
   }
 
   startRuntimeMaintenance({
-    paths: { stateRoot: STATE_ROOT, backupRoot: BACKUP_ROOT, auditLog: AUDIT_LOG },
+    paths: { stateRoot: STATE_ROOT, backupRoot: BACKUP_ROOT, auditLog: AUDIT_LOG, configFile: CONFIG_PATH },
     getOptions: () => readConfig().maintenance || {}
   });
   completeStartupProgress('server_module_loaded');
 } catch (error) {
+  if (instanceLockAcquired) {
+    try { releaseGatewayInstanceLock(); } catch {}
+    instanceLockAcquired = false;
+  }
   failStartupProgress(error);
   throw error;
 } finally {
