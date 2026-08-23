@@ -65,6 +65,55 @@ function cleanPublicUrl(value) {
   return value.trim();
 }
 
+function connectionPolicyGeneration(config) {
+  const connection = object(config?.connection, 'connection');
+  return strictInteger(
+    connection.policyGeneration,
+    0,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    'connection.policyGeneration'
+  );
+}
+
+function connectionPolicySnapshot(config) {
+  const connection = object(config?.connection, 'connection');
+  return Object.freeze({
+    provider: strictEnum(connection.provider, CONNECTION_PROVIDERS, 'ngrok', 'connection provider'),
+    publicUrl: cleanPublicUrl(connection.publicUrl),
+    generation: connectionPolicyGeneration(config)
+  });
+}
+
+function setConnectionPolicy(config, { provider, publicUrl } = {}) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new TypeError('DevMate config must be an object');
+  const current = connectionPolicySnapshot(config);
+  const nextProvider = provider === undefined
+    ? current.provider
+    : strictEnum(provider, CONNECTION_PROVIDERS, current.provider, 'connection provider');
+  const nextPublicUrl = publicUrl === undefined ? current.publicUrl : cleanPublicUrl(publicUrl);
+  const changed = nextProvider !== current.provider || nextPublicUrl !== current.publicUrl;
+
+  if (changed && current.generation >= Number.MAX_SAFE_INTEGER) {
+    const error = new Error('DevMate connection policy generation is exhausted');
+    error.code = 'connection_policy_generation_exhausted';
+    throw error;
+  }
+
+  config.connection = {
+    ...object(config.connection, 'connection'),
+    provider: nextProvider,
+    publicUrl: nextPublicUrl,
+    policyGeneration: changed ? current.generation + 1 : current.generation
+  };
+  return Object.freeze({
+    provider: nextProvider,
+    publicUrl: nextPublicUrl,
+    generation: config.connection.policyGeneration,
+    changed
+  });
+}
+
 function assertSupportedInstanceShape(config) {
   const team = config?.team;
   const unsupported = Object.hasOwn(config, 'deployment')
@@ -98,7 +147,8 @@ function normalizeInstanceConfig(config) {
   config.connection = {
     ...previousConnection,
     provider: strictEnum(previousConnection.provider, CONNECTION_PROVIDERS, 'ngrok', 'connection provider'),
-    publicUrl: cleanPublicUrl(previousConnection.publicUrl)
+    publicUrl: cleanPublicUrl(previousConnection.publicUrl),
+    policyGeneration: strictInteger(previousConnection.policyGeneration, 0, 0, Number.MAX_SAFE_INTEGER, 'connection.policyGeneration')
   };
 
   // No-auth is the default for local and public MCP access. OAuth remains optional;
@@ -139,7 +189,11 @@ function normalizeInstanceConfig(config) {
 
 function connectionState(config) {
   const normalized = normalizeInstanceConfig(config);
-  return { provider: normalized.connection.provider, publicUrl: normalized.connection.publicUrl };
+  return {
+    provider: normalized.connection.provider,
+    publicUrl: normalized.connection.publicUrl,
+    policyGeneration: normalized.connection.policyGeneration
+  };
 }
 
 function accessState(config) {
@@ -160,9 +214,12 @@ module.exports = {
   TEAM_ROLES,
   accessState,
   assertSupportedInstanceShape,
+  connectionPolicyGeneration,
+  connectionPolicySnapshot,
   connectionState,
   normalizeInstanceConfig,
   normalizeLifecycle,
+  setConnectionPolicy,
   strictBoolean,
   strictEnum,
   strictInteger,
