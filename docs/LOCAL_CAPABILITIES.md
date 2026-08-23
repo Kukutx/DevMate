@@ -14,7 +14,7 @@ These features extend convenience without turning the normal file tools into unr
 - Adding or removing a trusted writable root requires the `fullAccess` permission profile.
 - Persistent process execution is blocked by `readOnly` and follows the existing dangerous-command guard in `balanced` mode.
 - Processes run as the operating-system user that launched VS Code. DevMate cannot bypass UAC, filesystem ACLs, `sudo`, containers, Remote SSH boundaries, or other OS controls.
-- Public MCP uses the direct no-auth default. OAuth is available only when a shared or published app needs it.
+- Public MCP defaults to OAuth. Explicit `auth.mode: "none"` is limited to trusted loopback-only MCP and never authorizes a remote request.
 
 ## Trusted writable roots
 
@@ -52,7 +52,7 @@ Trusted roots do not disable the existing safe-path policy. Normal file tools co
 - databases, logs, and unsupported binary files;
 - paths that escape the trusted root through `..`, symlinks, or reparse points.
 
-Arbitrary shell commands remain intentionally powerful under `fullAccess`; review the connection token and only trust directories needed for development.
+Arbitrary shell commands remain intentionally powerful under `fullAccess`; use that profile only for trusted development workspaces.
 
 ## Persistent processes
 
@@ -106,7 +106,9 @@ Use `configure_local_capabilities` to adjust the first two values. Use `local_ca
 
 This avoids leaving common child processes, watchers, and shells orphaned after a stop request.
 
-## Recommended private-use configuration
+## Optional loopback-only private configuration
+
+A user who deliberately runs only the local loopback Gateway may select no-auth:
 
 ```json
 {
@@ -118,4 +120,4 @@ This avoids leaving common child processes, watchers, and shells orphaned after 
 }
 ```
 
-Use `"oauth"` only when turning DevMate into a shared or published app. The ordinary private desktop flow remains no-auth.
+This does **not** make a tunnel, reverse proxy, or other remote ingress trusted. Remote MCP requests are rejected in `none` mode. Keep the default `"oauth"` whenever DevMate is exposed through a public/shared connection.
