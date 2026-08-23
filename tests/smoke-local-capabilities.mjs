@@ -15,6 +15,7 @@ const gatewayScript = path.join(root, 'gateway', 'server.bundle.mjs');
 
 const config = configStore.newInstanceConfig({ workspaceRoot: root, port, appVersion: configStore.DEFAULT_VERSION });
 config.instanceId = `local-smoke-${Date.now()}`;
+config.auth = { mode: 'none' };
 config.runtime.defaultCommandTimeoutMs = 30000;
 config.runtime.maxOutputChars = 80000;
 config.permissions = {
