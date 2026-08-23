@@ -23,6 +23,7 @@ const {
   recordGeneration,
   verifiedForCurrentRecord
 } = require('../../shared/public-ingress-verification.cjs');
+const { withConnectionMutationLease } = require('../../vscode-host/connection-mutation-lease.js');
 const { settingsFromState } = require('../../vscode-host/effective-tunnel-settings.js');
 const { DesktopTunnelController } = require('../../vscode-host/desktop-tunnel-controller.js');
 const {
@@ -65,7 +66,6 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.lastPublicVerificationAttemptAt = 0;
     this.publicVerificationPromise = null;
     this.publicVerificationGeneration = '';
-    this.sessionRequested = false;
     this.recoveryPromise = null;
     this.recoveryNextAt = 0;
     this.vaultRoot = '';
@@ -129,7 +129,6 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
   async onunload() {
     this.unloading = true;
-    this.sessionRequested = false;
     this.recoveryNextAt = 0;
     if (this.contextTimer) window.clearTimeout(this.contextTimer);
     if (this.reconfigureTimer) window.clearTimeout(this.reconfigureTimer);
@@ -254,33 +253,112 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     return this.sharedLifecycleIntent()?.desiredState === 'running';
   }
 
+  withConnectionMutation(label, operation) {
+    if (!this.controller?.stateDirectory) {
+      const error = new Error('Obsidian DevMate shared state is unavailable for connection mutation');
+      error.code = 'DEVMATE_OBSIDIAN_SHARED_STATE_UNAVAILABLE';
+      throw error;
+    }
+    return withConnectionMutationLease({
+      stateDirectory: this.controller.stateDirectory,
+      hostId: `${this.hostInstanceId}-${String(label || 'connection').replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 80)}`
+    }, operation);
+  }
+
   async configureConnection(patch = {}) {
     if (!this.controller?.configFile) return null;
     const requestedProvider = patch.provider === undefined ? null : tunnelProvider(String(patch.provider));
     const requestedPublicUrl = patch.publicUrl === undefined ? null : String(patch.publicUrl || '').trim();
-    const status = await this.controller.status().catch(() => null);
-    const recoveryToken = lifecycleRecoveryToken(this.controller.configFile);
-    let stopState = { safe: true, remoteOwner: false, reason: 'not-running', tunnel: null };
-    if (this.tunnelController) {
-      const stopResult = await this.tunnelController.stop();
-      stopState = assertTunnelSafeForCredentialChange(stopResult, 'Obsidian connection configuration change');
-      if (stopState.remoteOwner) {
-        this.logRuntime('The shared public connection remains active in another desktop process; the new configuration will be used by the next connection generation.');
+
+    const result = await this.withConnectionMutation('connection-config', async () => {
+      const recoveryToken = lifecycleRecoveryToken(this.controller.configFile);
+      let stopState = { safe: true, remoteOwner: false, reason: 'not-running', tunnel: null };
+      if (this.tunnelController) {
+        const stopResult = await this.tunnelController.stop();
+        stopState = assertTunnelSafeForCredentialChange(stopResult, 'Obsidian connection configuration change');
+        if (stopState.remoteOwner) {
+          this.logRuntime('The shared public connection remains active in another desktop process; the new configuration will be used by the next connection generation.');
+        }
       }
-    }
-    const updated = updateConfig(this.controller.configFile, config => {
-      normalizeInstanceConfig(config);
-      if (requestedProvider !== null) config.connection.provider = requestedProvider;
-      if (requestedPublicUrl !== null) config.connection.publicUrl = requestedPublicUrl;
-      return config;
+
+      let updated;
+      try {
+        updated = updateConfig(this.controller.configFile, config => {
+          normalizeInstanceConfig(config);
+          if (requestedProvider !== null) config.connection.provider = requestedProvider;
+          if (requestedPublicUrl !== null) config.connection.publicUrl = requestedPublicUrl;
+          return config;
+        });
+      } catch (error) {
+        if (recoveryToken && this.settings.enabled && !stopState.remoteOwner) {
+          try { await this.startRuntime({ quiet: true, recoveryToken }); }
+          catch (recoveryError) {
+            if (recoveryError?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED' && recoveryError?.code !== 'DEVMATE_TUNNEL_LIFECYCLE_STOPPED') {
+              error.recoveryError = recoveryError?.message || String(recoveryError);
+            }
+          }
+        }
+        throw error;
+      }
+
+      this.clearPublicVerification();
+      if (recoveryToken && this.settings.enabled && !stopState.remoteOwner) {
+        try { await this.startRuntime({ quiet: true, recoveryToken }); }
+        catch (error) {
+          if (error?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED' && error?.code !== 'DEVMATE_TUNNEL_LIFECYCLE_STOPPED') throw error;
+        }
+      }
+      return { updated, stopState };
     });
-    this.clearPublicVerification();
-    if (recoveryToken && status?.state === 'running' && !stopState.remoteOwner) {
-      await this.startRuntime({ quiet: true, recoveryToken });
-    } else {
+
+    await this.refreshStatus();
+    return result.updated;
+  }
+
+  async configureTunnelCredential(settingKey, encryptedValue) {
+    const providers = {
+      ngrokAuthtokenEncrypted: 'ngrok',
+      cloudflareTunnelTokenEncrypted: 'cloudflare-managed'
+    };
+    const provider = providers[settingKey];
+    if (!provider) throw new Error(`Unsupported DevMate tunnel credential setting: ${String(settingKey)}`);
+    const nextValue = String(encryptedValue || '').trim();
+
+    return this.withConnectionMutation(`credential-${provider}`, async () => {
+      const recoveryToken = lifecycleRecoveryToken(this.controller.configFile);
+      const gateway = await this.controller.status().catch(() => null);
+      let runtime = null;
+      try { runtime = this.tunnelController?.status(gateway?.port || 0) || null; } catch {}
+      const configuredProvider = this.connectionConfiguration().provider;
+      const credentialInUse = configuredProvider === provider || (runtime?.running === true && runtime?.provider === provider);
+      let stopState = { safe: true, remoteOwner: false, reason: 'credential-dormant', tunnel: null };
+
+      if (credentialInUse && this.tunnelController) {
+        const stopResult = await this.tunnelController.stop();
+        stopState = assertTunnelSafeForCredentialChange(stopResult, `Obsidian ${provider} credential change`);
+      }
+
+      const previous = this.settings[settingKey];
+      try {
+        this.settings[settingKey] = nextValue;
+        await this.saveSettings();
+      } catch (error) {
+        this.settings[settingKey] = previous;
+        try { await this.saveSettings(); } catch {}
+        throw error;
+      }
+
+      this.invalidateTunnelSecrets();
+      this.clearPublicVerification();
+      if (recoveryToken && this.settings.enabled && !stopState.remoteOwner) {
+        try { await this.startRuntime({ quiet: true, recoveryToken }); }
+        catch (error) {
+          if (error?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED' && error?.code !== 'DEVMATE_TUNNEL_LIFECYCLE_STOPPED') throw error;
+        }
+      }
       await this.refreshStatus();
-    }
-    return updated;
+      return { configured: !!nextValue, provider, stopState };
+    });
   }
 
   updateConnectionSnapshot(patch = {}) {
@@ -448,7 +526,6 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     if (this.settings.authenticationMode === 'oauth') ensureOAuthSecrets(this.controller.configFile);
 
     if (!this.settings.enabled) {
-      this.sessionRequested = false;
       this.recoveryNextAt = 0;
       let stoppedTunnel = { stopped: false, reason: 'not-running' };
       try {
@@ -726,7 +803,6 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       const preflight = await this.verifyPublicEndpoint(publicUrl, tunnel.record);
       assertRecovery();
       this.runtimeDiagnostics?.clearFailure();
-      this.sessionRequested = true;
       this.recoveryNextAt = 0;
       let copied = false;
       let copyError = '';
@@ -799,7 +875,6 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
   }
 
   async stopRuntimeInternal({ quiet = false } = {}) {
-    this.sessionRequested = false;
     this.recoveryNextAt = 0;
     if (this.controller?.configFile) {
       setLifecycleIntent(this.controller.configFile, 'stopped', { requestedBy: this.hostInstanceId, reason: 'stop' });
