@@ -180,7 +180,7 @@ export function releaseWorkspaceLeaseInDocument(document, {
   return { released: true, lease: publicLease(current) };
 }
 
-function acquireWorkspaceLeaseHoldInDocument(document, {
+export function acquireWorkspaceLeaseHoldInDocument(document, {
   workspaceId,
   principal,
   capability,
@@ -214,7 +214,7 @@ function acquireWorkspaceLeaseHoldInDocument(document, {
   return { ...hold };
 }
 
-function releaseWorkspaceLeaseHoldInDocument(document, {
+export function releaseWorkspaceLeaseHoldInDocument(document, {
   workspaceId,
   holdId,
   leaseId = '',
