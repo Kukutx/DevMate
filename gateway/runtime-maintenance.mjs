@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
-import { maintenanceOptions, pruneAuditLog, pruneBackups } from './maintenance.mjs';
+import { maintenanceOptions, pruneAuditLog, pruneBackups, pruneRecoveryState } from './maintenance.mjs';
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { jobRuntimeStatus } from './job-runtime.mjs';
 
@@ -46,9 +46,14 @@ function normalizePaths(paths = {}) {
   if (stateRoot === path.parse(stateRoot).root) throw new Error('Runtime maintenance stateRoot cannot be a filesystem root');
   const backupRoot = path.resolve(String(paths.backupRoot || path.join(stateRoot, 'backups')));
   const auditLog = path.resolve(String(paths.auditLog || path.join(stateRoot, 'audit.jsonl')));
+  const configDirectory = path.dirname(stateRoot);
+  const configFile = path.resolve(String(paths.configFile || path.join(configDirectory, 'config.json')));
   if (!isInside(stateRoot, backupRoot)) throw new Error('Runtime maintenance backupRoot must be inside stateRoot');
   if (!isInside(stateRoot, auditLog)) throw new Error('Runtime maintenance auditLog must be inside stateRoot');
-  return { stateRoot, backupRoot, auditLog };
+  if (path.dirname(configFile) !== configDirectory) {
+    throw new Error('Runtime maintenance configFile must share the parent directory of stateRoot');
+  }
+  return { stateRoot, backupRoot, auditLog, configFile };
 }
 
 function currentOptions(runConfig = configured) {
@@ -110,6 +115,8 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
     const startedAt = Date.now();
     const options = currentOptions(runConfig);
     const { backupRoot, auditLog } = runConfig.paths;
+    const recovery = pruneRecoveryState(runConfig.paths, startedAt);
+    const recoveryDeleted = recovery.config.deleted.length + recovery.state.deleted.length;
     const [auditStat, backupRootStat] = await Promise.all([
       statOrNull(auditLog),
       statOrNull(backupRoot)
@@ -120,14 +127,15 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
     const backupMtimeMs = backupRootStat?.mtimeMs || 0;
     const backupChanged = force || previousBackupMtimeMs == null || backupMtimeMs !== previousBackupMtimeMs;
 
-    if (!auditNeedsPrune && !backupChanged) {
+    if (!auditNeedsPrune && !backupChanged && recoveryDeleted === 0) {
       const skipped = {
         skipped: true,
         reason: 'within-bounds',
         checkedAt: now(),
         auditBytes,
         auditHighWater,
-        backupMtimeMs
+        backupMtimeMs,
+        recovery
       };
       await recordSuccess(runConfig, healthPath, skipped);
       return skipped;
@@ -137,7 +145,8 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
       skipped: false,
       startedAt: new Date(startedAt).toISOString(),
       audit: null,
-      backups: null
+      backups: null,
+      recovery
     };
     if (auditNeedsPrune) result.audit = await pruneAuditLog(auditLog, options);
     if (backupChanged) result.backups = await pruneBackups(backupRoot, options);
