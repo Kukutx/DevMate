@@ -87,7 +87,7 @@ test('local owner drain checks and inactive sessions avoid durable control-plane
   assert.ok(drain.indexOf("principal?.source !== 'oauth-member'") < drain.indexOf('drainStatus()'));
   assert.equal(sessions.includes('if (!expired) return false'), true);
   assert.equal(sessions.includes('if (!existing) return null'), true);
-  assert.equal(leases.includes('if (!expired) return false'), true);
+  assert.equal(leases.includes('if (!needsPrune) return false'), true);
 });
 
 test('VSIX excludes development-only repository surfaces', () => {
