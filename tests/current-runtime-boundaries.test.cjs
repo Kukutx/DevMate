@@ -39,16 +39,25 @@ test('one work-session model is shared across local and member workflows', () =>
 });
 
 test('desktop public connection lifecycle is provider-native and shared', () => {
-  const controller = source('vscode-host/tunnel-controller.js');
+  const providerController = source('vscode-host/tunnel-controller.js');
+  const desktopController = source('vscode-host/desktop-tunnel-controller.js');
   const runtime = source('vscode-host/tunnel-runtime.js');
+  const vscodeTunnel = source('extension-entry-shared-tunnel.js');
   const obsidian = source('obsidian-plugin/src/main.js');
-  assert.match(controller, /class TunnelController/);
+
+  assert.match(providerController, /class TunnelController/);
+  assert.match(desktopController, /class DesktopTunnelController extends TunnelController/);
+  assert.match(desktopController, /withConnectionMutationLease/);
+  assert.match(desktopController, /readLifecycleIntent/);
+
   assert.match(runtime, /const current = tunnelController\(\)/);
   assert.match(runtime, /await current\.start\(port\)/);
   assert.match(runtime, /attachmentRecoveryPromise/);
   assert.match(runtime, /if \(pendingRecovery\) await pendingRecovery\.catch\(\(\) => null\)/);
   assert.match(runtime, /return current\.stop\(\)/);
-  assert.match(obsidian, /new TunnelController\(\{/);
+
+  assert.match(vscodeTunnel, /new DesktopTunnelController\(\{/);
+  assert.match(obsidian, /new DesktopTunnelController\(\{/);
   assert.match(obsidian, /this\.tunnelController\.start\(gateway\.port\)/);
 });
 
