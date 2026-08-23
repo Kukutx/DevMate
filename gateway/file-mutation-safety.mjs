@@ -109,7 +109,7 @@ function resolvedRealTarget(root, full) {
   const rootReal = fs.realpathSync.native(path.resolve(root));
   const direct = fs.lstatSync(full, { throwIfNoEntry: false });
   if (direct?.isSymbolicLink()) throw new Error(`Write blocked: symlink/reparse target: ${normalizeSlash(path.relative(root, full))}`);
-  let existing = direct ? path.dirname(full) : path.dirname(full);
+  let existing = path.dirname(full);
   while (!fs.lstatSync(existing, { throwIfNoEntry: false }) && existing !== path.dirname(existing)) existing = path.dirname(existing);
   const existingReal = fs.realpathSync.native(existing);
   const resolved = path.resolve(existingReal, path.relative(existing, full));
@@ -198,6 +198,24 @@ async function assertDirectoryMutationAllowed(config, workspace, full, rel) {
 
 function sha256(text) {
   return crypto.createHash('sha256').update(String(text ?? ''), 'utf8').digest('hex');
+}
+
+function expectedHash(value) {
+  const clean = String(value || '').trim().toLowerCase();
+  if (!clean) return '';
+  if (!/^[a-f0-9]{64}$/.test(clean)) throw new Error('expectedSha256 must be a 64-character hexadecimal digest');
+  return clean;
+}
+
+async function assertExpectedRegularFileSha(full, stat, expected, label = 'Target') {
+  const digest = expectedHash(expected);
+  if (!digest) return null;
+  if (!stat?.isFile() || stat.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+  if (stat.size > MAX_FILE_BYTES) throw new Error(`File too large: ${stat.size} bytes`);
+  const text = await fsp.readFile(full, 'utf8');
+  const actual = sha256(text);
+  if (actual !== digest) throw new Error(`sha256 mismatch: expected ${digest}, actual ${actual}`);
+  return text;
 }
 
 function backupSafeRel(rel) {
@@ -298,16 +316,22 @@ function existingRegularFile(full, label = 'Target') {
 
 async function writeFileTool(args = {}) {
   requireStateRoots();
-  const { workspaceId, path: rel, content = '', append = false, createDirs = true } = args;
+  const { workspaceId, path: rel, content = '', append = false, createDirs = true, expectedSha256 = '' } = args;
   const config = readConfig();
   const workspace = getWritableWorkspace(config, workspaceId);
   const full = assertWritable(config, workspace, rel, { textOnly: true });
   return withPathLocks([full], async () => {
     const stat = existingRegularFile(full);
+    const expected = expectedHash(expectedSha256);
+    if (expected && !stat) throw new Error(`sha256 mismatch: expected ${expected}, actual missing`);
     let before = '';
-    if (append && stat) {
+    if (stat && (append || expected)) {
       if (stat.size > MAX_FILE_BYTES) throw new Error(`File too large: ${stat.size} bytes`);
       before = await fsp.readFile(full, 'utf8');
+      if (expected) {
+        const actual = sha256(before);
+        if (actual !== expected) throw new Error(`sha256 mismatch: expected ${expected}, actual ${actual}`);
+      }
     }
     const backup = stat ? await durableBackup(full, rel) : null;
     const next = append ? `${before}${content}` : String(content);
@@ -325,7 +349,7 @@ async function writeFileTool(args = {}) {
 
 async function createFileTool(args = {}) {
   requireStateRoots();
-  const { workspaceId, path: rel, content = '', overwrite = false, createDirs = true } = args;
+  const { workspaceId, path: rel, content = '', overwrite = false, createDirs = true, mode = null } = args;
   const config = readConfig();
   const workspace = getWritableWorkspace(config, workspaceId);
   const full = assertWritable(config, workspace, rel, { textOnly: true });
@@ -338,7 +362,8 @@ async function createFileTool(args = {}) {
       workspaceRoot: workspace.root,
       target: full,
       content: String(content),
-      createDirs: createDirs !== false
+      createDirs: createDirs !== false,
+      mode
     });
     await audit('create_file', { workspace: workspace.id, path: rel, overwrite: !!overwrite, backup, transactionId: transaction.transactionId });
     return toolText({
@@ -362,7 +387,8 @@ async function applyPatchTool(args = {}) {
     if (stat.size > MAX_FILE_BYTES) throw new Error(`File too large: ${stat.size} bytes`);
     const text = await fsp.readFile(full, 'utf8');
     const beforeSha = sha256(text);
-    if (expectedSha256 && expectedSha256 !== beforeSha) throw new Error(`sha256 mismatch: expected ${expectedSha256}, actual ${beforeSha}`);
+    const expected = expectedHash(expectedSha256);
+    if (expected && expected !== beforeSha) throw new Error(`sha256 mismatch: expected ${expected}, actual ${beforeSha}`);
     if (!text.includes(oldText)) throw new Error('oldText not found');
     if (!allOccurrences && text.indexOf(oldText) !== text.lastIndexOf(oldText)) {
       throw new Error('oldText appears multiple times; set allOccurrences=true or provide more specific oldText');
@@ -386,12 +412,14 @@ async function applyPatchTool(args = {}) {
 
 async function deleteFileTool(args = {}) {
   requireStateRoots();
-  const { workspaceId, path: rel, recursive = false } = args;
+  const { workspaceId, path: rel, recursive = false, expectedSha256 = '' } = args;
   const config = readConfig();
   const workspace = getWritableWorkspace(config, workspaceId);
   const full = assertWritable(config, workspace, rel);
   return withPathLocks([full], async () => {
     const stat = await assertDirectoryMutationAllowed(config, workspace, full, rel);
+    const expected = expectedHash(expectedSha256);
+    if (expected) await assertExpectedRegularFileSha(full, stat, expected);
     if (stat.isDirectory() && !recursive) throw new Error('Target is directory; pass recursive=true');
     let backup = null;
     const transaction = await transactionalDelete({
@@ -514,9 +542,11 @@ export const __test = {
   TEXT_EXT,
   TRANSACTION_ROOT,
   assertDirectoryMutationAllowed,
+  assertExpectedRegularFileSha,
   assertWritable,
   backupRelativePath,
   durableBackup,
+  expectedHash,
   isBinaryOrSecret,
   isTextAllowed,
   resolvedRealTarget,
