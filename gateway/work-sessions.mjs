@@ -12,10 +12,50 @@ const NAMESPACE = 'work-sessions';
 const sessions = new Map();
 
 function nowIso(now = Date.now()) { return new Date(now).toISOString(); }
+
+function sessionStateError(message, detail = {}) {
+  const error = new Error(`Work session durable state is invalid: ${message}`);
+  error.code = 'work_session_state_invalid';
+  Object.assign(error, detail);
+  return error;
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validTimestamp(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function normalizeSession(item, index) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw sessionStateError(`session ${index} must be an object`, { sessionIndex: index });
+  }
+  for (const field of ['id', 'principalId', 'workspaceId', 'leaseId']) {
+    if (!nonEmpty(item[field])) throw sessionStateError(`session ${index} is missing ${field}`, { sessionIndex: index });
+  }
+  for (const field of ['startedAt', 'lastActivityAt', 'expiresAt']) {
+    if (!validTimestamp(item[field])) throw sessionStateError(`session ${item.id} has invalid ${field}`, { sessionId: item.id });
+  }
+  for (const field of ['toolCalls', 'failures']) {
+    if (!Number.isSafeInteger(item[field]) || item[field] < 0) {
+      throw sessionStateError(`session ${item.id} has invalid ${field}`, { sessionId: item.id });
+    }
+  }
+  return { ...item };
+}
+
 function sessionMap(values) {
-  return new Map((Array.isArray(values) ? values : [])
-    .filter(item => item?.id && item?.principalId && item?.workspaceId)
-    .map(item => [item.id, item]));
+  if (values === undefined) return new Map();
+  if (!Array.isArray(values)) throw sessionStateError('namespace must be an array');
+  const output = new Map();
+  values.forEach((item, index) => {
+    const session = normalizeSession(item, index);
+    if (output.has(session.id)) throw sessionStateError(`duplicate session id ${session.id}`, { sessionId: session.id });
+    output.set(session.id, session);
+  });
+  return output;
 }
 function documentSessionMap(document) {
   return sessionMap(document?.namespaces?.[NAMESPACE]);
@@ -207,7 +247,10 @@ export function clearWorkSessions() {
 
 export const __test = {
   documentSessionMap,
+  normalizeSession,
   pruneSessionMap,
+  sessionMap,
+  sessionStateError,
   sessions,
   syncWorkSessionsFromDurableState,
   writeDocumentSessions
