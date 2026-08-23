@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { configureAuthentication } = require('../shared/auth-config.cjs');
 const {
   recordGeneration,
   successfulVerificationPatch,
@@ -22,10 +23,12 @@ function record(readyAt, overrides = {}) {
 
 function config(preflightAt = '2026-08-08T01:00:01.000Z') {
   return {
+    hostRuntime: { authenticationPolicyGeneration: 0 },
     auth: { mode: 'oauth' },
     connection: {
       lastPreflightAt: preflightAt,
       lastAuthMode: 'oauth',
+      lastAuthGeneration: 0,
       lastPublicHost: 'stable.example.com',
       lastMcpPath: '/mcp',
       lastToolCount: 25,
@@ -62,14 +65,16 @@ test('ownership takeover creates a distinct generation even when URL and ready t
   assert.notEqual(recordGeneration(first), recordGeneration(takeover));
 });
 
-test('new verification evidence binds to the exact tunnel generation', () => {
+test('new verification evidence binds to exact tunnel and authentication generations', () => {
   const first = record('2026-08-08T01:00:00.000Z');
   const current = {
+    hostRuntime: { authenticationPolicyGeneration: 0 },
     auth: { mode: 'oauth' },
-    connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first)
+    connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first, null, 'oauth', 0)
   };
   assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
   assert.equal(current.connection.lastAuthMode, 'oauth');
+  assert.equal(current.connection.lastAuthGeneration, 0);
   assert.equal(current.connection.lastToolCallVerified, true);
   assert.equal(current.connection.lastProbeTool, 'gateway_status');
   assert.equal(verifiedForCurrentRecord(current, first), true);
@@ -78,24 +83,39 @@ test('new verification evidence binds to the exact tunnel generation', () => {
   assert.equal(verifiedForCurrentRecord(current, takeover), false);
 });
 
-test('authentication changes invalidate otherwise current public Ready evidence', () => {
+test('authentication changes invalidate evidence even after OAuth-none-OAuth ABA', () => {
   const currentRecord = record('2026-08-08T01:00:00.000Z');
   const current = config();
   assert.equal(verifiedForCurrentRecord(current, currentRecord), true);
 
-  current.auth.mode = 'none';
+  configureAuthentication(current, 'none', { replace: true });
+  assert.equal(current.hostRuntime.authenticationPolicyGeneration, 1);
   assert.equal(verifiedForCurrentRecord(current, currentRecord), false);
 
-  current.auth.mode = 'oauth';
-  current.connection.lastAuthMode = 'none';
-  assert.equal(verifiedForCurrentRecord(current, currentRecord), false);
+  configureAuthentication(current, 'oauth', { replace: true });
+  assert.equal(current.hostRuntime.authenticationPolicyGeneration, 2);
+  assert.equal(current.auth.mode, 'oauth');
+  assert.equal(current.connection.lastAuthMode, 'oauth');
+  assert.equal(verifiedForCurrentRecord(current, currentRecord), false, 'old OAuth evidence survived an auth-policy ABA transition');
+
+  current.connection = successfulVerificationPatch(
+    verifiedTestResult(currentRecord.publicUrl),
+    currentRecord.publicUrl,
+    '2026-08-08T01:00:02.000Z',
+    currentRecord,
+    null,
+    'oauth',
+    current.hostRuntime.authenticationPolicyGeneration
+  );
+  assert.equal(verifiedForCurrentRecord(current, currentRecord), true);
 });
 
 test('same tunnel process requires a fresh preflight when Gateway generation changes', () => {
   const first = record('2026-08-08T01:00:00.000Z', { gatewayGeneration: 'gateway-a' });
   const current = {
+    hostRuntime: { authenticationPolicyGeneration: 0 },
     auth: { mode: 'oauth' },
-    connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first)
+    connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first, null, 'oauth', 0)
   };
   assert.equal(current.connection.lastGatewayGeneration, 'gateway-a');
   assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
@@ -127,13 +147,13 @@ test('handshake-only evidence is invalid until a real MCP tool call succeeds', (
 test('matching host alone can never validate malformed or empty MCP evidence', () => {
   const current = record('2026-08-08T01:00:00.000Z');
   for (const connection of [
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 0, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/wrong', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'other' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: false, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
-    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'wrong', lastServerName: 'devmate' },
-    { lastPreflightAt: 'not-a-date', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' }
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastAuthMode: 'oauth', lastAuthGeneration: 0, lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 0, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastAuthMode: 'oauth', lastAuthGeneration: 0, lastPublicHost: 'stable.example.com', lastMcpPath: '/wrong', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastAuthMode: 'oauth', lastAuthGeneration: 0, lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'other' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastAuthMode: 'oauth', lastAuthGeneration: 0, lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: false, lastProbeTool: 'gateway_status', lastServerName: 'devmate' },
+    { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastAuthMode: 'oauth', lastAuthGeneration: 0, lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'wrong', lastServerName: 'devmate' },
+    { lastPreflightAt: 'not-a-date', lastAuthMode: 'oauth', lastAuthGeneration: 0, lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' }
   ]) {
-    assert.equal(verifiedForCurrentRecord({ auth: { mode: 'oauth' }, connection }, current), false);
+    assert.equal(verifiedForCurrentRecord({ hostRuntime: { authenticationPolicyGeneration: 0 }, auth: { mode: 'oauth' }, connection }, current), false);
   }
 });
