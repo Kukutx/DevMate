@@ -16,6 +16,10 @@ let started = false;
 let shuttingDown = false;
 let shutdownPromise = null;
 
+function fail(message) {
+  try { process.stderr.write(`DevMate provider supervisor: ${message}\n`); } catch {}
+}
+
 function cleanOptions(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const options = {
@@ -34,8 +38,8 @@ function validateStartMessage(message) {
   if (!message || message.type !== 'devmate:provider-start') throw new Error('Invalid provider supervisor start message');
   const command = String(message.command || '').trim();
   if (!command) throw new Error('Provider command is required');
-  if (!Array.isArray(message.args) || message.args.some(item => typeof item !== 'string')) {
-    throw new TypeError('Provider args must be an array of strings');
+  if (!Array.isArray(message.args) || message.args.some(item => typeof item !== 'string') || message.args.length > 128) {
+    throw new TypeError('Provider args must be a bounded array of strings');
   }
   return { command, args: [...message.args], options: cleanOptions(message.options) };
 }
@@ -47,24 +51,40 @@ function relay(stream, target) {
   });
 }
 
-async function shutdown(reason = 'shutdown', exitCode = 0) {
+async function shutdown(reason = 'shutdown', requestedExitCode = 0) {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
   shutdownPromise = (async () => {
+    let exitCode = requestedExitCode;
+    let exitConfirmed = true;
     const child = provider;
-    if (child) {
+    if (child && child.exitCode == null && child.signalCode == null) {
       try {
-        await terminateProcessTree(child, CLEANUP_OPTIONS);
-      } catch {}
+        const result = await terminateProcessTree(child, CLEANUP_OPTIONS);
+        if (result?.exitConfirmed === false) {
+          exitCode = 1;
+          exitConfirmed = false;
+          fail(`could not confirm provider process exit during ${reason}`);
+        }
+      } catch (error) {
+        exitCode = 1;
+        exitConfirmed = false;
+        fail(`provider cleanup failed during ${reason}: ${error?.message || error}`);
+      }
     }
-    provider = null;
+    if (exitConfirmed) provider = null;
     try {
-      if (process.connected) process.send?.({ type: 'devmate:provider-supervisor-stopped', reason });
+      if (process.connected) process.send?.({
+        type: 'devmate:provider-supervisor-stopped',
+        reason,
+        exitCode,
+        exitConfirmed
+      });
     } catch {}
     process.exitCode = exitCode;
+    setImmediate(() => process.exit(exitCode));
+    return { reason, exitCode, exitConfirmed };
   })();
-  await shutdownPromise;
-  setImmediate(() => process.exit(exitCode));
   return shutdownPromise;
 }
 
@@ -76,9 +96,10 @@ function launch(message) {
   relay(provider.stdout, process.stdout);
   relay(provider.stderr, process.stderr);
   provider.once('error', error => {
-    try { process.stderr.write(`DevMate provider launch error: ${error.message || error}\n`); } catch {}
+    fail(`provider launch error: ${error.message || error}`);
+    if (!shuttingDown) void shutdown('provider-error', 1);
   });
-  provider.once('exit', (code, signal) => {
+  provider.once('close', (code, signal) => {
     if (shuttingDown) return;
     provider = null;
     try {
@@ -110,7 +131,7 @@ process.on('message', message => {
     launch(message);
     if (started) clearTimeout(startTimer);
   } catch (error) {
-    try { process.stderr.write(`DevMate provider supervisor rejected launch: ${error.message || error}\n`); } catch {}
+    fail(`rejected launch: ${error.message || error}`);
     void shutdown('invalid-start-message', 1);
   }
 });
