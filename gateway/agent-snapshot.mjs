@@ -1,0 +1,374 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+
+const CONFIG_PATH = String(process.env.DEVMATE_CONFIG || '').trim();
+const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
+export const AGENT_STATE_ROOT = CONFIG_DIR ? path.join(CONFIG_DIR, 'state', 'codex-collaboration') : '';
+export const AGENT_TASK_ROOT = AGENT_STATE_ROOT ? path.join(AGENT_STATE_ROOT, 'tasks') : '';
+export const SNAPSHOT_MAX_FILES = 20_000;
+export const SNAPSHOT_MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const SNAPSHOT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+const TASK_ID = /^codex-[a-z0-9-]{6,120}$/i;
+
+const SKIP_DIRS = new Set([
+  '.git', '.godot', '.next', '.nuxt', '.cache', '.dart_tool', '.firebase', '.terraform',
+  'node_modules', 'coverage', 'dist', 'build', 'bin', 'obj', '.venv', 'venv', '__pycache__',
+  'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys',
+  'service-account', 'service_accounts'
+]);
+const BLOCKED_BASENAMES = new Set([
+  '.env', 'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
+  'service-account.json', 'service_account.json', 'service-account-key.json',
+  'service_account_key.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
+]);
+const BLOCKED_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.db', '.sqlite', '.sqlite3']);
+const TEXT_EXTENSIONS = new Set([
+  '.md', '.mdx', '.txt', '.json', '.jsonc', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx',
+  '.cjs', '.mjs', '.css', '.scss', '.sass', '.less', '.html', '.xml', '.cs', '.csproj', '.sln',
+  '.dart', '.py', '.ps1', '.sh', '.bash', '.zsh', '.sql', '.toml', '.ini', '.config', '.cfg',
+  '.props', '.targets', '.java', '.kt', '.kts', '.go', '.rs', '.php', '.rb', '.swift', '.vue',
+  '.svelte', '.gd', '.godot', '.gdshader', '.gdshaderinc', '.shader', '.tscn', '.tres', '.uid'
+]);
+const TEXT_BASENAMES = new Set([
+  'README', 'README.md', 'LICENSE', 'Dockerfile', 'Makefile', 'package.json', 'package-lock.json',
+  'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'pubspec.yaml', 'pubspec.lock', 'global.json',
+  'Directory.Packages.props', 'AGENTS.md', 'CONTRIBUTING.md'
+]);
+
+function ensureRoots() {
+  if (!CONFIG_PATH || !AGENT_STATE_ROOT || !AGENT_TASK_ROOT) {
+    const error = new Error('DEVMATE_CONFIG is required for Codex Collaboration snapshots');
+    error.code = 'codex_snapshot_config_required';
+    throw error;
+  }
+}
+
+function codedError(message, code, detail = {}) {
+  const error = new Error(message);
+  error.code = code;
+  Object.assign(error, detail);
+  return error;
+}
+
+function normalizeRelative(value) {
+  const raw = String(value || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!raw || raw === '.' || raw.startsWith('/') || /^[A-Za-z]:\//.test(raw)) {
+    throw codedError(`Invalid snapshot relative path: ${value}`, 'codex_snapshot_path_invalid');
+  }
+  const parts = raw.split('/');
+  if (parts.some(part => !part || part === '.' || part === '..')) {
+    throw codedError(`Invalid snapshot relative path: ${value}`, 'codex_snapshot_path_invalid');
+  }
+  return parts.join('/');
+}
+
+function taskPaths(taskId) {
+  ensureRoots();
+  const id = String(taskId || '').trim();
+  if (!TASK_ID.test(id)) throw codedError('Invalid Codex task id', 'codex_task_id_invalid');
+  const root = path.join(AGENT_TASK_ROOT, id);
+  return {
+    id,
+    root,
+    baseline: path.join(root, 'baseline'),
+    work: path.join(root, 'workspace'),
+    manifest: path.join(root, 'manifest.json')
+  };
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function blockedPath(rel) {
+  const parts = String(rel || '').replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.some(part => SKIP_DIRS.has(part.toLowerCase()))) return true;
+  const base = (parts.at(-1) || '').toLowerCase();
+  if (BLOCKED_BASENAMES.has(base)) return true;
+  if (base.startsWith('.env.') && !base.endsWith('.example') && !base.endsWith('.sample')) return true;
+  return BLOCKED_EXTENSIONS.has(path.extname(base).toLowerCase());
+}
+
+export function proposalTextPath(rel) {
+  const normalized = normalizeRelative(rel);
+  if (blockedPath(normalized)) return false;
+  const base = path.basename(normalized);
+  if (TEXT_BASENAMES.has(base)) return true;
+  if (base.toLowerCase().endsWith('.env.example') || base.toLowerCase().endsWith('.env.sample')) return true;
+  return TEXT_EXTENSIONS.has(path.extname(base).toLowerCase());
+}
+
+function inside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function safeChild(root, rel) {
+  const normalized = normalizeRelative(rel);
+  const full = path.resolve(root, ...normalized.split('/'));
+  if (!inside(path.resolve(root), full)) throw codedError(`Snapshot path escapes root: ${rel}`, 'codex_snapshot_path_escape');
+  return full;
+}
+
+async function stableReadFile(file, initialStat) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = attempt === 0 ? initialStat : await fsp.lstat(file);
+    if (!before.isFile() || before.isSymbolicLink()) {
+      throw codedError(`Snapshot source is not a regular file: ${file}`, 'codex_snapshot_unsafe_source');
+    }
+    if (before.size > SNAPSHOT_MAX_FILE_BYTES) return null;
+    const buffer = await fsp.readFile(file);
+    const after = await fsp.lstat(file);
+    if (
+      after.isFile() && !after.isSymbolicLink() &&
+      before.size === after.size && before.mtimeMs === after.mtimeMs &&
+      (before.ino == null || after.ino == null || before.ino === after.ino)
+    ) return { buffer, stat: after };
+  }
+  throw codedError(`Workspace changed repeatedly while snapshotting: ${file}`, 'codex_snapshot_source_unstable');
+}
+
+async function writeSnapshotFile(destination, buffer, mode) {
+  await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+  await fsp.writeFile(destination, buffer, { flag: 'wx', mode: mode & 0o777 });
+  try { await fsp.chmod(destination, mode & 0o777); } catch {}
+}
+
+async function walkWorkspace(sourceRoot, visitor, rel = '') {
+  const directory = rel ? safeChild(sourceRoot, rel) : path.resolve(sourceRoot);
+  const entries = await fsp.readdir(directory, { withFileTypes: true });
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+    if (blockedPath(childRel)) continue;
+    const child = safeChild(sourceRoot, childRel);
+    const stat = await fsp.lstat(child);
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) {
+      await visitor({ rel: childRel, full: child, stat, directory: true });
+      await walkWorkspace(sourceRoot, visitor, childRel);
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    await visitor({ rel: childRel, full: child, stat, directory: false });
+  }
+}
+
+async function writeManifest(file, value) {
+  const payload = `${JSON.stringify(value, null, 2)}\n`;
+  await fsp.writeFile(file, payload, { flag: 'wx', mode: 0o600 });
+}
+
+export async function createAgentSnapshot({ taskId, workspace }) {
+  ensureRoots();
+  if (!workspace?.root || !workspace?.id) throw new TypeError('A resolved workspace is required');
+  const paths = taskPaths(taskId);
+  const rootStat = await fsp.stat(workspace.root).catch(() => null);
+  if (!rootStat?.isDirectory()) throw codedError('Workspace root is unavailable', 'codex_snapshot_workspace_unavailable');
+  const workspaceReal = await fsp.realpath(workspace.root);
+  await fsp.mkdir(AGENT_TASK_ROOT, { recursive: true, mode: 0o700 });
+  if (fs.existsSync(paths.root)) throw codedError(`Codex task snapshot already exists: ${taskId}`, 'codex_snapshot_exists');
+  await fsp.mkdir(paths.baseline, { recursive: true, mode: 0o700 });
+  await fsp.mkdir(paths.work, { recursive: true, mode: 0o700 });
+
+  const files = [];
+  const skippedLarge = [];
+  let totalBytes = 0;
+  try {
+    await walkWorkspace(workspaceReal, async item => {
+      if (item.directory) {
+        await Promise.all([
+          fsp.mkdir(safeChild(paths.baseline, item.rel), { recursive: true, mode: 0o700 }),
+          fsp.mkdir(safeChild(paths.work, item.rel), { recursive: true, mode: 0o700 })
+        ]);
+        return;
+      }
+      if (files.length >= SNAPSHOT_MAX_FILES) {
+        throw codedError(`Workspace exceeds Codex snapshot file limit (${SNAPSHOT_MAX_FILES})`, 'codex_snapshot_too_many_files');
+      }
+      const read = await stableReadFile(item.full, item.stat);
+      if (!read) {
+        skippedLarge.push(item.rel);
+        return;
+      }
+      totalBytes += read.buffer.length;
+      if (totalBytes > SNAPSHOT_MAX_TOTAL_BYTES) {
+        throw codedError(`Workspace exceeds Codex snapshot byte limit (${SNAPSHOT_MAX_TOTAL_BYTES})`, 'codex_snapshot_too_large');
+      }
+      await writeSnapshotFile(safeChild(paths.baseline, item.rel), read.buffer, read.stat.mode);
+      await writeSnapshotFile(safeChild(paths.work, item.rel), read.buffer, read.stat.mode);
+      files.push({
+        path: item.rel,
+        sha256: sha256(read.buffer),
+        bytes: read.buffer.length,
+        mode: read.stat.mode & 0o777,
+        text: proposalTextPath(item.rel)
+      });
+    });
+    const manifest = {
+      version: 1,
+      taskId: paths.id,
+      workspaceId: workspace.id,
+      workspaceRoot: workspaceReal,
+      createdAt: new Date().toISOString(),
+      files,
+      skippedLarge,
+      fileCount: files.length,
+      totalBytes
+    };
+    await writeManifest(paths.manifest, manifest);
+    return {
+      taskId: paths.id,
+      workspaceId: workspace.id,
+      workspaceRoot: workspaceReal,
+      cwd: paths.work,
+      baseline: paths.baseline,
+      fileCount: files.length,
+      totalBytes,
+      skippedLarge: [...skippedLarge]
+    };
+  } catch (error) {
+    await fsp.rm(paths.root, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function readAgentSnapshotManifest(taskId) {
+  const paths = taskPaths(taskId);
+  const raw = await fsp.readFile(paths.manifest, 'utf8');
+  const value = JSON.parse(raw);
+  if (!value || value.version !== 1 || value.taskId !== paths.id || !Array.isArray(value.files)) {
+    throw codedError('Codex snapshot manifest is invalid', 'codex_snapshot_manifest_invalid');
+  }
+  return value;
+}
+
+async function currentSnapshotFiles(taskId) {
+  const paths = taskPaths(taskId);
+  const values = new Map();
+  await walkWorkspace(paths.work, async item => {
+    if (item.directory) return;
+    if (item.stat.size > SNAPSHOT_MAX_FILE_BYTES) {
+      values.set(item.rel, { path: item.rel, tooLarge: true, bytes: item.stat.size, text: proposalTextPath(item.rel) });
+      return;
+    }
+    const read = await stableReadFile(item.full, item.stat);
+    if (!read) return;
+    values.set(item.rel, {
+      path: item.rel,
+      sha256: sha256(read.buffer),
+      bytes: read.buffer.length,
+      mode: read.stat.mode & 0o777,
+      text: proposalTextPath(item.rel)
+    });
+  });
+  return values;
+}
+
+export async function agentProposalChanges(taskId) {
+  const manifest = await readAgentSnapshotManifest(taskId);
+  const baseline = new Map(manifest.files.map(item => [item.path, item]));
+  const current = await currentSnapshotFiles(taskId);
+  const changes = [];
+  const blocked = [];
+
+  for (const [rel, before] of baseline) {
+    const after = current.get(rel);
+    if (!after) {
+      const value = { path: rel, kind: 'delete', beforeSha256: before.sha256, afterSha256: null, bytes: 0 };
+      (before.text ? changes : blocked).push({ ...value, reason: before.text ? undefined : 'non-text file changes cannot be applied' });
+      continue;
+    }
+    current.delete(rel);
+    if (after.tooLarge) {
+      blocked.push({ path: rel, kind: 'modify', reason: 'changed file exceeds proposal size limit' });
+      continue;
+    }
+    if (after.sha256 === before.sha256) continue;
+    const value = { path: rel, kind: 'modify', beforeSha256: before.sha256, afterSha256: after.sha256, bytes: after.bytes, mode: after.mode };
+    (before.text && after.text ? changes : blocked).push({ ...value, reason: before.text && after.text ? undefined : 'non-text file changes cannot be applied' });
+  }
+
+  for (const [rel, after] of current) {
+    if (after.tooLarge || !after.text) {
+      blocked.push({ path: rel, kind: 'create', reason: after.tooLarge ? 'new file exceeds proposal size limit' : 'non-text file changes cannot be applied' });
+      continue;
+    }
+    changes.push({ path: rel, kind: 'create', beforeSha256: null, afterSha256: after.sha256, bytes: after.bytes, mode: after.mode });
+  }
+
+  changes.sort((a, b) => a.path.localeCompare(b.path));
+  blocked.sort((a, b) => a.path.localeCompare(b.path));
+  return { taskId: manifest.taskId, workspaceId: manifest.workspaceId, changes, blocked };
+}
+
+export async function readAgentProposalFile(taskId, rel) {
+  const paths = taskPaths(taskId);
+  const normalized = normalizeRelative(rel);
+  if (!proposalTextPath(normalized)) throw codedError(`Proposal file is not an allowed text path: ${normalized}`, 'codex_proposal_file_blocked');
+  const full = safeChild(paths.work, normalized);
+  const stat = await fsp.lstat(full).catch(() => null);
+  if (!stat?.isFile() || stat.isSymbolicLink()) throw codedError(`Proposal file is not a regular file: ${normalized}`, 'codex_proposal_file_invalid');
+  if (stat.size > SNAPSHOT_MAX_FILE_BYTES) throw codedError(`Proposal file is too large: ${normalized}`, 'codex_proposal_file_too_large');
+  return fsp.readFile(full, 'utf8');
+}
+
+async function assertRealPathSafe(workspaceRoot, rel, { allowMissing = true } = {}) {
+  const rootReal = await fsp.realpath(workspaceRoot);
+  const normalized = normalizeRelative(rel);
+  const target = safeChild(rootReal, normalized);
+  let current = rootReal;
+  for (const part of normalized.split('/')) {
+    current = path.join(current, part);
+    const stat = await fsp.lstat(current).catch(() => null);
+    if (!stat) {
+      if (!allowMissing) throw codedError(`Workspace path disappeared: ${normalized}`, 'codex_proposal_conflict');
+      break;
+    }
+    if (stat.isSymbolicLink()) throw codedError(`Workspace path became a symlink/reparse point: ${normalized}`, 'codex_proposal_conflict');
+  }
+  const parent = await fsp.realpath(path.dirname(target)).catch(() => null);
+  if (parent && !inside(rootReal, parent)) throw codedError(`Workspace path escapes root: ${normalized}`, 'codex_proposal_conflict');
+  return target;
+}
+
+export async function assertAgentProposalConflictFree({ workspaceRoot, change }) {
+  const target = await assertRealPathSafe(workspaceRoot, change.path, { allowMissing: change.kind === 'create' });
+  const stat = await fsp.lstat(target).catch(() => null);
+  if (change.kind === 'create') {
+    if (stat) throw codedError(`Workspace changed since Codex snapshot: ${change.path} now exists`, 'codex_proposal_conflict', { path: change.path });
+    return target;
+  }
+  if (!stat?.isFile() || stat.isSymbolicLink()) {
+    throw codedError(`Workspace changed since Codex snapshot: ${change.path} is no longer a regular file`, 'codex_proposal_conflict', { path: change.path });
+  }
+  if (stat.size > SNAPSHOT_MAX_FILE_BYTES) throw codedError(`Workspace file is too large to verify: ${change.path}`, 'codex_proposal_conflict', { path: change.path });
+  const current = await fsp.readFile(target);
+  const currentSha = sha256(current);
+  if (currentSha !== change.beforeSha256) {
+    throw codedError(`Workspace changed since Codex snapshot: ${change.path}`, 'codex_proposal_conflict', {
+      path: change.path,
+      expectedSha256: change.beforeSha256,
+      actualSha256: currentSha
+    });
+  }
+  return target;
+}
+
+export async function removeAgentSnapshot(taskId) {
+  const paths = taskPaths(taskId);
+  await fsp.rm(paths.root, { recursive: true, force: true });
+}
+
+export const __test = {
+  BLOCKED_BASENAMES,
+  BLOCKED_EXTENSIONS,
+  SKIP_DIRS,
+  TASK_ID,
+  blockedPath,
+  normalizeRelative,
+  safeChild,
+  sha256,
+  taskPaths
+};
