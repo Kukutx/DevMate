@@ -22,8 +22,10 @@ function record(readyAt, overrides = {}) {
 
 function config(preflightAt = '2026-08-08T01:00:01.000Z') {
   return {
+    auth: { mode: 'oauth' },
     connection: {
       lastPreflightAt: preflightAt,
+      lastAuthMode: 'oauth',
       lastPublicHost: 'stable.example.com',
       lastMcpPath: '/mcp',
       lastToolCount: 25,
@@ -63,9 +65,11 @@ test('ownership takeover creates a distinct generation even when URL and ready t
 test('new verification evidence binds to the exact tunnel generation', () => {
   const first = record('2026-08-08T01:00:00.000Z');
   const current = {
+    auth: { mode: 'oauth' },
     connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first)
   };
   assert.equal(current.connection.lastTunnelGeneration, recordGeneration(first));
+  assert.equal(current.connection.lastAuthMode, 'oauth');
   assert.equal(current.connection.lastToolCallVerified, true);
   assert.equal(current.connection.lastProbeTool, 'gateway_status');
   assert.equal(verifiedForCurrentRecord(current, first), true);
@@ -74,9 +78,23 @@ test('new verification evidence binds to the exact tunnel generation', () => {
   assert.equal(verifiedForCurrentRecord(current, takeover), false);
 });
 
+test('authentication changes invalidate otherwise current public Ready evidence', () => {
+  const currentRecord = record('2026-08-08T01:00:00.000Z');
+  const current = config();
+  assert.equal(verifiedForCurrentRecord(current, currentRecord), true);
+
+  current.auth.mode = 'none';
+  assert.equal(verifiedForCurrentRecord(current, currentRecord), false);
+
+  current.auth.mode = 'oauth';
+  current.connection.lastAuthMode = 'none';
+  assert.equal(verifiedForCurrentRecord(current, currentRecord), false);
+});
+
 test('same tunnel process requires a fresh preflight when Gateway generation changes', () => {
   const first = record('2026-08-08T01:00:00.000Z', { gatewayGeneration: 'gateway-a' });
   const current = {
+    auth: { mode: 'oauth' },
     connection: successfulVerificationPatch(verifiedTestResult(first.publicUrl), first.publicUrl, '2026-08-08T01:00:01.000Z', first)
   };
   assert.equal(current.connection.lastGatewayGeneration, 'gateway-a');
@@ -116,6 +134,6 @@ test('matching host alone can never validate malformed or empty MCP evidence', (
     { lastPreflightAt: '2026-08-08T01:00:01.000Z', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'wrong', lastServerName: 'devmate' },
     { lastPreflightAt: 'not-a-date', lastPublicHost: 'stable.example.com', lastMcpPath: '/mcp', lastToolCount: 25, lastToolCallVerified: true, lastProbeTool: 'gateway_status', lastServerName: 'devmate' }
   ]) {
-    assert.equal(verifiedForCurrentRecord({ connection }, current), false);
+    assert.equal(verifiedForCurrentRecord({ auth: { mode: 'oauth' }, connection }, current), false);
   }
 });
