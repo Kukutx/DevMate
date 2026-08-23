@@ -88,8 +88,11 @@ export function initConfig(options = {}) {
   const publicUrl = rawPublicUrl ? normalizeOrigin(rawPublicUrl, { httpsOnly: true }) : '';
   validateStandaloneIngress({ provider, publicUrl });
   const requestedAuthentication = options['authentication-mode'] === undefined
-    ? 'none'
+    ? 'oauth'
     : String(options['authentication-mode']).trim().toLowerCase();
+  if (publicUrl && requestedAuthentication !== 'oauth') {
+    throw new Error('Public HTTPS ingress requires --authentication-mode oauth; none is loopback-only');
+  }
 
   const config = newInstanceConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
   config.instanceId = `standalone-${Date.now().toString(36)}`;
@@ -173,7 +176,7 @@ export function doctor(options = {}) {
     { key: 'workspace', ok: !!workspace && !!fs.statSync(workspace.root, { throwIfNoEntry: false })?.isDirectory(), detail: workspace?.root || 'missing' },
     { key: 'authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'oauth' },
     { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'optional' },
-    { key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-no-auth-mode' },
+    { key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-loopback-only-mode' },
     { key: 'git', ...executableStatus('git') },
     { key: 'node', ok: true, detail: process.version }
   ];
@@ -184,7 +187,7 @@ export function doctor(options = {}) {
     checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.connection.publicUrl || ''), detail: config.connection.publicUrl || 'missing' });
   }
   if (config.connection.publicUrl) {
-    checks.push({ key: 'public-authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' });
+    checks.push({ key: 'public-authentication', ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth' });
   }
   if (config.requestPolicy.allowedHosts.length) {
     const configuredHost = config.connection.publicUrl ? new URL(config.connection.publicUrl).host.toLowerCase() : '';
