@@ -115,16 +115,23 @@ test('normal VS Code host shutdown preserves the shared DevMate session', async 
   };
   const harness = createHarness({ platform });
   await harness.lifecycle.activate(harness.context);
+  setLifecycleIntent(harness.configFile, 'running', { requestedBy: 'test', reason: 'session-active' });
+  const before = readLifecycleIntent(harness.configFile);
+
   await harness.lifecycle.deactivate();
+
+  const after = readLifecycleIntent(harness.configFile);
   assert.deepEqual(deactivationOptions, { preserveSession: true });
+  assert.equal(after.desiredState, 'running');
+  assert.equal(after.generation, before.generation);
 });
 
-test('host handoff restores running intent if an inner teardown temporarily marks the shared session stopped', async () => {
+test('host handoff never reconstructs running intent after an inner authoritative stop', async () => {
   let configFile = '';
   const platform = {
     async activate() {},
     async deactivate() {
-      setLifecycleIntent(configFile, 'stopped', { requestedBy: 'legacy-inner-deactivate', reason: 'synthetic-full-stop' });
+      setLifecycleIntent(configFile, 'stopped', { requestedBy: 'inner', reason: 'cleanup-during-handoff' });
     }
   };
   const harness = createHarness({ platform });
@@ -137,10 +144,10 @@ test('host handoff restores running intent if an inner teardown temporarily mark
 
   const after = readLifecycleIntent(configFile);
   assert.equal(before.desiredState, 'running');
-  assert.equal(after.desiredState, 'running');
+  assert.equal(after.desiredState, 'stopped');
   assert.ok(after.generation > before.generation);
-  assert.equal(after.requestedBy, 'vscode-host-handoff');
-  assert.equal(after.reason, 'host-deactivation-handoff');
+  assert.equal(after.requestedBy, 'inner');
+  assert.equal(after.reason, 'cleanup-during-handoff');
 });
 
 test('host handoff never resurrects a session that was already explicitly stopped', async () => {

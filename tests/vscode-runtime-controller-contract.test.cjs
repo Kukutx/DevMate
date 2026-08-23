@@ -71,8 +71,9 @@ test('actual VS Code process calls use native child_process and the shared runti
 
 test('ngrok setup owns only configuration and secrets while TunnelController owns provider processes', () => {
   assert.doesNotMatch(ngrokSetupEntry, /SpawnLayer|runtime-io\.js|createExtensionSpawn|installManagedSpawnLayer/);
-  assert.match(ngrokSetupEntry, /context\.secrets\.store\(SECRET_KEY, validateAuthtoken\(token\)\)/);
-  assert.match(ngrokSetupEntry, /managedAuthtoken = validateAuthtoken\(token\)/);
+  assert.match(ngrokSetupEntry, /const validated = validateAuthtoken\(token\)/);
+  assert.match(ngrokSetupEntry, /context\.secrets\.store\(SECRET_KEY, validated\)/);
+  assert.match(ngrokSetupEntry, /managedAuthtoken = validated/);
   assert.match(ngrokSetupEntry, /writeActiveNgrokUrl/);
   assert.doesNotMatch(ngrokSetupEntry, /childProcess\.spawn\(/);
   assert.match(ngrokSetupEntry, /activationAttempted/);
