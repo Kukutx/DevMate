@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { terminateProcessTree } from './command-process.mjs';
-import { redactSensitiveString } from './local-shared.mjs';
+import { redactSensitiveString, redactSensitiveValue } from './local-shared.mjs';
 
 const RPC_TIMEOUT_MS = 30_000;
 const RESUME_TIMEOUT_MS = 20_000;
@@ -50,7 +50,7 @@ function sanitizeText(value, max = MAX_AGENT_OUTPUT_CHARS) {
 
 function sanitizeRpcData(value) {
   if (value == null) return null;
-  try { return sanitizeText(JSON.stringify(value), 8000); }
+  try { return sanitizeText(JSON.stringify(redactSensitiveValue(value)), 8000); }
   catch { return '[unserializable]'; }
 }
 
