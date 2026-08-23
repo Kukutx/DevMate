@@ -2,9 +2,9 @@ import { readConfig } from './local-shared.mjs';
 import { ensureToolApproval } from './approvals.mjs';
 import { jobTarget } from './job-runtime.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
-import { assertWorkspaceLease } from './workspace-leases.mjs';
+import { acquireWorkspaceLeaseHold, assertWorkspaceLease } from './workspace-leases.mjs';
 
-export function preflightQueuedJob(job) {
+export function preflightQueuedJob(job, { holdWorkspaceLease = false } = {}) {
   const target = jobTarget(job?.tool);
   if (!target) {
     const error = new Error(`Job target is not currently available: ${job?.tool || 'unknown'}`);
@@ -35,5 +35,15 @@ export function preflightQueuedJob(job) {
     workspaceId: authorized.workspaceId,
     args
   });
-  return { target, authorized, approval };
+  const leaseHold = holdWorkspaceLease
+    ? acquireWorkspaceLeaseHold({
+      workspaceId: authorized.workspaceId,
+      principal: authorized.principal,
+      capability: authorized.capability,
+      config,
+      holdMs: Math.max(60_000, Number(job?.timeoutMs) || 900_000) + 60_000,
+      purpose: `job:${job?.id || target.name}`
+    })
+    : null;
+  return { target, authorized, approval, leaseHold };
 }
