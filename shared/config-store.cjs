@@ -181,15 +181,19 @@ function replacementCandidates(file) {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-function validateReplacement(file) {
+function replacementCompatibility(file) {
   try {
     const result = parseJsonObjectFile(file);
-    if (!result.exists) return false;
+    if (!result.exists) return 'invalid';
     assertSupportedConfigVersion(result.value, file);
-    return true;
-  } catch {
-    return false;
+    return 'current';
+  } catch (error) {
+    return error?.code === 'unsupported_config_version' ? 'unsupported' : 'invalid';
   }
+}
+
+function validateReplacement(file) {
+  return replacementCompatibility(file) === 'current';
 }
 
 function quarantineConfig(file, reason = 'corrupt') {
@@ -231,7 +235,7 @@ function archiveUnsupportedLegacyConfig(file) {
 
 function cleanupReplacementCandidates(candidates, except = '') {
   for (const candidate of candidates) {
-    if (candidate.file === except) continue;
+    if (candidate.file === except || replacementCompatibility(candidate.file) === 'unsupported') continue;
     try { fs.rmSync(candidate.file, { force: true }); } catch {}
   }
 }
@@ -268,6 +272,18 @@ function recoverConfigReplacement(file) {
     const recovered = parseJsonObjectFile(file).value;
     assertSupportedConfigVersion(recovered, file);
     return { recovered: true, source: replacement.file, quarantined, value: recovered };
+  }
+
+  const unsupported = candidates.filter(candidate => replacementCompatibility(candidate.file) === 'unsupported');
+  if (unsupported.length) {
+    const error = configError(
+      'DevMate config recovery found replacement data written by an incompatible schema version; preserved for a compatible DevMate version',
+      'config_recovery_incompatible',
+      file,
+      mainError
+    );
+    error.replacementCandidates = unsupported.map(candidate => candidate.file);
+    throw error;
   }
 
   if (!mainError && !main?.exists && candidates.length) {
@@ -567,6 +583,7 @@ module.exports = {
   replaceConfig,
   recoverConfigReplacement,
   replacementCandidates,
+  replacementCompatibility,
   updateConfig,
   validateReplacement,
   newerVersion,
