@@ -38,6 +38,14 @@ test('base desktop controllers cannot successfully dispose a locally owned proce
   assert.doesNotMatch(tunnel, /async dispose\(\{ stopOwned/);
 });
 
+test('Gateway restart never starts a replacement while an owned runtime stop is unconfirmed', () => {
+  const gateway = source('host/runtime/process-controller.js');
+  assert.match(gateway, /restart\(\)[\s\S]*const stopped = await this\.stopInternal\(\)/);
+  assert.match(gateway, /stopped\.reason !== 'not-running'/);
+  assert.match(gateway, /DEVMATE_GATEWAY_RESTART_STOP_FAILED/);
+  assert.match(gateway, /error\.stop = stopped/);
+});
+
 test('VS Code wrapper chain forwards preserveSession instead of reconstructing lifecycle intent after teardown', () => {
   const platform = source('extension-entry-platform.js');
   const setup = source('extension-entry.js');
