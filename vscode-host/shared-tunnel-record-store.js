@@ -147,6 +147,89 @@ function quarantineRecord(file, reason = 'invalid') {
   }
 }
 
+function replacementCandidates(recordFile) {
+  const directory = path.dirname(recordFile);
+  const prefix = `${path.basename(recordFile)}.replace-`;
+  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.startsWith(prefix))
+    .map(entry => {
+      const file = path.join(directory, entry.name);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      return stat ? { file, mtimeMs: stat.mtimeMs } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+function recordCompatibility(file) {
+  try {
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size > MAX_RUNTIME_RECORD_BYTES) return 'invalid';
+    const record = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    const version = Number(record?.version);
+    if (Number.isInteger(version) && version > RUNTIME_RECORD_VERSION) return 'future';
+    return version === RUNTIME_RECORD_VERSION && normalizeRuntimeRecord(record) ? 'current' : 'invalid';
+  } catch {
+    return 'invalid';
+  }
+}
+
+function fsyncDirectory(directory) {
+  let fd = null;
+  try {
+    fd = fs.openSync(directory, 'r');
+    fs.fsyncSync(fd);
+  } catch {
+  } finally {
+    if (fd != null) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+function recoverRecordReplacement(recordFile) {
+  const candidates = replacementCandidates(recordFile);
+  const liveCompatibility = fs.existsSync(recordFile) ? recordCompatibility(recordFile) : 'missing';
+  if (liveCompatibility === 'future') {
+    throw runtimeRecordError(
+      `Shared tunnel runtime record is newer than supported version ${RUNTIME_RECORD_VERSION}`,
+      'DEVMATE_TUNNEL_RECORD_FUTURE_VERSION',
+      recordFile
+    );
+  }
+  if (liveCompatibility === 'current') {
+    for (const candidate of candidates) {
+      if (recordCompatibility(candidate.file) === 'future') continue;
+      try { fs.rmSync(candidate.file, { force: true }); } catch {}
+    }
+    return null;
+  }
+
+  const replacement = candidates.find(candidate => recordCompatibility(candidate.file) === 'current');
+  if (replacement) {
+    if (fs.existsSync(recordFile)) quarantineRecord(recordFile, 'corrupt');
+    fs.renameSync(replacement.file, recordFile);
+    try { fs.chmodSync(recordFile, 0o600); } catch {}
+    fsyncDirectory(path.dirname(recordFile));
+    for (const candidate of candidates) {
+      if (candidate.file === replacement.file || recordCompatibility(candidate.file) === 'future') continue;
+      try { fs.rmSync(candidate.file, { force: true }); } catch {}
+    }
+    return replacement.file;
+  }
+
+  const future = candidates.find(candidate => recordCompatibility(candidate.file) === 'future');
+  if (future) {
+    const error = runtimeRecordError(
+      `Interrupted shared tunnel replacement was written by a newer runtime and was preserved: ${future.file}`,
+      'DEVMATE_TUNNEL_RECORD_FUTURE_VERSION',
+      recordFile
+    );
+    error.replacementFile = future.file;
+    throw error;
+  }
+  return null;
+}
+
 class SharedTunnelRecordStore {
   constructor({ stateDirectory, leaseMs = DEFAULT_RUNTIME_LEASE_MS, logger = () => {} } = {}) {
     if (!stateDirectory) throw new Error('A state directory is required for shared tunnel state');
@@ -170,6 +253,7 @@ class SharedTunnelRecordStore {
   }
 
   read({ includeStale = false } = {}) {
+    recoverRecordReplacement(this.recordFile);
     const stat = fs.statSync(this.recordFile, { throwIfNoEntry: false });
     if (!stat) return null;
     if (!stat.isFile()) {
@@ -290,6 +374,9 @@ module.exports = {
   normalizeRuntimeRecord,
   nowIso,
   processAlive,
+  recordCompatibility,
+  recoverRecordReplacement,
+  replacementCandidates,
   runtimeRecordStale,
   safePublicUrl,
   stableConfiguration
