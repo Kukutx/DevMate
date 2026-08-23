@@ -13,28 +13,68 @@ function emptyStore() {
   return { version: VERSION, records: {} };
 }
 
+function stateError(message, detail = {}) {
+  const error = new Error(`External job workspace-hold durable state is invalid: ${message}`);
+  error.code = 'external_job_workspace_hold_state_invalid';
+  Object.assign(error, detail);
+  return error;
+}
+
+function capacityError(count) {
+  const error = new Error(`External job workspace-hold capacity reached (${count}/${MAX_RECORDS})`);
+  error.code = 'external_job_workspace_hold_capacity';
+  error.count = count;
+  error.limit = MAX_RECORDS;
+  return error;
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validTimestamp(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function normalizeRecord(jobId, record) {
+  if (!nonEmpty(jobId) || !record || typeof record !== 'object' || Array.isArray(record)) {
+    throw stateError(`record ${String(jobId || '(empty)')} must be an object with a non-empty job id`, { jobId: jobId || null });
+  }
+  if (record.jobId !== jobId || !nonEmpty(record.runnerId)) {
+    throw stateError(`record ${jobId} has inconsistent identity`, { jobId });
+  }
+  if (!record.hold || typeof record.hold !== 'object' || Array.isArray(record.hold)) {
+    throw stateError(`record ${jobId} is missing its workspace hold`, { jobId });
+  }
+  for (const field of ['id', 'leaseId', 'workspaceId', 'principalId']) {
+    if (!nonEmpty(record.hold[field])) throw stateError(`record ${jobId} has invalid hold.${field}`, { jobId });
+  }
+  if (!validTimestamp(record.hold.expiresAt)) throw stateError(`record ${jobId} has invalid hold expiry`, { jobId });
+  if (!validTimestamp(record.createdAt) || !validTimestamp(record.updatedAt)) {
+    throw stateError(`record ${jobId} has invalid timestamps`, { jobId });
+  }
+  return {
+    ...record,
+    hold: { ...record.hold }
+  };
+}
+
 function normalizeStore(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyStore();
-  const records = value.records && typeof value.records === 'object' && !Array.isArray(value.records)
-    ? { ...value.records }
-    : {};
+  if (value == null) return emptyStore();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw stateError('root must be an object');
+  if (value.version !== VERSION) throw stateError(`unsupported version ${String(value.version)}`, { stateVersion: value.version ?? null });
+  if (!value.records || typeof value.records !== 'object' || Array.isArray(value.records)) throw stateError('records must be an object');
+  const records = {};
+  for (const [jobId, record] of Object.entries(value.records)) records[jobId] = normalizeRecord(jobId, record);
   return { version: VERSION, records };
 }
 
 function prune(store, now = Date.now()) {
   for (const [jobId, record] of Object.entries(store.records)) {
-    const expiresAt = Date.parse(record?.hold?.expiresAt || '');
-    if (!record?.hold?.id || !record?.runnerId || !Number.isFinite(expiresAt) || expiresAt <= now) {
-      delete store.records[jobId];
-    }
+    if (Date.parse(record.hold.expiresAt) <= now) delete store.records[jobId];
   }
-  const entries = Object.entries(store.records);
-  if (entries.length > MAX_RECORDS) {
-    entries
-      .sort(([, left], [, right]) => Date.parse(left?.createdAt || 0) - Date.parse(right?.createdAt || 0))
-      .slice(0, entries.length - MAX_RECORDS)
-      .forEach(([jobId]) => { delete store.records[jobId]; });
-  }
+  const count = Object.keys(store.records).length;
+  if (count > MAX_RECORDS) throw capacityError(count);
   return store;
 }
 
@@ -47,6 +87,7 @@ export function externalJobWorkspaceHold(jobId) {
 }
 
 function holdRecord(id, runner, hold) {
+  const timestamp = new Date().toISOString();
   return {
     jobId: id,
     runnerId: runner,
@@ -57,8 +98,8 @@ function holdRecord(id, runner, hold) {
       principalId: String(hold.principalId),
       expiresAt: String(hold.expiresAt || '')
     },
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: timestamp,
+    updatedAt: timestamp
   };
 }
 
@@ -89,6 +130,7 @@ export function acquireExternalJobWorkspaceHold({
     const store = prune(normalizeStore(document.namespaces?.[NAMESPACE]));
     const existing = store.records[id];
     if (existing) throw holdConflict(id, existing.runnerId || '');
+    if (Object.keys(store.records).length >= MAX_RECORDS) throw capacityError(Object.keys(store.records).length);
 
     hold = acquireWorkspaceLeaseHoldInDocument(document, {
       workspaceId,
@@ -170,8 +212,11 @@ export const __test = {
   MAX_RECORDS,
   NAMESPACE,
   VERSION,
+  capacityError,
   emptyStore,
   holdRecord,
+  normalizeRecord,
   normalizeStore,
-  prune
+  prune,
+  stateError
 };
