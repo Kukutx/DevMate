@@ -8,8 +8,8 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - A provider-native connection, reverse proxy, VPN, or other HTTPS ingress exposes the intended public MCP endpoint.
 - `/control/health` and `/control/metrics` remain local-control surfaces and must not be exposed as public MCP endpoints.
 - MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
-- `auth.mode: "none"` is valid for both loopback and public MCP and grants owner-level access without an access token.
-- Public MCP defaults to no authentication; OAuth is optional.
+- `auth.mode: "none"` is valid only for trusted loopback MCP and grants local owner access without an access token; it does not authorize remote requests.
+- Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
 - `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
 - Runner control requests have their own bounded body, rate and protocol-version requirements.
 
@@ -29,7 +29,7 @@ The Gateway, desktop preflight, packaged VSIX/Obsidian smoke tests, and external
 
 ## OAuth credentials and identities
 
-- Desktop public MCP defaults to no authentication. OAuth is optional and only used when explicitly enabled.
+- Desktop public MCP defaults to OAuth. `none` is an explicit loopback-only option and never authorizes remote MCP requests.
 - When OAuth is enabled, MCP accepts OAuth access tokens; copied static owner/member credentials remain unsupported.
 - OAuth signing material and the rotating owner approval code live under private DevMate state with restrictive permissions, not in `config.json`.
 - OAuth client identity uses Client ID Metadata Documents (CIMD). The retired dynamic client-registration endpoint is not exposed.
