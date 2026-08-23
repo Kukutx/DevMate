@@ -74,6 +74,12 @@ function inferredWorkspace(name, args = {}) {
   return null;
 }
 
+function bindAuthorizedWorkspaceArgs(args, authorized) {
+  const workspaceId = String(authorized?.workspaceId || '').trim();
+  if (!workspaceId || String(args?.workspaceId || '').trim()) return args;
+  return { ...args, workspaceId };
+}
+
 function filterArray(items, allowed, field = 'workspaceId') {
   return Array.isArray(items) ? items.filter(item => allowed.has(item?.[field] || item?.id)) : items;
 }
@@ -234,6 +240,7 @@ export function wrapAuthorizedTool(name, config, handler) {
       config: current,
       principal: principalNow()
     });
+    const executionArgs = bindAuthorizedWorkspaceArgs(authorizationArgs, authorized);
 
     if (name !== 'job_cancel') {
       assertDrainAllows({
@@ -281,7 +288,7 @@ export function wrapAuthorizedTool(name, config, handler) {
         tool: name,
         capability: authorized.capability,
         workspaceId: authorized.workspaceId,
-        args: authorizationArgs
+        args: executionArgs
       });
       if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
@@ -289,7 +296,7 @@ export function wrapAuthorizedTool(name, config, handler) {
       let rawResult;
       try {
         rawResult = await runWithRequestSignal(invocationSignal, () =>
-          runWithWorkSessionContext(active?.id || null, () => handler(args, ...rest))
+          runWithWorkSessionContext(active?.id || null, () => handler(executionArgs, ...rest))
         );
       } finally {
         if (leaseHold) {
@@ -387,6 +394,7 @@ export async function shutdownTeamServices() {
 }
 
 export const __test = {
+  bindAuthorizedWorkspaceArgs,
   cleanOrigin,
   commandResultFailed,
   failedGitPhase,
