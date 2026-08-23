@@ -11,7 +11,7 @@ const {
 
 function config(overrides = {}) {
   return {
-    connection: { provider: 'cloudflare-quick', publicUrl: '', ...(overrides.connection || {}) },
+    connection: { provider: 'cloudflare-quick', publicUrl: '', policyGeneration: 0, ...(overrides.connection || {}) },
     ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== 'connection'))
   };
 }
@@ -30,8 +30,13 @@ function readyRecord(overrides = {}) {
 
 function verifiedConfig() {
   return config({
+    auth: { mode: 'oauth' },
+    hostRuntime: { authenticationPolicyGeneration: 0 },
     connection: {
       lastPreflightAt: '2026-08-08T01:00:01.000Z',
+      lastAuthMode: 'oauth',
+      lastAuthGeneration: 0,
+      lastConnectionPolicyGeneration: 0,
       lastPublicHost: 'current.example.com',
       lastMcpPath: '/mcp',
       lastToolCount: 12,
