@@ -6,6 +6,9 @@ const path = require('node:path');
 const { cleanOperationId } = require('./path-policy.js');
 
 const DEFAULT_MAX_RECORD_BYTES = 12 * 1024 * 1024;
+const DEFAULT_RECORD_QUARANTINE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_RECORD_QUARANTINE_FILES = 64;
+const DEFAULT_MAX_RECORD_QUARANTINE_BYTES = 64 * 1024 * 1024;
 
 function fsyncDirectory(directory) {
   let fd = null;
@@ -18,6 +21,68 @@ function fsyncDirectory(directory) {
       try { fs.closeSync(fd); } catch {}
     }
   }
+}
+
+function pruneRecordQuarantine(directory, {
+  retentionMs = DEFAULT_RECORD_QUARANTINE_RETENTION_MS,
+  maxFiles = DEFAULT_MAX_RECORD_QUARANTINE_FILES,
+  maxBytes = DEFAULT_MAX_RECORD_QUARANTINE_BYTES
+} = {}, nowMs = Date.now()) {
+  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+    return { beforeFiles: 0, afterFiles: 0, beforeBytes: 0, afterBytes: 0, deleted: [] };
+  }
+  const artifacts = fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && /\.json\.corrupt-/.test(entry.name) && !entry.name.includes('.replace-'))
+    .map(entry => {
+      const file = path.join(directory, entry.name);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      return stat?.isFile() ? { file, mtimeMs: stat.mtimeMs, sizeBytes: stat.size } : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.mtimeMs - right.mtimeMs || left.file.localeCompare(right.file));
+  const beforeFiles = artifacts.length;
+  const beforeBytes = artifacts.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const cutoff = nowMs - Math.max(1, Number(retentionMs) || DEFAULT_RECORD_QUARANTINE_RETENTION_MS);
+  const fileLimit = Math.max(1, Number(maxFiles) || DEFAULT_MAX_RECORD_QUARANTINE_FILES);
+  const byteLimit = Math.max(1, Number(maxBytes) || DEFAULT_MAX_RECORD_QUARANTINE_BYTES);
+  const deleted = [];
+  const remaining = [];
+
+  const remove = (artifact, reason) => {
+    try {
+      fs.rmSync(artifact.file, { force: true });
+      deleted.push({ path: artifact.file, reason, sizeBytes: artifact.sizeBytes });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  for (const artifact of artifacts) {
+    if (artifact.mtimeMs < cutoff) {
+      if (!remove(artifact, 'age')) remaining.push(artifact);
+    } else {
+      remaining.push(artifact);
+    }
+  }
+
+  let totalBytes = remaining.reduce((sum, item) => sum + item.sizeBytes, 0);
+  while (remaining.length > fileLimit || totalBytes > byteLimit) {
+    const artifact = remaining[0];
+    if (!artifact) break;
+    const reason = remaining.length > fileLimit ? 'count' : 'size';
+    if (!remove(artifact, reason)) break;
+    remaining.shift();
+    totalBytes -= artifact.sizeBytes;
+  }
+
+  return {
+    beforeFiles,
+    afterFiles: remaining.length,
+    beforeBytes,
+    afterBytes: totalBytes,
+    deleted
+  };
 }
 
 function parseRecordFile(file, maxBytes = DEFAULT_MAX_RECORD_BYTES) {
@@ -76,6 +141,7 @@ function recoverRecordReplacement(target, maxBytes = DEFAULT_MAX_RECORD_BYTES) {
   fs.renameSync(replacement.file, target);
   try { fs.chmodSync(target, 0o600); } catch {}
   fsyncDirectory(path.dirname(target));
+  pruneRecordQuarantine(path.dirname(target));
   return parseRecordFile(target, maxBytes);
 }
 
@@ -185,12 +251,17 @@ class JsonRecordStore {
     for (const stale of records.slice(this.maxRecords)) {
       try { fs.rmSync(stale.file, { force: true }); } catch {}
     }
+    pruneRecordQuarantine(this.directory);
   }
 }
 
 module.exports = {
   DEFAULT_MAX_RECORD_BYTES,
+  DEFAULT_MAX_RECORD_QUARANTINE_BYTES,
+  DEFAULT_MAX_RECORD_QUARANTINE_FILES,
+  DEFAULT_RECORD_QUARANTINE_RETENTION_MS,
   JsonRecordStore,
   atomicWriteRecord,
+  pruneRecordQuarantine,
   recoverRecordReplacement
 };
