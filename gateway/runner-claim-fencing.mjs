@@ -8,18 +8,82 @@ const VERSION = 1;
 const TOKEN_BYTES = 32;
 const MAX_CLAIMS = 5000;
 const GENERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const TOKEN_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 function emptyStore() {
   return { version: VERSION, claims: {}, generations: {} };
 }
 
+function claimStateError(message, detail = {}) {
+  const error = new Error(`Runner claim durable state is invalid: ${message}`);
+  error.code = 'runner_claim_state_invalid';
+  error.status = 409;
+  Object.assign(error, detail);
+  return error;
+}
+
+function claimCapacityError(count) {
+  const error = new Error(`Runner claim capacity reached (${count}/${MAX_CLAIMS})`);
+  error.code = 'runner_claim_capacity';
+  error.status = 409;
+  error.count = count;
+  error.limit = MAX_CLAIMS;
+  return error;
+}
+
+function validTime(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function validId(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeClaim(jobId, record) {
+  if (!validId(jobId) || !record || typeof record !== 'object' || Array.isArray(record)) {
+    throw claimStateError(`claim ${String(jobId || '(empty)')} must be an object`, { jobId: jobId || null });
+  }
+  if (record.jobId !== jobId || !validId(record.runnerId)) {
+    throw claimStateError(`claim ${jobId} has inconsistent identity`, { jobId });
+  }
+  if (!Number.isSafeInteger(record.generation) || record.generation < 1) {
+    throw claimStateError(`claim ${jobId} has an invalid generation`, { jobId });
+  }
+  if (typeof record.tokenHash !== 'string' || !TOKEN_HASH_PATTERN.test(record.tokenHash)) {
+    throw claimStateError(`claim ${jobId} has an invalid token hash`, { jobId });
+  }
+  if (!validTime(record.issuedAt) || !validTime(record.leaseExpiresAt)) {
+    throw claimStateError(`claim ${jobId} has invalid timestamps`, { jobId });
+  }
+  return { ...record };
+}
+
+function normalizeGeneration(jobId, record) {
+  if (!validId(jobId) || !record || typeof record !== 'object' || Array.isArray(record)) {
+    throw claimStateError(`generation ${String(jobId || '(empty)')} must be an object`, { jobId: jobId || null });
+  }
+  if (!Number.isSafeInteger(record.generation) || record.generation < 1 || !validTime(record.updatedAt)) {
+    throw claimStateError(`generation ${jobId} is invalid`, { jobId });
+  }
+  return { generation: record.generation, updatedAt: record.updatedAt };
+}
+
 export function normalizeRunnerClaimStore(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyStore();
-  return {
-    version: VERSION,
-    claims: value.claims && typeof value.claims === 'object' && !Array.isArray(value.claims) ? { ...value.claims } : {},
-    generations: value.generations && typeof value.generations === 'object' && !Array.isArray(value.generations) ? { ...value.generations } : {}
-  };
+  if (value === undefined) return emptyStore();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw claimStateError('root must be an object');
+  if (value.version !== VERSION) throw claimStateError(`unsupported version ${String(value.version)}`, { stateVersion: value.version ?? null });
+  if (!value.claims || typeof value.claims !== 'object' || Array.isArray(value.claims)) throw claimStateError('claims must be an object');
+  if (!value.generations || typeof value.generations !== 'object' || Array.isArray(value.generations)) throw claimStateError('generations must be an object');
+
+  const claims = Object.fromEntries(Object.entries(value.claims).map(([jobId, record]) => [jobId, normalizeClaim(jobId, record)]));
+  const generations = Object.fromEntries(Object.entries(value.generations).map(([jobId, record]) => [jobId, normalizeGeneration(jobId, record)]));
+  for (const [jobId, claim] of Object.entries(claims)) {
+    const retained = generations[jobId];
+    if (!retained || retained.generation < claim.generation) {
+      throw claimStateError(`claim ${jobId} is missing a matching retained generation`, { jobId, claimGeneration: claim.generation });
+    }
+  }
+  return { version: VERSION, claims, generations };
 }
 
 function readStore() {
@@ -49,27 +113,23 @@ function claimError(message, code = 'claim_fence_invalid') {
 
 function prune(store, at = Date.now()) {
   for (const [jobId, claim] of Object.entries(store.claims)) {
-    const expires = Date.parse(claim?.leaseExpiresAt || 0);
-    if (!Number.isFinite(expires) || expires < at - 5 * 60 * 1000) delete store.claims[jobId];
+    const expires = Date.parse(claim.leaseExpiresAt);
+    if (expires < at - 5 * 60 * 1000) delete store.claims[jobId];
   }
+  if (Object.keys(store.claims).length > MAX_CLAIMS) throw claimCapacityError(Object.keys(store.claims).length);
+
   for (const [jobId, generation] of Object.entries(store.generations)) {
-    const updated = Date.parse(generation?.updatedAt || 0);
-    if (!store.claims[jobId] && (!Number.isFinite(updated) || updated < at - GENERATION_RETENTION_MS)) delete store.generations[jobId];
-  }
-  const claims = Object.entries(store.claims);
-  if (claims.length > MAX_CLAIMS) {
-    claims
-      .sort((a, b) => Date.parse(a[1]?.issuedAt || 0) - Date.parse(b[1]?.issuedAt || 0))
-      .slice(0, claims.length - MAX_CLAIMS)
-      .forEach(([jobId]) => delete store.claims[jobId]);
+    const updated = Date.parse(generation.updatedAt);
+    if (!store.claims[jobId] && updated < at - GENERATION_RETENTION_MS) delete store.generations[jobId];
   }
   const generations = Object.entries(store.generations);
   if (generations.length > MAX_CLAIMS) {
-    generations
+    const removable = generations
       .filter(([jobId]) => !store.claims[jobId])
-      .sort((a, b) => Date.parse(a[1]?.updatedAt || 0) - Date.parse(b[1]?.updatedAt || 0))
-      .slice(0, Math.max(0, generations.length - MAX_CLAIMS))
-      .forEach(([jobId]) => delete store.generations[jobId]);
+      .sort((a, b) => Date.parse(a[1].updatedAt) - Date.parse(b[1].updatedAt));
+    const removeCount = generations.length - MAX_CLAIMS;
+    if (removable.length < removeCount) throw claimCapacityError(Object.keys(store.claims).length);
+    removable.slice(0, removeCount).forEach(([jobId]) => delete store.generations[jobId]);
   }
   return store;
 }
@@ -116,6 +176,7 @@ export function issueRunnerClaimInStore(storeValue, { jobId, runnerId, leaseExpi
   const expires = Date.parse(leaseExpiresAt || '');
   if (!Number.isFinite(expires) || expires <= Date.now()) throw new Error('Runner claim requires a future leaseExpiresAt');
   const store = prune(normalizeRunnerClaimStore(storeValue));
+  if (!store.claims[id] && Object.keys(store.claims).length >= MAX_CLAIMS) throw claimCapacityError(Object.keys(store.claims).length);
   const generation = generationValue(store, id) + 1;
   const token = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
   const issuedAt = now();
@@ -191,7 +252,7 @@ export function revokeRunnerClaim(jobId) {
     return false;
   }
   delete store.claims[id];
-  store.generations[id] = { generation: Number(record.generation) || generationValue(store, id), updatedAt: now() };
+  store.generations[id] = { generation: record.generation, updatedAt: now() };
   writeStore(store);
   releaseWorkspaceHoldBestEffort(id, record.runnerId);
   return true;
@@ -221,9 +282,14 @@ export const __test = {
   GENERATION_RETENTION_MS,
   MAX_CLAIMS,
   TOKEN_BYTES,
+  TOKEN_HASH_PATTERN,
+  claimCapacityError,
+  claimStateError,
   emptyStore,
   generationValue,
   hashToken,
+  normalizeClaim,
+  normalizeGeneration,
   normalizeRunnerClaimStore,
   prune,
   releaseWorkspaceHoldBestEffort,
