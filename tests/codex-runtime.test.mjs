@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { CodexAppServer, __test as runtimeTest } from '../gateway/agent-codex-runtime.mjs';
 
-function fakeAppServer({ completeTurn = true } = {}) {
+function fakeAppServer({ completeTurn = true, turnError = null } = {}) {
   const child = new EventEmitter();
   child.pid = 424242;
   child.exitCode = null;
@@ -35,7 +35,17 @@ function fakeAppServer({ completeTurn = true } = {}) {
         if (completeTurn) {
           setTimeout(() => {
             send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { turnId: 'turn-1', delta: 'proposal ready' } });
-            send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
+            send({
+              jsonrpc: '2.0',
+              method: 'turn/completed',
+              params: {
+                turn: {
+                  id: 'turn-1',
+                  status: turnError ? 'failed' : 'completed',
+                  ...(turnError ? { error: turnError } : {})
+                }
+              }
+            });
           }, 10);
         }
       }
@@ -206,6 +216,34 @@ test('Codex RPC diagnostic data is bounded and credential-redacted', () => {
   const safe = runtimeTest.sanitizeRpcData({ authorization: 'Bearer sk-supersecret', token: 'abc123', detail: 'ok' });
   assert.doesNotMatch(safe, /sk-supersecret|abc123/);
   assert.match(safe, /redacted/);
+});
+
+test('Codex completed turn errors are structurally credential-redacted', async () => {
+  const fake = fakeAppServer({
+    turnError: {
+      authorization: 'Bearer sk-turn-supersecret',
+      token: 'turn-secret-value',
+      detail: 'synthetic failure'
+    }
+  });
+  const cwd = await snapshotDir();
+  const runtime = new CodexAppServer({
+    executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex',
+    spawnFn: () => fake.child
+  });
+  try {
+    await runtime.start({ cwd });
+    const thread = await runtime.ensureThread({ cwd });
+    const result = await runtime.runTurn({ threadId: thread.threadId, cwd, prompt: 'Return a synthetic failure.' });
+    assert.equal(result.status, 'failed');
+    assert.match(result.error, /redacted/);
+    assert.match(result.error, /synthetic failure/);
+    assert.doesNotMatch(result.error, /sk-turn-supersecret|turn-secret-value/);
+  } finally {
+    fake.child.exitCode = 0;
+    await runtime.stop();
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test('Codex app-server refuses to start outside an explicit existing snapshot cwd', async () => {
