@@ -319,7 +319,7 @@ test('failed startup keeps ownership until a stubborn Gateway actually exits', a
   assert.equal(controller.phase, 'idle');
 });
 
-test('dispose refuses to orphan an owned process unless stopOwned is requested', async () => {
+test('dispose always releases an owned Gateway before disposing the controller', async () => {
   const root = temporaryDirectory('devmate-dispose-root-');
   const state = temporaryDirectory('devmate-dispose-state-');
   const controller = new RuntimeController({
@@ -329,11 +329,11 @@ test('dispose refuses to orphan an owned process unless stopOwned is requested',
     preferredPort: await freePort()
   });
   await controller.start({ timeoutMs: 5000 });
-  const refused = await controller.dispose();
-  assert.deepEqual(refused, { disposed: false, reason: 'owned-process-running' });
-  assert.equal(controller.disposed, false);
-  const disposed = await controller.dispose({ stopOwned: true });
+  const disposed = await controller.dispose();
   assert.equal(disposed.disposed, true);
+  assert.equal(disposed.stop.stopped, true);
   assert.equal(controller.disposed, true);
+  assert.equal(controller.owned, false);
+  assert.equal(controller.child, null);
   assert.equal(controller.phase, 'disposed');
 });
