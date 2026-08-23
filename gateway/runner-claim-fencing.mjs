@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { now } from './local-shared.mjs';
 import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
+import { releaseExternalJobWorkspaceHold } from './external-job-workspace-holds.mjs';
 
 const NAMESPACE = 'runner-claims';
 const VERSION = 1;
@@ -97,6 +98,17 @@ function validateRecord(record, { jobId, runnerId, generation, token, allowExpir
   return record;
 }
 
+function releaseWorkspaceHoldBestEffort(jobId, runnerId) {
+  try {
+    return releaseExternalJobWorkspaceHold({ jobId, runnerId });
+  } catch {
+    // Claim fencing is the execution authority. A cleanup-store failure must not
+    // turn an already-completed job into an ambiguous failed response. The hold
+    // itself is bounded and remains fail-closed until expiry/retry.
+    return false;
+  }
+}
+
 export function issueRunnerClaimInStore(storeValue, { jobId, runnerId, leaseExpiresAt }) {
   const id = String(jobId || '').trim();
   const owner = String(runnerId || '').trim();
@@ -127,6 +139,21 @@ export function issueRunnerClaim(input) {
   return claim;
 }
 
+export function activeRunnerClaim(jobId, runnerId = '') {
+  const id = String(jobId || '').trim();
+  if (!id) return null;
+  const store = prune(readStore());
+  const record = claimRecord(store, id);
+  if (!record || Date.parse(record.leaseExpiresAt || 0) <= Date.now()) return null;
+  if (runnerId && record.runnerId !== String(runnerId)) return null;
+  return {
+    jobId: record.jobId,
+    runnerId: record.runnerId,
+    generation: record.generation,
+    leaseExpiresAt: record.leaseExpiresAt
+  };
+}
+
 export function validateRunnerClaim(input) {
   const store = prune(readStore());
   const record = validateRecord(claimRecord(store, input.jobId), input);
@@ -150,7 +177,8 @@ export function consumeRunnerClaim(input) {
   delete store.claims[input.jobId];
   store.generations[input.jobId] = { generation: record.generation, updatedAt: now() };
   writeStore(store);
-  return { generation: record.generation, runnerId: record.runnerId };
+  const workspaceHoldReleased = releaseWorkspaceHoldBestEffort(input.jobId, record.runnerId);
+  return { generation: record.generation, runnerId: record.runnerId, workspaceHoldReleased };
 }
 
 export function revokeRunnerClaim(jobId) {
@@ -158,10 +186,14 @@ export function revokeRunnerClaim(jobId) {
   if (!id) return false;
   const store = readStore();
   const record = store.claims[id];
-  if (!record) return false;
+  if (!record) {
+    releaseWorkspaceHoldBestEffort(id, '');
+    return false;
+  }
   delete store.claims[id];
   store.generations[id] = { generation: Number(record.generation) || generationValue(store, id), updatedAt: now() };
   writeStore(store);
+  releaseWorkspaceHoldBestEffort(id, record.runnerId);
   return true;
 }
 
@@ -194,6 +226,7 @@ export const __test = {
   hashToken,
   normalizeRunnerClaimStore,
   prune,
+  releaseWorkspaceHoldBestEffort,
   timingSafeEqualText,
   validateRecord
 };
