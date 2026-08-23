@@ -47,7 +47,8 @@ function normalizePaths(paths = {}) {
   const backupRoot = path.resolve(String(paths.backupRoot || path.join(stateRoot, 'backups')));
   const auditLog = path.resolve(String(paths.auditLog || path.join(stateRoot, 'audit.jsonl')));
   const configDirectory = path.dirname(stateRoot);
-  const configFile = path.resolve(String(paths.configFile || path.join(configDirectory, 'config.json')));
+  const configuredFile = String(paths.configFile || process.env.DEVMATE_CONFIG || path.join(configDirectory, 'config.json'));
+  const configFile = path.resolve(configuredFile);
   if (!isInside(stateRoot, backupRoot)) throw new Error('Runtime maintenance backupRoot must be inside stateRoot');
   if (!isInside(stateRoot, auditLog)) throw new Error('Runtime maintenance auditLog must be inside stateRoot');
   if (path.dirname(configFile) !== configDirectory) {
