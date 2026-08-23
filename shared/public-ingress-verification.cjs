@@ -100,6 +100,8 @@ function runtimeMatchesConnection(config, record, publicUrl = cleanHttpsOrigin(r
 
 function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   const connection = config?.connection || {};
+  const authMode = String(config?.auth?.mode || 'oauth').trim().toLowerCase();
+  if (authMode !== 'oauth' || String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;
   const preflightAt = Date.parse(connection.lastPreflightAt || '');
   if (!Number.isFinite(preflightAt)) return false;
   const failureAt = Date.parse(connection.lastErrorAt || '');
@@ -138,12 +140,14 @@ function successfulVerificationPatch(
   publicUrl,
   stamp = new Date().toISOString(),
   record = null,
-  gatewayLock = null
+  gatewayLock = null,
+  authMode = 'oauth'
 ) {
   const tunnelGeneration = recordGeneration(record);
   const currentGatewayGeneration = gatewayGeneration(gatewayLock) || String(record?.gatewayGeneration || '').trim();
   return {
     lastPreflightAt: stamp,
+    lastAuthMode: String(authMode || '').trim().toLowerCase(),
     lastPublicOrigin: String(test?.publicOrigin || publicUrl || '').trim(),
     lastPublicHost: hostOf(test?.publicOrigin || publicUrl),
     lastMcpPath: '/mcp',
