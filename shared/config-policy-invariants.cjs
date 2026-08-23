@@ -15,6 +15,28 @@ function policyInvariantError(message, code, file, details = {}) {
   return error;
 }
 
+function policyGenerationBaseline(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+  const authGeneration = config?.hostRuntime?.[AUTH_POLICY_GENERATION_KEY];
+  const connection = config?.connection && typeof config.connection === 'object' && !Array.isArray(config.connection)
+    ? config.connection
+    : {};
+  return {
+    instanceId: config.instanceId,
+    auth: config.auth && typeof config.auth === 'object' && !Array.isArray(config.auth)
+      ? { mode: config.auth.mode }
+      : undefined,
+    hostRuntime: authGeneration === undefined
+      ? undefined
+      : { [AUTH_POLICY_GENERATION_KEY]: authGeneration },
+    connection: {
+      provider: connection.provider,
+      publicUrl: connection.publicUrl,
+      policyGeneration: connection.policyGeneration
+    }
+  };
+}
+
 function sameInstance(before, next) {
   const beforeId = String(before?.instanceId || '').trim();
   const nextId = String(next?.instanceId || '').trim();
@@ -122,6 +144,7 @@ module.exports = {
   enforceAuthenticationGeneration,
   enforceConnectionGeneration,
   enforcePolicyGenerations,
+  policyGenerationBaseline,
   policyInvariantError,
   sameInstance
 };
