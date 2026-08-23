@@ -221,10 +221,16 @@ async function recoverWriteJournal(journal, paths) {
   const temporaryExists = !!fs.lstatSync(paths.temporary, { throwIfNoEntry: false });
 
   if (rollbackExists && targetExists) {
+    if (temporaryExists) {
+      throw transactionError(
+        'Interrupted file replacement found a recreated target before the prepared write committed',
+        'FILE_TRANSACTION_RECOVERY_BLOCKED',
+        journal
+      );
+    }
     if (!(await removeIfPresent(paths.rollback))) {
       throw transactionError('Committed file replacement still has an undeletable rollback file', 'FILE_TRANSACTION_RECOVERY_BLOCKED', journal);
     }
-    await removeIfPresent(paths.temporary);
     removeJournal(journal);
     return { id: journal.id, action: 'finish-committed-write' };
   }
