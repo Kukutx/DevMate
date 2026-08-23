@@ -5,6 +5,7 @@ const fs = require('node:fs');
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_STALE_MS = 60000;
+const MAX_LOCK_BYTES = 64 * 1024;
 const held = new Map();
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 
@@ -24,28 +25,54 @@ function processAlive(pid) {
   }
 }
 
-function readLock(lockPath) {
-  try { return JSON.parse(fs.readFileSync(lockPath, 'utf8')); }
-  catch { return null; }
+function readLockState(lockPath) {
+  const stat = fs.statSync(lockPath, { throwIfNoEntry: false });
+  if (!stat) return { exists: false, lock: null, stat: null, valid: false };
+  if (!stat.isFile() || stat.size > MAX_LOCK_BYTES) {
+    return { exists: true, lock: null, stat, valid: false };
+  }
+  try {
+    const value = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { exists: true, lock: null, stat, valid: false };
+    }
+    return { exists: true, lock: value, stat, valid: true };
+  } catch {
+    return { exists: true, lock: null, stat, valid: false };
+  }
 }
 
-function staleLock(lock, staleMs, now = Date.now()) {
-  void staleMs;
-  void now;
-  // A live owner is authoritative. This synchronous lock has no heartbeat that can safely justify age-based takeover.
-  return !processAlive(lock?.pid);
+function readLock(lockPath) {
+  return readLockState(lockPath).lock;
+}
+
+function staleLock(lock) {
+  // A parsed live owner is authoritative. This synchronous lock has no
+  // heartbeat that can safely justify age-based takeover. Unreadable locks are
+  // handled separately from file mtime so a contender cannot steal a lock in
+  // the small open('wx') -> write(JSON) initialization window.
+  if (!lock || typeof lock !== 'object') return false;
+  return !processAlive(lock.pid);
+}
+
+function staleUnreadableLock(state, staleMs, now = Date.now()) {
+  if (!state?.exists || state.valid || !state.stat) return false;
+  const age = now - Number(state.stat.mtimeMs || 0);
+  return Number.isFinite(age) && age >= Math.max(1000, Number(staleMs) || DEFAULT_STALE_MS);
 }
 
 function removeStaleLock(lockPath, staleMs) {
-  const current = readLock(lockPath);
-  if (!staleLock(current, staleMs)) return false;
+  const state = readLockState(lockPath);
+  if (!state.exists) return true;
+  if (!(state.valid ? staleLock(state.lock) : staleUnreadableLock(state, staleMs))) return false;
+  const quarantine = `${lockPath}.stale-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
   try {
-    fs.renameSync(lockPath, `${lockPath}.stale-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`);
-    return true;
+    fs.renameSync(lockPath, quarantine);
   } catch {
-    try { fs.rmSync(lockPath, { force: true }); return true; }
-    catch { return false; }
+    return false;
   }
+  try { fs.rmSync(quarantine, { force: true }); } catch {}
+  return true;
 }
 
 function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAULT_STALE_MS } = {}) {
@@ -111,11 +138,14 @@ function clearFileLocksForTests() {
 module.exports = {
   DEFAULT_STALE_MS,
   DEFAULT_TIMEOUT_MS,
+  MAX_LOCK_BYTES,
   acquireFileLock,
   clearFileLocksForTests,
   processAlive,
   readLock,
+  readLockState,
   releaseFileLock,
   staleLock,
+  staleUnreadableLock,
   withFileLockSync
 };
