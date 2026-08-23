@@ -27,7 +27,7 @@ const { setConnectionPolicy } = instanceConfig;
 const { normalizeAllowedHosts } = publicHostPolicy;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
-  const config = normalizeInstanceConfig(inputConfig);
+  const config = normalizeInstanceConfig(JSON.parse(JSON.stringify(inputConfig || {})));
   const previousProvider = config.connection.provider;
   const previousPublicUrl = config.connection.publicUrl;
   const provider = patch.tunnelProvider === undefined ? previousProvider : patch.tunnelProvider;
