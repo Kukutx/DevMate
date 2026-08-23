@@ -32,12 +32,21 @@ const workspaceRecord = {
   reference: false
 };
 
-test('Codex snapshot is isolated, excludes credentials and symlinks, and produces bounded text proposals', async () => {
+test('Codex snapshot is isolated, omits real workspace path metadata, excludes credentials and symlinks, and produces bounded text proposals', async () => {
   const created = await snapshot.createAgentSnapshot({ taskId, workspace: workspaceRecord });
   assert.equal(path.resolve(created.cwd).startsWith(path.resolve(workspace) + path.sep), false);
   assert.equal(await fsp.readFile(path.join(created.cwd, 'app.js'), 'utf8'), 'export const value = 1;\n');
   assert.equal(fs.existsSync(path.join(created.cwd, '.env')), false);
   if (symlinkCreated) assert.equal(fs.existsSync(path.join(created.cwd, 'outside-link.txt')), false);
+
+  const manifest = await snapshot.readAgentSnapshotManifest(taskId);
+  assert.equal(Object.hasOwn(manifest, 'workspaceRoot'), false);
+  const manifestText = await fsp.readFile(path.join(snapshot.AGENT_TASK_ROOT, taskId, 'manifest.json'), 'utf8');
+  assert.equal(manifestText.includes(path.resolve(workspace)), false);
+
+  const baseline = await snapshot.readAgentBaselineFile(taskId, 'app.js');
+  assert.equal(baseline.text, 'export const value = 1;\n');
+  assert.match(baseline.sha256, /^[a-f0-9]{64}$/);
 
   await fsp.writeFile(path.join(created.cwd, 'app.js'), 'export const value = 2;\n', 'utf8');
   await fsp.rm(path.join(created.cwd, 'remove.md'));
@@ -52,10 +61,22 @@ test('Codex snapshot is isolated, excludes credentials and symlinks, and produce
   assert.equal(proposal.blocked.length, 1);
   assert.equal(proposal.blocked[0].path, 'asset.bin');
   assert.match(proposal.blocked[0].reason, /non-text/);
+  assert.equal(Number.isInteger(proposal.changes.find(item => item.path === 'remove.md')?.mode), true);
 
   assert.equal(await fsp.readFile(path.join(workspace, 'app.js'), 'utf8'), 'export const value = 1;\n');
   assert.equal(fs.existsSync(path.join(workspace, 'new-file.ts')), false);
   assert.equal(fs.existsSync(path.join(workspace, 'remove.md')), true);
+});
+
+test('baseline integrity is verified before it can be used for rollback', async () => {
+  const baselinePath = path.join(snapshot.AGENT_TASK_ROOT, taskId, 'baseline', 'app.js');
+  const original = await fsp.readFile(baselinePath, 'utf8');
+  await fsp.writeFile(baselinePath, 'tampered baseline\n', 'utf8');
+  await assert.rejects(
+    snapshot.readAgentBaselineFile(taskId, 'app.js'),
+    error => error?.code === 'codex_baseline_integrity_failed'
+  );
+  await fsp.writeFile(baselinePath, original, 'utf8');
 });
 
 test('proposal conflict validation protects dirty real-workspace state from stale Codex changes', async () => {
