@@ -50,13 +50,10 @@ async function prepareModifyTask({ file = 'app.js', before = 'export const value
   const proposal = await snapshot.agentProposalChanges(task.id);
   assert.equal(proposal.blocked.length, 0);
   assert.equal(proposal.changes.length, 1);
-  return { task, change: proposal.changes[0], before, after };
+  return { task, created, change: proposal.changes[0], before, after };
 }
 
 async function clearFixture() {
-  // resetDurableStateForTests intentionally clears only in-process caches/locks; the
-  // persisted namespace must also be reset so each crash-recovery case starts from
-  // a genuinely empty durable collaboration state.
   durable.resetDurableStateForTests();
   durable.writeDurableNamespace('codex-collaboration', { version: 1, activeTaskId: null, tasks: [] });
   durable.resetDurableStateForTests();
@@ -66,6 +63,44 @@ async function clearFixture() {
 }
 
 test.beforeEach(clearFixture);
+
+test('reviewed proposal digest is stable and a changed snapshot cannot be applied under an old review', async () => {
+  const { task, created, before } = await prepareModifyTask();
+  const first = await collaboration.codexProposal({ workspaceId, taskId: task.id });
+  const repeated = await collaboration.codexProposal({ workspaceId, taskId: task.id });
+  assert.match(first.proposalDigest, /^[a-f0-9]{64}$/);
+  assert.equal(repeated.proposalDigest, first.proposalDigest);
+
+  await fsp.writeFile(path.join(created.cwd, 'app.js'), 'export const value = 3;\n', 'utf8');
+  await assert.rejects(
+    collaboration.applyCodexProposal({ workspaceId, taskId: task.id, expectedProposalDigest: first.proposalDigest }),
+    error => error?.code === 'codex_proposal_review_stale'
+  );
+  assert.equal(await fsp.readFile(path.join(workspace, 'app.js'), 'utf8'), before);
+  assert.equal(durableTask(task.id).status, 'proposal_ready');
+
+  const refreshed = await collaboration.codexProposal({ workspaceId, taskId: task.id });
+  assert.notEqual(refreshed.proposalDigest, first.proposalDigest);
+  const applied = await collaboration.applyCodexProposal({
+    workspaceId,
+    taskId: task.id,
+    expectedProposalDigest: refreshed.proposalDigest
+  });
+  assert.equal(applied.proposalDigest, refreshed.proposalDigest);
+  assert.deepEqual(applied.applied, [{ kind: 'modify', path: 'app.js' }]);
+  assert.equal(await fsp.readFile(path.join(workspace, 'app.js'), 'utf8'), 'export const value = 3;\n');
+  assert.equal(durableTask(task.id).status, 'applied');
+});
+
+test('Codex proposal apply refuses unreviewed calls without an exact digest', async () => {
+  const { task, before } = await prepareModifyTask();
+  await assert.rejects(
+    collaboration.applyCodexProposal({ workspaceId, taskId: task.id }),
+    error => error?.code === 'codex_proposal_digest_required'
+  );
+  assert.equal(await fsp.readFile(path.join(workspace, 'app.js'), 'utf8'), before);
+  assert.equal(durableTask(task.id).status, 'proposal_ready');
+});
 
 test('startup recovery rolls back a mutation committed after durable in-flight intent but before appliedCount persistence', async () => {
   const { task, change, before, after } = await prepareModifyTask();
