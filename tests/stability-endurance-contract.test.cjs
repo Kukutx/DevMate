@@ -84,7 +84,7 @@ test('local owner drain checks and inactive sessions avoid durable control-plane
   const drainStart = queue.indexOf('export function assertDrainAllows');
   const drainEnd = queue.indexOf('\n}', drainStart);
   const drain = queue.slice(drainStart, drainEnd);
-  assert.ok(drain.indexOf("principal?.source !== 'team-token'") < drain.indexOf('drainStatus()'));
+  assert.ok(drain.indexOf("principal?.source !== 'oauth-member'") < drain.indexOf('drainStatus()'));
   assert.equal(sessions.includes('if (!expired) return false'), true);
   assert.equal(sessions.includes('if (!existing) return null'), true);
   assert.equal(leases.includes('if (!expired) return false'), true);
