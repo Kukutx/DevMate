@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { authenticationPolicyGeneration, configureAuthentication } = require('../shared/auth-config.cjs');
 const { DEFAULT_VERSION, atomicWriteJson, newInstanceConfig, readJson } = require('../shared/config-store.cjs');
+const { setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
 const {
   recordVerificationFailure,
   verifySharedPublicMcp
@@ -31,7 +33,14 @@ function fixture() {
     defaultConnectionProvider: 'cloudflare-quick'
   });
   config.instanceId = 'instance-a';
-  config.auth = { mode: 'oauth' };
+  config.lifecycle = {
+    desiredState: 'running',
+    generation: 1,
+    updatedAt: '2026-08-14T11:59:59.000Z',
+    requestedBy: 'test',
+    reason: 'test'
+  };
+  configureAuthentication(config, 'oauth', { replace: true });
   atomicWriteJson(configFile, config);
   return { stateDirectory, configFile, record, cleanup: () => fs.rmSync(stateDirectory, { recursive: true, force: true }) };
 }
@@ -47,6 +56,19 @@ function success(publicUrl) {
   };
 }
 
+function verificationPatch(fx, stamp) {
+  const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+  return successfulVerificationPatch(
+    success(fx.record.publicUrl),
+    fx.record.publicUrl,
+    stamp,
+    fx.record,
+    null,
+    config.auth.mode,
+    authenticationPolicyGeneration(config)
+  );
+}
+
 test('desktop callers can select the account-free provider without changing standalone defaults', () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-desktop-default-'));
   try {
@@ -58,7 +80,7 @@ test('desktop callers can select the account-free provider without changing stan
   }
 });
 
-test('desktop hosts share one network preflight for the same connection generation', async () => {
+test('desktop hosts share one network preflight for the same connection and auth generation', async () => {
   const fx = fixture();
   let calls = 0;
   let release;
@@ -89,6 +111,8 @@ test('desktop hosts share one network preflight for the same connection generati
     assert.equal(a.test.toolCallVerified, true);
     assert.equal(b.test.toolCallVerified, true);
     assert.equal([a.reused, b.reused].filter(Boolean).length, 1);
+    const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(persisted.connection.lastAuthGeneration, authenticationPolicyGeneration(persisted));
   } finally {
     fx.cleanup();
   }
@@ -99,7 +123,7 @@ test('stale Ready evidence is rechecked instead of being trusted forever', async
   const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
   config.connection = {
     ...config.connection,
-    ...successfulVerificationPatch(success(fx.record.publicUrl), fx.record.publicUrl, '2026-08-14T12:00:00.000Z', fx.record)
+    ...verificationPatch(fx, '2026-08-14T12:00:00.000Z')
   };
   atomicWriteJson(fx.configFile, config);
   let calls = 0;
@@ -133,7 +157,7 @@ test('a fresh failed probe invalidates older Ready evidence but preserves a newe
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     config.connection = {
       ...config.connection,
-      ...successfulVerificationPatch(success(fx.record.publicUrl), fx.record.publicUrl, stamp, fx.record)
+      ...verificationPatch(fx, stamp)
     };
     atomicWriteJson(fx.configFile, config);
     assert.equal(verifiedForCurrentRecord(config, fx.record), true);
@@ -146,7 +170,7 @@ test('a fresh failed probe invalidates older Ready evidence but preserves a newe
 
     failed.connection = {
       ...failed.connection,
-      ...successfulVerificationPatch(success(fx.record.publicUrl), fx.record.publicUrl, '2026-08-14T12:00:04.000Z', fx.record)
+      ...verificationPatch(fx, '2026-08-14T12:00:04.000Z')
     };
     atomicWriteJson(fx.configFile, failed);
     recordVerificationFailure(fx.configFile, () => fx.record, generation, Object.assign(new Error('late timeout'), { code: 'ETIMEDOUT' }), () => Date.parse('2026-08-14T12:00:05.000Z'), () => true, () => null, Date.parse('2026-08-14T12:00:03.000Z'));
@@ -154,6 +178,47 @@ test('a fresh failed probe invalidates older Ready evidence but preserves a newe
     assert.equal(verifiedForCurrentRecord(preserved, fx.record), true);
     assert.equal(preserved.connection.lastError, '');
   } finally {
+    fx.cleanup();
+  }
+});
+
+test('OAuth-none-OAuth ABA during preflight cannot stamp old evidence onto the new policy generation', async () => {
+  const fx = fixture();
+  let release;
+  const preflightStarted = new Promise(resolve => { release = resolve; });
+  let complete;
+  const hold = new Promise(resolve => { complete = resolve; });
+
+  try {
+    const verification = verifySharedPublicMcp({
+      stateDirectory: fx.stateDirectory,
+      configFile: fx.configFile,
+      publicUrl: fx.record.publicUrl,
+      expectedRecord: fx.record,
+      currentRecord: () => fx.record,
+      preflight: async input => {
+        release();
+        await hold;
+        return success(input.publicUrl);
+      }
+    });
+
+    await preflightStarted;
+    const before = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    const beforeGeneration = authenticationPolicyGeneration(before);
+    setDesktopAuthenticationMode(fx.configFile, 'none');
+    setDesktopAuthenticationMode(fx.configFile, 'oauth');
+    const after = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(after.auth.mode, 'oauth');
+    assert.equal(authenticationPolicyGeneration(after), beforeGeneration + 2);
+
+    complete();
+    await assert.rejects(verification, error => error?.code === 'DEVMATE_PUBLIC_MCP_AUTH_POLICY_CHANGED');
+    const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(verifiedForCurrentRecord(persisted, fx.record), false);
+    assert.notEqual(persisted.connection.lastAuthGeneration, authenticationPolicyGeneration(persisted));
+  } finally {
+    complete?.();
     fx.cleanup();
   }
 });
