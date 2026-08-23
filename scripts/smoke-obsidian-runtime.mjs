@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const { RuntimeController } = require('../host/runtime-controller.js');
 const { MINIMUM_NODE_MAJOR, nodeMajor, resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
+const { updateConfig } = require('../shared/config-store.cjs');
+const { configureAuthentication } = require('../shared/auth-config.cjs');
+const { setLifecycleIntent } = require('../shared/lifecycle-intent.cjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 
@@ -82,6 +85,19 @@ const controller = new RuntimeController({
 });
 
 try {
+  // This artifact smoke drives RuntimeController directly instead of the normal
+  // Obsidian Start wrapper. Establish the same explicit local-only lifecycle
+  // state first without weakening production OAuth defaults or lifecycle fencing.
+  controller.ensureConfig();
+  updateConfig(controller.configFile, config => {
+    configureAuthentication(config, 'none', { replace: true });
+    return config;
+  });
+  setLifecycleIntent(controller.configFile, 'running', {
+    requestedBy: 'obsidian-runtime-smoke',
+    reason: 'packaged runtime ownership smoke'
+  });
+
   const first = await controller.start({ timeoutMs: 15000 });
   assert.equal(first.started, true);
   assert.equal(controller.lastLaunch?.mode, 'child_process');
