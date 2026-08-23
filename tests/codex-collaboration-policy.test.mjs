@@ -87,7 +87,9 @@ test('production runtime loads collaboration only after singleton lock ownership
   const runtime = await fsp.readFile(new URL('../gateway/server-runtime.mjs', import.meta.url), 'utf8');
   const collaborationSource = await fsp.readFile(new URL('../gateway/agent-collaboration.mjs', import.meta.url), 'utf8');
   const acquire = runtime.indexOf('acquireGatewayInstanceLock()');
-  const load = runtime.indexOf("await import('./agent-collaboration.mjs')");
+  const dynamicImport = runtime.indexOf('await import(');
+  const collaborationPath = runtime.search(/agent-collaboration\.mjs/);
+  const load = dynamicImport >= 0 && collaborationPath > dynamicImport ? dynamicImport : -1;
   const install = runtime.indexOf('installCodexCollaborationCapability(McpServer)');
   assert.ok(acquire >= 0 && load > acquire && install > load);
   assert.equal(/\bAPPLY\b/.test(collaborationSource), false);
