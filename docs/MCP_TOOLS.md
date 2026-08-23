@@ -113,6 +113,8 @@ Codex Collaboration is off by default and runs delegated Codex work only inside 
 - `codex_task_start`, `codex_task_continue`, `codex_task_steer`, `codex_task_interrupt`
 - `codex_proposal_status`, `codex_proposal_apply`
 
+The snapshot is a minimized proposal filesystem, not a VM, container, or operating-system sandbox. DevMate copies only allowlisted source/text paths into it and omits credential/environment files, keys, databases, logs, binary artifacts, dependency/build caches, and other protected paths. Delegated Codex still executes as the DevMate OS identity; use a separate OS account, container, VM, or host when the delegated code itself is untrusted.
+
 The proposal review/apply boundary is optimistic and exact. `codex_proposal_status` returns a `proposalDigest`; `codex_proposal_apply` requires that exact value as `expectedProposalDigest`. If the snapshot changes after review, apply fails with `codex_proposal_review_stale` and the caller must fetch and review the new proposal before applying it. A proposal is applied to the real workspace only through DevMate's normal mutation, conflict, rollback, lease and authorization controls.
 
 ## Obsidian knowledge tools
@@ -258,7 +260,3 @@ Publishing requires the capability declared by policy and may additionally requi
 - `godot_quality_report`
 - `deployment_metrics`
 - `deployment_runtime_state`
-
-Use `show_changes` for the final review of source changes before finishing a work session. Prometheus-compatible metrics are available from loopback only at `/control/metrics`.
-
-See `TEAM_DEPLOYMENT.md`, `JOBS.md`, `EXTERNAL_RUNNERS.md`, `GODOT_AUTOMATION.md`, `GODOT_RUNTIME_QUALITY.md`, `GODOT_TEST_PERFORMANCE.md`, `OPERATIONS.md`, `TUNNELS.md` and `SECURITY.md` for detailed behavior and trust boundaries.
