@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { CodexAppServer } from '../gateway/agent-codex-runtime.mjs';
+import { CodexAppServer, __test as runtimeTest } from '../gateway/agent-codex-runtime.mjs';
 
 function fakeAppServer() {
   const child = new EventEmitter();
@@ -40,9 +43,14 @@ function fakeAppServer() {
   return { child, requests };
 }
 
+async function snapshotDir() {
+  return fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-codex-runtime-snapshot-'));
+}
+
 test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, and completes a bounded turn', async () => {
   const fake = fakeAppServer();
   const spawned = [];
+  const cwd = await snapshotDir();
   const previousConfig = process.env.DEVMATE_CONFIG;
   process.env.DEVMATE_CONFIG = 'must-not-reach-codex';
   const runtime = new CodexAppServer({
@@ -53,13 +61,13 @@ test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, an
     }
   });
   try {
-    await runtime.start();
+    await runtime.start({ cwd });
     assert.equal(spawned.length, 1);
     assert.deepEqual(spawned[0].args, ['app-server', '--stdio']);
     assert.equal(spawned[0].options.shell, false);
+    assert.equal(path.resolve(spawned[0].options.cwd), path.resolve(cwd));
     assert.equal(spawned[0].options.env.DEVMATE_CONFIG, undefined);
 
-    const cwd = process.platform === 'win32' ? 'C:\\devmate-state\\codex-task\\workspace' : '/tmp/devmate-state/codex-task/workspace';
     const thread = await runtime.ensureThread({ cwd });
     assert.equal(thread.threadId, 'thread-1');
     const result = await runtime.runTurn({ threadId: thread.threadId, cwd, prompt: 'Make the requested isolated change.' });
@@ -68,17 +76,17 @@ test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, an
     assert.match(result.output, /proposal ready/);
 
     const startThread = fake.requests.find(item => item.method === 'thread/start');
-    assert.equal(startThread.params.cwd, cwd);
+    assert.equal(path.resolve(startThread.params.cwd), path.resolve(cwd));
     assert.equal(startThread.params.approvalPolicy, 'never');
     assert.equal(startThread.params.sandbox, 'workspace-write');
     assert.match(startThread.params.developerInstructions, /isolated snapshot workspace/);
 
     const startTurn = fake.requests.find(item => item.method === 'turn/start');
-    assert.equal(startTurn.params.cwd, cwd);
+    assert.equal(path.resolve(startTurn.params.cwd), path.resolve(cwd));
     assert.equal(startTurn.params.approvalPolicy, 'never');
     assert.deepEqual(startTurn.params.sandboxPolicy, {
       type: 'workspaceWrite',
-      writableRoots: [cwd],
+      writableRoots: [path.resolve(cwd)],
       networkAccess: false,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false
@@ -89,14 +97,50 @@ test('Codex app-server is shell-free, deny-all, snapshot-scoped, network-off, an
     await runtime.stop();
     if (previousConfig === undefined) delete process.env.DEVMATE_CONFIG;
     else process.env.DEVMATE_CONFIG = previousConfig;
+    await fsp.rm(cwd, { recursive: true, force: true });
   }
+});
+
+test('Codex environment is allowlisted and never inherits common credential variables', () => {
+  const clean = runtimeTest.cleanEnvironment({
+    PATH: '/safe/bin',
+    HOME: '/safe/home',
+    LANG: 'en_US.UTF-8',
+    LC_ALL: 'C',
+    CODEX_HOME: '/safe/codex',
+    OPENAI_API_KEY: 'sk-secret',
+    GITHUB_TOKEN: 'gh-secret',
+    AWS_SECRET_ACCESS_KEY: 'aws-secret',
+    MY_PASSWORD: 'password',
+    SSH_AUTH_SOCK: '/tmp/agent.sock',
+    DEVMATE_CONFIG: '/secret/config.json',
+    RANDOM_UNRELATED_VALUE: 'do-not-forward'
+  });
+  assert.equal(clean.PATH, '/safe/bin');
+  assert.equal(clean.HOME, '/safe/home');
+  assert.equal(clean.LANG, 'en_US.UTF-8');
+  assert.equal(clean.LC_ALL, 'C');
+  assert.equal(clean.CODEX_HOME, '/safe/codex');
+  for (const key of ['OPENAI_API_KEY', 'GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'MY_PASSWORD', 'SSH_AUTH_SOCK', 'DEVMATE_CONFIG', 'RANDOM_UNRELATED_VALUE']) {
+    assert.equal(clean[key], undefined, key);
+  }
+  assert.equal(clean.GIT_TERMINAL_PROMPT, '0');
+  assert.equal(clean.GCM_INTERACTIVE, 'Never');
+});
+
+test('Codex app-server refuses to start outside an explicit existing snapshot cwd', async () => {
+  const fake = fakeAppServer();
+  const runtime = new CodexAppServer({ executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex', spawnFn: () => fake.child });
+  await assert.rejects(runtime.start(), error => error?.code === 'codex_snapshot_cwd_invalid');
+  await assert.rejects(runtime.start({ cwd: path.join(os.tmpdir(), 'definitely-missing-devmate-codex-cwd') }), error => error?.code === 'codex_snapshot_cwd_invalid');
 });
 
 test('Codex server requests are explicitly rejected instead of hanging approval flow', async () => {
   const fake = fakeAppServer();
+  const cwd = await snapshotDir();
   const runtime = new CodexAppServer({ executable: process.platform === 'win32' ? 'C:\\tools\\codex.exe' : '/usr/local/bin/codex', spawnFn: () => fake.child });
   try {
-    await runtime.start();
+    await runtime.start({ cwd });
     fake.child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'item/commandExecution/requestApproval', params: {} })}\n`);
     await new Promise(resolve => setTimeout(resolve, 10));
     const reply = fake.requests.find(item => item.id === 99 && item.error);
@@ -105,5 +149,6 @@ test('Codex server requests are explicitly rejected instead of hanging approval 
   } finally {
     fake.child.exitCode = 0;
     await runtime.stop();
+    await fsp.rm(cwd, { recursive: true, force: true });
   }
 });
