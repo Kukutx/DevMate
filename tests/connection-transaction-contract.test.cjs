@@ -8,6 +8,7 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const platform = fs.readFileSync(path.join(root, 'extension-entry-platform.js'), 'utf8');
 const ngrok = fs.readFileSync(path.join(root, 'extension-entry.js'), 'utf8');
+const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin/src/main.js'), 'utf8');
 
 test('Cloudflare connection restores the previous secret if the shared instance transaction fails', () => {
   assert.match(platform, /async function commitCloudflareConnection\(context, token, localUpdates, sharedPatch\)/);
@@ -34,19 +35,42 @@ test('parent Connection Setup treats nested ngrok cancellation as cancellation a
   assert.match(platform, /if \(!state\) throw new Error\('DevMate shared config disappeared during ngrok setup'\)/);
 });
 
-test('connection credential mutation always stops or safely attaches before writing secrets', () => {
-  const ngrokStart = ngrok.indexOf('async function commitNgrokConfiguration');
-  const ngrokEnd = ngrok.indexOf('function checkNgrokInstalled', ngrokStart);
-  const ngrokBlock = ngrok.slice(ngrokStart, ngrokEnd);
-  assert.ok(ngrokBlock.indexOf("prepareNgrokCredentialMutation('ngrok configuration change')") < ngrokBlock.indexOf('context.secrets.store(SECRET_KEY'));
-
-  const connectionStart = platform.indexOf('async function configureConnection');
-  const connectionEnd = platform.indexOf('async function connectionDoctor', connectionStart);
+test('VS Code provider and credential mutations hold one cross-host lease across stop and commit', () => {
+  assert.match(platform, /withConnectionMutationLease/);
+  assert.match(platform, /withPlatformConnectionMutation\(context, 'connection-setup'/);
+  const connectionStart = platform.indexOf("withPlatformConnectionMutation(context, 'connection-setup'");
+  const connectionEnd = platform.indexOf('if (stopState.remoteOwner)', connectionStart);
   const connectionBlock = platform.slice(connectionStart, connectionEnd);
-  const stop = connectionBlock.indexOf('const stopState = await prepareConnectionMutation()');
-  assert.ok(stop >= 0);
-  assert.ok(connectionBlock.indexOf('commitCloudflareConnection', stop) > stop);
-  assert.ok(connectionBlock.indexOf('commitConnectionSettings', stop) > stop);
+  const stop = connectionBlock.indexOf('prepareConnectionMutation()');
+  const cloudflareCommit = connectionBlock.indexOf('commitCloudflareConnection', stop);
+  const normalCommit = connectionBlock.indexOf('commitConnectionSettings', stop);
+  assert.ok(stop >= 0 && cloudflareCommit > stop && normalCommit > stop);
+
+  assert.match(platform, /withPlatformConnectionMutation\(context, 'cloudflare-token-set'/);
+  assert.match(platform, /withPlatformConnectionMutation\(context, 'cloudflare-token-clear'/);
+  assert.match(platform, /async function commitConnectionSettings[\s\S]*withPlatformConnectionMutation\(context, 'connection-settings'/);
+  assert.match(platform, /async function commitCloudflareConnection[\s\S]*withPlatformConnectionMutation\(context, 'cloudflare-connection'/);
+});
+
+test('ngrok mutation serializes stop, credentials, preferences and rollback in one lease', () => {
+  assert.match(ngrok, /withConnectionMutationLease/);
+  const start = ngrok.indexOf('async function commitNgrokConfiguration');
+  const end = ngrok.indexOf('function checkNgrokInstalled', start);
+  const block = ngrok.slice(start, end);
+  const lease = block.indexOf("withNgrokConnectionMutation('configuration'");
+  const stop = block.indexOf("prepareNgrokCredentialMutation('ngrok configuration change')");
+  const secret = block.indexOf('context.secrets.store(SECRET_KEY');
+  const rollback = block.indexOf('restoreSecret(context, previous.token)');
+  assert.ok(lease >= 0 && stop > lease && secret > stop && rollback > secret);
+  assert.match(ngrok, /withNgrokConnectionMutation\('managed-account-removal'/);
+  assert.match(ngrok, /withNgrokConnectionMutation\('account-source-change'/);
+});
+
+test('Obsidian connection and credential mutations use the same shared lease protocol', () => {
+  assert.match(obsidian, /withConnectionMutationLease/);
+  assert.match(obsidian, /this\.withConnectionMutation\('connection-config'/);
+  assert.match(obsidian, /this\.withConnectionMutation\(`credential-\$\{provider\}`/);
+  assert.doesNotMatch(obsidian, /sessionRequested/);
 });
 
 test('a remote connection owner prevents a second host from offering immediate replacement Start', () => {
