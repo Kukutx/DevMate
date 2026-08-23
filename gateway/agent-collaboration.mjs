@@ -27,6 +27,9 @@ const RUNTIME_ACTIVE_STATUSES = new Set(['preparing', 'running']);
 const APPLY_ACTIVE_STATUSES = new Set(['applying', 'rolling_back', 'recovery_blocked']);
 const ACTIVE_STATUSES = new Set([...RUNTIME_ACTIVE_STATUSES, ...APPLY_ACTIVE_STATUSES]);
 const CONTINUABLE_STATUSES = new Set(['proposal_ready', 'completed', 'failed', 'interrupted']);
+const TASK_STATUSES = new Set([...ACTIVE_STATUSES, ...CONTINUABLE_STATUSES, 'applied']);
+const APPLY_CHANGE_KINDS = new Set(['create', 'modify', 'delete']);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 const MAX_TASKS = 20;
 const MAX_TITLE = 200;
 const MAX_OUTPUT = 20_000;
@@ -51,13 +54,120 @@ function codedError(message, code, detail = {}) {
   return error;
 }
 
+function invalidCollaborationState(message, detail = {}) {
+  return codedError(
+    `Codex collaboration durable state is invalid: ${message}`,
+    'codex_collaboration_state_invalid',
+    detail
+  );
+}
+
+function validNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validateApplyChange(change, taskId, index) {
+  if (!change || typeof change !== 'object' || Array.isArray(change)) {
+    throw invalidCollaborationState(`task ${taskId} apply change ${index} must be an object`, { taskId, changeIndex: index });
+  }
+  if (!validNonEmptyString(change.path) || change.path.includes('\0')) {
+    throw invalidCollaborationState(`task ${taskId} apply change ${index} has an invalid path`, { taskId, changeIndex: index });
+  }
+  if (!APPLY_CHANGE_KINDS.has(change.kind)) {
+    throw invalidCollaborationState(`task ${taskId} apply change ${index} has an invalid kind`, { taskId, changeIndex: index });
+  }
+  const beforeValid = change.beforeSha256 == null || (typeof change.beforeSha256 === 'string' && SHA256_PATTERN.test(change.beforeSha256));
+  const afterValid = change.afterSha256 == null || (typeof change.afterSha256 === 'string' && SHA256_PATTERN.test(change.afterSha256));
+  if (!beforeValid || !afterValid) {
+    throw invalidCollaborationState(`task ${taskId} apply change ${index} has an invalid content digest`, { taskId, changeIndex: index });
+  }
+  if (change.kind === 'create' && (change.beforeSha256 !== null || !SHA256_PATTERN.test(String(change.afterSha256 || '')))) {
+    throw invalidCollaborationState(`task ${taskId} create change ${index} has inconsistent digests`, { taskId, changeIndex: index });
+  }
+  if (change.kind === 'modify' && (!SHA256_PATTERN.test(String(change.beforeSha256 || '')) || !SHA256_PATTERN.test(String(change.afterSha256 || '')))) {
+    throw invalidCollaborationState(`task ${taskId} modify change ${index} has inconsistent digests`, { taskId, changeIndex: index });
+  }
+  if (change.kind === 'delete' && (!SHA256_PATTERN.test(String(change.beforeSha256 || '')) || change.afterSha256 !== null)) {
+    throw invalidCollaborationState(`task ${taskId} delete change ${index} has inconsistent digests`, { taskId, changeIndex: index });
+  }
+}
+
+function validateApplyState(task, taskIndex) {
+  const apply = task.apply;
+  if (!apply || typeof apply !== 'object' || Array.isArray(apply)) {
+    throw invalidCollaborationState(`active apply task ${task.id} is missing its recovery transaction`, { taskId: task.id, taskIndex });
+  }
+  if (apply.version !== 1 || apply.status !== task.status || !Array.isArray(apply.changes) || !apply.changes.length) {
+    throw invalidCollaborationState(`active apply task ${task.id} has malformed transaction metadata`, { taskId: task.id, taskIndex });
+  }
+  if (!Number.isSafeInteger(apply.appliedCount) || apply.appliedCount < 0 || apply.appliedCount > apply.changes.length) {
+    throw invalidCollaborationState(`active apply task ${task.id} has an invalid appliedCount`, { taskId: task.id, taskIndex });
+  }
+  if (
+    apply.inFlightIndex !== null &&
+    (!Number.isSafeInteger(apply.inFlightIndex) || apply.inFlightIndex < 0 || apply.inFlightIndex >= apply.changes.length)
+  ) {
+    throw invalidCollaborationState(`active apply task ${task.id} has an invalid inFlightIndex`, { taskId: task.id, taskIndex });
+  }
+  if (!Array.isArray(apply.recoveryFailures)) {
+    throw invalidCollaborationState(`active apply task ${task.id} has invalid recoveryFailures`, { taskId: task.id, taskIndex });
+  }
+  apply.changes.forEach((change, changeIndex) => validateApplyChange(change, task.id, changeIndex));
+}
+
 function normalizeState(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== 1) return emptyState();
-  const tasks = Array.isArray(raw.tasks) ? raw.tasks.filter(item => item?.id && item?.workspaceId).slice(-MAX_TASKS) : [];
-  const activeTaskId = tasks.some(item => item.id === raw.activeTaskId && ACTIVE_STATUSES.has(item.status))
-    ? raw.activeTaskId
-    : null;
-  return { version: 1, activeTaskId, tasks };
+  // A missing namespace is the only case that is safe to initialize. Existing
+  // malformed state must remain intact and stop recovery rather than silently
+  // discarding task/apply evidence.
+  if (raw === undefined) return emptyState();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalidCollaborationState('root must be an object');
+  }
+  if (raw.version !== 1) {
+    throw invalidCollaborationState(`unsupported version ${String(raw.version)}`, { stateVersion: raw.version ?? null });
+  }
+  if (!Array.isArray(raw.tasks)) throw invalidCollaborationState('tasks must be an array');
+  if (raw.tasks.length > MAX_TASKS) {
+    throw invalidCollaborationState(`task history exceeds the ${MAX_TASKS} task limit`, { taskCount: raw.tasks.length });
+  }
+
+  const ids = new Set();
+  const tasks = raw.tasks.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw invalidCollaborationState(`task ${index} must be an object`, { taskIndex: index });
+    }
+    if (!validNonEmptyString(item.id) || !validNonEmptyString(item.workspaceId)) {
+      throw invalidCollaborationState(`task ${index} is missing identity`, { taskIndex: index });
+    }
+    if (ids.has(item.id)) throw invalidCollaborationState(`duplicate task id ${item.id}`, { taskId: item.id, taskIndex: index });
+    ids.add(item.id);
+    if (!TASK_STATUSES.has(item.status)) {
+      throw invalidCollaborationState(`task ${item.id} has unsupported status ${String(item.status)}`, { taskId: item.id, taskIndex: index });
+    }
+    if (APPLY_ACTIVE_STATUSES.has(item.status)) validateApplyState(item, index);
+    else if (item.apply != null) {
+      throw invalidCollaborationState(`inactive task ${item.id} retains an apply transaction`, { taskId: item.id, taskIndex: index });
+    }
+    return item;
+  });
+
+  if (raw.activeTaskId !== null && !validNonEmptyString(raw.activeTaskId)) {
+    throw invalidCollaborationState('activeTaskId must be null or a non-empty task id');
+  }
+  const activeTasks = tasks.filter(item => ACTIVE_STATUSES.has(item.status));
+  if (activeTasks.length > 1) {
+    throw invalidCollaborationState('more than one task is active', { activeTaskIds: activeTasks.map(item => item.id) });
+  }
+  if (!activeTasks.length && raw.activeTaskId !== null) {
+    throw invalidCollaborationState(`activeTaskId ${raw.activeTaskId} does not reference an active task`, { activeTaskId: raw.activeTaskId });
+  }
+  if (activeTasks.length === 1 && raw.activeTaskId !== activeTasks[0].id) {
+    throw invalidCollaborationState(`active task ${activeTasks[0].id} does not match activeTaskId`, {
+      activeTaskId: raw.activeTaskId,
+      taskId: activeTasks[0].id
+    });
+  }
+  return { version: 1, activeTaskId: raw.activeTaskId, tasks };
 }
 
 function readState() {
