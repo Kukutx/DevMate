@@ -443,9 +443,9 @@ async function activate(context) {
   log(`Connection integration ready: provider=${settings.provider}.`);
 }
 
-async function deactivate() {
+async function deactivate(options = {}) {
   try {
-    if (innerExtension?.deactivate) await innerExtension.deactivate();
+    if (innerExtension?.deactivate) await innerExtension.deactivate(options);
   } finally {
     innerExtension = null;
   }
