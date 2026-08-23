@@ -179,13 +179,13 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('MCP authentication')
-      .setDesc('None is the direct private-use default. Choose OAuth only when sharing or publishing this DevMate app.')
+      .setDesc('OAuth is the default for public MCP. None is only for trusted loopback-only access and will not authorize remote requests.')
       .addDropdown(dropdown => dropdown
-        .addOption('none', 'None (default)')
-        .addOption('oauth', 'OAuth (shared or published app)')
+        .addOption('oauth', 'OAuth (recommended)')
+        .addOption('none', 'None (loopback only)')
         .setValue(this.plugin.settings.authenticationMode)
         .onChange(async value => {
-          this.plugin.settings.authenticationMode = value === 'oauth' ? 'oauth' : 'none';
+          this.plugin.settings.authenticationMode = value === 'none' ? 'none' : 'oauth';
           await this.plugin.saveSettings();
           this.plugin.scheduleReconfigure();
         }));
@@ -335,7 +335,7 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Copy verified MCP URL after Start')
-      .setDesc('Copy the MCP URL only after DevMate has completed initialize and tools/list successfully.')
+      .setDesc('Copy the MCP URL only after server/discover, tools/list, and a read-only gateway_status call verify the current public generation.')
       .addToggle(toggle => toggle
         .setValue(this.plugin.settings.autoCopyUrl)
         .onChange(async value => {
