@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-const supervisorPath = fileURLToPath(new URL('../gateway/agent-codex-supervisor.mjs', import.meta.url));
+const supervisorUrl = new URL('../gateway/agent-codex-supervisor.mjs', import.meta.url);
+const supervisorPath = fileURLToPath(supervisorUrl);
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
@@ -55,6 +56,15 @@ function waitForExit(child, timeoutMs = 10000) {
     child.once('exit', onExit);
   });
 }
+
+test('Codex supervisor source keeps its lifetime fence until child cleanup is confirmed', async () => {
+  const source = await fsp.readFile(supervisorUrl, 'utf8');
+  assert.match(source, /while \(childActive\(current\)\)/);
+  assert.match(source, /const result = await terminateProcessTree\(current, CLEANUP\)/);
+  assert.match(source, /if \(!confirmed\)[\s\S]*await delay\(CLEANUP_RETRY_MS\)/);
+  assert.match(source, /exitConfirmed: true/);
+  assert.doesNotMatch(source, /exitConfirmed === false[\s\S]{0,600}process\.exit/);
+});
 
 test('Codex supervisor terminates its app-server child when the Gateway IPC parent disappears', async () => {
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-codex-supervisor-'));
