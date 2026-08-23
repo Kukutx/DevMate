@@ -136,9 +136,10 @@ function captureEnabledEpoch() {
 }
 
 function requireEnabledEpoch(epoch) {
-  if (epoch !== collaborationEpoch || !collaborationConfig().enabled) {
-    throw codedError('Codex Collaboration was turned OFF while the task was preparing.', 'codex_collaboration_disabled');
-  }
+  const enabled = collaborationConfig().enabled;
+  if (epoch === collaborationEpoch && enabled) return;
+  if (!enabled) throw codedError('Codex Collaboration was turned OFF while the task was active.', 'codex_collaboration_disabled');
+  throw codedError('Codex task was interrupted by the supervisor while it was active.', 'codex_task_interrupted');
 }
 
 function writableWorkspace(config, workspaceId) {
@@ -205,8 +206,9 @@ function reserveContinuation(taskId, workspaceId) {
     const task = taskById(state, taskId);
     if (!task) throw codedError(`Codex task not found: ${taskId}`, 'codex_task_not_found');
     if (task.workspaceId !== workspaceId) throw codedError('Codex task belongs to a different workspace', 'codex_task_workspace_mismatch');
-    if (!task.threadId || !task.snapshotAvailable) throw codedError('Codex task has no resumable snapshot/thread state', 'codex_task_not_resumable');
     if (!CONTINUABLE_STATUSES.has(task.status)) throw codedError(`Codex task cannot continue from status ${task.status}`, 'codex_task_not_resumable');
+    if (!task.threadId) throw codedError('Codex task has no resumable thread state', 'codex_task_not_resumable');
+    if (!task.snapshotAvailable && task.status !== 'completed') throw codedError('Codex task has no resumable snapshot state', 'codex_task_not_resumable');
     task.status = 'preparing';
     task.error = null;
     task.turnId = null;
@@ -222,7 +224,7 @@ function markFailure(taskId, error) {
   try {
     return updateTask(taskId, (task, state) => {
       if (APPLY_ACTIVE_STATUSES.has(task.status)) return;
-      task.status = ['codex_turn_idle_timeout', 'codex_turn_timeout', 'codex_transport_closed', 'codex_stopped', 'codex_collaboration_disabled'].includes(error?.code)
+      task.status = ['codex_turn_idle_timeout', 'codex_turn_timeout', 'codex_transport_closed', 'codex_stopped', 'codex_collaboration_disabled', 'codex_task_interrupted'].includes(error?.code)
         ? 'interrupted'
         : 'failed';
       task.error = String(error?.message || error).slice(0, 4000);
@@ -232,6 +234,25 @@ function markFailure(taskId, error) {
   } catch {
     return null;
   }
+}
+
+async function stopCodexRuntimeConfirmed(context, attempts = 2) {
+  let last = null;
+  let lastError = null;
+  const count = Math.max(1, Math.min(3, Number(attempts) || 2));
+  for (let attempt = 0; attempt < count; attempt += 1) {
+    try {
+      last = await shutdownCodexRuntime();
+      if (last?.exitConfirmed !== false) return last;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt + 1 < count) await delay(100);
+  }
+  throw codedError(`Could not confirm Codex app-server exit while ${context}`, 'codex_stop_unconfirmed', {
+    termination: last ? clone(last) : null,
+    stopError: lastError ? String(lastError?.message || lastError).slice(0, 2000) : null
+  });
 }
 
 async function cleanupTaskSnapshot(taskId) {
@@ -251,8 +272,19 @@ async function cleanupTaskSnapshot(taskId) {
   }
 }
 
+function proposalDigest(proposal) {
+  const canonical = {
+    taskId: proposal?.taskId || null,
+    workspaceId: proposal?.workspaceId || null,
+    changes: Array.isArray(proposal?.changes) ? proposal.changes : [],
+    blocked: Array.isArray(proposal?.blocked) ? proposal.blocked : []
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
+}
+
 async function finalizeTurn(taskId, result) {
   const proposal = await agentProposalChanges(taskId);
+  const digest = proposalDigest(proposal);
   const hasChanges = proposal.changes.length > 0 || proposal.blocked.length > 0;
   const failedTurn = ['failed', 'interrupted', 'cancelled'].includes(String(result.status || '').toLowerCase());
   const updated = updateTask(taskId, (task, state) => {
@@ -260,6 +292,7 @@ async function finalizeTurn(taskId, result) {
     task.turnStatus = result.status;
     task.output = String(result.output || '').slice(-MAX_OUTPUT);
     task.proposal = {
+      digest,
       changeCount: proposal.changes.length,
       blockedCount: proposal.blocked.length,
       changes: proposal.changes.slice(0, 500),
@@ -318,7 +351,9 @@ async function executeTurn({ task, workspace, prompt, epoch }) {
     requireEnabledEpoch(epoch);
     return finalizeTurn(task.id, result);
   } catch (error) {
-    if (error?.code === 'codex_collaboration_disabled') await shutdownCodexRuntime().catch(() => {});
+    if (error?.code === 'codex_collaboration_disabled' || error?.code === 'codex_task_interrupted') {
+      await stopCodexRuntimeConfirmed('cancelling an active task').catch(stopError => { throw stopError; });
+    }
     markFailure(task.id, error);
     throw error;
   }
@@ -357,14 +392,22 @@ export async function interruptCodexTask({ workspaceId, taskId }) {
   if (!task) throw codedError(`Codex task not found: ${taskId}`, 'codex_task_not_found');
   if (task.workspaceId !== workspaceId) throw codedError('Codex task belongs to a different workspace', 'codex_task_workspace_mismatch');
   if (APPLY_ACTIVE_STATUSES.has(task.status)) throw codedError('Codex proposal apply/recovery cannot be interrupted mid-transaction', 'codex_apply_active');
-  let runtimeResult = { interrupted: false };
-  if (task.threadId && task.turnId) runtimeResult = await codexRuntime().interrupt(task.threadId, task.turnId).catch(() => ({ interrupted: false }));
+  if (!RUNTIME_ACTIVE_STATUSES.has(task.status)) throw codedError('Codex task has no active turn/preparation to interrupt', 'codex_turn_not_active');
+
+  collaborationEpoch += 1;
+  let interruptResult = { interrupted: false };
+  if (task.threadId && task.turnId) {
+    try { interruptResult = await codexRuntime().interrupt(task.threadId, task.turnId); }
+    catch (error) { interruptResult = { interrupted: false, error: String(error?.message || error).slice(0, 1000) }; }
+  }
+  const stopped = await stopCodexRuntimeConfirmed(`interrupting Codex task ${task.id}`);
   const updated = updateTask(task.id, (current, currentState) => {
     current.status = 'interrupted';
     current.error = 'Interrupted by supervisor';
+    current.turnStatus = null;
     releaseActive(currentState, current);
   });
-  return { task: publicTask(updated), runtime: runtimeResult };
+  return { task: publicTask(updated), runtime: { ...interruptResult, stop: stopped } };
 }
 
 export async function codexProposal({ workspaceId, taskId }) {
@@ -372,9 +415,9 @@ export async function codexProposal({ workspaceId, taskId }) {
   const task = taskById(state, taskId);
   if (!task) throw codedError(`Codex task not found: ${taskId}`, 'codex_task_not_found');
   if (task.workspaceId !== workspaceId) throw codedError('Codex task belongs to a different workspace', 'codex_task_workspace_mismatch');
-  if (!task.snapshotAvailable) return { task: publicTask(task), changes: [], blocked: [] };
+  if (!task.snapshotAvailable) return { task: publicTask(task), proposalDigest: null, changes: [], blocked: [] };
   const proposal = await agentProposalChanges(task.id);
-  return { task: publicTask(task), ...proposal };
+  return { task: publicTask(task), proposalDigest: proposalDigest(proposal), ...proposal };
 }
 
 function sha256Text(text) {
@@ -555,8 +598,10 @@ async function rollbackApplyTransaction(taskId, workspace, { strictInFlight = tr
   return { recovered: true, blocked: [], task: publicTask(updated) };
 }
 
-export async function applyCodexProposal({ workspaceId, taskId }) {
+export async function applyCodexProposal({ workspaceId, taskId, expectedProposalDigest }) {
   requireEnabled();
+  const expected = String(expectedProposalDigest || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(expected)) throw codedError('A reviewed expectedProposalDigest is required to apply a Codex proposal', 'codex_proposal_digest_required');
   const config = readConfig();
   const workspace = writableWorkspace(config, workspaceId);
   const state = readState();
@@ -566,8 +611,15 @@ export async function applyCodexProposal({ workspaceId, taskId }) {
   if (task.status !== 'proposal_ready' || !task.snapshotAvailable || task.apply) throw codedError(`Codex proposal is not ready from status ${task.status}`, 'codex_proposal_not_ready');
 
   const proposal = await agentProposalChanges(task.id);
+  const currentDigest = proposalDigest(proposal);
+  if (currentDigest !== expected) {
+    throw codedError('Codex proposal changed after review; inspect the proposal again before applying it', 'codex_proposal_review_stale', {
+      expectedProposalDigest: expected,
+      currentProposalDigest: currentDigest
+    });
+  }
   if (proposal.blocked.length) {
-    throw codedError(`Codex proposal contains ${proposal.blocked.length} blocked non-text/oversized change(s)`, 'codex_proposal_blocked', { blocked: proposal.blocked.slice(0, 100) });
+    throw codedError(`Codex proposal contains ${proposal.blocked.length} blocked change(s)`, 'codex_proposal_blocked', { blocked: proposal.blocked.slice(0, 100) });
   }
   if (!proposal.changes.length) throw codedError('Codex proposal has no changes to apply', 'codex_proposal_empty');
 
@@ -604,6 +656,7 @@ export async function applyCodexProposal({ workspaceId, taskId }) {
     current.apply = null;
     current.error = null;
     current.proposal = {
+      digest: currentDigest,
       changeCount: proposal.changes.length,
       blockedCount: 0,
       changes: proposal.changes.slice(0, 500),
@@ -612,19 +665,22 @@ export async function applyCodexProposal({ workspaceId, taskId }) {
     releaseActive(currentState, current);
   });
   await cleanupTaskSnapshot(task.id);
-  return { task: publicTask(updated), applied: proposal.changes.map(item => ({ kind: item.kind, path: item.path })) };
+  return { task: publicTask(updated), proposalDigest: currentDigest, applied: proposal.changes.map(item => ({ kind: item.kind, path: item.path })) };
 }
 
 export async function configureCodexCollaboration(enabled) {
   if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
-  collaborationEpoch += 1;
-  const config = mutateConfig(current => {
-    current.agent ||= {};
-    current.agent.codexCollaborationEnabled = enabled;
-    return current;
-  });
+  const previous = collaborationConfig().enabled;
+  const config = previous === enabled
+    ? readConfig()
+    : mutateConfig(current => {
+        current.agent ||= {};
+        current.agent.codexCollaborationEnabled = enabled;
+        return current;
+      });
+  if (previous !== enabled) collaborationEpoch += 1;
   if (!enabled) {
-    await shutdownCodexRuntime().catch(() => {});
+    await stopCodexRuntimeConfirmed('turning Codex Collaboration OFF');
     mutateState(state => {
       for (const task of state.tasks) {
         if (!RUNTIME_ACTIVE_STATUSES.has(task.status)) continue;
@@ -651,7 +707,9 @@ export function codexCollaborationStatus() {
       maxActiveTasks: 1,
       realWorkspaceDirectWriteByCodex: false,
       applyRequiresSnapshotConflictCheck: true,
+      applyRequiresProposalDigest: true,
       applyCrashRecovery: true,
+      parentDeathFenced: true,
       strongOsReadIsolation: false
     }
   };
@@ -683,8 +741,8 @@ function registerCodexTools(server) {
   register('codex_proposal_status', 'Codex proposal status', 'Review the snapshot changes proposed by a Codex task before applying them.', z.object({
     workspaceId: z.string().min(1), taskId: z.string().min(1)
   }), ro, async args => toolText(await codexProposal(args)));
-  register('codex_proposal_apply', 'Apply Codex proposal', 'Apply a reviewed Codex snapshot proposal through DevMate transaction and conflict controls.', z.object({
-    workspaceId: z.string().min(1), taskId: z.string().min(1)
+  register('codex_proposal_apply', 'Apply Codex proposal', 'Apply exactly the reviewed Codex snapshot proposal through DevMate transaction and conflict controls.', z.object({
+    workspaceId: z.string().min(1), taskId: z.string().min(1), expectedProposalDigest: z.string().regex(/^[a-fA-F0-9]{64}$/)
   }), rw, async args => toolText(await applyCodexProposal(args)));
 }
 
@@ -697,20 +755,20 @@ export function installCodexCollaborationCapability(McpServerClass) {
 }
 
 export async function shutdownCodexCollaboration() {
+  const stopped = await stopCodexRuntimeConfirmed('shutting down the Gateway', 3);
   const state = readState();
   if (state.activeTaskId) {
     const active = taskById(state, state.activeTaskId);
     if (active && RUNTIME_ACTIVE_STATUSES.has(active.status)) {
-      try {
-        updateTask(active.id, (task, current) => {
-          task.status = 'interrupted';
-          task.error = 'Gateway stopped while Codex task was active';
-          releaseActive(current, task);
-        });
-      } catch {}
+      updateTask(active.id, (task, current) => {
+        task.status = 'interrupted';
+        task.error = 'Gateway stopped while Codex task was active';
+        task.turnStatus = null;
+        releaseActive(current, task);
+      });
     }
   }
-  return shutdownCodexRuntime();
+  return stopped;
 }
 
 export function recoverCodexCollaborationAfterRestart() {
@@ -758,8 +816,6 @@ export async function recoverCodexApplyAfterFileTransactions() {
   return { recovered, blocked };
 }
 
-recoverCodexCollaborationAfterRestart();
-
 export const __test = {
   ACTIVE_STATUSES,
   APPLY_ACTIVE_STATUSES,
@@ -771,6 +827,7 @@ export const __test = {
   collaborationConfig,
   emptyState,
   normalizeState,
+  proposalDigest,
   publicTask,
   readState,
   registerCodexTools,
@@ -778,6 +835,7 @@ export const __test = {
   reserveContinuation,
   reserveNewTask,
   rollbackApplyTransaction,
+  stopCodexRuntimeConfirmed,
   updateApplyProgress,
   writableWorkspace
 };
