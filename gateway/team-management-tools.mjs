@@ -174,6 +174,28 @@ export function registerTeamManagementTools(register, annotations) {
 
   register('team_member_rotate', {
     title: 'Rotate DevMate member login code', description: 'Invalidate the old OAuth member login code, revoke existing member authorization, and return a new login code once. Requires owner.',
-    inputSchema: { id: z.string().min(1), annotations: rw }
+    inputSchema: { id: z.string().min(1) }, annotations: rw
+  }, async ({ id }) => {
+    const config = normalizeInstanceConfig(readConfig());
+    const result = rotateTeamMemberLoginCode(config, id);
+    writeConfig(config);
+    await audit('team_member_rotate', { principalId: principalNow().id, memberId: id });
+    return toolText({ ...result, warning: 'The replacement OAuth login code is shown once. Update the member secret and remove old copies.' });
   });
+
+  register('team_member_revoke', {
+    title: 'Revoke DevMate team member', description: 'Disable a member identity immediately. Requires owner.',
+    inputSchema: { id: z.string().min(1) }, annotations: { ...rw, idempotentHint: true }
+  }, async ({ id }) => {
+    const config = normalizeInstanceConfig(readConfig());
+    const member = revokeTeamMember(config, id);
+    writeConfig(config);
+    await audit('team_member_revoke', { principalId: principalNow().id, memberId: id });
+    return toolText({ member });
+  });
+
+  register('team_activity_status', {
+    title: 'DevMate team activity', description: 'Show recent authenticated MCP clients, request counts, roles, and authenticated client identities. Requires maintainer or owner.',
+    inputSchema: { activeWithinMinutes: z.number().int().min(1).max(1440).optional() }, annotations: ro
+  }, async ({ activeWithinMinutes = 60 }) => toolText({ activities: activitySnapshot({ activeWithinMinutes }) }));
 }
