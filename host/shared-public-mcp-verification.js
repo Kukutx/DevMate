@@ -172,7 +172,14 @@ async function verifySharedPublicMcp({
       if (recordGeneration(record) !== generation) return config;
       config.connection = {
         ...(config.connection || {}),
-        ...successfulVerificationPatch(test, publicUrl, stamp, record, currentGatewayLock())
+        ...successfulVerificationPatch(
+          test,
+          publicUrl,
+          stamp,
+          record,
+          currentGatewayLock(),
+          config.auth?.mode || 'oauth'
+        )
       };
       return config;
     });
