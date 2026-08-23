@@ -119,6 +119,10 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
 
   const port = await freePort();
   const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: configStore.DEFAULT_VERSION });
+  // This test exercises trusted loopback hardening, not public OAuth. Keep that
+  // boundary explicit so low-level config construction does not masquerade as a
+  // production OAuth bootstrap (which also initializes dedicated secret state).
+  config.auth.mode = 'none';
   config.activeWorkspaceId = 'app';
   config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'Application', role: 'active' };
   config.connection = {
