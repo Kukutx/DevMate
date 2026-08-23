@@ -215,6 +215,15 @@ async function removeIfPresent(file, { recursive = false } = {}) {
   }
 }
 
+async function removeRecoveryPathOrBlock(file, journal, label) {
+  if (await removeIfPresent(file)) return;
+  throw transactionError(
+    `Could not remove ${label} while recovering a file transaction`,
+    'FILE_TRANSACTION_RECOVERY_BLOCKED',
+    journal
+  );
+}
+
 async function recoverWriteJournal(journal, paths) {
   const targetExists = !!fs.lstatSync(paths.target, { throwIfNoEntry: false });
   const rollbackExists = !!fs.lstatSync(paths.rollback, { throwIfNoEntry: false });
@@ -248,17 +257,17 @@ async function recoverWriteJournal(journal, paths) {
     } catch (cause) {
       throw transactionError('Could not restore the previous file after interrupted replacement', 'FILE_TRANSACTION_RECOVERY_BLOCKED', journal, cause);
     }
-    await removeIfPresent(paths.temporary);
+    await removeRecoveryPathOrBlock(paths.temporary, journal, 'prepared write');
     removeJournal(journal);
     return { id: journal.id, action: 'rollback-interrupted-write' };
   }
   if (targetExists) {
-    await removeIfPresent(paths.temporary);
+    await removeRecoveryPathOrBlock(paths.temporary, journal, 'prepared write');
     removeJournal(journal);
     return { id: journal.id, action: temporaryExists ? 'discard-uncommitted-write' : 'finish-direct-write' };
   }
   if (journal.targetExisted === false) {
-    await removeIfPresent(paths.temporary);
+    await removeRecoveryPathOrBlock(paths.temporary, journal, 'prepared write');
     removeJournal(journal);
     return { id: journal.id, action: temporaryExists ? 'discard-uncommitted-create' : 'discard-prepared-create' };
   }
@@ -446,10 +455,11 @@ async function commitPreparedWrite(journal) {
         try {
           await fsp.rename(journal.rollback, journal.target);
           fsyncDirectory(path.dirname(journal.target));
-          await removeIfPresent(journal.temporary);
+          await removeRecoveryPathOrBlock(journal.temporary, journal, 'prepared write');
           removeJournal(journal);
-        } catch {
-          throw transactionError('File replacement failed and automatic rollback could not be completed', 'FILE_TRANSACTION_RECOVERY_BLOCKED', journal, cause);
+        } catch (rollbackError) {
+          if (rollbackError?.code === 'FILE_TRANSACTION_RECOVERY_BLOCKED') throw rollbackError;
+          throw transactionError('File replacement failed and automatic rollback could not be completed', 'FILE_TRANSACTION_RECOVERY_BLOCKED', journal, rollbackError);
         }
       }
       throw cause;
