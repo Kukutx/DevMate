@@ -105,6 +105,16 @@ When a protected capability is configured to require approval, the tool call cre
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
 
+## Optional Codex Collaboration
+
+Codex Collaboration is off by default and runs delegated Codex work only inside a DevMate-managed isolated snapshot:
+
+- `codex_collaboration_status`, `codex_collaboration_configure`
+- `codex_task_start`, `codex_task_continue`, `codex_task_steer`, `codex_task_interrupt`
+- `codex_proposal_status`, `codex_proposal_apply`
+
+The proposal review/apply boundary is optimistic and exact. `codex_proposal_status` returns a `proposalDigest`; `codex_proposal_apply` requires that exact value as `expectedProposalDigest`. If the snapshot changes after review, apply fails with `codex_proposal_review_stale` and the caller must fetch and review the new proposal before applying it. A proposal is applied to the real workspace only through DevMate's normal mutation, conflict, rollback, lease and authorization controls.
+
 ## Obsidian knowledge tools
 
 Generic host context:
