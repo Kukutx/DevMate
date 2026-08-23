@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { preflightPublicMcp, publicMcpErrorKind } = require('./public-mcp.js');
+const { authenticationMode, authenticationPolicyGeneration } = require('../shared/auth-config.cjs');
 const { readJson, updateConfig } = require('../shared/config-store.cjs');
 const {
   recordGeneration,
@@ -24,6 +25,30 @@ function staleGenerationError() {
 function lifecycleStoppedError() {
   const error = new Error('Public MCP verification was cancelled because the shared DevMate lifecycle is stopped');
   error.code = 'DEVMATE_PUBLIC_MCP_LIFECYCLE_STOPPED';
+  return error;
+}
+
+function authPolicySnapshot(config) {
+  return Object.freeze({
+    mode: authenticationMode(config?.auth?.mode),
+    generation: authenticationPolicyGeneration(config)
+  });
+}
+
+function authPolicyMatches(config, expected) {
+  if (!expected) return true;
+  const current = authPolicySnapshot(config);
+  return current.mode === expected.mode && current.generation === expected.generation;
+}
+
+function authPolicyChangedError(expected, config) {
+  const current = authPolicySnapshot(config);
+  const error = new Error('Public MCP verification was cancelled because the authentication policy changed');
+  error.code = 'DEVMATE_PUBLIC_MCP_AUTH_POLICY_CHANGED';
+  error.expectedAuthMode = expected?.mode || null;
+  error.expectedAuthGeneration = expected?.generation ?? null;
+  error.currentAuthMode = current.mode;
+  error.currentAuthGeneration = current.generation;
   return error;
 }
 
@@ -52,9 +77,20 @@ function verificationEvidenceFresh(config, record, gatewayLock, maxAgeMs, at = D
   return Number.isFinite(verifiedAt) && at - verifiedAt <= maximumAge;
 }
 
-function recordVerificationFailure(configFile, currentRecord, generation, error, now = Date.now, isCurrent = () => true, currentGatewayLock = () => null, probeStartedAt = 0) {
+function recordVerificationFailure(
+  configFile,
+  currentRecord,
+  generation,
+  error,
+  now = Date.now,
+  isCurrent = () => true,
+  currentGatewayLock = () => null,
+  probeStartedAt = 0,
+  expectedAuthPolicy = null
+) {
   return updateConfig(configFile, config => {
     if (isCurrent() !== true || config?.lifecycle?.desiredState !== 'running') return config;
+    if (!authPolicyMatches(config, expectedAuthPolicy)) return config;
     const record = currentRecord();
     if (recordGeneration(record) !== generation) return config;
     const successfulAt = Date.parse(config?.connection?.lastPreflightAt || '');
@@ -93,22 +129,27 @@ async function verifySharedPublicMcp({
   const generation = recordGeneration(expectedRecord);
   if (!generation) throw staleGenerationError();
 
-  const inspect = () => {
+  const inspect = (expectedAuthPolicy = null) => {
     if (isCurrent() !== true) throw staleGenerationError();
     const record = currentRecord();
     if (recordGeneration(record) !== generation) throw staleGenerationError();
     const config = readJson(configFile, null, { strict: true, supportedVersion: true });
     if (!config) throw new Error('DevMate shared config is unavailable during public verification');
     if (config.lifecycle?.desiredState !== 'running') throw lifecycleStoppedError();
+    if (expectedAuthPolicy && !authPolicyMatches(config, expectedAuthPolicy)) {
+      throw authPolicyChangedError(expectedAuthPolicy, config);
+    }
     return {
       config,
       record,
+      authPolicy: authPolicySnapshot(config),
       verified: verifiedForCurrentRecord(config, record, currentGatewayLock()),
       fresh: verificationEvidenceFresh(config, record, currentGatewayLock(), maxEvidenceAgeMs, now())
     };
   };
 
   const initial = inspect();
+  const expectedAuthPolicy = initial.authPolicy;
   if (initial.fresh) {
     return { test: evidenceResult(initial.config, initial.record), generation, record: initial.record, reused: true };
   }
@@ -127,13 +168,14 @@ async function verifySharedPublicMcp({
       timeoutMs: timeout + 5000,
       pollMs: 150,
       onWait: async () => {
-        const snapshot = inspect();
+        const snapshot = inspect(expectedAuthPolicy);
         if (!snapshot.fresh) return null;
         return { test: evidenceResult(snapshot.config, snapshot.record), generation, record: snapshot.record, reused: true };
       }
     });
   } catch (error) {
-    const latest = inspect();
+    if (error?.code === 'DEVMATE_PUBLIC_MCP_AUTH_POLICY_CHANGED' || error?.code === 'DEVMATE_PUBLIC_MCP_LIFECYCLE_STOPPED') throw error;
+    const latest = inspect(expectedAuthPolicy);
     if (latest.fresh) {
       return { test: evidenceResult(latest.config, latest.record), generation, record: latest.record, reused: true };
     }
@@ -142,12 +184,12 @@ async function verifySharedPublicMcp({
   if (!(acquired instanceof StartupLease)) return acquired;
 
   try {
-    const before = inspect();
+    const before = inspect(expectedAuthPolicy);
     if (before.fresh) {
       return { test: evidenceResult(before.config, before.record), generation, record: before.record, reused: true };
     }
 
-    logger(`Verifying public MCP once for shared connection generation ${generation.slice(0, 32)}...`);
+    logger(`Verifying public MCP once for shared connection generation ${generation.slice(0, 32)} auth=${expectedAuthPolicy.mode}:${expectedAuthPolicy.generation}...`);
     let test;
     const probeStartedAt = now();
     try {
@@ -162,25 +204,36 @@ async function verifySharedPublicMcp({
           try {
             if (recordGeneration(currentRecord()) !== generation) return false;
             const currentConfig = readJson(configFile, null, { strict: true, supportedVersion: true });
-            return currentConfig?.lifecycle?.desiredState === 'running';
+            return currentConfig?.lifecycle?.desiredState === 'running' && authPolicyMatches(currentConfig, expectedAuthPolicy);
           } catch {
             return false;
           }
         }
       });
     } catch (error) {
-      const latest = inspect();
+      const latest = inspect(expectedAuthPolicy);
       if (latest.fresh && Date.parse(latest.config?.connection?.lastPreflightAt || '') > probeStartedAt) {
         return { test: evidenceResult(latest.config, latest.record), generation, record: latest.record, reused: true };
       }
-      recordVerificationFailure(configFile, currentRecord, generation, error, now, isCurrent, currentGatewayLock, probeStartedAt);
+      recordVerificationFailure(
+        configFile,
+        currentRecord,
+        generation,
+        error,
+        now,
+        isCurrent,
+        currentGatewayLock,
+        probeStartedAt,
+        expectedAuthPolicy
+      );
       throw error;
     }
 
     const stamp = new Date(now()).toISOString();
-    inspect();
+    inspect(expectedAuthPolicy);
     updateConfig(configFile, config => {
       if (isCurrent() !== true || config?.lifecycle?.desiredState !== 'running') return config;
+      if (!authPolicyMatches(config, expectedAuthPolicy)) return config;
       const record = currentRecord();
       if (recordGeneration(record) !== generation) return config;
       config.connection = {
@@ -191,13 +244,14 @@ async function verifySharedPublicMcp({
           stamp,
           record,
           currentGatewayLock(),
-          config.auth?.mode || 'oauth'
+          expectedAuthPolicy.mode,
+          expectedAuthPolicy.generation
         )
       };
       return config;
     });
 
-    const persisted = inspect();
+    const persisted = inspect(expectedAuthPolicy);
     if (!persisted.verified) throw staleGenerationError();
     return { test, stamp, generation, record: persisted.record, reused: false };
   } finally {
@@ -210,6 +264,9 @@ module.exports = {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_EVIDENCE_MAX_AGE_MS,
   VERIFICATION_LOCK_NAME,
+  authPolicyChangedError,
+  authPolicyMatches,
+  authPolicySnapshot,
   evidenceResult,
   lifecycleStoppedError,
   recordVerificationFailure,
