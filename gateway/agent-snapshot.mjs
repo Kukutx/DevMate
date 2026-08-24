@@ -161,6 +161,43 @@ async function canonicalStorageCandidate() {
   return path.resolve(current);
 }
 
+async function canonicalWorkspaceCandidate(workspaceRoot) {
+  const requested = String(workspaceRoot || '').trim();
+  if (!requested) return null;
+  try {
+    return await fsp.realpath(requested);
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes(error?.code)) throw error;
+    return path.resolve(requested);
+  }
+}
+
+async function configuredWorkspaceRoots() {
+  ensureRoots();
+  let raw;
+  try {
+    raw = await fsp.readFile(CONFIG_PATH, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw codedError('DevMate config cannot be read while reconciling Codex snapshots', 'codex_snapshot_config_invalid', {
+      cause: String(error?.message || error).slice(0, 1000)
+    });
+  }
+  let config;
+  try {
+    config = JSON.parse(raw.replace(/^\uFEFF/, ''));
+  } catch {
+    throw codedError('DevMate config is invalid while reconciling Codex snapshots', 'codex_snapshot_config_invalid');
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw codedError('DevMate config root is invalid while reconciling Codex snapshots', 'codex_snapshot_config_invalid');
+  }
+  return [
+    ...(Array.isArray(config.workspaces) ? config.workspaces.map(item => item?.root) : []),
+    ...(Array.isArray(config.trustedWritableRoots) ? config.trustedWritableRoots.map(item => item?.root || item?.path || item) : [])
+  ].filter(value => typeof value === 'string' && value.trim()).map(value => value.trim());
+}
+
 async function assertSnapshotStorageSeparated(workspaceReal) {
   const workspaceRoot = path.resolve(workspaceReal);
   const storageRoot = await canonicalStorageCandidate();
@@ -198,6 +235,10 @@ function retainSnapshot(task) {
 
 export async function reconcileAgentSnapshotStorage() {
   ensureRoots();
+  for (const workspaceRoot of await configuredWorkspaceRoots()) {
+    const candidate = await canonicalWorkspaceCandidate(workspaceRoot);
+    if (candidate) await assertSnapshotStorageSeparated(candidate);
+  }
   const tasks = snapshotState(readDurableNamespace(COLLABORATION_NAMESPACE, null));
   if (!tasks) return { skipped: true, removed: [], failed: [] };
   await fsp.mkdir(AGENT_TASK_ROOT, { recursive: true, mode: 0o700 });
@@ -580,6 +621,8 @@ export const __test = {
   assertSnapshotStorageSeparated,
   blockedPath,
   canonicalStorageCandidate,
+  canonicalWorkspaceCandidate,
+  configuredWorkspaceRoots,
   isEnvironmentFile,
   isSafeEnvExample,
   normalizeRelative,
