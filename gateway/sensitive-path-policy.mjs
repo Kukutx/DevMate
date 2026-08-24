@@ -56,7 +56,9 @@ export function relativePathParts(value) {
 }
 
 export function isSafeProjectMetadataPath(value) {
-  return SAFE_PROJECT_METADATA_PATHS.has(normalizedRelative(value).toLowerCase());
+  const normalized = normalizedRelative(value).toLowerCase();
+  return SAFE_PROJECT_METADATA_PATHS.has(normalized) ||
+    [...SAFE_PROJECT_METADATA_PATHS].some(safe => normalized.endsWith(`/${safe}`));
 }
 
 export function isSafeEnvironmentExample(base) {
