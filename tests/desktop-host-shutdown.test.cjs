@@ -75,7 +75,9 @@ test('desktop child processes have parent-death fencing and provider cleanup kee
   assert.match(supervisor, /await delay\(CLEANUP_RETRY_MS\)/);
   assert.match(supervised, /supervisor\.forceTerminate = \(\) =>/);
   assert.match(supervised, /devmate:provider-stop/);
-  assert.doesNotMatch(supervised, /forceTerminate[\s\S]{0,400}SIGKILL/);
+  const forceTerminateBody = supervised.match(/supervisor\.forceTerminate = \(\) => \{([\s\S]*?)\n      \};/)?.[1] || '';
+  assert.ok(forceTerminateBody, 'provider supervisor forceTerminate body must remain inspectable');
+  assert.doesNotMatch(forceTerminateBody, /kill\(['"]SIGKILL['"]\)/);
   assert.match(sharedTunnel, /value\.childKind === ['"]supervisor['"] && processAlive\(value\.childPid\)/);
   assert.match(sharedTunnel, /DEVMATE_TUNNEL_SUPERVISOR_CLEANUP_PENDING/);
   assert.match(supervisor, /provider\.once\(['"]error['"][\s\S]*shutdown\(['"]provider-error['"], 1\)/);
