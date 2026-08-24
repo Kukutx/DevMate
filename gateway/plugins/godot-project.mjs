@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { resolveWorkspacePath } from './plugin-runtime.mjs';
 
 export function resolveProjectChild(projectRoot, relativePath = '.', options = {}) {
@@ -213,10 +214,7 @@ export async function validateProject(context, { workspaceId, projectSubpath, ti
 }
 
 function safeRelativeOutput(value) {
-  const output = String(value || '').trim().replace(/\\/g, '/');
-  if (!output) throw new Error('Godot export outputPath is required');
-  if (path.isAbsolute(output) || output.split('/').includes('..')) throw new Error('Godot export outputPath must stay inside the project workspace');
-  return output;
+  return safeGodotRelativePath(value, '', 'Godot export outputPath');
 }
 
 function slug(value) {
