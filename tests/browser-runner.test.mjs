@@ -47,3 +47,26 @@ test('Browser QA output and configured modules cannot escape through workspace s
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test('Browser QA artifact outputs cannot target protected workspace data', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-protected-'));
+  try {
+    fs.mkdirSync(path.join(workspace, '.aws'), { recursive: true });
+    fs.mkdirSync(path.join(workspace, '.devmate'), { recursive: true });
+    assert.throws(
+      () => __test.safeWorkspaceOutput(workspace, '.npmrc', 'Report'),
+      /protected workspace data/i
+    );
+    assert.throws(
+      () => __test.safeWorkspaceOutput(workspace, '.aws/credentials', 'Screenshot'),
+      /protected workspace data/i
+    );
+    assert.throws(
+      () => __test.safeWorkspaceOutput(workspace, '.devmate/state.json', 'Report'),
+      /protected workspace data/i
+    );
+    assert.doesNotThrow(() => __test.safeWorkspaceOutput(workspace, 'artifacts/browser-qa/latest.json', 'Report'));
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
