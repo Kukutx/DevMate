@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { inspectQaBridge } from './godot-qa-bridge.mjs';
 import { projectMetadata, readExportPresets, resolveProject } from './godot-project.mjs';
 import { inspectGodotTests } from './godot-tests.mjs';
@@ -8,9 +9,7 @@ import { inspectGodotTests } from './godot-tests.mjs';
 const SCHEMA_VERSION = 1;
 
 function safeRelative(value = '.devmate/automation.json') {
-  const relative = String(value || '.devmate/automation.json').trim().replace(/\\/g, '/');
-  if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error('Godot automation manifest path must stay inside the workspace');
-  return relative;
+  return safeGodotRelativePath(value, '.devmate/automation.json', 'Godot automation manifest path');
 }
 
 async function readExisting(file) {
