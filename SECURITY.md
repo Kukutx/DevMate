@@ -71,6 +71,18 @@ Never place OAuth, member login codes, Runner, provider, preview, or artifact-se
 - Member identities are denied recognized direct force/destructive Git and shell patterns by policy. Execute access still runs as the DevMate OS identity and is a trusted execution boundary, not a hostile-code sandbox.
 - Global administration, identity lifecycle, request/Runner policy and other elevated control-plane operations require the capability declared by central tool policy.
 
+## Optional Codex Collaboration boundary
+
+Codex Collaboration is disabled by default. Enabling it delegates work to a supervised Codex app-server against a DevMate-managed proposal snapshot rather than giving Codex a direct write path to the real workspace.
+
+- The snapshot is stored outside the real workspace and contains only allowlisted source/text paths. Credential-prone directories and dotfiles, real environment files, keys, databases, logs, binary artifacts, dependency caches and build outputs are omitted.
+- New protected or non-text files produced inside the proposal snapshot are reported as blocked changes and are not automatically applied.
+- The Codex runtime receives an allowlisted environment, runs with `networkAccess: false`, and is parent-supervised with bounded shutdown. These controls reduce exposure; they do not create an operating-system security boundary.
+- `strongOsReadIsolation` is false. Snapshot separation is a data-minimization and write-isolation boundary, **not** a VM/container sandbox for hostile code. Use a separate OS account, VM, container, or host when delegated code is untrusted.
+- `codex_proposal_status` returns the exact proposal digest. `codex_proposal_apply` requires that reviewed value as `expectedProposalDigest`; any proposal change invalidates the old review.
+- Applying a proposal uses normal DevMate workspace authorization, lease, conflict checks and crash-safe file mutations. Codex does not write directly from its runtime into the real workspace.
+- Apply state and snapshot recovery evidence are durable. Startup reconciles stale/orphan snapshot storage before file/apply recovery and fails closed rather than deleting required apply evidence when durable snapshot state is inconsistent or cleanup cannot be confirmed.
+
 ## Desktop public-generation boundary
 
 VS Code and Obsidian can each own or attach to the same machine-wide Gateway and provider-native public connection.
