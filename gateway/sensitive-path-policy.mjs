@@ -9,15 +9,20 @@ export const SENSITIVE_DIRECTORY_SEGMENTS = new Set([
 
 export const SENSITIVE_BASENAMES = new Set([
   '.env', '.envrc', '.dev.vars', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.netrc', '_netrc',
-  '.git-credentials', '.gitconfig', '.sentryclirc', '.terraformrc', 'terraform.rc',
+  '.git-credentials', '.gitconfig', '.sentryclirc', '.terraformrc', 'terraform.rc', '.htpasswd', '.htdigest',
+  '.credentials', '.secrets', 'auth.json', 'master.key', 'application_default_credentials.json',
   'pip.conf', 'nuget.config', 'local.properties', 'keystore.properties', 'key.properties', 'gradle.properties',
   'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
   'service-account.json', 'service_account.json', 'service-account-key.json', 'service_account_key.json',
-  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
+  'serviceaccountkey.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
 ]);
 
 export const SENSITIVE_EXTENSIONS = new Set([
   '.pem', '.key', '.pfx', '.p12', '.jks', '.keystore', '.db', '.sqlite', '.sqlite3', '.log'
+]);
+
+export const SAFE_PROJECT_METADATA_PATHS = new Set([
+  '.devmate/automation.json'
 ]);
 
 export const SAFE_TEXT_EXTENSIONS = new Set([
@@ -42,8 +47,16 @@ function slash(value) {
   return String(value || '').replace(/\\/g, '/');
 }
 
+function normalizedRelative(value) {
+  return slash(value).replace(/^\.\//, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
+}
+
 export function relativePathParts(value) {
-  return slash(value).split('/').filter(Boolean);
+  return normalizedRelative(value).split('/').filter(Boolean);
+}
+
+export function isSafeProjectMetadataPath(value) {
+  return SAFE_PROJECT_METADATA_PATHS.has(normalizedRelative(value).toLowerCase());
 }
 
 export function isSafeEnvironmentExample(base) {
@@ -59,7 +72,10 @@ export function isEnvironmentCredentialFile(base) {
 }
 
 export function sensitiveWorkspacePathReason(value) {
-  const parts = relativePathParts(value);
+  const normalized = normalizedRelative(value);
+  if (!normalized || normalized === '.') return '';
+  if (isSafeProjectMetadataPath(normalized)) return '';
+  const parts = relativePathParts(normalized);
   if (!parts.length) return '';
   const lowered = parts.map(part => part.toLowerCase());
   const sensitiveDirectory = lowered.find(part => SENSITIVE_DIRECTORY_SEGMENTS.has(part));
@@ -68,6 +84,7 @@ export function sensitiveWorkspacePathReason(value) {
   const base = lowered.at(-1) || '';
   if (isEnvironmentCredentialFile(base)) return 'environment-credential';
   if (SENSITIVE_BASENAMES.has(base)) return `sensitive-basename:${base}`;
+  if (/^service[_-]?account(?:[_-]?key)?.*\.json$/i.test(base)) return 'service-account-credential';
   if (SENSITIVE_EXTENSIONS.has(path.posix.extname(base).toLowerCase())) return `sensitive-extension:${path.posix.extname(base).toLowerCase()}`;
 
   const dockerIndex = lowered.lastIndexOf('.docker');
@@ -83,7 +100,8 @@ export function isSensitiveWorkspacePath(value) {
 
 export function isSafeWorkspaceTextPath(value) {
   if (isSensitiveWorkspacePath(value)) return false;
-  const normalized = slash(value);
+  const normalized = normalizedRelative(value);
+  if (isSafeProjectMetadataPath(normalized)) return true;
   const base = path.posix.basename(normalized);
   if (SAFE_TEXT_BASENAMES.has(base)) return true;
   if (isSafeEnvironmentExample(base)) return true;
