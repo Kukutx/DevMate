@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { z } from 'zod';
 import { definePlugin } from './plugin-sdk.mjs';
 import { browserQaStatus, runBrowserScenario } from './browser-runner.mjs';
@@ -15,6 +16,21 @@ const settingsSchema = z.object({
   chromiumExecutablePath: z.string().max(2000).optional(),
   allowRemoteUrls: z.boolean().optional()
 }).strict();
+
+function serviceWorkspaceFromRoot(context, workspaceRoot, { writable = false } = {}) {
+  const requested = fs.realpathSync.native(String(workspaceRoot || ''));
+  const config = context.readConfig();
+  const matches = (Array.isArray(config?.workspaces) ? config.workspaces : []).filter(workspace => {
+    try { return fs.realpathSync.native(workspace.root) === requested; }
+    catch { return false; }
+  });
+  if (matches.length !== 1) {
+    const error = new Error('Browser QA service workspace root is not a uniquely configured DevMate workspace');
+    error.code = 'browser_qa_workspace_boundary';
+    throw error;
+  }
+  return context.workspace.get(matches[0].id, { writable });
+}
 
 async function savedScenario(context, { workspaceId, manifestPath, scenarioId }) {
   const loaded = await loadAutomationManifest(context, { workspaceId, manifestPath });
@@ -72,12 +88,12 @@ export const browserQaPlugin = definePlugin({
   activate(context) {
     const { server } = context;
     const service = Object.freeze({
-      status: workspaceId => {
-        const workspace = context.workspace.get(workspaceId, { writable: false });
+      status: workspaceRoot => {
+        const workspace = serviceWorkspaceFromRoot(context, workspaceRoot, { writable: false });
         return browserQaStatus(workspace.root, context.settings);
       },
-      runScenario: ({ workspaceId, ...args }) => {
-        const workspace = context.workspace.get(workspaceId, { writable: true });
+      runScenario: ({ workspaceRoot, ...args }) => {
+        const workspace = serviceWorkspaceFromRoot(context, workspaceRoot, { writable: true });
         return runBrowserScenario({
           ...args,
           workspaceRoot: workspace.root,
@@ -193,4 +209,4 @@ export const browserQaPlugin = definePlugin({
   }
 });
 
-export const __test = { automationConfigSchema, browserActionSchema, browserScenarioSchema, settingsSchema };
+export const __test = { automationConfigSchema, browserActionSchema, browserScenarioSchema, serviceWorkspaceFromRoot, settingsSchema };
