@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -62,18 +63,30 @@ function assertWorkspaceTarget(config, workspace, rel) {
   return target;
 }
 
+function backupOriginalRelative(root, candidate) {
+  const relative = path.relative(root, candidate);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return '';
+  const parts = relative.split(path.sep).filter(Boolean);
+  return parts.length >= 2 ? normalizeSlash(parts.slice(1).join('/')) : '';
+}
+
 function assertBackupSource(backupPath) {
   if (!BACKUP_ROOT) throw new Error('DevMate backup root is unavailable');
   const root = path.resolve(BACKUP_ROOT);
   const candidate = path.resolve(String(backupPath || ''));
-  if (!isInside(root, candidate)) throw new Error('Backup path is outside DevMate backup root');
+  if (!isInside(root, candidate) || candidate === root) throw new Error('Backup path is outside DevMate backup root');
+  const originalRel = backupOriginalRelative(root, candidate);
+  if (!originalRel) throw new Error('Backup path does not encode an original workspace-relative path');
+  assertSafeRollbackRel(originalRel, 'Backup source path');
   const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
   if (!stat) return null;
   if (stat.isSymbolicLink()) throw new Error('Backup source cannot be a symlink/reparse point');
+  const rootStat = fs.statSync(root, { throwIfNoEntry: false });
+  if (!rootStat?.isDirectory()) throw new Error('DevMate backup root is unavailable');
   const rootReal = fs.realpathSync.native(root);
   const sourceReal = fs.realpathSync.native(candidate);
   if (!isInside(rootReal, sourceReal)) throw new Error('Backup path escapes DevMate backup root');
-  return { path: sourceReal, stat };
+  return { path: sourceReal, stat, originalRel };
 }
 
 async function assertTreeSafe(root, destinationRel) {
@@ -109,7 +122,7 @@ async function backupCurrent(target, rel) {
   if (!stat) return null;
   if (stat.isSymbolicLink()) throw new Error(`Rollback backup target is a symlink/reparse point: ${rel}`);
   await assertTreeSafe(target, rel);
-  const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}-${Math.random().toString(16).slice(2, 10)}`;
+  const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   const safeRel = normalizeSlash(rel).split('/').filter(part => part && part !== '.' && part !== '..')
     .map(part => part.replace(/[<>:"|?*\x00-\x1F]/g, '_')).join('/') || 'workspace-root';
   const destination = path.join(BACKUP_ROOT, stamp, safeRel);
@@ -233,6 +246,7 @@ export const __test = {
   assertSafeRollbackRel,
   assertTreeSafe,
   assertWorkspaceTarget,
+  backupOriginalRelative,
   isInside,
   rollbackEntry
 };
