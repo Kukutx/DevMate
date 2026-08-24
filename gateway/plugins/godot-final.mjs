@@ -5,6 +5,7 @@ import { extendPlugin } from './plugin-sdk.mjs';
 import { advancedGodotPlugin } from './godot-advanced.mjs';
 import { bootstrapGodotAutomation } from './godot-bootstrap.mjs';
 import { comparePerformanceBaseline, readPerformanceBaseline, writePerformanceBaseline } from './godot-baseline.mjs';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { compactPerformanceResult, runPerformanceTest } from './godot-performance.mjs';
 import { evaluateGodotReleaseGate } from './godot-release-gate.mjs';
 
@@ -55,8 +56,7 @@ const nativeSchema = {
 
 async function writeRegressionReport(context, result, relativePath) {
   const workspace = context.workspace.get(result.workspace.id, { writable: true });
-  const relative = String(relativePath || 'artifacts/godot-performance/regression.json').trim().replace(/\\/g, '/');
-  if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error('Godot performance regression report must stay inside the workspace');
+  const relative = safeGodotRelativePath(relativePath, 'artifacts/godot-performance/regression.json', 'Godot performance regression report path');
   const file = context.workspace.resolve(workspace, path.join(result.projectSubpath || '.', relative));
   await fsp.mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
