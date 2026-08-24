@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import test from 'node:test';
 import configStore from '../shared/config-store.cjs';
 
+const execFileAsync = promisify(execFile);
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-file-access-hardening-'));
 const workspace = path.join(root, 'workspace');
 const configPath = path.join(root, 'config.json');
@@ -29,6 +32,20 @@ async function write(rel, content = 'needle\n') {
   await fsp.mkdir(path.dirname(file), { recursive: true });
   await fsp.writeFile(file, content, 'utf8');
   return file;
+}
+
+async function git(args) {
+  return execFileAsync('git', args, { cwd: workspace, encoding: 'utf8' });
+}
+
+async function initGit() {
+  await git(['init', '-q']);
+  await git(['config', 'user.email', 'devmate-tests@example.invalid']);
+  await git(['config', 'user.name', 'DevMate Tests']);
+  await write('src/app.js', 'export const marker = "baseline";\n');
+  await write('.env', 'SECRET=baseline-secret\n');
+  await git(['add', '--', 'src/app.js', '.env']);
+  await git(['commit', '-q', '-m', 'baseline']);
 }
 
 test.beforeEach(async () => {
@@ -56,7 +73,9 @@ test('explicit read and mutation paths fail closed before reaching their handler
     ['write_file', { path: '.dev.vars' }],
     ['delete_file', { path: '.aws/credentials' }],
     ['apply_patch', { filePath: '.docker/config.json' }],
-    ['move_file', { from: 'src/app.js', to: '.kube/config' }]
+    ['move_file', { from: 'src/app.js', to: '.kube/config' }],
+    ['git_blame', { path: '.env' }],
+    ['git_diff', { paths: ['.aws/credentials'] }]
   ]) {
     assert.throws(() => hardening.__test.guardExplicitPaths(name, args), error => error?.code === 'sensitive_workspace_path');
   }
@@ -126,6 +145,52 @@ test('path-bearing discovery and editor context results remove protected entries
   assert.equal(context.structuredContent.activeEditor, null);
   assert.deepEqual(context.structuredContent.visibleEditors, [{ path: 'src/app.js' }]);
   assert.deepEqual(context.structuredContent.diagnostics, [{ path: 'src/app.js' }]);
+});
+
+test('Git diff and show-changes never return tracked credential-file content', async () => {
+  await initGit();
+  await write('src/app.js', 'export const marker = "safe-change";\n');
+  await write('.env', 'SECRET=do-not-return-this-value\n');
+
+  const diff = await hardening.__test.safeGitDiff({ workspaceId: 'app', maxOutputChars: 100_000 });
+  assert.match(diff.structuredContent.stdout, /safe-change/);
+  assert.doesNotMatch(diff.structuredContent.stdout, /\.env|do-not-return-this-value/);
+
+  const review = await hardening.__test.safeShowChanges({ workspaceId: 'app', maxOutputChars: 100_000 });
+  assert.match(review.structuredContent.patch.stdout, /safe-change/);
+  assert.doesNotMatch(review.structuredContent.patch.stdout, /\.env|do-not-return-this-value/);
+  assert.equal(review.structuredContent.files.some(item => policy.isSensitiveWorkspacePath(item.path)), false);
+  assert.doesNotMatch(review.structuredContent.status.stdout, /\.env/);
+});
+
+test('broad Git staging blocks changed protected files while an explicit safe path remains usable', async () => {
+  await initGit();
+  await write('src/app.js', 'export const marker = "safe-stage";\n');
+  await write('.npmrc', '//registry.example/:_authToken=never-stage-me\n');
+
+  await assert.rejects(
+    hardening.__test.guardGitStaging('git_add', { workspaceId: 'app', paths: [] }),
+    error => error?.code === 'git_sensitive_path_staging_blocked' && error.blockedCount >= 1
+  );
+  await assert.doesNotReject(
+    hardening.__test.guardGitStaging('git_add', { workspaceId: 'app', paths: ['src/app.js'] })
+  );
+});
+
+test('git_raw is restricted to metadata-only subcommands', () => {
+  for (const command of ['show', 'cat-file', 'config', 'grep', 'diff', 'log', 'add', 'commit']) {
+    assert.throws(
+      () => hardening.__test.guardGitRaw({ args: [command] }),
+      error => error?.code === 'git_raw_command_restricted'
+    );
+  }
+  for (const command of ['status', 'branch', 'rev-parse', 'describe', 'tag', 'ls-files']) {
+    assert.equal(hardening.__test.guardGitRaw({ args: [command] }).command, command);
+  }
+  assert.throws(
+    () => hardening.__test.guardGitRaw({ args: ['status', '--', '.env'] }),
+    error => error?.code === 'sensitive_workspace_path'
+  );
 });
 
 test('Codex snapshot remains at least as strict for representative credential paths', () => {
