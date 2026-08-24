@@ -1,9 +1,11 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { definePlugin } from './plugin-sdk.mjs';
 import { browserQaStatus, runBrowserScenario } from './browser-runner.mjs';
 import { getPreview, listPreviews, startPreview, stopPreview, stopWorkspacePreviews } from './preview-manager.mjs';
 import { loadAutomationManifest, pluginAutomationConfig, scenarioById } from './automation-manifest.mjs';
+import { sensitiveWorkspacePathReason } from '../sensitive-path-policy.mjs';
 
 import { browserActionSchema, browserScenarioSchema, browserViewportSchema } from './browser-schemas.mjs';
 
@@ -32,6 +34,18 @@ function serviceWorkspaceFromRoot(context, workspaceRoot, { writable = false } =
   return context.workspace.get(matches[0].id, { writable });
 }
 
+function resolvePreviewRoot(context, workspace, rootInput) {
+  const root = context.workspace.resolve(workspace, rootInput, { mustExist: true, directory: true });
+  const relative = path.relative(fs.realpathSync.native(workspace.root), root).replace(/\\/g, '/');
+  const reason = sensitiveWorkspacePathReason(relative);
+  if (reason) {
+    const error = new Error(`Preview root targets protected workspace data (${reason}): ${relative}`);
+    error.code = 'preview_protected_root';
+    throw error;
+  }
+  return root;
+}
+
 async function savedScenario(context, { workspaceId, manifestPath, scenarioId }) {
   const loaded = await loadAutomationManifest(context, { workspaceId, manifestPath });
   const config = automationConfigSchema.parse(pluginAutomationConfig(loaded.manifest, 'devmate.browser-qa'));
@@ -39,7 +53,7 @@ async function savedScenario(context, { workspaceId, manifestPath, scenarioId })
   const workspace = context.workspace.get(workspaceId, { writable: true });
   let preview = null;
   if (scenario.preview) {
-    const root = context.workspace.resolve(workspace, scenario.preview.rootSubpath, { mustExist: true, directory: true });
+    const root = resolvePreviewRoot(context, workspace, scenario.preview.rootSubpath);
     preview = await startPreview({
       workspaceId: workspace.id,
       root,
@@ -102,7 +116,7 @@ export const browserQaPlugin = definePlugin({
       },
       startPreview: ({ workspaceId, root, ...args }) => {
         const workspace = context.workspace.get(workspaceId, { writable: false });
-        const resolvedRoot = context.workspace.resolve(workspace, root, { mustExist: true, directory: true });
+        const resolvedRoot = resolvePreviewRoot(context, workspace, root);
         return startPreview({ ...args, workspaceId: workspace.id, root: resolvedRoot });
       },
       getPreview,
@@ -127,7 +141,7 @@ export const browserQaPlugin = definePlugin({
     }, async ({ workspaceId, rootSubpath = 'build/web', entryPath = 'index.html', port = 0, crossOriginIsolation = false, spaFallback = false }) => {
       context.assertCanMutate('Starting a local preview');
       const workspace = context.workspace.get(workspaceId, { writable: true });
-      const root = context.workspace.resolve(workspace, rootSubpath, { mustExist: true, directory: true });
+      const root = resolvePreviewRoot(context, workspace, rootSubpath);
       const preview = await startPreview({ workspaceId: workspace.id, root, entryPath, port, crossOriginIsolation, spaFallback });
       await context.audit('preview_start', { workspace: workspace.id, rootSubpath, entryPath, previewId: preview.id, port: preview.port });
       return context.toolText({ preview });
@@ -209,4 +223,4 @@ export const browserQaPlugin = definePlugin({
   }
 });
 
-export const __test = { automationConfigSchema, browserActionSchema, browserScenarioSchema, serviceWorkspaceFromRoot, settingsSchema };
+export const __test = { automationConfigSchema, browserActionSchema, browserScenarioSchema, resolvePreviewRoot, serviceWorkspaceFromRoot, settingsSchema };
