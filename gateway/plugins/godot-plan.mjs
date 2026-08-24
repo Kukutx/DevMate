@@ -1,5 +1,6 @@
 import fsp from 'node:fs/promises';
 import { loadAutomationManifest, pluginAutomationConfig, scenarioById } from './automation-manifest.mjs';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { inspectQaBridge } from './godot-qa-bridge.mjs';
 import { projectMetadata, readExportPresets, resolveProject } from './godot-project.mjs';
 
@@ -54,6 +55,19 @@ function issue(level, code, message, data = {}) {
   return { level, code, message, ...data };
 }
 
+function pathBlocker(value, label, scenarioId = null) {
+  if (!value) return null;
+  try {
+    safeGodotRelativePath(value, '', label);
+    return null;
+  } catch (error) {
+    return issue('error', 'unsafe_automation_path', `${label} is unsafe: ${error.message}`, {
+      ...(scenarioId ? { scenarioId } : {}),
+      path: String(value)
+    });
+  }
+}
+
 function exportPlanItem(target, preset, config, csharpProject) {
   const mode = target.mode || config.exportMode || 'release';
   const args = {
@@ -62,6 +76,11 @@ function exportPlanItem(target, preset, config, csharpProject) {
     mode
   };
   if (target.outputPath) args.outputPath = target.outputPath;
+  const blockers = preset ? [] : [issue('error', 'unknown_export_preset', `Godot export preset not found: ${target.preset}`, { preset: target.preset })];
+  const outputBlocker = pathBlocker(target.outputPath, 'Godot export outputPath');
+  if (outputBlocker) blockers.push(outputBlocker);
+  const projectBlocker = pathBlocker(args.projectSubpath, 'Godot projectSubpath');
+  if (projectBlocker) blockers.push(projectBlocker);
   return {
     id: `export:${target.preset}`,
     kind: 'export',
@@ -71,7 +90,7 @@ function exportPlanItem(target, preset, config, csharpProject) {
     mode,
     requiredCapabilities: suggestedCapabilitiesForPreset(preset || { name: target.preset }, { csharp: csharpProject }),
     job: { tool: 'godot_export', arguments: args },
-    blockers: preset ? [] : [issue('error', 'unknown_export_preset', `Godot export preset not found: ${target.preset}`, { preset: target.preset })],
+    blockers,
     warnings: []
   };
 }
@@ -106,6 +125,10 @@ function scenarioPlanItem(scenario, config, presets, metadata, bridge, csharpPro
     if (!(scenario.assertions || []).length && !(scenario.requiredCheckpoints || []).length && !scenario.quitOnCheckpoint) {
       warnings.push(issue('warning', 'weak_native_acceptance', 'Native scenario has no state assertions or required checkpoints.', { scenarioId: scenario.id }));
     }
+    for (const [value, label] of [[args.projectSubpath, 'Godot projectSubpath'], [args.reportPath, 'Godot native reportPath']]) {
+      const blocker = pathBlocker(value, label, scenario.id);
+      if (blocker) blockers.push(blocker);
+    }
     requiredCapabilities = ['core', 'godot'];
     if (csharpProject) requiredCapabilities.push('dotnet');
   } else {
@@ -124,6 +147,15 @@ function scenarioPlanItem(scenario, config, presets, metadata, bridge, csharpPro
     if (!preset) blockers.push(issue('error', 'unknown_web_preset', `Web acceptance preset not found: ${presetName}`, { scenarioId: scenario.id, preset: presetName }));
     else if (!/web/i.test(`${preset.name} ${preset.platform}`)) blockers.push(issue('error', 'non_web_preset', `Acceptance preset is not a Web preset: ${presetName}`, { scenarioId: scenario.id, preset: presetName }));
     if (!(scenario.actions || []).length) warnings.push(issue('warning', 'empty_web_actions', 'Web scenario has no browser or state actions.', { scenarioId: scenario.id }));
+    for (const [value, label] of [
+      [args.projectSubpath, 'Godot projectSubpath'],
+      [args.outputPath, 'Godot Web outputPath'],
+      [args.screenshotPath, 'Godot Web screenshotPath'],
+      [args.reportPath, 'Godot Web reportPath']
+    ]) {
+      const blocker = pathBlocker(value, label, scenario.id);
+      if (blocker) blockers.push(blocker);
+    }
     requiredCapabilities = ['core', 'godot', 'browser-qa'];
     if (csharpProject) requiredCapabilities.push('dotnet');
   }
@@ -205,4 +237,4 @@ export async function planGodotAutomation(context, {
   };
 }
 
-export const __test = { exportPlanItem, normalizeExport, normalizeScenario, scenarioPlanItem };
+export const __test = { exportPlanItem, normalizeExport, normalizeScenario, pathBlocker, scenarioPlanItem };
