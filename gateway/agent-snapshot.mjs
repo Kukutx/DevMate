@@ -138,6 +138,41 @@ function safeChild(root, rel) {
   return full;
 }
 
+async function canonicalStorageCandidate() {
+  ensureRoots();
+  let current;
+  try {
+    current = await fsp.realpath(CONFIG_DIR);
+  } catch (error) {
+    throw codedError('DevMate config directory is unavailable for Codex snapshot storage', 'codex_snapshot_config_required', {
+      cause: String(error?.message || error).slice(0, 1000)
+    });
+  }
+  for (const part of ['state', 'codex-collaboration', 'tasks']) {
+    const next = path.join(current, part);
+    let resolved = null;
+    try {
+      resolved = await fsp.realpath(next);
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error?.code)) throw error;
+    }
+    current = resolved || next;
+  }
+  return path.resolve(current);
+}
+
+async function assertSnapshotStorageSeparated(workspaceReal) {
+  const workspaceRoot = path.resolve(workspaceReal);
+  const storageRoot = await canonicalStorageCandidate();
+  if (inside(workspaceRoot, storageRoot) || inside(storageRoot, workspaceRoot)) {
+    throw codedError(
+      'Codex snapshot storage must be outside and separate from the real workspace',
+      'codex_snapshot_state_overlap'
+    );
+  }
+  return storageRoot;
+}
+
 function snapshotState(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== 1 || !Array.isArray(raw.tasks)) return null;
   const tasks = new Map();
@@ -277,11 +312,13 @@ export async function createAgentSnapshot({ taskId, workspace }) {
   const rootStat = await fsp.stat(workspace.root).catch(() => null);
   if (!rootStat?.isDirectory()) throw codedError('Workspace root is unavailable', 'codex_snapshot_workspace_unavailable');
   const workspaceReal = await fsp.realpath(workspace.root);
+  await assertSnapshotStorageSeparated(workspaceReal);
   const recovery = await reconcileAgentSnapshotStorage();
   if (recovery.failed.length) {
     throw codedError(`Codex snapshot cleanup is blocked for ${recovery.failed.length} task(s)`, 'codex_snapshot_cleanup_blocked', { failed: recovery.failed });
   }
   await fsp.mkdir(AGENT_TASK_ROOT, { recursive: true, mode: 0o700 });
+  await assertSnapshotStorageSeparated(workspaceReal);
   if (fs.existsSync(paths.root)) {
     await fsp.rm(paths.root, { recursive: true, force: true });
   }
@@ -540,7 +577,9 @@ export const __test = {
   COLLABORATION_NAMESPACE,
   SKIP_DIRS,
   TASK_ID,
+  assertSnapshotStorageSeparated,
   blockedPath,
+  canonicalStorageCandidate,
   isEnvironmentFile,
   isSafeEnvExample,
   normalizeRelative,
