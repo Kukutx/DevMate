@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assertSafeWorkspacePath,
+  assertSafeWorkspaceRoot,
   isSafeGodotBaselineMetadataPath,
   isSafeProjectMetadataPath,
   isSafeWorkspaceTextPath,
   isSensitiveWorkspacePath,
-  sensitiveWorkspacePathReason
+  sensitiveWorkspacePathReason,
+  sensitiveWorkspaceRootReason
 } from '../gateway/sensitive-path-policy.mjs';
 
 test('project automation metadata is allowed only outside protected parent directories', () => {
@@ -78,5 +80,27 @@ test('credential-shaped and standalone control-plane files remain protected whil
     assert.equal(isSensitiveWorkspacePath(value), false, value);
     assert.equal(isSafeWorkspaceTextPath(value), true, value);
     assert.equal(assertSafeWorkspacePath(value), value);
+  }
+});
+
+test('a protected directory cannot become the workspace root and erase its own relative-path marker', () => {
+  for (const value of [
+    '/home/user/.aws',
+    '/home/user/.devmate/desktop',
+    '/srv/.devmate-server',
+    '/tmp/secrets/project',
+    'C:\\Users\\me\\.ssh\\project'
+  ]) {
+    assert.match(sensitiveWorkspaceRootReason(value), /^sensitive-directory:/, value);
+    assert.throws(
+      () => assertSafeWorkspaceRoot(value),
+      error => error?.code === 'protected_workspace_root' && /^sensitive-directory:/.test(error?.reason || ''),
+      value
+    );
+  }
+
+  for (const value of ['/home/user/projects/app', 'C:\\Users\\me\\source\\app']) {
+    assert.equal(sensitiveWorkspaceRootReason(value), '', value);
+    assert.equal(assertSafeWorkspaceRoot(value), value);
   }
 });
