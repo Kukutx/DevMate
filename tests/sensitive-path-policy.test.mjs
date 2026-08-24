@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assertSafeWorkspacePath,
+  isSafeGodotBaselineMetadataPath,
   isSafeProjectMetadataPath,
   isSafeWorkspaceTextPath,
   isSensitiveWorkspacePath,
@@ -24,6 +25,30 @@ test('project automation metadata is allowed only outside protected parent direc
     assert.equal(isSensitiveWorkspacePath(value), true, value);
     assert.match(sensitiveWorkspacePathReason(value), /^sensitive-directory:/, value);
     assert.equal(isSafeWorkspaceTextPath(value), false, value);
+  }
+});
+
+test('reviewed Godot baseline metadata is narrowly allowed inside .devmate', () => {
+  for (const value of [
+    '.devmate/baselines/godot/main.json',
+    'game/.devmate/baselines/godot/main-linux-x64.json'
+  ]) {
+    assert.equal(isSafeGodotBaselineMetadataPath(value), true, value);
+    assert.equal(isSafeProjectMetadataPath(value), true, value);
+    assert.equal(isSensitiveWorkspacePath(value), false, value);
+    assert.equal(isSafeWorkspaceTextPath(value), true, value);
+  }
+
+  for (const value of [
+    '.devmate/baselines/godot/credentials.json',
+    '.devmate/baselines/godot/service-account-prod.json',
+    '.devmate/baselines/godot/nested/main.json',
+    '.aws/.devmate/baselines/godot/main.json',
+    '.devmate/baselines/other/main.json',
+    '.devmate/state.json'
+  ]) {
+    assert.equal(isSafeGodotBaselineMetadataPath(value), false, value);
+    assert.equal(isSensitiveWorkspacePath(value), true, value);
   }
 });
 
