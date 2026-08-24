@@ -44,6 +44,17 @@ function assertAllowedUrl(rawUrl, allowRemoteUrls) {
   return url;
 }
 
+function browserRequestUrlAllowed(rawUrl) {
+  const value = String(rawUrl || '');
+  if (/^(?:data:|blob:|about:)/i.test(value)) return true;
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:'].includes(parsed.protocol) && isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function browserExecutableAllowed(value) {
   if (!value) return true;
   const base = path.basename(String(value).replace(/\\/g, '/')).toLowerCase();
@@ -248,12 +259,8 @@ export async function runBrowserScenario({ workspaceRoot, url, settings = {}, ac
     if (!settings.allowRemoteUrls) {
       await context.route('**/*', async route => {
         const requestUrl = route.request().url();
-        if (/^(?:data:|blob:|about:)/i.test(requestUrl)) { await route.continue(); return; }
-        try {
-          const parsed = new URL(requestUrl);
-          if (['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname)) await route.continue();
-          else await route.abort('blockedbyclient');
-        } catch { await route.abort('blockedbyclient'); }
+        if (browserRequestUrlAllowed(requestUrl)) await route.continue();
+        else await route.abort('blockedbyclient');
       });
     }
     const page = await context.newPage();
@@ -343,6 +350,7 @@ export async function runBrowserScenario({ workspaceRoot, url, settings = {}, ac
 export const __test = {
   assertAllowedUrl,
   browserExecutableAllowed,
+  browserRequestUrlAllowed,
   compareQaValue,
   isInside,
   resolveModuleFromWorkspace,
