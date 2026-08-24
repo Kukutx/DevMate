@@ -301,6 +301,8 @@ export function memberCreate(options = {}) {
   let result = null;
   updateConfig(file, current => {
     const config = normalizeInstanceConfig(current);
+    const name = String(options.name || '').trim();
+    if (!name) throw new Error('--name is required');
     result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });
     return config;
   });
