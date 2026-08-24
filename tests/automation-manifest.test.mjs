@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { automationManifestTemplate, loadAutomationManifest, pluginAutomationConfig, scenarioById } from '../gateway/plugins/automation-manifest.mjs';
+import { __test, automationManifestTemplate, loadAutomationManifest, pluginAutomationConfig, scenarioById } from '../gateway/plugins/automation-manifest.mjs';
 
 function contextFor(root) {
   const workspace = { id: 'workspace', name: 'workspace', root };
@@ -39,4 +39,12 @@ test('rejects unsupported automation manifest versions', async t => {
   await fsp.mkdir(path.join(root, '.devmate'), { recursive: true });
   await fsp.writeFile(path.join(root, '.devmate', 'automation.json'), JSON.stringify({ schemaVersion: 99, plugins: {} }), 'utf8');
   await assert.rejects(() => loadAutomationManifest(contextFor(root), {}), /Unsupported DevMate automation schemaVersion/);
+});
+
+test('automation manifest path allows only safe project metadata locations', () => {
+  assert.equal(__test.safeManifestPath('.devmate/automation.json'), '.devmate/automation.json');
+  assert.equal(__test.safeManifestPath('game/.devmate/automation.json'), 'game/.devmate/automation.json');
+  for (const value of ['../automation.json', '/tmp/automation.json', '.aws/.devmate/automation.json', 'secrets/automation.json', '.npmrc']) {
+    assert.throws(() => __test.safeManifestPath(value), value);
+  }
 });
