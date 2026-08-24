@@ -20,6 +20,21 @@ test('Browser QA blocks remote URLs by default', () => {
   assert.doesNotThrow(() => __test.assertAllowedUrl('http://[::1]:3000', false));
 });
 
+test('Browser QA request fencing uses the same complete loopback policy', () => {
+  for (const value of [
+    'http://127.0.0.1:3000/app.js',
+    'http://127.2.3.4:3000/app.js',
+    'http://localhost:3000/app.js',
+    'http://[::1]:3000/app.js',
+    'data:text/plain,ok',
+    'blob:http://127.0.0.1/id',
+    'about:blank'
+  ]) assert.equal(__test.browserRequestUrlAllowed(value), true, value);
+  for (const value of ['https://example.com/app.js', 'ftp://127.0.0.1/file', 'not-a-url']) {
+    assert.equal(__test.browserRequestUrlAllowed(value), false, value);
+  }
+});
+
 test('Browser QA output and configured modules cannot escape through workspace symlinks', t => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-workspace-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-outside-'));
