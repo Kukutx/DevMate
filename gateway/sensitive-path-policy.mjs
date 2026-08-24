@@ -56,9 +56,18 @@ export function relativePathParts(value) {
 }
 
 export function isSafeProjectMetadataPath(value) {
-  const normalized = normalizedRelative(value).toLowerCase();
-  return SAFE_PROJECT_METADATA_PATHS.has(normalized) ||
-    [...SAFE_PROJECT_METADATA_PATHS].some(safe => normalized.endsWith(`/${safe}`));
+  const parts = relativePathParts(value);
+  if (parts.length < 2) return false;
+  const lowered = parts.map(part => part.toLowerCase());
+  for (const safe of SAFE_PROJECT_METADATA_PATHS) {
+    const safeParts = safe.split('/').filter(Boolean);
+    if (safeParts.length > lowered.length) continue;
+    const start = lowered.length - safeParts.length;
+    if (!safeParts.every((part, index) => lowered[start + index] === part)) continue;
+    const unsafeParent = lowered.slice(0, start).find(part => SENSITIVE_DIRECTORY_SEGMENTS.has(part));
+    if (!unsafeParent) return true;
+  }
+  return false;
 }
 
 export function isSafeEnvironmentExample(base) {
