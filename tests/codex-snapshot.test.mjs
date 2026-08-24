@@ -43,6 +43,16 @@ function comparablePath(value) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function resumableSnapshotState() {
+  return {
+    version: 1,
+    activeTaskId: null,
+    tasks: [
+      { id: taskId, workspaceId: 'app', status: 'proposal_ready', snapshotAvailable: true, snapshotCleanupPending: false }
+    ]
+  };
+}
+
 test('Codex snapshot is isolated, text-minimized, excludes credential-prone paths and produces bounded proposals', async () => {
   assert.equal(snapshot.proposalTextPath('.gitignore'), true);
   assert.equal(snapshot.proposalTextPath('.npmrc'), false);
@@ -120,6 +130,38 @@ test('snapshot recovery removes orphan, partial and terminal residue while retai
   assert.equal(state.tasks.find(item => item.id === taskId)?.snapshotAvailable, true);
   assert.equal(state.tasks.find(item => item.id === partialId)?.snapshotAvailable, false);
   assert.equal(state.tasks.find(item => item.id === terminalId)?.snapshotAvailable, false);
+});
+
+test('snapshot reconciliation never deletes apply recovery evidence when durable snapshot state is inconsistent', async () => {
+  const applyId = 'codex-apply-evidence-123456';
+  const evidence = path.join(snapshot.AGENT_TASK_ROOT, applyId, 'baseline', 'app.js');
+  await fsp.mkdir(path.dirname(evidence), { recursive: true });
+  await fsp.writeFile(evidence, 'rollback evidence\n', 'utf8');
+  const malformed = {
+    version: 1,
+    activeTaskId: applyId,
+    tasks: [
+      {
+        id: applyId,
+        workspaceId: 'app',
+        status: 'applying',
+        snapshotAvailable: false,
+        snapshotCleanupPending: false
+      }
+    ]
+  };
+  durable.writeDurableNamespace('codex-collaboration', malformed);
+  try {
+    await assert.rejects(
+      snapshot.reconcileAgentSnapshotStorage(),
+      error => error?.code === 'codex_snapshot_state_invalid' && error?.taskId === applyId
+    );
+    assert.equal(fs.existsSync(evidence), true, 'apply recovery evidence must remain untouched');
+    assert.deepEqual(durable.readDurableNamespace('codex-collaboration', null), malformed);
+  } finally {
+    durable.writeDurableNamespace('codex-collaboration', resumableSnapshotState());
+    await fsp.rm(path.join(snapshot.AGENT_TASK_ROOT, applyId), { recursive: true, force: true });
+  }
 });
 
 test('baseline integrity is verified before it can be used for rollback', async () => {
