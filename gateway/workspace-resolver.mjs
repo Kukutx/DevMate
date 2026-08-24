@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { assertSafeWorkspaceRoot } from './sensitive-path-policy.mjs';
 
 function publicWorkspace(workspace) {
   return {
@@ -7,6 +9,20 @@ function publicWorkspace(workspace) {
     reference: !!workspace.reference,
     mode: workspace.mode || (workspace.reference ? 'readonly' : 'workspace-write')
   };
+}
+
+function assertOperationalWorkspaceRoot(workspace) {
+  const root = String(workspace?.root || '').trim();
+  if (!root) return workspace;
+  assertSafeWorkspaceRoot(root);
+  try {
+    const real = fs.realpathSync.native(root);
+    assertSafeWorkspaceRoot(real, 'Workspace real root');
+  } catch (error) {
+    if (error?.code === 'protected_workspace_root') throw error;
+    if (!['ENOENT', 'ENOTDIR'].includes(error?.code)) throw error;
+  }
+  return workspace;
 }
 
 export function writableWorkspaces(config) {
@@ -31,14 +47,14 @@ export function resolveWorkspace(config, requested = '') {
       || writable[0]
       || workspaces[0];
     if (!active) throw new Error('No workspace configured');
-    return active;
+    return assertOperationalWorkspaceRoot(active);
   }
 
   const byId = workspaces.find(item => item.id === value);
-  if (byId) return byId;
+  if (byId) return assertOperationalWorkspaceRoot(byId);
 
   const byName = workspaces.filter(item => item.name === value);
-  if (byName.length == 1) return byName[0];
+  if (byName.length == 1) return assertOperationalWorkspaceRoot(byName[0]);
   if (byName.length > 1) {
     const error = new Error(`Workspace name is ambiguous: ${value}`);
     error.code = 'workspace_ambiguous';
@@ -54,3 +70,5 @@ export function resolveWorkspace(config, requested = '') {
 export function resolveWorkspaceId(config, requested = '') {
   return resolveWorkspace(config, requested).id;
 }
+
+export const __test = { assertOperationalWorkspaceRoot };
