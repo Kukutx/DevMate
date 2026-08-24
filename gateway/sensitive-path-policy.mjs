@@ -55,17 +55,33 @@ export function relativePathParts(value) {
   return normalizedRelative(value).split('/').filter(Boolean);
 }
 
+function hasSensitiveParent(parts, endExclusive) {
+  return parts.slice(0, endExclusive).some(part => SENSITIVE_DIRECTORY_SEGMENTS.has(part));
+}
+
+export function isSafeGodotBaselineMetadataPath(value) {
+  const lowered = relativePathParts(value).map(part => part.toLowerCase());
+  if (lowered.length < 4) return false;
+  const file = lowered.at(-1) || '';
+  const markerStart = lowered.length - 4;
+  if (lowered[markerStart] !== '.devmate' || lowered[markerStart + 1] !== 'baselines' || lowered[markerStart + 2] !== 'godot') return false;
+  if (hasSensitiveParent(lowered, markerStart)) return false;
+  if (!/^[a-z0-9._-]{1,160}\.json$/.test(file)) return false;
+  if (SENSITIVE_BASENAMES.has(file) || /^service[_-]?account(?:[_-]?key)?.*\.json$/i.test(file)) return false;
+  return true;
+}
+
 export function isSafeProjectMetadataPath(value) {
   const parts = relativePathParts(value);
   if (parts.length < 2) return false;
   const lowered = parts.map(part => part.toLowerCase());
+  if (isSafeGodotBaselineMetadataPath(value)) return true;
   for (const safe of SAFE_PROJECT_METADATA_PATHS) {
     const safeParts = safe.split('/').filter(Boolean);
     if (safeParts.length > lowered.length) continue;
     const start = lowered.length - safeParts.length;
     if (!safeParts.every((part, index) => lowered[start + index] === part)) continue;
-    const unsafeParent = lowered.slice(0, start).find(part => SENSITIVE_DIRECTORY_SEGMENTS.has(part));
-    if (!unsafeParent) return true;
+    if (!hasSensitiveParent(lowered, start)) return true;
   }
   return false;
 }
