@@ -3,7 +3,7 @@ import { assertSafeWorkspacePath } from '../sensitive-path-policy.mjs';
 
 function normalizeRelative(value, fallback, label) {
   const relative = String(value || fallback || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!relative || path.posix.isAbsolute(relative) || relative.split('/').includes('..')) {
+  if (!relative || path.posix.isAbsolute(relative) || path.win32.isAbsolute(relative) || relative.split('/').includes('..')) {
     const error = new Error(`${label} must stay inside the project workspace`);
     error.code = 'godot_path_boundary';
     throw error;
