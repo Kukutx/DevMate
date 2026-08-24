@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackHostname } from '../http-host-policy.mjs';
+import { sensitiveWorkspacePathReason } from '../sensitive-path-policy.mjs';
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -27,7 +28,12 @@ function resolveContainedWorkspacePath(workspaceRoot, candidatePath, label, { mu
 function safeWorkspaceOutput(workspaceRoot, relativePath, label) {
   const value = String(relativePath || '').trim();
   if (!value) return null;
-  return resolveContainedWorkspacePath(workspaceRoot, value, label);
+  const root = fs.realpathSync.native(workspaceRoot);
+  const resolved = resolveContainedWorkspacePath(root, value, label);
+  const relative = path.relative(root, resolved).replace(/\\/g, '/');
+  const reason = sensitiveWorkspacePathReason(relative);
+  if (reason) throw new Error(`${label} path targets protected workspace data (${reason}): ${relative}`);
+  return resolved;
 }
 
 function assertAllowedUrl(rawUrl, allowRemoteUrls) {
