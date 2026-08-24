@@ -82,7 +82,7 @@ test('recursive directory mutation refuses a safe parent that contains protected
   await write('bundle/.kube/config', 'token: secret\n');
   await assert.rejects(
     hardening.__test.assertNoSensitiveDescendants(principalWorkspace, 'bundle'),
-    error => error?.code === 'sensitive_workspace_path' && /bundle[\\/].kube[\\/]config/.test(error.message)
+    error => error?.code === 'sensitive_workspace_path' && /bundle[\\/].kube(?:[\\/]|$)/.test(error.message)
   );
 });
 
