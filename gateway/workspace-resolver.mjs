@@ -11,18 +11,29 @@ function publicWorkspace(workspace) {
   };
 }
 
-function assertOperationalWorkspaceRoot(workspace) {
-  const root = String(workspace?.root || '').trim();
+export function assertOperationalWorkspaceRoot(workspace, label = 'Workspace root') {
+  const root = String(workspace?.root || workspace?.path || workspace || '').trim();
   if (!root) return workspace;
-  assertSafeWorkspaceRoot(root);
+  assertSafeWorkspaceRoot(root, label);
   try {
     const real = fs.realpathSync.native(root);
-    assertSafeWorkspaceRoot(real, 'Workspace real root');
+    assertSafeWorkspaceRoot(real, `${label} real path`);
   } catch (error) {
     if (error?.code === 'protected_workspace_root') throw error;
     if (!['ENOENT', 'ENOTDIR'].includes(error?.code)) throw error;
   }
   return workspace;
+}
+
+export function assertConfiguredWorkspaceRootsSafe(config) {
+  for (const workspace of Array.isArray(config?.workspaces) ? config.workspaces : []) {
+    if (workspace?.root) assertOperationalWorkspaceRoot(workspace, `Workspace ${workspace.id || workspace.name || 'unknown'} root`);
+  }
+  for (const trusted of Array.isArray(config?.trustedWritableRoots) ? config.trustedWritableRoots : []) {
+    const root = trusted?.root || trusted?.path || trusted;
+    if (root) assertOperationalWorkspaceRoot({ root }, 'Trusted workspace root');
+  }
+  return config;
 }
 
 export function writableWorkspaces(config) {
