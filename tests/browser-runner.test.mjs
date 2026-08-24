@@ -106,3 +106,32 @@ test('Browser QA plugin service accepts only uniquely configured workspace roots
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test('Browser QA preview roots cannot point at protected workspace directories', () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-preview-root-'));
+  try {
+    fs.mkdirSync(path.join(workspaceRoot, 'build', 'web'), { recursive: true });
+    fs.mkdirSync(path.join(workspaceRoot, '.aws'), { recursive: true });
+    const workspace = { id: 'main', root: workspaceRoot };
+    const context = {
+      workspace: {
+        resolve(_workspace, value) {
+          const target = path.resolve(workspaceRoot, value);
+          const relative = path.relative(workspaceRoot, target);
+          if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('escape');
+          return target;
+        }
+      }
+    };
+    assert.equal(
+      browserQaTest.resolvePreviewRoot(context, workspace, 'build/web'),
+      path.join(workspaceRoot, 'build', 'web')
+    );
+    assert.throws(
+      () => browserQaTest.resolvePreviewRoot(context, workspace, '.aws'),
+      error => error?.code === 'preview_protected_root'
+    );
+  } finally {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
