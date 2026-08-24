@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { safeGodotBaselinePath, safeGodotRelativePath } from '../gateway/plugins/godot-path-policy.mjs';
@@ -6,6 +8,7 @@ import { __test as baselineTest } from '../gateway/plugins/godot-baseline.mjs';
 import { __test as bootstrapTest } from '../gateway/plugins/godot-bootstrap.mjs';
 import { __test as nativeQaTest } from '../gateway/plugins/godot-native-qa.mjs';
 import { __test as projectTest } from '../gateway/plugins/godot-project.mjs';
+import { resolveWorkspacePath } from '../gateway/plugins/plugin-runtime.mjs';
 import { __test as releaseGateTest } from '../gateway/plugins/godot-release-gate.mjs';
 import { __test as testsTest } from '../gateway/plugins/godot-tests.mjs';
 
@@ -46,8 +49,31 @@ test('Godot path-producing modules consistently reject protected destinations', 
   assert.equal(bootstrapTest.safeRelative('.devmate/automation.json'), '.devmate/automation.json');
 });
 
-test('Godot relative paths reject absolute POSIX and platform-native absolute forms', () => {
+test('Godot relative paths reject absolute POSIX and Windows forms on every host', () => {
   assert.throws(() => safeGodotRelativePath('/tmp/report.json'));
+  assert.throws(() => safeGodotRelativePath('C:\\Temp\\report.json'));
   const absolute = path.resolve('absolute-report.json');
   assert.throws(() => safeGodotRelativePath(absolute));
+});
+
+test('plugin workspace boundary admits reviewed DevMate metadata but not neighboring protected files', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-godot-path-boundary-'));
+  try {
+    const workspace = { root };
+    assert.equal(
+      resolveWorkspacePath(workspace, '.devmate/automation.json'),
+      path.join(root, '.devmate', 'automation.json')
+    );
+    assert.equal(
+      resolveWorkspacePath(workspace, '.devmate/baselines/godot/main.json'),
+      path.join(root, '.devmate', 'baselines', 'godot', 'main.json')
+    );
+    for (const value of [
+      '.devmate/state.json',
+      '.devmate/baselines/godot/credentials.json',
+      '.aws/credentials'
+    ]) assert.throws(() => resolveWorkspacePath(workspace, value), /protected/i, value);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
