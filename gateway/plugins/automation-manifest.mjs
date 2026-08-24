@@ -12,7 +12,7 @@ function isPlainObject(value) {
 
 function safeManifestPath(value = DEFAULT_AUTOMATION_MANIFEST) {
   const relative = String(value || DEFAULT_AUTOMATION_MANIFEST).trim().replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!relative || path.posix.isAbsolute(relative) || relative.split('/').includes('..')) {
+  if (!relative || path.posix.isAbsolute(relative) || path.win32.isAbsolute(relative) || relative.split('/').includes('..')) {
     const error = new Error('DevMate automation manifest path must stay inside the workspace');
     error.code = 'automation_manifest_path_boundary';
     throw error;
