@@ -7,11 +7,15 @@ const test = require('node:test');
 
 const source = fs.readFileSync(path.resolve(__dirname, '..', 'gateway', 'team-capabilities.mjs'), 'utf8');
 
-test('approved execution is consumed only after the workspace lease hold is acquired', () => {
+function authorizationBlock() {
   const start = source.indexOf('export function wrapAuthorizedTool');
   const end = source.indexOf('export function installTeamCapabilities', start);
   assert.ok(start >= 0 && end > start);
-  const block = source.slice(start, end);
+  return source.slice(start, end);
+}
+
+test('approved execution is consumed only after the workspace lease hold is acquired', () => {
+  const block = authorizationBlock();
   const hold = block.indexOf('leaseHold = acquireWorkspaceLeaseHold');
   const approval = block.indexOf('const approval = ensureToolApproval');
   const handler = block.indexOf('runWithWorkSessionContext');
@@ -20,9 +24,11 @@ test('approved execution is consumed only after the workspace lease hold is acqu
   assert.ok(handler > approval, 'approval must be consumed immediately before entering the tool handler');
 });
 
-test('approval failure releases an already-acquired lease hold through the common error path', () => {
-  const start = source.indexOf('export function wrapAuthorizedTool');
-  const end = source.indexOf('export function installTeamCapabilities', start);
-  const block = source.slice(start, end);
-  assert.match(block, /catch \(error\) \{[\s\S]*if \(leaseHold\)[\s\S]*releaseWorkspaceLeaseHold/);
+test('approval and handler paths both release an acquired lease hold without making cleanup failure an ambiguous tool retry', () => {
+  const block = authorizationBlock();
+  assert.match(block, /const releaseLeaseHoldSafely = async stage =>/);
+  assert.match(block, /catch \(cleanupError\) \{[\s\S]*workspace_lease_hold_release_failed/);
+  assert.match(block, /finally \{\s*await releaseLeaseHoldSafely\('post-handler'\);\s*\}/);
+  assert.match(block, /catch \(error\) \{\s*await releaseLeaseHoldSafely\('error-path'\);/);
+  assert.doesNotMatch(block, /throw cleanupError/);
 });
