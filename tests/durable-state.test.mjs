@@ -66,6 +66,38 @@ test('rejects malformed durable document structure instead of silently dropping 
   }
 });
 
+test('unrecoverable durable state corruption fails closed and remains intact', () => {
+  const directory = path.dirname(durable.RUNTIME_STATE_PATH);
+  fs.mkdirSync(directory, { recursive: true });
+  const base = path.basename(durable.RUNTIME_STATE_PATH);
+  const cases = [
+    { payload: '{broken-json', code: 'durable_state_corrupt' },
+    {
+      payload: `${JSON.stringify({ version: durable.DOCUMENT_VERSION, namespaces: [] }, null, 2)}\n`,
+      code: 'invalid_state_document'
+    },
+    {
+      payload: `${JSON.stringify({ version: 0, namespaces: {} }, null, 2)}\n`,
+      code: 'invalid_state_version'
+    }
+  ];
+
+  for (const { payload, code } of cases) {
+    for (const name of fs.readdirSync(directory)) {
+      if (name.startsWith(`${base}.replace-`) || name.startsWith(`${base}.corrupt-`)) {
+        fs.rmSync(path.join(directory, name), { force: true });
+      }
+    }
+    fs.writeFileSync(durable.RUNTIME_STATE_PATH, payload, 'utf8');
+    durable.resetDurableStateForTests();
+    assert.throws(() => durable.readDurableNamespace('protected', null), error => error?.code === code);
+    assert.equal(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8'), payload);
+    assert.equal(fs.readdirSync(directory).some(name => name.startsWith(`${base}.corrupt-`)), false);
+  }
+  fs.rmSync(durable.RUNTIME_STATE_PATH, { force: true });
+  durable.resetDurableStateForTests();
+});
+
 test('derives a request-aware instance lock lease while allowing explicit test leases', () => {
   assert.equal(
     durable.configuredGatewayInstanceLeaseMs({}),

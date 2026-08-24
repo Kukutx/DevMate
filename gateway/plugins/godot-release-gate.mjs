@@ -1,14 +1,13 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { resolveProject } from './godot-project.mjs';
 
 const GATE_SCHEMA_VERSION = 1;
 
 function safeRelative(value, label) {
-  const relative = String(value || '').trim().replace(/\\/g, '/');
-  if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error(`${label} path must stay inside the project workspace`);
-  return relative;
+  return safeGodotRelativePath(value, '', `${label} path`);
 }
 
 async function readJsonEvidence(context, project, relative, label) {

@@ -105,6 +105,22 @@ When a protected capability is configured to require approval, the tool call cre
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
 
+## Optional Codex Collaboration
+
+Codex Collaboration is off by default and runs delegated Codex work only inside a DevMate-managed isolated snapshot:
+
+- `codex_collaboration_status`, `codex_collaboration_configure`
+- `codex_task_start`, `codex_task_continue`, `codex_task_steer`, `codex_task_interrupt`
+- `codex_proposal_status`, `codex_proposal_apply`
+
+The snapshot is a minimized proposal filesystem, not a VM, container, or operating-system sandbox. DevMate copies only allowlisted source/text paths into it and omits credential/environment files, keys, databases, logs, binary artifacts, dependency/build caches, and other protected paths. Delegated Codex still executes as the DevMate OS identity; use a separate OS account, container, VM, or host when the delegated code itself is untrusted.
+
+The Codex runtime receives an allowlisted environment and starts with `networkAccess: false`. DevMate reports `strongOsReadIsolation: false`: snapshot separation is therefore a data-minimization and write-isolation boundary, not a claim that hostile code is contained by the operating system.
+
+The proposal review/apply boundary is optimistic and exact. `codex_proposal_status` returns a `proposalDigest`; `codex_proposal_apply` requires that exact value as `expectedProposalDigest`. If the snapshot changes after review, apply fails with `codex_proposal_review_stale` and the caller must fetch and review the new proposal before applying it. A proposal is applied to the real workspace only through DevMate's normal mutation, conflict, rollback, lease and authorization controls.
+
+Snapshot and apply recovery are durable. On Gateway startup, stale/orphan snapshot storage is reconciled before file/apply recovery. Cleanup failures or inconsistent apply-active snapshot state fail closed so required rollback evidence is not silently deleted.
+
 ## Obsidian knowledge tools
 
 Generic host context:
@@ -248,7 +264,3 @@ Publishing requires the capability declared by policy and may additionally requi
 - `godot_quality_report`
 - `deployment_metrics`
 - `deployment_runtime_state`
-
-Use `show_changes` for the final review of source changes before finishing a work session. Prometheus-compatible metrics are available from loopback only at `/control/metrics`.
-
-See `TEAM_DEPLOYMENT.md`, `JOBS.md`, `EXTERNAL_RUNNERS.md`, `GODOT_AUTOMATION.md`, `GODOT_RUNTIME_QUALITY.md`, `GODOT_TEST_PERFORMANCE.md`, `OPERATIONS.md`, `TUNNELS.md` and `SECURITY.md` for detailed behavior and trust boundaries.

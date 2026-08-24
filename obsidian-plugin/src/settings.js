@@ -4,6 +4,7 @@ const { Notice, PluginSettingTab, Setting } = require('obsidian');
 const { normalizeNgrokUrl, validateAuthtoken } = require('../../ngrok-support.js');
 const { normalizePublicOrigin } = require('../../host/public-mcp.js');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
+const { setDesktopAuthenticationMode } = require('../../shared/desktop-auth-policy.cjs');
 const { PROVIDERS, tunnelMaxRestarts, tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
 const { cloudflaredInstallCommand, installCloudflared } = require('../../vscode-host/tunnel-executable.js');
 const { encryptSecret, encryptionAvailable } = require('./secret-store.js');
@@ -76,13 +77,9 @@ function tokenSetting(containerEl, plugin, {
       try {
         const secret = validate(raw);
         if (!encryptionAvailable()) throw new Error('OS-backed encryption is unavailable in this Obsidian environment.');
-        plugin.settings[settingKey] = encryptSecret(secret);
-        await plugin.saveSettings();
+        await plugin.configureTunnelCredential(settingKey, encryptSecret(secret));
         text.inputEl.value = '';
         new Notice(`${title} saved securely.`);
-        plugin.invalidateTunnelSecrets();
-        plugin.scheduleReconfigure();
-        this?.display?.();
       } catch (error) {
         new Notice(`Could not save ${title}: ${error.message || error}`);
       }
@@ -93,11 +90,12 @@ function tokenSetting(containerEl, plugin, {
     .setButtonText('Clear')
     .setDisabled(!configured)
     .onClick(async () => {
-      plugin.settings[settingKey] = '';
-      await plugin.saveSettings();
-      plugin.invalidateTunnelSecrets();
-      plugin.scheduleReconfigure();
-      new Notice(`${title} cleared.`);
+      try {
+        await plugin.configureTunnelCredential(settingKey, '');
+        new Notice(`${title} cleared.`);
+      } catch (error) {
+        new Notice(`Could not clear ${title}: ${error.message || error}`);
+      }
     }));
 }
 
@@ -177,17 +175,28 @@ class DevMateSettingTab extends PluginSettingTab {
       .setName('ChatGPT app address')
       .setDesc(stability.message);
 
+    const sharedAuthentication = this.plugin.controller?.readConfig?.()?.auth?.mode;
+    const authentication = sharedAuthentication === 'none' ? 'none' : 'oauth';
     new Setting(containerEl)
       .setName('MCP authentication')
-      .setDesc('None is the direct private-use default. Choose OAuth only when sharing or publishing this DevMate app.')
+      .setDesc('OAuth is the default for public MCP. None is only for trusted loopback-only access and will not authorize remote requests.')
       .addDropdown(dropdown => dropdown
-        .addOption('none', 'None (default)')
-        .addOption('oauth', 'OAuth (shared or published app)')
-        .setValue(this.plugin.settings.authenticationMode)
+        .addOption('oauth', 'OAuth (recommended)')
+        .addOption('none', 'None (loopback only)')
+        .setValue(authentication)
         .onChange(async value => {
-          this.plugin.settings.authenticationMode = value === 'oauth' ? 'oauth' : 'none';
-          await this.plugin.saveSettings();
-          this.plugin.scheduleReconfigure();
+          const mode = value === 'none' ? 'none' : 'oauth';
+          try {
+            if (!this.plugin.controller?.configFile) throw new Error('Shared DevMate configuration is not ready');
+            setDesktopAuthenticationMode(this.plugin.controller.configFile, mode);
+            this.plugin.settings.authenticationMode = mode;
+            await this.plugin.saveSettings();
+            this.plugin.clearPublicVerification();
+            await this.plugin.reconfigureRuntime();
+          } catch (error) {
+            new Notice(`Could not change DevMate authentication: ${error.message || error}`);
+            this.display();
+          }
         }));
 
     if (provider === 'ngrok') {
@@ -335,7 +344,7 @@ class DevMateSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Copy verified MCP URL after Start')
-      .setDesc('Copy the MCP URL only after DevMate has completed initialize and tools/list successfully.')
+      .setDesc('Copy the MCP URL only after server/discover, tools/list, and a read-only gateway_status call verify the current public generation.')
       .addToggle(toggle => toggle
         .setValue(this.plugin.settings.autoCopyUrl)
         .onChange(async value => {

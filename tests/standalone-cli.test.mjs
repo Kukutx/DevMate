@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { __test } from '../scripts/devmate-command.mjs';
-import { cleanProvider, normalizeOrigin, validateStandaloneIngress } from '../scripts/standalone-runtime.mjs';
+import {
+  cleanProvider,
+  normalizeOrigin,
+  standaloneStateSeparation,
+  validateStandaloneIngress
+} from '../scripts/standalone-runtime.mjs';
 
 async function tempRoot(t, prefix = 'devmate-cli-') {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -12,93 +17,106 @@ async function tempRoot(t, prefix = 'devmate-cli-') {
   return root;
 }
 
-test('creates one default no-auth public standalone instance, MCP URL, and optional member login code', async t => {
-  const root = await tempRoot(t);
-  const config = path.join(root, 'state', 'config.json');
-  const result = __test.initConfig({ config, workspace: root, provider: 'external', 'public-url': 'devmate.example.com' });
+async function tempInstance(t, prefix = 'devmate-cli-') {
+  const root = await tempRoot(t, prefix);
+  const state = await tempRoot(t, `${prefix}state-`);
+  return { root, state, config: path.join(state, 'config.json') };
+}
+
+function inside(root, target) {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+test('creates one default OAuth public standalone instance, MCP URL, and optional member login code', async t => {
+  const current = await tempInstance(t);
+  const result = __test.initConfig({ config: current.config, workspace: current.root, provider: 'external', 'public-url': 'devmate.example.com' });
   assert.equal(result.config.connection.provider, 'external');
   assert.equal(result.config.connection.publicUrl, 'https://devmate.example.com');
   assert.equal('deployment' in result.config, false);
-  assert.equal(__test.mcpUrl({ config }), 'https://devmate.example.com/mcp');
-  assert.equal(result.config.auth.mode, 'none');
-  const created = __test.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
+  assert.equal(__test.mcpUrl({ config: current.config }), 'https://devmate.example.com/mcp');
+  assert.equal(result.config.auth.mode, 'oauth');
+  const created = __test.memberCreate({ config: current.config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
   assert.match(created.loginCode, /^dmc_/);
   assert.equal(created.member.name, 'Alice');
-  assert.equal(__test.memberList({ config })[0].name, 'Alice');
-  const stat = await fsp.stat(config);
+  assert.equal(__test.memberList({ config: current.config })[0].name, 'Alice');
+  const stat = await fsp.stat(current.config);
   if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
 });
 
-test('bootstrap presets supply default no-auth and current capability defaults without persisting a runtime mode', async t => {
-  const personalRoot = await tempRoot(t, 'devmate-personal-');
-  const personal = __test.bootstrap({
+test('bootstrap presets encode public OAuth and runner-local no-auth without persisting a runtime mode', async t => {
+  const personal = await tempInstance(t, 'devmate-personal-');
+  const personalResult = __test.bootstrap({
     preset: 'personal',
-    workspace: personalRoot,
-    config: path.join(personalRoot, 'config.json')
+    workspace: personal.root,
+    config: personal.config
   });
-  assert.equal(personal.preset, 'personal');
-  assert.equal(personal.authenticationMode, 'none');
-  assert.equal(personal.access.workspaceLeasesRequired, false);
-  assert.equal(personal.execution.embeddedRunnerEnabled, true);
-  assert.equal(personal.execution.externalRunnerControlEnabled, false);
+  assert.equal(personalResult.preset, 'personal');
+  assert.equal(personalResult.authenticationMode, 'oauth');
+  assert.equal(personalResult.access.workspaceLeasesRequired, false);
+  assert.equal(personalResult.execution.embeddedRunnerEnabled, true);
+  assert.equal(personalResult.execution.externalRunnerControlEnabled, false);
 
-  const teamRoot = await tempRoot(t, 'devmate-team-');
-  const team = __test.bootstrap({
+  const team = await tempInstance(t, 'devmate-team-');
+  const teamResult = __test.bootstrap({
     preset: 'team',
-    workspace: teamRoot,
-    config: path.join(teamRoot, 'config.json'),
+    workspace: team.root,
+    config: team.config,
     'member-name': 'Alice'
   });
-  assert.equal(team.preset, 'team');
-  assert.equal(team.authenticationMode, 'none');
-  assert.equal(team.access.ownerOnly, false);
-  assert.equal(team.access.workspaceLeasesRequired, true);
-  assert.match(team.member.loginCode, /^dmc_/);
+  assert.equal(teamResult.preset, 'team');
+  assert.equal(teamResult.authenticationMode, 'oauth');
+  assert.equal(teamResult.access.ownerOnly, false);
+  assert.equal(teamResult.access.workspaceLeasesRequired, true);
+  assert.match(teamResult.member.loginCode, /^dmc_/);
 
-  const controlRoot = await tempRoot(t, 'devmate-control-');
-  const control = __test.bootstrap({
+  const control = await tempInstance(t, 'devmate-control-');
+  const controlResult = __test.bootstrap({
     preset: 'control-plane',
-    workspace: controlRoot,
-    config: path.join(controlRoot, 'config.json'),
+    workspace: control.root,
+    config: control.config,
     'public-url': 'https://devmate.example.com',
     'runner-name': 'Builder'
   });
-  assert.equal(control.preset, 'control-plane');
-  assert.equal(control.authenticationMode, 'none');
-  assert.equal(control.connection.provider, 'external');
-  assert.equal(control.execution.embeddedRunnerEnabled, false);
-  assert.equal(control.execution.externalRunnerControlEnabled, true);
-  assert.equal(control.access.workspaceLeasesRequired, true);
-  assert.match(control.runner.token, /^dmr_/);
-  const controlStatus = __test.status({ config: control.config });
+  assert.equal(controlResult.preset, 'control-plane');
+  assert.equal(controlResult.authenticationMode, 'oauth');
+  assert.equal(controlResult.connection.provider, 'external');
+  assert.equal(controlResult.execution.embeddedRunnerEnabled, false);
+  assert.equal(controlResult.execution.externalRunnerControlEnabled, true);
+  assert.equal(controlResult.access.workspaceLeasesRequired, true);
+  assert.match(controlResult.runner.token, /^dmr_/);
+  const controlStatus = __test.status({ config: controlResult.config });
   assert.deepEqual(controlStatus.requestPolicy.allowedHosts, ['devmate.example.com']);
 
-  const runnerRoot = await tempRoot(t, 'devmate-runner-');
+  const runner = await tempInstance(t, 'devmate-runner-');
   const runnerHost = __test.bootstrap({
     preset: 'runner',
-    workspace: runnerRoot,
-    config: path.join(runnerRoot, 'config.json')
+    workspace: runner.root,
+    config: runner.config
   });
   assert.equal(runnerHost.preset, 'runner');
   assert.equal(runnerHost.authenticationMode, 'none');
   assert.equal(runnerHost.execution.embeddedRunnerEnabled, false);
   assert.equal(runnerHost.execution.externalRunnerControlEnabled, false);
 
-  for (const result of [personal, team, control, runnerHost]) {
+  for (const result of [personalResult, teamResult, controlResult, runnerHost]) {
     const saved = JSON.parse(await fsp.readFile(result.config, 'utf8'));
     assert.equal(Object.hasOwn(saved, 'mode'), false);
     assert.equal(Object.hasOwn(saved, 'deployment'), false);
     assert.equal(Object.hasOwn(saved, 'production'), false);
-    assert.deepEqual(saved.auth, { mode: 'none' });
   }
+  assert.deepEqual(JSON.parse(await fsp.readFile(personalResult.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(teamResult.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(controlResult.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(runnerHost.config, 'utf8')).auth, { mode: 'none' });
 });
 
 test('explicit bootstrap options override preset defaults and unknown presets fail closed', async t => {
-  const root = await tempRoot(t, 'devmate-preset-override-');
+  const current = await tempInstance(t, 'devmate-preset-override-');
   const result = __test.bootstrap({
     preset: 'team',
-    workspace: root,
-    config: path.join(root, 'config.json'),
+    workspace: current.root,
+    config: current.config,
     'authentication-mode': 'oauth',
     'require-workspace-lease-for-writes': false,
     'external-runner-control': true
@@ -107,6 +125,41 @@ test('explicit bootstrap options override preset defaults and unknown presets fa
   assert.equal(result.access.workspaceLeasesRequired, false);
   assert.equal(result.execution.externalRunnerControlEnabled, true);
   assert.throws(() => __test.bootstrapPreset('production'), /Unknown bootstrap preset/);
+});
+
+test('public standalone rejects explicit no-auth while loopback-only no-auth remains available', async t => {
+  const current = await tempInstance(t, 'devmate-auth-boundary-');
+  assert.throws(() => __test.initConfig({
+    config: path.join(current.state, 'public.json'),
+    workspace: current.root,
+    provider: 'external',
+    'public-url': 'https://devmate.example.com',
+    'authentication-mode': 'none'
+  }), /requires .*oauth.*loopback-only/i);
+
+  const localConfig = path.join(current.state, 'local.json');
+  const local = __test.initConfig({
+    config: localConfig,
+    workspace: current.root,
+    provider: 'ngrok',
+    'authentication-mode': 'none'
+  });
+  assert.equal(local.config.connection.publicUrl, '');
+  assert.equal(local.config.auth.mode, 'none');
+});
+
+test('standalone state defaults outside the workspace and explicit overlap is rejected before writing credentials', async t => {
+  const root = await tempRoot(t, 'devmate-state-boundary-');
+  const defaultConfig = __test.configPath({ workspace: root });
+  assert.equal(inside(root, defaultConfig), false);
+  assert.equal(standaloneStateSeparation(defaultConfig, [root]).ok, true);
+
+  const unsafeConfig = path.join(root, '.devmate-server', 'config.json');
+  assert.throws(
+    () => __test.initConfig({ workspace: root, config: unsafeConfig, provider: 'ngrok' }),
+    error => error?.code === 'standalone_state_workspace_overlap' && error?.reason === 'config-inside-workspace'
+  );
+  await assert.rejects(fsp.stat(unsafeConfig), error => error?.code === 'ENOENT');
 });
 
 test('rejects invalid connection inputs instead of silently falling back', () => {

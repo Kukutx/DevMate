@@ -384,7 +384,10 @@ test('stop timeout preserves a live provider and shared ownership', async () => 
     child.emit('exit', 0, 'SIGKILL');
     child.emit('close', 0, 'SIGKILL');
     await waitFor(() => controller.ownerId === '' && controller.store.read() === null);
-    assert.deepEqual(await controller.dispose({ stopOwned: false }), { disposed: true });
+    assert.deepEqual(await controller.dispose({ stopOwned: false }), {
+      disposed: true,
+      stop: { stopped: false, reason: 'not-running' }
+    });
   } finally {
     if (!controller.disposed) {
       child.exitCode = 0;

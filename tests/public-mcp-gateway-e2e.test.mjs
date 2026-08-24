@@ -120,23 +120,30 @@ async function runRealPublicPreflight(mode) {
     }
     assert.equal(ready, true, `Gateway did not become ready.\nstdout=${stdout}\nstderr=${stderr}`);
 
-    const result = await preflightPublicMcp({
-      publicUrl,
-      token,
-      clientName: `devmate-public-${mode}-e2e`,
-      clientVersion: configStore.DEFAULT_VERSION,
-      request: localPublicRequest(port, publicHost, options => {
-        authorizationHeaders.push(authorizationHeader(options.headers));
-      })
-    });
+    try {
+      const result = await preflightPublicMcp({
+        publicUrl,
+        token,
+        clientName: `devmate-public-${mode}-e2e`,
+        clientVersion: configStore.DEFAULT_VERSION,
+        request: localPublicRequest(port, publicHost, options => {
+          authorizationHeaders.push(authorizationHeader(options.headers));
+        })
+      });
 
-    assert.equal(result.server?.name, 'devmate');
-    assert.ok(result.toolCount > 0);
-    assert.equal(result.mcpUrl, `${publicUrl}/mcp`);
-    assert.equal(result.protocolVersion, '2026-07-28');
-    assert.equal(result.toolCallVerified, true);
-    assert.equal(result.probeTool, 'gateway_status');
-    return { authorizationHeaders, token };
+      assert.equal(result.server?.name, 'devmate');
+      assert.ok(result.toolCount > 0);
+      assert.equal(result.mcpUrl, `${publicUrl}/mcp`);
+      assert.equal(result.protocolVersion, '2026-07-28');
+      assert.equal(result.toolCallVerified, true);
+      assert.equal(result.probeTool, 'gateway_status');
+      return { authorizationHeaders, token, rejected: false };
+    } catch (error) {
+      if (mode !== 'none') throw error;
+      assert.equal(error?.response?.status, 401);
+      assert.equal(error?.response?.json?.code, 'unauthorized');
+      return { authorizationHeaders, token, rejected: true };
+    }
   } finally {
     if (child.exitCode === null) {
       child.kill();
@@ -146,15 +153,17 @@ async function runRealPublicPreflight(mode) {
   }
 }
 
-test('public no-auth MCP 2026 discovery, tools/list, and gateway_status work against the real Gateway without Authorization', async () => {
+test('public no-auth MCP is rejected by the real Gateway without Authorization', async () => {
   const result = await runRealPublicPreflight('none');
+  assert.equal(result.rejected, true);
   assert.equal(result.token, '');
-  assert.ok(result.authorizationHeaders.length >= 3);
+  assert.ok(result.authorizationHeaders.length >= 1);
   assert.deepEqual([...new Set(result.authorizationHeaders)], ['']);
 }, { timeout: 30000 });
 
-test('optional public OAuth still works against the real Gateway', async () => {
+test('public OAuth works against the real Gateway', async () => {
   const result = await runRealPublicPreflight('oauth');
+  assert.equal(result.rejected, false);
   assert.match(result.token, /^dmoa\./);
   assert.ok(result.authorizationHeaders.length >= 3);
   assert.ok(result.authorizationHeaders.every(value => /^Bearer\s+dmoa\./.test(value)));

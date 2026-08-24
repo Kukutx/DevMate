@@ -14,6 +14,7 @@ const gatewayScript = process.env.DEVMATE_GATEWAY_SCRIPT || (fs.existsSync(bundl
 
 const config = configStore.newInstanceConfig({ workspaceRoot: root, port, appVersion: configStore.DEFAULT_VERSION });
 config.instanceId = `smoke-${Date.now()}`;
+config.auth = { mode: 'none' };
 config.runtime.defaultCommandTimeoutMs = 30000;
 config.runtime.maxOutputChars = 80000;
 config.permissions = {
@@ -206,7 +207,17 @@ try {
   );
 
   const statusPanel = await rpc('tools/call', { name: 'devmate_status_panel', arguments: {} });
-  assert(statusPanel.response.ok && statusPanel.text.includes('DevMate status'), `devmate_status_panel failed: ${statusPanel.text}`);
+  const statusPanelData = statusPanel.json?.result?.structuredContent;
+  assert(
+    statusPanel.response.ok &&
+      statusPanelData?.name === 'devmate' &&
+      statusPanelData?.gateway?.reachable === true &&
+      statusPanelData?.gateway?.authenticationMode === 'none' &&
+      statusPanelData?.gateway?.permissionProfile === 'fullAccess' &&
+      statusPanelData?.vscode?.contextPresent === true &&
+      statusPanelData?.vscode?.activeEditor?.path === 'README.md',
+    `devmate_status_panel failed: ${statusPanel.text}`
+  );
 
   const resources = await rpc('resources/list', {});
   assert(resources.response.ok && resources.text.includes('ui://devmate/status.html'), `resources/list did not include status UI: ${resources.text}`);

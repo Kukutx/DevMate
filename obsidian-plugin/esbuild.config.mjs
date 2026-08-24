@@ -23,9 +23,31 @@ await build({
   logLevel: 'info'
 });
 
+await build({
+  entryPoints: [path.join(root, 'host', 'runtime', 'provider-supervisor.js')],
+  outfile: path.join(output, 'provider-supervisor.cjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node24',
+  sourcemap: false,
+  logLevel: 'info'
+});
+
 await buildGatewayBundle({
   root,
   outfile: path.join(output, 'gateway', 'server.mjs')
+});
+
+await build({
+  entryPoints: [path.join(root, 'gateway', 'agent-codex-supervisor.mjs')],
+  outfile: path.join(output, 'gateway', 'agent-codex-supervisor.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node24',
+  sourcemap: false,
+  logLevel: 'info'
 });
 
 for (const file of ['manifest.json', 'styles.css', 'versions.json']) {

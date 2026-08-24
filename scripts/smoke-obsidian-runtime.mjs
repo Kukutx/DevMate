@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const { RuntimeController } = require('../host/runtime-controller.js');
 const { MINIMUM_NODE_MAJOR, nodeMajor, resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
+const { updateConfig } = require('../shared/config-store.cjs');
+const { configureAuthentication } = require('../shared/auth-config.cjs');
+const { setLifecycleIntent } = require('../shared/lifecycle-intent.cjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
 
@@ -29,13 +32,21 @@ const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-bu
 const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-obsidian-bundle-state-'));
 const distRoot = path.join(root, 'obsidian-plugin', 'dist');
 const pluginMain = path.join(distRoot, 'main.js');
+const providerSupervisor = path.join(distRoot, 'provider-supervisor.cjs');
 const gatewayEntry = path.join(distRoot, 'gateway', 'server.mjs');
+const codexSupervisor = path.join(distRoot, 'gateway', 'agent-codex-supervisor.mjs');
 const instanceLock = path.join(stateDirectory, 'state', 'gateway.lock');
-for (const file of [pluginMain, gatewayEntry]) {
+for (const file of [pluginMain, providerSupervisor, gatewayEntry, codexSupervisor]) {
   if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error(`Built Obsidian file is missing: ${file}`);
 }
 
 const mainSource = fs.readFileSync(pluginMain, 'utf8');
+const providerSupervisorSource = fs.readFileSync(providerSupervisor, 'utf8');
+const codexSupervisorSource = fs.readFileSync(codexSupervisor, 'utf8');
+assert.doesNotMatch(providerSupervisorSource, /\.\/process-tree\.js/, 'Obsidian provider supervisor must be bundled with its process-tree dependencies');
+assert.match(providerSupervisorSource, /terminateProcessTree/, 'Obsidian provider supervisor bundle must retain bounded process-tree cleanup');
+assert.doesNotMatch(codexSupervisorSource, /\.\/command-process\.mjs/, 'Obsidian Codex supervisor must be bundled with its process-tree dependencies');
+assert.match(codexSupervisorSource, /terminateProcessTree/, 'Obsidian Codex supervisor bundle must retain bounded process-tree cleanup');
 assert.doesNotMatch(mainSource, /node:worker_threads|createWorkerSpawn|new Worker\s*\(/, 'Obsidian bundle must not depend on Worker threads');
 assert.match(mainSource, /child_process/, 'Obsidian bundle must contain the child-process Gateway runtime');
 assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Node runtime diagnostics');
@@ -74,6 +85,19 @@ const controller = new RuntimeController({
 });
 
 try {
+  // This artifact smoke drives RuntimeController directly instead of the normal
+  // Obsidian Start wrapper. Establish the same explicit local-only lifecycle
+  // state first without weakening production OAuth defaults or lifecycle fencing.
+  controller.ensureConfig();
+  updateConfig(controller.configFile, config => {
+    configureAuthentication(config, 'none', { replace: true });
+    return config;
+  });
+  setLifecycleIntent(controller.configFile, 'running', {
+    requestedBy: 'obsidian-runtime-smoke',
+    reason: 'packaged runtime ownership smoke'
+  });
+
   const first = await controller.start({ timeoutMs: 15000 });
   assert.equal(first.started, true);
   assert.equal(controller.lastLaunch?.mode, 'child_process');

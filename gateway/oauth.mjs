@@ -5,7 +5,8 @@ import net from 'node:net';
 import tokens from '../shared/oauth-tokens.cjs';
 import oauthSecrets from '../shared/oauth-secrets.cjs';
 import { CONFIG_PATH, mutateConfig, readConfig } from './local-shared.mjs';
-import { isLoopbackHostname } from './http-host-policy.mjs';
+import { hostAllowed, isLoopbackHostname } from './http-host-policy.mjs';
+import { publicAddress } from './public-ip-policy.mjs';
 import { normalizeInstanceConfig, principalFromOAuthClaims, verifyMemberLoginCode } from './team-access.mjs';
 import {
   consumeAuthorizationCode,
@@ -23,6 +24,14 @@ const CIMD_FETCH_TIMEOUT_MS = 5000;
 const MAX_OAUTH_REQUEST_BYTES = 64 * 1024;
 const MAX_CIMD_BYTES = 64 * 1024;
 const MAX_CIMD_CACHE = 500;
+const OAUTH_REQUEST_PATHS = new Set([
+  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-protected-resource/mcp',
+  '/.well-known/oauth-authorization-server',
+  '/oauth/authorize',
+  '/oauth/token',
+  '/oauth/revoke'
+]);
 const cimdCache = new Map();
 
 function json(res, status, value) {
@@ -69,6 +78,10 @@ function mcpAudience(req) {
   return `${originFor(req)}/mcp`;
 }
 
+function oauthRequestPath(url) {
+  return OAUTH_REQUEST_PATHS.has(String(url?.pathname || ''));
+}
+
 function authorizationServerMetadata(origin) {
   return {
     issuer: origin,
@@ -107,35 +120,6 @@ function isRedirectUriAllowed(value) {
   } catch {
     return false;
   }
-}
-
-function ipv4Public(address) {
-  const parts = String(address).split('.').map(Number);
-  if (parts.length !== 4 || parts.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return false;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && (b === 0 || b === 168)) return false;
-  if (a === 198 && (b === 18 || b === 19)) return false;
-  if ((a === 192 && b === 0) || (a === 192 && b === 0) || (a === 198 && b === 51) || (a === 203 && b === 0)) return false;
-  return true;
-}
-
-function ipv6Public(address) {
-  const value = String(address || '').toLowerCase().split('%')[0];
-  if (!value || value === '::' || value === '::1') return false;
-  if (value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value) || value.startsWith('ff')) return false;
-  if (value.startsWith('2001:db8:')) return false;
-  const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return ipv4Public(mapped[1]);
-  return true;
-}
-
-function publicAddress(address) {
-  const family = net.isIP(String(address || ''));
-  return family === 4 ? ipv4Public(address) : family === 6 ? ipv6Public(address) : false;
 }
 
 function cimdUrl(value) {
@@ -467,7 +451,11 @@ export function oauthAccessToken(config, token, req) {
 }
 
 export async function handleOAuthRequest(req, res, url, config) {
-  if (config.auth?.mode !== 'oauth') return false;
+  if (config.auth?.mode !== 'oauth' || !oauthRequestPath(url)) return false;
+  if (!hostAllowed(req, config)) {
+    json(res, 421, { error: 'invalid_request', error_description: 'OAuth request host is not allowed' });
+    return true;
+  }
   const origin = originFor(req);
   if (req.method === 'GET' && (url.pathname === '/.well-known/oauth-protected-resource' || url.pathname === '/.well-known/oauth-protected-resource/mcp')) {
     json(res, 200, protectedResourceMetadata(req));
@@ -527,8 +515,10 @@ export async function handleOAuthRequest(req, res, url, config) {
 }
 
 export const __test = {
+  OAUTH_REQUEST_PATHS,
   authorizationServerMetadata,
   cimdUrl,
+  oauthRequestPath,
   originFor,
   protectedResourceMetadata,
   publicAddress,

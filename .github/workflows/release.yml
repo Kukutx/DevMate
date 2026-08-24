@@ -44,7 +44,10 @@ jobs:
         run: |
           set -euo pipefail
           checks=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
-          for required in "verify" "Linux and Real Godot 4.7.1"; do
+          for required in \
+            "Windows, VS Code 1.133, Node 24 LTS" \
+            "Node 26 Current compatibility" \
+            "Linux and Real Godot 4.7.1"; do
             conclusion=$(printf '%s' "$checks" | jq -r --arg name "$required" '[.check_runs[] | select(.name == $name and .status == "completed")] | sort_by(.completed_at) | last | .conclusion // ""')
             if [ "$conclusion" != "success" ]; then
               echo "Required CI check '$required' is not successful for $GITHUB_SHA: ${conclusion:-missing}" >&2
@@ -89,7 +92,8 @@ jobs:
           (
             cd obsidian-plugin/dist
             zip -q -9 "$GITHUB_WORKSPACE/release/devmate-obsidian-${version}.zip" \
-              main.js manifest.json versions.json styles.css gateway/server.mjs
+              main.js manifest.json versions.json styles.css provider-supervisor.cjs \
+              gateway/server.mjs gateway/agent-codex-supervisor.mjs
           )
           (
             cd release

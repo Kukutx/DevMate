@@ -14,7 +14,7 @@ test('VS Code entry initializes shared instance config before the provider-nativ
 
   const source = fs.readFileSync(path.join(root, 'extension-entry-shared-tunnel.js'), 'utf8');
   assert.match(source, /VscodeHostLifecycle/);
-  assert.match(source, /TunnelController/);
+  assert.match(source, /DesktopTunnelController/);
   assert.match(source, /setTunnelController/);
   assert.match(source, /clearTunnelController/);
   assert.match(source, /settingsFromState/);
@@ -26,7 +26,7 @@ test('VS Code entry initializes shared instance config before the provider-nativ
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
 
   const sharedConfig = fs.readFileSync(path.join(root, 'shared', 'config-store.cjs'), 'utf8');
-  assert.match(sharedConfig, /connection: \{ provider, publicUrl: '' \}/);
+  assert.match(sharedConfig, /connection: \{ provider, publicUrl: '', policyGeneration: 0 \}/);
   assert.match(sharedConfig, /defaultConnectionProvider = 'ngrok'/);
 
   const effective = fs.readFileSync(path.join(root, 'vscode-host', 'effective-tunnel-settings.js'), 'utf8');
@@ -37,7 +37,7 @@ test('VS Code entry initializes shared instance config before the provider-nativ
   assert.doesNotMatch(effective, /validateDeploymentMode|deploymentMode|sharedDeployment/);
 
   const config = source.indexOf('ensureSharedDesktopConfig(runtimeStateDirectory)');
-  const controller = source.indexOf('runtime = new TunnelController({');
+  const controller = source.indexOf('runtime = new DesktopTunnelController({');
   const registry = source.indexOf('setTunnelController(runtime)');
   const activation = source.indexOf('await lifecycle.activate(context)');
   assert.ok(config >= 0 && controller > config, 'Shared instance config must exist before controller creation');

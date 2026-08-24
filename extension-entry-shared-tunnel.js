@@ -10,11 +10,17 @@ const { strictPort } = require('./shared/port.cjs');
 const { publicConnectionStability } = require('./shared/connection-stability.cjs');
 const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
 const { ensureOAuthSecrets } = require('./shared/oauth-secrets.cjs');
+const {
+  assertLifecycleRecoveryToken,
+  lifecycleRecoveryToken,
+  readLifecycleIntent,
+  runWithLifecycleRecoveryToken
+} = require('./shared/lifecycle-intent.cjs');
 const { VscodeHostLifecycle } = require('./vscode-host/lifecycle.js');
 const { settingsFromState } = require('./vscode-host/effective-tunnel-settings.js');
 const { PublicTunnelVerifier } = require('./vscode-host/public-tunnel-verifier.js');
 const { currentWorkspaceRoot, resolveVscodeStateDirectory, setting } = require('./vscode-host/runtime-context.js');
-const { TunnelController } = require('./vscode-host/tunnel-controller.js');
+const { DesktopTunnelController } = require('./vscode-host/desktop-tunnel-controller.js');
 const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const {
   clearTunnelController,
@@ -66,6 +72,21 @@ function log(message) {
   output?.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
 }
 
+function sharedConfigFile() {
+  return runtimeStateDirectory ? path.join(runtimeStateDirectory, 'config.json') : '';
+}
+
+function sharedSessionIntent() {
+  const configFile = sharedConfigFile();
+  if (!configFile) return null;
+  try { return readLifecycleIntent(configFile); }
+  catch { return null; }
+}
+
+function sharedSessionRequested() {
+  return sharedSessionIntent()?.desiredState === 'running';
+}
+
 function ensureSharedDesktopConfig(stateDirectory) {
   const workspaceRoot = currentWorkspaceRoot(vscode);
   if (!workspaceRoot) return null;
@@ -106,8 +127,8 @@ async function stopConfigurationConflict() {
   const result = await runtime.stop();
   await syncBasePublicState();
   if (result.stopped) {
-    if (tunnelSessionRequested()) {
-      log('Stopped the stale public connection; the requested DevMate session will recover with the current shared connection configuration.');
+    if (sharedSessionRequested()) {
+      log('Stopped the stale public connection; the shared running session will recover with the current connection configuration.');
     } else {
       const choice = await vscode.window.showWarningMessage(
         'DevMate stopped the previous public connection because the shared connection configuration changed.',
@@ -187,7 +208,7 @@ function stopSessionRecoveryWatcher() {
 }
 
 function requestedSessionNeedsRecovery() {
-  if (!runtime || !runtimeStateDirectory || !tunnelSessionRequested()) return false;
+  if (!runtime || !runtimeStateDirectory || !sharedSessionRequested()) return false;
   const config = readJson(path.join(runtimeStateDirectory, 'config.json'), null, { strict: true, supportedVersion: true });
   const port = Number(config?.server?.port || 0);
   if (!Number.isInteger(port) || port <= 0) return false;
@@ -198,29 +219,37 @@ function requestedSessionNeedsRecovery() {
 }
 
 async function recoverRequestedSession(expectedEpoch = sessionRecoveryEpoch) {
-  if (expectedEpoch !== sessionRecoveryEpoch) return { recovered: false, reason: 'stale-lifecycle' };
-  if (!runtime || !lifecycle || !tunnelSessionRequested()) return { recovered: false, reason: 'not-requested' };
+  if (expectedEpoch !== sessionRecoveryEpoch) return { recovered: false, reason: 'stale-host-lifecycle' };
+  if (!runtime || !lifecycle) return { recovered: false, reason: 'runtime-unavailable' };
+  const configFile = sharedConfigFile();
+  const recoveryToken = configFile ? lifecycleRecoveryToken(configFile) : null;
+  if (!recoveryToken) return { recovered: false, reason: 'not-requested' };
   if (!requestedSessionNeedsRecovery()) return { recovered: false, reason: 'healthy-or-verifier-owned' };
-  log('Recovering requested DevMate desktop session through the complete Start lifecycle.');
-  const result = await vscode.commands.executeCommand('devMate.start', { quiet: true });
-  if (expectedEpoch !== sessionRecoveryEpoch || !runtime || !lifecycle || !tunnelSessionRequested()) {
-    return { recovered: false, reason: 'stale-lifecycle' };
+
+  log(`Recovering shared DevMate session generation ${recoveryToken.generation} through the complete Start lifecycle.`);
+  const result = await runWithLifecycleRecoveryToken(configFile, recoveryToken, () =>
+    vscode.commands.executeCommand('devMate.start', { quiet: true })
+  );
+
+  if (expectedEpoch !== sessionRecoveryEpoch || !runtime || !lifecycle) {
+    return { recovered: false, reason: 'stale-host-lifecycle' };
   }
+  assertLifecycleRecoveryToken(configFile, recoveryToken);
   if (result?.ok === false || !result?.mcpUrl || Number(result?.toolCount || 0) <= 0) {
     const error = new Error(result?.error || 'DevMate recovery Start did not reach verified Ready state');
     error.code = result?.code || 'DEVMATE_SESSION_RECOVERY_NOT_READY';
     throw error;
   }
   sessionRecoveryNextAt = 0;
-  log(`Recovered requested DevMate desktop session; tools=${result.toolCount}.`);
-  return { recovered: true, result };
+  log(`Recovered shared DevMate session generation ${recoveryToken.generation}; tools=${result.toolCount}.`);
+  return { recovered: true, result, generation: recoveryToken.generation };
 }
 
 function startSessionRecoveryWatcher() {
   stopSessionRecoveryWatcher();
   const epoch = sessionRecoveryEpoch;
   sessionRecoveryTimer = setInterval(() => {
-    if (sessionRecoveryPromise || Date.now() < sessionRecoveryNextAt || !tunnelSessionRequested()) return;
+    if (sessionRecoveryPromise || Date.now() < sessionRecoveryNextAt) return;
     if (epoch !== sessionRecoveryEpoch) return;
     let needsRecovery = false;
     try {
@@ -235,8 +264,10 @@ function startSessionRecoveryWatcher() {
     recovery = recoverRequestedSession(epoch)
       .catch(error => {
         if (epoch !== sessionRecoveryEpoch) return null;
-        sessionRecoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
-        log(`DevMate session recovery failed: ${error.message || error}`);
+        if (error?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED') {
+          sessionRecoveryNextAt = Date.now() + SESSION_RECOVERY_RETRY_MS;
+          log(`DevMate session recovery failed: ${error.message || error}`);
+        }
         return null;
       })
       .finally(() => {
@@ -258,22 +289,24 @@ async function activateInternal(context) {
   }
   output = vscode.window.createOutputChannel('DevMate Tunnel');
   context.subscriptions.push(output);
-    lifecycle = new VscodeHostLifecycle({
-      vscode,
-      runtimeSnapshot: () => ({
-        tunnel: runtime?.diagnosticSnapshot?.() || null,
-        sessionRecovery: {
-          requested: tunnelSessionRequested(),
-          inFlight: !!sessionRecoveryPromise,
-          nextAttemptAt: sessionRecoveryNextAt || 0
-        }
-      })
-    });
+  lifecycle = new VscodeHostLifecycle({
+    vscode,
+    runtimeSnapshot: () => ({
+      tunnel: runtime?.diagnosticSnapshot?.() || null,
+      sessionRecovery: {
+        requested: sharedSessionRequested(),
+        sharedGeneration: sharedSessionIntent()?.generation ?? null,
+        localAttachmentRequested: tunnelSessionRequested(),
+        inFlight: !!sessionRecoveryPromise,
+        nextAttemptAt: sessionRecoveryNextAt || 0
+      }
+    })
+  });
   try {
     runtimeStateDirectory = resolveVscodeStateDirectory(vscode, context);
     localTunnelSettings();
     ensureSharedDesktopConfig(runtimeStateDirectory);
-    runtime = new TunnelController({
+    runtime = new DesktopTunnelController({
       stateDirectory: runtimeStateDirectory,
       settings: () => tunnelSettings(runtimeStateDirectory),
       getSecrets: () => tunnelSecrets(context),
@@ -356,6 +389,8 @@ module.exports = {
   localTunnelSettings,
   recoverRequestedSession,
   requestedSessionNeedsRecovery,
+  sharedSessionIntent,
+  sharedSessionRequested,
   startSessionRecoveryWatcher,
   stopConfigurationConflict,
   stopSessionRecoveryWatcher,

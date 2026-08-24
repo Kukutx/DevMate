@@ -1,7 +1,7 @@
 'use strict';
 
 const { readJson, updateConfig } = require('../shared/config-store.cjs');
-const { normalizeInstanceConfig } = require('../shared/instance-config.cjs');
+const { normalizeInstanceConfig, setConnectionPolicy } = require('../shared/instance-config.cjs');
 const {
   normalizeAllowedHosts,
   reconcileAllowedHosts
@@ -39,7 +39,8 @@ function connectionState(config) {
   const normalized = normalizeInstanceConfig(config);
   return {
     provider: validateTunnelProvider(String(normalized.connection.provider || 'ngrok').trim().toLowerCase()),
-    publicUrl: cleanHttpsOrigin(normalized.connection.publicUrl || '')
+    publicUrl: cleanHttpsOrigin(normalized.connection.publicUrl || ''),
+    policyGeneration: normalized.connection.policyGeneration
   };
 }
 
@@ -86,8 +87,7 @@ function applyInstancePatch(file, patch = {}) {
       });
     }
 
-    config.connection.provider = provider;
-    config.connection.publicUrl = publicUrl;
+    if (connectionTouched) setConnectionPolicy(config, { provider, publicUrl });
 
     if (patch.requireWorkspaceLeaseForWrites !== undefined) {
       if (typeof patch.requireWorkspaceLeaseForWrites !== 'boolean') {

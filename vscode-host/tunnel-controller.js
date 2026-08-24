@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const defaultChildProcess = require('node:child_process');
+const { createSupervisedChildProcess } = require('../host/runtime/supervised-child-process.js');
 const { terminateChild } = require('../host/runtime/process-controller.js');
 const { StartupLease, waitForStartupLease } = require('../host/runtime/startup-lease.js');
 const {
@@ -44,6 +45,7 @@ const MAX_DIAGNOSTIC_EVENTS = 80;
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
 const DEFAULT_FORCE_STOP_TIMEOUT_MS = 2000;
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
+const defaultProviderChildProcess = createSupervisedChildProcess({ childProcess: defaultChildProcess });
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -167,7 +169,7 @@ class TunnelController {
     settings = () => ({}),
     getSecrets = async () => ({}),
     verifyExistingEndpoint = null,
-    childProcess = defaultChildProcess,
+    childProcess = defaultProviderChildProcess,
     httpRequest = http.request,
     hostId = 'vscode',
     logger = () => {},
@@ -248,12 +250,6 @@ class TunnelController {
 
   matches(record, match) {
     if (!record || Number(record.port) !== Number(match.port) || record.provider !== match.provider) return false;
-
-    // Provider executable paths, credentials, restart policy, and other launch
-    // details are local to the process that owns the shared tunnel. Followers
-    // must not reject an otherwise compatible live endpoint merely because
-    // their host-local execution settings differ (for example VS Code using
-    // PATH while Obsidian stores an absolute cloudflared path).
     const configuredUrl = match.provider === 'ngrok'
       ? normalizePublicUrl(match.settings.ngrokUrl || '')
       : (match.provider === 'cloudflare-managed' || match.provider === 'external')
@@ -377,7 +373,7 @@ class TunnelController {
           if (!live) {
             this.borrowedFailureCount += 1;
             if (this.borrowedFailureCount < 2) {
-              this.store.write(ownerId, { childPid: null });
+              this.store.write(ownerId, { childPid: null, childKind: null });
               return { healthy: false, pending: true, providerMissing: true };
             }
             this.logger('Borrowed ngrok endpoint no longer reaches the current DevMate Gateway; releasing it for recovery.');
@@ -387,7 +383,10 @@ class TunnelController {
           this.borrowedFailureCount = 0;
         }
         this.ownershipFailureCount = 0;
-        this.store.write(ownerId, { childPid: this.child?.pid || null });
+        this.store.write(ownerId, {
+          childPid: this.child?.pid || null,
+          childKind: this.child?.devMateSupervised ? 'supervisor' : null
+        });
         return { healthy: true };
       }
       const definitive = !!record;
@@ -511,6 +510,7 @@ class TunnelController {
     this.store.write(ownerId, {
       hostId: this.hostId,
       childPid: null,
+      childKind: null,
       port: match.port,
       provider: match.provider,
       configurationKey: match.configurationKey,
@@ -643,6 +643,7 @@ class TunnelController {
         this.store.write(ownerId, {
           hostId: this.hostId,
           childPid: null,
+          childKind: null,
           port: match.port,
           provider: match.provider,
           configurationKey: match.configurationKey,
@@ -688,6 +689,7 @@ class TunnelController {
       this.store.write(ownerId, {
         hostId: this.hostId,
         childPid: child.pid || null,
+        childKind: child.devMateSupervised ? 'supervisor' : null,
         port: match.port,
         provider: match.provider,
         configurationKey: match.configurationKey,
@@ -698,6 +700,7 @@ class TunnelController {
       const publicUrl = await this.providerReadyUrl(launch, match, child, this.readyTimeoutMs);
       this.store.write(ownerId, {
         childPid: child.pid || null,
+        childKind: child.devMateSupervised ? 'supervisor' : null,
         status: 'ready',
         publicUrl,
         readyAt: nowIso()
@@ -762,7 +765,7 @@ class TunnelController {
     }
     this.restartCount += 1;
     const delayMs = Math.min(30000, 1000 * (2 ** Math.min(5, this.restartCount - 1)));
-    this.store.write(this.ownerId, { childPid: null, status: 'pending', publicUrl: '', readyAt: null });
+    this.store.write(this.ownerId, { childPid: null, childKind: null, status: 'pending', publicUrl: '', readyAt: null });
     await delay(delayMs);
     if (this.stopping || this.disposed || !this.ownerId) return;
 
@@ -845,7 +848,7 @@ class TunnelController {
       borrowedAgentApiBase: this.borrowedAgentApiBase || null,
       borrowedPublicVerified: this.borrowedPublicVerified,
       publicUrl: record?.publicUrl || this.borrowedPublicUrl || null,
-      child: this.child ? { pid: this.child.pid || null, exitCode: this.child.exitCode ?? null, signalCode: this.child.signalCode || null, ready: this.childReady } : null,
+      child: this.child ? { pid: this.child.pid || null, exitCode: this.child.exitCode ?? null, signalCode: this.child.signalCode || null, ready: this.childReady, supervised: this.child.devMateSupervised === true } : null,
       heartbeatMs: this.borrowedProvider ? this.borrowedHeartbeatMs : this.heartbeatMs,
       runtimeLeaseMs: this.runtimeLeaseMs,
       restartCount: this.restartCount,
@@ -934,17 +937,13 @@ class TunnelController {
     }
   }
 
-  async dispose({ stopOwned = true } = {}) {
+  async dispose() {
     if (this.disposed) return { disposed: true, alreadyDisposed: true };
-    if (stopOwned) {
-      const stopped = await this.stop();
-      if (childActive(this.child)) return { disposed: false, reason: 'process-exit-timeout', stop: stopped };
-    } else if (childActive(this.child) || (!this.borrowedProvider && this.ownerId && this.store.read()?.ownerId === this.ownerId)) {
-      return { disposed: false, reason: 'owned-process-running' };
-    }
+    const stopped = await this.stop();
+    if (childActive(this.child)) return { disposed: false, reason: stopped.reason || 'process-exit-timeout', stop: stopped };
     this.stopHeartbeat();
     this.disposed = true;
-    return { disposed: true };
+    return { disposed: true, stop: stopped };
   }
 }
 

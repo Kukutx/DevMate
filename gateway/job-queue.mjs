@@ -16,6 +16,8 @@ import {
 const NAMESPACE = 'jobs';
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'blocked_lease']);
 const FINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+const JOB_STATUSES = new Set([...ACTIVE_STATUSES, ...FINAL_STATUSES]);
+const RUNNER_STATUSES = new Set(['online', 'offline']);
 const SENSITIVE_KEY = /token|secret|password|authorization|api[_-]?key|credential/i;
 const SENSITIVE_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]+|\bsk-[A-Za-z0-9_-]{10,}|[?&](?:token|secret|password|key)=/i;
 
@@ -27,18 +29,59 @@ function emptyStore() {
   return { version: 1, jobs: [], runners: [], drain: { active: false, startedAt: null, startedBy: null, reason: '' } };
 }
 
+function jobStateError(message, detail = {}) {
+  const error = new Error(`Durable job state is invalid: ${message}`);
+  error.code = 'job_state_invalid';
+  Object.assign(error, detail);
+  return error;
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validateStore(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw jobStateError('root must be an object');
+  if (raw.version !== 1) throw jobStateError(`unsupported version ${String(raw.version)}`, { stateVersion: raw.version ?? null });
+  if (!Array.isArray(raw.jobs)) throw jobStateError('jobs must be an array');
+  if (!Array.isArray(raw.runners)) throw jobStateError('runners must be an array');
+  if (!raw.drain || typeof raw.drain !== 'object' || Array.isArray(raw.drain) || typeof raw.drain.active !== 'boolean') {
+    throw jobStateError('drain must be an object with a boolean active flag');
+  }
+
+  const jobIds = new Set();
+  raw.jobs.forEach((job, index) => {
+    if (!job || typeof job !== 'object' || Array.isArray(job) || !nonEmpty(job.id) || !JOB_STATUSES.has(job.status)) {
+      throw jobStateError(`job ${index} has invalid identity or status`, { jobIndex: index, jobId: job?.id || null });
+    }
+    if (jobIds.has(job.id)) throw jobStateError(`duplicate job id ${job.id}`, { jobId: job.id });
+    if (!job.requestedBy || typeof job.requestedBy !== 'object' || Array.isArray(job.requestedBy) || !nonEmpty(job.requestedBy.id)) {
+      throw jobStateError(`job ${job.id} has invalid requester identity`, { jobId: job.id });
+    }
+    if (!Array.isArray(job.requiredCapabilities)) throw jobStateError(`job ${job.id} requiredCapabilities must be an array`, { jobId: job.id });
+    jobIds.add(job.id);
+  });
+
+  const runnerIds = new Set();
+  raw.runners.forEach((runner, index) => {
+    if (!runner || typeof runner !== 'object' || Array.isArray(runner) || !nonEmpty(runner.id) || !RUNNER_STATUSES.has(runner.status)) {
+      throw jobStateError(`runner ${index} has invalid identity or status`, { runnerIndex: index, runnerId: runner?.id || null });
+    }
+    if (runnerIds.has(runner.id)) throw jobStateError(`duplicate runner id ${runner.id}`, { runnerId: runner.id });
+    if (!Array.isArray(runner.capabilities) || !Array.isArray(runner.workspaceIds)) {
+      throw jobStateError(`runner ${runner.id} capability/workspace scopes must be arrays`, { runnerId: runner.id });
+    }
+    runnerIds.add(runner.id);
+  });
+  return raw;
+}
+
 function readStore() {
-  const raw = readDurableNamespace(NAMESPACE, emptyStore());
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyStore();
-  return {
-    version: 1,
-    jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
-    runners: Array.isArray(raw.runners) ? raw.runners : [],
-    drain: raw.drain && typeof raw.drain === 'object' ? raw.drain : emptyStore().drain
-  };
+  return validateStore(readDurableNamespace(NAMESPACE, emptyStore()));
 }
 
 function writeStore(store) {
+  validateStore(store);
   assertJobStoreCapacity(store);
   return writeDurableNamespace(NAMESPACE, store);
 }
@@ -485,10 +528,14 @@ export function clearJobsForTests() {
 export const __test = {
   ACTIVE_STATUSES,
   FINAL_STATUSES,
+  JOB_STATUSES,
+  RUNNER_STATUSES,
   assertSafeArguments,
   emptyStore,
+  jobStateError,
   publicJob,
   recover,
   runnerMatches,
+  validateStore,
   writeStore
 };

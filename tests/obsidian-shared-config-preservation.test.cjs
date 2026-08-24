@@ -41,7 +41,7 @@ test('shared host config completion preserves connection, access, policy, runner
 
   try {
     const result = ensureInstanceConfig({ configFile, workspaceRoot: root, preferredPort: 9999, appVersion: '3.3.0' });
-    assert.deepEqual(result.connection, original.connection);
+    assert.deepEqual(result.connection, { ...original.connection, policyGeneration: 0 });
     assert.deepEqual(result.team.members, original.team.members);
     assert.equal(result.team.requireWorkspaceLeaseForWrites, true);
     assert.deepEqual(result.team.approvals, original.team.approvals);

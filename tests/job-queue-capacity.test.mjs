@@ -90,6 +90,27 @@ test('every Job store write enforces current capacity limits', () => {
   });
 });
 
+test('malformed durable job state cannot silently disable drain or discard jobs', () => {
+  const malformed = {
+    version: 1,
+    jobs: [activeJob(1)],
+    runners: [],
+    drain: { active: 'yes', startedAt: new Date().toISOString(), startedBy: 'owner', reason: 'maintenance' }
+  };
+  durable.writeDurableNamespace('jobs', malformed);
+  durable.resetDurableStateForTests();
+  assert.throws(
+    () => queue.drainStatus(),
+    error => error?.code === 'job_state_invalid' && /boolean active/.test(error.message)
+  );
+  durable.resetDurableStateForTests();
+  assert.deepEqual(
+    durable.readDurableNamespace('jobs', null),
+    malformed,
+    'malformed job/drain evidence must remain intact instead of being normalized to an empty store'
+  );
+});
+
 test('prunes long-offline Runner records during normal reads', () => {
   const store = emptyStore();
   store.runners = [{

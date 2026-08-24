@@ -76,7 +76,8 @@ test('Gateway reaches Ready with large audit and backup maintenance state', { ti
     preferredPort: port,
     appVersion: configStore.DEFAULT_VERSION,
     hostId: 'large-state-startup',
-    nodeExecutable: process.execPath
+    nodeExecutable: process.execPath,
+    lifecycleFence: false
   });
 
   try {

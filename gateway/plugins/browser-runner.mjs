@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackHostname } from '../http-host-policy.mjs';
+import { sensitiveWorkspacePathReason } from '../sensitive-path-policy.mjs';
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -27,7 +28,12 @@ function resolveContainedWorkspacePath(workspaceRoot, candidatePath, label, { mu
 function safeWorkspaceOutput(workspaceRoot, relativePath, label) {
   const value = String(relativePath || '').trim();
   if (!value) return null;
-  return resolveContainedWorkspacePath(workspaceRoot, value, label);
+  const root = fs.realpathSync.native(workspaceRoot);
+  const resolved = resolveContainedWorkspacePath(root, value, label);
+  const relative = path.relative(root, resolved).replace(/\\/g, '/');
+  const reason = sensitiveWorkspacePathReason(relative);
+  if (reason) throw new Error(`${label} path targets protected workspace data (${reason}): ${relative}`);
+  return resolved;
 }
 
 function assertAllowedUrl(rawUrl, allowRemoteUrls) {
@@ -36,6 +42,17 @@ function assertAllowedUrl(rawUrl, allowRemoteUrls) {
   const local = isLoopbackHostname(url.hostname);
   if (!local && !allowRemoteUrls) throw new Error('Remote browser URLs are disabled. Use a DevMate local preview or explicitly enable allowRemoteUrls.');
   return url;
+}
+
+function browserRequestUrlAllowed(rawUrl) {
+  const value = String(rawUrl || '');
+  if (/^(?:data:|blob:|about:)/i.test(value)) return true;
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:'].includes(parsed.protocol) && isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function browserExecutableAllowed(value) {
@@ -242,12 +259,8 @@ export async function runBrowserScenario({ workspaceRoot, url, settings = {}, ac
     if (!settings.allowRemoteUrls) {
       await context.route('**/*', async route => {
         const requestUrl = route.request().url();
-        if (/^(?:data:|blob:|about:)/i.test(requestUrl)) { await route.continue(); return; }
-        try {
-          const parsed = new URL(requestUrl);
-          if (['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname)) await route.continue();
-          else await route.abort('blockedbyclient');
-        } catch { await route.abort('blockedbyclient'); }
+        if (browserRequestUrlAllowed(requestUrl)) await route.continue();
+        else await route.abort('blockedbyclient');
       });
     }
     const page = await context.newPage();
@@ -337,6 +350,7 @@ export async function runBrowserScenario({ workspaceRoot, url, settings = {}, ac
 export const __test = {
   assertAllowedUrl,
   browserExecutableAllowed,
+  browserRequestUrlAllowed,
   compareQaValue,
   isInside,
   resolveModuleFromWorkspace,

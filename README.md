@@ -7,7 +7,7 @@ DevMate is a local-first MCP development gateway for ChatGPT. It can inspect, mo
 Choose one bootstrap preset to compose a complete starting configuration:
 
 ```bash
-# One local developer: loopback-only MCP
+# One developer: OAuth-ready public connection + frictionless local loopback
 npx devmate bootstrap --preset personal --workspace /srv/project
 
 # Trusted team: OAuth MCP + first member login code
@@ -32,7 +32,7 @@ npx devmate bootstrap \
   --config /var/lib/devmate-runner/config.json
 ```
 
-Presets compose the same capability-based instance schema; they are not runtime modes. All presets default to `auth.mode: "none"`. No-auth is valid for both local and public MCP. OAuth remains available only when explicitly selected.
+Presets compose the same capability-based instance schema; they are not runtime modes. Public-capable presets default to `auth.mode: "oauth"`. The Runner-host preset uses `auth.mode: "none"` because its MCP surface is loopback-only. Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
 
 Member creation returns a one-time `dmc_` OAuth login code. Only its salted verifier and the member `authVersion` are persisted. Runner creation returns a one-time `dmr_` Runner credential; only its salted verifier is persisted. Neither plaintext credential is written to `config.json`.
 
@@ -51,17 +51,17 @@ The normal desktop path is:
 1. Open a project.
 2. Run `DevMate: Start` — or leave the default auto-start enabled.
 3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, verifies MCP 2026 with `server/discover` → `tools/list` → a real `gateway_status` tool call, then reaches Ready and copies the verified HTTPS `/mcp` URL.
-4. Add that URL to ChatGPT and select **No authentication**. Desktop public MCP defaults to no authentication; OAuth is optional.
+4. Add that URL to ChatGPT and use OAuth for the public connection. If the authorization page asks for approval, use **DevMate: Copy OAuth Approval Code**.
 
 Fresh desktop instances use **ngrok**. Configure ngrok once, then DevMate keeps using the account-owned HTTPS endpoint across normal restarts. Cloudflare and external HTTPS ingress remain optional providers, not defaults.
 
-Routine Start never requires a separate tunnel-start or verification command. `auth.mode: "none"` works on both loopback and public ingress. OAuth can be enabled explicitly when wanted. Public MCP never accepts credentials in URLs. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) and [`docs/TUNNELS.md`](docs/TUNNELS.md).
+Routine Start never requires a separate tunnel-start or verification command. Trusted loopback access remains frictionless; remote/public MCP requires OAuth. Public MCP never accepts credentials in URLs. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) and [`docs/TUNNELS.md`](docs/TUNNELS.md).
 
 ## Obsidian setup
 
 DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins.
 
-Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → MCP 2026 preflight using the selected authentication mode → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
+Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → MCP 2026 preflight using OAuth for public ingress → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
 
 VS Code and Obsidian also share one generation-scoped public verification. They do not compete with duplicate startup probes; a temporary edge timeout keeps the current URL alive while automatic recovery continues. Ready evidence is periodically refreshed so a process that is still running cannot hide a remote endpoint failure indefinitely.
 
@@ -73,18 +73,18 @@ See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md), [`obsidian-plugin/RE
 
 | Preset | MCP identity | Execution | Best for |
 |---|---|---|---|
-| Personal | No auth by default | Embedded Runner | One local developer |
-| Team | No auth by default; optional OAuth members | Embedded Runner, optional external Runners | Trusted shared workflows |
-| Control-plane | No auth by default; optional OAuth members | External Runners by default | Hardened long-lived control plane |
-| Runner host | No-auth local MCP + `dmr_` central credential | Local toolchain | Platform-specific execution |
+| Personal | OAuth by default; trusted loopback remains local owner | Embedded Runner | One developer |
+| Team | OAuth members | Embedded Runner, optional external Runners | Trusted shared workflows |
+| Control-plane | OAuth members | External Runners by default | Hardened long-lived control plane |
+| Runner host | No-auth loopback MCP + `dmr_` central credential | Local toolchain | Platform-specific execution |
 
 These presets compose connection, access, request policy and Runner capabilities. They do not create mutually exclusive runtime modes. DevMate supports ngrok, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress independently of access or Runner topology.
 
 ## Architecture
 
 ```text
-ChatGPT / optional OAuth members
-        │ HTTPS MCP 2026 (no-auth default; OAuth optional)
+ChatGPT / OAuth members
+        │ HTTPS MCP 2026 (OAuth on public ingress)
         ▼
 DevMate Gateway
   ├─ Capability Host and tool contracts
@@ -226,8 +226,8 @@ Use drain controls before upgrades so new mutations and job claims stop while in
 ## Safety boundary
 
 - Gateways bind to `127.0.0.1` by default; container deployments opt into an explicit container bind host while host publishing remains loopback-bound.
-- `auth.mode: "none"` is the default for both local and public MCP and grants owner-level access to the configured endpoint.
-- OAuth is optional. When enabled, OAuth signing material and owner approval codes live in private state, not `config.json`.
+- `auth.mode: "oauth"` is the default for public-capable instances. `auth.mode: "none"` authorizes only trusted loopback requests and never promotes remote requests to owner.
+- OAuth signing material and owner approval codes live in private state, not `config.json`.
 - Member, Runner, provider, preview, and MCP credentials are distinct trust domains.
 - Workspace paths use realpath containment and block secrets, keys, databases, logs, and real `.env` files.
 - Runner capabilities are scheduling metadata, not an operating-system sandbox.

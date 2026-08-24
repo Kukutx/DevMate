@@ -106,11 +106,9 @@ try {
   const manifest = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
   assert.equal(manifest.name, 'devmate');
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
-  assert.equal(
-    manifest.contributes?.configuration?.properties?.['devMate.authenticationMode']?.default,
-    'none',
-    'Packaged VSIX must default desktop MCP authentication to no-auth'
-  );
+  const authenticationMode = manifest.contributes?.configuration?.properties?.['devMate.authenticationMode'];
+  assert.equal(authenticationMode?.default, 'oauth', 'Packaged VSIX must default desktop MCP authentication to OAuth');
+  assert.deepEqual(authenticationMode?.enum, ['none', 'oauth'], 'Packaged VSIX must retain explicit loopback no-auth and OAuth options');
 
   const requiredFiles = [
     'extension.js',
@@ -124,6 +122,7 @@ try {
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
     'shared/auth-config.cjs',
+    'shared/lifecycle-intent.cjs',
     'shared/oauth-secrets.cjs',
     'shared/oauth-tokens.cjs',
     'shared/config-store.cjs',
@@ -135,6 +134,7 @@ try {
     'host/runtime/operation-coordinator.js',
     'host/runtime/process-controller.js',
     'host/runtime/startup-lease.js',
+    'gateway/agent-codex-supervisor.mjs',
     'gateway/server.bundle.mjs'
   ];
   for (const relative of requiredFiles) {
@@ -144,7 +144,11 @@ try {
 
   const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
   const entryFile = path.join(extensionPath, manifest.main.replace(/^\.\//, ''));
-  const dependencyFiles = assertDependencyClosure(entryFile, extensionPath);
+  const codexSupervisorFile = path.join(extensionPath, 'gateway', 'agent-codex-supervisor.mjs');
+  const dependencyFiles = new Set([
+    ...assertDependencyClosure(entryFile, extensionPath),
+    ...assertDependencyClosure(codexSupervisorFile, extensionPath)
+  ]);
   assertNoPrivateElectronNodeFlags(dependencyFiles);
   assert.match(extensionSource, /resolveNodeRuntime/, 'VSIX must resolve a verified Node runtime before launching the Gateway');
   assert.match(extensionSource, /host\/runtime\/network\.js/, 'VSIX must use the shared Gateway health contract');
@@ -175,6 +179,9 @@ try {
   const requireFromVsix = createRequire(packageFile);
   const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
   const { resolveNodeRuntime } = requireFromVsix('./host/runtime/node-runtime.js');
+  const { updateConfig } = requireFromVsix('./shared/config-store.cjs');
+  const { configureAuthentication } = requireFromVsix('./shared/auth-config.cjs');
+  const { setLifecycleIntent } = requireFromVsix('./shared/lifecycle-intent.cjs');
   const nodeRuntime = resolveNodeRuntime();
   const port = await freePort();
   const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
@@ -188,6 +195,19 @@ try {
   };
   vscodeController = new RuntimeController({ ...controllerOptions, hostId: 'vscode-artifact' });
   secondController = new RuntimeController({ ...controllerOptions, hostId: 'second-artifact-host' });
+
+  // This artifact-level smoke exercises RuntimeController directly rather than
+  // the user-facing Start command, so establish the same explicit local-only
+  // lifecycle/auth state that the host wrapper would establish first.
+  vscodeController.ensureConfig();
+  updateConfig(vscodeController.configFile, config => {
+    configureAuthentication(config, 'none', { replace: true });
+    return config;
+  });
+  setLifecycleIntent(vscodeController.configFile, 'running', {
+    requestedBy: 'vsix-runtime-smoke',
+    reason: 'packaged runtime ownership smoke'
+  });
 
   const [vscodeStart, secondStart] = await Promise.all([
     vscodeController.start({ timeoutMs: 20000 }),
@@ -235,10 +255,11 @@ try {
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
-    noAuthDefaultVerified: true,
-    optionalOAuthPackaged: true,
+    oauthDefaultVerified: true,
+    loopbackNoAuthOptionVerified: true,
     statelessMcp2026Verified: true,
     providerNativeConnectionRuntimePackaged: true,
+    codexSupervisorPackaged: true,
     packagedDependencyClosureVerified: true,
     privateElectronFlagsAbsent: true
   }));

@@ -3,13 +3,12 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { compareQaValue, stateValueAtPath } from './browser-runner.mjs';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { inspectQaBridge } from './godot-qa-bridge.mjs';
 import { normalizeScene, parseGodotDiagnostics, projectMetadata, resolveGodotExecutable, resolveProject, resolveProjectChild } from './godot-project.mjs';
 
 function safeRelative(value, fallback) {
-  const relative = String(value || fallback || '').trim().replace(/\\/g, '/');
-  if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error('Godot native QA path must stay inside the project workspace');
-  return relative;
+  return safeGodotRelativePath(value, fallback, 'Godot native QA path');
 }
 
 function normalizeInputActions(actions = [], knownActions = []) {

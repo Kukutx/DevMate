@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { extendPlugin } from './plugin-sdk.mjs';
 import { godotPlugin } from './godot.mjs';
 import { buildGodotDependencyGraph } from './godot-graph.mjs';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { installQaBridge } from './godot-qa-bridge.mjs';
 import { planGodotAutomation } from './godot-plan.mjs';
 import { writeGodotQualityReport } from './godot-report.mjs';
@@ -35,8 +36,12 @@ function configureGodot(context, {
   }
   settings.defaultProjectSubpath = project.subpath;
   if (defaultWebPreset !== undefined) settings.defaultWebPreset = String(defaultWebPreset || '').trim();
-  if (defaultWebOutput !== undefined) settings.defaultWebOutput = String(defaultWebOutput || '').trim();
-  if (defaultExportRoot !== undefined) settings.defaultExportRoot = String(defaultExportRoot || '').trim();
+  if (defaultWebOutput !== undefined) {
+    settings.defaultWebOutput = safeGodotRelativePath(defaultWebOutput, 'build/web/index.html', 'Godot default Web output');
+  }
+  if (defaultExportRoot !== undefined) {
+    settings.defaultExportRoot = safeGodotRelativePath(defaultExportRoot, 'build/exports', 'Godot default export root');
+  }
   config.plugins.settings['devmate.godot'] = settings;
   context.writeConfig(config);
   return { project, settings, installBridge };

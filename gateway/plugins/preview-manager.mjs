@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isSensitiveWorkspacePath } from '../sensitive-path-policy.mjs';
 
 export const MAX_ACTIVE_PREVIEWS = 32;
 export const MAX_WORKSPACE_PREVIEWS = 8;
@@ -63,21 +64,30 @@ function containedExistingPath(root, candidate) {
   return stat ? { file: real, stat } : null;
 }
 
+function previewRelativePath(requested) {
+  return String(requested || '').replace(/^[/\\]+/, '').replace(/\\/g, '/');
+}
+
 function safeFile(root, pathname, entryPath, spaFallback) {
   let decoded;
   try { decoded = decodeURIComponent(pathname); } catch { return null; }
   const requested = decoded === '/' ? `/${entryPath}` : decoded;
-  const parts = requested.split(/[\\/]+/).filter(Boolean).map(part => part.toLowerCase());
+  const relative = previewRelativePath(requested);
+  if (!relative || isSensitiveWorkspacePath(relative)) return null;
+  const parts = relative.split('/').filter(Boolean).map(part => part.toLowerCase());
   const basename = parts.at(-1) || '';
   if (parts.some(part => part.startsWith('.') || BLOCKED_SEGMENTS.has(part) || part.startsWith('.env.')) || BLOCKED_EXTENSIONS.has(path.extname(basename))) return null;
   const candidate = path.resolve(root, `.${requested}`);
   const resolved = containedExistingPath(root, candidate);
   if (resolved?.stat.isDirectory()) {
-    const index = containedExistingPath(root, path.join(resolved.file, 'index.html'));
+    const indexRelative = `${relative.replace(/\/$/, '')}/index.html`;
+    const index = isSensitiveWorkspacePath(indexRelative) ? null : containedExistingPath(root, path.join(resolved.file, 'index.html'));
     if (index?.stat.isFile()) return index;
   }
   if (resolved?.stat.isFile()) return resolved;
   if (spaFallback) {
+    const fallbackRelative = previewRelativePath(entryPath);
+    if (isSensitiveWorkspacePath(fallbackRelative)) return null;
     const fallback = containedExistingPath(root, path.resolve(root, entryPath));
     if (fallback?.stat.isFile()) return fallback;
   }
@@ -161,7 +171,8 @@ export async function startPreview({ workspaceId, root, entryPath = 'index.html'
   let server = null;
   try {
     const realRoot = fs.realpathSync.native(root);
-    const entry = String(entryPath || 'index.html').replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    const entry = previewRelativePath(entryPath || 'index.html');
+    if (!entry || isSensitiveWorkspacePath(entry)) throw new Error(`Preview entry is protected by DevMate credential policy: ${entry || entryPath}`);
     const entryFull = path.resolve(realRoot, entry);
     const resolvedEntry = containedExistingPath(realRoot, entryFull);
     if (!resolvedEntry?.stat.isFile()) throw new Error(`Preview entry not found or escapes preview root: ${entry}`);
@@ -303,6 +314,7 @@ export const __test = {
   parseRange,
   pendingStartCompletions,
   pendingWorkspaceStarts,
+  previewRelativePath,
   previews,
   reservePreviewCapacity,
   safeFile,

@@ -1,23 +1,70 @@
 import { now } from './local-shared.mjs';
 import { mutateDurableDocument } from './durable-state.mjs';
-import { compactJobStore } from './job-store-limits.mjs';
+import { assertJobStoreCapacity, compactJobStore } from './job-store-limits.mjs';
 import { issueRunnerClaimInStore, normalizeRunnerClaimStore } from './runner-claim-fencing.mjs';
 import { defaultedInteger } from './strict-config.mjs';
+
+const JOB_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'blocked_lease', 'succeeded', 'failed', 'cancelled']);
+const RUNNER_STATUSES = new Set(['online', 'offline']);
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function normalizeJobStore(value) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+function stateError(message, detail = {}) {
+  const error = new Error(`External job claim durable state is invalid: ${message}`);
+  error.code = 'external_job_claim_state_invalid';
+  Object.assign(error, detail);
+  return error;
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function emptyJobStore() {
   return {
     version: 1,
-    jobs: Array.isArray(source.jobs) ? source.jobs : [],
-    runners: Array.isArray(source.runners) ? source.runners : [],
-    drain: source.drain && typeof source.drain === 'object'
-      ? source.drain
-      : { active: false, startedAt: null, startedBy: null, reason: '' }
+    jobs: [],
+    runners: [],
+    drain: { active: false, startedAt: null, startedBy: null, reason: '' }
   };
+}
+
+function normalizeJobStore(value) {
+  if (value === undefined) return emptyJobStore();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw stateError('jobs namespace root must be an object');
+  if (value.version !== 1) throw stateError(`unsupported jobs namespace version ${String(value.version)}`, { stateVersion: value.version ?? null });
+  if (!Array.isArray(value.jobs) || !Array.isArray(value.runners)) throw stateError('jobs and runners must be arrays');
+  if (!value.drain || typeof value.drain !== 'object' || Array.isArray(value.drain) || typeof value.drain.active !== 'boolean') {
+    throw stateError('drain must be an object with a boolean active flag');
+  }
+
+  const jobIds = new Set();
+  for (const [index, job] of value.jobs.entries()) {
+    if (!job || typeof job !== 'object' || Array.isArray(job) || !nonEmpty(job.id) || !JOB_STATUSES.has(job.status)) {
+      throw stateError(`job ${index} has invalid identity or status`, { jobIndex: index, jobId: job?.id || null });
+    }
+    if (jobIds.has(job.id)) throw stateError(`duplicate job id ${job.id}`, { jobId: job.id });
+    if (!job.requestedBy || typeof job.requestedBy !== 'object' || Array.isArray(job.requestedBy) || !nonEmpty(job.requestedBy.id)) {
+      throw stateError(`job ${job.id} has invalid requester identity`, { jobId: job.id });
+    }
+    if (!Array.isArray(job.requiredCapabilities)) throw stateError(`job ${job.id} requiredCapabilities must be an array`, { jobId: job.id });
+    jobIds.add(job.id);
+  }
+
+  const runnerIds = new Set();
+  for (const [index, runner] of value.runners.entries()) {
+    if (!runner || typeof runner !== 'object' || Array.isArray(runner) || !nonEmpty(runner.id) || !RUNNER_STATUSES.has(runner.status)) {
+      throw stateError(`runner ${index} has invalid identity or status`, { runnerIndex: index, runnerId: runner?.id || null });
+    }
+    if (runnerIds.has(runner.id)) throw stateError(`duplicate runner id ${runner.id}`, { runnerId: runner.id });
+    if (!Array.isArray(runner.capabilities) || !Array.isArray(runner.workspaceIds)) {
+      throw stateError(`runner ${runner.id} capability/workspace scopes must be arrays`, { runnerId: runner.id });
+    }
+    runnerIds.add(runner.id);
+  }
+  return value;
 }
 
 function appendEvent(job, type, detail = {}) {
@@ -28,9 +75,9 @@ function appendEvent(job, type, detail = {}) {
 
 function runnerMatches(job, runner) {
   if (!runner || runner.status !== 'online') return false;
-  if (runner.workspaceIds?.length && job.workspaceId && !runner.workspaceIds.includes(job.workspaceId)) return false;
-  const capabilities = new Set(Array.isArray(runner.capabilities) ? runner.capabilities : []);
-  return (Array.isArray(job.requiredCapabilities) ? job.requiredCapabilities : []).every(value => capabilities.has(value));
+  if (runner.workspaceIds.length && job.workspaceId && !runner.workspaceIds.includes(job.workspaceId)) return false;
+  const capabilities = new Set(runner.capabilities);
+  return job.requiredCapabilities.every(value => capabilities.has(value));
 }
 
 function publicJob(job) {
@@ -42,7 +89,7 @@ function publicJob(job) {
     priority: job.priority,
     workspaceId: job.workspaceId || null,
     requestedBy: clone(job.requestedBy),
-    requiredCapabilities: [...(job.requiredCapabilities || [])],
+    requiredCapabilities: [...job.requiredCapabilities],
     runnerId: job.runnerId || null,
     attempts: job.attempts,
     maxAttempts: job.maxAttempts,
@@ -94,6 +141,7 @@ export function claimExternalJob({ runnerId, leaseSeconds = 60 }) {
     if (fromStatus !== 'waiting_approval' && fromStatus !== 'blocked_lease') job.attempts += 1;
     appendEvent(job, 'claimed', { runnerId: owner, fromStatus, attempt: job.attempts, fenced: true });
     runner.runningJobs = running + 1;
+    assertJobStoreCapacity(store);
 
     const claims = normalizeRunnerClaimStore(document.namespaces['runner-claims']);
     const claim = issueRunnerClaimInStore(claims, {
@@ -107,4 +155,14 @@ export function claimExternalJob({ runnerId, leaseSeconds = 60 }) {
   });
 }
 
-export const __test = { appendEvent, normalizeJobStore, publicJob, runnerMatches, selectCandidate };
+export const __test = {
+  JOB_STATUSES,
+  RUNNER_STATUSES,
+  appendEvent,
+  emptyJobStore,
+  normalizeJobStore,
+  publicJob,
+  runnerMatches,
+  selectCandidate,
+  stateError
+};

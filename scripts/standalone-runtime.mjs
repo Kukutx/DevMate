@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -20,7 +21,74 @@ const { CONNECTION_PROVIDERS } = instanceConfig;
 const { parsePortOption } = portConfig;
 
 export function configFile(options = {}) {
-  return path.resolve(String(options.config || process.env.DEVMATE_CONFIG || path.join(process.cwd(), '.devmate-server', 'config.json')));
+  return path.resolve(String(
+    options.config ||
+    process.env.DEVMATE_CONFIG ||
+    path.join(os.homedir(), '.devmate', 'standalone', 'config.json')
+  ));
+}
+
+function canonicalCandidate(value) {
+  const target = path.resolve(String(value || ''));
+  let existing = target;
+  while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);
+  const real = fs.realpathSync.native(existing);
+  return path.resolve(real, path.relative(existing, target));
+}
+
+function inside(root, target) {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function configuredWorkspaceRoots(config) {
+  return [
+    ...(Array.isArray(config?.workspaces) ? config.workspaces.map(item => item?.root) : []),
+    ...(Array.isArray(config?.trustedWritableRoots) ? config.trustedWritableRoots.map(item => item?.root || item?.path || item) : [])
+  ].filter(value => typeof value === 'string' && value.trim()).map(value => value.trim());
+}
+
+export function standaloneStateSeparation(file, workspaceRoots = []) {
+  const configPath = canonicalCandidate(file);
+  const stateRoot = canonicalCandidate(path.join(path.dirname(configPath), 'state'));
+  for (const rawRoot of workspaceRoots) {
+    const workspaceRoot = canonicalCandidate(rawRoot);
+    if (inside(workspaceRoot, configPath)) {
+      return {
+        ok: false,
+        reason: 'config-inside-workspace',
+        workspaceRoot,
+        configPath,
+        stateRoot
+      };
+    }
+    if (inside(workspaceRoot, stateRoot) || inside(stateRoot, workspaceRoot)) {
+      return {
+        ok: false,
+        reason: 'state-workspace-overlap',
+        workspaceRoot,
+        configPath,
+        stateRoot
+      };
+    }
+  }
+  return { ok: true, reason: null, configPath, stateRoot };
+}
+
+export function assertStandaloneStateSeparated(file, configOrRoots) {
+  const roots = Array.isArray(configOrRoots) ? configOrRoots : configuredWorkspaceRoots(configOrRoots);
+  const result = standaloneStateSeparation(file, roots);
+  if (result.ok) return result;
+  const error = new Error(
+    `Standalone DevMate config/state must be outside controlled workspaces (${result.reason}). ` +
+    `Move the config to a separate directory such as ~/.devmate/standalone/config.json.`
+  );
+  error.code = 'standalone_state_workspace_overlap';
+  error.reason = result.reason;
+  error.workspaceRoot = result.workspaceRoot;
+  error.configPath = result.configPath;
+  error.stateRoot = result.stateRoot;
+  throw error;
 }
 
 export function readConfig(file) {
@@ -75,12 +143,13 @@ function optionalBoolean(value, fallback, label) {
 }
 
 export function initConfig(options = {}) {
+  const workspace = path.resolve(String(options.workspace || process.cwd()));
+  if (!fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);
   const file = configFile(options);
+  assertStandaloneStateSeparated(file, [workspace]);
   if (fs.existsSync(file) && options.force !== true && options.force !== 'true') {
     throw new Error(`Config already exists: ${file}. Pass --force to replace it.`);
   }
-  const workspace = path.resolve(String(options.workspace || process.cwd()));
-  if (!fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);
 
   const provider = cleanProvider(String(options.provider || 'ngrok'));
   const port = parsePortOption(options.port, { label: '--port' });
@@ -88,8 +157,11 @@ export function initConfig(options = {}) {
   const publicUrl = rawPublicUrl ? normalizeOrigin(rawPublicUrl, { httpsOnly: true }) : '';
   validateStandaloneIngress({ provider, publicUrl });
   const requestedAuthentication = options['authentication-mode'] === undefined
-    ? 'none'
+    ? 'oauth'
     : String(options['authentication-mode']).trim().toLowerCase();
+  if (publicUrl && requestedAuthentication !== 'oauth') {
+    throw new Error('Public HTTPS ingress requires --authentication-mode oauth; none is loopback-only');
+  }
 
   const config = newInstanceConfig({ workspaceRoot: workspace, port, appVersion: DEFAULT_VERSION });
   config.instanceId = `standalone-${Date.now().toString(36)}`;
@@ -168,12 +240,14 @@ export function doctor(options = {}) {
   const file = configFile(options);
   const config = normalizeInstanceConfig(readConfig(file));
   const workspace = config.workspaces?.find(item => item.id === config.activeWorkspaceId) || config.workspaces?.[0];
+  const separation = standaloneStateSeparation(file, configuredWorkspaceRoots(config));
   const checks = [
     { key: 'config', ok: true, detail: file },
+    { key: 'state-separation', ok: separation.ok, detail: separation.ok ? separation.stateRoot : `${separation.reason}: ${separation.workspaceRoot}` },
     { key: 'workspace', ok: !!workspace && !!fs.statSync(workspace.root, { throwIfNoEntry: false })?.isDirectory(), detail: workspace?.root || 'missing' },
     { key: 'authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'oauth' },
     { key: 'oauth-secrets', ok: config.auth?.mode !== 'oauth' || (() => { try { readOAuthSecrets(file); return true; } catch { return false; } })(), detail: config.auth?.mode === 'oauth' ? 'required' : 'optional' },
-    { key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-no-auth-mode' },
+    { key: 'member-auth', ok: true, detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-loopback-only-mode' },
     { key: 'git', ...executableStatus('git') },
     { key: 'node', ok: true, detail: process.version }
   ];
@@ -184,7 +258,7 @@ export function doctor(options = {}) {
     checks.push({ key: 'public-url', ok: /^https:\/\//i.test(config.connection.publicUrl || ''), detail: config.connection.publicUrl || 'missing' });
   }
   if (config.connection.publicUrl) {
-    checks.push({ key: 'public-authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' });
+    checks.push({ key: 'public-authentication', ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth' });
   }
   if (config.requestPolicy.allowedHosts.length) {
     const configuredHost = config.connection.publicUrl ? new URL(config.connection.publicUrl).host.toLowerCase() : '';
@@ -266,6 +340,8 @@ export function memberRevoke(options = {}) {
 export async function serve(options = {}) {
   const file = configFile(options);
   if (!fs.existsSync(file)) throw new Error(`Config not found: ${file}`);
+  const config = normalizeInstanceConfig(readConfig(file));
+  assertStandaloneStateSeparated(file, config);
   process.env.DEVMATE_CONFIG = file;
   process.env.DEVMATE_PUBLIC_HEALTH_DETAILS = options['public-health-details'] === true || options['public-health-details'] === 'true' ? '1' : '0';
   await import(pathToFileURL(path.resolve(import.meta.dirname, '..', 'gateway', 'server-entry.mjs')).href);

@@ -11,11 +11,13 @@ const controller = fs.readFileSync(path.join(root, 'host', 'runtime', 'process-c
 const extension = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
 const publicMcp = fs.readFileSync(path.join(root, 'host', 'public-mcp.js'), 'utf8');
 const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'main.js'), 'utf8');
+const obsidianSettings = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'settings.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
-test('Gateway accepts default public no-auth and retains optional OAuth for remote MCP', () => {
-  assert.match(requestGuard, /isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'/);
-  assert.match(requestGuard, /config\.auth\?\.mode !== 'oauth'/);
+test('Gateway keeps loopback no-auth but requires OAuth for remote MCP ingress', () => {
+  assert.match(requestGuard, /if \(isLocalRequest\(req\)\) return fallbackLocalPrincipal\(\)/);
+  assert.match(requestGuard, /if \(config\.auth\?\.mode !== 'oauth'\) return null/);
+  assert.doesNotMatch(requestGuard, /isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'/);
   assert.match(requestGuard, /oauthAccessToken/);
   assert.match(requestGuard, /principalFromOAuthClaims/);
   assert.doesNotMatch(requestGuard, /x-devmate-token/);
@@ -38,7 +40,7 @@ test('connection URLs never embed credentials and public verification uses MCP 2
   assert.doesNotMatch(publicMcp, /['"]initialize['"]|mcp-session-id|Mcp-Session-Id/i);
 });
 
-test('desktop hosts default to no-auth while keeping OAuth approval as an optional capability', () => {
+test('desktop hosts default public MCP to OAuth while none remains an explicit local-only option', () => {
   assert.doesNotMatch(extension, /devMate\.copyToken/);
   assert.doesNotMatch(extension, /copyConnectionToken/);
   assert.equal(packageJson.contributes.commands.some(command => command.command === 'devMate.copyToken'), false);
@@ -49,5 +51,7 @@ test('desktop hosts default to no-auth while keeping OAuth approval as an option
   assert.match(obsidian, /authenticationMode/);
   assert.match(extension, /copyOAuthApprovalCode/);
   assert.match(obsidian, /copyOAuthApprovalCode/);
-  assert.equal(packageJson.contributes.configuration.properties['devMate.authenticationMode'].default, 'none');
+  assert.equal(packageJson.contributes.configuration.properties['devMate.authenticationMode'].default, 'oauth');
+  assert.match(packageJson.contributes.configuration.properties['devMate.authenticationMode'].description, /public MCP/i);
+  assert.match(obsidianSettings, /authenticationMode:\s*'oauth'/);
 });

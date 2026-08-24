@@ -1,13 +1,15 @@
 # Authentication policy
 
-DevMate supports two current MCP 2026 authentication modes: `none` by default, and optional OAuth. There is no static MCP credential mode.
+DevMate supports two current MCP 2026 authentication modes: OAuth by default, plus an explicit loopback-only `none` mode. There is no static MCP credential mode.
 
 ## Security boundary
 
-- `auth.mode: "none"` accepts both loopback and public MCP without an access token. It is the default.
-- No-auth requests receive owner-level DevMate access; Host allowlisting and ingress configuration remain independent controls.
-- `auth.mode: "oauth"` is optional and must be selected explicitly.
+- `auth.mode: "oauth"` is the default and is required for remote/public MCP ingress.
+- `auth.mode: "none"` is limited to trusted loopback MCP access.
+- Loopback requests remain frictionless and receive the local owner principal.
+- Remote requests are never promoted to owner because authentication is disabled; a remote request without valid OAuth authorization is rejected.
 - When OAuth is enabled, access tokens use the standard `Authorization: Bearer <access-token>` header. DevMate does not expose a user-configured static MCP Bearer credential.
+- Host allowlisting, ingress provider configuration, TLS, and authentication are separate controls; none substitutes for another.
 
 ## OAuth 2026 flow
 
@@ -50,19 +52,19 @@ Successful member authorization issues normal OAuth access/refresh tokens whose 
 
 Rotating a member login code increments `authVersion`, immediately invalidating existing member OAuth credentials. Disabling, revoking, expiring, changing scope, or changing authorization version also makes stale authorization unusable.
 
-Standalone `member-create` and `member-rotate` do not change the selected authentication mode. Member OAuth login codes become relevant only when OAuth is explicitly enabled.
+Standalone `member-create` and `member-rotate` do not silently weaken the selected authentication mode. Public-capable configurations should retain OAuth.
 
 ## Secret storage
 
-`config.json` contains only the authentication mode and non-plaintext identity metadata. OAuth signing material and the owner approval code live under the instance state directory with restrictive permissions, file locking, bounded reads, and atomic replacement.
+`config.json` contains only the authentication mode and non-plaintext identity metadata. OAuth signing material and the owner approval code live under the instance state directory with restrictive permissions, file locking, bounded reads, crash-safe replacement recovery, and atomic replacement.
 
 Member login-code verifiers and Runner credential verifiers remain one-way stored in configuration. Plaintext member login codes and Runner credentials are returned only at creation/rotation boundaries and must not be committed to a repository or placed in MCP URLs.
 
 ## Invariants
 
 - Credentials are never accepted from URL query parameters.
-- No-auth public MCP intentionally maps to owner-level access.
-- Public URL configuration is valid with the default `none` mode or with optional OAuth.
+- Public/remote MCP requires OAuth.
+- No-auth is trusted-loopback-only and cannot authorize a remote request.
 - Active shared member identity uses OAuth, never a static MCP credential.
 - Unsupported authentication fields fail closed.
 - OAuth tokens are issuer- and resource-bound.

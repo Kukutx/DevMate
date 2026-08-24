@@ -124,9 +124,11 @@ class RuntimeController {
     logger = () => {},
     nodeExecutable = process.execPath,
     spawnImpl = spawn,
+    lifecycleFence = false,
     childExitTimeoutMs = CHILD_EXIT_TIMEOUT_MS,
     childForceExitTimeoutMs = CHILD_FORCE_EXIT_TIMEOUT_MS
   }) {
+    if (typeof lifecycleFence !== 'boolean') throw new TypeError('lifecycleFence must be a boolean');
     this.workspaceRoot = requiredPath(workspaceRoot, 'workspaceRoot');
     this.stateDirectory = requiredPath(stateDirectory, 'stateDirectory');
     this.gatewayEntry = requiredPath(gatewayEntry, 'gatewayEntry');
@@ -137,6 +139,7 @@ class RuntimeController {
     this.logger = logger;
     this.nodeExecutable = nodeExecutable;
     this.spawnImpl = spawnImpl;
+    this.lifecycleFence = lifecycleFence;
     this.childExitTimeoutMs = Math.max(100, Number(childExitTimeoutMs) || CHILD_EXIT_TIMEOUT_MS);
     this.childForceExitTimeoutMs = Math.max(100, Number(childForceExitTimeoutMs) || CHILD_FORCE_EXIT_TIMEOUT_MS);
     this.child = null;
@@ -197,6 +200,7 @@ class RuntimeController {
       stateDirectory: this.stateDirectory,
       gatewayEntry: this.gatewayEntry,
       configFile: this.configFile,
+      lifecycleFence: this.lifecycleFence,
       phase: this.phase,
       disposed: this.disposed,
       owned: this.owned,
@@ -375,10 +379,11 @@ class RuntimeController {
             DEVMATE_CONFIG: this.configFile,
             DEVMATE_PUBLIC_HEALTH_DETAILS: '0',
             DEVMATE_RUNTIME_OWNER_ID: runtimeOwnerId,
-            DEVMATE_RUNTIME_PARENT_PID: String(process.pid)
+            DEVMATE_RUNTIME_PARENT_PID: String(process.pid),
+            DEVMATE_DESKTOP_LIFECYCLE_FENCE: this.lifecycleFence ? '1' : '0'
           },
           windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe']
+          stdio: ['ignore', 'pipe', 'pipe', 'ipc']
         });
       } catch (error) {
         launch.endedAt = now();
@@ -518,8 +523,17 @@ class RuntimeController {
     return this.operations.run('restart', async () => {
       if (this.disposed) throw new Error('Runtime controller is disposed');
       const stopped = await this.stopInternal();
-      if (!stopped.stopped && stopped.reason === 'managed-by-another-host') {
-        return { restarted: false, attached: true, reason: stopped.reason };
+      if (!stopped.stopped) {
+        if (stopped.reason === 'managed-by-another-host') {
+          return { restarted: false, attached: true, reason: stopped.reason };
+        }
+        if (stopped.reason !== 'not-running') {
+          const error = new Error(`DevMate Gateway restart refused because the existing runtime did not stop cleanly: ${stopped.reason || 'unknown stop failure'}`);
+          error.code = 'DEVMATE_GATEWAY_RESTART_STOP_FAILED';
+          error.stop = stopped;
+          error.diagnostics = this.diagnosticSnapshot();
+          throw error;
+        }
       }
       return { restarted: true, ...(await this.startInternal()) };
     });
@@ -532,20 +546,18 @@ class RuntimeController {
     return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
   }
 
-  dispose({ stopOwned = false } = {}) {
+  dispose() {
     return this.operations.run('dispose', async () => {
       if (this.disposed) return { disposed: true, alreadyDisposed: true };
-      if (stopOwned) {
-        const result = await this.stopInternal();
-        if (!result.stopped && result.reason === 'process-exit-timeout') return result;
-      } else if (this.activeOwnedChild()) {
-        return { disposed: false, reason: 'owned-process-running' };
+      const stopped = await this.stopInternal();
+      if (this.activeOwnedChild()) {
+        return { disposed: false, reason: stopped.reason || 'process-exit-timeout', stop: stopped };
       }
       this.child = null;
       this.owned = false;
       this.phase = 'disposed';
       this.disposed = true;
-      return { disposed: true };
+      return { disposed: true, stop: stopped };
     });
   }
 }

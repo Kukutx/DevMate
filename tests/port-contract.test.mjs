@@ -43,12 +43,14 @@ test('VS Code Settings exposes the same strict Gateway port range', () => {
 
 test('standalone init rejects invalid explicit ports instead of clamping or falling back', async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-port-contract-'));
+  const workspace = path.join(root, 'workspace');
+  await fsp.mkdir(workspace, { recursive: true });
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
   let index = 0;
   for (const value of ['abc', '8787.5', '1', '65536', -1, 70000, true]) {
     const config = path.join(root, `bad-${index++}`, 'config.json');
     assert.throws(
-      () => cli.initConfig({ config, workspace: root, mode: 'personal', provider: 'ngrok', port: value }),
+      () => cli.initConfig({ config, workspace, mode: 'personal', provider: 'ngrok', port: value }),
       error => error?.code === 'DEVMATE_PORT_INVALID'
     );
     assert.equal(fs.existsSync(config), false);
@@ -56,7 +58,7 @@ test('standalone init rejects invalid explicit ports instead of clamping or fall
 
   const valid = cli.initConfig({
     config: path.join(root, 'valid', 'config.json'),
-    workspace: root,
+    workspace,
     mode: 'personal',
     provider: 'ngrok',
     port: String(MIN_PORT)

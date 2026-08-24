@@ -33,7 +33,7 @@ test('serializes reentrant configuration mutations with one lock file', async t 
   assert.equal(fs.existsSync(`${file}.lock`), false);
 });
 
-test('recovers dead and expired lock records', async t => {
+test('recovers dead lock records immediately', async t => {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-config-stale-lock-'));
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'config.json');
@@ -48,6 +48,7 @@ test('recovers dead and expired lock records', async t => {
   assert.notEqual(acquired.token, 'stale');
   assert.equal(releaseFileLock(acquired), true);
   assert.equal(fs.existsSync(lockPath), false);
+  assert.equal(fs.readdirSync(directory).some(name => name.includes('.lock.stale-')), false);
 });
 
 test('does not remove a fresh live lock owned by another token', async t => {
@@ -67,4 +68,35 @@ test('does not remove a fresh live lock owned by another token', async t => {
     return true;
   });
   assert.equal(fs.existsSync(lockPath), true);
+});
+
+test('does not steal a fresh lock while its owner is still writing the payload', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-config-partial-lock-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  const lockPath = `${file}.lock`;
+  await fsp.writeFile(file, '{}\n');
+  await fsp.writeFile(lockPath, '{"token":"initializing"');
+  assert.equal(readLock(lockPath), null);
+  assert.throws(() => acquireFileLock(file, { timeoutMs: 100, staleMs: 60000 }), error => {
+    assert.equal(error.code, 'file_lock_timeout');
+    return true;
+  });
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), '{"token":"initializing"');
+});
+
+test('recovers an old unreadable lock only after the stale threshold', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-config-old-partial-lock-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  const lockPath = `${file}.lock`;
+  await fsp.writeFile(file, '{}\n');
+  await fsp.writeFile(lockPath, '');
+  const old = new Date(Date.now() - 5000);
+  await fsp.utimes(lockPath, old, old);
+  const acquired = acquireFileLock(file, { timeoutMs: 500, staleMs: 1000 });
+  assert.equal(fs.existsSync(lockPath), true);
+  assert.equal(releaseFileLock(acquired), true);
+  assert.equal(fs.existsSync(lockPath), false);
+  assert.equal(fs.readdirSync(directory).some(name => name.includes('.lock.stale-')), false);
 });

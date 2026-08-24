@@ -13,6 +13,7 @@ export const INSTANCE_LOCK_LEASE_MS = 20 * 60 * 1000;
 export const INSTANCE_LOCK_LEASE_MARGIN_MS = 60 * 1000;
 export const INSTANCE_LOCK_HEARTBEAT_MS = 30000;
 export const INSTANCE_LOCK_ACQUIRE_TIMEOUT_MS = 10000;
+export const INSTANCE_LOCK_INITIALIZATION_GRACE_MS = 5000;
 export const MAX_INSTANCE_LOCK_BYTES = 64 * 1024;
 
 let cache = null;
@@ -54,6 +55,15 @@ function invalidDocument(message) {
   const error = new Error(`DevMate durable state is invalid: ${message}`);
   error.code = 'invalid_state_document';
   return error;
+}
+
+function corruptDocument(error) {
+  const wrapped = new Error(`DevMate durable state could not be read safely and was preserved for recovery: ${String(error?.message || error)}`);
+  wrapped.code = 'durable_state_corrupt';
+  wrapped.statePath = RUNTIME_STATE_PATH || null;
+  wrapped.causeCode = error?.code || null;
+  wrapped.cause = error;
+  return wrapped;
 }
 
 function normalizeDocument(value) {
@@ -124,15 +134,20 @@ function validDurableFile(file) {
   return durableFileCompatibility(file) === 'current';
 }
 
+function cleanupCompatibleReplacementCandidates(candidates, except = '') {
+  for (const candidate of candidates) {
+    if (candidate.file === except || durableFileCompatibility(candidate.file) === 'unsupported') continue;
+    try { fs.rmSync(candidate.file, { force: true }); } catch {}
+  }
+}
+
 export function recoverDurableStateReplacement() {
   if (!RUNTIME_STATE_PATH || !STATE_ROOT || !fs.existsSync(STATE_ROOT)) return null;
   const candidates = replacementCandidates();
   if (fs.existsSync(RUNTIME_STATE_PATH)) {
     const compatibility = durableFileCompatibility(RUNTIME_STATE_PATH);
     if (compatibility === 'current') {
-      for (const candidate of candidates) {
-        try { fs.rmSync(candidate.file, { force: true }); } catch {}
-      }
+      cleanupCompatibleReplacementCandidates(candidates);
       return null;
     }
     if (compatibility === 'unsupported') return null;
@@ -146,10 +161,7 @@ export function recoverDurableStateReplacement() {
   fs.renameSync(candidate.file, RUNTIME_STATE_PATH);
   try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
   fsyncDirectory(STATE_ROOT);
-  for (const stale of candidates) {
-    if (stale.file === candidate.file) continue;
-    try { fs.rmSync(stale.file, { force: true }); } catch {}
-  }
+  cleanupCompatibleReplacementCandidates(candidates, candidate.file);
   return candidate.file;
 }
 
@@ -162,7 +174,8 @@ function readDocument() {
   }
   try {
     const stat = fs.statSync(RUNTIME_STATE_PATH, { throwIfNoEntry: false });
-    if (stat?.size > MAX_DURABLE_STATE_BYTES) {
+    if (!stat?.isFile()) throw invalidDocument('runtime-state path must be a regular file');
+    if (stat.size > MAX_DURABLE_STATE_BYTES) {
       const error = new Error(`DevMate durable state exceeds the ${MAX_DURABLE_STATE_BYTES} byte limit (${stat.size} bytes)`);
       error.code = 'durable_state_too_large';
       throw error;
@@ -170,12 +183,10 @@ function readDocument() {
     cache = normalizeDocument(JSON.parse(fs.readFileSync(RUNTIME_STATE_PATH, 'utf8').replace(/^\uFEFF/, '')));
     return cache;
   } catch (error) {
-    if (['unsupported_state_version', 'durable_state_too_large'].includes(error?.code)) throw error;
-    const quarantine = `${RUNTIME_STATE_PATH}.corrupt-${Date.now()}`;
-    try { fs.renameSync(RUNTIME_STATE_PATH, quarantine); } catch {}
-    cache = emptyDocument();
-    cache.recovery = { quarantinedPath: quarantine, error: String(error?.message || error) };
-    return cache;
+    if (['unsupported_state_version', 'invalid_state_version', 'invalid_state_document', 'durable_state_too_large'].includes(error?.code)) {
+      throw error;
+    }
+    throw corruptDocument(error);
   }
 }
 
@@ -289,16 +300,25 @@ function processAlive(pid) {
   }
 }
 
-export function readGatewayInstanceLock() {
-  try {
-    const stat = fs.statSync(INSTANCE_LOCK_PATH, { throwIfNoEntry: false });
-    if (!stat?.isFile() || stat.size > MAX_INSTANCE_LOCK_BYTES) return null;
-    const value = JSON.parse(fs.readFileSync(INSTANCE_LOCK_PATH, 'utf8').replace(/^\uFEFF/, ''));
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    return { ...value, mtimeMs: stat.mtimeMs };
-  } catch {
-    return null;
+function readGatewayInstanceLockState() {
+  const stat = fs.statSync(INSTANCE_LOCK_PATH, { throwIfNoEntry: false });
+  if (!stat) return { exists: false, lock: null, stat: null, valid: false };
+  if (!stat.isFile() || stat.size > MAX_INSTANCE_LOCK_BYTES) {
+    return { exists: true, lock: null, stat, valid: false };
   }
+  try {
+    const value = JSON.parse(fs.readFileSync(INSTANCE_LOCK_PATH, 'utf8').replace(/^\uFEFF/, ''));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { exists: true, lock: null, stat, valid: false };
+    }
+    return { exists: true, lock: { ...value, mtimeMs: stat.mtimeMs }, stat, valid: true };
+  } catch {
+    return { exists: true, lock: null, stat, valid: false };
+  }
+}
+
+export function readGatewayInstanceLock() {
+  return readGatewayInstanceLockState().lock;
 }
 
 function lockActivityMs(lock) {
@@ -320,6 +340,17 @@ export function gatewayInstanceLockStale(lock, {
   const effectiveLease = Math.max(5000, Number(lock.leaseMs) || Number(leaseMs) || INSTANCE_LOCK_LEASE_MS);
   const activity = lockActivityMs(lock);
   return !activity || at - activity >= effectiveLease;
+}
+
+function gatewayInstanceLockRecoverable(state, {
+  at = Date.now(),
+  leaseMs = INSTANCE_LOCK_LEASE_MS,
+  initializationGraceMs = INSTANCE_LOCK_INITIALIZATION_GRACE_MS
+} = {}) {
+  if (!state?.exists) return true;
+  if (state.valid) return gatewayInstanceLockStale(state.lock, { at, leaseMs });
+  const age = at - Number(state.stat?.mtimeMs || 0);
+  return Number.isFinite(age) && age >= Math.max(1000, Number(initializationGraceMs) || INSTANCE_LOCK_INITIALIZATION_GRACE_MS);
 }
 
 function quarantineGatewayInstanceLock() {
@@ -387,6 +418,22 @@ export function configuredGatewayInstanceLeaseMs(config, requestedLeaseMs = null
   );
 }
 
+function gatewayInstanceLockConflict(current) {
+  const owner = current?.runtimeOwnerId || `pid-${current?.pid || 'initializing'}`;
+  const conflict = new Error(`Another DevMate gateway is already using this state directory (owner=${owner}, instanceId=${current?.instanceId || 'unknown'})`);
+  conflict.code = 'gateway_instance_lock_timeout';
+  conflict.currentLock = current ? {
+    pid: current.pid || null,
+    threadId: current.threadId ?? null,
+    runtimeOwnerId: current.runtimeOwnerId || null,
+    instanceId: current.instanceId || null,
+    acquiredAt: current.acquiredAt || null,
+    heartbeatAt: current.mtimeMs ? new Date(current.mtimeMs).toISOString() : current.heartbeatAt || null,
+    leaseMs: current.leaseMs || null
+  } : null;
+  return conflict;
+}
+
 export function acquireGatewayInstanceLock({
   timeoutMs = INSTANCE_LOCK_ACQUIRE_TIMEOUT_MS,
   leaseMs = null
@@ -440,29 +487,17 @@ export function acquireGatewayInstanceLock({
       return { ...payload };
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
-      const current = readGatewayInstanceLock();
-      if (gatewayInstanceLockStale(current, { leaseMs: payload.leaseMs })) {
+      const state = readGatewayInstanceLockState();
+      const current = state.lock;
+      if (!state.exists) continue;
+      if (gatewayInstanceLockRecoverable(state, { leaseMs: payload.leaseMs })) {
         if (quarantineGatewayInstanceLock()) continue;
       }
-      if (Date.now() >= deadline) {
-        const owner = current?.runtimeOwnerId || `pid-${current?.pid || 'unknown'}`;
-        const conflict = new Error(`Another DevMate gateway is already using this state directory (owner=${owner}, instanceId=${current?.instanceId || 'unknown'})`);
-        conflict.code = 'gateway_instance_lock_timeout';
-        conflict.currentLock = current ? {
-          pid: current.pid || null,
-          threadId: current.threadId ?? null,
-          runtimeOwnerId: current.runtimeOwnerId || null,
-          instanceId: current.instanceId || null,
-          acquiredAt: current.acquiredAt || null,
-          heartbeatAt: current.mtimeMs ? new Date(current.mtimeMs).toISOString() : current.heartbeatAt || null,
-          leaseMs: current.leaseMs || null
-        } : null;
-        throw conflict;
-      }
+      if (Date.now() >= deadline) throw gatewayInstanceLockConflict(current);
       sleepSync(100);
     }
   }
-  throw new Error('Could not acquire the DevMate gateway instance lock');
+  throw gatewayInstanceLockConflict(readGatewayInstanceLock());
 }
 
 export function releaseGatewayInstanceLock() {
@@ -519,10 +554,14 @@ export function resetDurableStateForTests() {
 
 export const __test = {
   atomicWrite,
+  cleanupCompatibleReplacementCandidates,
+  corruptDocument,
   durableFileCompatibility,
   emptyDocument,
   validDurableFile,
   fsyncDirectory,
+  gatewayInstanceLockConflict,
+  gatewayInstanceLockRecoverable,
   gatewayInstanceLockStale,
   invalidDocument,
   invalidVersion,
@@ -530,6 +569,7 @@ export const __test = {
   normalizeDocument,
   processAlive,
   quarantineGatewayInstanceLock,
+  readGatewayInstanceLockState,
   replacementCandidates,
   unsupportedVersion
 };

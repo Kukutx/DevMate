@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
-const { configureAuthentication } = require('./auth-config.cjs');
+const { configureAuthentication, DEFAULT_AUTHENTICATION_MODE } = require('./auth-config.cjs');
+const { enforcePolicyGenerations, policyGenerationBaseline } = require('./config-policy-invariants.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
@@ -181,15 +182,19 @@ function replacementCandidates(file) {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-function validateReplacement(file) {
+function replacementCompatibility(file) {
   try {
     const result = parseJsonObjectFile(file);
-    if (!result.exists) return false;
+    if (!result.exists) return 'invalid';
     assertSupportedConfigVersion(result.value, file);
-    return true;
-  } catch {
-    return false;
+    return 'current';
+  } catch (error) {
+    return error?.code === 'unsupported_config_version' ? 'unsupported' : 'invalid';
   }
+}
+
+function validateReplacement(file) {
+  return replacementCompatibility(file) === 'current';
 }
 
 function quarantineConfig(file, reason = 'corrupt') {
@@ -231,7 +236,7 @@ function archiveUnsupportedLegacyConfig(file) {
 
 function cleanupReplacementCandidates(candidates, except = '') {
   for (const candidate of candidates) {
-    if (candidate.file === except) continue;
+    if (candidate.file === except || replacementCompatibility(candidate.file) === 'unsupported') continue;
     try { fs.rmSync(candidate.file, { force: true }); } catch {}
   }
 }
@@ -268,6 +273,18 @@ function recoverConfigReplacement(file) {
     const recovered = parseJsonObjectFile(file).value;
     assertSupportedConfigVersion(recovered, file);
     return { recovered: true, source: replacement.file, quarantined, value: recovered };
+  }
+
+  const unsupported = candidates.filter(candidate => replacementCompatibility(candidate.file) === 'unsupported');
+  if (unsupported.length) {
+    const error = configError(
+      'DevMate config recovery found replacement data written by an incompatible schema version; preserved for a compatible DevMate version',
+      'config_recovery_incompatible',
+      file,
+      mainError
+    );
+    error.replacementCandidates = unsupported.map(candidate => candidate.file);
+    throw error;
   }
 
   if (!mainError && !main?.exists && candidates.length) {
@@ -349,6 +366,7 @@ function replaceConfig(file, value) {
     const current = readConfigState(target);
     if (current.exists !== source.exists || current.hash !== source.hash) throw configConflict(target);
     assertSupportedConfigVersion(value, target);
+    if (current.exists) enforcePolicyGenerations(policyGenerationBaseline(current.value), value, target);
     atomicWriteJson(target, value);
     return readConfigSnapshot(target);
   });
@@ -365,6 +383,7 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
       const beforeState = readConfigState(target);
       const current = attachConfigSnapshot(beforeState.value, target, beforeState);
       const beforeJson = JSON.stringify(current);
+      const policyBefore = beforeState.exists ? policyGenerationBaseline(current) : null;
       const changed = mutator(current);
       if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
       if (changed === false) return current;
@@ -378,6 +397,7 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
         if (attempt === attempts - 1) throw configConflict(target);
         continue;
       }
+      if (beforeState.exists) enforcePolicyGenerations(policyBefore, next, target);
       if (beforeState.exists && JSON.stringify(next) === beforeJson) return current;
       atomicWriteJson(target, next);
       return readConfigSnapshot(target);
@@ -429,8 +449,8 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
       maxConcurrentJobs: 2
     },
     maintenance: { ...DEFAULT_MAINTENANCE },
-    connection: { provider, publicUrl: '' },
-    auth: { mode: 'none' },
+    connection: { provider, publicUrl: '', policyGeneration: 0 },
+    auth: { mode: DEFAULT_AUTHENTICATION_MODE },
     permissions: {
       profile: 'fullAccess',
       readOnly: false,
@@ -567,6 +587,7 @@ module.exports = {
   replaceConfig,
   recoverConfigReplacement,
   replacementCandidates,
+  replacementCompatibility,
   updateConfig,
   validateReplacement,
   newerVersion,

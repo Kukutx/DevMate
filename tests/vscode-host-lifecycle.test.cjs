@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { readLifecycleIntent, setLifecycleIntent } = require('../shared/lifecycle-intent.cjs');
 const { VscodeHostLifecycle } = require('../vscode-host/lifecycle.js');
 
 function temporaryDirectory(prefix) {
@@ -24,7 +25,8 @@ function createHarness({ platform }) {
 
   const settings = {
     autoStart: false,
-    sharedStateDirectory: stateDirectory
+    sharedStateDirectory: stateDirectory,
+    authenticationMode: 'oauth'
   };
   const registered = [];
   const output = { appendLine() {}, show() {}, dispose() {} };
@@ -46,7 +48,12 @@ function createHarness({ platform }) {
     workspace: {
       workspaceFolders: [{ name: path.basename(workspaceRoot), index: 0, uri: { fsPath: workspaceRoot } }],
       workspaceFile: null,
-      getConfiguration() { return { get(name) { return settings[name]; } }; },
+      getConfiguration() {
+        return {
+          get(name) { return settings[name]; },
+          async update(name, value) { settings[name] = value; }
+        };
+      },
       onDidChangeConfiguration() { return disposable(); },
       onDidChangeWorkspaceFolders() { return disposable(); },
       async openTextDocument(file) { return { fileName: file }; }
@@ -60,7 +67,7 @@ function createHarness({ platform }) {
     secrets: { async get() { return ''; } }
   };
   const lifecycle = new VscodeHostLifecycle({ vscode, platformExtension: platform });
-  return { context, lifecycle, registered, stateDirectory };
+  return { context, lifecycle, registered, settings, stateDirectory, configFile: path.join(stateDirectory, 'config.json') };
 }
 
 test('rolls back platform state when VS Code host activation fails', async () => {
@@ -108,8 +115,57 @@ test('normal VS Code host shutdown preserves the shared DevMate session', async 
   };
   const harness = createHarness({ platform });
   await harness.lifecycle.activate(harness.context);
+  setLifecycleIntent(harness.configFile, 'running', { requestedBy: 'test', reason: 'session-active' });
+  const before = readLifecycleIntent(harness.configFile);
+
   await harness.lifecycle.deactivate();
+
+  const after = readLifecycleIntent(harness.configFile);
   assert.deepEqual(deactivationOptions, { preserveSession: true });
+  assert.equal(after.desiredState, 'running');
+  assert.equal(after.generation, before.generation);
+});
+
+test('host handoff never reconstructs running intent after an inner authoritative stop', async () => {
+  let configFile = '';
+  const platform = {
+    async activate() {},
+    async deactivate() {
+      setLifecycleIntent(configFile, 'stopped', { requestedBy: 'inner', reason: 'cleanup-during-handoff' });
+    }
+  };
+  const harness = createHarness({ platform });
+  configFile = harness.configFile;
+  await harness.lifecycle.activate(harness.context);
+  setLifecycleIntent(configFile, 'running', { requestedBy: 'test', reason: 'session-active' });
+  const before = readLifecycleIntent(configFile);
+
+  await harness.lifecycle.deactivate({ preserveSession: true });
+
+  const after = readLifecycleIntent(configFile);
+  assert.equal(before.desiredState, 'running');
+  assert.equal(after.desiredState, 'stopped');
+  assert.ok(after.generation > before.generation);
+  assert.equal(after.requestedBy, 'inner');
+  assert.equal(after.reason, 'cleanup-during-handoff');
+});
+
+test('host handoff never resurrects a session that was already explicitly stopped', async () => {
+  let configFile = '';
+  const platform = {
+    async activate() {},
+    async deactivate() {
+      setLifecycleIntent(configFile, 'stopped', { requestedBy: 'inner', reason: 'cleanup' });
+    }
+  };
+  const harness = createHarness({ platform });
+  configFile = harness.configFile;
+  await harness.lifecycle.activate(harness.context);
+  setLifecycleIntent(configFile, 'stopped', { requestedBy: 'user', reason: 'explicit-stop' });
+
+  await harness.lifecycle.deactivate({ preserveSession: true });
+
+  assert.equal(readLifecycleIntent(configFile).desiredState, 'stopped');
 });
 
 test('activation rollback still requests a full platform cleanup', async () => {

@@ -101,6 +101,10 @@ test('MCP Git can push repeatedly, surface failures, recover, and fail closed ac
 
   const port = await freePort();
   const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port, appVersion: configStore.DEFAULT_VERSION });
+  // This test exercises the trusted loopback MCP/Git path only. Keep the
+  // authentication boundary explicit instead of depending on the public-capable
+  // default, which intentionally requires separately initialized OAuth secrets.
+  config.auth.mode = 'none';
   config.permissions.confirmBeforePush = false;
   config.requestPolicy.requestTimeoutMs = 30000;
   configStore.atomicWriteJson(configPath, config);

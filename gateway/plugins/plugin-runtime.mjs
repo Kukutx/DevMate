@@ -6,9 +6,10 @@ import {
   resolveWorkspaceCwd, syncTrustedRootsIntoConfig, toolText, writeConfig
 } from '../local-shared.mjs';
 import { executeCommand } from '../command-process.mjs';
+import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from '../sensitive-path-policy.mjs';
 import { resolveWorkspace } from '../workspace-resolver.mjs';
 import {
-  listPersistentProcesses, readPersistentOutput, startPersistentProcess, stopPersistentProcess
+  listPersistentProcesses, readPersistentOutput, startPersistentExecutable, stopPersistentProcess
 } from '../persistent-processes.mjs';
 
 const DEFAULT_TIMEOUT_MS = 180000;
@@ -25,15 +26,29 @@ function isInside(root, candidate) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
+function assertPluginWorkspacePathSafe(root, candidate, label = 'Plugin workspace path') {
+  const rel = normalizeSlash(path.relative(root, candidate));
+  if (!rel || rel === '.') return rel;
+  if (isSensitiveWorkspacePath(rel)) {
+    const error = new Error(`${label} is protected by DevMate credential policy: ${rel}`);
+    error.code = 'sensitive_workspace_path';
+    error.reason = sensitiveWorkspacePathReason(rel);
+    throw error;
+  }
+  return rel;
+}
+
 export function resolveWorkspacePath(workspace, subpath = '.', { mustExist = false, directory = false } = {}) {
   const root = fs.realpathSync.native(workspace.root);
   const candidate = path.resolve(root, subpath || '.');
   if (!isInside(root, candidate)) throw new Error(`Path escapes workspace root: ${subpath}`);
+  assertPluginWorkspacePathSafe(root, candidate);
   let existing = candidate;
   while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);
   const existingReal = fs.realpathSync.native(existing);
   const resolved = path.resolve(existingReal, path.relative(existing, candidate));
   if (!isInside(root, resolved)) throw new Error(`Path escapes workspace root through symlink/reparse point: ${subpath}`);
+  assertPluginWorkspacePathSafe(root, resolved);
   const stat = fs.statSync(resolved, { throwIfNoEntry: false });
   if (mustExist && !stat) throw new Error(`Path does not exist: ${normalizeSlash(path.relative(root, resolved))}`);
   if (directory && stat && !stat.isDirectory()) throw new Error(`Path is not a directory: ${normalizeSlash(path.relative(root, resolved))}`);
@@ -72,12 +87,6 @@ export async function runExecutable(executable, args = [], options = {}) {
     stdoutTruncated: result.stdoutTruncated,
     stderrTruncated: result.stderrTruncated
   };
-}
-
-function quoteShellArg(value) {
-  const text = String(value);
-  if (process.platform === 'win32') return `"${text.replace(/"/g, '\\"')}"`;
-  return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
 function executableAllowed(manifest, executable) {
@@ -190,8 +199,7 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
       async start(executable, args, { workspaceId, cwd = '.', label = '', environment = {}, autoStopAfterMs } = {}) {
         assertCanMutate(readConfig(), `${manifest.name} persistent process execution`);
         if (!executableAllowed(manifest, executable)) throw new Error(`Executable is not allowed for ${manifest.id}: ${path.basename(String(executable || ''))}`);
-        const command = [quoteShellArg(executable), ...args.map(quoteShellArg)].join(' ');
-        return startPersistentProcess({ workspaceId, command, cwd, label, environment, autoStopAfterMs });
+        return startPersistentExecutable({ workspaceId, executable, args, cwd, label, environment, autoStopAfterMs });
       }
     },
     processes: {
@@ -202,4 +210,4 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
   };
 }
 
-export const __test = { executableAllowed, isInside, quoteShellArg, truncate };
+export const __test = { assertPluginWorkspacePathSafe, executableAllowed, isInside, truncate };

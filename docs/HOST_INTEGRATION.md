@@ -8,7 +8,7 @@ The user-facing contract is:
 Start
   → Gateway available
   → configured public connection available
-  → MCP server/discover succeeds with the selected authentication mode
+  → MCP server/discover succeeds with OAuth on public ingress
   → tools/list succeeds
   → gateway_status tools/call succeeds
   → Ready
@@ -24,7 +24,7 @@ Desktop hosts resolve one machine-wide state directory by default, regardless of
 VS Code ─────┐
              ├─ shared state directory
 Obsidian ────┘     ├─ config.json
-                   ├─ optional private OAuth state
+                   ├─ private OAuth state
                    ├─ one Gateway owner/attachment record
                    └─ one public-connection owner/attachment record
 ```
@@ -42,14 +42,14 @@ Both VS Code and Obsidian can own or attach to the same provider-native public c
     "publicUrl": ""
   },
   "auth": {
-    "mode": "none"
+    "mode": "oauth"
   }
 }
 ```
 
 Supported providers are `ngrok`, `cloudflare-quick`, `cloudflare-managed`, and `external`.
 
-Desktop public MCP defaults to no authentication. `auth.mode: "none"` works for both local and public ingress. OAuth is optional and is used only when explicitly selected. OAuth signing material and owner approval codes are host-private state, not public config fields.
+Desktop public MCP defaults to OAuth. `auth.mode: "none"` is an explicit trusted-loopback-only option and does not authorize remote requests. OAuth signing material and owner approval codes are host-private state, not public config fields.
 
 Access control, request policy, Runner configuration, plugins and maintenance remain independent capabilities. Selecting a connection provider must not silently alter member access, Host restrictions, Runner topology or permission policy.
 
@@ -64,7 +64,7 @@ Both desktop hosts implement the same complete Start semantics:
 3. Start or attach to the shared Gateway.
 4. Start or attach to the configured provider-native public connection.
 5. Obtain the active HTTPS origin from that connection generation.
-6. Use no token in default `none` mode, or obtain a short-lived OAuth owner access token from private state when OAuth is enabled.
+6. Obtain a short-lived OAuth owner access token from private state for public preflight.
 7. Send MCP `server/discover` pinned to protocol `2026-07-28`.
 8. Validate the advertised protocol and DevMate server identity.
 9. Call `tools/list`.
@@ -74,7 +74,7 @@ Both desktop hosts implement the same complete Start semantics:
 
 MCP 2026 verification is stateless. DevMate does not create, retain, or propagate an MCP transport session ID.
 
-No normal Start requires the user to manually start a tunnel, copy an internal Gateway URL, or run a separate verification command.
+Trusted loopback requests may use explicit `auth.mode: "none"`, but that local convenience is not the public desktop connection path. No normal Start requires the user to manually start a tunnel, copy an internal Gateway URL, or run a separate verification command.
 
 ## Generation-scoped Ready
 
@@ -108,15 +108,15 @@ If a dynamic provider publishes a different hostname, DevMate can notify the use
 
 `Stop` is ownership-aware. A desktop host releases resources it owns and detaches from resources owned by another host. It does not intentionally leave an owned orphan Gateway process.
 
-`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current complete generation passes MCP 2026 preflight using the selected authentication mode.
+`Restart` operates on the complete product lifecycle, not only the Gateway. It returns to Ready only after the current complete generation passes MCP 2026 preflight with OAuth on public ingress.
 
 ## Copy MCP URL
 
 `Copy MCP URL` never copies the internal loopback Gateway URL. It uses the active public connection and verifies the current complete generation before copying the `/mcp` endpoint.
 
-The copied URL contains no credential. In default no-auth mode ChatGPT connects directly. If OAuth is explicitly enabled, ChatGPT performs OAuth against the DevMate authorization server. Static owner/member Bearer tokens and credential query parameters are not supported.
+The copied URL contains no credential. Public ChatGPT connections authenticate with OAuth against the DevMate authorization server. `auth.mode: "none"` remains available only for trusted loopback MCP and cannot authorize a remote request. Static owner/member Bearer tokens and credential query parameters are not supported.
 
-## Provider and optional OAuth credentials
+## Provider and OAuth credentials
 
 Provider credentials are host-local secrets:
 
@@ -126,7 +126,7 @@ Provider credentials are host-local secrets:
 - Cloudflare Quick requires no tunnel credential.
 - External HTTPS ingress does not require DevMate to spawn a provider process.
 
-When OAuth is enabled, OAuth signing material and the owner approval code are stored in restrictive DevMate private state. Provider and OAuth secrets are not written into shared `config.json` or project files.
+OAuth signing material and the owner approval code are stored in restrictive DevMate private state. Provider and OAuth secrets are not written into shared `config.json` or project files.
 
 ## Obsidian host bridge
 
@@ -160,8 +160,8 @@ A provider configuration owned by another active desktop process is not silently
 1. One shared Gateway per state directory.
 2. One compatible provider-native public connection per state directory.
 3. Both VS Code and Obsidian may own or attach to those shared resources.
-4. Start is Gateway → public connection → MCP 2026 preflight using the selected authentication mode → Ready.
-5. Public Ready supports default no-auth and optional OAuth.
+4. Start is Gateway → public connection → MCP 2026 preflight with OAuth → Ready.
+5. Public Ready requires OAuth; no-auth is limited to trusted loopback access.
 6. MCP preflight is stateless and pinned to `2026-07-28`.
 7. Ready is complete-generation scoped, never URL-only or tunnel-only.
 8. Stop never destroys a resource owned by another host and never intentionally leaves a locally owned orphan process.

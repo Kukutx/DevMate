@@ -8,8 +8,8 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - A provider-native connection, reverse proxy, VPN, or other HTTPS ingress exposes the intended public MCP endpoint.
 - `/control/health` and `/control/metrics` remain local-control surfaces and must not be exposed as public MCP endpoints.
 - MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
-- `auth.mode: "none"` is valid for both loopback and public MCP and grants owner-level access without an access token.
-- Public MCP defaults to no authentication; OAuth is optional.
+- `auth.mode: "none"` is valid only for trusted loopback MCP and grants local owner access without an access token; it does not authorize remote requests.
+- Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
 - `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
 - Runner control requests have their own bounded body, rate and protocol-version requirements.
 
@@ -29,7 +29,7 @@ The Gateway, desktop preflight, packaged VSIX/Obsidian smoke tests, and external
 
 ## OAuth credentials and identities
 
-- Desktop public MCP defaults to no authentication. OAuth is optional and only used when explicitly enabled.
+- Desktop public MCP defaults to OAuth. `none` is an explicit loopback-only option and never authorizes remote MCP requests.
 - When OAuth is enabled, MCP accepts OAuth access tokens; copied static owner/member credentials remain unsupported.
 - OAuth signing material and the rotating owner approval code live under private DevMate state with restrictive permissions, not in `config.json`.
 - OAuth client identity uses Client ID Metadata Documents (CIMD). The retired dynamic client-registration endpoint is not exposed.
@@ -70,6 +70,18 @@ Never place OAuth, member login codes, Runner, provider, preview, or artifact-se
 - An approval is bound to requester, tool, workspace and exact argument set and is consumed according to current policy.
 - Member identities are denied recognized direct force/destructive Git and shell patterns by policy. Execute access still runs as the DevMate OS identity and is a trusted execution boundary, not a hostile-code sandbox.
 - Global administration, identity lifecycle, request/Runner policy and other elevated control-plane operations require the capability declared by central tool policy.
+
+## Optional Codex Collaboration boundary
+
+Codex Collaboration is disabled by default. Enabling it delegates work to a supervised Codex app-server against a DevMate-managed proposal snapshot rather than giving Codex a direct write path to the real workspace.
+
+- The snapshot is stored outside the real workspace and contains only allowlisted source/text paths. Credential-prone directories and dotfiles, real environment files, keys, databases, logs, binary artifacts, dependency caches and build outputs are omitted.
+- New protected or non-text files produced inside the proposal snapshot are reported as blocked changes and are not automatically applied.
+- The Codex runtime receives an allowlisted environment, runs with `networkAccess: false`, and is parent-supervised with bounded shutdown. These controls reduce exposure; they do not create an operating-system security boundary.
+- `strongOsReadIsolation` is false. Snapshot separation is a data-minimization and write-isolation boundary, **not** a VM/container sandbox for hostile code. Use a separate OS account, VM, container, or host when delegated code is untrusted.
+- `codex_proposal_status` returns the exact proposal digest. `codex_proposal_apply` requires that reviewed value as `expectedProposalDigest`; any proposal change invalidates the old review.
+- Applying a proposal uses normal DevMate workspace authorization, lease, conflict checks and crash-safe file mutations. Codex does not write directly from its runtime into the real workspace.
+- Apply state and snapshot recovery evidence are durable. Startup reconciles stale/orphan snapshot storage before file/apply recovery and fails closed rather than deleting required apply evidence when durable snapshot state is inconsistent or cleanup cannot be confirmed.
 
 ## Desktop public-generation boundary
 

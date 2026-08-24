@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import {
   readAuditEntries,
   readConfig
 } from './local-shared.mjs';
+import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from './sensitive-path-policy.mjs';
 import { normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
@@ -15,6 +17,7 @@ import { resolveWorkspace } from './workspace-resolver.mjs';
 const BACKUP_ROOT = CONFIG_PATH ? path.join(path.dirname(CONFIG_PATH), 'state', 'backups') : '';
 const ROLLBACK_ACTIONS = new Set(['write_file', 'create_file', 'apply_patch', 'delete_file', 'move_file', 'restore_backup']);
 const SESSION_ACTIONS = new Set(['work_session_start', 'work_session_finish', 'work_session_rollback']);
+const MAX_ROLLBACK_SCAN_ENTRIES = 20_000;
 
 function normalizeSlash(value) { return String(value || '').replace(/\\/g, '/'); }
 function isInside(root, target) {
@@ -22,16 +25,32 @@ function isInside(root, target) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
+function protectedPathError(rel, context = 'Rollback path') {
+  const error = new Error(`${context} is protected by DevMate credential policy: ${rel}`);
+  error.code = 'sensitive_workspace_path';
+  error.reason = sensitiveWorkspacePathReason(rel);
+  return error;
+}
+
+function assertSafeRollbackRel(rel, context = 'Rollback path') {
+  const normalized = normalizeSlash(String(rel || '').trim());
+  if (isSensitiveWorkspacePath(normalized)) throw protectedPathError(normalized, context);
+  return normalized;
+}
+
 function assertWorkspaceTarget(config, workspace, rel) {
   assertCanMutate(config, 'Work session rollback');
   if (!workspace || workspace.reference || workspace.mode === 'readonly') {
     throw new Error(`Workspace is readonly/reference: ${workspace?.id || 'unknown'}`);
   }
+  assertSafeRollbackRel(rel);
   const root = path.resolve(workspace.root);
   const target = path.resolve(root, String(rel || ''));
   if (!isInside(root, target) || target === root) throw new Error(`Rollback path escapes workspace root: ${rel}`);
   const rootReal = fs.realpathSync.native(root);
-  if (fs.existsSync(target)) {
+  const direct = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (direct?.isSymbolicLink()) throw new Error(`Rollback path is a symlink/reparse target: ${rel}`);
+  if (direct) {
     const targetReal = fs.realpathSync.native(target);
     if (!isInside(rootReal, targetReal)) throw new Error(`Rollback path escapes workspace root through symlink: ${rel}`);
     return target;
@@ -44,29 +63,72 @@ function assertWorkspaceTarget(config, workspace, rel) {
   return target;
 }
 
+function backupOriginalRelative(root, candidate) {
+  const relative = path.relative(root, candidate);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return '';
+  const parts = relative.split(path.sep).filter(Boolean);
+  return parts.length >= 2 ? normalizeSlash(parts.slice(1).join('/')) : '';
+}
+
 function assertBackupSource(backupPath) {
   if (!BACKUP_ROOT) throw new Error('DevMate backup root is unavailable');
   const root = path.resolve(BACKUP_ROOT);
   const candidate = path.resolve(String(backupPath || ''));
-  if (!isInside(root, candidate)) throw new Error('Backup path is outside DevMate backup root');
-  const stat = fs.statSync(candidate, { throwIfNoEntry: false });
+  if (!isInside(root, candidate) || candidate === root) throw new Error('Backup path is outside DevMate backup root');
+  const originalRel = backupOriginalRelative(root, candidate);
+  if (!originalRel) throw new Error('Backup path does not encode an original workspace-relative path');
+  assertSafeRollbackRel(originalRel, 'Backup source path');
+  const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
   if (!stat) return null;
+  if (stat.isSymbolicLink()) throw new Error('Backup source cannot be a symlink/reparse point');
+  const rootStat = fs.statSync(root, { throwIfNoEntry: false });
+  if (!rootStat?.isDirectory()) throw new Error('DevMate backup root is unavailable');
   const rootReal = fs.realpathSync.native(root);
   const sourceReal = fs.realpathSync.native(candidate);
   if (!isInside(rootReal, sourceReal)) throw new Error('Backup path escapes DevMate backup root');
-  return { path: sourceReal, stat };
+  return { path: sourceReal, stat, originalRel };
+}
+
+async function assertTreeSafe(root, destinationRel) {
+  const rootStat = await fsp.lstat(root).catch(() => null);
+  if (!rootStat) return;
+  if (rootStat.isSymbolicLink()) throw new Error('Rollback tree root cannot be a symlink/reparse point');
+  if (!rootStat.isDirectory()) return;
+  let count = 0;
+  async function scan(directory, nested = '') {
+    const entries = await fsp.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      count += 1;
+      if (count > MAX_ROLLBACK_SCAN_ENTRIES) {
+        const error = new Error(`Rollback tree safety scan exceeds ${MAX_ROLLBACK_SCAN_ENTRIES} entries`);
+        error.code = 'work_session_rollback_scan_limit';
+        throw error;
+      }
+      const childNested = nested ? `${nested}/${entry.name}` : entry.name;
+      const intended = normalizeSlash(path.posix.join(normalizeSlash(destinationRel), childNested));
+      if (isSensitiveWorkspacePath(intended)) throw protectedPathError(intended, 'Rollback tree entry');
+      if (!entry.isDirectory()) continue;
+      const child = path.join(directory, entry.name);
+      const stat = await fsp.lstat(child).catch(() => null);
+      if (!stat || stat.isSymbolicLink()) continue;
+      await scan(child, childNested);
+    }
+  }
+  await scan(root);
 }
 
 async function backupCurrent(target, rel) {
-  const stat = await fsp.stat(target).catch(() => null);
+  const stat = await fsp.lstat(target).catch(() => null);
   if (!stat) return null;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  if (stat.isSymbolicLink()) throw new Error(`Rollback backup target is a symlink/reparse point: ${rel}`);
+  await assertTreeSafe(target, rel);
+  const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   const safeRel = normalizeSlash(rel).split('/').filter(part => part && part !== '.' && part !== '..')
     .map(part => part.replace(/[<>:"|?*\x00-\x1F]/g, '_')).join('/') || 'workspace-root';
   const destination = path.join(BACKUP_ROOT, stamp, safeRel);
-  await fsp.mkdir(path.dirname(destination), { recursive: true });
-  if (stat.isDirectory()) await fsp.cp(target, destination, { recursive: true, force: false });
-  else await fsp.copyFile(target, destination);
+  await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+  if (stat.isDirectory()) await fsp.cp(target, destination, { recursive: true, force: false, errorOnExist: true, dereference: false });
+  else await fsp.copyFile(target, destination, fs.constants.COPYFILE_EXCL);
   return destination;
 }
 
@@ -74,15 +136,19 @@ async function restoreBackup(config, workspace, backupPath, rel, dryRun) {
   if (!backupPath || String(backupPath).startsWith('backup_failed:')) {
     return { path: rel, backupPath, restored: false, reason: 'missing backup' };
   }
+  const target = assertWorkspaceTarget(config, workspace, rel);
   const source = assertBackupSource(backupPath);
   if (!source) return { path: rel, backupPath, restored: false, reason: 'backup not found' };
-  const target = assertWorkspaceTarget(config, workspace, rel);
+  await assertTreeSafe(source.path, rel);
   if (dryRun) return { path: rel, backupPath: source.path, restored: false, dryRun: true };
   const currentBackup = fs.existsSync(target) ? await backupCurrent(target, rel) : null;
   await fsp.mkdir(path.dirname(target), { recursive: true });
-  if (fs.existsSync(target)) await fsp.rm(target, { recursive: true, force: true });
-  if (source.stat.isDirectory()) await fsp.cp(source.path, target, { recursive: true, force: false });
-  else await fsp.copyFile(source.path, target);
+  if (fs.existsSync(target)) {
+    await assertTreeSafe(target, rel);
+    await fsp.rm(target, { recursive: true, force: true });
+  }
+  if (source.stat.isDirectory()) await fsp.cp(source.path, target, { recursive: true, force: false, errorOnExist: true, dereference: false });
+  else await fsp.copyFile(source.path, target, fs.constants.COPYFILE_EXCL);
   return { path: rel, backupPath: source.path, currentBackup, restored: true };
 }
 
@@ -90,6 +156,7 @@ async function removePath(config, workspace, rel, dryRun) {
   const target = assertWorkspaceTarget(config, workspace, rel);
   if (dryRun) return { path: rel, removed: false, dryRun: true };
   if (!fs.existsSync(target)) return { path: rel, removed: false, reason: 'target already absent' };
+  await assertTreeSafe(target, rel);
   const currentBackup = await backupCurrent(target, rel);
   await fsp.rm(target, { recursive: true, force: true });
   return { path: rel, currentBackup, removed: true };
@@ -160,7 +227,7 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
   for (const entry of entries.slice().reverse()) {
     if (SESSION_ACTIONS.has(entry.action)) continue;
     try { results.push({ entry, rollback: await rollbackEntry(config, entry, dryRun) }); }
-    catch (error) { results.push({ entry, rollback: { failed: true, error: error.message } }); }
+    catch (error) { results.push({ entry, rollback: { failed: true, error: error.message, code: error.code || null } }); }
   }
   await audit('work_session_rollback', {
     principalId: principal.id,
@@ -174,8 +241,12 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
 }
 
 export const __test = {
+  MAX_ROLLBACK_SCAN_ENTRIES,
   assertBackupSource,
+  assertSafeRollbackRel,
+  assertTreeSafe,
   assertWorkspaceTarget,
+  backupOriginalRelative,
   isInside,
   rollbackEntry
 };

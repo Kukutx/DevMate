@@ -146,6 +146,35 @@ test('plans exports and mixed automation with bridge and capability requirements
   assert.deepEqual(suggestedCapabilitiesForPreset({ platform: 'iOS' }), ['core', 'godot', 'macos-arm64', 'xcode']);
 });
 
+test('automation planning fails closed for protected output destinations', async t => {
+  const root = await createProject();
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const context = workspaceContext(root);
+  await installQaBridge(context, {});
+  const manifestPath = path.join(root, '.devmate', 'automation.json');
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, 'utf8'));
+  manifest.plugins['devmate.godot'].exports = [{ preset: 'Windows Desktop', outputPath: '.devmate/state.json' }];
+  manifest.plugins['devmate.godot'].scenarios = [{
+    id: 'native-protected',
+    kind: 'native',
+    reportPath: '.npmrc',
+    assertions: [{ statePath: 'runtime.bridge_ready', operator: 'truthy' }]
+  }, {
+    id: 'web-protected',
+    kind: 'web',
+    preset: 'Web',
+    outputPath: '.aws/credentials',
+    screenshotPath: 'secrets/screen.png',
+    reportPath: '.devmate/private.json',
+    actions: [{ type: 'expect_visible', selector: 'canvas' }]
+  }];
+  await fsp.writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+  const plan = await planGodotAutomation(context, {});
+  assert.equal(plan.ok, false);
+  assert.equal(plan.blockers.filter(item => item.code === 'unsafe_automation_path').length >= 5, true);
+  assert.equal(plan.items.every(item => item.blockers.length > 0), true);
+});
+
 test('escapes report HTML and renders actionable status', () => {
   assert.equal(reportTest.escapeHtml('<script>'), '&lt;script&gt;');
   const html = reportTest.renderReport({

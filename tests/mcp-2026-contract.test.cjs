@@ -51,7 +51,7 @@ test('OAuth is CIMD-only and resource/issuer bound', () => {
   assert.match(tokens, /payload\.aud !== expectedAudience \|\| payload\.iss !== expectedIssuer/);
 });
 
-test('default public no-auth owner access coexists with optional OAuth member identity and current RBAC', () => {
+test('trusted loopback owner access coexists with required public OAuth member identity and current RBAC', () => {
   const team = source('gateway/team-access.mjs');
   const guard = source('gateway/request-guard.mjs');
   assert.match(team, /dmc_/);
@@ -59,8 +59,9 @@ test('default public no-auth owner access coexists with optional OAuth member id
   assert.match(team, /source:\s*['"]oauth-member['"]/);
   assert.match(team, /authVersion/);
   assert.doesNotMatch(team, /dmt_|team-token|tokenVersion|parseTeamToken|verifyAccessToken/);
-  assert.match(guard, /if \(isLocalRequest\(req\) \|\| config\.auth\?\.mode === ['"]none['"]\) return fallbackLocalPrincipal\(\)/);
-  assert.match(guard, /config\.auth\?\.mode !== ['"]oauth['"]/);
+  assert.match(guard, /if \(isLocalRequest\(req\)\) return fallbackLocalPrincipal\(\)/);
+  assert.match(guard, /if \(config\.auth\?\.mode !== ['"]oauth['"]\) return null/);
+  assert.doesNotMatch(guard, /isLocalRequest\(req\)\s*\|\|\s*config\.auth\?\.mode\s*===\s*['"]none['"]/);
   assert.match(guard, /principalFromOAuthClaims\(access, config\)/);
 });
 
@@ -74,7 +75,8 @@ test('OAuth secrets and refresh replay state use dedicated boundaries', () => {
   assert.match(state, /reuse_detected/);
   assert.match(state, /authorizationCodes/);
   assert.match(state, /families/);
-  assert.match(runtime, /readOAuthSecrets\(process\.env\.DEVMATE_CONFIG\)/);
+  assert.match(runtime, /const CONFIG_PATH = String\(process\.env\.DEVMATE_CONFIG/);
+  assert.match(runtime, /oauthSecrets\.readOAuthSecrets\(CONFIG_PATH\)/);
 });
 
 test('Capability Host remains the only MCP prototype interception layer', () => {

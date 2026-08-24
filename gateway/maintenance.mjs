@@ -2,11 +2,24 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import maintenanceConfig from '../shared/maintenance-config.cjs';
+import recoveryArtifactStore from '../shared/recovery-artifacts.cjs';
 import { withAuditLogLock } from './audit-log-coordinator.mjs';
 import { withStartupStage } from './startup-progress.mjs';
 
 const { DEFAULT_MAINTENANCE, MAINTENANCE_LIMITS } = maintenanceConfig;
+const {
+  DEFAULT_MAX_RECOVERY_BYTES,
+  DEFAULT_MAX_RECOVERY_FILES,
+  DEFAULT_RECOVERY_RETENTION_DAYS,
+  pruneRecoveryArtifacts,
+  recoveryArtifacts
+} = recoveryArtifactStore;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const STATE_RECOVERY_MATCHERS = Object.freeze([
+  /^runtime-state\.json\.corrupt-/,
+  /^oauth-secrets\.json\.corrupt-/,
+  /^tunnel\.runtime\.json\.(?:corrupt|invalid-json|invalid-record|oversized)-/
+]);
 
 export { DEFAULT_MAINTENANCE };
 
@@ -34,6 +47,69 @@ function isInside(root, target) {
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 }
 
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function inferredStateRoot(paths = {}) {
+  if (String(paths.stateRoot || '').trim()) return path.resolve(String(paths.stateRoot));
+  if (String(paths.backupRoot || '').trim()) return path.dirname(path.resolve(String(paths.backupRoot)));
+  if (String(paths.auditLog || '').trim()) return path.dirname(path.resolve(String(paths.auditLog)));
+  const configured = String(paths.configFile || process.env.DEVMATE_CONFIG || '').trim();
+  if (configured) return path.join(path.dirname(path.resolve(configured)), 'state');
+  throw new Error('Maintenance stateRoot cannot be inferred');
+}
+
+function recoveryLocations(paths = {}) {
+  const stateRoot = inferredStateRoot(paths);
+  if (stateRoot === path.parse(stateRoot).root) throw new Error('Maintenance stateRoot cannot be a filesystem root');
+  const configDirectory = path.dirname(stateRoot);
+  const configuredFile = String(paths.configFile || process.env.DEVMATE_CONFIG || path.join(configDirectory, 'config.json'));
+  const configFile = path.resolve(configuredFile);
+  if (path.dirname(configFile) !== configDirectory) {
+    throw new Error('Maintenance configFile must share the parent directory of stateRoot');
+  }
+  const configBase = escapeRegex(path.basename(configFile));
+  return {
+    stateRoot,
+    configDirectory,
+    configFile,
+    configMatchers: [
+      new RegExp(`^${configBase}\\.(?:corrupt|replaced)-`),
+      new RegExp(`^${configBase}\\.legacy-v\\d+-.*\\.json$`)
+    ]
+  };
+}
+
+export function recoveryStateSummary(paths = {}) {
+  const locations = recoveryLocations(paths);
+  const config = recoveryArtifacts(locations.configDirectory, locations.configMatchers);
+  const state = recoveryArtifacts(locations.stateRoot, STATE_RECOVERY_MATCHERS);
+  const configBytes = config.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const stateBytes = state.reduce((sum, item) => sum + item.sizeBytes, 0);
+  return {
+    configFiles: config.length,
+    configBytes,
+    stateFiles: state.length,
+    stateBytes,
+    totalFiles: config.length + state.length,
+    totalBytes: configBytes + stateBytes
+  };
+}
+
+export function pruneRecoveryState(paths = {}, nowMs = Date.now()) {
+  const locations = recoveryLocations(paths);
+  const options = {
+    retentionDays: DEFAULT_RECOVERY_RETENTION_DAYS,
+    maxFiles: DEFAULT_MAX_RECOVERY_FILES,
+    maxBytes: DEFAULT_MAX_RECOVERY_BYTES
+  };
+  return {
+    config: pruneRecoveryArtifacts(locations.configDirectory, { ...options, matchers: locations.configMatchers }, nowMs),
+    state: pruneRecoveryArtifacts(locations.stateRoot, { ...options, matchers: STATE_RECOVERY_MATCHERS }, nowMs)
+  };
+}
+
 async function statOrNull(file) {
   try { return await fsp.stat(file); } catch { return null; }
 }
@@ -46,7 +122,6 @@ async function directoryStats(root) {
   const st = await lstatOrNull(root);
   if (!st) return { bytes: 0, files: 0 };
   if (!st.isDirectory()) return { bytes: st.size, files: 1 };
-
   let bytes = st.size;
   let files = 0;
   let entries = [];
@@ -57,11 +132,11 @@ async function directoryStats(root) {
       const nested = await directoryStats(child);
       bytes += nested.bytes;
       files += nested.files;
-      continue;
+    } else {
+      const childStat = await lstatOrNull(child);
+      bytes += childStat?.size || 0;
+      files += 1;
     }
-    const childStat = await lstatOrNull(child);
-    bytes += childStat?.size || 0;
-    files += 1;
   }
   return { bytes, files };
 }
@@ -85,24 +160,28 @@ async function listBackupSets(backupRoot) {
     const st = await statOrNull(full);
     if (!st) continue;
     const stats = await directoryStats(full);
-    sets.push({
-      name: entry.name,
-      path: full,
-      mtimeMs: st.mtimeMs,
-      sizeBytes: stats.bytes,
-      fileCount: stats.files
-    });
+    sets.push({ name: entry.name, path: full, mtimeMs: st.mtimeMs, sizeBytes: stats.bytes, fileCount: stats.files });
   }
   sets.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name));
   return sets;
 }
 
-export async function stateSummary(paths) {
-  const backupSets = await listBackupSets(paths.backupRoot);
-  const auditStat = await statOrNull(paths.auditLog);
+export async function stateSummary(paths = {}) {
+  const locations = recoveryLocations(paths);
+  const backupRoot = path.resolve(String(paths.backupRoot || path.join(locations.stateRoot, 'backups')));
+  const auditLog = path.resolve(String(paths.auditLog || path.join(locations.stateRoot, 'audit.jsonl')));
+  if (!isInside(locations.stateRoot, backupRoot) || backupRoot === locations.stateRoot) {
+    throw new Error('Maintenance backupRoot must be inside stateRoot');
+  }
+  if (!isInside(locations.stateRoot, auditLog) || auditLog === locations.stateRoot) {
+    throw new Error('Maintenance auditLog must be inside stateRoot');
+  }
+  const backupSets = await listBackupSets(backupRoot);
+  const auditStat = await statOrNull(auditLog);
+  const recovery = recoveryStateSummary({ ...paths, stateRoot: locations.stateRoot, configFile: locations.configFile });
   let auditEntries = 0;
   try {
-    const text = await fsp.readFile(paths.auditLog, 'utf8');
+    const text = await fsp.readFile(auditLog, 'utf8');
     auditEntries = text.split(/\r?\n/).filter(Boolean).length;
   } catch {}
   return {
@@ -110,7 +189,9 @@ export async function stateSummary(paths) {
     backupFiles: backupSets.reduce((sum, item) => sum + item.fileCount, 0),
     backupBytes: backupSets.reduce((sum, item) => sum + item.sizeBytes, 0),
     auditEntries,
-    auditBytes: auditStat?.size || 0
+    auditBytes: auditStat?.size || 0,
+    recoveryFiles: recovery.totalFiles,
+    recoveryBytes: recovery.totalBytes
   };
 }
 
@@ -123,7 +204,6 @@ export async function pruneBackups(backupRoot, options = {}, nowMs = Date.now())
   const cutoff = nowMs - opts.backupRetentionDays * DAY_MS;
   const deleted = [];
   const remaining = [];
-
   for (const item of sets) {
     if (item.mtimeMs < cutoff) {
       await safeRemoveChild(backupRoot, item.path);
@@ -132,7 +212,6 @@ export async function pruneBackups(backupRoot, options = {}, nowMs = Date.now())
       remaining.push(item);
     }
   }
-
   let total = remaining.reduce((sum, item) => sum + item.sizeBytes, 0);
   let firstKept = 0;
   while (total > opts.maxBackupBytes && firstKept < remaining.length) {
@@ -141,14 +220,7 @@ export async function pruneBackups(backupRoot, options = {}, nowMs = Date.now())
     total -= item.sizeBytes;
     deleted.push({ path: item.path, reason: 'size', sizeBytes: item.sizeBytes });
   }
-
-  return {
-    beforeSets,
-    afterSets: remaining.length - firstKept,
-    beforeBytes,
-    afterBytes: total,
-    deleted
-  };
+  return { beforeSets, afterSets: remaining.length - firstKept, beforeBytes, afterBytes: total, deleted };
 }
 
 async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now()) {
@@ -166,7 +238,6 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
       return true;
     }
   });
-
   let totalBytes = 0;
   let firstKept = kept.length;
   while (firstKept > 0) {
@@ -176,7 +247,6 @@ async function pruneAuditLogUnlocked(auditLog, options = {}, nowMs = Date.now())
     firstKept -= 1;
   }
   if (firstKept) kept = kept.slice(firstKept);
-
   const next = kept.length ? `${kept.join('\n')}\n` : '';
   const changed = next !== original;
   if (changed) {
@@ -207,11 +277,19 @@ export function pruneAuditLog(auditLog, options = {}, nowMs = Date.now()) {
 
 export function pruneState(paths, options = {}, nowMs = Date.now()) {
   return withStartupStage('maintenance', async () => {
-    await fsp.mkdir(paths.stateRoot, { recursive: true });
-    await fsp.mkdir(paths.backupRoot, { recursive: true });
+    const locations = recoveryLocations(paths);
+    const backupRoot = path.resolve(String(paths.backupRoot || path.join(locations.stateRoot, 'backups')));
+    const auditLog = path.resolve(String(paths.auditLog || path.join(locations.stateRoot, 'audit.jsonl')));
+    if (!isInside(locations.stateRoot, backupRoot) || backupRoot === locations.stateRoot) throw new Error('Maintenance backupRoot must be inside stateRoot');
+    if (!isInside(locations.stateRoot, auditLog) || auditLog === locations.stateRoot) throw new Error('Maintenance auditLog must be inside stateRoot');
+    await fsp.mkdir(locations.stateRoot, { recursive: true });
+    await fsp.mkdir(backupRoot, { recursive: true });
     const opts = maintenanceOptions(options);
-    const backups = await pruneBackups(paths.backupRoot, opts, nowMs);
-    const audit = await pruneAuditLog(paths.auditLog, opts, nowMs);
-    return { options: opts, backups, audit };
+    const recovery = pruneRecoveryState({ ...paths, stateRoot: locations.stateRoot, configFile: locations.configFile }, nowMs);
+    const backups = await pruneBackups(backupRoot, opts, nowMs);
+    const audit = await pruneAuditLog(auditLog, opts, nowMs);
+    return { options: opts, recovery, backups, audit };
   });
 }
+
+export const __test = { inferredStateRoot, recoveryLocations };

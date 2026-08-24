@@ -4,6 +4,7 @@ import {
   permissionProfile, processLimits, publicTrustedRoot, syncTrustedRootsIntoConfig,
   toolText, writeConfig
 } from './local-shared.mjs';
+import { assertSafeWorkspaceRoot } from './sensitive-path-policy.mjs';
 import {
   DEFAULT_READ_CHARS, MAX_READ_CHARS, listPersistentProcesses, processPublic, processRecord,
   readPersistentOutput, runningProcesses, sendPersistentInput, shutdownPersistentProcesses,
@@ -73,13 +74,15 @@ export function registerLocalTools(server) {
 
   registerTool(server, 'add_trusted_root', {
     title: 'Add trusted writable root',
-    description: 'Grant DevMate writable workspace access to one existing absolute local directory. Requires fullAccess and refuses filesystem roots.',
+    description: 'Grant DevMate writable workspace access to one existing absolute local directory. Requires fullAccess and refuses filesystem or protected credential/control-plane roots.',
     inputSchema: { path: z.string().min(1), name: z.string().optional() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true }
   }, async ({ path: rootPath, name = '' }) => {
     const config = syncTrustedRootsIntoConfig();
     assertFullAccess(config, 'Adding a trusted writable root');
+    assertSafeWorkspaceRoot(rootPath, 'Trusted root');
     const root = normalizeTrustedRoot(rootPath, name);
+    assertSafeWorkspaceRoot(root.root, 'Trusted real root');
     const normalWorkspace = (config.workspaces || []).find(item => !item.trusted && pathKey(item.root || '') === pathKey(root.root));
     if (normalWorkspace) {
       return toolText({ added: false, reason: 'already configured as a workspace', root: publicTrustedRoot(root) });

@@ -58,7 +58,7 @@ test('explicit and automatic verification persist the same complete-generation c
   const shared = source('host/shared-public-mcp-verification.js');
   assert.match(extension, /verifySharedPublicMcp\(\{/);
   assert.match(verifier, /verifySharedPublicMcp\(\{/);
-  assert.match(shared, /successfulVerificationPatch\(test, publicUrl, stamp, record, currentGatewayLock\(\)\)/);
+  assert.match(shared, /successfulVerificationPatch\(\s*test,\s*publicUrl,\s*stamp,\s*record,\s*currentGatewayLock\(\),\s*expectedAuthPolicy\.mode,\s*expectedAuthPolicy\.generation,\s*expectedConnectionPolicy\.generation\s*\)/);
   assert.match(shared, /verifiedForCurrentRecord\(config, record, currentGatewayLock\(\)\)/);
   assert.match(shared, /VERIFICATION_LOCK_NAME = 'public-mcp\.verify\.lock'/);
 });

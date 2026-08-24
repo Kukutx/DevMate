@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { safeGodotBaselinePath, safeGodotRelativePath } from './godot-path-policy.mjs';
 import { summarizePerformance } from './godot-performance.mjs';
 import { resolveProject } from './godot-project.mjs';
 
@@ -25,9 +26,7 @@ function safeId(value = 'default') {
 }
 
 function safeRelative(value, fallback) {
-  const relative = String(value || fallback).trim().replace(/\\/g, '/');
-  if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error('Godot baseline path must stay inside the project workspace');
-  return relative;
+  return safeGodotRelativePath(value, fallback, 'Godot performance report path');
 }
 
 async function readJson(file, maxBytes = 8 * 1024 * 1024) {
@@ -124,7 +123,7 @@ export async function writePerformanceBaseline(context, {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: true });
   const id = safeId(baselineId);
   const reportRelative = safeRelative(reportPath, 'artifacts/godot-performance/latest.json');
-  const baselineRelative = safeRelative(baselinePath, `.devmate/baselines/godot/${id}.json`);
+  const baselineRelative = safeGodotBaselinePath(baselinePath, `.devmate/baselines/godot/${id}.json`);
   const reportFile = context.workspace.resolve(project.workspace, path.join(project.subpath, reportRelative), { mustExist: true });
   const baselineFile = context.workspace.resolve(project.workspace, path.join(project.subpath, baselineRelative));
   if (fs.statSync(baselineFile, { throwIfNoEntry: false })?.isFile() && !force) throw new Error(`Godot performance baseline already exists: ${baselineRelative}; set force=true to replace it`);
@@ -159,7 +158,7 @@ export async function writePerformanceBaseline(context, {
 export async function readPerformanceBaseline(context, { workspaceId, projectSubpath, baselineId = 'default', baselinePath } = {}) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: false });
   const id = safeId(baselineId);
-  const relative = safeRelative(baselinePath, `.devmate/baselines/godot/${id}.json`);
+  const relative = safeGodotBaselinePath(baselinePath, `.devmate/baselines/godot/${id}.json`);
   const file = context.workspace.resolve(project.workspace, path.join(project.subpath, relative), { mustExist: true });
   const baseline = await readJson(file, 1024 * 1024);
   return { project, relative: path.relative(project.workspace.root, file).replace(/\\/g, '/'), baseline };

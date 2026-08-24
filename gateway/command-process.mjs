@@ -60,8 +60,22 @@ function cancellationError(signal) {
   return error;
 }
 
+function ipcCleanupSupervisor(child) {
+  return !!child && typeof child.send === 'function' && child.channel != null;
+}
+
 export async function terminateProcessTree(child, { graceMs = 1500, forceMs = 2500 } = {}) {
   if (!child || child.exitCode != null || child.signalCode != null) return { terminated: false, forced: false, exitConfirmed: true };
+
+  // IPC children are cleanup supervisors (currently the Codex supervisor).
+  // Their parent sends the explicit stop protocol before calling this helper.
+  // Never taskkill/SIGKILL the supervisor merely because its own process tree
+  // has not yet reached a confirmed terminal state: that would destroy the
+  // ownership fence while the real delegated process could still be alive.
+  if (ipcCleanupSupervisor(child)) {
+    const exit = await waitWithTimeout(waitForExit(child), Math.max(1000, Number(graceMs) || 1500) + Math.max(1000, Number(forceMs) || 2500));
+    return { terminated: true, forced: false, exitConfirmed: !!exit, supervisorCleanupPending: !exit };
+  }
 
   if (process.platform === 'win32') {
     await runBoundedTaskkill(child.pid, true, spawn, Math.max(1000, forceMs));
@@ -168,3 +182,5 @@ export async function shutdownCommandProcesses() {
 export function activeCommandProcessCount() {
   return activeProcesses.size;
 }
+
+export const __test = { ipcCleanupSupervisor, waitForExit, waitWithTimeout };

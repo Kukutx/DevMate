@@ -13,7 +13,7 @@ test('fresh shared instance owns the ngrok connection default while retaining al
   const store = require('../shared/config-store.cjs');
   const schema = require('../shared/instance-config.cjs');
   const config = store.newInstanceConfig({ workspaceRoot: root });
-  assert.deepEqual(config.connection, { provider: 'ngrok', publicUrl: '' });
+  assert.deepEqual(config.connection, { provider: 'ngrok', publicUrl: '', policyGeneration: 0 });
   assert.deepEqual(schema.CONNECTION_PROVIDERS, ['ngrok', 'cloudflare-quick', 'cloudflare-managed', 'external']);
 });
 
@@ -55,10 +55,12 @@ test('provider-specific endpoint selection is derived from shared connection sta
 
 test('Obsidian is a first-class owner or attacher of the same provider-native shared connection', () => {
   const main = source('obsidian-plugin/src/main.js');
+  const desktop = source('vscode-host/desktop-tunnel-controller.js');
   const settings = source('obsidian-plugin/src/settings.js');
   assert.match(main, /new RuntimeController/);
   assert.match(main, /new ObsidianHostBridge/);
-  assert.match(main, /new TunnelController/);
+  assert.match(main, /new DesktopTunnelController/);
+  assert.match(desktop, /class DesktopTunnelController extends TunnelController/);
   assert.match(main, /this\.tunnelController\.start\(gateway\.port\)/);
   assert.match(main, /verifyPublicEndpoint\(publicUrl, tunnel\.record\)/);
   assert.match(settings, /Connection provider/);

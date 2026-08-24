@@ -15,6 +15,12 @@ function pinnedAction(name, major) {
   return new RegExp(`${name.replace('/', '\\/')}@[a-f0-9]{40}\\s+# v${major}`, 'i');
 }
 
+const requiredReleaseChecks = [
+  'Windows, VS Code 1.133, Node 24 LTS',
+  'Node 26 Current compatibility',
+  'Linux and Real Godot 4.7.1'
+];
+
 test('permanent CI is read-only and never mutates source branches', () => {
   assert.match(ci, /permissions:[\s\S]*?contents:\s*read/);
   assert.doesNotMatch(ci, /contents:\s*write/);
@@ -40,7 +46,11 @@ test('release authority is limited to publishing, CI verification, and provenanc
   assert.match(release, /id-token:\s*write/);
   assert.match(release, /attestations:\s*write/);
   assert.match(release, /Verify required CI checks passed for tagged commit/);
-  assert.match(release, /"verify" "Linux and Real Godot 4\.7\.1"/);
+  for (const checkName of requiredReleaseChecks) {
+    assert.match(ci, new RegExp(`name:\\s*${checkName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.equal(release.includes(`"${checkName}"`), true, `release must require CI check: ${checkName}`);
+  }
+  assert.equal(release.includes('for required in "verify"'), false);
   assert.doesNotMatch(release, /pull-requests:\s*write|issues:\s*write|actions:\s*write/);
 });
 

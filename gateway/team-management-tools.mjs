@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import instanceConfig from '../shared/instance-config.cjs';
 import publicHostPolicy from '../shared/public-host-policy.cjs';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
 import { activitySnapshot } from './request-guard.mjs';
@@ -22,32 +23,36 @@ import {
   workspaceIds
 } from './team-tool-data.mjs';
 
+const { setConnectionPolicy } = instanceConfig;
 const { normalizeAllowedHosts } = publicHostPolicy;
 
 export function applyTeamConfigurationPatch(inputConfig, patch = {}) {
-  const config = normalizeInstanceConfig(inputConfig);
+  const config = normalizeInstanceConfig(JSON.parse(JSON.stringify(inputConfig || {})));
   const previousProvider = config.connection.provider;
-  if (patch.tunnelProvider) config.connection.provider = patch.tunnelProvider;
-
-  const providerChanged = patch.tunnelProvider !== undefined && patch.tunnelProvider !== previousProvider;
+  const previousPublicUrl = config.connection.publicUrl;
+  const provider = patch.tunnelProvider === undefined ? previousProvider : patch.tunnelProvider;
+  const providerChanged = provider !== previousProvider;
+  let publicUrl = previousPublicUrl;
   if (patch.publicUrl !== undefined) {
-    config.connection.publicUrl = cleanOrigin(patch.publicUrl, false);
-  } else if (providerChanged || config.connection.provider === 'cloudflare-quick') {
-    config.connection.publicUrl = '';
+    publicUrl = cleanOrigin(patch.publicUrl, false);
+  } else if (providerChanged || provider === 'cloudflare-quick') {
+    publicUrl = '';
   }
 
   const connectionTouched = patch.tunnelProvider !== undefined || patch.publicUrl !== undefined;
   if (
     connectionTouched &&
-    (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
-    !config.connection.publicUrl
+    (provider === 'cloudflare-managed' || provider === 'external') &&
+    !publicUrl
   ) {
-    throw new Error(`${config.connection.provider} requires a public HTTPS URL`);
+    throw new Error(`${provider} requires a public HTTPS URL`);
   }
 
   if (patch.allowedHosts !== undefined) {
     config.requestPolicy.allowedHosts = normalizeAllowedHosts(patch.allowedHosts);
   }
+
+  if (connectionTouched) setConnectionPolicy(config, { provider, publicUrl });
 
   if (patch.requireWorkspaceLeaseForWrites !== undefined) {
     config.team.requireWorkspaceLeaseForWrites = patch.requireWorkspaceLeaseForWrites;

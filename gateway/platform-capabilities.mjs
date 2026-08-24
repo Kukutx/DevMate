@@ -1,4 +1,8 @@
+import { installBackupAccessGuard } from './backup-access-guard.mjs';
 import { installEmbeddedRunnerCapability } from './embedded-runner-capability.mjs';
+import { installFileAccessHardening } from './file-access-hardening.mjs';
+import { installFileMutationSafety } from './file-mutation-safety.mjs';
+import { installGitAccessGuard } from './git-access-guard.mjs';
 import { installHostContextCapabilities } from './host-context-capabilities.mjs';
 import { installLocalCapabilities } from './local-capabilities.mjs';
 import { installObsidianHostCapabilities } from './obsidian-host-capabilities.mjs';
@@ -23,6 +27,10 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
       return { handler };
     }
   });
+  installFileMutationSafety(McpServerClass);
+  installFileAccessHardening(McpServerClass);
+  installBackupAccessGuard(McpServerClass);
+  installGitAccessGuard(McpServerClass);
   installTeamCapabilities(McpServerClass);
   installRunnerCapabilities(McpServerClass);
   installHostContextCapabilities(McpServerClass);
