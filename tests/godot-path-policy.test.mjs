@@ -60,13 +60,14 @@ test('plugin workspace boundary admits reviewed DevMate metadata but not neighbo
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-godot-path-boundary-'));
   try {
     const workspace = { root };
+    const canonicalRoot = fs.realpathSync(root);
     assert.equal(
       resolveWorkspacePath(workspace, '.devmate/automation.json'),
-      path.join(root, '.devmate', 'automation.json')
+      path.join(canonicalRoot, '.devmate', 'automation.json')
     );
     assert.equal(
       resolveWorkspacePath(workspace, '.devmate/baselines/godot/main.json'),
-      path.join(root, '.devmate', 'baselines', 'godot', 'main.json')
+      path.join(canonicalRoot, '.devmate', 'baselines', 'godot', 'main.json')
     );
     for (const value of [
       '.devmate/state.json',
