@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { parseGodotDiagnostics, resolveGodotExecutable, resolveProject, resolveProjectChild } from './godot-project.mjs';
 
 const FRAMEWORKS = Object.freeze({
@@ -17,9 +18,7 @@ const FRAMEWORKS = Object.freeze({
 });
 
 function safeRelative(value, fallback) {
-  const relative = String(value || fallback || '').trim().replace(/\\/g, '/');
-  if (!relative || path.isAbsolute(relative) || relative.split('/').includes('..')) throw new Error('Godot test path must stay inside the project workspace');
-  return relative;
+  return safeGodotRelativePath(value, fallback, 'Godot test path');
 }
 
 function toResourcePath(value) {
