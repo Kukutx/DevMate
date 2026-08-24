@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { mutateDurableDocument, readDurableNamespace } from './durable-state.mjs';
+import { isSensitiveWorkspacePath } from './sensitive-path-policy.mjs';
 
 const CONFIG_PATH = String(process.env.DEVMATE_CONFIG || '').trim();
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
@@ -107,6 +108,7 @@ function isEnvironmentFile(base) {
 }
 
 function blockedPath(rel) {
+  if (isSensitiveWorkspacePath(rel)) return true;
   const parts = String(rel || '').replace(/\\/g, '/').split('/').filter(Boolean);
   if (parts.some(part => SKIP_DIRS.has(part.toLowerCase()))) return true;
   const base = (parts.at(-1) || '').toLowerCase();
