@@ -72,9 +72,23 @@ export const browserQaPlugin = definePlugin({
   activate(context) {
     const { server } = context;
     const service = Object.freeze({
-      status: workspaceRoot => browserQaStatus(workspaceRoot, context.settings),
-      runScenario: args => runBrowserScenario({ ...args, settings: { ...context.settings, ...(args.settings || {}) } }),
-      startPreview,
+      status: workspaceId => {
+        const workspace = context.workspace.get(workspaceId, { writable: false });
+        return browserQaStatus(workspace.root, context.settings);
+      },
+      runScenario: ({ workspaceId, ...args }) => {
+        const workspace = context.workspace.get(workspaceId, { writable: true });
+        return runBrowserScenario({
+          ...args,
+          workspaceRoot: workspace.root,
+          settings: { ...context.settings, ...(args.settings || {}) }
+        });
+      },
+      startPreview: ({ workspaceId, root, ...args }) => {
+        const workspace = context.workspace.get(workspaceId, { writable: false });
+        const resolvedRoot = context.workspace.resolve(workspace, root, { mustExist: true, directory: true });
+        return startPreview({ ...args, workspaceId: workspace.id, root: resolvedRoot });
+      },
       getPreview,
       listPreviews,
       stopPreview,
