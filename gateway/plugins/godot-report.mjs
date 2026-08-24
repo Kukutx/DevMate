@@ -2,6 +2,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { auditGodotProject } from './godot-audit.mjs';
 import { buildGodotDependencyGraph } from './godot-graph.mjs';
+import { safeGodotRelativePath } from './godot-path-policy.mjs';
 import { planGodotAutomation } from './godot-plan.mjs';
 import { inspectGodotRuntime } from './godot-runtime.mjs';
 import { resolveProject } from './godot-project.mjs';
@@ -78,6 +79,8 @@ export async function writeGodotQualityReport(context, {
   timeoutMs = 15000
 } = {}) {
   const project = resolveProject(context, workspaceId, projectSubpath, { writable: true });
+  const safeHtmlPath = safeGodotRelativePath(htmlPath, 'artifacts/godot-quality/report.html', 'Godot quality HTML report path');
+  const safeJsonPath = safeGodotRelativePath(jsonPath, 'artifacts/godot-quality/report.json', 'Godot quality JSON report path');
   const [runtime, audit, graph, plan] = await Promise.all([
     inspectGodotRuntime(context, { workspaceId: project.workspace.id, projectSubpath: project.subpath, timeoutMs }),
     auditGodotProject(context, { workspaceId: project.workspace.id, projectSubpath: project.subpath }),
@@ -95,8 +98,8 @@ export async function writeGodotQualityReport(context, {
     graph,
     plan
   };
-  const htmlFile = context.workspace.resolve(project.workspace, path.join(project.subpath, htmlPath));
-  const jsonFile = context.workspace.resolve(project.workspace, path.join(project.subpath, jsonPath));
+  const htmlFile = context.workspace.resolve(project.workspace, path.join(project.subpath, safeHtmlPath));
+  const jsonFile = context.workspace.resolve(project.workspace, path.join(project.subpath, safeJsonPath));
   await Promise.all([fsp.mkdir(path.dirname(htmlFile), { recursive: true }), fsp.mkdir(path.dirname(jsonFile), { recursive: true })]);
   await Promise.all([
     fsp.writeFile(htmlFile, renderReport(data), 'utf8'),
