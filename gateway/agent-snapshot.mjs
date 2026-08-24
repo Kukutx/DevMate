@@ -14,6 +14,7 @@ export const SNAPSHOT_MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const SNAPSHOT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const COLLABORATION_NAMESPACE = 'codex-collaboration';
 const TASK_ID = /^codex-[a-z0-9-]{6,120}$/i;
+const APPLY_ACTIVE_STATUSES = new Set(['applying', 'rolling_back', 'recovery_blocked']);
 
 const SKIP_DIRS = new Set([
   '.git', '.godot', '.next', '.nuxt', '.cache', '.dart_tool', '.firebase', '.terraform',
@@ -143,6 +144,14 @@ function snapshotState(raw) {
   for (const task of raw.tasks) {
     const id = String(task?.id || '').trim();
     if (!TASK_ID.test(id) || tasks.has(id)) return null;
+    const status = String(task?.status || '');
+    if (APPLY_ACTIVE_STATUSES.has(status) && task?.snapshotAvailable !== true) {
+      throw codedError(
+        `Codex apply task ${id} is missing required snapshot recovery state`,
+        'codex_snapshot_state_invalid',
+        { taskId: id, status }
+      );
+    }
     tasks.set(id, task);
   }
   return tasks;
@@ -525,6 +534,7 @@ export async function removeAgentSnapshot(taskId) {
 }
 
 export const __test = {
+  APPLY_ACTIVE_STATUSES,
   BLOCKED_BASENAMES,
   BLOCKED_EXTENSIONS,
   COLLABORATION_NAMESPACE,
