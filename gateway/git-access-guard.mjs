@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { executeCommand } from './command-process.mjs';
 import { readConfig } from './local-shared.mjs';
 import { registerToolDecorator } from './server-extension-host.mjs';
@@ -9,6 +8,8 @@ const MAX_GIT_PATH_OUTPUT = 2 * 1024 * 1024;
 const MAX_SAFE_DIFF_PATHS = 128;
 const MAX_SAFE_DIFF_ARGUMENT_CHARS = 16 * 1024;
 const SAFE_RAW = new Set(['status', 'branch', 'rev-parse', 'describe', 'tag', 'ls-files']);
+const SAFE_RAW_STATUS_OPTIONS = new Set(['--short', '-s', '--porcelain', '--porcelain=v1', '--branch', '-b', '-u', '-uno', '-unormal', '-uall']);
+const SAFE_RAW_LS_FILES_OPTIONS = new Set(['--cached', '-c', '--deleted', '-d', '--modified', '-m', '--others', '-o', '--exclude-standard']);
 const STATUS_RESULT_TOOLS = new Set(['git_add', 'git_stage', 'git_commit', 'git_save']);
 
 function protectedError(message, code, detail = {}) {
@@ -46,10 +47,11 @@ function nulPaths(stdout = '') {
   return String(stdout).split('\0').filter(Boolean).map(value => value.replace(/\\/g, '/'));
 }
 
-async function diffPaths(workspace, staged = false) {
+async function diffPaths(workspace, staged = false, paths = []) {
   const args = ['diff'];
   if (staged) args.push('--staged');
   args.push('--name-only', '-z');
+  if (paths.length) args.push('--', ...paths);
   return nulPaths((await runGit(workspace, args)).stdout);
 }
 
@@ -62,7 +64,10 @@ async function preflightDiffScale(name, args = {}) {
   const config = readConfig();
   const workspace = resolveWorkspace(config, args.workspaceId);
   const staged = name === 'git_staged_files' || args.staged === true;
-  const safe = (await diffPaths(workspace, staged)).filter(rel => !isSensitiveWorkspacePath(rel));
+  const requested = name === 'git_diff' && Array.isArray(args.paths)
+    ? args.paths.map(value => assertSafePath(value))
+    : [];
+  const safe = (await diffPaths(workspace, staged, requested)).filter(rel => !isSensitiveWorkspacePath(rel));
   const chars = safe.reduce((sum, rel) => sum + rel.length + 1, 0);
   if (safe.length > MAX_SAFE_DIFF_PATHS || chars > MAX_SAFE_DIFF_ARGUMENT_CHARS) {
     throw protectedError(
@@ -92,6 +97,23 @@ function rawCommand(args = []) {
   return { values, command: String(values[0] || '').toLowerCase() };
 }
 
+function assertRawOptionSet(parsed, allowed) {
+  let pathMode = false;
+  for (const value of parsed.values.slice(1)) {
+    if (value === '--') {
+      pathMode = true;
+      continue;
+    }
+    if (pathMode || !value.startsWith('-')) {
+      assertSafePath(value, 'Git raw path');
+      continue;
+    }
+    if (allowed.has(value) || [...allowed].some(option => option.endsWith('=') && value.startsWith(option))) continue;
+    if (value.startsWith('--untracked-files=')) continue;
+    throw protectedError(`git_raw ${parsed.command} option is not allowed: ${value}`, 'git_raw_option_restricted');
+  }
+}
+
 function guardRaw(args = {}) {
   const parsed = rawCommand(args.args);
   if (!parsed.command || !SAFE_RAW.has(parsed.command)) {
@@ -106,11 +128,8 @@ function guardRaw(args = {}) {
       throw protectedError(`git_raw ${parsed.command} cannot accept positional mutation arguments`, 'git_raw_mutation_restricted');
     }
   }
-  if (['status', 'ls-files'].includes(parsed.command)) {
-    for (const value of parsed.values.slice(1)) {
-      if (!value.startsWith('-') && value !== '--') assertSafePath(value, 'Git raw path');
-    }
-  }
+  if (parsed.command === 'status') assertRawOptionSet(parsed, SAFE_RAW_STATUS_OPTIONS);
+  if (parsed.command === 'ls-files') assertRawOptionSet(parsed, SAFE_RAW_LS_FILES_OPTIONS);
   return parsed;
 }
 
@@ -134,10 +153,7 @@ function filterStatus(value) {
 }
 
 function filterLinePaths(value) {
-  return String(value || '').split(/\r?\n/).filter(line => {
-    const fields = line.split(/\s+/).filter(Boolean);
-    return !isSensitiveWorkspacePath(fields.at(-1) || '');
-  }).join('\n');
+  return String(value || '').split(/\r?\n/).filter(line => !isSensitiveWorkspacePath(String(line || '').trim())).join('\n');
 }
 
 function syncText(result) {
@@ -209,7 +225,10 @@ export const __test = {
   MAX_SAFE_DIFF_ARGUMENT_CHARS,
   MAX_SAFE_DIFF_PATHS,
   SAFE_RAW,
+  SAFE_RAW_LS_FILES_OPTIONS,
+  SAFE_RAW_STATUS_OPTIONS,
   assertSafePath,
+  diffPaths,
   filterLinePaths,
   filterProjectSnapshot,
   filterRawResult,
