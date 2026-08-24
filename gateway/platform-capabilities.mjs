@@ -1,3 +1,4 @@
+import { installBackupAccessGuard } from './backup-access-guard.mjs';
 import { installEmbeddedRunnerCapability } from './embedded-runner-capability.mjs';
 import { installFileAccessHardening } from './file-access-hardening.mjs';
 import { installFileMutationSafety } from './file-mutation-safety.mjs';
@@ -28,6 +29,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
   });
   installFileMutationSafety(McpServerClass);
   installFileAccessHardening(McpServerClass);
+  installBackupAccessGuard(McpServerClass);
   installGitAccessGuard(McpServerClass);
   installTeamCapabilities(McpServerClass);
   installRunnerCapabilities(McpServerClass);
