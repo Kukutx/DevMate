@@ -13,7 +13,8 @@ import {
   memberRotate,
   mcpUrl,
   readConfig,
-  serve
+  serve,
+  standaloneStateSeparation
 } from './standalone-runtime.mjs';
 
 const { DEFAULT_VERSION, updateConfig } = configStore;
@@ -86,6 +87,13 @@ function activeWorkspaceIds(config) {
   return (config.workspaces || [])
     .filter(item => !item.reference && item.mode !== 'readonly')
     .map(item => item.id);
+}
+
+function configuredWorkspaceRoots(config) {
+  return [
+    ...(Array.isArray(config?.workspaces) ? config.workspaces.map(item => item?.root) : []),
+    ...(Array.isArray(config?.trustedWritableRoots) ? config.trustedWritableRoots.map(item => item?.root || item?.path || item) : [])
+  ].filter(value => typeof value === 'string' && value.trim()).map(value => value.trim());
 }
 
 function bootstrapPreset(value) {
@@ -185,6 +193,10 @@ function status(options = {}) {
   );
   const workspaces = config.workspaces || [];
   const warnings = [];
+  const separation = standaloneStateSeparation(file, configuredWorkspaceRoots(config));
+  if (!separation.ok) {
+    warnings.push(`Standalone DevMate config/state overlaps a controlled workspace (${separation.reason}); move it outside the workspace before serving.`);
+  }
   if (!['none', 'oauth'].includes(config.auth?.mode)) warnings.push('Authentication mode is invalid.');
   if (!workspaces.some(item => !item.reference && item.mode !== 'readonly')) warnings.push('No writable workspace is configured.');
   if (config.runnerControl.enabled && !activeRunners.length) warnings.push('External Runner control is enabled but has no active credential.');
