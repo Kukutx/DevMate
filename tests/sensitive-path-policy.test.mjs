@@ -52,7 +52,7 @@ test('reviewed Godot baseline metadata is narrowly allowed inside .devmate', () 
   }
 });
 
-test('credential-shaped files remain protected while documented environment examples stay readable', () => {
+test('credential-shaped and standalone control-plane files remain protected while documented environment examples stay readable', () => {
   for (const value of [
     '.npmrc',
     'prod.env',
@@ -60,7 +60,11 @@ test('credential-shaped files remain protected while documented environment exam
     '.aws/credentials',
     'application_default_credentials.json',
     'service-account-prod.json',
-    'keys/signing.jks'
+    'keys/signing.jks',
+    '.devmate-server/config.json',
+    '.devmate-server/state/durable-state.json',
+    '.devmate-server/state/oauth-secrets.json',
+    'copied/oauth-secrets.json'
   ]) {
     assert.equal(isSensitiveWorkspacePath(value), true, value);
     assert.equal(isSafeWorkspaceTextPath(value), false, value);
