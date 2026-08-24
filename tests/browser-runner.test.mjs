@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { __test } from '../gateway/plugins/browser-runner.mjs';
+import { __test as browserQaTest } from '../gateway/plugins/browser-qa.mjs';
 
 test('Browser QA accepts only browser-shaped executable names', () => {
   assert.equal(__test.browserExecutableAllowed('/Applications/Google Chrome'), true);
@@ -68,5 +69,40 @@ test('Browser QA artifact outputs cannot target protected workspace data', () =>
     assert.doesNotThrow(() => __test.safeWorkspaceOutput(workspace, 'artifacts/browser-qa/latest.json', 'Report'));
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Browser QA plugin service accepts only uniquely configured workspace roots', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-service-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-service-outside-'));
+  try {
+    const context = {
+      readConfig: () => ({ workspaces: [{ id: 'main', root: workspace }] }),
+      workspace: {
+        get(id, options) {
+          assert.equal(id, 'main');
+          return { id, root: workspace, writable: !!options?.writable };
+        }
+      }
+    };
+    const resolved = browserQaTest.serviceWorkspaceFromRoot(context, workspace, { writable: true });
+    assert.equal(resolved.id, 'main');
+    assert.equal(resolved.writable, true);
+    assert.throws(
+      () => browserQaTest.serviceWorkspaceFromRoot(context, outside),
+      error => error?.code === 'browser_qa_workspace_boundary'
+    );
+
+    const duplicateContext = {
+      ...context,
+      readConfig: () => ({ workspaces: [{ id: 'a', root: workspace }, { id: 'b', root: workspace }] })
+    };
+    assert.throws(
+      () => browserQaTest.serviceWorkspaceFromRoot(duplicateContext, workspace),
+      error => error?.code === 'browser_qa_workspace_boundary'
+    );
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
