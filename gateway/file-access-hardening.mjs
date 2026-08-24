@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -17,7 +16,6 @@ import {
 } from './sensitive-path-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
 const MAX_SEARCH_FILES = 10_000;
 const MAX_DIRECTORY_SCAN_ENTRIES = 20_000;
@@ -65,7 +63,7 @@ function safeWorkspacePath(workspace, rel = '.') {
   const rootReal = fs.realpathSync.native(root);
   const direct = fs.lstatSync(full, { throwIfNoEntry: false });
   if (direct?.isSymbolicLink()) throw new Error(`Read blocked: symlink/reparse target: ${rel}`);
-  let ancestor = direct ? path.dirname(full) : path.dirname(full);
+  let ancestor = direct?.isDirectory() ? full : path.dirname(full);
   while (!fs.lstatSync(ancestor, { throwIfNoEntry: false }) && ancestor !== path.dirname(ancestor)) ancestor = path.dirname(ancestor);
   const ancestorReal = fs.realpathSync.native(ancestor);
   if (!isInside(rootReal, ancestorReal)) throw new Error(`Path escapes workspace root through symlink/reparse point: ${rel}`);
@@ -97,7 +95,11 @@ async function assertNoSensitiveDescendants(workspace, rel) {
         throw error;
       }
       count += 1;
-      if (count > MAX_DIRECTORY_SCAN_ENTRIES) return;
+      if (count > MAX_DIRECTORY_SCAN_ENTRIES) {
+        const error = new Error(`Directory mutation credential scan exceeds ${MAX_DIRECTORY_SCAN_ENTRIES} entries`);
+        error.code = 'sensitive_workspace_scan_limit';
+        throw error;
+      }
       if (!entry.isDirectory()) continue;
       const stat = await fsp.lstat(child).catch(() => null);
       if (!stat || stat.isSymbolicLink()) continue;
@@ -148,6 +150,8 @@ async function guardMutationTree(name, args = {}) {
 
 async function safeSearchText(args = {}) {
   const { workspaceId, query, subpath = '.', regex = false } = args;
+  const search = String(query || '');
+  if (!search) throw new Error('query is required');
   const maxResults = Math.min(500, Math.max(1, Number(args.maxResults) || 120));
   guardExplicitPaths('search_text', args);
   const config = readConfig();
@@ -157,10 +161,10 @@ async function safeSearchText(args = {}) {
   if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) throw new Error('search_text subpath must be a real directory');
   let pattern = null;
   if (regex) {
-    try { pattern = new RegExp(String(query)); }
+    try { pattern = new RegExp(search); }
     catch (error) { throw new Error(`Invalid regex: ${error.message}`); }
   }
-  const literal = String(query || '').toLowerCase();
+  const literal = search.toLowerCase();
   const files = [];
   const walk = async directory => {
     if (files.length >= MAX_SEARCH_FILES) return;
@@ -196,7 +200,7 @@ async function safeSearchText(args = {}) {
       if (results.length >= maxResults) break;
     }
   }
-  return toolText({ workspace: workspacePublic(workspace), query, engine: 'builtin', results });
+  return toolText({ workspace: workspacePublic(workspace), query: search, engine: 'builtin', results });
 }
 
 function syncTextContent(result) {
@@ -247,16 +251,13 @@ function filterPathResults(name, result) {
 
 function redactReadResult(name, result) {
   if (!result?.structuredContent) return result;
-  if (name === 'read_file' && typeof result.structuredContent.text === 'string') {
-    result.structuredContent.text = redactSensitiveString(result.structuredContent.text);
-  } else if (['project_snapshot', 'project_instructions', 'list_project_scripts', 'vscode_context', 'active_editor_context'].includes(name)) {
+  if ([
+    'project_snapshot', 'project_instructions', 'list_project_scripts',
+    'vscode_context', 'active_editor_context', 'list_diagnostics'
+  ].includes(name)) {
     result.structuredContent = redactSensitiveValue(result.structuredContent);
   }
   return syncTextContent(result);
-}
-
-function sha256(text) {
-  return crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex');
 }
 
 export function installFileAccessHardening(McpServerClass) {
@@ -271,8 +272,7 @@ export function installFileAccessHardening(McpServerClass) {
           await guardMutationTree(name, args);
           let result = await handler(args, ...rest);
           if (RESULT_PATH_FILTER_TOOLS.has(name)) result = filterPathResults(name, result);
-          result = redactReadResult(name, result);
-          return result;
+          return redactReadResult(name, result);
         }
       };
     }
@@ -292,6 +292,5 @@ export const __test = {
   restoreTargetRelative,
   safePathEntry,
   safeSearchText,
-  safeWorkspacePath,
-  sha256
+  safeWorkspacePath
 };
