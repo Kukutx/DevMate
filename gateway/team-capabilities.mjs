@@ -271,6 +271,31 @@ export function wrapAuthorizedTool(name, config, handler) {
       ? activeWorkSession(authorized.principal.id, authorized.workspaceId)
       : null;
     let leaseHold = null;
+    const releaseLeaseHoldSafely = async stage => {
+      if (!leaseHold) return;
+      const hold = leaseHold;
+      leaseHold = null;
+      try {
+        releaseWorkspaceLeaseHold({
+          workspaceId: hold.workspaceId,
+          holdId: hold.id,
+          leaseId: hold.leaseId,
+          principalId: hold.principalId
+        });
+      } catch (cleanupError) {
+        incrementCounter('devmate_workspace_lease_hold_cleanup_total', { tool: name, stage, status: 'error' }, 1);
+        await audit('workspace_lease_hold_release_failed', {
+          requestId: requestContext()?.requestId || null,
+          principalId: authorized.principal.id,
+          tool: name,
+          capability: authorized.capability,
+          workspace: hold.workspaceId,
+          holdId: hold.id,
+          stage,
+          error: String(cleanupError?.message || cleanupError).slice(0, 1000)
+        }, { workSessionId: active?.id || null });
+      }
+    };
     try {
       if (leaseProtected) {
         leaseHold = acquireWorkspaceLeaseHold({
@@ -299,15 +324,7 @@ export function wrapAuthorizedTool(name, config, handler) {
           runWithWorkSessionContext(active?.id || null, () => handler(executionArgs, ...rest))
         );
       } finally {
-        if (leaseHold) {
-          releaseWorkspaceLeaseHold({
-            workspaceId: leaseHold.workspaceId,
-            holdId: leaseHold.id,
-            leaseId: leaseHold.leaseId,
-            principalId: leaseHold.principalId
-          });
-          leaseHold = null;
-        }
+        await releaseLeaseHoldSafely('post-handler');
       }
       const result = filterResult(
         name,
@@ -336,17 +353,7 @@ export function wrapAuthorizedTool(name, config, handler) {
       }, { workSessionId });
       return result;
     } catch (error) {
-      if (leaseHold) {
-        try {
-          releaseWorkspaceLeaseHold({
-            workspaceId: leaseHold.workspaceId,
-            holdId: leaseHold.id,
-            leaseId: leaseHold.leaseId,
-            principalId: leaseHold.principalId
-          });
-        } catch {}
-        leaseHold = null;
-      }
+      await releaseLeaseHoldSafely('error-path');
       const session = authorized.workspaceId
         ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
         : null;
