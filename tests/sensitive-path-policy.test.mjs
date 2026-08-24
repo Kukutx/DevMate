@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  assertSafeWorkspacePath,
   isSafeProjectMetadataPath,
   isSafeWorkspaceTextPath,
   isSensitiveWorkspacePath,
@@ -38,10 +39,15 @@ test('credential-shaped files remain protected while documented environment exam
   ]) {
     assert.equal(isSensitiveWorkspacePath(value), true, value);
     assert.equal(isSafeWorkspaceTextPath(value), false, value);
+    assert.throws(
+      () => assertSafeWorkspacePath(value, 'Artifact path'),
+      error => error?.code === 'protected_workspace_path' && error?.reason
+    );
   }
 
   for (const value of ['.env.example', 'config/dev.env.sample', 'ops.env.template']) {
     assert.equal(isSensitiveWorkspacePath(value), false, value);
     assert.equal(isSafeWorkspaceTextPath(value), true, value);
+    assert.equal(assertSafeWorkspacePath(value), value);
   }
 });
