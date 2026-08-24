@@ -66,7 +66,7 @@ test('credential-shaped files remain protected while documented environment exam
     assert.equal(isSafeWorkspaceTextPath(value), false, value);
     assert.throws(
       () => assertSafeWorkspacePath(value, 'Artifact path'),
-      error => error?.code === 'protected_workspace_path' && error?.reason
+      error => error?.code === 'protected_workspace_path' && typeof error?.reason === 'string' && error.reason.length > 0
     );
   }
 
