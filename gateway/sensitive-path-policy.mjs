@@ -105,6 +105,15 @@ export function sensitiveWorkspacePathReason(value) {
   return '';
 }
 
+export function assertSafeWorkspacePath(value, label = 'Workspace path') {
+  const reason = sensitiveWorkspacePathReason(value);
+  if (!reason) return value;
+  const error = new Error(`${label} targets protected workspace data (${reason}): ${normalizedRelative(value)}`);
+  error.code = 'protected_workspace_path';
+  error.reason = reason;
+  throw error;
+}
+
 export function isSensitiveWorkspacePath(value) {
   return !!sensitiveWorkspacePathReason(value);
 }
