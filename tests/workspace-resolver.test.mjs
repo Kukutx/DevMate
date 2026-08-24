@@ -1,5 +1,7 @@
-
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { resolveWorkspace, resolveWorkspaceId } from '../gateway/workspace-resolver.mjs';
 import { toolWorkspaceId } from '../gateway/tool-policy.mjs';
@@ -57,4 +59,30 @@ test('trusted-root administration stays global after it creates a second writabl
   };
   assert.equal(toolWorkspaceId('add_trusted_root', {}, config), null);
   assert.equal(toolWorkspaceId('remove_trusted_root', { id: 'trusted' }, config), null);
+});
+
+test('workspace resolution rejects protected roots including symlink aliases to credential trees', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-workspace-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const normal = path.join(root, 'project');
+  const protectedProject = path.join(root, '.aws', 'project');
+  fs.mkdirSync(normal, { recursive: true });
+  fs.mkdirSync(protectedProject, { recursive: true });
+
+  assert.equal(resolveWorkspace({ workspaces: [{ id: 'normal', root: normal }] }, 'normal').root, normal);
+  assert.throws(
+    () => resolveWorkspace({ workspaces: [{ id: 'protected', root: protectedProject }] }, 'protected'),
+    error => error?.code === 'protected_workspace_root' && error?.reason === 'sensitive-directory:.aws'
+  );
+
+  const alias = path.join(root, 'alias-project');
+  try {
+    fs.symlinkSync(protectedProject, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch {
+    return;
+  }
+  assert.throws(
+    () => resolveWorkspace({ workspaces: [{ id: 'alias', root: alias }] }, 'alias'),
+    error => error?.code === 'protected_workspace_root' && error?.reason === 'sensitive-directory:.aws'
+  );
 });
