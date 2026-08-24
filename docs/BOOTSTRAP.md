@@ -2,6 +2,8 @@
 
 `devmate bootstrap` creates one current-schema DevMate instance. Presets are capability defaults, not runtime modes. Explicit options may override preset capabilities, but DevMate refuses combinations that would create an unusable or insecure identity configuration.
 
+When `--config` is omitted, standalone bootstrap stores the instance at `~/.devmate/standalone/config.json`. Configuration and private runtime state are deliberately kept outside controlled workspaces; explicit config paths that overlap a workspace are rejected.
+
 ## Presets
 
 | Preset | MCP authentication | Embedded Runner | External Runner API | Workspace lease default | Connection default |
@@ -84,7 +86,7 @@ The Runner-host preset disables both the local embedded queue and the central ex
 
 ## OAuth secret boundary
 
-OAuth mode creates private runtime secret state beside the instance configuration. OAuth signing material and the rotating owner approval code are stored under the DevMate state directory with restrictive permissions; they are not fields in public `config.json`.
+OAuth mode creates private runtime secret state beside the instance configuration. OAuth signing material and the rotating owner approval code are stored under the DevMate state directory with restrictive permissions; they are not fields in public `config.json`, and that state directory is not allowed to overlap a controlled workspace.
 
 Member `dmc_` login codes are used only to authenticate the member during OAuth authorization. MCP `/mcp` receives OAuth access tokens, not `dmc_` codes and not static member Bearer credentials.
 
@@ -125,7 +127,7 @@ MCP endpoint URLs never contain credentials.
 npx devmate status --config /srv/devmate/config.json
 ```
 
-If a configuration has a public URL while `auth.mode` is `none`, status reports it as an invalid public-authentication combination rather than treating the URL itself as a credential.
+If a configuration has a public URL while `auth.mode` is `none`, status reports it as an invalid public-authentication combination rather than treating the URL itself as a credential. It also reports control-plane/workspace overlap instead of treating an unsafe project-local state directory as usable.
 
 ## Commands
 
