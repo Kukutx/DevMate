@@ -59,6 +59,21 @@ function hasSensitiveParent(parts, endExclusive) {
   return parts.slice(0, endExclusive).some(part => SENSITIVE_DIRECTORY_SEGMENTS.has(part));
 }
 
+export function sensitiveWorkspaceRootReason(value) {
+  const parts = relativePathParts(value).map(part => part.toLowerCase());
+  const sensitiveDirectory = parts.find(part => SENSITIVE_DIRECTORY_SEGMENTS.has(part));
+  return sensitiveDirectory ? `sensitive-directory:${sensitiveDirectory}` : '';
+}
+
+export function assertSafeWorkspaceRoot(value, label = 'Workspace root') {
+  const reason = sensitiveWorkspaceRootReason(value);
+  if (!reason) return value;
+  const error = new Error(`${label} is inside protected credential/control-plane storage (${reason}): ${slash(value)}`);
+  error.code = 'protected_workspace_root';
+  error.reason = reason;
+  throw error;
+}
+
 export function isSafeGodotBaselineMetadataPath(value) {
   const lowered = relativePathParts(value).map(part => part.toLowerCase());
   if (lowered.length < 4) return false;
