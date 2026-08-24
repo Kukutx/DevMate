@@ -12,6 +12,8 @@ npx devmate init \
   --config /srv/devmate/config.json
 ```
 
+When `--config` is omitted, standalone uses `~/.devmate/standalone/config.json`. The instance configuration and its private `state/` directory must remain outside every controlled workspace or trusted writable root. Initialization and `serve` fail closed on overlap instead of letting workspace tools reach DevMate control-plane state. Legacy project-local `.devmate-server` state should be moved to a separate instance directory before serving it.
+
 A new standalone configuration defaults to `auth.mode: "oauth"`. Trusted loopback MCP remains usable directly by the local owner.
 
 Public standalone instance:
@@ -57,7 +59,9 @@ npx devmate member-revoke --config /srv/devmate/config.json --id alice
 npx devmate serve --config /srv/devmate/config.json
 ```
 
-`devmate serve` starts the Gateway. Standalone CLI does **not** start or supervise the selected ngrok/Cloudflare/external ingress process; run the intended ingress as a separate supervised service when remote access is required.
+`devmate serve` starts the Gateway. It validates that control-plane state is separate from configured workspaces before startup recovery runs. Protected credential/control-plane directories such as `.devmate`, `.devmate-server`, `.aws`, `.ssh`, and `secrets` cannot themselves be configured as operational workspace roots, including through a filesystem alias that resolves into one of those trees.
+
+Standalone CLI does **not** start or supervise the selected ngrok/Cloudflare/external ingress process; run the intended ingress as a separate supervised service when remote access is required.
 
 The Gateway binds to loopback by default. Container/service deployments may use the repository's explicit deployment bind configuration where appropriate; do not expose local control routes as the public MCP endpoint.
 
@@ -97,7 +101,7 @@ https://devmate.example.com/mcp
 
 It never embeds credentials.
 
-`doctor` validates current config/workspace state, OAuth private-state availability, public URL/authentication consistency, and provider prerequisites relevant to the selected connection capability. It does not claim that a separately managed public ingress is live merely because configuration is valid.
+`doctor` validates current config/workspace state, control-plane/workspace separation, OAuth private-state availability, public URL/authentication consistency, and provider prerequisites relevant to the selected connection capability. It does not claim that a separately managed public ingress is live merely because configuration is valid.
 
 ## Service management
 
