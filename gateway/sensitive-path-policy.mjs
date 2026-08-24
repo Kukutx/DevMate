@@ -2,7 +2,7 @@ import path from 'node:path';
 
 export const SENSITIVE_DIRECTORY_SEGMENTS = new Set([
   '.git', '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.npm', '.m2', '.gradle',
-  '.terraform', '.pulumi', '.serverless', '.wrangler', '.direnv', '.devmate', '.codex', '.openai',
+  '.terraform', '.pulumi', '.serverless', '.wrangler', '.direnv', '.devmate', '.devmate-server', '.codex', '.openai',
   'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys',
   'service-account', 'service_accounts'
 ]);
@@ -11,7 +11,7 @@ export const SENSITIVE_BASENAMES = new Set([
   '.env', '.envrc', '.dev.vars', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.netrc', '_netrc',
   '.git-credentials', '.gitconfig', '.sentryclirc', '.terraformrc', 'terraform.rc', '.htpasswd', '.htdigest',
   '.credentials', '.secrets', 'auth.json', 'master.key', 'application_default_credentials.json',
-  'pip.conf', 'nuget.config', 'local.properties', 'keystore.properties', 'key.properties', 'gradle.properties',
+  'oauth-secrets.json', 'pip.conf', 'nuget.config', 'local.properties', 'keystore.properties', 'key.properties', 'gradle.properties',
   'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
   'service-account.json', 'service_account.json', 'service-account-key.json', 'service_account_key.json',
   'serviceaccountkey.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
