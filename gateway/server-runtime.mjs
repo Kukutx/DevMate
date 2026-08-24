@@ -24,6 +24,7 @@ import { installRunnerControlPlane, resetRunnerControlState } from './runner-con
 import { recoverFileTransactions } from './file-transactions.mjs';
 import { reconcileAgentSnapshotStorage } from './agent-snapshot.mjs';
 import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
+import { assertConfiguredWorkspaceRootsSafe } from './workspace-resolver.mjs';
 
 const { validatePermissionConfig } = permissionConfig;
 const { strictPort } = portConfig;
@@ -46,6 +47,7 @@ try {
   const startupConfig = readConfig();
   strictPort(startupConfig.server?.port, { label: 'server.port' });
   validatePermissionConfig(startupConfig);
+  assertConfiguredWorkspaceRootsSafe(startupConfig);
   if (DESKTOP_LIFECYCLE_FENCE && startupConfig.lifecycle?.desiredState !== 'running') {
     const error = new Error('Desktop Gateway launch was cancelled because the shared DevMate lifecycle is stopped');
     error.code = 'DEVMATE_GATEWAY_LIFECYCLE_STOPPED';
