@@ -6,6 +6,7 @@ import {
   resolveWorkspaceCwd, syncTrustedRootsIntoConfig, toolText, writeConfig
 } from '../local-shared.mjs';
 import { executeCommand } from '../command-process.mjs';
+import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from '../sensitive-path-policy.mjs';
 import { resolveWorkspace } from '../workspace-resolver.mjs';
 import {
   listPersistentProcesses, readPersistentOutput, startPersistentExecutable, stopPersistentProcess
@@ -25,15 +26,29 @@ function isInside(root, candidate) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
+function assertPluginWorkspacePathSafe(root, candidate, label = 'Plugin workspace path') {
+  const rel = normalizeSlash(path.relative(root, candidate));
+  if (!rel || rel === '.') return rel;
+  if (isSensitiveWorkspacePath(rel)) {
+    const error = new Error(`${label} is protected by DevMate credential policy: ${rel}`);
+    error.code = 'sensitive_workspace_path';
+    error.reason = sensitiveWorkspacePathReason(rel);
+    throw error;
+  }
+  return rel;
+}
+
 export function resolveWorkspacePath(workspace, subpath = '.', { mustExist = false, directory = false } = {}) {
   const root = fs.realpathSync.native(workspace.root);
   const candidate = path.resolve(root, subpath || '.');
   if (!isInside(root, candidate)) throw new Error(`Path escapes workspace root: ${subpath}`);
+  assertPluginWorkspacePathSafe(root, candidate);
   let existing = candidate;
   while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);
   const existingReal = fs.realpathSync.native(existing);
   const resolved = path.resolve(existingReal, path.relative(existing, candidate));
   if (!isInside(root, resolved)) throw new Error(`Path escapes workspace root through symlink/reparse point: ${subpath}`);
+  assertPluginWorkspacePathSafe(root, resolved);
   const stat = fs.statSync(resolved, { throwIfNoEntry: false });
   if (mustExist && !stat) throw new Error(`Path does not exist: ${normalizeSlash(path.relative(root, resolved))}`);
   if (directory && stat && !stat.isDirectory()) throw new Error(`Path is not a directory: ${normalizeSlash(path.relative(root, resolved))}`);
@@ -195,4 +210,4 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
   };
 }
 
-export const __test = { executableAllowed, isInside, truncate };
+export const __test = { assertPluginWorkspacePathSafe, executableAllowed, isInside, truncate };
