@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { stateSummary } from '../gateway/maintenance.mjs';
 
@@ -25,7 +26,17 @@ async function freePort() {
   return port;
 }
 
-test('Gateway reaches Ready with large audit and backup maintenance state', { timeout: 30000 }, async () => {
+async function waitForMaintenance(paths, predicate, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let summary = await stateSummary(paths);
+  while (!predicate(summary) && Date.now() < deadline) {
+    await delay(100);
+    summary = await stateSummary(paths);
+  }
+  return summary;
+}
+
+test('Gateway reaches Ready before large-state maintenance and still prunes state immediately afterward', { timeout: 30000 }, async () => {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-large-state-'));
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-large-state-workspace-'));
   const configFile = path.join(stateDirectory, 'config.json');
@@ -87,13 +98,16 @@ test('Gateway reaches Ready with large audit and backup maintenance state', { ti
 
     assert.equal(result.started, true);
     assert.equal(result.port, port);
-    assert.ok(readyMs < 10000, `Gateway Ready exceeded startup budget: ${readyMs}ms`);
+    assert.ok(readyMs < 7000, `Gateway Ready exceeded non-maintenance startup budget: ${readyMs}ms`);
 
-    const summary = await stateSummary({ backupRoot, auditLog });
-    assert.ok(summary.auditBytes <= DEFAULT_MAINTENANCE.maxAuditBytes, `audit log was not pruned: ${summary.auditBytes} bytes`);
-    assert.ok(summary.backupBytes <= config.maintenance.maxBackupBytes, `backup state was not pruned: ${summary.backupBytes} bytes`);
+    const summary = await waitForMaintenance(
+      { stateRoot, backupRoot, auditLog, configFile },
+      value => value.auditBytes <= DEFAULT_MAINTENANCE.maxAuditBytes && value.backupBytes <= config.maintenance.maxBackupBytes
+    );
+    assert.ok(summary.auditBytes <= DEFAULT_MAINTENANCE.maxAuditBytes, `audit log was not pruned after Ready: ${summary.auditBytes} bytes`);
+    assert.ok(summary.backupBytes <= config.maintenance.maxBackupBytes, `backup state was not pruned after Ready: ${summary.backupBytes} bytes`);
     assert(summary.backupSets > 0 && summary.backupSets < 200, `unexpected retained backup set count: ${summary.backupSets}`);
-    assert.equal(fs.existsSync(path.join(backupRoot, 'set-000')), false, 'expired backup set survived age pruning');
+    assert.equal(fs.existsSync(path.join(backupRoot, 'set-000')), false, 'expired backup set survived post-Ready age pruning');
     assert.equal(fs.existsSync(path.join(backupRoot, 'set-249')), true, 'newest backup set was not retained');
   } finally {
     await controller.dispose({ stopOwned: true }).catch(() => {});
