@@ -38,6 +38,7 @@ jobs:
           if old not in s:
               raise SystemExit('could not disambiguate personal auth test patch')
           s = s.replace(old, new, 1)
+          s = s.replace("        replace(path, old, new, 1)", "        replace(path, old, new, 2 if path == 'obsidian-plugin/README.md' else 1)", 1)
           p.write_text(s)
           PY
           python3 scripts/personal-noauth-hotfix.py
