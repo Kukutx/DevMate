@@ -32,6 +32,7 @@ const {
   startRuntimeMaintenance,
   stopRuntimeMaintenance
 } = await import('../gateway/runtime-maintenance.mjs');
+const { sharedHttpRequestConcurrency } = await import('../gateway/request-concurrency.mjs');
 
 test('runtime maintenance trims audit high-water and changed backup state only while idle', async () => {
   const auditLines = Array.from({ length: 2200 }, (_, index) => JSON.stringify({
@@ -76,6 +77,25 @@ test('runtime maintenance trims audit high-water and changed backup state only w
     assert.equal(second.skipped, true);
     assert.equal(second.reason, 'within-bounds');
   } finally {
+    stopRuntimeMaintenance();
+  }
+});
+
+test('runtime maintenance skips retention work while an HTTP request is active', async () => {
+  startRuntimeMaintenance({
+    paths: { stateRoot, backupRoot, auditLog },
+    options: config.maintenance,
+    intervalMs: 60_000
+  });
+  const request = sharedHttpRequestConcurrency.enter('maintenance-busy-test', 4, 4);
+  assert.equal(request.allowed, true);
+
+  try {
+    const result = await runRuntimeMaintenanceOnce();
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, 'busy');
+  } finally {
+    request.release();
     stopRuntimeMaintenance();
   }
 });
