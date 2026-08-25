@@ -42,6 +42,14 @@ jobs:
           s = s.replace(old, new, 1)
           s = s.replace("        replace(path, old, new, 1)", "        replace(path, old, new, 2 if path == 'obsidian-plugin/README.md' else 1)", 1)
           p.write_text(s)
+
+          p = Path('scripts/finalize-personal-noauth-3.6.1-docs.py')
+          s = p.read_text()
+          old = """    found = source.count(old)\n    if found != count:\n        raise SystemExit(f'{path}: expected {count} matches, found {found}: {old[:160]!r}')\n    p.write_text(source.replace(old, new), encoding='utf-8')"""
+          new = """    found = source.count(old)\n    if found == count:\n        p.write_text(source.replace(old, new), encoding='utf-8')\n        return\n    if found == 0 and source.count(new) >= count:\n        return\n    raise SystemExit(f'{path}: expected {count} matches, found {found}: {old[:160]!r}')"""
+          if old not in s:
+              raise SystemExit('could not make final docs patch idempotent')
+          p.write_text(s.replace(old, new, 1))
           PY
           python3 scripts/personal-noauth-hotfix.py
           python3 scripts/finalize-personal-noauth-3.6.1.py
