@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.1
+
+- Restored the single-owner contract: `auth.mode: none` is the default for both local and public MCP ingress, including ngrok, without OAuth or copied credentials.
+- Kept OAuth strictly opt-in for team/member identity and aligned VS Code, Obsidian, standalone bootstrap, public verification, and Gateway request authorization on the same rule.
+- Added repository and regression locks so future OAuth-only public MCP changes fail CI instead of silently breaking personal use.
+
 ## 3.6.0
 
 - Removed retention maintenance from the Gateway Ready critical path, so accumulated backups, audit logs, and recovery artifacts can no longer make desktop startup time out.

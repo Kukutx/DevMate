@@ -56,7 +56,7 @@ Object.assign(config.connection, publicVerification.successfulVerificationPatch(
   toolCallVerified: true,
   probeTool: 'gateway_status',
   server: { name: 'devmate', version: configStore.DEFAULT_VERSION }
-}, config.connection.publicUrl, verificationStamp));
+}, config.connection.publicUrl, verificationStamp, null, null, 'oauth', 0, 0));
 configStore.atomicWriteJson(configPath, config);
 
 const { acquireGatewayInstanceLock, releaseGatewayInstanceLock, resetDurableStateForTests } = await import('../gateway/durable-state.mjs');

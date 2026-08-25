@@ -37,7 +37,7 @@ test('standalone external connection records the public URL without inventing a 
     });
     assert.equal(result.config.connection.provider, 'external');
     assert.equal(result.config.connection.publicUrl, 'https://standalone.example.test');
-    assert.deepEqual(result.config.auth, { mode: 'oauth' });
+    assert.deepEqual(result.config.auth, { mode: 'none' });
     assert.deepEqual(result.config.requestPolicy.allowedHosts, []);
     assert.equal('deployment' in result.config, false);
     assert.equal('production' in result.config, false);

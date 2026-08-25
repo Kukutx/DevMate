@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   nodeExecutable: '',
   captureSelection: true,
   autoCopyUrl: true,
-  authenticationMode: 'oauth',
+  authenticationMode: 'none',
   ngrokCommandPath: '',
   ngrokPoolingEnabled: false,
   tunnelAutoRestart: true,
@@ -44,7 +44,7 @@ function normalizeSettings(value = {}) {
     nodeExecutable: String(input.nodeExecutable || '').trim(),
     captureSelection: input.captureSelection !== false,
     autoCopyUrl: input.autoCopyUrl !== false,
-    authenticationMode: input.authenticationMode === 'none' ? 'none' : 'oauth',
+    authenticationMode: input.authenticationMode === 'oauth' ? 'oauth' : 'none',
     ngrokCommandPath: String(input.ngrokCommandPath || '').trim(),
     ngrokPoolingEnabled: input.ngrokPoolingEnabled === true,
     tunnelAutoRestart: input.tunnelAutoRestart !== false,
@@ -176,13 +176,13 @@ class DevMateSettingTab extends PluginSettingTab {
       .setDesc(stability.message);
 
     const sharedAuthentication = this.plugin.controller?.readConfig?.()?.auth?.mode;
-    const authentication = sharedAuthentication === 'none' ? 'none' : 'oauth';
+    const authentication = sharedAuthentication === 'oauth' ? 'oauth' : 'none';
     new Setting(containerEl)
       .setName('MCP authentication')
-      .setDesc('OAuth is the default for public MCP. None is only for trusted loopback-only access and will not authorize remote requests.')
+      .setDesc('None is the default single-owner mode for local and public MCP. OAuth is for team/shared member identity.')
       .addDropdown(dropdown => dropdown
-        .addOption('oauth', 'OAuth (recommended)')
-        .addOption('none', 'None (loopback only)')
+        .addOption('none', 'None (single owner, default)')
+        .addOption('oauth', 'OAuth (team/shared)')
         .setValue(authentication)
         .onChange(async value => {
           const mode = value === 'none' ? 'none' : 'oauth';

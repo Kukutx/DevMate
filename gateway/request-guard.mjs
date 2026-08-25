@@ -68,11 +68,9 @@ function touchTeamMemberBestEffort(principal) {
 export function authenticateGatewayRequest(req, url, config) {
   void url;
   normalizeInstanceConfig(config);
-  // Loopback remains frictionless for the trusted local desktop/Runner path.
-  // Remote ingress is never promoted to owner merely because auth.mode=none:
-  // a public MCP endpoint must use OAuth rather than treating an unguessable
-  // URL as a credential.
-  if (isLocalRequest(req)) return fallbackLocalPrincipal();
+  // auth.mode=none is the explicit single-owner trust model for local and configured public MCP ingress.
+  // OAuth is reserved for team/member identity.
+  if (isLocalRequest(req) || config.auth?.mode === 'none') return fallbackLocalPrincipal();
   if (config.auth?.mode !== 'oauth') return null;
   const token = String(req?.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
   const access = oauthAccessToken(config, token, req);

@@ -28,9 +28,9 @@ function inside(root, target) {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-test('creates one default OAuth public standalone instance, MCP URL, and optional member login code', async t => {
+test('creates an explicit OAuth public standalone instance, MCP URL, and optional member login code', async t => {
   const current = await tempInstance(t);
-  const result = __test.initConfig({ config: current.config, workspace: current.root, provider: 'external', 'public-url': 'devmate.example.com' });
+  const result = __test.initConfig({ config: current.config, workspace: current.root, provider: 'external', 'public-url': 'devmate.example.com', 'authentication-mode': 'oauth' });
   assert.equal(result.config.connection.provider, 'external');
   assert.equal(result.config.connection.publicUrl, 'https://devmate.example.com');
   assert.equal('deployment' in result.config, false);
@@ -44,7 +44,7 @@ test('creates one default OAuth public standalone instance, MCP URL, and optiona
   if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
 });
 
-test('bootstrap presets encode public OAuth and runner-local no-auth without persisting a runtime mode', async t => {
+test('bootstrap presets encode personal no-auth and team OAuth without persisting a runtime mode', async t => {
   const personal = await tempInstance(t, 'devmate-personal-');
   const personalResult = __test.bootstrap({
     preset: 'personal',
@@ -52,7 +52,7 @@ test('bootstrap presets encode public OAuth and runner-local no-auth without per
     config: personal.config
   });
   assert.equal(personalResult.preset, 'personal');
-  assert.equal(personalResult.authenticationMode, 'oauth');
+  assert.equal(personalResult.authenticationMode, 'none');
   assert.equal(personalResult.access.workspaceLeasesRequired, false);
   assert.equal(personalResult.execution.embeddedRunnerEnabled, true);
   assert.equal(personalResult.execution.externalRunnerControlEnabled, false);
@@ -105,7 +105,7 @@ test('bootstrap presets encode public OAuth and runner-local no-auth without per
     assert.equal(Object.hasOwn(saved, 'deployment'), false);
     assert.equal(Object.hasOwn(saved, 'production'), false);
   }
-  assert.deepEqual(JSON.parse(await fsp.readFile(personalResult.config, 'utf8')).auth, { mode: 'oauth' });
+  assert.deepEqual(JSON.parse(await fsp.readFile(personalResult.config, 'utf8')).auth, { mode: 'none' });
   assert.deepEqual(JSON.parse(await fsp.readFile(teamResult.config, 'utf8')).auth, { mode: 'oauth' });
   assert.deepEqual(JSON.parse(await fsp.readFile(controlResult.config, 'utf8')).auth, { mode: 'oauth' });
   assert.deepEqual(JSON.parse(await fsp.readFile(runnerHost.config, 'utf8')).auth, { mode: 'none' });
@@ -127,25 +127,27 @@ test('explicit bootstrap options override preset defaults and unknown presets fa
   assert.throws(() => __test.bootstrapPreset('production'), /Unknown bootstrap preset/);
 });
 
-test('public standalone rejects explicit no-auth while loopback-only no-auth remains available', async t => {
+test('public standalone accepts the default and explicit single-owner no-auth modes', async t => {
   const current = await tempInstance(t, 'devmate-auth-boundary-');
-  assert.throws(() => __test.initConfig({
-    config: path.join(current.state, 'public.json'),
+  const publicConfig = path.join(current.state, 'public.json');
+  const publicInstance = __test.initConfig({
+    config: publicConfig,
     workspace: current.root,
     provider: 'external',
     'public-url': 'https://devmate.example.com',
     'authentication-mode': 'none'
-  }), /requires .*oauth.*loopback-only/i);
-
-  const localConfig = path.join(current.state, 'local.json');
-  const local = __test.initConfig({
-    config: localConfig,
-    workspace: current.root,
-    provider: 'ngrok',
-    'authentication-mode': 'none'
   });
-  assert.equal(local.config.connection.publicUrl, '');
-  assert.equal(local.config.auth.mode, 'none');
+  assert.equal(publicInstance.config.connection.publicUrl, 'https://devmate.example.com');
+  assert.equal(publicInstance.config.auth.mode, 'none');
+
+  const defaultConfig = path.join(current.state, 'default-public.json');
+  const defaultPublic = __test.initConfig({
+    config: defaultConfig,
+    workspace: current.root,
+    provider: 'external',
+    'public-url': 'https://default.example.com'
+  });
+  assert.equal(defaultPublic.config.auth.mode, 'none');
 });
 
 test('standalone state defaults outside the workspace and explicit overlap is rejected before writing credentials', async t => {

@@ -13,20 +13,22 @@ function noAuthConfig() {
   };
 }
 
-test('auth none is local-only and never promotes remote MCP ingress to owner', () => {
+test('auth none grants the single owner access through local and public MCP ingress', () => {
   const reverseProxyLoopbackSocket = authenticateGatewayRequest(
     { headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '127.0.0.1' } },
     new URL('http://localhost/mcp'),
     noAuthConfig()
   );
-  assert.equal(reverseProxyLoopbackSocket, null, 'a public Host header must not inherit loopback owner trust through a local reverse proxy socket');
+  assert.equal(reverseProxyLoopbackSocket?.role, 'owner');
+  assert.equal(reverseProxyLoopbackSocket?.source, 'local');
 
   const remotePrincipal = authenticateGatewayRequest(
     { headers: { host: 'devmate.example.com' }, socket: { remoteAddress: '203.0.113.10' } },
     new URL('http://localhost/mcp'),
     noAuthConfig()
   );
-  assert.equal(remotePrincipal, null);
+  assert.equal(remotePrincipal?.role, 'owner');
+  assert.equal(remotePrincipal?.source, 'local');
 
   const localPrincipal = authenticateGatewayRequest(
     { headers: { host: '127.0.0.1:8787' }, socket: { remoteAddress: '127.0.0.1' } },

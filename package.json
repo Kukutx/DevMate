@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
-  "version": "3.6.0",
+  "version": "3.6.1",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {
@@ -239,12 +239,12 @@
         },
         "devMate.authenticationMode": {
           "type": "string",
-          "default": "oauth",
+          "default": "none",
           "enum": [
             "none",
             "oauth"
           ],
-          "description": "MCP authentication mode. oauth is the default for public MCP; none is restricted to trusted loopback access."
+          "description": "MCP authentication mode. none is the default single-owner mode for local and public MCP access; oauth is for team/shared member identity."
         },
         "devMate.permissionProfile": {
           "type": "string",

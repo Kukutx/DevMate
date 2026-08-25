@@ -27,7 +27,7 @@ npx devmate init \
   --restrict-public-host true
 ```
 
-Public HTTPS ingress defaults to OAuth; `none` is loopback-only.
+Public HTTPS ingress supports the default single-owner `none` mode; use `oauth` for team/member identity.
 
 If `--public-url` is supplied together with `--authentication-mode none`, initialization fails instead of creating a public endpoint that cannot authenticate remote requests.
 

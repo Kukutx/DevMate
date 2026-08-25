@@ -14,10 +14,9 @@ const obsidian = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'main
 const obsidianSettings = fs.readFileSync(path.join(root, 'obsidian-plugin', 'src', 'settings.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
-test('Gateway keeps loopback no-auth but requires OAuth for remote MCP ingress', () => {
-  assert.match(requestGuard, /if \(isLocalRequest\(req\)\) return fallbackLocalPrincipal\(\)/);
+test('Gateway grants single-owner no-auth on local and public MCP while keeping OAuth for team identity', () => {
+  assert.match(requestGuard, /if \(isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'\) return fallbackLocalPrincipal\(\)/);
   assert.match(requestGuard, /if \(config\.auth\?\.mode !== 'oauth'\) return null/);
-  assert.doesNotMatch(requestGuard, /isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'/);
   assert.match(requestGuard, /oauthAccessToken/);
   assert.match(requestGuard, /principalFromOAuthClaims/);
   assert.doesNotMatch(requestGuard, /x-devmate-token/);
@@ -40,7 +39,7 @@ test('connection URLs never embed credentials and public verification uses MCP 2
   assert.doesNotMatch(publicMcp, /['"]initialize['"]|mcp-session-id|Mcp-Session-Id/i);
 });
 
-test('desktop hosts default public MCP to OAuth while none remains an explicit local-only option', () => {
+test('desktop hosts default single-owner MCP to none while OAuth remains available for team identity', () => {
   assert.doesNotMatch(extension, /devMate\.copyToken/);
   assert.doesNotMatch(extension, /copyConnectionToken/);
   assert.equal(packageJson.contributes.commands.some(command => command.command === 'devMate.copyToken'), false);
@@ -51,7 +50,7 @@ test('desktop hosts default public MCP to OAuth while none remains an explicit l
   assert.match(obsidian, /authenticationMode/);
   assert.match(extension, /copyOAuthApprovalCode/);
   assert.match(obsidian, /copyOAuthApprovalCode/);
-  assert.equal(packageJson.contributes.configuration.properties['devMate.authenticationMode'].default, 'oauth');
-  assert.match(packageJson.contributes.configuration.properties['devMate.authenticationMode'].description, /public MCP/i);
-  assert.match(obsidianSettings, /authenticationMode:\s*'oauth'/);
+  assert.equal(packageJson.contributes.configuration.properties['devMate.authenticationMode'].default, 'none');
+  assert.match(packageJson.contributes.configuration.properties['devMate.authenticationMode'].description, /single-owner/i);
+  assert.match(obsidianSettings, /authenticationMode:\s*'none'/);
 });

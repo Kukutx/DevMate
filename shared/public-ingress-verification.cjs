@@ -106,7 +106,7 @@ function verifiedConnection(config, publicUrl, { notBefore = '' } = {}) {
   const authMode = authenticationMode(config?.auth?.mode);
   const authGeneration = authenticationPolicyGeneration(config);
   const policyGeneration = connectionPolicyGeneration(config);
-  if (authMode !== 'oauth' || String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;
+  if (String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;
   if (!Number.isSafeInteger(connection.lastAuthGeneration) || connection.lastAuthGeneration !== authGeneration) return false;
   if (!Number.isSafeInteger(connection.lastConnectionPolicyGeneration) || connection.lastConnectionPolicyGeneration !== policyGeneration) return false;
   const preflightAt = Date.parse(connection.lastPreflightAt || '');
@@ -149,7 +149,7 @@ function successfulVerificationPatch(
   stamp = new Date().toISOString(),
   record = null,
   gatewayLock = null,
-  authMode = 'oauth',
+  authMode = 'none',
   authGeneration = 0,
   policyGeneration = 0
 ) {

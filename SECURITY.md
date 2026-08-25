@@ -9,7 +9,7 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - `/control/health` and `/control/metrics` remain local-control surfaces and must not be exposed as public MCP endpoints.
 - MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
 - `auth.mode: "none"` is valid only for trusted loopback MCP and grants local owner access without an access token; it does not authorize remote requests.
-- Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
+- Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity.
 - `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
 - Runner control requests have their own bounded body, rate and protocol-version requirements.
 

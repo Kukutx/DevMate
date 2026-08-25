@@ -30,17 +30,17 @@ test('rejects invalid optional capabilities before creating a config', async t =
   await assert.rejects(fsp.stat(current.config), error => error?.code === 'ENOENT');
 });
 
-test('default standalone bootstrap creates an OAuth-ready DevMate instance', async t => {
+test('default standalone bootstrap creates a single-owner no-auth DevMate instance', async t => {
   const current = await fixture('owner');
   t.after(() => fsp.rm(current.root, { recursive: true, force: true }));
   const result = __test.bootstrap({ workspace: current.workspace, config: current.config });
-  assert.equal(result.authenticationMode, 'oauth');
+  assert.equal(result.authenticationMode, 'none');
   assert.equal(result.connection.provider, 'ngrok');
   assert.equal(result.access.ownerOnly, true);
   assert.equal(result.execution.embeddedRunnerEnabled, false);
   const config = await readConfig(current.config);
-  assert.deepEqual(config.auth, { mode: 'oauth' });
-  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), true);
+  assert.deepEqual(config.auth, { mode: 'none' });
+  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), false);
   assert.equal('deployment' in config, false);
   assert.equal('production' in config, false);
   assert.equal('preset' in result, false);
@@ -89,9 +89,9 @@ test('bootstrap presets encode their security boundary explicitly', async t => {
 
   const personal = await fixture('preset-personal'); fixtures.push(personal);
   const personalResult = __test.bootstrap({ preset: 'personal', workspace: personal.workspace, config: personal.config });
-  assert.equal(personalResult.authenticationMode, 'oauth');
+  assert.equal(personalResult.authenticationMode, 'none');
   assert.equal(personalResult.execution.embeddedRunnerEnabled, true);
-  assert.equal(await exists(path.join(personal.root, 'state', 'oauth-secrets.json')), true);
+  assert.equal(await exists(path.join(personal.root, 'state', 'oauth-secrets.json')), false);
 
   const team = await fixture('preset-team'); fixtures.push(team);
   const teamResult = __test.bootstrap({ preset: 'team', workspace: team.workspace, config: team.config });

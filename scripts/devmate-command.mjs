@@ -21,7 +21,7 @@ const { DEFAULT_VERSION, updateConfig } = configStore;
 
 const BOOTSTRAP_PRESETS = Object.freeze({
   personal: Object.freeze({
-    'authentication-mode': 'oauth',
+    'authentication-mode': 'none',
     'embedded-runner': true,
     'external-runner-control': false,
     'require-workspace-lease-for-writes': false
@@ -118,6 +118,12 @@ function bootstrap(options = {}) {
   const effective = { ...resolved.options };
   const memberName = String(effective['member-name'] || '').trim();
   if (effective['member-role'] && !memberName) throw new Error('--member-role requires --member-name');
+  if (memberName) {
+    if (effective['authentication-mode'] === undefined) effective['authentication-mode'] = 'oauth';
+    if (effective['authentication-mode'] !== 'oauth') {
+      throw new Error('--member-name requires --authentication-mode oauth because member access is an OAuth identity flow');
+    }
+  }
   if (effective['runner-concurrency'] !== undefined) {
     const value = Number(effective['runner-concurrency']);
     if (!Number.isInteger(value) || value < 1 || value > 16) throw new Error('--runner-concurrency must be an integer from 1 to 16');
@@ -164,7 +170,7 @@ function bootstrap(options = {}) {
     ok: true,
     ...(resolved.preset ? { preset: resolved.preset } : {}),
     config: initialized.file,
-    authenticationMode: finalConfig.auth?.mode || 'oauth',
+    authenticationMode: finalConfig.auth?.mode || 'none',
     mcpUrl: mcpUrl({ config: initialized.file, url: finalConfig.connection.publicUrl || undefined }),
     connection: { ...finalConfig.connection },
     access: {
@@ -204,8 +210,8 @@ function status(options = {}) {
     (config.connection.provider === 'cloudflare-managed' || config.connection.provider === 'external') &&
     !config.connection.publicUrl
   ) warnings.push(`${config.connection.provider} requires a public HTTPS URL.`);
-  if (config.connection.publicUrl && config.auth?.mode !== 'oauth') {
-    warnings.push('Public MCP ingress requires OAuth; auth.mode=none is loopback-only.');
+  if (activeMembers.length && config.auth?.mode !== 'oauth') {
+    warnings.push('Active members require OAuth authentication.');
   }
 
   return {
@@ -235,7 +241,7 @@ function status(options = {}) {
 }
 
 function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nPublic-capable bootstrap presets default to OAuth. The runner preset is loopback-only and retains no-auth unless explicitly overridden.\n`;
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nPersonal and runner presets default to no authentication. Public MCP supports both none and oauth; team, control-plane, and member access use OAuth.\n`;
 }
 
 async function main(argv = process.argv.slice(2)) {

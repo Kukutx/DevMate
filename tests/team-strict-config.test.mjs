@@ -44,7 +44,7 @@ test('invalid roles, booleans and numeric policy limits fail without coercion', 
 test('missing optional capabilities receive one official secure default set', () => {
   const config = {};
   normalizeInstanceConfig(config);
-  assert.equal(config.auth.mode, 'oauth');
+  assert.equal(config.auth.mode, 'none');
   assert.equal(config.connection.provider, 'ngrok');
   assert.equal(config.team.defaultMemberRole, 'developer');
   assert.equal(config.team.maxMembers, 100);

@@ -5,7 +5,7 @@ DevMate supports two current MCP 2026 authentication modes: OAuth by default, pl
 ## Security boundary
 
 - `auth.mode: "oauth"` is the default and is required for remote/public MCP ingress.
-- `auth.mode: "none"` is limited to trusted loopback MCP access.
+- `auth.mode: "none"` is the default single-owner mode for both local and public MCP access.
 - Loopback requests remain frictionless and receive the local owner principal.
 - Remote requests are never promoted to owner because authentication is disabled; a remote request without valid OAuth authorization is rejected.
 - When OAuth is enabled, access tokens use the standard `Authorization: Bearer <access-token>` header. DevMate does not expose a user-configured static MCP Bearer credential.

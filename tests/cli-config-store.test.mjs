@@ -18,7 +18,7 @@ test('standalone CLI uses the shared configuration store without a compatibility
   assert.equal(command.includes('spawn('), false);
 });
 
-test('standalone initialization writes the supported default OAuth schema atomically', () => {
+test('standalone initialization writes the supported default single-owner no-auth schema atomically', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-store-'));
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'state', 'config.json');
@@ -28,14 +28,14 @@ test('standalone initialization writes the supported default OAuth schema atomic
   assert.equal(result.file, config);
   assert.equal(persisted.version, configStore.SUPPORTED_CONFIG_VERSION);
   assert.equal(persisted.appVersion, packageJson.version);
-  assert.deepEqual(persisted.auth, { mode: 'oauth' });
+  assert.deepEqual(persisted.auth, { mode: 'none' });
   assert.equal(persisted.connection.provider, 'ngrok');
-  assert.equal(fs.existsSync(path.join(directory, 'state', 'state', 'oauth-secrets.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'state', 'state', 'oauth-secrets.json')), false);
   assert.equal('deployment' in persisted, false);
   assert.equal('production' in persisted, false);
 });
 
-test('standalone public initialization defaults to OAuth and rejects explicit no-auth', () => {
+test('standalone public initialization defaults to and accepts explicit single-owner no-auth', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-public-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -48,22 +48,25 @@ test('standalone public initialization defaults to OAuth and rejects explicit no
     'public-url': 'https://devmate.example.com'
   });
   const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
-  assert.deepEqual(persisted.auth, { mode: 'oauth' });
+  assert.deepEqual(persisted.auth, { mode: 'none' });
   assert.equal(persisted.connection.publicUrl, 'https://devmate.example.com');
-  assert.equal(fs.existsSync(path.join(directory, 'default', 'state', 'oauth-secrets.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'default', 'state', 'oauth-secrets.json')), false);
 
   const explicit = path.join(directory, 'explicit-none', 'config.json');
-  assert.throws(() => cli.initConfig({
+  cli.initConfig({
     workspace,
     config: explicit,
     provider: 'external',
     'public-url': 'https://devmate.example.com',
     'authentication-mode': 'none'
-  }), /Public HTTPS ingress requires .*oauth.*loopback-only/i);
-  assert.equal(fs.existsSync(explicit), false);
+  });
+  const explicitPersisted = configStore.readJson(explicit, null, { strict: true, supportedVersion: true });
+  assert.deepEqual(explicitPersisted.auth, { mode: 'none' });
+  assert.equal(explicitPersisted.connection.publicUrl, 'https://devmate.example.com');
+  assert.equal(fs.existsSync(path.join(directory, 'explicit-none', 'state', 'oauth-secrets.json')), false);
 });
 
-test('standalone loopback-only no-auth remains available when explicitly selected', () => {
+test('standalone local no-auth remains available when explicitly selected', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-loopback-none-'));
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'local', 'config.json');
@@ -102,7 +105,7 @@ test('member creation preserves the selected OAuth mode and never persists the l
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'state', 'config.json');
   fs.mkdirSync(workspace);
-  cli.initConfig({ workspace, config, provider: 'ngrok' });
+  cli.initConfig({ workspace, config, provider: 'ngrok', 'authentication-mode': 'oauth' });
   const created = cli.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
   assert.match(created.loginCode, /^dmc_/);
   const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
@@ -113,15 +116,18 @@ test('member creation preserves the selected OAuth mode and never persists the l
   assert.equal(fs.existsSync(path.join(directory, 'state', 'state', 'oauth-secrets.json')), true);
 });
 
-test('member creation preserves an explicitly selected loopback-only no-auth mode', () => {
+test('member creation requires OAuth and cannot mutate single-owner no-auth mode', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-cli-member-none-'));
   const workspace = path.join(directory, 'workspace');
   const config = path.join(directory, 'state', 'config.json');
   fs.mkdirSync(workspace);
   cli.initConfig({ workspace, config, provider: 'ngrok', 'authentication-mode': 'none' });
-  const created = cli.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' });
+  assert.throws(
+    () => cli.memberCreate({ config, name: 'Alice', role: 'developer', workspaces: 'workspace' }),
+    /Team member access requires auth\.mode=oauth/
+  );
   const persisted = configStore.readJson(config, null, { strict: true, supportedVersion: true });
   assert.deepEqual(persisted.auth, { mode: 'none' });
-  assert.equal(JSON.stringify(persisted).includes(created.loginCode), false);
+  assert.equal(persisted.team.members.length, 0);
   assert.equal(fs.existsSync(path.join(directory, 'state', 'state', 'oauth-secrets.json')), false);
 });

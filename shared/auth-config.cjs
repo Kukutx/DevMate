@@ -1,7 +1,7 @@
 'use strict';
 
 const AUTHENTICATION_MODES = Object.freeze(['none', 'oauth']);
-const DEFAULT_AUTHENTICATION_MODE = 'oauth';
+const DEFAULT_AUTHENTICATION_MODE = 'none';
 const AUTH_POLICY_INITIALIZED_KEY = 'authenticationPolicyInitialized';
 const AUTH_POLICY_GENERATION_KEY = 'authenticationPolicyGeneration';
 

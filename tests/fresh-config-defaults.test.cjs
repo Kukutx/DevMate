@@ -14,6 +14,7 @@ test('fresh DevMate config keeps background jobs opt-in and uses canonical host 
     assert.equal(config.jobs.embeddedRunnerEnabled, false);
     assert.deepEqual(config.hostContexts, {});
     assert.equal(config.activeHostId, null);
+    assert.deepEqual(config.auth, { mode: 'none' });
     assert.equal(Object.hasOwn(config, 'vscodeContext'), false);
   } finally {
     fs.rmSync(workspaceRoot, { recursive: true, force: true });

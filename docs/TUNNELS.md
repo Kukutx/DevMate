@@ -24,9 +24,9 @@ Machine-local executable paths, provider credentials and restart preferences rem
 
 ## Public authentication boundary
 
-Public MCP defaults to OAuth. `auth.mode: "none"` is a trusted-loopback-only option and does not authorize requests arriving through ngrok, Cloudflare, external HTTPS ingress, or another remote/public path.
+Single-owner public MCP defaults to `auth.mode: "none"` and accepts the owner through ngrok, Cloudflare, external HTTPS ingress, or another configured public path. OAuth is opt-in for team/shared member identity.
 
-Desktop and standalone public-capable configurations default to OAuth. Provider selection never weakens the authentication boundary.
+Desktop and standalone personal configurations default to `none`; team/member identity uses OAuth. Provider selection does not silently change the authentication mode.
 
 OAuth signing material and approval codes remain in private runtime state. Public URLs contain no credential and static owner/member Bearer tokens are not supported.
 
@@ -39,7 +39,7 @@ Start
   → start/attach Gateway
   → start/attach configured public connection
   → obtain HTTPS origin
-  → obtain short-lived OAuth verification token
+  → obtain authentication material only when the configured mode requires it
   → MCP server/discover (2026-07-28)
   → tools/list
   → gateway_status tools/call
@@ -92,7 +92,7 @@ A public URL is necessary but insufficient for Ready.
 
 After a provider publishes an HTTPS endpoint, DevMate performs current MCP preflight:
 
-1. Obtain a short-lived OAuth owner access token from protected local state.
+1. If `auth.mode: "oauth"` is enabled, obtain a short-lived OAuth owner access token from protected local state; `none` uses no token.
 2. Send `server/discover` with protocol pin `2026-07-28`.
 3. Require the server to advertise `2026-07-28` and identify itself as `devmate`.
 4. Call `tools/list`.
@@ -101,7 +101,7 @@ After a provider publishes an HTTPS endpoint, DevMate performs current MCP prefl
 
 The MCP transport is stateless. No MCP session identifier is created, propagated, or cached.
 
-Explicit `auth.mode: "none"` remains valid for trusted loopback-only MCP workflows, but those local calls are not public-generation verification and cannot authorize a remote request.
+`auth.mode: "none"` is valid for both local and public single-owner MCP workflows. Public-generation verification uses the same mode configured for the instance.
 
 If the Gateway restarts, provider restarts, ownership changes, or a new provider `readyAt` is published, previous verification becomes stale even when the hostname is identical. The host returns to recovery/verifying until the new complete generation passes preflight.
 
@@ -119,7 +119,7 @@ DevMate discovers dynamic ngrok endpoints through the current local Agent endpoi
 
 `cloudflare-quick` starts a native `cloudflared tunnel --url ...` quick tunnel and discovers the TryCloudflare HTTPS endpoint from provider output.
 
-The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh OAuth-authenticated MCP 2026 preflight and may produce a new hostname.
+The endpoint is dynamic and has no stable shared `publicUrl`. A new provider generation therefore requires a fresh MCP 2026 preflight under the configured authentication mode and may produce a new hostname.
 
 Both desktop hosts coordinate one public preflight for each Gateway+tunnel generation. Fresh success evidence is reused briefly across the two hosts, then periodically revalidated. Temporary DNS, TLS, edge propagation, or timeout failures leave the current tunnel running and retry with bounded backoff instead of creating another hostname.
 
@@ -139,7 +139,7 @@ The token is supplied through the provider process environment, not command-line
 
 `external` is a first-class provider for an existing reverse proxy, load balancer, VPN gateway or externally managed tunnel.
 
-DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and requires OAuth-authenticated current MCP preflight before Ready.
+DevMate does not spawn an ingress process for this provider. It still creates and owns/attaches the same shared connection record and requires current MCP preflight under the configured authentication mode before Ready.
 
 The configured origin must be a clean HTTPS origin without credentials, path, query string or fragment.
 

@@ -153,11 +153,11 @@ async function runRealPublicPreflight(mode) {
   }
 }
 
-test('public no-auth MCP is rejected by the real Gateway without Authorization', async () => {
+test('public single-owner no-auth MCP works against the real Gateway without Authorization', async () => {
   const result = await runRealPublicPreflight('none');
-  assert.equal(result.rejected, true);
+  assert.equal(result.rejected, false);
   assert.equal(result.token, '');
-  assert.ok(result.authorizationHeaders.length >= 1);
+  assert.ok(result.authorizationHeaders.length >= 3);
   assert.deepEqual([...new Set(result.authorizationHeaders)], ['']);
 }, { timeout: 30000 });
 

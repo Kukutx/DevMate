@@ -9,7 +9,7 @@ DevMate: Start
   → Obsidian bridge ready
   → Gateway started or attached
   → public connection started or attached
-  → MCP server/discover verified with OAuth for public ingress
+  → MCP server/discover verified for the configured authentication mode
   → tools/list verified
   → gateway_status tools/call verified
   → Ready
@@ -53,10 +53,10 @@ Stopping one attached host does not kill a compatible shared resource owned by t
 
 ## Authentication
 
-Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
+Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.
 
-- `auth.mode: "oauth"` is the desktop/public default.
-- `auth.mode: "none"` is an explicit loopback-only option; remote requests are rejected rather than promoted to owner.
+- `auth.mode: "oauth"` is opt-in for team/shared member identity.
+- `auth.mode: "none"` is the default single-owner mode for both local and public MCP ingress.
 - OAuth signing material and the rotating owner approval code live in protected DevMate state, not shared `config.json` and not the vault.
 - The copied `/mcp` URL contains no credential.
 - Static owner/member Bearer credentials and credential query parameters are not supported.
@@ -93,7 +93,7 @@ Cloudflare managed requires a stable public HTTPS origin and a managed tunnel to
 
 ### External HTTPS ingress
 
-External is for an existing reverse proxy, load balancer, VPN endpoint, or separately managed tunnel. DevMate does not spawn an ingress child process, but it still coordinates shared connection ownership and requires MCP 2026 verification with OAuth before public Ready.
+External is for an existing reverse proxy, load balancer, VPN endpoint, or separately managed tunnel. DevMate does not spawn an ingress child process, but it still coordinates shared connection ownership and requires current MCP 2026 verification before public Ready.
 
 ## Automatic recovery
 
@@ -154,7 +154,7 @@ Important user settings include:
 - provider-specific stable public URL where applicable
 - optional provider executable paths
 - optional encrypted provider credentials
-- **Authentication mode** — OAuth is the public default; `none` is loopback-only
+- **Authentication mode** — `none` is the single-owner default; OAuth is for team/shared identity
 - **Restart connection after unexpected exit**
 - **Maximum connection restarts**
 - **Shared state directory override**
@@ -174,7 +174,7 @@ Internal transport details are not required for routine use.
 ## Security
 
 - The Gateway binds to loopback internally by default.
-- Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
+- Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.
 - MCP is pinned to `2026-07-28`, uses `server/discover`, and is stateless at the transport layer.
 - OAuth and provider secrets stay out of MCP URLs, the vault, and shared public config.
 - Optional provider credentials use OS-backed encrypted storage when available.

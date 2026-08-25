@@ -176,7 +176,6 @@ async function verifySharedPublicMcp({
     const config = readJson(configFile, null, { strict: true, supportedVersion: true });
     if (!config) throw new Error('DevMate shared config is unavailable during public verification');
     if (config.lifecycle?.desiredState !== 'running') throw lifecycleStoppedError();
-    if (authenticationMode(config?.auth?.mode) !== 'oauth') throw publicAuthenticationRequiredError(config);
     if (expectedAuthPolicy && !authPolicyMatches(config, expectedAuthPolicy)) {
       throw authPolicyChangedError(expectedAuthPolicy, config);
     }
@@ -258,7 +257,6 @@ async function verifySharedPublicMcp({
             if (recordGeneration(currentRecord()) !== generation) return false;
             const currentConfig = readJson(configFile, null, { strict: true, supportedVersion: true });
             return currentConfig?.lifecycle?.desiredState === 'running' &&
-              authenticationMode(currentConfig?.auth?.mode) === 'oauth' &&
               authPolicyMatches(currentConfig, expectedAuthPolicy) &&
               connectionPolicyMatches(currentConfig, expectedConnectionPolicy) &&
               runtimeMatchesConnection(currentConfig, currentRecord()).matches;
@@ -291,7 +289,6 @@ async function verifySharedPublicMcp({
     inspect(expectedAuthPolicy, expectedConnectionPolicy);
     updateConfig(configFile, config => {
       if (isCurrent() !== true || config?.lifecycle?.desiredState !== 'running') return config;
-      if (authenticationMode(config?.auth?.mode) !== 'oauth') return config;
       if (!authPolicyMatches(config, expectedAuthPolicy)) return config;
       if (!connectionPolicyMatches(config, expectedConnectionPolicy)) return config;
       const record = currentRecord();

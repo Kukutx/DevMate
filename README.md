@@ -32,7 +32,7 @@ npx devmate bootstrap \
   --config /var/lib/devmate-runner/config.json
 ```
 
-Presets compose the same capability-based instance schema; they are not runtime modes. Public-capable presets default to `auth.mode: "oauth"`. The Runner-host preset uses `auth.mode: "none"` because its MCP surface is loopback-only. Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.
+Presets compose the same capability-based instance schema; they are not runtime modes. Public-capable presets default to `auth.mode: "oauth"`. The Runner-host preset uses `auth.mode: "none"` because its MCP surface is loopback-only. Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.
 
 Member creation returns a one-time `dmc_` OAuth login code. Only its salted verifier and the member `authVersion` are persisted. Runner creation returns a one-time `dmr_` Runner credential; only its salted verifier is persisted. Neither plaintext credential is written to `config.json`.
 

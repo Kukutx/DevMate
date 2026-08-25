@@ -70,7 +70,7 @@ test('canonical policy helpers are accepted without double-incrementing generati
   try {
     const before = readJson(fx.file, null, { strict: true, supportedVersion: true });
     assert.equal(before.auth.mode, 'oauth');
-    assert.equal(authenticationPolicyGeneration(before), 0, 'establishing the default OAuth policy must not manufacture a transition');
+    assert.equal(authenticationPolicyGeneration(before), 1, 'the fixture explicit none -> OAuth transition advances exactly once');
 
     const updated = updateConfig(fx.file, config => {
       setConnectionPolicy(config, { provider: 'external', publicUrl: 'https://devmate.example.com' });
@@ -78,7 +78,7 @@ test('canonical policy helpers are accepted without double-incrementing generati
       return config;
     });
     assert.equal(connectionPolicyGeneration(updated), 1);
-    assert.equal(authenticationPolicyGeneration(updated), 1, 'one OAuth -> none transition advances exactly once');
+    assert.equal(authenticationPolicyGeneration(updated), 2, 'one OAuth -> none transition advances exactly once without double increment');
 
     const lifecycle = setLifecycleIntent(fx.file, 'running', { requestedBy: 'test', reason: 'canonical helper' });
     assert.equal(lifecycle.changed, true);

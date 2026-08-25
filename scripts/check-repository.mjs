@@ -137,7 +137,7 @@ const forbidden = [
   ['extension.js', /permissionProfile\(\) === 'fullAccess' \|\| .*allowDirectoryMutations/, 'directory permission bypass'],
   ['gateway/team-tool-data.mjs', /map\.set\(item\.name/, 'ambiguous workspace scope map'],
   ['shared/auth-config.cjs', /\b(?:signingKey|approvalCode|ownerApprovalCode)\b/, 'OAuth secrets must never be part of the public authentication config schema'],
-  ['gateway/request-guard.mjs', /isLocalRequest\(req\)\s*\|\|\s*config\.auth\?\.mode\s*===\s*['"]none['"]/, 'remote no-auth MCP must never map to local owner access']
+  ['host/shared-public-mcp-verification.js', /authenticationMode\(config\?\.auth\?\.mode\)\s*!==\s*['"]oauth['"]/, 'public verification must not reject single-owner no-auth']
 ];
 for (const [file, pattern, label] of forbidden) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
@@ -150,13 +150,14 @@ const required = [
   ['gateway/server.mjs', /createMcpHandler\(\(\) => createServer\(\), \{ legacy: 'reject' \}\)/, 'Gateway MCP server must reject legacy transport eras'],
   ['gateway/server-extension-host.mjs', /prototype\.registerTool = function devmateRegisterTool/, 'Gateway must retain the single MCP tool interception host'],
   ['shared/auth-config.cjs', /AUTHENTICATION_MODES = Object\.freeze\(\['none', 'oauth'\]\)/, 'authentication config must remain mode-only and OAuth-capable'],
-  ['shared/auth-config.cjs', /DEFAULT_AUTHENTICATION_MODE = 'oauth'/, 'authentication must default to OAuth'],
-  ['gateway/request-guard.mjs', /if \(isLocalRequest\(req\)\) return fallbackLocalPrincipal\(\)/, 'trusted loopback MCP must retain frictionless local-owner access'],
-  ['gateway/request-guard.mjs', /if \(config\.auth\?\.mode !== 'oauth'\) return null/, 'remote MCP must reject no-auth access'],
+  ['shared/auth-config.cjs', /DEFAULT_AUTHENTICATION_MODE = 'none'/, 'single-owner authentication must default to none'],
+  ['gateway/request-guard.mjs', /if \(isLocalRequest\(req\) \|\| config\.auth\?\.mode === 'none'\) return fallbackLocalPrincipal\(\)/, 'single-owner no-auth must work on local and public MCP ingress'],
+  ['gateway/request-guard.mjs', /if \(config\.auth\?\.mode !== 'oauth'\) return null/, 'unsupported modes must fail closed after none is handled'],
   ['shared/oauth-tokens.cjs', /if \(config\?\.auth\?\.mode !== 'oauth'\) return '';/, 'preflight must only mint an OAuth token when OAuth is enabled'],
   ['scripts/devmate-command.mjs', /team:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'oauth'/, 'Team bootstrap must default to OAuth'],
   ['scripts/devmate-command.mjs', /'control-plane':\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'oauth'/, 'Control-plane bootstrap must default to OAuth'],
-  ['scripts/devmate-command.mjs', /runner:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'none'/, 'Runner-local bootstrap may retain loopback no-auth']
+  ['scripts/devmate-command.mjs', /personal:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'none'/, 'Personal bootstrap must default to no-auth'],
+  ['scripts/devmate-command.mjs', /runner:\s*Object\.freeze\(\{[\s\S]*?'authentication-mode': 'none'/, 'Runner bootstrap must default to no-auth']
 ];
 for (const [file, pattern, label] of required) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
@@ -189,12 +190,12 @@ for (const file of documentationFiles) {
 
 const documentationRequired = [
   ['README.md', /server\/discover[\s\S]*2026-07-28|2026-07-28[\s\S]*server\/discover/, 'README must document MCP 2026 discovery'],
-  ['README.md', /Public MCP defaults to OAuth; no-auth is limited to trusted loopback access\./, 'README must document authenticated public MCP'],
-  ['SECURITY.md', /Public MCP defaults to OAuth; no-auth is limited to trusted loopback access\./, 'security policy must document authenticated public MCP'],
-  ['docs/AUTHENTICATION.md', /`auth\.mode: "none"` is limited to trusted loopback MCP access\./, 'authentication policy must define loopback-only no-auth'],
-  ['docs/BOOTSTRAP.md', /Public-capable presets default to `oauth`; the Runner-local preset uses `none` for loopback-only MCP\./, 'bootstrap docs must encode secure auth defaults'],
-  ['docs/STANDALONE.md', /Public HTTPS ingress defaults to OAuth; `none` is loopback-only\./, 'standalone docs must require authentication on public ingress'],
-  ['obsidian-plugin/README.md', /Public MCP defaults to OAuth; no-auth is limited to trusted loopback access\./, 'Obsidian docs must describe authenticated public MCP'],
+  ['README.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team\/member identity\./, 'README must document single-owner public no-auth'],
+  ['SECURITY.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team\/member identity\./, 'security policy must document single-owner public no-auth'],
+  ['docs/AUTHENTICATION.md', /`auth\.mode: "none"` is the default single-owner mode for both local and public MCP access\./, 'authentication policy must define single-owner public no-auth'],
+  ['docs/BOOTSTRAP.md', /The Personal and Runner presets default to `none`; Team and Control-plane presets use `oauth` for member identity\./, 'bootstrap docs must encode product auth defaults'],
+  ['docs/STANDALONE.md', /Public HTTPS ingress supports the default single-owner `none` mode; use `oauth` for team\/member identity\./, 'standalone docs must support single-owner public no-auth'],
+  ['obsidian-plugin/README.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team\/member identity\./, 'Obsidian docs must describe single-owner public no-auth'],
   ['docs/HOST_INTEGRATION.md', /MCP 2026 verification is stateless/, 'host integration must document stateless MCP 2026'],
   ['docs/TEAM_DEPLOYMENT.md', /single-use rotating token families/, 'team docs must document refresh-token rotation'],
   ['docs/TUNNELS.md', /The MCP transport is stateless/, 'tunnel docs must document stateless public verification']
@@ -205,6 +206,10 @@ for (const [file, pattern, label] of documentationRequired) {
 }
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const authenticationDefault = packageJson.contributes?.configuration?.properties?.['devMate.authenticationMode']?.default;
+if (authenticationDefault !== 'none') {
+  failures.push({ file: 'package.json', output: 'devMate.authenticationMode must default to none for single-owner use' });
+}
 const currentMcpPackages = {
   '@modelcontextprotocol/client': '2.0.0',
   '@modelcontextprotocol/node': '2.0.0',

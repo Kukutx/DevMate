@@ -373,28 +373,29 @@ test('already verified current Gateway+tunnel generation performs no duplicate n
   }
 });
 
-test('public recovery rejects no-auth before any network preflight', async () => {
+test('public recovery verifies no-auth single-owner ingress without minting OAuth', async () => {
   const fx = fixture();
   try {
     const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
     config.auth = { mode: 'none' };
     atomicWriteJson(fx.configFile, config);
     let calls = 0;
+    let token = null;
     const verifier = new PublicTunnelVerifier({
       stateDirectory: fx.stateDirectory,
       tunnelStatus: port => fx.status(port),
       readyGraceMs: 0,
       now: () => Date.parse('2026-08-08T01:01:00.000Z'),
-      preflight: async input => { calls += 1; return successfulTest(input.publicUrl); }
+      preflight: async input => { calls += 1; token = input.token; return successfulTest(input.publicUrl); }
     });
     const result = await verifier.check();
-    assert.equal(result.verified, false);
-    assert.equal(result.stale, false);
-    assert.equal(result.error?.code, 'DEVMATE_PUBLIC_MCP_AUTH_REQUIRED');
-    assert.equal(calls, 0);
+    assert.equal(result.verified, true);
+    assert.equal(calls, 1);
+    assert.equal(token, '');
     const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
-    assert.equal(persisted.connection.lastPublicHost, 'old.example.com');
-    assert.equal(persisted.connection.lastPreflightAt, '2026-08-08T00:00:00.000Z');
+    assert.equal(persisted.connection.lastAuthMode, 'none');
+    assert.equal(persisted.connection.lastPublicHost, 'new.example.com');
+    assert.equal(persisted.connection.lastToolCallVerified, true);
   } finally {
     fx.cleanup();
   }

@@ -15,7 +15,7 @@ When `--config` is omitted, standalone bootstrap stores the instance at `~/.devm
 
 No preset writes historical `mode`, `deployment`, or `production` fields.
 
-Public-capable presets default to `oauth`; the Runner-local preset uses `none` for loopback-only MCP.
+The Personal and Runner presets default to `none`; Team and Control-plane presets use `oauth` for member identity.
 
 ## Personal preset
 
