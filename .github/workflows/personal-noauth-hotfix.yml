@@ -1,0 +1,355 @@
+name: Personal no-auth public MCP hotfix
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/personal-noauth-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Patch single-owner no-auth contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re
+
+          def text(path):
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path, value):
+              Path(path).write_text(value, encoding='utf-8')
+
+          def must_replace(path, old, new, count=None):
+              s = text(path)
+              found = s.count(old)
+              if found == 0:
+                  raise SystemExit(f'missing expected text in {path}: {old[:120]!r}')
+              if count is not None and found != count:
+                  raise SystemExit(f'unexpected replacement count in {path}: expected {count}, got {found}')
+              write(path, s.replace(old, new))
+
+          def must_sub(path, pattern, replacement, count=1, flags=0):
+              s = text(path)
+              out, n = re.subn(pattern, replacement, s, count=count, flags=flags)
+              if n != count:
+                  raise SystemExit(f'unexpected regex replacement count in {path}: expected {count}, got {n}: {pattern}')
+              write(path, out)
+
+          # Canonical product default: single-owner is no-auth; OAuth is opt-in for team/member identity.
+          must_replace('shared/auth-config.cjs', "const DEFAULT_AUTHENTICATION_MODE = 'oauth';", "const DEFAULT_AUTHENTICATION_MODE = 'none';", 1)
+
+          package = json.loads(text('package.json'))
+          auth_setting = package['contributes']['configuration']['properties']['devMate.authenticationMode']
+          auth_setting['default'] = 'none'
+          auth_setting['description'] = 'MCP authentication mode. none is the default single-owner mode for local and public MCP access; oauth is for team/shared member identity.'
+          write('package.json', json.dumps(package, indent=2, ensure_ascii=False) + '\n')
+
+          # Gateway: in auth.mode=none the one owner is trusted on both loopback and the configured public ingress.
+          must_replace(
+              'gateway/request-guard.mjs',
+              "  if (isLocalRequest(req)) return fallbackLocalPrincipal();\n  if (config.auth?.mode !== 'oauth') return null;",
+              "  if (isLocalRequest(req) || config.auth?.mode === 'none') return fallbackLocalPrincipal();\n  if (config.auth?.mode !== 'oauth') return null;",
+              1
+          )
+
+          # Public verifier: verification is transport health, not an OAuth-only gate. Keep auth-generation fencing for both modes.
+          must_replace(
+              'host/shared-public-mcp-verification.js',
+              "    if (authenticationMode(config?.auth?.mode) !== 'oauth') throw publicAuthenticationRequiredError(config);\n",
+              '',
+              1
+          )
+          must_replace(
+              'host/shared-public-mcp-verification.js',
+              "              authenticationMode(currentConfig?.auth?.mode) === 'oauth' &&\n",
+              '',
+              1
+          )
+          must_replace(
+              'host/shared-public-mcp-verification.js',
+              "      if (authenticationMode(config?.auth?.mode) !== 'oauth') return config;\n",
+              '',
+              1
+          )
+
+          # Verification evidence is valid for whichever configured auth mode generated it.
+          must_replace(
+              'shared/public-ingress-verification.cjs',
+              "  if (authMode !== 'oauth' || String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;",
+              "  if (String(connection.lastAuthMode || '').trim().toLowerCase() !== authMode) return false;",
+              1
+          )
+          must_replace(
+              'shared/public-ingress-verification.cjs',
+              "  authMode = 'oauth',",
+              "  authMode = 'none',",
+              1
+          )
+
+          # Standalone and presets: personal/no member => none. Team/control-plane/member => OAuth.
+          must_replace(
+              'scripts/standalone-runtime.mjs',
+              "  const requestedAuthentication = options['authentication-mode'] === undefined\n    ? 'oauth'\n    : String(options['authentication-mode']).trim().toLowerCase();\n  if (publicUrl && requestedAuthentication !== 'oauth') {\n    throw new Error('Public HTTPS ingress requires --authentication-mode oauth; none is loopback-only');\n  }",
+              "  const requestedAuthentication = options['authentication-mode'] === undefined\n    ? 'none'\n    : String(options['authentication-mode']).trim().toLowerCase();",
+              1
+          )
+          must_replace('scripts/standalone-runtime.mjs', "detail: config.auth?.mode || 'oauth'", "detail: config.auth?.mode || 'none'", 1)
+          must_replace('scripts/standalone-runtime.mjs', "detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'not-used-in-loopback-only-mode'", "detail: config.auth?.mode === 'oauth' ? 'oauth-enabled' : 'single-owner-no-auth'", 1)
+          must_replace(
+              'scripts/standalone-runtime.mjs',
+              "    checks.push({ key: 'public-authentication', ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth' });",
+              "    checks.push({ key: 'public-authentication', ok: ['none', 'oauth'].includes(config.auth?.mode), detail: config.auth?.mode || 'none' });",
+              1
+          )
+          must_replace(
+              'scripts/standalone-runtime.mjs',
+              "    const config = normalizeInstanceConfig(current);\n    const name = String(options.name || '').trim();\n    if (!name) throw new Error('--name is required');\n    result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });",
+              "    const config = normalizeInstanceConfig(current);\n    if (config.auth?.mode !== 'oauth') throw new Error('Team member access requires auth.mode=oauth');\n    const name = String(options.name || '').trim();\n    if (!name) throw new Error('--name is required');\n    result = createTeamMember(config, { id: options.id, name, role: options.role, workspaceIds, expiresAt: options['expires-at'] || null });",
+              1
+          )
+
+          must_sub(
+              'scripts/devmate-command.mjs',
+              r"(personal:\s*Object\.freeze\(\{\s*\n\s*'authentication-mode': )'oauth'",
+              r"\1'none'",
+              1
+          )
+          must_replace(
+              'scripts/devmate-command.mjs',
+              "  if (effective['member-role'] && !memberName) throw new Error('--member-role requires --member-name');\n",
+              "  if (effective['member-role'] && !memberName) throw new Error('--member-role requires --member-name');\n  if (memberName) {\n    if (effective['authentication-mode'] === undefined) effective['authentication-mode'] = 'oauth';\n    if (effective['authentication-mode'] !== 'oauth') {\n      throw new Error('--member-name requires --authentication-mode oauth because member access is an OAuth identity flow');\n    }\n  }\n",
+              1
+          )
+          must_replace('scripts/devmate-command.mjs', "authenticationMode: finalConfig.auth?.mode || 'oauth'", "authenticationMode: finalConfig.auth?.mode || 'none'", 1)
+          must_replace(
+              'scripts/devmate-command.mjs',
+              "  if (config.connection.publicUrl && config.auth?.mode !== 'oauth') {\n    warnings.push('Public MCP ingress requires OAuth; auth.mode=none is loopback-only.');\n  }",
+              "  if (activeMembers.length && config.auth?.mode !== 'oauth') {\n    warnings.push('Active members require OAuth authentication.');\n  }",
+              1
+          )
+          must_replace(
+              'scripts/devmate-command.mjs',
+              "Public-capable bootstrap presets default to OAuth. The runner preset is loopback-only and retains no-auth unless explicitly overridden.",
+              "Personal and runner presets default to no authentication. Public MCP supports both none and oauth; team, control-plane, and member access use OAuth.",
+              1
+          )
+
+          # Obsidian host mirrors the same desktop policy.
+          must_replace('obsidian-plugin/src/settings.js', "authenticationMode: 'oauth'", "authenticationMode: 'none'", 1)
+          must_replace('obsidian-plugin/src/settings.js', "authenticationMode: input.authenticationMode === 'none' ? 'none' : 'oauth'", "authenticationMode: input.authenticationMode === 'oauth' ? 'oauth' : 'none'", 1)
+          must_replace('obsidian-plugin/src/settings.js', "const authentication = sharedAuthentication === 'none' ? 'none' : 'oauth';", "const authentication = sharedAuthentication === 'oauth' ? 'oauth' : 'none';", 1)
+          must_replace(
+              'obsidian-plugin/src/settings.js',
+              'OAuth is the default for public MCP. None is only for trusted loopback-only access and will not authorize remote requests.',
+              'None is the default single-owner mode for local and public MCP. OAuth is for team/shared member identity.',
+              1
+          )
+          must_replace("obsidian-plugin/src/settings.js", ".addOption('oauth', 'OAuth (recommended)')\n          .addOption('none', 'None (loopback only)')", ".addOption('none', 'None (single owner, default)')\n          .addOption('oauth', 'OAuth (team/shared)')", 1)
+
+          # Runtime regression tests: public no-auth must map to the one owner.
+          must_replace("tests/request-auth-boundaries.test.mjs", "test('auth none is local-only and never promotes remote MCP ingress to owner', () => {", "test('auth none grants the single owner access through local and public MCP ingress', () => {", 1)
+          must_replace("tests/request-auth-boundaries.test.mjs", "  assert.equal(reverseProxyLoopbackSocket, null, 'a public Host header must not inherit loopback owner trust through a local reverse proxy socket');", "  assert.equal(reverseProxyLoopbackSocket?.role, 'owner');\n  assert.equal(reverseProxyLoopbackSocket?.source, 'local');", 1)
+          must_replace("tests/request-auth-boundaries.test.mjs", "  assert.equal(remotePrincipal, null);", "  assert.equal(remotePrincipal?.role, 'owner');\n  assert.equal(remotePrincipal?.source, 'local');", 1)
+
+          old_noauth_verifier = """test('public recovery rejects no-auth before any network preflight', async () => {
+  const fx = fixture();
+  try {
+    const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    config.auth = { mode: 'none' };
+    atomicWriteJson(fx.configFile, config);
+    let calls = 0;
+    const verifier = new PublicTunnelVerifier({
+      stateDirectory: fx.stateDirectory,
+      tunnelStatus: port => fx.status(port),
+      readyGraceMs: 0,
+      now: () => Date.parse('2026-08-08T01:01:00.000Z'),
+      preflight: async input => { calls += 1; return successfulTest(input.publicUrl); }
+    });
+    const result = await verifier.check();
+    assert.equal(result.verified, false);
+    assert.equal(result.stale, false);
+    assert.equal(result.error?.code, 'DEVMATE_PUBLIC_MCP_AUTH_REQUIRED');
+    assert.equal(calls, 0);
+    const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(persisted.connection.lastPublicHost, 'old.example.com');
+    assert.equal(persisted.connection.lastPreflightAt, '2026-08-08T00:00:00.000Z');
+  } finally {
+    fx.cleanup();
+  }
+});"""
+          new_noauth_verifier = """test('public recovery verifies no-auth single-owner ingress without minting OAuth', async () => {
+  const fx = fixture();
+  try {
+    const config = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    config.auth = { mode: 'none' };
+    atomicWriteJson(fx.configFile, config);
+    let calls = 0;
+    let token = null;
+    const verifier = new PublicTunnelVerifier({
+      stateDirectory: fx.stateDirectory,
+      tunnelStatus: port => fx.status(port),
+      readyGraceMs: 0,
+      now: () => Date.parse('2026-08-08T01:01:00.000Z'),
+      preflight: async input => { calls += 1; token = input.token; return successfulTest(input.publicUrl); }
+    });
+    const result = await verifier.check();
+    assert.equal(result.verified, true);
+    assert.equal(calls, 1);
+    assert.equal(token, '');
+    const persisted = readJson(fx.configFile, null, { strict: true, supportedVersion: true });
+    assert.equal(persisted.connection.lastAuthMode, 'none');
+    assert.equal(persisted.connection.lastPublicHost, 'new.example.com');
+    assert.equal(persisted.connection.lastToolCallVerified, true);
+  } finally {
+    fx.cleanup();
+  }
+});"""
+          must_replace('tests/public-tunnel-verifier.test.cjs', old_noauth_verifier, new_noauth_verifier, 1)
+
+          # CLI expectations.
+          must_replace('tests/devmate-command.test.mjs', "test('default standalone bootstrap creates an OAuth-ready DevMate instance'", "test('default standalone bootstrap creates a single-owner no-auth DevMate instance'", 1)
+          must_replace('tests/devmate-command.test.mjs', "  assert.equal(result.authenticationMode, 'oauth');\n  assert.equal(result.connection.provider, 'ngrok');", "  assert.equal(result.authenticationMode, 'none');\n  assert.equal(result.connection.provider, 'ngrok');", 1)
+          must_replace('tests/devmate-command.test.mjs', "  assert.deepEqual(config.auth, { mode: 'oauth' });\n  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), true);", "  assert.deepEqual(config.auth, { mode: 'none' });\n  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), false);", 1)
+          must_replace('tests/devmate-command.test.mjs', "  assert.equal(personalResult.authenticationMode, 'oauth');", "  assert.equal(personalResult.authenticationMode, 'none');", 1)
+          must_replace('tests/devmate-command.test.mjs', "  assert.equal(await exists(path.join(personal.root, 'state', 'oauth-secrets.json')), true);", "  assert.equal(await exists(path.join(personal.root, 'state', 'oauth-secrets.json')), false);", 1)
+
+          must_replace('tests/standalone-cli.test.mjs', "test('creates one default OAuth public standalone instance, MCP URL, and optional member login code'", "test('creates an explicit OAuth public standalone instance, MCP URL, and optional member login code'", 1)
+          must_replace("tests/standalone-cli.test.mjs", "const result = __test.initConfig({ config: current.config, workspace: current.root, provider: 'external', 'public-url': 'devmate.example.com' });", "const result = __test.initConfig({ config: current.config, workspace: current.root, provider: 'external', 'public-url': 'devmate.example.com', 'authentication-mode': 'oauth' });", 1)
+          must_replace("tests/standalone-cli.test.mjs", "test('bootstrap presets encode public OAuth and runner-local no-auth without persisting a runtime mode'", "test('bootstrap presets encode personal no-auth and team OAuth without persisting a runtime mode'", 1)
+          must_replace('tests/standalone-cli.test.mjs', "  assert.equal(personalResult.authenticationMode, 'oauth');", "  assert.equal(personalResult.authenticationMode, 'none');", 1)
+          must_replace('tests/standalone-cli.test.mjs', "  assert.deepEqual(JSON.parse(await fsp.readFile(personalResult.config, 'utf8')).auth, { mode: 'oauth' });", "  assert.deepEqual(JSON.parse(await fsp.readFile(personalResult.config, 'utf8')).auth, { mode: 'none' });", 1)
+          old_boundary = """test('public standalone rejects explicit no-auth while loopback-only no-auth remains available', async t => {
+  const current = await tempInstance(t, 'devmate-auth-boundary-');
+  assert.throws(() => __test.initConfig({
+    config: path.join(current.state, 'public.json'),
+    workspace: current.root,
+    provider: 'external',
+    'public-url': 'https://devmate.example.com',
+    'authentication-mode': 'none'
+  }), /requires .*oauth.*loopback-only/i);
+
+  const localConfig = path.join(current.state, 'local.json');
+  const local = __test.initConfig({
+    config: localConfig,
+    workspace: current.root,
+    provider: 'ngrok',
+    'authentication-mode': 'none'
+  });
+  assert.equal(local.config.connection.publicUrl, '');
+  assert.equal(local.config.auth.mode, 'none');
+});"""
+          new_boundary = """test('public standalone accepts the default and explicit single-owner no-auth modes', async t => {
+  const current = await tempInstance(t, 'devmate-auth-boundary-');
+  const publicConfig = path.join(current.state, 'public.json');
+  const publicInstance = __test.initConfig({
+    config: publicConfig,
+    workspace: current.root,
+    provider: 'external',
+    'public-url': 'https://devmate.example.com',
+    'authentication-mode': 'none'
+  });
+  assert.equal(publicInstance.config.connection.publicUrl, 'https://devmate.example.com');
+  assert.equal(publicInstance.config.auth.mode, 'none');
+
+  const defaultConfig = path.join(current.state, 'default-public.json');
+  const defaultPublic = __test.initConfig({
+    config: defaultConfig,
+    workspace: current.root,
+    provider: 'external',
+    'public-url': 'https://default.example.com'
+  });
+  assert.equal(defaultPublic.config.auth.mode, 'none');
+});"""
+          must_replace('tests/standalone-cli.test.mjs', old_boundary, new_boundary, 1)
+
+          # Repository-level lock: CI must fail if OAuth-only public policy is reintroduced.
+          must_replace(
+              'scripts/check-repository.mjs',
+              "  ['gateway/request-guard.mjs', /isLocalRequest\\(req\\)\\s*\\|\\|\\s*config\\.auth\\?\\.mode\\s*===\\s*['\"]none['\"]/, 'remote no-auth MCP must never map to local owner access']\n",
+              "  ['host/shared-public-mcp-verification.js', /authenticationMode\\(config\\?\\.auth\\?\\.mode\\)\\s*!==\\s*['\"]oauth['\"]/, 'public verification must not reject single-owner no-auth']\n",
+              1
+          )
+          must_replace('scripts/check-repository.mjs', "['shared/auth-config.cjs', /DEFAULT_AUTHENTICATION_MODE = 'oauth'/, 'authentication must default to OAuth']", "['shared/auth-config.cjs', /DEFAULT_AUTHENTICATION_MODE = 'none'/, 'single-owner authentication must default to none']", 1)
+          must_replace('scripts/check-repository.mjs', "['gateway/request-guard.mjs', /if \\(isLocalRequest\\(req\\)\\) return fallbackLocalPrincipal\\(\\)/, 'trusted loopback MCP must retain frictionless local-owner access']", "['gateway/request-guard.mjs', /if \\(isLocalRequest\\(req\\) \\|\\| config\\.auth\\?\\.mode === 'none'\\) return fallbackLocalPrincipal\\(\\)/, 'single-owner no-auth must work on local and public MCP ingress']", 1)
+          must_replace('scripts/check-repository.mjs', "['gateway/request-guard.mjs', /if \\(config\\.auth\\?\\.mode !== 'oauth'\\) return null/, 'remote MCP must reject no-auth access']", "['gateway/request-guard.mjs', /if \\(config\\.auth\\?\\.mode !== 'oauth'\\) return null/, 'unsupported modes must fail closed after none is handled']", 1)
+          must_replace('scripts/check-repository.mjs', "['scripts/devmate-command.mjs', /runner:\\s*Object\\.freeze\\(\\{[\\s\\S]*?'authentication-mode': 'none'/, 'Runner-local bootstrap may retain loopback no-auth']", "['scripts/devmate-command.mjs', /personal:\\s*Object\\.freeze\\(\\{[\\s\\S]*?'authentication-mode': 'none'/, 'Personal bootstrap must default to no-auth'],\n  ['scripts/devmate-command.mjs', /runner:\\s*Object\\.freeze\\(\\{[\\s\\S]*?'authentication-mode': 'none'/, 'Runner bootstrap must default to no-auth']", 1)
+
+          # Canonical docs. Replace the explicit contradictory policy statements and lock their new wording.
+          doc_replacements = {
+              'README.md': [('Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.', 'Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.')],
+              'SECURITY.md': [('Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.', 'Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity.')],
+              'docs/AUTHENTICATION.md': [('`auth.mode: "none"` is limited to trusted loopback MCP access.', '`auth.mode: "none"` is the default single-owner mode for both local and public MCP access.')],
+              'docs/BOOTSTRAP.md': [('Public-capable presets default to `oauth`; the Runner-local preset uses `none` for loopback-only MCP.', 'The Personal and Runner presets default to `none`; Team and Control-plane presets use `oauth` for member identity.')],
+              'docs/STANDALONE.md': [('Public HTTPS ingress defaults to OAuth; `none` is loopback-only.', 'Public HTTPS ingress supports the default single-owner `none` mode; use `oauth` for team/member identity.')],
+              'obsidian-plugin/README.md': [('Public MCP defaults to OAuth; no-auth is limited to trusted loopback access.', 'Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.')]
+          }
+          for path, pairs in doc_replacements.items():
+              for old, new in pairs:
+                  must_replace(path, old, new, 1)
+
+          must_replace('scripts/check-repository.mjs', "['README.md', /Public MCP defaults to OAuth; no-auth is limited to trusted loopback access\\./, 'README must document authenticated public MCP']", "['README.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team\\/member identity\\./, 'README must document single-owner public no-auth']", 1)
+          must_replace('scripts/check-repository.mjs', "['SECURITY.md', /Public MCP defaults to OAuth; no-auth is limited to trusted loopback access\\./, 'security policy must document authenticated public MCP']", "['SECURITY.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team\\/member identity\\./, 'security policy must document single-owner public no-auth']", 1)
+          must_replace('scripts/check-repository.mjs', "['docs/AUTHENTICATION.md', /`auth\\.mode: \"none\"` is limited to trusted loopback MCP access\\./, 'authentication policy must define loopback-only no-auth']", "['docs/AUTHENTICATION.md', /`auth\\.mode: \"none\"` is the default single-owner mode for both local and public MCP access\\./, 'authentication policy must define single-owner public no-auth']", 1)
+          must_replace('scripts/check-repository.mjs', "['docs/BOOTSTRAP.md', /Public-capable presets default to `oauth`; the Runner-local preset uses `none` for loopback-only MCP\\./, 'bootstrap docs must encode secure auth defaults']", "['docs/BOOTSTRAP.md', /The Personal and Runner presets default to `none`; Team and Control-plane presets use `oauth` for member identity\\./, 'bootstrap docs must encode product auth defaults']", 1)
+          must_replace('scripts/check-repository.mjs', "['docs/STANDALONE.md', /Public HTTPS ingress defaults to OAuth; `none` is loopback-only\\./, 'standalone docs must require authentication on public ingress']", "['docs/STANDALONE.md', /Public HTTPS ingress supports the default single-owner `none` mode; use `oauth` for team\\/member identity\\./, 'standalone docs must support single-owner public no-auth']", 1)
+          must_replace('scripts/check-repository.mjs', "['obsidian-plugin/README.md', /Public MCP defaults to OAuth; no-auth is limited to trusted loopback access\\./, 'Obsidian docs must describe authenticated public MCP']", "['obsidian-plugin/README.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team\\/member identity\\./, 'Obsidian docs must describe single-owner public no-auth']", 1)
+
+          # Additional hard lock independent of wording above.
+          marker = "const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));"
+          policy_guard = """const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const authenticationDefault = packageJson.contributes?.configuration?.properties?.['devMate.authenticationMode']?.default;
+if (authenticationDefault !== 'none') {
+  failures.push({ file: 'package.json', output: 'devMate.authenticationMode must default to none for single-owner use' });
+}
+"""
+          must_replace('scripts/check-repository.mjs', marker + '\n', policy_guard, 1)
+
+          # Fresh config test also pins the invariant.
+          must_replace('tests/fresh-config-defaults.test.cjs', "    assert.equal(config.activeHostId, null);", "    assert.equal(config.activeHostId, null);\n    assert.deepEqual(config.auth, { mode: 'none' });", 1)
+
+          print('Personal no-auth public MCP policy patched and regression locks installed.')
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Repository contracts
+        run: npm run check
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Package fixed VSIX
+        run: npm run package:vsix
+
+      - name: Commit permanent fix and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'DevMate Hotfix'
+          git config user.email 'devmate-hotfix@users.noreply.github.com'
+          git rm .github/workflows/personal-noauth-hotfix.yml
+          git add -A
+          git commit -m 'fix: restore single-owner public no-auth contract'
+          git push origin HEAD:master
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devmate-3.6.0-personal-noauth-fixed
+          path: '*.vsix'
+          if-no-files-found: error
