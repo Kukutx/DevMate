@@ -25,7 +25,16 @@ jobs:
       - name: Apply permanent policy patch
         shell: bash
         run: |
-          python3 -c "from pathlib import Path; p=Path('scripts/personal-noauth-hotfix.py'); s=p.read_text(); s=s.replace(\"replace('scripts/standalone-runtime.mjs', \\\"detail: config.auth?.mode || 'oauth'\\\", \\\"detail: config.auth?.mode || 'none'\\\", 1)\", \"replace('scripts/standalone-runtime.mjs', \\\"detail: config.auth?.mode || 'oauth'\\\", \\\"detail: config.auth?.mode || 'none'\\\", 2)\"); s=s.replace(\"ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth'\", \"ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none'\"); p.write_text(s)"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/personal-noauth-hotfix.py')
+          s = p.read_text()
+          s = s.replace("replace('scripts/standalone-runtime.mjs', \"detail: config.auth?.mode || 'oauth'\", \"detail: config.auth?.mode || 'none'\", 1)", "replace('scripts/standalone-runtime.mjs', \"detail: config.auth?.mode || 'oauth'\", \"detail: config.auth?.mode || 'none'\", 2)")
+          s = s.replace("ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth'", "ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none'")
+          s = s.replace("\n          .addOption('none', 'None (loopback only)')", "\n        .addOption('none', 'None (loopback only)')")
+          s = s.replace("\n          .addOption('oauth', 'OAuth (team/shared)')", "\n        .addOption('oauth', 'OAuth (team/shared)')")
+          p.write_text(s)
+          PY
           python3 scripts/personal-noauth-hotfix.py
 
       - name: Install dependencies
