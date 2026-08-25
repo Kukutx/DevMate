@@ -9,7 +9,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import packageJson from '../package.json' with { type: 'json' };
-import { DEFAULT_MAINTENANCE, maintenanceOptions, pruneState, stateSummary } from './maintenance.mjs';
+import { DEFAULT_MAINTENANCE, maintenanceOptions, stateSummary } from './maintenance.mjs';
 import * as shared from './local-shared.mjs';
 import { executeCommand } from './command-process.mjs';
 import { isLocalRequest } from './http-host-policy.mjs';
@@ -680,15 +680,6 @@ function createServer(){
 const mcpHandler = toNodeHandler(createMcpHandler(() => createServer(), { legacy: 'reject' }));
 
 const config = loadConfig();
-try {
-  const maintenance = await pruneState({stateRoot:STATE_ROOT,backupRoot:BACKUP_ROOT,auditLog:AUDIT_LOG}, config.maintenance);
-  const deletedBackups = maintenance.backups.deleted.length;
-  if (deletedBackups || maintenance.audit.removedEntries) {
-    console.log(`Maintenance pruned backups=${deletedBackups} auditEntries=${maintenance.audit.removedEntries}`);
-  }
-} catch (e) {
-  console.error(`Maintenance failed: ${e.message || e}`);
-}
 const httpServer = http.createServer(async (req,res)=>{
   let url;
   try { url = new URL(req.url || '/', 'http://localhost'); }

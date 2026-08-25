@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.0
+
+- Removed retention maintenance from the Gateway Ready critical path, so accumulated backups, audit logs, and recovery artifacts can no longer make desktop startup time out.
+- Run the first bounded runtime-maintenance pass immediately after Ready, then continue the existing idle high-water maintenance cycle without sacrificing automatic cleanup.
+- Added explicit startup-order and large accumulated-state regressions that verify fast Ready plus eventual post-Ready pruning.
+
 ## 3.5.0
 
 - Fixed Gateway startup failures caused by accumulated audit and backup state, and added idle runtime high-water maintenance so state remains bounded after startup.
