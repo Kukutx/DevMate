@@ -23,7 +23,10 @@ jobs:
           cache: npm
 
       - name: Apply permanent policy patch
-        run: python3 scripts/personal-noauth-hotfix.py
+        shell: bash
+        run: |
+          python3 -c "from pathlib import Path; p=Path('scripts/personal-noauth-hotfix.py'); s=p.read_text(); s=s.replace(\"replace('scripts/standalone-runtime.mjs', \\\"detail: config.auth?.mode || 'oauth'\\\", \\\"detail: config.auth?.mode || 'none'\\\", 1)\", \"replace('scripts/standalone-runtime.mjs', \\\"detail: config.auth?.mode || 'oauth'\\\", \\\"detail: config.auth?.mode || 'none'\\\", 2)\"); s=s.replace(\"ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth'\", \"ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none'\"); p.write_text(s)"
+          python3 scripts/personal-noauth-hotfix.py
 
       - name: Install dependencies
         run: npm ci
