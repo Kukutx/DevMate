@@ -33,6 +33,11 @@ jobs:
           s = s.replace("ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'oauth'", "ok: config.auth?.mode === 'oauth', detail: config.auth?.mode || 'none'")
           s = s.replace(r"\n          .addOption('none', 'None (loopback only)')", r"\n        .addOption('none', 'None (loopback only)')")
           s = s.replace(r"\n          .addOption('oauth', 'OAuth (team/shared)')", r"\n        .addOption('oauth', 'OAuth (team/shared)')")
+          old = '''replace('tests/devmate-command.test.mjs', "  assert.deepEqual(config.auth, { mode: 'oauth' });\\n  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), true);", "  assert.deepEqual(config.auth, { mode: 'none' });\\n  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), false);", 1)'''
+          new = '''replace('tests/devmate-command.test.mjs', "  const config = await readConfig(current.config);\\n  assert.deepEqual(config.auth, { mode: 'oauth' });\\n  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), true);\\n  assert.equal('deployment' in config, false);", "  const config = await readConfig(current.config);\\n  assert.deepEqual(config.auth, { mode: 'none' });\\n  assert.equal(await exists(path.join(current.root, 'state', 'oauth-secrets.json')), false);\\n  assert.equal('deployment' in config, false);", 1)'''
+          if old not in s:
+              raise SystemExit('could not disambiguate personal auth test patch')
+          s = s.replace(old, new, 1)
           p.write_text(s)
           PY
           python3 scripts/personal-noauth-hotfix.py
