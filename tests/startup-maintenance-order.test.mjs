@@ -13,8 +13,13 @@ test('Gateway startup never waits for retention maintenance', () => {
 
   const readyIndex = runtimeSource.indexOf("completeStartupProgress('server_module_loaded');");
   const scheduleIndex = runtimeSource.indexOf('setImmediate(() => {', readyIndex);
-  const maintenanceIndex = runtimeSource.indexOf('runRuntimeMaintenanceOnce({ force: true })', readyIndex);
+  const maintenanceIndex = runtimeSource.indexOf('runRuntimeMaintenanceOnce()', readyIndex);
   assert.ok(readyIndex >= 0, 'startup completion marker is missing');
   assert.ok(scheduleIndex > readyIndex, 'initial maintenance must be scheduled only after startup completion');
   assert.ok(maintenanceIndex > scheduleIndex, 'initial maintenance must run inside the post-Ready schedule');
+  assert.equal(
+    runtimeSource.includes('runRuntimeMaintenanceOnce({ force: true })'),
+    false,
+    'post-Ready maintenance must preserve the runtime idle gate instead of racing active requests or Jobs'
+  );
 });
