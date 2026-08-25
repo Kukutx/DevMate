@@ -18,7 +18,7 @@ import { installLocalControlGuard } from './local-control-guard.mjs';
 import { acquireGatewayInstanceLock, releaseGatewayInstanceLock } from './durable-state.mjs';
 import { shutdownTeamServices } from './team-capabilities.mjs';
 import { shutdownJobRuntime } from './job-runtime.mjs';
-import { drainRuntimeMaintenance, startRuntimeMaintenance, stopRuntimeMaintenance } from './runtime-maintenance.mjs';
+import { drainRuntimeMaintenance, runRuntimeMaintenanceOnce, startRuntimeMaintenance, stopRuntimeMaintenance } from './runtime-maintenance.mjs';
 import { beginStartupProgress, completeStartupProgress, enterStartupStage, failStartupProgress } from './startup-progress.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 import { recoverFileTransactions } from './file-transactions.mjs';
@@ -255,6 +255,11 @@ try {
     getOptions: () => readConfig().maintenance || {}
   });
   completeStartupProgress('server_module_loaded');
+  setImmediate(() => {
+    void runRuntimeMaintenanceOnce({ force: true }).catch(error => {
+      console.error(`Initial runtime maintenance failed: ${error?.message || error}`);
+    });
+  });
 } catch (error) {
   if (instanceLockAcquired) {
     try { releaseGatewayInstanceLock(); } catch {}
