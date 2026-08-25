@@ -256,7 +256,7 @@ try {
   });
   completeStartupProgress('server_module_loaded');
   setImmediate(() => {
-    void runRuntimeMaintenanceOnce({ force: true }).catch(error => {
+    void runRuntimeMaintenanceOnce().catch(error => {
       console.error(`Initial runtime maintenance failed: ${error?.message || error}`);
     });
   });
