@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && contains(github.event.head_commit.message, '[run-prepare-3.6]')
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -55,8 +55,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add package.json package-lock.json CHANGELOG.md gateway/server.mjs gateway/server-runtime.mjs \
-            obsidian-plugin/manifest.json obsidian-plugin/package.json obsidian-plugin/versions.json \
-            tests/gateway-large-state-startup.test.mjs tests/startup-maintenance-order.test.mjs
+            obsidian-plugin/manifest.json obsidian-plugin/package.json obsidian-plugin/versions.json
           git diff --cached --check
           git diff --cached --quiet && { echo 'No prepared changes found' >&2; exit 1; }
           git commit -m 'DevMate 3.6.0: decouple maintenance from startup'
