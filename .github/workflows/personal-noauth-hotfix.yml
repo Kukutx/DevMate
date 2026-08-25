@@ -58,6 +58,7 @@ jobs:
           python3 scripts/finalize-host-recovery-3.6.1.py
           python3 scripts/finalize-mcp-2026-contract-3.6.1.py
           python3 scripts/finalize-public-mcp-e2e-3.6.1.py
+          python3 scripts/finalize-runner-readiness-3.6.1.py
           node scripts/sync-version.mjs
 
       - name: Install dependencies
@@ -80,7 +81,7 @@ jobs:
           gh auth setup-git
           git config user.name 'DevMate Hotfix'
           git config user.email 'devmate-hotfix@users.noreply.github.com'
-          git rm .github/workflows/personal-noauth-hotfix.yml scripts/personal-noauth-hotfix.py scripts/finalize-personal-noauth-3.6.1.py scripts/finalize-personal-noauth-3.6.1-docs.py scripts/finalize-auth-generation-3.6.1.py scripts/finalize-host-recovery-3.6.1.py scripts/finalize-mcp-2026-contract-3.6.1.py scripts/finalize-public-mcp-e2e-3.6.1.py
+          git rm .github/workflows/personal-noauth-hotfix.yml scripts/personal-noauth-hotfix.py scripts/finalize-personal-noauth-3.6.1.py scripts/finalize-personal-noauth-3.6.1-docs.py scripts/finalize-auth-generation-3.6.1.py scripts/finalize-host-recovery-3.6.1.py scripts/finalize-mcp-2026-contract-3.6.1.py scripts/finalize-public-mcp-e2e-3.6.1.py scripts/finalize-runner-readiness-3.6.1.py
           git add -A
           git commit -m 'fix: release 3.6.1 single-owner public no-auth'
           git push origin HEAD:master
