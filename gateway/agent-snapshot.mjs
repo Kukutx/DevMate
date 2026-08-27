@@ -18,7 +18,7 @@ const APPLY_ACTIVE_STATUSES = new Set(['applying', 'rolling_back', 'recovery_blo
 
 const SKIP_DIRS = new Set([
   '.git', '.godot', '.next', '.nuxt', '.cache', '.dart_tool', '.firebase', '.terraform',
-  '.devmate', '.codex', '.openai', '.direnv', '.ssh', '.gnupg', '.aws', '.azure', '.docker', '.kube',
+  '.devmate', '.direnv', '.ssh', '.gnupg', '.aws', '.azure', '.docker', '.kube',
   '.npm', '.yarn', '.m2', '.gradle',
   'node_modules', 'coverage', 'dist', 'build', 'bin', 'obj', '.venv', 'venv', '__pycache__',
   'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys',
@@ -27,16 +27,16 @@ const SKIP_DIRS = new Set([
 const BLOCKED_BASENAMES = new Set([
   '.env', '.envrc', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.netrc', '_netrc',
   '.git-credentials', '.gitconfig', 'pip.conf', 'nuget.config', 'local.properties',
-  'keystore.properties', 'key.properties', 'gradle.properties',
+  'keystore.properties', 'key.properties',
   'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
   'service-account.json', 'service_account.json', 'service-account-key.json',
   'service_account_key.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
 ]);
 const BLOCKED_EXTENSIONS = new Set([
-  '.pem', '.key', '.pfx', '.p12', '.jks', '.keystore', '.db', '.sqlite', '.sqlite3', '.log'
+  '.pem', '.key', '.pfx', '.p12', '.jks', '.keystore'
 ]);
 const TEXT_EXTENSIONS = new Set([
-  '.md', '.mdx', '.txt', '.json', '.jsonc', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx',
+  '.md', '.mdx', '.txt', '.log', '.json', '.jsonc', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx',
   '.cjs', '.mjs', '.css', '.scss', '.sass', '.less', '.html', '.xml', '.cs', '.csproj', '.sln',
   '.dart', '.py', '.ps1', '.sh', '.bash', '.zsh', '.sql', '.toml', '.ini', '.config', '.cfg',
   '.props', '.targets', '.java', '.kt', '.kts', '.go', '.rs', '.php', '.rb', '.swift', '.vue',
@@ -45,7 +45,7 @@ const TEXT_EXTENSIONS = new Set([
 const TEXT_BASENAMES = new Set([
   'README', 'README.md', 'LICENSE', 'Dockerfile', 'Makefile', 'CMakeLists.txt',
   'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb',
-  'pubspec.yaml', 'pubspec.lock', 'global.json', 'Directory.Packages.props',
+  'pubspec.yaml', 'pubspec.lock', 'global.json', 'Directory.Packages.props', 'gradle.properties',
   'AGENTS.md', 'CONTRIBUTING.md', '.gitignore', '.gitattributes', '.dockerignore', '.editorconfig',
   '.prettierignore', '.eslintignore', '.npmignore', '.nvmrc', '.node-version', '.python-version', '.tool-versions',
   'Gemfile', 'Rakefile', 'Pipfile', 'Pipfile.lock', 'go.mod', 'go.sum', 'Cargo.lock',
