@@ -30,6 +30,27 @@ test('project automation metadata is allowed only outside protected parent direc
   }
 });
 
+test('project agent metadata remains readable while credential-shaped files stay protected', () => {
+  for (const value of [
+    '.codex/rules/project.md',
+    '.codex/workflows/agent-workflow-guide.md',
+    'app/.codex/standards/skill-authoring.md'
+  ]) {
+    assert.equal(isSensitiveWorkspacePath(value), false, value);
+    assert.equal(isSafeWorkspaceTextPath(value), true, value);
+    assert.equal(assertSafeWorkspacePath(value), value);
+  }
+
+  for (const value of [
+    '.codex/.env',
+    '.codex/credentials.json',
+    '.codex/keys/release.key'
+  ]) {
+    assert.equal(isSensitiveWorkspacePath(value), true, value);
+    assert.equal(isSafeWorkspaceTextPath(value), false, value);
+  }
+});
+
 test('reviewed Godot baseline metadata is narrowly allowed inside .devmate', () => {
   for (const value of [
     '.devmate/baselines/godot/main.json',
