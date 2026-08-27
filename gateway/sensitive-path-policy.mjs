@@ -2,7 +2,7 @@ import path from 'node:path';
 
 export const SENSITIVE_DIRECTORY_SEGMENTS = new Set([
   '.git', '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.npm', '.m2', '.gradle',
-  '.terraform', '.pulumi', '.serverless', '.wrangler', '.direnv', '.devmate', '.devmate-server', '.codex', '.openai',
+  '.terraform', '.pulumi', '.serverless', '.wrangler', '.direnv', '.devmate', '.devmate-server', '.openai',
   'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys',
   'service-account', 'service_accounts'
 ]);
