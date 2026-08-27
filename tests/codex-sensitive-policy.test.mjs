@@ -21,9 +21,39 @@ test('Codex text snapshot inherits shared credential-directory exclusions', () =
   }
 });
 
-test('shared policy integration preserves normal text and environment examples', () => {
-  for (const rel of ['src/app.js', 'config/settings.yaml', '.env.example', 'README.md']) {
+test('shared policy integration preserves normal project text and environment examples', () => {
+  for (const rel of [
+    'src/app.js',
+    'config/settings.yaml',
+    '.env.example',
+    'README.md',
+    '.codex/rules/project.md',
+    '.openai/project.md',
+    'frontend/app/android/gradle.properties',
+    'logs/build.log'
+  ]) {
     assert.equal(isSensitiveWorkspacePath(rel), false, rel);
     assert.equal(proposalTextPath(rel), true, rel);
+  }
+});
+
+test('database files are ordinary project data but remain non-text snapshot inputs', () => {
+  for (const rel of ['data/app.db', 'data/cache.sqlite', 'data/cache.sqlite3']) {
+    assert.equal(isSensitiveWorkspacePath(rel), false, rel);
+    assert.equal(proposalTextPath(rel), false, rel);
+  }
+});
+
+test('credential-shaped files stay blocked inside otherwise readable project metadata directories', () => {
+  for (const rel of [
+    '.codex/.env',
+    '.codex/credentials.json',
+    '.codex/keys/release.key',
+    '.openai/.env',
+    '.openai/credentials.json',
+    '.openai/keys/release.key'
+  ]) {
+    assert.equal(isSensitiveWorkspacePath(rel), true, rel);
+    assert.equal(proposalTextPath(rel), false, rel);
   }
 });
