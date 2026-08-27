@@ -2,7 +2,7 @@ import path from 'node:path';
 
 export const SENSITIVE_DIRECTORY_SEGMENTS = new Set([
   '.git', '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.npm', '.m2', '.gradle',
-  '.terraform', '.pulumi', '.serverless', '.wrangler', '.direnv', '.devmate', '.devmate-server', '.openai',
+  '.terraform', '.pulumi', '.serverless', '.wrangler', '.direnv', '.devmate', '.devmate-server',
   'secrets', 'secret', 'credentials', 'credential', 'private-key', 'private_keys',
   'service-account', 'service_accounts'
 ]);
@@ -11,14 +11,14 @@ export const SENSITIVE_BASENAMES = new Set([
   '.env', '.envrc', '.dev.vars', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.netrc', '_netrc',
   '.git-credentials', '.gitconfig', '.sentryclirc', '.terraformrc', 'terraform.rc', '.htpasswd', '.htdigest',
   '.credentials', '.secrets', 'auth.json', 'master.key', 'application_default_credentials.json',
-  'oauth-secrets.json', 'pip.conf', 'nuget.config', 'local.properties', 'keystore.properties', 'key.properties', 'gradle.properties',
+  'oauth-secrets.json', 'pip.conf', 'nuget.config', 'local.properties', 'keystore.properties', 'key.properties',
   'credentials.json', 'credential.json', 'secrets.json', 'secret.json',
   'service-account.json', 'service_account.json', 'service-account-key.json', 'service_account_key.json',
   'serviceaccountkey.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
 ]);
 
 export const SENSITIVE_EXTENSIONS = new Set([
-  '.pem', '.key', '.pfx', '.p12', '.jks', '.keystore', '.db', '.sqlite', '.sqlite3', '.log'
+  '.pem', '.key', '.pfx', '.p12', '.jks', '.keystore'
 ]);
 
 export const SAFE_PROJECT_METADATA_PATHS = new Set([
@@ -26,7 +26,7 @@ export const SAFE_PROJECT_METADATA_PATHS = new Set([
 ]);
 
 export const SAFE_TEXT_EXTENSIONS = new Set([
-  '.md', '.mdx', '.txt', '.json', '.jsonc', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx', '.cjs', '.mjs',
+  '.md', '.mdx', '.txt', '.log', '.json', '.jsonc', '.yaml', '.yml', '.js', '.jsx', '.ts', '.tsx', '.cjs', '.mjs',
   '.css', '.scss', '.sass', '.less', '.html', '.xml', '.cs', '.csproj', '.sln', '.dart', '.py', '.ps1', '.sh',
   '.bash', '.zsh', '.sql', '.toml', '.ini', '.config', '.cfg', '.props', '.targets', '.java', '.kt', '.kts', '.go',
   '.rs', '.php', '.rb', '.swift', '.vue', '.svelte', '.gd', '.godot', '.gdshader', '.gdshaderinc', '.shader',
@@ -36,7 +36,7 @@ export const SAFE_TEXT_EXTENSIONS = new Set([
 export const SAFE_TEXT_BASENAMES = new Set([
   'README', 'README.md', 'LICENSE', 'Dockerfile', 'Makefile', 'CMakeLists.txt',
   'package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb',
-  'pubspec.yaml', 'pubspec.lock', 'global.json', 'Directory.Packages.props',
+  'pubspec.yaml', 'pubspec.lock', 'global.json', 'Directory.Packages.props', 'gradle.properties',
   'AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md', '.gitignore', '.gitattributes', '.dockerignore', '.editorconfig',
   '.prettierignore', '.eslintignore', '.npmignore', '.nvmrc', '.node-version', '.python-version', '.tool-versions',
   'Gemfile', 'Rakefile', 'Pipfile', 'Pipfile.lock', 'go.mod', 'go.sum', 'Cargo.lock',
