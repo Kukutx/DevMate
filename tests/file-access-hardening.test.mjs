@@ -56,15 +56,22 @@ test.beforeEach(async () => {
 test('credential-prone workspace paths are classified without blocking safe examples', () => {
   for (const rel of [
     '.npmrc', '.pypirc', '.netrc', '.dev.vars', '.aws/credentials', '.ssh/id_ed25519',
-    '.kube/config', '.terraform/terraform.tfstate', '.docker/config.json', 'keys/release.p12', 'logs/runtime.log'
+    '.kube/config', '.terraform/terraform.tfstate', '.docker/config.json', 'keys/release.p12'
   ]) {
     assert.equal(policy.isSensitiveWorkspacePath(rel), true, rel);
   }
-  for (const rel of ['.env.example', '.env.sample', '.docker/Dockerfile', 'src/config.json', 'gradle/wrapper/gradle-wrapper.properties']) {
+  for (const rel of [
+    '.env.example', '.env.sample', '.docker/Dockerfile', 'src/config.json',
+    'gradle/wrapper/gradle-wrapper.properties', 'frontend/app/android/gradle.properties',
+    '.openai/project.md', 'logs/runtime.log', 'data/app.db', 'data/cache.sqlite'
+  ]) {
     assert.equal(policy.isSensitiveWorkspacePath(rel), false, rel);
   }
   assert.equal(policy.isSafeWorkspaceTextPath('.env.example'), true);
   assert.equal(policy.isSafeWorkspaceTextPath('.docker/Dockerfile'), true);
+  assert.equal(policy.isSafeWorkspaceTextPath('frontend/app/android/gradle.properties'), true);
+  assert.equal(policy.isSafeWorkspaceTextPath('logs/runtime.log'), true);
+  assert.equal(policy.isSafeWorkspaceTextPath('data/app.db'), false);
 });
 
 test('explicit read and mutation paths fail closed before reaching their handlers', () => {
