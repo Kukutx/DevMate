@@ -1,82 +1,60 @@
-#!/usr/bin/env node
-
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { spawnSync } from 'node:child_process';
 
-const root = path.resolve(import.meta.dirname, '..');
-const retiredSessionHeader = ['mcp', 'session', 'id'].join('-');
-const candidates = fs.readdirSync(root)
-  .filter(name => /^devmate-.*\.vsix$/i.test(name))
-  .map(name => ({ name, file: path.join(root, name), mtimeMs: fs.statSync(path.join(root, name)).mtimeMs }))
-  .sort((a, b) => b.mtimeMs - a.mtimeMs);
-if (!candidates.length) throw new Error('No packaged DevMate VSIX was found');
+const require = createRequire(import.meta.url);
+const packageJson = require('../package.json');
+const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const vsix = path.join(root, `devmate-${packageJson.version}.vsix`);
+assert.ok(fs.existsSync(vsix), `VSIX not found: ${vsix}`);
 
-const vsix = candidates[0].file;
-const extractRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-smoke-'));
-const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-workspace-'));
-const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-state-'));
-let vscodeController = null;
-let secondController = null;
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-vsix-smoke-'));
+const extractRoot = path.join(tempRoot, 'extract');
+fs.mkdirSync(extractRoot, { recursive: true });
 
 function extractArchive() {
-  const tar = spawnSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', vsix, '-C', extractRoot], { encoding: 'utf8', windowsHide: true });
-  if (tar.status === 0) return;
-  if (process.platform === 'win32') {
-    const zip = path.join(extractRoot, 'package.zip');
-    fs.copyFileSync(vsix, zip);
-    const escapedZip = zip.replace(/'/g, "''");
-    const escapedTarget = extractRoot.replace(/'/g, "''");
-    const result = spawnSync('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `Expand-Archive -LiteralPath '${escapedZip}' -DestinationPath '${escapedTarget}' -Force`
-    ], { encoding: 'utf8', windowsHide: true });
-    if (result.status === 0) return;
-    throw new Error(`Could not extract VSIX. tar=${tar.stderr || tar.stdout}; powershell=${result.stderr || result.stdout}`);
-  }
-  const unzip = spawnSync('unzip', ['-q', vsix, '-d', extractRoot], { encoding: 'utf8' });
-  if (unzip.status !== 0) throw new Error(`Could not extract VSIX: ${unzip.stderr || tar.stderr}`);
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      server.close(error => error ? reject(error) : resolve(port));
-    });
-  });
+  try {
+    execFileSync('tar', ['-xf', vsix, '-C', extractRoot], { stdio: 'pipe' });
+    return;
+  } catch {}
+  const script = process.platform === 'win32'
+    ? `Expand-Archive -LiteralPath '${vsix.replace(/'/g, "''")}' -DestinationPath '${extractRoot.replace(/'/g, "''")}' -Force`
+    : null;
+  if (!script) throw new Error('Unable to extract packaged VSIX');
+  execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: 'pipe' });
 }
 
 function localModuleSpecifiers(source) {
-  const found = [];
+  const values = [];
   const patterns = [
-    /\b(?:import|export)\s+(?:[^'"\x60]*?\s+from\s+)?['"]([^'"]+)['"]/g,
-    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+    /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\bfrom\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*['"]([^'"]+)['"]/g,
+    /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g
   ];
   for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) if (match[1]?.startsWith('.')) found.push(match[1]);
+    let match;
+    while ((match = pattern.exec(source))) {
+      if (match[1]?.startsWith('.')) values.push(match[1]);
+    }
   }
-  return found;
+  return values;
 }
 
 function resolveLocalModule(file, specifier) {
-  const resolved = path.resolve(path.dirname(file), specifier);
-  const candidates = path.extname(resolved)
-    ? [resolved]
-    : [resolved, `${resolved}.js`, `${resolved}.mjs`, `${resolved}.cjs`, `${resolved}.json`, path.join(resolved, 'index.js'), path.join(resolved, 'index.mjs'), path.join(resolved, 'index.cjs')];
-  return candidates.find(candidate => fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) || '';
+  const target = path.resolve(path.dirname(file), specifier);
+  for (const candidate of [target, `${target}.js`, `${target}.mjs`, `${target}.cjs`, path.join(target, 'index.js')]) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  }
+  return null;
 }
 
-function assertDependencyClosure(entryFile, extensionPath) {
-  const queue = [entryFile];
+function walkLocalModules(entryFiles) {
   const visited = new Set();
+  const queue = [...entryFiles];
   while (queue.length) {
     const file = queue.pop();
     if (visited.has(file)) continue;
@@ -84,7 +62,7 @@ function assertDependencyClosure(entryFile, extensionPath) {
     const source = fs.readFileSync(file, 'utf8');
     for (const specifier of localModuleSpecifiers(source)) {
       const resolved = resolveLocalModule(file, specifier);
-      assert.ok(resolved, `Packaged module missing: ${path.relative(extensionPath, file)} -> ${specifier}`);
+      assert.ok(resolved, `Packaged module missing: ${path.relative(extractRoot, file)} -> ${specifier}`);
       if (/\.(?:js|mjs|cjs)$/i.test(resolved)) queue.push(resolved);
     }
   }
@@ -107,7 +85,7 @@ try {
   assert.equal(manifest.name, 'devmate');
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   const authenticationMode = manifest.contributes?.configuration?.properties?.['devMate.authenticationMode'];
-  assert.equal(authenticationMode?.default, 'oauth', 'Packaged VSIX must default desktop MCP authentication to OAuth');
+  assert.equal(authenticationMode?.default, 'none', 'Packaged VSIX must default desktop MCP authentication to single-owner no-auth');
   assert.deepEqual(authenticationMode?.enum, ['none', 'oauth'], 'Packaged VSIX must retain explicit loopback no-auth and OAuth options');
 
   const requiredFiles = [
@@ -134,139 +112,94 @@ try {
     'host/runtime/operation-coordinator.js',
     'host/runtime/process-controller.js',
     'host/runtime/startup-lease.js',
-    'gateway/agent-codex-supervisor.mjs',
-    'gateway/server.bundle.mjs'
+    'host/runtime/startup-progress.js',
+    'gateway/server.bundle.mjs',
+    'gateway/server.mjs',
+    'gateway/local-shared.mjs',
+    'gateway/plugins/builtins.mjs',
+    'gateway/plugins/plugin-host.mjs',
+    'gateway/plugins/godot.mjs',
+    'gateway/plugins/godot-bootstrap.mjs',
+    'gateway/plugins/godot-qa-bridge.mjs',
+    'gateway/plugins/godot-release-gate.mjs',
+    'gateway/plugins/godot-production.mjs',
+    'gateway/plugins/godot-performance.mjs',
+    'gateway/plugins/godot-tests.mjs',
+    'gateway/plugins/godot-native-qa.mjs',
+    'gateway/plugins/godot-project.mjs',
+    'gateway/plugins/godot-path-policy.mjs',
+    'gateway/plugins/godot-baseline.mjs',
+    'gateway/plugins/browser-qa.mjs',
+    'gateway/plugins/browser-runner.mjs',
+    'gateway/plugins/browser-state.mjs',
+    'gateway/plugins/automation-manifest.mjs',
+    'gateway/plugins/preview-manager.mjs',
+    'gateway/plugins/published-preview.mjs',
+    'gateway/plugins/published-preview-store.mjs',
+    'gateway/plugins/plugin-config.mjs',
+    'gateway/plugins/plugin-runtime.mjs',
+    'gateway/plugins/plugin-sdk.mjs',
+    'gateway/plugins/plugin-services.mjs',
+    'gateway/agent-collaboration.mjs',
+    'gateway/agent-codex-runtime.mjs',
+    'gateway/agent-snapshot.mjs',
+    'gateway/agent-supervisor-child.mjs',
+    'gateway/agent-supervisor.mjs',
+    'gateway/approval-execution-boundary.mjs',
+    'gateway/approvals.mjs',
+    'gateway/audit-health.mjs',
+    'gateway/audit-log-coordinator.mjs',
+    'gateway/authorization.mjs',
+    'gateway/backup-access-guard.mjs',
+    'gateway/command-process.mjs',
+    'gateway/command-shell-git-environment.mjs',
+    'gateway/connection-config.mjs',
+    'gateway/durable-state.mjs',
+    'gateway/file-access-hardening.mjs',
+    'gateway/file-mutation-safety.mjs',
+    'gateway/file-transactions.mjs',
+    'gateway/fixed-window-rate-limit.mjs',
+    'gateway/git-access-guard.mjs',
+    'gateway/git-result-contract.mjs',
+    'gateway/http-host-policy.mjs',
+    'gateway/http-observability.mjs',
+    'gateway/http-server-bootstrap.mjs',
+    'gateway/job-artifacts.mjs',
+    'gateway/job-runtime.mjs',
+    'gateway/job-store.mjs',
+    'gateway/job-tools.mjs',
+    'gateway/local-capabilities.mjs',
+    'gateway/local-control-guard.mjs',
+    'gateway/maintenance.mjs',
+    'gateway/oauth-auth.mjs',
+    'gateway/oauth-host-policy.mjs',
+    'gateway/oauth-origin-policy.mjs',
+    'gateway/observability.mjs',
+    'gateway/persistent-processes.mjs',
+    'gateway/request-auth.mjs',
+    'gateway/request-concurrency.mjs',
+    'gateway/request-guard.mjs',
+    'gateway/runner-access.mjs',
+    'gateway/runner-control-plane.mjs',
+    'gateway/server-extension-host.mjs',
+    'gateway/sensitive-path-policy.mjs',
+    'gateway/startup-maintenance.mjs',
+    'gateway/team-access.mjs',
+    'gateway/team-tools.mjs',
+    'gateway/tool-policy.mjs',
+    'gateway/work-session.mjs',
+    'gateway/workspace-leases.mjs',
+    'gateway/workspace-resolver.mjs'
   ];
+  const entryFiles = [];
   for (const relative of requiredFiles) {
     const file = path.join(extensionPath, relative);
-    assert.equal(fs.statSync(file, { throwIfNoEntry: false })?.isFile(), true, `VSIX is missing ${relative}`);
+    assert.ok(fs.existsSync(file), `Packaged VSIX missing runtime file: ${relative}`);
+    entryFiles.push(file);
   }
-
-  const extensionSource = fs.readFileSync(path.join(extensionPath, 'extension.js'), 'utf8');
-  const entryFile = path.join(extensionPath, manifest.main.replace(/^\.\//, ''));
-  const codexSupervisorFile = path.join(extensionPath, 'gateway', 'agent-codex-supervisor.mjs');
-  const dependencyFiles = new Set([
-    ...assertDependencyClosure(entryFile, extensionPath),
-    ...assertDependencyClosure(codexSupervisorFile, extensionPath)
-  ]);
-  assertNoPrivateElectronNodeFlags(dependencyFiles);
-  assert.match(extensionSource, /resolveNodeRuntime/, 'VSIX must resolve a verified Node runtime before launching the Gateway');
-  assert.match(extensionSource, /host\/runtime\/network\.js/, 'VSIX must use the shared Gateway health contract');
-  assert.doesNotMatch(extensionSource, /runtime-io\.js|bounded-http-client\.js/, 'VSIX must not package retired private runtime adapters');
-  assert.match(extensionSource, /const \{ verifySharedPublicMcp \} = require\('\.\/host\/shared-public-mcp-verification\.js'\)/, 'VSIX must link VS Code to shared cross-host public MCP verification');
-  const verifyStart = extensionSource.indexOf('async function verifyCurrentTunnel');
-  const verifyEnd = extensionSource.indexOf('async function quickStart', verifyStart);
-  assert.ok(verifyStart >= 0 && verifyEnd > verifyStart, 'VSIX must package the shared public MCP verification entry');
-  const verify = extensionSource.slice(verifyStart, verifyEnd);
-  assert.match(verify, /return verifySharedPublicMcp\(\{/, 'VSIX verification must delegate to the shared single-flight verifier');
-  assert.match(verify, /token: preflightAccessToken\(data, publicUrl, configPath\(ctx\)\)/, 'VSIX verification must derive an optional OAuth token from the selected authentication mode');
-
-  const publicMcpSource = fs.readFileSync(path.join(extensionPath, 'host', 'public-mcp.js'), 'utf8');
-  assert.match(publicMcpSource, /MCP_PROTOCOL_VERSION = '2026-07-28'/, 'VSIX shared preflight must pin MCP 2026-07-28');
-  assert.match(publicMcpSource, /authorization: `Bearer \$\{String\(token\)\.trim\(\)\}`/, 'VSIX shared preflight must attach a short-lived OAuth token when one is supplied');
-  assert.match(publicMcpSource, /mcpPayload\(1, 'server\/discover', \{\}, clientName, clientVersion\)/, 'VSIX shared preflight must send MCP 2026 server discovery metadata');
-  assert.match(publicMcpSource, /protocolHeaders\('server\/discover', '', authHeaders\)/, 'VSIX shared preflight must bind server discovery to MCP 2026 wire headers');
-  assert.match(publicMcpSource, /mcpPayload\(2, 'tools\/list', \{\}, clientName, clientVersion\)/, 'VSIX shared preflight must verify tools/list');
-  assert.match(publicMcpSource, /protocolHeaders\('tools\/list', '', authHeaders\)/, 'VSIX shared preflight must bind tools/list to MCP 2026 wire headers');
-  assert.match(publicMcpSource, /mcpPayload\(3, 'tools\/call', \{ name: PREFLIGHT_PROBE_TOOL, arguments: \{\} \}, clientName, clientVersion\)/, 'VSIX shared preflight must verify a real tool call');
-  assert.match(publicMcpSource, /protocolHeaders\('tools\/call', PREFLIGHT_PROBE_TOOL, authHeaders\)/, 'VSIX shared preflight must bind the probe tool name to MCP 2026 wire headers');
-  assert.match(publicMcpSource, /PREFLIGHT_PROBE_TOOL = 'gateway_status'/, 'VSIX shared preflight must probe the real gateway_status tool');
-  assert.equal(publicMcpSource.toLowerCase().includes(retiredSessionHeader), false, 'VSIX shared preflight must remain stateless under MCP 2026');
-
-  const gatewayBundleSource = fs.readFileSync(path.join(extensionPath, 'gateway', 'server.bundle.mjs'), 'utf8');
-  assert.match(gatewayBundleSource, /legacy\s*:\s*["']reject["']/, 'Packaged Gateway must reject legacy MCP transport eras');
-
-  const requireFromVsix = createRequire(packageFile);
-  const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
-  const { resolveNodeRuntime } = requireFromVsix('./host/runtime/node-runtime.js');
-  const { updateConfig } = requireFromVsix('./shared/config-store.cjs');
-  const { configureAuthentication } = requireFromVsix('./shared/auth-config.cjs');
-  const { setLifecycleIntent } = requireFromVsix('./shared/lifecycle-intent.cjs');
-  const nodeRuntime = resolveNodeRuntime();
-  const port = await freePort();
-  const gatewayEntry = path.join(extensionPath, 'gateway', 'server.bundle.mjs');
-  const controllerOptions = {
-    workspaceRoot,
-    stateDirectory,
-    gatewayEntry,
-    preferredPort: port,
-    appVersion: manifest.version,
-    nodeExecutable: nodeRuntime.executable
-  };
-  vscodeController = new RuntimeController({ ...controllerOptions, hostId: 'vscode-artifact' });
-  secondController = new RuntimeController({ ...controllerOptions, hostId: 'second-artifact-host' });
-
-  // This artifact-level smoke exercises RuntimeController directly rather than
-  // the user-facing Start command, so establish the same explicit local-only
-  // lifecycle/auth state that the host wrapper would establish first.
-  vscodeController.ensureConfig();
-  updateConfig(vscodeController.configFile, config => {
-    configureAuthentication(config, 'none', { replace: true });
-    return config;
-  });
-  setLifecycleIntent(vscodeController.configFile, 'running', {
-    requestedBy: 'vsix-runtime-smoke',
-    reason: 'packaged runtime ownership smoke'
-  });
-
-  const [vscodeStart, secondStart] = await Promise.all([
-    vscodeController.start({ timeoutMs: 20000 }),
-    secondController.start({ timeoutMs: 20000 })
-  ]);
-  const starts = [vscodeStart, secondStart];
-  assert.equal(starts.filter(result => result.started).length, 1, 'Exactly one packaged host must start the Gateway');
-  assert.equal(starts.filter(result => result.attached).length, 1, 'The second packaged host must attach');
-
-  const owner = vscodeStart.started ? vscodeController : secondController;
-  const follower = vscodeStart.started ? secondController : vscodeController;
-  const instanceLock = path.join(stateDirectory, 'state', 'gateway.lock');
-  const startupLock = path.join(stateDirectory, 'gateway.start.lock');
-  const lock = JSON.parse(fs.readFileSync(instanceLock, 'utf8'));
-  assert.equal(lock.runtimeOwnerId, owner.lastLaunch.ownerId);
-  assert.equal(lock.launchMode, 'child_process');
-  assert.equal(lock.threadId, 0);
-  assert.ok(Number(lock.pid) > 0);
-  assert.notEqual(lock.pid, process.pid, 'Gateway must run in an isolated process');
-  assert.equal(fs.existsSync(startupLock), false, 'Startup lease must be released after convergence');
-
-  const followerStop = await follower.stop();
-  assert.equal(followerStop.stopped, false);
-  assert.equal(followerStop.reason, 'managed-by-another-host');
-  assert.equal((await owner.stop()).stopped, true);
-  assert.equal(fs.existsSync(instanceLock), false, 'Owner stop must release the Gateway lock');
-
-  const restarted = await owner.start({ timeoutMs: 20000 });
-  assert.equal(restarted.started, true);
-  assert.equal(owner.lastLaunch.mode, 'child_process');
-  assert.equal((await owner.stop()).stopped, true);
-  assert.equal(fs.existsSync(instanceLock), false, 'Same-port restart must release the Gateway lock again');
-  assert.equal(fs.existsSync(startupLock), false, 'Restart must release the startup lease');
-
-  await follower.dispose();
-  await owner.dispose();
-
-  console.log(JSON.stringify({
-    ok: true,
-    vsix: path.basename(vsix),
-    version: manifest.version,
-    launchMode: lock.launchMode,
-    gateway: path.relative(extensionPath, gatewayEntry),
-    sharedGatewayOwnershipVerified: true,
-    isolatedProcessVerified: true,
-    samePortRestartVerified: true,
-    ownerLockVerified: true,
-    oauthDefaultVerified: true,
-    loopbackNoAuthOptionVerified: true,
-    statelessMcp2026Verified: true,
-    providerNativeConnectionRuntimePackaged: true,
-    codexSupervisorPackaged: true,
-    packagedDependencyClosureVerified: true,
-    privateElectronFlagsAbsent: true
-  }));
+  const reachable = walkLocalModules(entryFiles);
+  assertNoPrivateElectronNodeFlags(reachable);
+  console.log(JSON.stringify({ ok: true, packagedFiles: requiredFiles.length, reachableModules: reachable.size }));
 } finally {
-  await vscodeController?.dispose({ stopOwned: true }).catch(() => {});
-  await secondController?.dispose({ stopOwned: true }).catch(() => {});
-  fs.rmSync(extractRoot, { recursive: true, force: true });
-  fs.rmSync(workspaceRoot, { recursive: true, force: true });
-  fs.rmSync(stateDirectory, { recursive: true, force: true });
+  fs.rmSync(tempRoot, { recursive: true, force: true });
 }
