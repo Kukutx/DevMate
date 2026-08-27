@@ -34,7 +34,8 @@ test('project agent metadata remains readable while credential-shaped files stay
   for (const value of [
     '.codex/rules/project.md',
     '.codex/workflows/agent-workflow-guide.md',
-    'app/.codex/standards/skill-authoring.md'
+    'app/.codex/standards/skill-authoring.md',
+    '.openai/project.md'
   ]) {
     assert.equal(isSensitiveWorkspacePath(value), false, value);
     assert.equal(isSafeWorkspaceTextPath(value), true, value);
@@ -44,11 +45,33 @@ test('project agent metadata remains readable while credential-shaped files stay
   for (const value of [
     '.codex/.env',
     '.codex/credentials.json',
-    '.codex/keys/release.key'
+    '.codex/keys/release.key',
+    '.openai/.env',
+    '.openai/credentials.json',
+    '.openai/keys/release.key'
   ]) {
     assert.equal(isSensitiveWorkspacePath(value), true, value);
     assert.equal(isSafeWorkspaceTextPath(value), false, value);
   }
+});
+
+test('ordinary project tooling, logs, and databases are not credential paths', () => {
+  const readableText = [
+    'frontend/app/android/gradle.properties',
+    'logs/build.log'
+  ];
+  const nonTextData = [
+    'data/app.db',
+    'data/cache.sqlite',
+    'data/cache.sqlite3'
+  ];
+
+  for (const value of [...readableText, ...nonTextData]) {
+    assert.equal(isSensitiveWorkspacePath(value), false, value);
+    assert.equal(assertSafeWorkspacePath(value), value);
+  }
+  for (const value of readableText) assert.equal(isSafeWorkspaceTextPath(value), true, value);
+  for (const value of nonTextData) assert.equal(isSafeWorkspaceTextPath(value), false, value);
 });
 
 test('reviewed Godot baseline metadata is narrowly allowed inside .devmate', () => {
