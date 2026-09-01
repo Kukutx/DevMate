@@ -65,6 +65,8 @@ devmate init \
   --restrict-public-host true
 ```
 
+Public HTTPS ingress supports the default single-owner `none` mode; use `oauth` for team/member identity.
+
 There is no `--mode` option. Connection provider, member access, request policy, workspace-lease policy and Runner topology are independent capabilities.
 
 For common capability combinations, prefer `devmate bootstrap --preset ...`; presets provide initialization defaults only and never persist a runtime mode.
