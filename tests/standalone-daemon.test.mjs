@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,6 +11,17 @@ async function tempDirectory(t, prefix) {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   return directory;
+}
+
+async function freePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  return port;
 }
 
 test('CLI daemon ownership requires both the dedicated owner prefix and exact config path', async t => {
@@ -29,7 +41,8 @@ test('standalone daemon starts a real Gateway, reports CLI ownership, and stops 
   const workspace = await tempDirectory(t, 'devmate-daemon-workspace-');
   const state = await tempDirectory(t, 'devmate-daemon-state-');
   const config = path.join(state, 'config.json');
-  initConfig({ config, workspace, provider: 'ngrok', 'authentication-mode': 'none', port: '0' });
+  const port = await freePort();
+  initConfig({ config, workspace, provider: 'ngrok', 'authentication-mode': 'none', port });
 
   let started = false;
   t.after(async () => {
@@ -43,7 +56,7 @@ test('standalone daemon starts a real Gateway, reports CLI ownership, and stops 
   assert.equal(result.started, true);
   assert.equal(result.attached, false);
   assert.match(String(result.owner || ''), /^cli-daemon-/);
-  assert.ok(Number(result.port) > 0);
+  assert.equal(result.port, port);
 
   const status = await daemonStatus({ config });
   assert.equal(status.ok, true);
