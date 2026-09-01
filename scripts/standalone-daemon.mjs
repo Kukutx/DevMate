@@ -7,6 +7,7 @@ import { configFile, readConfig, standaloneStateSeparation } from './standalone-
 
 const { healthAt, healthMatches } = network;
 const CLI_OWNER_PREFIX = 'cli-daemon-';
+const CLI_LAUNCH_MODE = 'standalone-cli-daemon';
 const START_TIMEOUT_MS = 30000;
 const STOP_TIMEOUT_MS = 10000;
 const TASKKILL_TIMEOUT_MS = 2000;
@@ -53,10 +54,17 @@ function readLock(file) {
   }
 }
 
+function samePath(left, right) {
+  const a = path.resolve(String(left || ''));
+  const b = path.resolve(String(right || ''));
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
 function cliOwnedLock(lock, file) {
   return !!lock &&
     String(lock.runtimeOwnerId || '').startsWith(CLI_OWNER_PREFIX) &&
-    path.resolve(String(lock.configPath || '')) === path.resolve(file) &&
+    String(lock.launchMode || '') === CLI_LAUNCH_MODE &&
+    samePath(lock.configPath, file) &&
     Number.isInteger(Number(lock.pid)) && Number(lock.pid) > 0;
 }
 
@@ -237,7 +245,7 @@ export async function startDaemon(options = {}) {
         DEVMATE_PUBLIC_HEALTH_DETAILS: '0',
         DEVMATE_RUNTIME_OWNER_ID: ownerId,
         DEVMATE_RUNTIME_PARENT_PID: String(process.pid),
-        DEVMATE_RUNTIME_LAUNCH_MODE: 'standalone-cli-daemon'
+        DEVMATE_RUNTIME_LAUNCH_MODE: CLI_LAUNCH_MODE
       },
       stdio: ['ignore', logFd, logFd]
     });
@@ -321,6 +329,7 @@ export async function restartDaemon(options = {}) {
 }
 
 export const __test = {
+  CLI_LAUNCH_MODE,
   CLI_OWNER_PREFIX,
   boundedTimeout,
   cliOwnedLock,
@@ -329,6 +338,7 @@ export const __test = {
   readLock,
   runTaskkill,
   runtimeFiles,
+  samePath,
   terminateDaemonProcess,
   waitForProcessExit
 };
