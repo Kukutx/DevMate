@@ -262,3 +262,90 @@ jobs:
 
       - name: Run real Godot deterministic movie capture
         run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs
+
+  portable-windows:
+    name: Portable CLI Windows
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build Gateway
+        run: npm run build
+
+      - name: Package portable CLI
+        shell: pwsh
+        run: |
+          $node = (Get-Command node).Source
+          node scripts/package-portable.mjs `
+            --platform win32 `
+            --arch x64 `
+            --node "$node" `
+            --out "$env:RUNNER_TEMP/devmate-portable"
+
+      - name: Smoke portable CLI
+        shell: pwsh
+        run: node scripts/smoke-portable-cli.mjs --root "$env:RUNNER_TEMP/devmate-portable"
+
+      - name: Upload portable CLI
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: devmate-portable-windows-x64
+          path: ${{ runner.temp }}/devmate-portable/**
+          if-no-files-found: error
+
+  portable-linux:
+    name: Portable CLI Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build Gateway
+        run: npm run build
+
+      - name: Package portable CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/package-portable.mjs \
+            --platform linux \
+            --arch x64 \
+            --node "$(command -v node)" \
+            --out "$RUNNER_TEMP/devmate-portable"
+
+      - name: Smoke portable CLI
+        run: node scripts/smoke-portable-cli.mjs --root "$RUNNER_TEMP/devmate-portable"
+
+      - name: Upload portable CLI
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: devmate-portable-linux-x64
+          path: ${{ runner.temp }}/devmate-portable/**
+          if-no-files-found: error
