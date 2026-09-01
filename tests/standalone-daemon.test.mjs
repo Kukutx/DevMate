@@ -37,7 +37,15 @@ test('CLI daemon ownership requires both the dedicated owner prefix and exact co
   assert.equal(daemon.cliOwnedLock({ ...lock, configPath: path.join(state, 'other.json') }, config), false);
 });
 
-test('standalone daemon starts a real Gateway, reports CLI ownership, and stops cleanly', async t => {
+test('CLI daemon timeout options reject invalid and unbounded values', () => {
+  assert.equal(daemon.boundedTimeout(undefined, 10000, '--timeout'), 10000);
+  assert.equal(daemon.boundedTimeout('2500', 10000, '--timeout'), 2500);
+  assert.throws(() => daemon.boundedTimeout('0', 10000, '--timeout'), /integer from 1000 to 120000/);
+  assert.throws(() => daemon.boundedTimeout('120001', 10000, '--timeout'), /integer from 1000 to 120000/);
+  assert.throws(() => daemon.boundedTimeout('bad', 10000, '--timeout'), /integer from 1000 to 120000/);
+});
+
+test('standalone daemon starts a real Gateway, reports CLI ownership, and confirms process exit on stop', async t => {
   const workspace = await tempDirectory(t, 'devmate-daemon-workspace-');
   const state = await tempDirectory(t, 'devmate-daemon-state-');
   const config = path.join(state, 'config.json');
@@ -57,10 +65,12 @@ test('standalone daemon starts a real Gateway, reports CLI ownership, and stops 
   assert.equal(result.attached, false);
   assert.match(String(result.owner || ''), /^cli-daemon-/);
   assert.equal(result.port, port);
+  assert.ok(Number(result.pid) > 0);
 
   const status = await daemonStatus({ config });
   assert.equal(status.ok, true);
   assert.equal(status.running, true);
+  assert.equal(status.processAlive, true);
   assert.equal(status.cliOwned, true);
   assert.equal(status.pid, result.pid);
 
@@ -68,7 +78,11 @@ test('standalone daemon starts a real Gateway, reports CLI ownership, and stops 
   started = false;
   assert.equal(stopped.ok, true);
   assert.equal(stopped.stopped, true);
+  assert.equal(stopped.pid, result.pid);
+  assert.equal(daemon.processAlive(result.pid), false);
 
   const after = await daemonStatus({ config });
   assert.equal(after.running, false);
+  assert.equal(after.processAlive, false);
+  assert.equal(after.cliOwned, false);
 });
