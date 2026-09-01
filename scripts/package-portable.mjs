@@ -76,6 +76,18 @@ function assertNodeBinary(file, platform) {
   }
 }
 
+function nodeLicense(nodeBinary) {
+  const directory = path.dirname(nodeBinary);
+  const candidates = [
+    path.join(directory, 'LICENSE'),
+    path.join(directory, '..', 'LICENSE'),
+    path.join(directory, '..', '..', 'LICENSE')
+  ].map(value => path.resolve(value));
+  const license = candidates.find(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile());
+  if (!license) throw new Error(`Could not locate the bundled Node.js LICENSE near ${nodeBinary}`);
+  return license;
+}
+
 export function packagePortable(options = {}) {
   const platform = targetPlatform(options.platform);
   const arch = targetArch(options.arch);
@@ -106,6 +118,7 @@ export function packagePortable(options = {}) {
 
   const runtimeName = platform === 'win32' ? 'node.exe' : 'node';
   copy(nodeBinary, path.join(runtimeDirectory, runtimeName));
+  copy(nodeLicense(nodeBinary), path.join(runtimeDirectory, 'LICENSE-node.txt'));
   if (platform !== 'win32') fs.chmodSync(path.join(runtimeDirectory, runtimeName), 0o755);
 
   if (platform === 'win32') {
@@ -139,4 +152,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
   }
 }
 
-export const __test = { launcherContent, targetArch, targetPlatform };
+export const __test = { launcherContent, nodeLicense, targetArch, targetPlatform };
