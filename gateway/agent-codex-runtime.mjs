@@ -13,7 +13,19 @@ const TURN_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_STDIO_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_AGENT_OUTPUT_CHARS = 200_000;
-const CODEX_SUPERVISOR_PATH = fileURLToPath(new URL('./agent-codex-supervisor.mjs', import.meta.url));
+const MODULE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const CODEX_SUPERVISOR_PATH = (() => {
+  const configured = String(process.env.DEVMATE_CODEX_SUPERVISOR_PATH || '').trim();
+  if (!configured) return path.join(MODULE_DIRECTORY, 'agent-codex-supervisor.mjs');
+  const candidate = path.resolve(configured);
+  if (path.basename(candidate) !== 'agent-codex-supervisor.mjs') {
+    throw new Error('DEVMATE_CODEX_SUPERVISOR_PATH must point to agent-codex-supervisor.mjs');
+  }
+  if (!fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`Configured Codex supervisor does not exist: ${candidate}`);
+  }
+  return candidate;
+})();
 const SAFE_ENV_KEYS = new Set([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR',
   'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
@@ -337,236 +349,131 @@ export class CodexAppServer extends EventEmitter {
   async runTurn({ threadId, cwd, prompt, timeoutMs = TURN_TIMEOUT_MS, idleTimeoutMs = TURN_IDLE_TIMEOUT_MS }) {
     if (this.activeTurn) throw codedError('Only one Codex turn may run at a time', 'codex_turn_active');
     const safeCwd = normalizeSnapshotCwd(cwd);
-    if (!this.child || !this.initialized || !samePath(this.processCwd, safeCwd)) throw codedError('Codex app-server is not bound to this snapshot cwd', 'codex_runtime_cwd_mismatch');
-    const text = String(prompt || '').trim();
-    if (!text) throw codedError('Codex task prompt is required', 'codex_prompt_required');
-    if (text.length > 100_000) throw codedError('Codex task prompt exceeds 100000 characters', 'codex_prompt_too_large');
-    const started = await this.request('turn/start', {
-      threadId,
-      cwd: safeCwd,
-      approvalPolicy: 'never',
-      sandboxPolicy: {
-        type: 'workspaceWrite',
-        writableRoots: [safeCwd],
-        networkAccess: false,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false
-      },
-      input: [{ type: 'text', text, textElements: [] }]
-    });
-    const turnId = String(started?.turn?.id || '');
+    const input = String(prompt || '').trim();
+    if (!input) throw codedError('Codex turn prompt is required', 'codex_prompt_required');
+    const thread = await this.ensureThread({ threadId, cwd: safeCwd });
+    const response = await this.request('turn/start', {
+      threadId: thread.threadId,
+      input: [{ type: 'text', text: input }]
+    }, { timeoutMs: RPC_TIMEOUT_MS });
+    const turnId = String(response?.turn?.id || response?.turnId || '');
     if (!turnId) throw codedError('Codex turn/start returned no turn id', 'codex_turn_invalid');
-    const state = {
-      threadId,
-      turnId,
-      startedAt: new Date().toISOString(),
-      lastEventAt: new Date().toISOString(),
-      output: '',
-      notifications: 0
-    };
-    this.activeTurn = state;
-    try {
-      return await this.#waitForTurn(state, {
-        timeoutMs: Math.max(10_000, Math.min(TURN_TIMEOUT_MS, Number(timeoutMs) || TURN_TIMEOUT_MS)),
-        idleTimeoutMs: Math.max(10_000, Math.min(TURN_IDLE_TIMEOUT_MS, Number(idleTimeoutMs) || TURN_IDLE_TIMEOUT_MS))
-      });
-    } finally {
-      if (this.activeTurn?.turnId === turnId) this.activeTurn = null;
-    }
-  }
 
-  #waitForTurn(state, { timeoutMs, idleTimeoutMs }) {
+    const startedAt = new Date().toISOString();
+    const record = {
+      threadId: thread.threadId,
+      turnId,
+      startedAt,
+      lastEventAt: startedAt,
+      completedAt: null,
+      finalText: '',
+      messages: 0,
+      events: 0,
+      error: null,
+      completed: false
+    };
+    this.activeTurn = record;
+    const absoluteDeadline = Date.now() + Math.max(5000, Number(timeoutMs) || TURN_TIMEOUT_MS);
+    const idleLimit = Math.max(5000, Math.min(Number(idleTimeoutMs) || TURN_IDLE_TIMEOUT_MS, Number(timeoutMs) || TURN_TIMEOUT_MS));
+
     return new Promise((resolve, reject) => {
-      let settled = false;
-      let idleTimer = null;
-      let totalTimer = null;
-      const finish = (error, value) => {
-        if (settled) return;
-        settled = true;
-        if (totalTimer) clearTimeout(totalTimer);
-        if (idleTimer) clearTimeout(idleTimer);
-        this.off('notification', onNotification);
-        this.off('transport-error', onTransportError);
-        if (error) reject(error);
-        else resolve(value);
-      };
-      const resetIdle = () => {
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => {
-          const error = codedError(`Codex turn ${state.turnId} became idle without completion`, 'codex_turn_idle_timeout');
-          void this.interrupt(state.threadId, state.turnId).catch(() => {});
-          finish(error);
-        }, idleTimeoutMs);
-        idleTimer.unref?.();
-      };
-      const onNotification = ({ method, params }) => {
-        const notificationTurnId = messageTurnId(params);
-        if (notificationTurnId && notificationTurnId !== state.turnId) return;
-        state.notifications += 1;
-        state.lastEventAt = new Date().toISOString();
-        resetIdle();
-        if (method === 'item/agentMessage/delta' && typeof params?.delta === 'string') state.output = boundedAppend(state.output, sanitizeText(params.delta));
-        if (method === 'item/completed' && params?.item?.type === 'agentMessage') {
-          const text = params.item.text || params.item.content || '';
-          if (typeof text === 'string' && text) state.output = sanitizeText(text);
+      const onNotification = event => {
+        const eventTurnId = messageTurnId(event.params);
+        if (eventTurnId && eventTurnId !== turnId) return;
+        record.events += 1;
+        record.lastEventAt = new Date().toISOString();
+        const method = String(event.method || '');
+        const params = event.params || {};
+        const messageText = params?.message?.content || params?.message?.text || params?.text || params?.content;
+        if (typeof messageText === 'string' && messageText.trim()) {
+          record.finalText = sanitizeText(messageText, MAX_AGENT_OUTPUT_CHARS);
+          record.messages += 1;
         }
-        if (method !== 'turn/completed') return;
-        const turn = params?.turn || {};
-        finish(null, {
-          threadId: state.threadId,
-          turnId: state.turnId,
-          status: String(turn.status || 'completed'),
-          error: turn.error ? sanitizeRpcData(turn.error) : null,
-          output: state.output,
-          notificationCount: state.notifications,
-          completedAt: new Date().toISOString()
-        });
+        if (/turn\/(?:completed|complete|failed|cancelled)$/i.test(method)) {
+          cleanup();
+          record.completed = /completed|complete/i.test(method);
+          record.completedAt = new Date().toISOString();
+          const failure = params?.error?.message || params?.error || params?.message?.error;
+          if (!record.completed) record.error = sanitizeText(failure || method, 4000);
+          this.activeTurn = null;
+          resolve({ ...record, thread: { threadId: thread.threadId, resumed: thread.resumed, restarted: !!thread.restarted } });
+        }
       };
-      const onTransportError = error => finish(error instanceof Error ? error : codedError('Codex app-server transport closed', 'codex_transport_closed'));
+      const poll = setInterval(() => {
+        const last = Date.parse(record.lastEventAt || record.startedAt);
+        if (Date.now() >= absoluteDeadline || (Number.isFinite(last) && Date.now() - last >= idleLimit)) {
+          cleanup();
+          this.activeTurn = null;
+          reject(codedError('Codex turn timed out', 'codex_turn_timeout', { threadId: thread.threadId, turnId }));
+        }
+      }, 1000);
+      poll.unref?.();
+      const cleanup = () => {
+        clearInterval(poll);
+        this.off('notification', onNotification);
+      };
       this.on('notification', onNotification);
-      this.on('transport-error', onTransportError);
-      resetIdle();
-      totalTimer = setTimeout(() => {
-        const error = codedError(`Codex turn ${state.turnId} exceeded its execution limit`, 'codex_turn_timeout');
-        void this.interrupt(state.threadId, state.turnId).catch(() => {});
-        finish(error);
-      }, timeoutMs);
-      totalTimer.unref?.();
     });
   }
 
-  async steer(threadId, turnId, prompt) {
-    const text = String(prompt || '').trim();
-    if (!text) throw codedError('Steering text is required', 'codex_prompt_required');
-    if (text.length > 20_000) throw codedError('Steering text exceeds 20000 characters', 'codex_prompt_too_large');
-    if (!this.activeTurn || this.activeTurn.threadId !== threadId || this.activeTurn.turnId !== turnId) throw codedError('Codex turn is not active in this Gateway process', 'codex_turn_not_active');
-    return this.request('turn/steer', { threadId, input: [{ type: 'text', text, textElements: [] }] });
-  }
-
-  async interrupt(threadId, turnId) {
-    if (!threadId || !turnId) return { interrupted: false };
-    try {
-      const response = await this.request('turn/interrupt', { threadId, turnId }, { timeoutMs: 10_000 });
-      return { interrupted: true, response };
-    } catch (error) {
-      if (error?.code === 'codex_transport_closed') return { interrupted: false, transportClosed: true };
-      throw error;
-    }
-  }
-
-  #failTransport(error) {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(error);
-    }
-    this.pending.clear();
-    this.initialized = false;
-    this.activeTurn = null;
-    this.emit('transport-error', error);
-  }
-
-  stop() {
+  async stop() {
     if (this.stopPromise) return this.stopPromise;
-    const stopPromise = this.#stopInternal();
-    this.stopPromise = stopPromise;
-    void stopPromise.finally(() => {
-      if (this.stopPromise === stopPromise) this.stopPromise = null;
-    }).catch(() => {});
-    return stopPromise;
-  }
-
-  async #stopInternal() {
-    if (!this.child) {
-      this.processCwd = null;
-      this.codexPid = null;
-      return { stopped: false, exitConfirmed: true };
-    }
     const child = this.child;
-    this.stopping = true;
-    this.initialized = false;
-    this.activeTurn = null;
-    try { child.send?.({ type: 'devmate:codex-stop' }); } catch {}
-    try { child.stdin?.end(); } catch {}
-    const termination = await this.terminateFn(child, { graceMs: 2000, forceMs: 3500 }).catch(error => ({
-      terminated: false,
-      forced: false,
-      exitConfirmed: false,
-      error: sanitizeText(error?.message || error, 2000)
-    }));
-    this.stopping = false;
-    if (termination.exitConfirmed !== false) {
-      if (this.child === child) this.child = null;
-      this.processCwd = null;
+    if (!child) {
+      this.initialized = false;
       this.codexPid = null;
-    } else if (!this.child) {
-      this.child = child;
+      this.processCwd = null;
+      return { stopped: true, exitConfirmed: true, alreadyStopped: true };
     }
-    return { stopped: true, ...termination };
+    this.stopPromise = (async () => {
+      this.stopping = true;
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(codedError('Codex app-server stopped', 'codex_stopped'));
+      }
+      this.pending.clear();
+      this.activeTurn = null;
+      this.initialized = false;
+      if (child.stdin && !child.stdin.destroyed) {
+        try { child.stdin.end(); } catch {}
+      }
+      let result = null;
+      try {
+        result = await this.terminateFn(child, { timeoutMs: 5000, forceTimeoutMs: 2000 });
+      } catch (error) {
+        result = { exitConfirmed: false, error: error.message || String(error) };
+      }
+      const exitConfirmed = result?.exited ?? result?.exitConfirmed ?? (child.exitCode != null || child.signalCode != null);
+      if (exitConfirmed && this.child === child) this.child = null;
+      if (exitConfirmed) {
+        this.codexPid = null;
+        this.processCwd = null;
+      }
+      return {
+        stopped: !!exitConfirmed,
+        exitConfirmed: !!exitConfirmed,
+        forced: !!result?.forced,
+        error: result?.error || null
+      };
+    })();
+    try { return await this.stopPromise; }
+    finally {
+      this.stopPromise = null;
+      this.stopping = false;
+    }
   }
-}
-
-let runtime = null;
-let runtimeShutdownPromise = null;
-
-export function codexRuntime() {
-  if (runtimeShutdownPromise) throw codedError('Codex app-server is stopping', 'codex_runtime_stopping');
-  runtime ||= new CodexAppServer();
-  return runtime;
-}
-
-export function codexRuntimeStatus() {
-  return runtime?.status() || {
-    running: false,
-    initialized: false,
-    pid: null,
-    supervisorPid: null,
-    supervised: true,
-    startedAt: null,
-    activeTurn: null,
-    strongOsReadIsolation: false
-  };
-}
-
-export function shutdownCodexRuntime() {
-  if (runtimeShutdownPromise) return runtimeShutdownPromise;
-  if (!runtime) return Promise.resolve({ stopped: false, exitConfirmed: true });
-  const current = runtime;
-  const shutdownPromise = (async () => {
-    const result = await current.stop();
-    if (result.exitConfirmed !== false && runtime === current) runtime = null;
-    return result;
-  })();
-  runtimeShutdownPromise = shutdownPromise;
-  void shutdownPromise.finally(() => {
-    if (runtimeShutdownPromise === shutdownPromise) runtimeShutdownPromise = null;
-  }).catch(() => {});
-  return shutdownPromise;
-}
-
-export function resetCodexRuntimeForTests() {
-  runtime = null;
-  runtimeShutdownPromise = null;
 }
 
 export const __test = {
   CODEX_SUPERVISOR_PATH,
-  DEVELOPER_INSTRUCTIONS,
   MAX_AGENT_OUTPUT_CHARS,
   MAX_PENDING_REQUESTS,
   MAX_STDIO_LINE_BYTES,
-  RESUME_TIMEOUT_MS,
-  RPC_TIMEOUT_MS,
-  SAFE_ENV_KEYS,
-  SENSITIVE_ENV_KEY,
-  TURN_IDLE_TIMEOUT_MS,
-  TURN_TIMEOUT_MS,
-  boundedAppend,
   cleanEnvironment,
   codexExecutable,
-  messageTurnId,
   normalizeSnapshotCwd,
-  samePath,
   sanitizeRpcData,
   sanitizeText,
+  samePath,
   supervisedEnvironment
 };
