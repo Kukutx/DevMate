@@ -50,6 +50,15 @@ test('tool timeout is a strict bounded integer', () => {
   assert.throws(() => cli.boundedInteger('abc', 60000, 1000, 600000, '--timeout'), /integer from 1000 to 600000/);
 });
 
+test('CLI boolean options are explicit and reject unknown values', () => {
+  assert.equal(cli.booleanOption(undefined, false, '--flag'), false);
+  assert.equal(cli.booleanOption('true', false, '--flag'), true);
+  assert.equal(cli.booleanOption('false', true, '--flag'), false);
+  assert.equal(cli.booleanOption('1', false, '--flag'), true);
+  assert.equal(cli.booleanOption('0', true, '--flag'), false);
+  assert.throws(() => cli.booleanOption('sometimes', false, '--flag'), /must be a boolean/);
+});
+
 test('workspace add, use and remove keep one authoritative active workspace', async t => {
   const current = await fixture(t);
   const added = cli.workspaceAdd({ config: current.config, use: true }, [current.second]);
@@ -71,6 +80,16 @@ test('workspace add, use and remove keep one authoritative active workspace', as
   const final = cli.workspaceList({ config: current.config });
   assert.deepEqual(final.workspaces.map(item => item.id), [first.id]);
   assert.equal(final.workspaces[0].active, true);
+});
+
+test('workspace add with explicit false does not activate or misreport the new workspace', async t => {
+  const current = await fixture(t);
+  const before = cli.workspaceList({ config: current.config });
+  const added = cli.workspaceAdd({ config: current.config, use: 'false' }, [current.second]);
+  assert.equal(added.added.active, false);
+  const after = cli.workspaceList({ config: current.config });
+  assert.equal(after.activeWorkspaceId, before.activeWorkspaceId);
+  assert.equal(after.workspaces.find(item => path.resolve(item.root) === path.resolve(current.second)).active, false);
 });
 
 test('readonly workspace can be removed but cannot become the active writable workspace', async t => {
