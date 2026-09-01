@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout tagged source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825fdacc3e6e1175528f360276 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -47,7 +47,9 @@ jobs:
           for required in \
             "Windows, VS Code 1.133, Node 24 LTS" \
             "Node 26 Current compatibility" \
-            "Linux and Real Godot 4.7.1"; do
+            "Linux and Real Godot 4.7.1" \
+            "Portable CLI Windows" \
+            "Portable CLI Linux"; do
             conclusion=$(printf '%s' "$checks" | jq -r --arg name "$required" '[.check_runs[] | select(.name == $name and .status == "completed")] | sort_by(.completed_at) | last | .conclusion // ""')
             if [ "$conclusion" != "success" ]; then
               echo "Required CI check '$required' is not successful for $GITHUB_SHA: ${conclusion:-missing}" >&2
@@ -86,7 +88,8 @@ jobs:
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
-          mkdir -p release
+          node_version=$(node -p "process.versions.node")
+          mkdir -p release "$RUNNER_TEMP/devmate-node"
           npx vsce package --out "release/devmate-${version}.vsix"
           npm run build:obsidian
           (
@@ -95,12 +98,41 @@ jobs:
               main.js manifest.json versions.json styles.css provider-supervisor.cjs \
               gateway/server.mjs gateway/agent-codex-supervisor.mjs
           )
+
+          cd "$RUNNER_TEMP/devmate-node"
+          base="https://nodejs.org/dist/v${node_version}"
+          win_archive="node-v${node_version}-win-x64.zip"
+          linux_archive="node-v${node_version}-linux-x64.tar.xz"
+          curl -fsSLO "${base}/SHASUMS256.txt"
+          curl -fsSLO "${base}/${win_archive}"
+          curl -fsSLO "${base}/${linux_archive}"
+          grep -E "  (${win_archive}|${linux_archive})$" SHASUMS256.txt | sha256sum -c -
+          unzip -q "$win_archive"
+          tar -xf "$linux_archive"
+
+          cd "$GITHUB_WORKSPACE"
+          node scripts/package-portable.mjs \
+            --platform win32 \
+            --arch x64 \
+            --node "$RUNNER_TEMP/devmate-node/node-v${node_version}-win-x64/node.exe" \
+            --out "$RUNNER_TEMP/devmate-portable-win"
+          node scripts/package-portable.mjs \
+            --platform linux \
+            --arch x64 \
+            --node "$RUNNER_TEMP/devmate-node/node-v${node_version}-linux-x64/bin/node" \
+            --out "$RUNNER_TEMP/devmate-portable-linux"
+
           (
-            cd release
-            sha256sum *.vsix *.zip > SHA256SUMS
+            cd "$RUNNER_TEMP/devmate-portable-win"
+            zip -q -9 -r "$GITHUB_WORKSPACE/release/devmate-${version}-windows-x64.zip" .
           )
-          ls -lh release
-          cat release/SHA256SUMS
+          tar -C "$RUNNER_TEMP/devmate-portable-linux" -czf \
+            "$GITHUB_WORKSPACE/release/devmate-${version}-linux-x64.tar.gz" .
+
+          cd "$GITHUB_WORKSPACE/release"
+          sha256sum *.vsix *.zip *.tar.gz > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
 
       - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
