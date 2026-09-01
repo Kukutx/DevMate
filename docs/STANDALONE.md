@@ -38,7 +38,7 @@ devmate> exit
 
 `devmate shell` opens the same shell explicitly. Outside a TTY, bare `devmate` prints help instead of waiting for input.
 
-The shell uses the same command dispatcher as one-shot commands. There is no second configuration model or hidden shell-only state.
+Each shell command runs through the same one-shot command dispatcher in a fresh DevMate child process. This keeps command behavior identical while preventing module state, configuration paths, or Gateway environment from leaking between shell commands.
 
 ## Initialize one instance
 
@@ -52,7 +52,7 @@ devmate init \
 
 When `--config` is omitted, standalone uses `~/.devmate/standalone/config.json`. The instance configuration and its private `state/` directory must remain outside every controlled workspace or trusted writable root. Initialization, background Start, and `serve` fail closed on overlap instead of letting workspace tools reach DevMate control-plane state.
 
-A direct `devmate init` configuration defaults to OAuth-ready standalone behavior. Presets may deliberately choose another authentication capability; for example the personal and Runner presets use trusted single-owner `none`, while Team/Control-plane presets use OAuth member identity.
+A direct `devmate init` configuration defaults to the single-owner `none` authentication mode. Use `--authentication-mode oauth` when team/member identity is required. Personal and Runner presets use `none`; Team and Control-plane presets use OAuth.
 
 Public standalone instance:
 
@@ -87,6 +87,7 @@ The background lifecycle is ownership-safe:
 - `start` attaches when a compatible Gateway is already healthy;
 - a CLI-created Gateway records a dedicated `cli-daemon-*` runtime owner in the normal Gateway lock;
 - `stop` and `restart` act only on a Gateway created by this CLI for the exact same config path;
+- Stop confirms the owned process has actually exited before it reports success, so Restart never overlaps the old Gateway;
 - VS Code, Obsidian, `devmate serve`, and other foreign owners are never killed by CLI Stop/Restart;
 - Gateway output is written to `<instance>/state/standalone-gateway.log`.
 
@@ -110,7 +111,7 @@ devmate workspace use game --config /srv/devmate/config.json
 devmate workspace remove tools --config /srv/devmate/config.json
 ```
 
-Removing the final writable workspace is refused. Removing another workspace also removes that workspace from member and Runner scopes; identities whose final scope disappears are disabled instead of retaining dangling authorization.
+Removing the final writable workspace is refused. Readonly workspaces may be removed but cannot be selected as the active writable workspace. Removing a workspace also removes that workspace from member and Runner scopes; identities whose final scope disappears are disabled instead of retaining dangling authorization.
 
 ## Plugin commands
 
