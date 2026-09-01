@@ -25,6 +25,15 @@ function boundedInteger(value, fallback, min, max, label) {
   return numeric;
 }
 
+function booleanOption(value, fallback, label) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  throw new Error(`${label} must be a boolean`);
+}
+
 function shellWords(line) {
   const source = String(line || '');
   const words = [];
@@ -92,6 +101,7 @@ function workspaceAdd(options = {}, positional = []) {
   const file = configFile(options);
   const root = path.resolve(String(options.path || positional[0] || process.cwd()));
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Workspace is not a directory: ${root}`);
+  const activate = booleanOption(options.use, false, '--use');
   const current = normalizeConfig(file);
   const roots = [...current.workspaces.map(item => item.root), root];
   const separation = standaloneStateSeparation(file, roots);
@@ -104,8 +114,8 @@ function workspaceAdd(options = {}, positional = []) {
     defaultConnectionProvider: current.connection.provider
   });
   const workspace = config.workspaces.find(item => path.resolve(item.root) === root);
-  if (options.use === true || options.use === 'true') activateInstanceWorkspace({ configFile: file, workspaceRoot: root });
-  return { added: workspacePublic(workspace, options.use ? workspace.id : config.activeWorkspaceId), config: file };
+  if (activate) activateInstanceWorkspace({ configFile: file, workspaceRoot: root });
+  return { added: workspacePublic(workspace, activate ? workspace.id : config.activeWorkspaceId), config: file };
 }
 
 function workspaceUse(options = {}, positional = []) {
@@ -241,7 +251,7 @@ function pluginDisable(options = {}, positional = []) {
   const file = configFile(options);
   const id = String(options.id || positional[0] || '').trim();
   if (!id) throw new Error('plugin disable requires an id');
-  const cascade = options.cascade === true || options.cascade === 'true';
+  const cascade = booleanOption(options.cascade, false, '--cascade');
   const map = pluginMap();
   const target = map.get(id);
   if (!target) throw new Error(`Unknown DevMate plugin: ${id}`);
@@ -330,8 +340,15 @@ async function jobCommand(action, options = {}, positional = []) {
   }
   if (!id) throw new Error(`job ${action} requires an id`);
   const args = { id, ...(workspaceId ? { workspaceId } : {}) };
-  if (action === 'status') return toolCall({ ...options, name: 'job_status', args: json({ ...args, includeArguments: options.arguments === true, includeResult: options.result !== 'false' }) });
-  if (action === 'cancel') return toolCall({ ...options, name: 'job_cancel', args: json({ ...args, force: options.force === true }) });
+  if (action === 'status') return toolCall({ ...options, name: 'job_status', args: json({
+    ...args,
+    includeArguments: booleanOption(options.arguments, false, '--arguments'),
+    includeResult: booleanOption(options.result, true, '--result')
+  }) });
+  if (action === 'cancel') return toolCall({ ...options, name: 'job_cancel', args: json({
+    ...args,
+    force: booleanOption(options.force, false, '--force')
+  }) });
   if (action === 'retry') return toolCall({ ...options, name: 'job_retry', args: json(args) });
   if (action === 'artifacts') return toolCall({ ...options, name: 'job_artifacts', args: json(args) });
   throw new Error(`Unknown job command: ${action}`);
@@ -393,6 +410,7 @@ export function extendedHelp() {
 }
 
 export const __test = {
+  booleanOption,
   boundedInteger,
   dependencyClosure,
   parseJsonArgs,
