@@ -65,6 +65,10 @@ async function main() {
     throw new Error(`Portable DevMate launcher is missing: ${launcher(portableRoot)}`);
   }
 
+  const help = invoke(portableRoot, ['help'], { json: false });
+  assert.equal(help.status, 0);
+  assert.match(String(help.stdout || ''), /CLI-first commands/);
+
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-portable-smoke-'));
   const workspace = path.join(temporary, 'workspace one');
   const secondWorkspace = path.join(temporary, 'workspace two');
@@ -82,7 +86,12 @@ async function main() {
       '--provider', 'ngrok', '--authentication-mode', 'none', '--port', String(port)
     ]);
     assert.equal(initialized.ok, true);
+    assert.equal(initialized.authenticationMode, 'none');
     assert.equal(path.resolve(initialized.config), path.resolve(config));
+
+    const plugins = invoke(portableRoot, ['plugin', 'list', '--config', config]);
+    assert.ok(plugins.plugins.some(item => item.id === 'devmate.browser-qa'));
+    assert.ok(plugins.plugins.some(item => item.id === 'devmate.godot'));
 
     const added = invoke(portableRoot, ['workspace', 'add', secondWorkspace, '--use', '--config', config]);
     assert.equal(path.resolve(added.added.root), path.resolve(secondWorkspace));
@@ -93,11 +102,14 @@ async function main() {
     assert.equal(started.ok, true);
     assert.equal(started.started, true);
     assert.match(String(started.owner || ''), /^cli-daemon-/);
+    assert.ok(Number(started.pid) > 0);
 
     const status = invoke(portableRoot, ['runtime-status', '--config', config]);
     assert.equal(status.running, true);
+    assert.equal(status.processAlive, true);
     assert.equal(status.cliOwned, true);
     assert.equal(status.port, port);
+    assert.equal(status.pid, started.pid);
 
     const tools = invoke(portableRoot, ['tool', 'list', '--config', config]);
     assert.ok(tools.tools.some(item => item.name === 'gateway_status'));
@@ -106,6 +118,23 @@ async function main() {
     const gateway = invoke(portableRoot, ['tool', 'call', 'gateway_status', '--args', '{}', '--config', config]);
     assert.ok(Array.isArray(gateway.content));
 
+    const restarted = invoke(portableRoot, ['restart', '--config', config]);
+    assert.equal(restarted.ok, true);
+    assert.equal(restarted.stopped.ok, true);
+    assert.equal(restarted.stopped.stopped, true);
+    assert.equal(restarted.stopped.pid, started.pid);
+    assert.equal(restarted.started.ok, true);
+    assert.equal(restarted.started.started, true);
+    assert.ok(Number(restarted.started.pid) > 0);
+
+    const afterRestart = invoke(portableRoot, ['runtime-status', '--config', config]);
+    assert.equal(afterRestart.running, true);
+    assert.equal(afterRestart.processAlive, true);
+    assert.equal(afterRestart.cliOwned, true);
+    assert.equal(afterRestart.pid, restarted.started.pid);
+    const gatewayAfterRestart = invoke(portableRoot, ['tool', 'call', 'gateway_status', '--args', '{}', '--config', config]);
+    assert.ok(Array.isArray(gatewayAfterRestart.content));
+
     const stopped = invoke(portableRoot, ['stop', '--config', config]);
     running = false;
     assert.equal(stopped.ok, true);
@@ -113,7 +142,8 @@ async function main() {
 
     const final = invoke(portableRoot, ['runtime-status', '--config', config]);
     assert.equal(final.running, false);
-    console.log(JSON.stringify({ ok: true, portableRoot, port, toolCount: tools.tools.length }, null, 2));
+    assert.equal(final.processAlive, false);
+    console.log(JSON.stringify({ ok: true, portableRoot, port, toolCount: tools.tools.length, pluginCount: plugins.plugins.length }, null, 2));
   } finally {
     if (running) invoke(portableRoot, ['stop', '--config', config], { allowFailure: true });
     fs.rmSync(temporary, { recursive: true, force: true });
