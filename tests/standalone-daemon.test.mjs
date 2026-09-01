@@ -24,16 +24,19 @@ async function freePort() {
   return port;
 }
 
-test('CLI daemon ownership requires both the dedicated owner prefix and exact config path', async t => {
+test('CLI daemon ownership requires owner prefix, launch mode, and exact config path', async t => {
   const state = await tempDirectory(t, 'devmate-daemon-owner-');
   const config = path.join(state, 'config.json');
   const lock = {
     pid: 12345,
     runtimeOwnerId: `${daemon.CLI_OWNER_PREFIX}test`,
+    launchMode: daemon.CLI_LAUNCH_MODE,
     configPath: config
   };
   assert.equal(daemon.cliOwnedLock(lock, config), true);
   assert.equal(daemon.cliOwnedLock({ ...lock, runtimeOwnerId: 'vscode-host-1' }, config), false);
+  assert.equal(daemon.cliOwnedLock({ ...lock, launchMode: 'child_process' }, config), false);
+  assert.equal(daemon.cliOwnedLock({ ...lock, launchMode: undefined }, config), false);
   assert.equal(daemon.cliOwnedLock({ ...lock, configPath: path.join(state, 'other.json') }, config), false);
 });
 
@@ -72,6 +75,7 @@ test('standalone daemon starts a real Gateway, reports CLI ownership, and confir
   assert.equal(status.running, true);
   assert.equal(status.processAlive, true);
   assert.equal(status.cliOwned, true);
+  assert.equal(status.lock?.launchMode, daemon.CLI_LAUNCH_MODE);
   assert.equal(status.pid, result.pid);
 
   const stopped = await stopDaemon({ config, timeout: 10000 });
