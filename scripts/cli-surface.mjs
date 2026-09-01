@@ -16,6 +16,15 @@ function json(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function boundedInteger(value, fallback, min, max, label) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const numeric = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(numeric) || numeric < min || numeric > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+  }
+  return numeric;
+}
+
 function shellWords(line) {
   const source = String(line || '');
   const words = [];
@@ -81,7 +90,7 @@ function workspaceList(options = {}) {
 
 function workspaceAdd(options = {}, positional = []) {
   const file = configFile(options);
-  const root = path.resolve(String(options.path || positional[1] || positional[0] || process.cwd()));
+  const root = path.resolve(String(options.path || positional[0] || process.cwd()));
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Workspace is not a directory: ${root}`);
   const current = normalizeConfig(file);
   const roots = [...current.workspaces.map(item => item.root), root];
@@ -101,24 +110,25 @@ function workspaceAdd(options = {}, positional = []) {
 
 function workspaceUse(options = {}, positional = []) {
   const file = configFile(options);
-  const requested = String(options.id || options.path || positional[1] || positional[0] || '').trim();
+  const requested = String(options.id || options.path || positional[0] || '').trim();
   if (!requested) throw new Error('workspace use requires an id or path');
   const config = normalizeConfig(file);
-  const byId = config.workspaces.find(item => item.id === requested && !item.reference);
+  const usable = item => item && !item.reference && item.mode !== 'readonly';
+  const byId = config.workspaces.find(item => usable(item) && item.id === requested);
   const byPath = config.workspaces.find(item => {
-    if (item.reference) return false;
+    if (!usable(item)) return false;
     try { return path.resolve(item.root) === path.resolve(requested); }
     catch { return false; }
   });
   const workspace = byId || byPath;
-  if (!workspace) throw new Error(`Workspace not found: ${requested}`);
+  if (!workspace) throw new Error(`Writable workspace not found: ${requested}`);
   const updated = activateInstanceWorkspace({ configFile: file, workspaceRoot: workspace.root });
   return { active: workspacePublic(updated.workspaces.find(item => item.id === updated.activeWorkspaceId), updated.activeWorkspaceId), config: file };
 }
 
 function workspaceRemove(options = {}, positional = []) {
   const file = configFile(options);
-  const id = String(options.id || positional[1] || positional[0] || '').trim();
+  const id = String(options.id || positional[0] || '').trim();
   if (!id) throw new Error('workspace remove requires an id');
   let removed = null;
   let disabledMembers = [];
@@ -126,14 +136,14 @@ function workspaceRemove(options = {}, positional = []) {
   const updated = updateConfig(file, current => {
     const config = normalizeRunnerControlConfig(normalizeInstanceConfig(current));
     const index = config.workspaces.findIndex(item => item.id === id && !item.reference);
-    if (index < 0) throw new Error(`Writable workspace not found: ${id}`);
-    const writable = config.workspaces.filter(item => !item.reference && item.mode !== 'readonly');
-    if (writable.length <= 1) throw new Error('Cannot remove the last writable workspace');
+    if (index < 0) throw new Error(`Workspace not found: ${id}`);
     removed = config.workspaces[index];
+    const writable = config.workspaces.filter(item => !item.reference && item.mode !== 'readonly');
+    if (removed.mode !== 'readonly' && writable.length <= 1) throw new Error('Cannot remove the last writable workspace');
     config.workspaces.splice(index, 1);
     const nextActive = config.activeWorkspaceId === id
       ? config.workspaces.find(item => !item.reference && item.mode !== 'readonly')
-      : config.workspaces.find(item => item.id === config.activeWorkspaceId);
+      : config.workspaces.find(item => item.id === config.activeWorkspaceId && !item.reference && item.mode !== 'readonly');
     config.activeWorkspaceId = nextActive?.id || null;
     for (const item of config.workspaces) {
       if (!item || item.reference) continue;
@@ -205,7 +215,7 @@ function pluginList(options = {}) {
 
 function pluginEnable(options = {}, positional = []) {
   const file = configFile(options);
-  const id = String(options.id || positional[1] || positional[0] || '').trim();
+  const id = String(options.id || positional[0] || '').trim();
   if (!id) throw new Error('plugin enable requires an id');
   const map = pluginMap();
   const plugin = map.get(id);
@@ -229,7 +239,7 @@ function pluginEnable(options = {}, positional = []) {
 
 function pluginDisable(options = {}, positional = []) {
   const file = configFile(options);
-  const id = String(options.id || positional[1] || positional[0] || '').trim();
+  const id = String(options.id || positional[0] || '').trim();
   if (!id) throw new Error('plugin disable requires an id');
   const cascade = options.cascade === true || options.cascade === 'true';
   const map = pluginMap();
@@ -301,10 +311,11 @@ function parseJsonArgs(options = {}) {
 }
 
 async function toolCall(options = {}, positional = []) {
-  const name = String(options.name || positional[1] || positional[0] || '').trim();
+  const name = String(options.name || positional[0] || '').trim();
   if (!name) throw new Error('tool call requires a tool name');
   const args = parseJsonArgs(options);
-  return withClient(options, client => client.callTool({ name, arguments: args }, { timeout: Number(options.timeout) || 60000, maxTotalTimeout: Number(options.timeout) || 60000 }));
+  const timeoutMs = boundedInteger(options.timeout, 60000, 1000, 600000, '--timeout');
+  return withClient(options, client => client.callTool({ name, arguments: args }, { timeout: timeoutMs, maxTotalTimeout: timeoutMs }));
 }
 
 async function jobCommand(action, options = {}, positional = []) {
@@ -382,6 +393,7 @@ export function extendedHelp() {
 }
 
 export const __test = {
+  boundedInteger,
   dependencyClosure,
   parseJsonArgs,
   shellWords,
