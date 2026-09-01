@@ -15,7 +15,10 @@ test('standalone CLI uses the shared configuration store without a compatibility
   }
   const command = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'scripts/devmate-command.mjs'), 'utf8');
   assert.equal(command.includes('devmate-cli.mjs'), false);
-  assert.equal(command.includes('spawn('), false);
+  const spawns = command.match(/\bspawn\(/g) || [];
+  assert.equal(spawns.length, 1);
+  assert.match(command, /spawn\(process\.execPath, \[import\.meta\.filename, \.\.\.words\]/);
+  assert.match(command, /shell: false/);
 });
 
 test('standalone initialization writes the supported default single-owner no-auth schema atomically', () => {
