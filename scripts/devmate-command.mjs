@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import configStore from '../shared/config-store.cjs';
 import { createRunnerCredential, normalizeRunnerControlConfig } from '../gateway/runner-access.mjs';
@@ -18,6 +19,31 @@ import {
 } from './standalone-runtime.mjs';
 
 const { DEFAULT_VERSION, updateConfig } = configStore;
+let cliSurfacePromise = null;
+
+function cliSurface() {
+  cliSurfacePromise ||= import('./cli-surface.mjs');
+  return cliSurfacePromise;
+}
+
+function shellCommand(words) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(process.execPath, [import.meta.filename, ...words], {
+        env: { ...process.env },
+        shell: false,
+        stdio: 'inherit',
+        windowsHide: true
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    child.once('error', reject);
+    child.once('close', () => resolve());
+  });
+}
 
 const BOOTSTRAP_PRESETS = Object.freeze({
   personal: Object.freeze({
@@ -49,7 +75,7 @@ const BOOTSTRAP_PRESETS = Object.freeze({
 });
 
 function parseArgs(argv) {
-  const [command = 'help', ...rest] = argv;
+  const [command = '', ...rest] = argv;
   const options = {};
   const positional = [];
   for (let index = 0; index < rest.length; index += 1) {
@@ -184,7 +210,7 @@ function bootstrap(options = {}) {
     },
     member,
     runner,
-    next: [`Start with: devmate serve --config ${initialized.file}`]
+    next: [`Start with: devmate start --config ${initialized.file}`]
   };
 }
 
@@ -240,12 +266,24 @@ function status(options = {}) {
   };
 }
 
-function help() {
-  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nPersonal and runner presets default to no authentication. Public MCP supports both none and oauth; team, control-plane, and member access use OAuth.\n`;
+async function help() {
+  const { extendedHelp } = await cliSurface();
+  return `DevMate\n\n  devmate bootstrap --preset personal|team|control-plane|runner --workspace <path> [capability options]\n  devmate bootstrap --workspace <path> [--provider ngrok|cloudflare-quick|cloudflare-managed|external] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate bootstrap --workspace <path> [--member-name <name>] [--runner-name <name>]\n  devmate status --config <path>\n  devmate init --workspace <path> [--provider <provider>] [--public-url <https-origin>] [--authentication-mode none|oauth]\n  devmate serve --config <path>\n  devmate doctor --config <path>\n  devmate mcp-url --config <path>\n  devmate member-list --config <path>\n  devmate member-create --config <path> --name <name> --workspaces <id,...>\n  devmate member-rotate --config <path> --id <id>\n  devmate member-revoke --config <path> --id <id>\n\nPersonal and runner presets default to no authentication. Public MCP supports both none and oauth; team, control-plane, and member access use OAuth.\n${extendedHelp()}`;
 }
 
 async function main(argv = process.argv.slice(2)) {
-  const { command, options } = parseArgs(argv);
+  const { command, options, positional } = parseArgs(argv);
+  if (!command) {
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      const { runShell } = await cliSurface();
+      return runShell(shellCommand);
+    }
+    return console.log(await help());
+  }
+  if (command === 'shell') {
+    const { runShell } = await cliSurface();
+    return runShell(shellCommand);
+  }
   if (command === 'bootstrap') return console.log(JSON.stringify(bootstrap(options), null, 2));
   if (command === 'status') {
     const result = status(options);
@@ -258,7 +296,7 @@ async function main(argv = process.argv.slice(2)) {
     return console.log(JSON.stringify({
       ok: true,
       config: result.file,
-      authenticationMode: result.config.auth?.mode || 'oauth',
+      authenticationMode: result.config.auth?.mode || 'none',
       mcpUrl: mcpUrl({ ...options, config: result.file })
     }, null, 2));
   }
@@ -274,7 +312,10 @@ async function main(argv = process.argv.slice(2)) {
   if (command === 'member-create') return console.log(JSON.stringify(memberCreate(options), null, 2));
   if (command === 'member-rotate') return console.log(JSON.stringify(memberRotate(options), null, 2));
   if (command === 'member-revoke') return console.log(JSON.stringify({ member: memberRevoke(options) }, null, 2));
-  if (command === 'help' || command === '--help' || command === '-h') return console.log(help());
+  if (command === 'help' || command === '--help' || command === '-h') return console.log(await help());
+  const { executeExtended } = await cliSurface();
+  const extended = await executeExtended({ command, options, positional });
+  if (extended.handled) return console.log(JSON.stringify(extended.value, null, 2));
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -302,5 +343,6 @@ export const __test = {
   mcpUrl,
   parseArgs,
   presetOptions,
+  shellCommand,
   status
 };
