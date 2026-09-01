@@ -36,6 +36,20 @@ test('interactive shell parsing preserves Windows paths and quoted spaces', () =
   assert.throws(() => cli.shellWords('workspace add "unfinished'), /Unclosed/);
 });
 
+test('interactive shell dispatches each command in a fresh DevMate process', async () => {
+  const source = await fsp.readFile(new URL('../scripts/devmate-command.mjs', import.meta.url), 'utf8');
+  assert.match(source, /spawn\(process\.execPath, \[import\.meta\.filename, \.\.\.words\]/);
+  assert.match(source, /return runShell\(shellCommand\)/);
+  assert.doesNotMatch(source, /runShell\(words => main\(words\)\)/);
+});
+
+test('tool timeout is a strict bounded integer', () => {
+  assert.equal(cli.boundedInteger(undefined, 60000, 1000, 600000, '--timeout'), 60000);
+  assert.equal(cli.boundedInteger('1500', 60000, 1000, 600000, '--timeout'), 1500);
+  assert.throws(() => cli.boundedInteger('-1', 60000, 1000, 600000, '--timeout'), /integer from 1000 to 600000/);
+  assert.throws(() => cli.boundedInteger('abc', 60000, 1000, 600000, '--timeout'), /integer from 1000 to 600000/);
+});
+
 test('workspace add, use and remove keep one authoritative active workspace', async t => {
   const current = await fixture(t);
   const added = cli.workspaceAdd({ config: current.config, use: true }, [current.second]);
@@ -57,6 +71,31 @@ test('workspace add, use and remove keep one authoritative active workspace', as
   const final = cli.workspaceList({ config: current.config });
   assert.deepEqual(final.workspaces.map(item => item.id), [first.id]);
   assert.equal(final.workspaces[0].active, true);
+});
+
+test('readonly workspace can be removed but cannot become the active writable workspace', async t => {
+  const current = await fixture(t);
+  configStore.updateConfig(current.config, config => {
+    config.workspaces.push({
+      id: 'readonly-extra',
+      name: 'Readonly extra',
+      root: current.second,
+      mode: 'readonly',
+      reference: false,
+      role: 'workspace'
+    });
+    return config;
+  });
+
+  assert.throws(
+    () => cli.workspaceUse({ config: current.config }, ['readonly-extra']),
+    /Writable workspace not found/
+  );
+  const removed = cli.workspaceRemove({ config: current.config }, ['readonly-extra']);
+  assert.equal(removed.removed.id, 'readonly-extra');
+  const final = cli.workspaceList({ config: current.config });
+  assert.equal(final.workspaces.some(item => item.id === 'readonly-extra'), false);
+  assert.equal(final.workspaces.filter(item => item.mode !== 'readonly' && !item.reference).length, 1);
 });
 
 test('workspace removal revokes scoped member and Runner access instead of leaving dangling scopes', async t => {
