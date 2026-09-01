@@ -9,9 +9,20 @@ const { healthAt, healthMatches } = network;
 const CLI_OWNER_PREFIX = 'cli-daemon-';
 const START_TIMEOUT_MS = 30000;
 const STOP_TIMEOUT_MS = 10000;
+const TASKKILL_TIMEOUT_MS = 2000;
+const GRACEFUL_STOP_MS = 3000;
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function boundedTimeout(value, fallback, label) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const numeric = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(numeric) || numeric < 1000 || numeric > 120000) {
+    throw new Error(`${label} must be an integer from 1000 to 120000`);
+  }
+  return numeric;
 }
 
 function configuredWorkspaceRoots(config) {
@@ -60,20 +71,100 @@ function processAlive(pid) {
   }
 }
 
+function runTaskkill(pid, force, timeoutMs = TASKKILL_TIMEOUT_MS) {
+  return new Promise(resolve => {
+    let killer;
+    try {
+      const args = ['/PID', String(pid), '/T'];
+      if (force) args.push('/F');
+      killer = spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' });
+    } catch (error) {
+      resolve({ ok: false, error: error?.message || String(error) });
+      return;
+    }
+    let settled = false;
+    let timer = null;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      killer.off?.('error', onError);
+      killer.off?.('close', onClose);
+      resolve(result);
+    };
+    const onError = error => finish({ ok: false, error: error?.message || String(error) });
+    const onClose = code => finish({ ok: code === 0, code });
+    killer.once('error', onError);
+    killer.once('close', onClose);
+    timer = setTimeout(() => {
+      try { killer.kill(); } catch {}
+      finish({ ok: false, timeout: true, error: 'taskkill-timeout' });
+    }, Math.max(250, Number(timeoutMs) || TASKKILL_TIMEOUT_MS));
+  });
+}
+
+async function waitForProcessExit(pid, deadline) {
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) return true;
+    await delay(100);
+  }
+  return !processAlive(pid);
+}
+
+async function terminateDaemonProcess(pid, timeoutMs = STOP_TIMEOUT_MS) {
+  const numeric = Number(pid);
+  if (!Number.isInteger(numeric) || numeric <= 0 || !processAlive(numeric)) {
+    return { exitConfirmed: true, forced: false };
+  }
+  const deadline = Date.now() + boundedTimeout(timeoutMs, STOP_TIMEOUT_MS, 'stop timeout');
+
+  if (process.platform === 'win32') {
+    await runTaskkill(numeric, false, Math.min(TASKKILL_TIMEOUT_MS, Math.max(250, deadline - Date.now())));
+    if (await waitForProcessExit(numeric, Math.min(deadline, Date.now() + GRACEFUL_STOP_MS))) {
+      return { exitConfirmed: true, forced: false };
+    }
+    await runTaskkill(numeric, true, Math.min(TASKKILL_TIMEOUT_MS, Math.max(250, deadline - Date.now())));
+    return { exitConfirmed: await waitForProcessExit(numeric, deadline), forced: true };
+  }
+
+  try { process.kill(numeric, 'SIGTERM'); }
+  catch (error) {
+    if (error?.code === 'ESRCH') return { exitConfirmed: true, forced: false };
+    throw error;
+  }
+  if (await waitForProcessExit(numeric, Math.min(deadline, Date.now() + GRACEFUL_STOP_MS))) {
+    return { exitConfirmed: true, forced: false };
+  }
+
+  let forced = true;
+  try { process.kill(-numeric, 'SIGKILL'); }
+  catch {
+    try { process.kill(numeric, 'SIGKILL'); }
+    catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+      forced = false;
+    }
+  }
+  return { exitConfirmed: await waitForProcessExit(numeric, deadline), forced };
+}
+
 async function runtimeStatus(file) {
   const config = readConfig(file);
   const port = Number(config?.server?.port || 8787);
   const health = await healthAt(port, 1000);
   const running = healthMatches(health, config);
   const lock = readLock(file);
+  const pid = Number(lock?.pid) || null;
+  const alive = pid ? processAlive(pid) : false;
   return {
     running,
+    processAlive: alive,
     port,
     health: running ? health.json : null,
     lock,
-    cliOwned: running && cliOwnedLock(lock, file),
+    cliOwned: alive && cliOwnedLock(lock, file),
     owner: lock?.runtimeOwnerId || null,
-    pid: Number(lock?.pid) || null
+    pid
   };
 }
 
@@ -99,8 +190,9 @@ export async function startDaemon(options = {}) {
   const config = readConfig(file);
   const separation = standaloneStateSeparation(file, configuredWorkspaceRoots(config));
   if (!separation.ok) throw new Error(`Standalone state overlaps a controlled workspace: ${separation.reason}`);
+  const timeoutMs = boundedTimeout(options.timeout, START_TIMEOUT_MS, '--timeout');
 
-  const current = await runtimeStatus(file);
+  let current = await runtimeStatus(file);
   if (current.running) {
     return {
       ok: true,
@@ -112,14 +204,30 @@ export async function startDaemon(options = {}) {
       cliOwned: current.cliOwned
     };
   }
+  if (current.processAlive && !current.cliOwned) {
+    throw new Error(`A Gateway owner process exists but is not healthy: ${current.owner || 'unknown'}`);
+  }
+  if (current.cliOwned) {
+    const deadline = Date.now() + timeoutMs;
+    const existingPid = current.pid;
+    while (Date.now() < deadline && processAlive(existingPid)) {
+      current = await runtimeStatus(file);
+      if (current.running) {
+        return { ok: true, started: false, attached: true, config: file, port: current.port, owner: current.owner, cliOwned: true, pid: current.pid };
+      }
+      await delay(200);
+    }
+    if (processAlive(existingPid)) throw new Error(`Existing CLI-owned Gateway ${existingPid} did not become ready`);
+  }
 
   const files = runtimeFiles(file);
   fs.mkdirSync(files.stateRoot, { recursive: true, mode: 0o700 });
   let logFd = null;
+  let child = null;
   try {
     logFd = fs.openSync(files.log, 'a', 0o600);
     const ownerId = `${CLI_OWNER_PREFIX}${process.pid}-${Date.now().toString(36)}`;
-    const child = spawn(process.execPath, [gatewayEntry()], {
+    child = spawn(process.execPath, [gatewayEntry()], {
       cwd: path.resolve(path.dirname(file)),
       detached: true,
       windowsHide: true,
@@ -137,18 +245,20 @@ export async function startDaemon(options = {}) {
     fs.closeSync(logFd);
     logFd = null;
 
-    const deadline = Date.now() + Math.max(2000, Number(options.timeout) || START_TIMEOUT_MS);
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const status = await runtimeStatus(file);
       if (status.running) {
-        if (status.owner !== ownerId && !status.cliOwned) {
-          return { ok: true, started: false, attached: true, config: file, port: status.port, owner: status.owner, cliOwned: false };
+        if (status.owner !== ownerId) {
+          if (processAlive(child.pid)) await terminateDaemonProcess(child.pid, STOP_TIMEOUT_MS);
+          return { ok: true, started: false, attached: true, config: file, port: status.port, owner: status.owner, cliOwned: status.cliOwned, pid: status.pid };
         }
         return { ok: true, started: true, attached: false, config: file, port: status.port, owner: status.owner, pid: status.pid, log: files.log };
       }
       if (!processAlive(child.pid)) break;
       await delay(250);
     }
+    if (processAlive(child.pid)) await terminateDaemonProcess(child.pid, STOP_TIMEOUT_MS);
     throw new Error(`DevMate Gateway did not become ready. See ${files.log}`);
   } finally {
     if (logFd != null) {
@@ -161,32 +271,45 @@ export async function stopDaemon(options = {}) {
   const file = configFile(options);
   if (!fs.existsSync(file)) return { ok: true, stopped: false, config: file, reason: 'config-not-found' };
   const current = await runtimeStatus(file);
-  if (!current.running) return { ok: true, stopped: false, config: file, reason: 'not-running' };
+  if (current.processAlive && !current.cliOwned) {
+    const error = new Error(`Refusing to stop Gateway owned by another host: ${current.owner || 'unknown'}`);
+    error.code = 'standalone_daemon_foreign_owner';
+    throw error;
+  }
+  if (!current.running && !current.cliOwned) return { ok: true, stopped: false, config: file, reason: 'not-running' };
   if (!current.cliOwned) {
     const error = new Error(`Refusing to stop Gateway owned by another host: ${current.owner || 'unknown'}`);
     error.code = 'standalone_daemon_foreign_owner';
     throw error;
   }
 
-  try { process.kill(current.pid, 'SIGTERM'); }
-  catch (error) {
-    if (error?.code !== 'ESRCH') throw error;
+  const timeoutMs = boundedTimeout(options.timeout, STOP_TIMEOUT_MS, '--timeout');
+  const terminated = await terminateDaemonProcess(current.pid, timeoutMs);
+  if (!terminated.exitConfirmed) throw new Error(`Timed out waiting for DevMate Gateway ${current.pid} to exit`);
+
+  const after = await runtimeStatus(file);
+  if (after.running) {
+    return {
+      ok: true,
+      stopped: true,
+      attached: true,
+      config: file,
+      previousPid: current.pid,
+      owner: after.owner,
+      pid: after.pid
+    };
   }
-  const deadline = Date.now() + Math.max(1000, Number(options.timeout) || STOP_TIMEOUT_MS);
-  while (Date.now() < deadline) {
-    const status = await runtimeStatus(file);
-    if (!status.running) return { ok: true, stopped: true, config: file, pid: current.pid };
-    if (!status.cliOwned || status.pid !== current.pid) {
-      return { ok: true, stopped: true, attached: true, config: file, owner: status.owner, pid: status.pid };
-    }
-    await delay(200);
-  }
-  throw new Error(`Timed out waiting for DevMate Gateway ${current.pid} to stop`);
+  return { ok: true, stopped: true, forced: terminated.forced, config: file, pid: current.pid };
 }
 
 export async function restartDaemon(options = {}) {
   const file = configFile(options);
   const current = fs.existsSync(file) ? await runtimeStatus(file) : null;
+  if (current?.processAlive && !current.cliOwned) {
+    const error = new Error(`Refusing to restart Gateway owned by another host: ${current.owner || 'unknown'}`);
+    error.code = 'standalone_daemon_foreign_owner';
+    throw error;
+  }
   if (current?.running && !current.cliOwned) {
     const error = new Error(`Refusing to restart Gateway owned by another host: ${current.owner || 'unknown'}`);
     error.code = 'standalone_daemon_foreign_owner';
@@ -199,9 +322,13 @@ export async function restartDaemon(options = {}) {
 
 export const __test = {
   CLI_OWNER_PREFIX,
+  boundedTimeout,
   cliOwnedLock,
   configuredWorkspaceRoots,
   processAlive,
   readLock,
-  runtimeFiles
+  runTaskkill,
+  runtimeFiles,
+  terminateDaemonProcess,
+  waitForProcessExit
 };
