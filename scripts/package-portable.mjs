@@ -43,8 +43,8 @@ function writeExecutable(file, content) {
 
 function npmCommand() {
   const cli = String(process.env.npm_execpath || '').trim();
-  if (cli && fs.statSync(cli, { throwIfNoEntry: false })?.isFile()) return { command: process.execPath, args: [cli] };
-  return { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: [] };
+  if (cli && fs.statSync(cli, { throwIfNoEntry: false })?.isFile()) return { command: process.execPath, args: [cli], shell: false };
+  return { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: [], shell: process.platform === 'win32' };
 }
 
 function installProductionDependencies(appDirectory) {
@@ -53,6 +53,7 @@ function installProductionDependencies(appDirectory) {
     cwd: appDirectory,
     encoding: 'utf8',
     windowsHide: true,
+    shell: npm.shell,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   if (result.error || result.status !== 0) {
