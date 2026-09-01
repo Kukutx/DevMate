@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import configStore from '../shared/config-store.cjs';
 import { createRunnerCredential, normalizeRunnerControlConfig } from '../gateway/runner-access.mjs';
@@ -23,6 +24,25 @@ let cliSurfacePromise = null;
 function cliSurface() {
   cliSurfacePromise ||= import('./cli-surface.mjs');
   return cliSurfacePromise;
+}
+
+function shellCommand(words) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(process.execPath, [import.meta.filename, ...words], {
+        env: { ...process.env },
+        shell: false,
+        stdio: 'inherit',
+        windowsHide: true
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    child.once('error', reject);
+    child.once('close', () => resolve());
+  });
 }
 
 const BOOTSTRAP_PRESETS = Object.freeze({
@@ -256,13 +276,13 @@ async function main(argv = process.argv.slice(2)) {
   if (!command) {
     if (process.stdin.isTTY && process.stdout.isTTY) {
       const { runShell } = await cliSurface();
-      return runShell(words => main(words));
+      return runShell(shellCommand);
     }
     return console.log(await help());
   }
   if (command === 'shell') {
     const { runShell } = await cliSurface();
-    return runShell(words => main(words));
+    return runShell(shellCommand);
   }
   if (command === 'bootstrap') return console.log(JSON.stringify(bootstrap(options), null, 2));
   if (command === 'status') {
@@ -276,7 +296,7 @@ async function main(argv = process.argv.slice(2)) {
     return console.log(JSON.stringify({
       ok: true,
       config: result.file,
-      authenticationMode: result.config.auth?.mode || 'oauth',
+      authenticationMode: result.config.auth?.mode || 'none',
       mcpUrl: mcpUrl({ ...options, config: result.file })
     }, null, 2));
   }
@@ -323,5 +343,6 @@ export const __test = {
   mcpUrl,
   parseArgs,
   presetOptions,
+  shellCommand,
   status
 };
