@@ -17,23 +17,23 @@ function json(value) {
 }
 
 function shellWords(line) {
+  const source = String(line || '');
   const words = [];
   let current = '';
   let quote = '';
-  let escape = false;
-  for (const char of String(line || '')) {
-    if (escape) {
-      current += char;
-      escape = false;
-      continue;
-    }
-    if (char === '\\') {
-      escape = true;
-      continue;
-    }
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
     if (quote) {
-      if (char === quote) quote = '';
-      else current += char;
+      if (char === quote) {
+        quote = '';
+        continue;
+      }
+      if (char === '\\' && source[index + 1] === quote) {
+        current += quote;
+        index += 1;
+        continue;
+      }
+      current += char;
       continue;
     }
     if (char === '"' || char === "'") {
@@ -49,7 +49,6 @@ function shellWords(line) {
     }
     current += char;
   }
-  if (escape) current += '\\';
   if (quote) throw new Error(`Unclosed ${quote} quote`);
   if (current) words.push(current);
   return words;
@@ -309,7 +308,7 @@ async function toolCall(options = {}, positional = []) {
 }
 
 async function jobCommand(action, options = {}, positional = []) {
-  const id = String(options.id || positional[1] || '').trim();
+  const id = String(options.id || positional[0] || '').trim();
   const workspaceId = options.workspace || options['workspace-id'];
   if (action === 'list') {
     return toolCall({ ...options, name: 'job_list', args: json({
