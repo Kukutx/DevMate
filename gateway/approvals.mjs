@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import { redactSensitiveString } from './local-shared.mjs';
 import { readDurableNamespace, writeDurableNamespace } from './durable-state.mjs';
-import { requestConversationScope } from './request-context.mjs';
 import { defaultedArray, defaultedBoolean, defaultedInteger } from './strict-config.mjs';
 
 const NAMESPACE = 'approvals';
@@ -45,7 +44,6 @@ function publicRequest(request) {
     tool: request.tool,
     capability: request.capability,
     workspaceId: request.workspaceId || null,
-    conversationScope: request.conversationScope || null,
     requestedBy: request.requestedBy,
     requestedByName: request.requestedByName,
     requestedByRole: request.requestedByRole,
@@ -135,12 +133,11 @@ export function toolNeedsApproval({ config, principal, tool, capability }) {
   return policy.requiredTools.includes(tool) || policy.requiredCapabilities.includes(capability);
 }
 
-export function approvalDigest({ principal, tool, workspaceId, args, conversationScope = requestConversationScope() }) {
+export function approvalDigest({ principal, tool, workspaceId, args }) {
   return crypto.createHash('sha256').update(canonical({
     principalId: principal?.id || '',
     tool: String(tool || ''),
     workspaceId: workspaceId || null,
-    conversationScope: conversationScope || null,
     args: args || {}
   })).digest('base64url');
 }
@@ -169,11 +166,11 @@ function approvalError(request) {
   return error;
 }
 
-export function ensureToolApproval({ config, principal, tool, capability, workspaceId, args, conversationScope = requestConversationScope() }) {
+export function ensureToolApproval({ config, principal, tool, capability, workspaceId, args }) {
   if (!toolNeedsApproval({ config, principal, tool, capability })) return { required: false };
   const policy = approvalPolicy(config);
   const store = prune(readStore());
-  const digest = approvalDigest({ principal, tool, workspaceId, args, conversationScope });
+  const digest = approvalDigest({ principal, tool, workspaceId, args });
   const approved = store.requests.find(item =>
     item.status === 'approved' &&
     item.requestedBy === principal.id &&
@@ -200,7 +197,6 @@ export function ensureToolApproval({ config, principal, tool, capability, worksp
     tool,
     capability,
     workspaceId: workspaceId || null,
-    conversationScope: conversationScope || null,
     requestedBy: principal.id,
     requestedByName: principal.name || principal.id,
     requestedByRole: principal.role,

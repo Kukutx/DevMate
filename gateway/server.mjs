@@ -618,7 +618,7 @@ function statusPanelHtml(){
 }
 
 function createServer(){
-  const server = new McpServer({ name:'devmate', version:VERSION }, { instructions:"DevMate is a local development gateway for personal and team workflows. It supports reading, editing, running commands, and full Git workflows according to the user's request. Keep responses practical and avoid exposing secrets; reference workspaces are read-only. In ChatGPT, bind the conversation to its intended project before project-scoped work. When the user supplies an absolute local path, call workspace_bind with that exact path and treat it as authoritative; never substitute the current VS Code or Obsidian workspace. Never adopt work sessions, jobs, persistent processes, or previews from another conversation after a reconnect." });
+  const server = new McpServer({ name:'devmate', version:VERSION }, { instructions:"DevMate is a local development gateway for personal and team workflows. It supports reading, editing, running commands, and full Git workflows according to the user's request. Keep responses practical and avoid exposing secrets; reference workspaces are read-only. In ChatGPT, if the user provides an absolute local path, call workspace_bind with that path and use it. If the user provides no path, use the current default VS Code or Obsidian workspace. Keep the selected project stable across reconnects. Conversations working on the same project may continue the same work records." });
   const registerTool = server.registerTool.bind(server);
   server.registerTool = (name, config, handler) => registerTool(name, toolConfig(name, config), handler);
   const S = (shape)=>shape;
