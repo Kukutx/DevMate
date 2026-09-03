@@ -500,39 +500,48 @@ function statusPanelHtml(){
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     :root{color-scheme:light dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    body{margin:0;padding:14px;background:Canvas;color:CanvasText}
-    .wrap{max-width:760px;margin:0 auto}
-    .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-    h1{font-size:18px;line-height:1.2;margin:0;font-weight:650}
-    button{font:inherit;border:1px solid color-mix(in srgb, CanvasText 22%, transparent);background:ButtonFace;color:ButtonText;border-radius:6px;padding:6px 10px;cursor:pointer}
-    .status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:4px 9px;font-size:12px;border:1px solid color-mix(in srgb, CanvasText 16%, transparent)}
-    .dot{width:8px;height:8px;border-radius:50%;background:#888}
+    body{margin:0;padding:10px 12px;background:Canvas;color:CanvasText}
+    .wrap{max-width:860px;margin:0 auto}
+    .top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+    .heading{min-width:0}
+    .title-row{display:flex;align-items:center;gap:8px;min-width:0}
+    h1{font-size:17px;line-height:1.2;margin:0;font-weight:650}
+    button{font:inherit;border:1px solid color-mix(in srgb, CanvasText 22%, transparent);background:ButtonFace;color:ButtonText;border-radius:6px;padding:5px 9px;cursor:pointer}
+    .status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 7px;font-size:11px;line-height:1;border:1px solid color-mix(in srgb, CanvasText 16%, transparent);white-space:nowrap}
+    .dot{width:6px;height:6px;border-radius:50%;background:#888;flex:0 0 auto}
     .ready .dot{background:#1a7f37}.attention .dot{background:#b54708}.loading .dot{background:#666}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
-    .card{border:1px solid color-mix(in srgb, CanvasText 14%, transparent);border-radius:8px;padding:10px;background:color-mix(in srgb, Canvas 94%, CanvasText 6%)}
-    .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;opacity:.72;margin-bottom:4px}
-    .value{font-size:14px;font-weight:600;overflow-wrap:anywhere}
-    .muted{font-size:12px;opacity:.74;margin-top:4px;overflow-wrap:anywhere}
-    .advice{margin-top:10px;border-left:3px solid #b54708;padding-left:10px}
-    ul{margin:6px 0 0;padding-left:18px}
-    li{margin:4px 0}
-    pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:8px 0 0;opacity:.78}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+    .card{min-width:0;border:1px solid color-mix(in srgb, CanvasText 14%, transparent);border-radius:8px;padding:7px 8px;background:color-mix(in srgb, Canvas 94%, CanvasText 6%)}
+    .label{font-size:10px;line-height:1.15;text-transform:uppercase;letter-spacing:.04em;opacity:.72;margin-bottom:2px}
+    .value{font-size:13px;line-height:1.25;font-weight:600;overflow-wrap:anywhere}
+    .muted{font-size:11px;line-height:1.25;opacity:.74;margin-top:2px;overflow-wrap:anywhere}
+    .loading-copy{font-size:12px;opacity:.74;padding:3px 0}
+    .advice{margin-top:8px;border-left:3px solid #b54708;padding-left:9px;font-size:12px}
+    ul{margin:5px 0 0;padding-left:17px}
+    li{margin:3px 0}
+    pre{white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.3;margin:6px 0 0;opacity:.78}
+    @media (max-width:620px){body{padding:10px}.top{align-items:flex-start}.title-row{align-items:flex-start;flex-wrap:wrap}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="top">
-      <div>
-        <h1>DevMate Connection</h1>
+      <div class="heading">
+        <div class="title-row">
+          <h1>DevMate Connection</h1>
+          <div id="summary" class="status loading" aria-live="polite"><span class="dot"></span><span>Loading</span></div>
+        </div>
         <div class="muted" id="updated">Waiting for diagnostics</div>
       </div>
       <button id="refresh" type="button">Refresh</button>
     </div>
-    <div id="root" class="status loading"><span class="dot"></span><span>Loading DevMate status</span></div>
+    <div id="root" class="loading-copy">Loading DevMate details…</div>
   </div>
   <script>
   (() => {
     const root = document.getElementById('root');
+    const summary = document.getElementById('summary');
     const updated = document.getElementById('updated');
     const refresh = document.getElementById('refresh');
     const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -555,29 +564,33 @@ function statusPanelHtml(){
     }
     function render(data) {
       if (!data || !data.gateway) {
-        root.className = 'status loading';
-        root.innerHTML = '<span class="dot"></span><span>Ask ChatGPT to run devmate_status_panel.</span>';
+        summary.className = 'status loading';
+        summary.innerHTML = '<span class="dot"></span><span>Loading</span>';
+        root.className = 'loading-copy';
+        root.textContent = 'Ask ChatGPT to run devmate_status_panel.';
         return;
       }
       const cls = data.status === 'ready' ? 'ready' : 'attention';
+      summary.className = 'status ' + cls;
+      summary.innerHTML = '<span class="dot"></span><span>' + esc(data.status || 'unknown') + '</span>';
       updated.textContent = 'Checked ' + (data.checkedAt || 'now');
       const diag = data.vscode?.diagnostics || { total: 0, bySeverity: {} };
       const advice = Array.isArray(data.advice) && data.advice.length
         ? '<div class="advice"><strong>Recommended actions</strong><ul>' + data.advice.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
         : '';
+      const lastError = data.connection?.lastError ? '<pre>' + esc(data.connection.lastError) + '</pre>' : '';
       root.className = '';
       root.innerHTML =
-        '<div class="status ' + cls + '"><span class="dot"></span><span>' + esc(data.status || 'unknown') + '</span></div>' +
-        '<div class="grid" style="margin-top:10px">' +
-          card('Gateway', data.gateway?.reachable ? 'Reachable' : 'Unknown', 'Port ' + esc(data.gateway?.localPort) + ' ' + esc(data.gateway?.mcpPath)) +
-          card('VS Code', data.vscode?.fresh ? 'Fresh context' : 'Check context', 'Captured ' + esc(fmtAge(data.vscode?.contextAgeSeconds))) +
+        '<div class="grid">' +
+          card('Gateway', data.gateway?.reachable ? 'Reachable' : 'Unknown', 'Port ' + data.gateway?.localPort + ' ' + data.gateway?.mcpPath) +
+          card('VS Code', data.vscode?.fresh ? 'Fresh context' : 'Check context', 'Captured ' + fmtAge(data.vscode?.contextAgeSeconds)) +
           card('Workspace', data.workspace?.active?.root || 'None', (data.workspace?.count || 0) + ' workspace(s), ' + (data.workspace?.references || 0) + ' reference(s)') +
           card('Permissions', data.gateway?.permissionProfile || 'unknown', data.gateway?.authenticationMode === 'oauth' ? 'OAuth enabled' : 'no authentication') +
           card('Diagnostics', String(diag.total || 0), 'errors ' + (diag.bySeverity?.error || 0) + ', warnings ' + (diag.bySeverity?.warning || 0)) +
           card('Last Preflight', data.connection?.lastPreflightAt ? fmtAge(data.connection?.lastPreflightAgeSeconds) : 'Not recorded', data.connection?.lastPublicHost || 'no public host snapshot') +
         '</div>' +
         advice +
-        '<pre>' + esc(data.connection?.lastError || '') + '</pre>';
+        lastError;
     }
     refresh.addEventListener('click', async () => {
       try {
@@ -587,8 +600,10 @@ function statusPanelHtml(){
           render(null);
         }
       } catch (error) {
-        root.className = 'status attention';
-        root.innerHTML = '<span class="dot"></span><span>' + esc(error?.message || error) + '</span>';
+        summary.className = 'status attention';
+        summary.innerHTML = '<span class="dot"></span><span>attention</span>';
+        root.className = '';
+        root.innerHTML = '<pre>' + esc(error?.message || error) + '</pre>';
       }
     });
     render(unwrap(window.openai?.toolOutput) || unwrap(window.openai?.toolResult));

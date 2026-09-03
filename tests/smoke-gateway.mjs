@@ -222,7 +222,14 @@ try {
   const resources = await rpc('resources/list', {});
   assert(resources.response.ok && resources.text.includes('ui://devmate/status.html'), `resources/list did not include status UI: ${resources.text}`);
   const statusUi = await rpc('resources/read', { uri: 'ui://devmate/status.html' });
-  assert(statusUi.response.ok && statusUi.text.includes('DevMate Connection') && statusUi.text.includes('text/html;profile=mcp-app'), `resources/read status UI failed: ${statusUi.text}`);
+  assert(
+    statusUi.response.ok &&
+      statusUi.text.includes('DevMate Connection') &&
+      statusUi.text.includes('text/html;profile=mcp-app') &&
+      statusUi.text.includes('title-row') &&
+      statusUi.text.includes('repeat(3,minmax(0,1fr))'),
+    `resources/read status UI failed: ${statusUi.text}`
+  );
 
   const vscodeContext = await rpc('tools/call', { name: 'vscode_context', arguments: {} });
   assert(vscodeContext.response.ok && vscodeContext.text.includes('README.md'), `vscode_context failed: ${vscodeContext.text}`);
