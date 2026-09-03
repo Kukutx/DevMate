@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { conversationWorkspace } from './conversation-workspaces.mjs';
 import { assertSafeWorkspaceRoot } from './sensitive-path-policy.mjs';
 
 function publicWorkspace(workspace) {
@@ -51,7 +53,10 @@ function workspaceSelectionRequired(workspaces) {
 export function resolveWorkspace(config, requested = '') {
   const workspaces = Array.isArray(config?.workspaces) ? config.workspaces : [];
   const value = String(requested || '').trim();
+  const bound = conversationWorkspace(config);
+
   if (!value) {
+    if (bound) return assertOperationalWorkspaceRoot(bound, 'Conversation workspace root');
     const writable = writableWorkspaces(config);
     if (writable.length > 1) throw workspaceSelectionRequired(writable);
     const active = workspaces.find(item => item.id === config?.activeWorkspaceId)
@@ -60,6 +65,8 @@ export function resolveWorkspace(config, requested = '') {
     if (!active) throw new Error('No workspace configured');
     return assertOperationalWorkspaceRoot(active);
   }
+
+  if (bound?.id === value) return assertOperationalWorkspaceRoot(bound, 'Conversation workspace root');
 
   const byId = workspaces.find(item => item.id === value);
   if (byId) return assertOperationalWorkspaceRoot(byId);
@@ -70,6 +77,12 @@ export function resolveWorkspace(config, requested = '') {
     const error = new Error(`Workspace name is ambiguous: ${value}`);
     error.code = 'workspace_ambiguous';
     error.matches = byName.map(publicWorkspace);
+    throw error;
+  }
+
+  if (path.isAbsolute(value)) {
+    const error = new Error(`Local path supplied where workspaceId was expected: ${value}. Call workspace_bind with this path first so the current conversation is isolated from VS Code and Obsidian workspace changes.`);
+    error.code = 'workspace_path_requires_binding';
     throw error;
   }
 
