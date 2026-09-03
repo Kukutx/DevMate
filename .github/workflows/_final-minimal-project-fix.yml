@@ -1,0 +1,121 @@
+name: Verify minimal project isolation fix
+on:
+  push:
+    branches: [fix/default-workspace-when-no-path]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/default-workspace-when-no-path
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - name: Patch and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          function replaceOnce(file, from, to) {
+            let s = fs.readFileSync(file, 'utf8');
+            if (!s.includes(from)) throw new Error(`missing target in ${file}`);
+            fs.writeFileSync(file, s.replace(from, to));
+          }
+
+          replaceOnce(
+            'gateway/server.mjs',
+            "DevMate is a local development gateway for personal and team workflows. It supports reading, editing, running commands, and full Git workflows according to the user's request. Keep responses practical and avoid exposing secrets; reference workspaces are read-only. In ChatGPT, bind the conversation to its intended project before project-scoped work. When the user supplies an absolute local path, call workspace_bind with that exact path and treat it as authoritative; never substitute the current VS Code or Obsidian workspace. Never adopt work sessions, jobs, persistent processes, or previews from another conversation after a reconnect.",
+            "DevMate is a local development gateway for personal and team workflows. It supports reading, editing, running commands, and full Git workflows according to the user's request. Keep responses practical and avoid exposing secrets; reference workspaces are read-only. In ChatGPT, if the user provides an absolute local path, call workspace_bind with that path and use it. If the user provides no path, use the current default VS Code or Obsidian workspace. Keep the selected project stable across reconnects. Conversations working on the same project may continue the same work records."
+          );
+
+          let jobs = fs.readFileSync('gateway/job-tools.mjs', 'utf8');
+          jobs = jobs.replace("import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';\n", "import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';\nimport { conversationWorkspace } from './conversation-workspaces.mjs';\n");
+          jobs = jobs.replace("function ensureVisible(job, principal) {\n", "function currentProjectWorkspaceId() {\n  const config = normalizeInstanceConfig(readConfig());\n  const bound = conversationWorkspace(config);\n  if (bound?.id) return bound.id;\n  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];\n  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;\n}\n\nfunction ensureVisible(job, principal) {\n  const currentWorkspaceId = currentProjectWorkspaceId();\n  if (currentWorkspaceId && job.workspaceId && job.workspaceId !== currentWorkspaceId) {\n    throw new Error(`Job ${job.id} belongs to a different project workspace`);\n  }\n");
+          jobs = jobs.replace("    const args = withWorkspace(rawArgs, workspaceId);", "    const args = withWorkspace(rawArgs, workspaceId || currentProjectWorkspaceId());");
+          jobs = jobs.replace("  }, async ({ status, workspaceId, limit = 100 }) => toolText({\n    jobs: listJobs({ principal: principalNow(), status, workspaceId, limit })\n  }));", "  }, async ({ status, workspaceId, limit = 100 }) => toolText({\n    jobs: listJobs({ principal: principalNow(), status, workspaceId: workspaceId || currentProjectWorkspaceId(), limit })\n  }));");
+          jobs = jobs.replace("  withWorkspace\n};", "  currentProjectWorkspaceId,\n  withWorkspace\n};");
+          fs.writeFileSync('gateway/job-tools.mjs', jobs);
+
+          fs.writeFileSync('tests/conversation-workspace-isolation.test.mjs', `import test from 'node:test';
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import { conversationScopeFromToolContext, runWithConversationScope } from '../gateway/request-context.mjs';
+          import { bindConversationWorkspaceToPath } from '../gateway/conversation-workspaces.mjs';
+          import { resolveWorkspace } from '../gateway/workspace-resolver.mjs';
+          import { activeWorkSession, clearWorkSessions, startWorkSession } from '../gateway/work-sessions.mjs';
+          import { clearWorkspaceLeases } from '../gateway/workspace-leases.mjs';
+          import { __test as capabilityTest } from '../gateway/team-capabilities.mjs';
+
+          const scopeA = 'chatgpt-' + 'a'.repeat(32);
+          const scopeB = 'chatgpt-' + 'b'.repeat(32);
+
+          test('reconnect keeps the same conversation identity', () => {
+            const a1 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-a' } } });
+            const a2 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-a' } } });
+            const b = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-b' } } });
+            assert.equal(a1, a2);
+            assert.notEqual(a1, b);
+          });
+
+          test('explicit local path wins for that conversation', () => {
+            const explicit = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-explicit-'));
+            const host = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-default-'));
+            const config = { activeWorkspaceId: 'host', workspaces: [{ id: 'host', name: 'Host', root: host, mode: 'workspace-write', reference: false }] };
+            bindConversationWorkspaceToPath(config, scopeA, explicit, { allowExternalWrite: true });
+            runWithConversationScope(scopeA, () => assert.equal(resolveWorkspace(config, '').root, fs.realpathSync.native(explicit)));
+            runWithConversationScope(scopeB, () => assert.equal(resolveWorkspace(config, '').id, 'host'));
+          });
+
+          test('without a path a new conversation uses the current default workspace', () => {
+            const one = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-one-'));
+            const two = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-two-'));
+            const config = { activeWorkspaceId: 'two', workspaces: [
+              { id: 'one', name: 'One', root: one, mode: 'workspace-write', reference: false },
+              { id: 'two', name: 'Two', root: two, mode: 'workspace-write', reference: false }
+            ] };
+            assert.equal(capabilityTest.defaultConversationWorkspace(config).id, 'two');
+          });
+
+          test('same-project work records remain shareable across conversations', () => {
+            clearWorkSessions();
+            clearWorkspaceLeases();
+            const principal = { id: 'local-owner', name: 'Local owner', role: 'owner', source: 'local' };
+            let session;
+            runWithConversationScope(scopeA, () => { session = startWorkSession({ principal, workspaceId: 'app' }); });
+            runWithConversationScope(scopeB, () => assert.equal(activeWorkSession(principal.id, 'app')?.id, session.id));
+            clearWorkSessions();
+            clearWorkspaceLeases();
+          });
+          `);
+
+          let changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+          if (!changelog.includes('## 3.6.4')) {
+            changelog = changelog.replace('# Changelog\n', '# Changelog\n\n## 3.6.4\n- Isolate ChatGPT work by project only: explicit local path wins; without a path, use the current VS Code/Obsidian default workspace.\n- Keep same-project work sessions and records shareable across conversations instead of locking them to one conversation.\n');
+          }
+          fs.writeFileSync('CHANGELOG.md', changelog);
+          NODE
+
+          git rm .github/workflows/_final-minimal-project-fix.yml
+          npm ci
+          npm version 3.6.4 --no-git-tag-version
+          npm run version:sync
+          node --test tests/conversation-workspace-isolation.test.mjs tests/approval-execution-boundary.test.cjs
+          npm run check
+          npm run test:unit
+          npm run smoke:gateway
+          npm run package:vsix
+          if grep -R "conversation-resources\|processConversationScope\|previewConversationScope\|work_session_conversation_conflict\|conversation_workspace_durable_job_unsafe" gateway tests --exclude='server.bundle.mjs'; then exit 1; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: isolate projects without locking same-project sessions"
+          git push origin HEAD:fix/default-workspace-when-no-path
