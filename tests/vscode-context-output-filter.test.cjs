@@ -14,3 +14,12 @@ test('VS Code context capture excludes its own Output documents', () => {
   assert.match(block, /editor\.document\.uri\.scheme !== 'output'/);
   assert.match(block, /filter\(e=>e\.document\.uri\.scheme !== 'output'\)/);
 });
+
+test('VS Code context refreshes when window focus changes', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '..', 'extension.js'), 'utf8');
+  const start = source.indexOf('function activate(context)');
+  const end = source.indexOf('function deactivate', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /vscode\.window\.onDidChangeWindowState\(\(\)=>scheduleContextRefresh\(context\)\)/);
+});
