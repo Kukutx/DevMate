@@ -1,9 +1,15 @@
 import { z } from 'zod';
-import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
-import { conversationWorkspace } from './conversation-workspaces.mjs';
+import { audit, mutateConfig, readConfig, toolText, writeConfig } from './local-shared.mjs';
+import {
+  assertConversationWorkspaceMatch,
+  bindConversationWorkspaceToWorkspace,
+  conversationWorkspace
+} from './conversation-workspaces.mjs';
+import { requestConversationScope } from './request-context.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
+import { resolveWorkspace } from './workspace-resolver.mjs';
 import {
   cancelDrain,
   cancelJob,
@@ -46,17 +52,50 @@ function targetAuthorization(target, args, principal) {
   return authorized;
 }
 
-function currentProjectWorkspaceId() {
-  const config = normalizeInstanceConfig(readConfig());
-  const bound = conversationWorkspace(config);
-  if (bound?.id) return bound.id;
-  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];
-  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;
+function defaultConversationWorkspace(config) {
+  const workspaces = Array.isArray(config?.workspaces) ? config.workspaces : [];
+  return workspaces.find(item => item?.id === config?.activeWorkspaceId && !item.reference && item.mode !== 'readonly')
+    || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')
+    || workspaces[0]
+    || null;
 }
 
-function ensureCurrentProjectJob(job) {
-  const currentWorkspaceId = currentProjectWorkspaceId();
-  if (currentWorkspaceId && job.workspaceId && job.workspaceId !== currentWorkspaceId) {
+function selectedConversationProject(requested = '') {
+  const scope = requestConversationScope();
+  if (!scope) return { scope: null, workspace: null };
+
+  let config = normalizeInstanceConfig(readConfig());
+  let workspace = conversationWorkspace(config, scope);
+  if (!workspace) {
+    const fallback = defaultConversationWorkspace(config);
+    if (!fallback) throw new Error('No workspace configured');
+    mutateConfig(current => {
+      normalizeInstanceConfig(current);
+      if (!conversationWorkspace(current, scope)) {
+        bindConversationWorkspaceToWorkspace(current, scope, fallback, { source: 'default' });
+      }
+      return current;
+    }, { retries: 4 });
+    config = normalizeInstanceConfig(readConfig());
+    workspace = conversationWorkspace(config, scope);
+  }
+
+  if (!workspace) throw new Error('No workspace configured');
+  if (requested) {
+    const candidate = resolveWorkspace(config, requested);
+    assertConversationWorkspaceMatch(config, scope, candidate);
+  }
+  return { scope, workspace };
+}
+
+function selectedJobWorkspaceId(requested = '') {
+  const selected = selectedConversationProject(requested);
+  return selected.scope ? selected.workspace.id : String(requested || '').trim() || null;
+}
+
+function ensureCurrentProjectJob(job, requested = '') {
+  const selected = selectedConversationProject(requested);
+  if (selected.scope && job.workspaceId && job.workspaceId !== selected.workspace.id) {
     throw new Error(`Job ${job.id} belongs to a different project workspace`);
   }
   return job;
@@ -168,7 +207,10 @@ export function registerJobTools(register, annotations) {
     }
     const target = jobTarget(tool);
     if (!target) throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
-    const args = withWorkspace(rawArgs, workspaceId || currentProjectWorkspaceId());
+    const scope = requestConversationScope();
+    const args = scope
+      ? { ...rawArgs, workspaceId: selectedJobWorkspaceId(workspaceId || rawArgs.workspaceId) }
+      : withWorkspace(rawArgs, workspaceId);
     if (tool === 'git_save' && args.push) {
       throw new Error('Durable git_save jobs cannot push. Review and publish synchronously through the approval flow.');
     }
@@ -211,9 +253,10 @@ export function registerJobTools(register, annotations) {
       limit: z.number().int().min(1).max(500).optional()
     },
     annotations: ro
-  }, async ({ status, workspaceId, limit = 100 }) => toolText({
-    jobs: listJobs({ principal: principalNow(), status, workspaceId: workspaceId || currentProjectWorkspaceId(), limit })
-  }));
+  }, async ({ status, workspaceId, limit = 100 }) => {
+    const effectiveWorkspaceId = requestConversationScope() ? selectedJobWorkspaceId(workspaceId) : workspaceId;
+    return toolText({ jobs: listJobs({ principal: principalNow(), status, workspaceId: effectiveWorkspaceId, limit }) });
+  });
 
   register('job_status', {
     title: 'DevMate job status',
@@ -225,9 +268,9 @@ export function registerJobTools(register, annotations) {
       includeResult: z.boolean().optional()
     },
     annotations: ro
-  }, async ({ id, includeArguments = false, includeResult = true }) => {
+  }, async ({ id, workspaceId, includeArguments = false, includeResult = true }) => {
     const principal = principalNow();
-    return toolText({ job: ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments, includeResult }), principal)) });
+    return toolText({ job: ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments, includeResult }), principal), workspaceId) });
   });
 
   register('job_artifacts', {
@@ -235,9 +278,9 @@ export function registerJobTools(register, annotations) {
     description: 'List indexed local or remote files produced by a completed durable job.',
     inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: ro
-  }, async ({ id }) => {
+  }, async ({ id, workspaceId }) => {
     const principal = principalNow();
-    const job = ensureCurrentProjectJob(ensureVisible(getJob(id), principal));
+    const job = ensureCurrentProjectJob(ensureVisible(getJob(id), principal), workspaceId);
     return toolText({ jobId: job.id, status: job.status, artifacts: job.artifacts });
   });
 
@@ -250,9 +293,9 @@ export function registerJobTools(register, annotations) {
       force: z.boolean().optional()
     },
     annotations: { ...rw, idempotentHint: true }
-  }, async ({ id, force = false }) => {
+  }, async ({ id, workspaceId, force = false }) => {
     const principal = principalNow();
-    ensureCurrentProjectJob(ensureVisible(getJob(id), principal));
+    ensureCurrentProjectJob(ensureVisible(getJob(id), principal), workspaceId);
     const result = cancelJob({ id, principal, force });
     await audit('job_cancel', { principalId: principal.id, jobId: id, force, cancelled: result.cancelled });
     return toolText(result);
@@ -263,9 +306,9 @@ export function registerJobTools(register, annotations) {
     description: 'Requeue a failed, cancelled, approval-blocked, or lease-blocked job after correcting its prerequisite.',
     inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: rw
-  }, async ({ id }) => {
+  }, async ({ id, workspaceId }) => {
     const principal = principalNow();
-    const existing = ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments: true }), principal));
+    const existing = ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments: true }), principal), workspaceId);
     const target = jobTarget(existing.tool);
     if (!target) throw new Error(`Job target is not currently available: ${existing.tool}`);
     targetAuthorization(target, existing.arguments || {}, principal);

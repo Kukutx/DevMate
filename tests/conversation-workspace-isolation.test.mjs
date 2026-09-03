@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { conversationScopeFromToolContext, runWithConversationScope } from '../gateway/request-context.mjs';
-import { bindConversationWorkspaceToPath } from '../gateway/conversation-workspaces.mjs';
+import { bindConversationWorkspaceToPath, conversationWorkspaceBinding, pruneConversationWorkspaceBindings } from '../gateway/conversation-workspaces.mjs';
 import { resolveWorkspace } from '../gateway/workspace-resolver.mjs';
 import { activeWorkSession, clearWorkSessions, startWorkSession } from '../gateway/work-sessions.mjs';
 import { clearWorkspaceLeases } from '../gateway/workspace-leases.mjs';
@@ -49,4 +49,22 @@ test('same-project work records remain shareable across conversations', () => {
   runWithConversationScope(scopeB, () => assert.equal(activeWorkSession(principal.id, 'app')?.id, session.id));
   clearWorkSessions();
   clearWorkspaceLeases();
+});
+
+test('project selection does not expire just because a conversation is old', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-stable-project-'));
+  const config = { activeWorkspaceId: 'app', workspaces: [{ id: 'app', name: 'App', root, mode: 'workspace-write', reference: false }] };
+  bindConversationWorkspaceToPath(config, scopeA, root, { allowExternalWrite: true, now: 0 });
+  pruneConversationWorkspaceBindings(config, 365 * 24 * 60 * 60 * 1000);
+  assert.equal(conversationWorkspaceBinding(config, scopeA)?.root, fs.realpathSync.native(root));
+});
+
+test('project resource fences do not restore conversation ownership locks', () => {
+  const capabilitySource = fs.readFileSync(new URL('../gateway/team-capabilities.mjs', import.meta.url), 'utf8');
+  const collaborationSource = fs.readFileSync(new URL('../gateway/team-collaboration-tools.mjs', import.meta.url), 'utf8');
+  const jobSource = fs.readFileSync(new URL('../gateway/job-tools.mjs', import.meta.url), 'utf8');
+  const combined = capabilitySource + collaborationSource + jobSource;
+  assert.doesNotMatch(combined, /conversation_resource_conflict|work_session_conversation_conflict|conversation_workspace_durable_job_unsafe|belongs to another ChatGPT conversation|must deliberately bind/);
+  assert.match(collaborationSource, /different project workspace/);
+  assert.match(jobSource, /different project workspace/);
 });

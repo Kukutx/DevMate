@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.6.5
+- Kept each ChatGPT conversation on its selected project across long gaps and reconnects without expiring the project choice.
+- Applied the same project boundary to sessions, leases, previews, and jobs while keeping same-project records shareable across conversations.
+
 ## 3.6.4
 - Isolate ChatGPT work by project only: explicit local path wins; without a path, use the current VS Code/Obsidian default workspace.
 - Keep same-project work sessions and records shareable across conversations instead of locking them to one conversation.

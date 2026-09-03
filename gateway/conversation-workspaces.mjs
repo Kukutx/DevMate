@@ -4,7 +4,6 @@ import path from 'node:path';
 import { requestConversationScope } from './request-context.mjs';
 import { assertSafeWorkspaceRoot } from './sensitive-path-policy.mjs';
 
-export const CONVERSATION_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_CONVERSATION_BINDINGS = 256;
 const STORE_KEY = 'conversationWorkspaceBindings';
 
@@ -95,8 +94,7 @@ function bindingFromWorkspace(scope, workspace, { source = 'auto', now = Date.no
     reference: readonly,
     source: String(source || 'auto').slice(0, 40),
     createdAt: timestamp,
-    updatedAt: timestamp,
-    expiresAt: new Date(now + CONVERSATION_BINDING_TTL_MS).toISOString()
+    updatedAt: timestamp
   };
 }
 
@@ -105,8 +103,6 @@ function normalizeBinding(scope, value) {
   if (cleanScope(scope) !== cleanScope(value.scope || scope)) return null;
   const root = String(value.root || '').trim();
   if (!root || !path.isAbsolute(root)) return null;
-  const expires = Date.parse(value.expiresAt || '');
-  if (!Number.isFinite(expires)) return null;
   return {
     scope: cleanScope(scope),
     workspaceId: String(value.workspaceId || syntheticWorkspaceId(scope, root)),
@@ -116,8 +112,7 @@ function normalizeBinding(scope, value) {
     reference: value.reference === true || value.mode === 'readonly',
     source: String(value.source || 'auto').slice(0, 40),
     createdAt: value.createdAt || null,
-    updatedAt: value.updatedAt || null,
-    expiresAt: new Date(expires).toISOString()
+    updatedAt: value.updatedAt || null
   };
 }
 
@@ -125,7 +120,7 @@ export function pruneConversationWorkspaceBindings(config, now = Date.now()) {
   const values = [];
   for (const [scope, raw] of Object.entries(store(config))) {
     const binding = normalizeBinding(scope, raw);
-    if (!binding || Date.parse(binding.expiresAt) <= now) continue;
+    if (!binding) continue;
     values.push(binding);
   }
   values.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
@@ -142,7 +137,6 @@ export function conversationWorkspaceBinding(config, scope = requestConversation
   if (!binding) return null;
   if (touch) {
     binding.updatedAt = new Date(now).toISOString();
-    binding.expiresAt = new Date(now + CONVERSATION_BINDING_TTL_MS).toISOString();
     config[STORE_KEY][key] = binding;
   }
   return { ...binding };
@@ -156,8 +150,7 @@ export function publicConversationWorkspaceBinding(config, scope = requestConver
     name: binding.name,
     root: binding.root,
     mode: binding.mode,
-    source: binding.source,
-    expiresAt: binding.expiresAt
+    source: binding.source
   };
 }
 

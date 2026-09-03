@@ -11,7 +11,8 @@ import {
 import {
   assertConversationWorkspaceMatch,
   bindConversationWorkspaceToWorkspace,
-  conversationWorkspace
+  conversationWorkspace,
+  conversationWorkspaceBinding
 } from './conversation-workspaces.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
@@ -238,6 +239,19 @@ function persistDefaultConversationBinding(scope, workspace) {
   return result;
 }
 
+function refreshConversationBinding(scope, current) {
+  const stored = conversationWorkspaceBinding(current, scope);
+  if (!stored) return current;
+  const updatedAt = Date.parse(stored.updatedAt || stored.createdAt || '');
+  if (Number.isFinite(updatedAt) && Date.now() - updatedAt < 24 * 60 * 60 * 1000) return current;
+  mutateConfig(config => {
+    normalizeInstanceConfig(config);
+    conversationWorkspaceBinding(config, scope, { touch: true });
+    return config;
+  }, { retries: 4 });
+  return normalizeInstanceConfig(readConfig());
+}
+
 function prepareConversationWorkspace(name, args, current) {
   const scope = requestConversationScope();
   const inferred = inferredWorkspace(name, args);
@@ -252,6 +266,9 @@ function prepareConversationWorkspace(name, args, current) {
     current = normalizeInstanceConfig(readConfig());
     binding = conversationWorkspace(current, scope);
   }
+  if (!binding) throw new Error('No workspace configured');
+  current = refreshConversationBinding(scope, current);
+  binding = conversationWorkspace(current, scope);
   if (!binding) throw new Error('No workspace configured');
 
   if (authorizationArgs.workspaceId) {
