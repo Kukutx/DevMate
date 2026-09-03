@@ -1,0 +1,255 @@
+name: Conversation isolation hardening retry
+
+on:
+  push:
+    branches:
+      - fix/conversation-workspace-isolation
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/conversation-workspace-isolation
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Apply hardening and verify
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(p): return Path(p).read_text()
+          def write(p,s): Path(p).write_text(s)
+          def once(s, old, new, label):
+              if old not in s: raise SystemExit(f'missing target: {label}')
+              return s.replace(old, new, 1)
+
+          write('gateway/request-context.mjs', '''import crypto from 'node:crypto';
+          import { AsyncLocalStorage } from 'node:async_hooks';
+
+          const storage = new AsyncLocalStorage();
+          const CONVERSATION_META_KEYS = Object.freeze([
+            'openai/session', 'openai/conversation', 'openai/conversationId',
+            'openai/thread', 'openai/threadId', 'openai/widgetSessionId'
+          ]);
+
+          function cleanMetaString(value, max = 4096) {
+            return typeof value === 'string' ? value.trim().slice(0, max) : '';
+          }
+          function conversationScope(value) {
+            const stable = cleanMetaString(value);
+            if (!stable) return null;
+            return `chatgpt-${crypto.createHash('sha256').update(stable, 'utf8').digest('hex').slice(0, 32)}`;
+          }
+          export function conversationScopeFromToolContext(context) {
+            const meta = context?.mcpReq?._meta || context?._meta || {};
+            for (const key of CONVERSATION_META_KEYS) {
+              const scope = conversationScope(meta?.[key]);
+              if (scope) return scope;
+            }
+            return null;
+          }
+          export function runWithRequestContext(context, fn) { return storage.run(Object.freeze({ ...(context || {}) }), fn); }
+          export function runWithConversationScope(value, fn) {
+            const current = requestContext() || {};
+            return storage.run(Object.freeze({ ...current, conversationScope: value || current.conversationScope || null }), fn);
+          }
+          export function runWithWorkSessionContext(workSessionId, fn) {
+            const current = requestContext() || {};
+            return storage.run(Object.freeze({ ...current, workSessionId: workSessionId || null }), fn);
+          }
+          export function runWithRequestSignal(signal, fn) {
+            const current = requestContext() || {};
+            return storage.run(Object.freeze({ ...current, signal: signal || current.signal || null }), fn);
+          }
+          export function requestContext() { return storage.getStore() || null; }
+          export function requestPrincipal() { return requestContext()?.principal || null; }
+          export function requestId() { return requestContext()?.requestId || null; }
+          export function requestConversationScope() { return requestContext()?.conversationScope || null; }
+          export function requestWorkSessionId() { return requestContext()?.workSessionId || null; }
+          export function requestSignal() { return requestContext()?.signal || null; }
+          export const __test = { CONVERSATION_META_KEYS, cleanMetaString, conversationScope };
+          '''.replace('          ',''))
+
+          p='gateway/persistent-processes.mjs'; s=read(p)
+          s=once(s, "import processTreeRuntime from '../host/runtime/process-tree.js';\n", "import processTreeRuntime from '../host/runtime/process-tree.js';\nimport { requestConversationScope } from './request-context.mjs';\n", 'process import')
+          s=once(s, "    status: 'running', startedAt: now(), finishedAt: null, exitCode: null, signal: null, error: null,\n", "    status: 'running', startedAt: now(), finishedAt: null, exitCode: null, signal: null, error: null,\n    conversationScope: requestConversationScope(),\n", 'process scope')
+          s=once(s, "export function processRecord(id) {\n", "export function processConversationScope(id) { return registry.get(id)?.conversationScope || null; }\nexport function processRecord(id) {\n", 'process helper')
+          write(p,s)
+
+          p='gateway/plugins/preview-manager.mjs'; s=read(p)
+          s=once(s, "import { isSensitiveWorkspacePath } from '../sensitive-path-policy.mjs';\n", "import { requestConversationScope } from '../request-context.mjs';\nimport { isSensitiveWorkspacePath } from '../sensitive-path-policy.mjs';\n", 'preview import')
+          s=once(s, "      crossOriginIsolation: !!crossOriginIsolation, spaFallback: !!spaFallback,\n      startedAt: new Date().toISOString(), requests: 0, lastRequestAt: null, server: null\n", "      crossOriginIsolation: !!crossOriginIsolation, spaFallback: !!spaFallback,\n      conversationScope: requestConversationScope(),\n      startedAt: new Date().toISOString(), requests: 0, lastRequestAt: null, server: null\n", 'preview scope')
+          s=once(s, "export function getPreview(id) {\n", "export function previewConversationScope(id) { return previews.get(id)?.conversationScope || null; }\n\nexport function getPreview(id) {\n", 'preview helper')
+          write(p,s)
+
+          p='gateway/approvals.mjs'; s=read(p)
+          s=once(s, "import { defaultedArray, defaultedBoolean, defaultedInteger } from './strict-config.mjs';\n", "import { requestConversationScope } from './request-context.mjs';\nimport { defaultedArray, defaultedBoolean, defaultedInteger } from './strict-config.mjs';\n", 'approval import')
+          s=once(s, "    workspaceId: request.workspaceId || null,\n", "    workspaceId: request.workspaceId || null,\n    conversationScope: request.conversationScope || null,\n", 'approval public')
+          s=once(s, "export function approvalDigest({ principal, tool, workspaceId, args }) {", "export function approvalDigest({ principal, tool, workspaceId, args, conversationScope = requestConversationScope() }) {", 'approval digest signature')
+          s=once(s, "    workspaceId: workspaceId || null,\n    args: args || {}", "    workspaceId: workspaceId || null,\n    conversationScope: conversationScope || null,\n    args: args || {}", 'approval digest body')
+          s=once(s, "export function ensureToolApproval({ config, principal, tool, capability, workspaceId, args }) {", "export function ensureToolApproval({ config, principal, tool, capability, workspaceId, args, conversationScope = requestConversationScope() }) {", 'approval ensure signature')
+          s=once(s, "  const digest = approvalDigest({ principal, tool, workspaceId, args });", "  const digest = approvalDigest({ principal, tool, workspaceId, args, conversationScope });", 'approval digest call')
+          s=once(s, "    workspaceId: workspaceId || null,\n    requestedBy: principal.id,", "    workspaceId: workspaceId || null,\n    conversationScope: conversationScope || null,\n    requestedBy: principal.id,", 'approval stored')
+          write(p,s)
+
+          p='gateway/team-capabilities.mjs'; s=read(p)
+          s=s.replace("import { listPersistentProcesses } from './persistent-processes.mjs';", "import { listPersistentProcesses, processConversationScope } from './persistent-processes.mjs';")
+          s=s.replace("import { getPreview } from './plugins/preview-manager.mjs';", "import { getPreview, previewConversationScope } from './plugins/preview-manager.mjs';")
+          a=s.index('function persistAutoConversationBinding')
+          b=s.index('async function authorizedToolExecution', a)
+          replacement='''function persistExplicitConversationBinding(scope, workspace) {
+            if (!scope || !workspace) return null;
+            let binding = null;
+            mutateConfig(config => {
+              normalizeInstanceConfig(config);
+              binding = conversationWorkspaceBinding(config, scope);
+              if (!binding) binding = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'explicit-tool' });
+              return config;
+            }, { retries: 4 });
+            return binding;
+          }
+          function conversationBindingRequired(current) {
+            const error = new Error('This ChatGPT conversation is not bound to a project. Call workspace_bind first. If the user supplied an absolute local path, bind that exact path; otherwise choose an explicit workspaceId from list_workspaces. DevMate will not silently use the current VS Code or Obsidian workspace.');
+            error.code = 'conversation_workspace_binding_required';
+            error.workspaces = (current.workspaces || []).filter(item => item && !item.reference && item.mode !== 'readonly').map(item => ({ id: item.id, name: item.name, root: item.root }));
+            return error;
+          }
+          function assertConversationResourceScope(kind, id, actualScope, expectedScope) {
+            if (!expectedScope) return;
+            if (actualScope && actualScope === expectedScope) return;
+            const error = new Error(`${kind} ${id} belongs to another or legacy unscoped ChatGPT conversation and will not be adopted automatically`);
+            error.code = 'conversation_resource_conflict';
+            throw error;
+          }
+          function prepareConversationWorkspace(name, args, current) {
+            const scope = requestConversationScope();
+            const inferred = inferredWorkspace(name, args);
+            let authorizationArgs = inferred && !args.workspaceId ? { ...args, workspaceId: inferred } : args;
+            if (!scope || !workspaceScopedTool(name)) return { current, args: authorizationArgs };
+            if (args.id && ['process_status', 'read_process_output', 'send_process_input', 'stop_process'].includes(name)) {
+              assertConversationResourceScope('process', args.id, processConversationScope(args.id), scope);
+            }
+            if (args.id && ['web_preview_status', 'web_preview_stop'].includes(name)) {
+              assertConversationResourceScope('preview', args.id, previewConversationScope(args.id), scope);
+            }
+            let binding = conversationWorkspace(current, scope);
+            if (!binding) {
+              if (!String(authorizationArgs.workspaceId || '').trim()) throw conversationBindingRequired(current);
+              const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
+              persistExplicitConversationBinding(scope, requested);
+              current = normalizeInstanceConfig(readConfig());
+              binding = conversationWorkspace(current, scope);
+            }
+            if (!binding) throw conversationBindingRequired(current);
+            if (authorizationArgs.workspaceId) {
+              const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
+              assertConversationWorkspaceMatch(current, scope, requested);
+            }
+            return { current, args: { ...authorizationArgs, workspaceId: binding.id } };
+          }
+
+          '''.replace('          ','')
+          s=s[:a]+replacement+s[b:]
+          old="function filterResult(name, result, principal) {\n  if (!result?.structuredContent) return sanitizeToolResult(name, result);\n"
+          new="function filterResult(name, result, principal, authorizedWorkspaceId = null, conversationScope = requestConversationScope()) {\n  if (!result?.structuredContent) return sanitizeToolResult(name, result);\n  const scopedData = result.structuredContent;\n  if (name === 'list_processes' && Array.isArray(scopedData.processes)) {\n    scopedData.processes = scopedData.processes.filter(item => (!authorizedWorkspaceId || item.workspaceId === authorizedWorkspaceId) && (!conversationScope || processConversationScope(item.id) === conversationScope));\n    scopedData.running = scopedData.processes.filter(item => ['running', 'stopping'].includes(item.status)).length;\n    syncTextContent(result);\n  }\n  if (name === 'web_preview_status' && Array.isArray(scopedData.previews)) {\n    scopedData.previews = scopedData.previews.filter(item => (!authorizedWorkspaceId || item.workspaceId === authorizedWorkspaceId) && (!conversationScope || previewConversationScope(item.id) === conversationScope));\n    syncTextContent(result);\n  }\n"
+          s=once(s,old,new,'filter signature')
+          pattern=r"const result = filterResult\(\s*name,\s*markGitFailure\(name, rawResult\),\s*authorized\.principal\s*\);"
+          repl="const result = filterResult(\n      name,\n      markGitFailure(name, rawResult),\n      authorized.principal,\n      authorized.workspaceId,\n      requestConversationScope()\n    );"
+          s,n=re.subn(pattern,repl,s,count=1)
+          if n != 1: raise SystemExit('missing filterResult invocation')
+          s=s.replace('persistAutoConversationBinding,', 'persistExplicitConversationBinding,')
+          write(p,s)
+
+          p='gateway/job-tools.mjs'; s=read(p)
+          s=once(s, "import { requestConversationScope } from './request-context.mjs';\n", "import { conversationWorkspace, sameWorkspaceRoot } from './conversation-workspaces.mjs';\nimport { requestConversationScope } from './request-context.mjs';\n", 'job import')
+          needle="    const authorized = targetAuthorization(target, args, principal);\n"
+          guard="    const currentConfig = normalizeInstanceConfig(readConfig());\n    const bound = conversationWorkspace(currentConfig);\n    if (bound) {\n      const configured = currentConfig.workspaces.find(item => item?.id === authorized.workspaceId);\n      if (!configured || !sameWorkspaceRoot(bound, configured)) {\n        const error = new Error('Durable jobs are disabled for conversation-only or path-narrowed workspace bindings because they outlive the ChatGPT conversation. Run the tool synchronously, or bind the exact configured workspace root first.');\n        error.code = 'conversation_workspace_durable_job_unsafe';\n        throw error;\n      }\n    }\n"
+          s=once(s,needle,needle+guard,'job guard')
+          write(p,s)
+
+          p='gateway/server.mjs'; s=read(p)
+          old="DevMate is a local development gateway for personal and team workflows. It supports reading, editing, running commands, and full Git workflows according to the user's request. Keep responses practical and avoid exposing secrets; reference workspaces are read-only."
+          new=old+" In ChatGPT, bind the conversation to its intended project before project-scoped work. When the user supplies an absolute local path, call workspace_bind with that exact path and treat it as authoritative; never substitute the current VS Code or Obsidian workspace. Never adopt work sessions, jobs, persistent processes, or previews from another conversation after a reconnect."
+          s=once(s,old,new,'server instruction'); write(p,s)
+
+          write('tests/conversation-workspace-isolation.test.mjs', '''import test from 'node:test';
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import { conversationScopeFromToolContext, runWithConversationScope } from '../gateway/request-context.mjs';
+          import { bindConversationWorkspaceToPath, conversationWorkspace } from '../gateway/conversation-workspaces.mjs';
+          import { resolveWorkspace } from '../gateway/workspace-resolver.mjs';
+          import { activeWorkSession, clearWorkSessions, startWorkSession } from '../gateway/work-sessions.mjs';
+          import { clearWorkspaceLeases } from '../gateway/workspace-leases.mjs';
+
+          const scopeA = 'chatgpt-' + 'a'.repeat(32);
+          const scopeB = 'chatgpt-' + 'b'.repeat(32);
+          test('conversation metadata is stable across supported keys', () => {
+            const a1 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-a' } } });
+            const a2 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/conversationId': 'conversation-a' } } });
+            const b = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-b' } } });
+            assert.equal(a1, a2); assert.notEqual(a1, b); assert.match(a1, /^chatgpt-[a-f0-9]{32}$/);
+          });
+          test('explicit local path overrides host active workspace only in its conversation', () => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-conversation-root-'));
+            const host = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-host-root-'));
+            const config = { activeWorkspaceId: 'host', workspaces: [{ id: 'host', name: 'Host', root: host, mode: 'workspace-write', reference: false }] };
+            bindConversationWorkspaceToPath(config, scopeA, root, { allowExternalWrite: true });
+            runWithConversationScope(scopeA, () => { assert.equal(resolveWorkspace(config, '').root, fs.realpathSync.native(root)); assert.equal(conversationWorkspace(config).root, fs.realpathSync.native(root)); });
+            runWithConversationScope(scopeB, () => assert.equal(resolveWorkspace(config, '').id, 'host'));
+          });
+          test('work sessions are never adopted by another conversation', () => {
+            clearWorkSessions(); clearWorkspaceLeases();
+            const principal = { id: 'local-owner', name: 'Local owner', role: 'owner', source: 'local' };
+            const session = startWorkSession({ principal, workspaceId: 'app', conversationScope: scopeA });
+            assert.equal(activeWorkSession(principal.id, 'app', scopeA)?.id, session.id);
+            assert.equal(activeWorkSession(principal.id, 'app', scopeB), null);
+            assert.throws(() => startWorkSession({ principal, workspaceId: 'app', conversationScope: scopeB }), e => e?.code === 'work_session_conversation_conflict');
+            clearWorkSessions(); clearWorkspaceLeases();
+          });
+          test('authorization refuses silent host adoption and scopes secondary resources', () => {
+            const source = fs.readFileSync(new URL('../gateway/team-capabilities.mjs', import.meta.url), 'utf8');
+            assert.match(source, /conversation_workspace_binding_required/);
+            assert.match(source, /DevMate will not silently use the current VS Code or Obsidian workspace/);
+            assert.doesNotMatch(source, /source:\s*'auto'/);
+            assert.match(source, /processConversationScope/);
+            assert.match(source, /previewConversationScope/);
+            const approvals = fs.readFileSync(new URL('../gateway/approvals.mjs', import.meta.url), 'utf8');
+            assert.match(approvals, /conversationScope/);
+          });
+          '''.replace('          ',''))
+
+          p='CHANGELOG.md'; s=read(p)
+          if '## 3.6.2' not in s:
+              s=s.replace('# Changelog\n', '# Changelog\n\n## 3.6.2\n- Isolated ChatGPT project work by conversation across reconnects.\n- Explicit absolute local paths now take precedence over VS Code/Obsidian host defaults through conversation workspace binding.\n- Scoped sessions, jobs, approvals, processes, and previews to prevent cross-conversation adoption.\n- Added regression coverage for workspace isolation and path precedence.\n', 1)
+          write(p,s)
+          PY
+
+          npm ci
+          npm version 3.6.2 --no-git-tag-version
+          npm run version:sync
+          node --test tests/conversation-workspace-isolation.test.mjs
+          npm run check
+          npm run test:unit
+          npm run smoke:gateway
+          npm run package:vsix
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          git rm .github/workflows/_conversation-isolation-fix.yml .github/workflows/_conversation-isolation-fix2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: harden conversation workspace isolation"
+          git push origin HEAD:fix/conversation-workspace-isolation
