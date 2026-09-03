@@ -15,6 +15,7 @@ import {
   revokePreviewShare
 } from './published-previews.mjs';
 import {
+  activeWorkSession,
   finishWorkSession,
   listWorkSessions,
   startWorkSession,
@@ -44,8 +45,22 @@ function assertConversationScope() {
   throw error;
 }
 
-function bindWorkspace(input) {
+function assertNoActiveConversationSession(config, principal, scope) {
+  const binding = publicConversationWorkspaceBinding(config, scope);
+  if (!binding) return;
+  const session = activeWorkSession(principal.id, binding.workspaceId, scope);
+  if (!session) return;
+  const error = new Error(`This ChatGPT conversation has active work session ${session.id}. Finish it before rebinding or unbinding the project.`);
+  error.code = 'conversation_workspace_session_active';
+  error.sessionId = session.id;
+  error.workspaceId = binding.workspaceId;
+  throw error;
+}
+
+function bindWorkspace(input, principal) {
   const scope = assertConversationScope();
+  const preview = normalizeInstanceConfig(readConfig());
+  assertNoActiveConversationSession(preview, principal, scope);
   let result = null;
   mutateConfig(config => {
     normalizeInstanceConfig(config);
@@ -92,11 +107,13 @@ export function registerTeamCollaborationTools(register, annotations) {
     const hasPath = !!String(input.path || '').trim();
     const hasWorkspace = !!String(input.workspaceId || '').trim();
     if (hasPath === hasWorkspace) throw new Error('workspace_bind requires exactly one of path or workspaceId');
-    const binding = bindWorkspace(input);
+    const principal = principalNow();
+    const binding = bindWorkspace(input, principal);
     await audit('workspace_bind', {
       workspace: binding.workspaceId,
       root: binding.root,
-      source: binding.source
+      source: binding.source,
+      conversationScope: requestConversationScope()
     });
     return toolText({
       bound: true,
@@ -119,13 +136,16 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async () => {
     const scope = assertConversationScope();
+    const principal = principalNow();
+    const preview = normalizeInstanceConfig(readConfig());
+    assertNoActiveConversationSession(preview, principal, scope);
     let removed = false;
     mutateConfig(config => {
       normalizeInstanceConfig(config);
       removed = clearConversationWorkspaceBinding(config, scope);
       return config;
     }, { retries: 4 });
-    await audit('workspace_unbind', { removed });
+    await audit('workspace_unbind', { removed, conversationScope: scope });
     return toolText({ removed });
   });
 
@@ -155,6 +175,9 @@ export function registerTeamCollaborationTools(register, annotations) {
       principalId: principal.id,
       principalName: principal.name,
       workspace: workspace.id,
+      workspaceName: workspace.name || workspace.id,
+      workspaceRoot: workspace.root,
+      conversationScope: session.conversationScope,
       leaseId: session.leaseId,
       title: session.title,
       purpose: session.purpose
@@ -218,6 +241,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     await audit('work_session_finish', {
       principalId: principal.id,
       workspace: result.session?.workspaceId || null,
+      conversationScope: requestConversationScope(),
       finished: result.finished,
       leaseReleased: result.lease?.released === true
     }, { workSessionId: id });
