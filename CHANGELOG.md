@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.6.4
+- Isolate ChatGPT work by project only: explicit local path wins; without a path, use the current VS Code/Obsidian default workspace.
+- Keep same-project work sessions and records shareable across conversations instead of locking them to one conversation.
+
 ## 3.6.3
 - Made ChatGPT project selection fail closed: every new conversation must deliberately bind a project before project-scoped tools can run, so an editor/vault default cannot be adopted implicitly.
 - Made the documented `openai/session` client metadata the canonical ChatGPT conversation identity while retaining compatibility fallbacks.

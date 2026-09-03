@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
+import { conversationWorkspace } from './conversation-workspaces.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
@@ -43,6 +44,22 @@ function targetAuthorization(target, args, principal) {
     config
   });
   return authorized;
+}
+
+function currentProjectWorkspaceId() {
+  const config = normalizeInstanceConfig(readConfig());
+  const bound = conversationWorkspace(config);
+  if (bound?.id) return bound.id;
+  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];
+  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;
+}
+
+function ensureCurrentProjectJob(job) {
+  const currentWorkspaceId = currentProjectWorkspaceId();
+  if (currentWorkspaceId && job.workspaceId && job.workspaceId !== currentWorkspaceId) {
+    throw new Error(`Job ${job.id} belongs to a different project workspace`);
+  }
+  return job;
 }
 
 function ensureVisible(job, principal) {
@@ -151,7 +168,7 @@ export function registerJobTools(register, annotations) {
     }
     const target = jobTarget(tool);
     if (!target) throw new Error(`Tool is not currently available as a durable job target: ${tool}`);
-    const args = withWorkspace(rawArgs, workspaceId);
+    const args = withWorkspace(rawArgs, workspaceId || currentProjectWorkspaceId());
     if (tool === 'git_save' && args.push) {
       throw new Error('Durable git_save jobs cannot push. Review and publish synchronously through the approval flow.');
     }
@@ -195,7 +212,7 @@ export function registerJobTools(register, annotations) {
     },
     annotations: ro
   }, async ({ status, workspaceId, limit = 100 }) => toolText({
-    jobs: listJobs({ principal: principalNow(), status, workspaceId, limit })
+    jobs: listJobs({ principal: principalNow(), status, workspaceId: workspaceId || currentProjectWorkspaceId(), limit })
   }));
 
   register('job_status', {
@@ -210,7 +227,7 @@ export function registerJobTools(register, annotations) {
     annotations: ro
   }, async ({ id, includeArguments = false, includeResult = true }) => {
     const principal = principalNow();
-    return toolText({ job: ensureVisible(getJob(id, { includeArguments, includeResult }), principal) });
+    return toolText({ job: ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments, includeResult }), principal)) });
   });
 
   register('job_artifacts', {
@@ -220,7 +237,7 @@ export function registerJobTools(register, annotations) {
     annotations: ro
   }, async ({ id }) => {
     const principal = principalNow();
-    const job = ensureVisible(getJob(id), principal);
+    const job = ensureCurrentProjectJob(ensureVisible(getJob(id), principal));
     return toolText({ jobId: job.id, status: job.status, artifacts: job.artifacts });
   });
 
@@ -235,7 +252,7 @@ export function registerJobTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, force = false }) => {
     const principal = principalNow();
-    ensureVisible(getJob(id), principal);
+    ensureCurrentProjectJob(ensureVisible(getJob(id), principal));
     const result = cancelJob({ id, principal, force });
     await audit('job_cancel', { principalId: principal.id, jobId: id, force, cancelled: result.cancelled });
     return toolText(result);
@@ -248,7 +265,7 @@ export function registerJobTools(register, annotations) {
     annotations: rw
   }, async ({ id }) => {
     const principal = principalNow();
-    const existing = ensureVisible(getJob(id, { includeArguments: true }), principal);
+    const existing = ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments: true }), principal));
     const target = jobTarget(existing.tool);
     if (!target) throw new Error(`Job target is not currently available: ${existing.tool}`);
     targetAuthorization(target, existing.arguments || {}, principal);

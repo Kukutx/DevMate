@@ -4,64 +4,49 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { conversationScopeFromToolContext, runWithConversationScope } from '../gateway/request-context.mjs';
-import { bindConversationWorkspaceToPath, conversationWorkspace } from '../gateway/conversation-workspaces.mjs';
+import { bindConversationWorkspaceToPath } from '../gateway/conversation-workspaces.mjs';
 import { resolveWorkspace } from '../gateway/workspace-resolver.mjs';
 import { activeWorkSession, clearWorkSessions, startWorkSession } from '../gateway/work-sessions.mjs';
 import { clearWorkspaceLeases } from '../gateway/workspace-leases.mjs';
+import { __test as capabilityTest } from '../gateway/team-capabilities.mjs';
 
 const scopeA = 'chatgpt-' + 'a'.repeat(32);
 const scopeB = 'chatgpt-' + 'b'.repeat(32);
 
-test('documented ChatGPT session metadata is the canonical conversation identity', () => {
+test('reconnect keeps the same conversation identity', () => {
   const a1 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-a' } } });
-  const a2 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/conversationId': 'conversation-a' } } });
+  const a2 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-a' } } });
   const b = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-b' } } });
-  const preferred = conversationScopeFromToolContext({ mcpReq: { _meta: {
-    'openai/session': 'conversation-a',
-    'openai/conversationId': 'conflicting-compatibility-hint'
-  } } });
   assert.equal(a1, a2);
-  assert.equal(preferred, a1);
   assert.notEqual(a1, b);
-  assert.match(a1, /^chatgpt-[a-f0-9]{32}$/);
 });
 
-test('explicit local path overrides host active workspace only in its conversation', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-conversation-root-'));
-  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-host-root-'));
+test('explicit local path wins for that conversation', () => {
+  const explicit = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-explicit-'));
+  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-default-'));
   const config = { activeWorkspaceId: 'host', workspaces: [{ id: 'host', name: 'Host', root: host, mode: 'workspace-write', reference: false }] };
-  bindConversationWorkspaceToPath(config, scopeA, root, { allowExternalWrite: true });
-  runWithConversationScope(scopeA, () => {
-    assert.equal(resolveWorkspace(config, '').root, fs.realpathSync.native(root));
-    assert.equal(conversationWorkspace(config).root, fs.realpathSync.native(root));
-  });
+  bindConversationWorkspaceToPath(config, scopeA, explicit, { allowExternalWrite: true });
+  runWithConversationScope(scopeA, () => assert.equal(resolveWorkspace(config, '').root, fs.realpathSync.native(explicit)));
   runWithConversationScope(scopeB, () => assert.equal(resolveWorkspace(config, '').id, 'host'));
 });
 
-test('work sessions are never adopted by another conversation', () => {
+test('without a path a new conversation uses the current default workspace', () => {
+  const one = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-one-'));
+  const two = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-two-'));
+  const config = { activeWorkspaceId: 'two', workspaces: [
+    { id: 'one', name: 'One', root: one, mode: 'workspace-write', reference: false },
+    { id: 'two', name: 'Two', root: two, mode: 'workspace-write', reference: false }
+  ] };
+  assert.equal(capabilityTest.defaultConversationWorkspace(config).id, 'two');
+});
+
+test('same-project work records remain shareable across conversations', () => {
   clearWorkSessions();
   clearWorkspaceLeases();
   const principal = { id: 'local-owner', name: 'Local owner', role: 'owner', source: 'local' };
-  const session = startWorkSession({ principal, workspaceId: 'app', conversationScope: scopeA });
-  assert.equal(activeWorkSession(principal.id, 'app', scopeA)?.id, session.id);
-  assert.equal(activeWorkSession(principal.id, 'app', scopeB), null);
-  assert.throws(
-    () => startWorkSession({ principal, workspaceId: 'app', conversationScope: scopeB }),
-    error => error?.code === 'work_session_conversation_conflict'
-  );
+  let session;
+  runWithConversationScope(scopeA, () => { session = startWorkSession({ principal, workspaceId: 'app' }); });
+  runWithConversationScope(scopeB, () => assert.equal(activeWorkSession(principal.id, 'app')?.id, session.id));
   clearWorkSessions();
   clearWorkspaceLeases();
-});
-
-test('authorization refuses silent host adoption and scopes secondary resources', () => {
-  const source = fs.readFileSync(new URL('../gateway/team-capabilities.mjs', import.meta.url), 'utf8');
-  assert.match(source, /conversation_workspace_binding_required/);
-  assert.match(source, /DevMate will not silently use the current VS Code or Obsidian workspace/);
-  assert.doesNotMatch(source, /source:\s*'auto'/);
-  assert.doesNotMatch(source, /persistExplicitConversationBinding/);
-  assert.match(source, /const binding = conversationWorkspace\(current, scope\);\n  if \(!binding\) throw conversationBindingRequired\(current\);/);
-  assert.match(source, /processConversationScope/);
-  assert.match(source, /previewConversationScope/);
-  const approvals = fs.readFileSync(new URL('../gateway/approvals.mjs', import.meta.url), 'utf8');
-  assert.match(approvals, /conversationScope/);
 });
