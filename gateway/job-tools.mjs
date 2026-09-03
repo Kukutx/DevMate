@@ -5,6 +5,7 @@ import {
   bindConversationResource,
   filterConversationResources
 } from './conversation-resources.mjs';
+import { conversationWorkspace, sameWorkspaceRoot } from './conversation-workspaces.mjs';
 import { requestConversationScope } from './request-context.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
@@ -164,6 +165,16 @@ export function registerJobTools(register, annotations) {
     }
     const principal = principalNow();
     const authorized = targetAuthorization(target, args, principal);
+    const currentConfig = normalizeInstanceConfig(readConfig());
+    const bound = conversationWorkspace(currentConfig);
+    if (bound) {
+      const configured = currentConfig.workspaces.find(item => item?.id === authorized.workspaceId);
+      if (!configured || !sameWorkspaceRoot(bound, configured)) {
+        const error = new Error('Durable jobs are disabled for conversation-only or path-narrowed workspace bindings because they outlive the ChatGPT conversation. Run the tool synchronously, or bind the exact configured workspace root first.');
+        error.code = 'conversation_workspace_durable_job_unsafe';
+        throw error;
+      }
+    }
     const capabilities = [...new Set([
       ...target.requiredCapabilities,
       ...requiredCapabilities.map(value => String(value).trim().toLowerCase()).filter(Boolean)

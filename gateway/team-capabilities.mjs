@@ -15,8 +15,8 @@ import {
   conversationWorkspaceBinding
 } from './conversation-workspaces.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
-import { listPersistentProcesses } from './persistent-processes.mjs';
-import { getPreview } from './plugins/preview-manager.mjs';
+import { listPersistentProcesses, processConversationScope } from './persistent-processes.mjs';
+import { getPreview, previewConversationScope } from './plugins/preview-manager.mjs';
 import { activeWorkSession, touchWorkSession } from './work-sessions.mjs';
 import {
   acquireWorkspaceLeaseHold,
@@ -202,8 +202,18 @@ function sanitizeToolResult(name, result) {
   return result;
 }
 
-function filterResult(name, result, principal) {
+function filterResult(name, result, principal, authorizedWorkspaceId = null, conversationScope = requestConversationScope()) {
   if (!result?.structuredContent) return sanitizeToolResult(name, result);
+  const scopedData = result.structuredContent;
+  if (name === 'list_processes' && Array.isArray(scopedData.processes)) {
+    scopedData.processes = scopedData.processes.filter(item => (!authorizedWorkspaceId || item.workspaceId === authorizedWorkspaceId) && (!conversationScope || processConversationScope(item.id) === conversationScope));
+    scopedData.running = scopedData.processes.filter(item => ['running', 'stopping'].includes(item.status)).length;
+    syncTextContent(result);
+  }
+  if (name === 'web_preview_status' && Array.isArray(scopedData.previews)) {
+    scopedData.previews = scopedData.previews.filter(item => (!authorizedWorkspaceId || item.workspaceId === authorizedWorkspaceId) && (!conversationScope || previewConversationScope(item.id) === conversationScope));
+    syncTextContent(result);
+  }
   if (principal?.workspaceIds?.length) {
     const allowed = new Set(principal.workspaceIds);
     const data = result.structuredContent;
@@ -241,48 +251,55 @@ function filterResult(name, result, principal) {
   return sanitizeToolResult(name, result);
 }
 
-function persistAutoConversationBinding(scope, workspace) {
+function persistExplicitConversationBinding(scope, workspace) {
   if (!scope || !workspace) return null;
   let binding = null;
   mutateConfig(config => {
     normalizeInstanceConfig(config);
     binding = conversationWorkspaceBinding(config, scope);
-    if (!binding) {
-      binding = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'auto' });
-    }
+    if (!binding) binding = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'explicit-tool' });
     return config;
   }, { retries: 4 });
   return binding;
 }
-
+function conversationBindingRequired(current) {
+  const error = new Error('This ChatGPT conversation is not bound to a project. Call workspace_bind first. If the user supplied an absolute local path, bind that exact path; otherwise choose an explicit workspaceId from list_workspaces. DevMate will not silently use the current VS Code or Obsidian workspace.');
+  error.code = 'conversation_workspace_binding_required';
+  error.workspaces = (current.workspaces || []).filter(item => item && !item.reference && item.mode !== 'readonly').map(item => ({ id: item.id, name: item.name, root: item.root }));
+  return error;
+}
+function assertConversationResourceScope(kind, id, actualScope, expectedScope) {
+  if (!expectedScope) return;
+  if (actualScope && actualScope === expectedScope) return;
+  const error = new Error(`${kind} ${id} belongs to another or legacy unscoped ChatGPT conversation and will not be adopted automatically`);
+  error.code = 'conversation_resource_conflict';
+  throw error;
+}
 function prepareConversationWorkspace(name, args, current) {
   const scope = requestConversationScope();
-  if (!scope || !workspaceScopedTool(name)) return { current, args };
-
   const inferred = inferredWorkspace(name, args);
-  let authorizationArgs = inferred && !args.workspaceId
-    ? { ...args, workspaceId: inferred }
-    : args;
-  let binding = conversationWorkspace(current, scope);
-
-  if (!binding) {
-    const proposedId = toolWorkspaceId(name, authorizationArgs, current);
-    const proposed = proposedId ? resolveWorkspace(current, proposedId) : null;
-    if (proposed) {
-      persistAutoConversationBinding(scope, proposed);
-      current = normalizeInstanceConfig(readConfig());
-      binding = conversationWorkspace(current, scope);
-    }
+  let authorizationArgs = inferred && !args.workspaceId ? { ...args, workspaceId: inferred } : args;
+  if (!scope || !workspaceScopedTool(name)) return { current, args: authorizationArgs };
+  if (args.id && ['process_status', 'read_process_output', 'send_process_input', 'stop_process'].includes(name)) {
+    assertConversationResourceScope('process', args.id, processConversationScope(args.id), scope);
   }
-
-  if (!binding) return { current, args: authorizationArgs };
-
+  if (args.id && ['web_preview_status', 'web_preview_stop'].includes(name)) {
+    assertConversationResourceScope('preview', args.id, previewConversationScope(args.id), scope);
+  }
+  let binding = conversationWorkspace(current, scope);
+  if (!binding) {
+    if (!String(authorizationArgs.workspaceId || '').trim()) throw conversationBindingRequired(current);
+    const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
+    persistExplicitConversationBinding(scope, requested);
+    current = normalizeInstanceConfig(readConfig());
+    binding = conversationWorkspace(current, scope);
+  }
+  if (!binding) throw conversationBindingRequired(current);
   if (authorizationArgs.workspaceId) {
     const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
     assertConversationWorkspaceMatch(current, scope, requested);
   }
-  authorizationArgs = { ...authorizationArgs, workspaceId: binding.id };
-  return { current, args: authorizationArgs };
+  return { current, args: { ...authorizationArgs, workspaceId: binding.id } };
 }
 
 async function authorizedToolExecution(name, config, handler, args, rest) {
@@ -387,7 +404,9 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
     const result = filterResult(
       name,
       markGitFailure(name, rawResult),
-      authorized.principal
+      authorized.principal,
+      authorized.workspaceId,
+      requestConversationScope()
     );
     const session = authorized.workspaceId
       ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true, conversationScope: requestConversationScope() })
@@ -474,7 +493,7 @@ export const __test = {
   filterResult,
   inferredWorkspace,
   markGitFailure,
-  persistAutoConversationBinding,
+  persistExplicitConversationBinding,
   prepareConversationWorkspace,
   publicDeployment,
   redactCommandResultPayload,
