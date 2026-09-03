@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { audit, readConfig, redactSensitiveString } from './local-shared.mjs';
+import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
 import {
   conversationScopeFromToolContext,
   requestContext,
@@ -10,11 +10,12 @@ import {
 } from './request-context.mjs';
 import {
   assertConversationWorkspaceMatch,
+  bindConversationWorkspaceToWorkspace,
   conversationWorkspace
 } from './conversation-workspaces.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
-import { listPersistentProcesses, processConversationScope } from './persistent-processes.mjs';
-import { getPreview, previewConversationScope } from './plugins/preview-manager.mjs';
+import { listPersistentProcesses } from './persistent-processes.mjs';
+import { getPreview } from './plugins/preview-manager.mjs';
 import { activeWorkSession, touchWorkSession } from './work-sessions.mjs';
 import {
   acquireWorkspaceLeaseHold,
@@ -31,7 +32,7 @@ import { incrementCounter, observeDuration } from './observability.mjs';
 import { registerServerInitializer, registerToolDecorator } from './server-extension-host.mjs';
 import { registerTeamManagementTools } from './team-management-tools.mjs';
 import { registerTeamCollaborationTools } from './team-collaboration-tools.mjs';
-import { toolWorkspaceId, workspaceScopedTool } from './tool-policy.mjs';
+import { workspaceScopedTool } from './tool-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 import {
   cleanOrigin,
@@ -51,18 +52,8 @@ export function registerTeamTools(server) {
     ...config
   }, handler);
   const annotations = {
-    ro: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    rw: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false
-    }
+    ro: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    rw: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
   };
   registerTeamManagementTools(register, annotations);
   registerTeamCollaborationTools(register, annotations);
@@ -71,18 +62,12 @@ export function registerTeamTools(server) {
 }
 
 function inferredWorkspace(name, args = {}) {
-  if (
-    ['process_status', 'read_process_output', 'send_process_input', 'stop_process'].includes(name) &&
-    args.id
-  ) {
+  if (['process_status', 'read_process_output', 'send_process_input', 'stop_process'].includes(name) && args.id) {
     return listPersistentProcesses(true).find(item => item.id === args.id)?.workspaceId || null;
   }
   if (['web_preview_status', 'web_preview_stop'].includes(name) && args.id) {
-    try {
-      return getPreview(args.id)?.workspaceId || null;
-    } catch {
-      return null;
-    }
+    try { return getPreview(args.id)?.workspaceId || null; }
+    catch { return null; }
   }
   return null;
 }
@@ -100,9 +85,7 @@ function filterArray(items, allowed, field = 'workspaceId') {
 function syncTextContent(result) {
   if (!Array.isArray(result?.content) || !result?.structuredContent) return result;
   const json = JSON.stringify(result.structuredContent, null, 2);
-  for (const item of result.content) {
-    if (item?.type === 'text') item.text = json;
-  }
+  for (const item of result.content) if (item?.type === 'text') item.text = json;
   return result;
 }
 
@@ -116,21 +99,15 @@ function failedGitPhase(name, data) {
   const tool = String(name || '');
   if (!tool.startsWith('git_') || !data || typeof data !== 'object') return '';
   if (tool === 'git_save') {
-    for (const phase of ['stage', 'commit', 'push', 'status']) {
-      if (commandResultFailed(data[phase])) return phase;
-    }
+    for (const phase of ['stage', 'commit', 'push', 'status']) if (commandResultFailed(data[phase])) return phase;
     return '';
   }
   if (tool === 'git_commit') {
-    for (const phase of ['stage', 'commit', 'status']) {
-      if (commandResultFailed(data[phase])) return phase;
-    }
+    for (const phase of ['stage', 'commit', 'status']) if (commandResultFailed(data[phase])) return phase;
     return '';
   }
   if (tool === 'git_add' || tool === 'git_stage') {
-    for (const phase of ['stage', 'status']) {
-      if (commandResultFailed(data[phase])) return phase;
-    }
+    for (const phase of ['stage', 'status']) if (commandResultFailed(data[phase])) return phase;
     return '';
   }
   return commandResultFailed(data) ? 'command' : '';
@@ -154,10 +131,8 @@ function redactCommandResultPayload(value, seen = new WeakSet()) {
     return value;
   }
   const commandShape = typeof value.command === 'string' && (
-    Object.hasOwn(value, 'exitCode') ||
-    Object.hasOwn(value, 'timedOut') ||
-    Object.hasOwn(value, 'stdout') ||
-    Object.hasOwn(value, 'stderr')
+    Object.hasOwn(value, 'exitCode') || Object.hasOwn(value, 'timedOut') ||
+    Object.hasOwn(value, 'stdout') || Object.hasOwn(value, 'stderr')
   );
   if (commandShape) {
     for (const key of ['command', 'stdout', 'stderr', 'error']) {
@@ -170,9 +145,7 @@ function redactCommandResultPayload(value, seen = new WeakSet()) {
 
 function redactProcessOutputEvents(name, value) {
   if (name !== 'read_process_output' || !Array.isArray(value?.events)) return value;
-  for (const event of value.events) {
-    if (typeof event?.text === 'string') event.text = redactSensitiveString(event.text);
-  }
+  for (const event of value.events) if (typeof event?.text === 'string') event.text = redactSensitiveString(event.text);
   return value;
 }
 
@@ -200,22 +173,21 @@ function sanitizeToolResult(name, result) {
   return result;
 }
 
-function filterResult(name, result, principal, authorizedWorkspaceId = null, conversationScope = requestConversationScope()) {
+function filterResult(name, result, principal, authorizedWorkspaceId = null) {
   if (!result?.structuredContent) return sanitizeToolResult(name, result);
   const scopedData = result.structuredContent;
-  if (name === 'list_processes' && Array.isArray(scopedData.processes)) {
-    scopedData.processes = scopedData.processes.filter(item => (!authorizedWorkspaceId || item.workspaceId === authorizedWorkspaceId) && (!conversationScope || processConversationScope(item.id) === conversationScope));
+  if (authorizedWorkspaceId && name === 'list_processes' && Array.isArray(scopedData.processes)) {
+    scopedData.processes = scopedData.processes.filter(item => item.workspaceId === authorizedWorkspaceId);
     scopedData.running = scopedData.processes.filter(item => ['running', 'stopping'].includes(item.status)).length;
     syncTextContent(result);
   }
-  if (name === 'web_preview_status' && Array.isArray(scopedData.previews)) {
-    scopedData.previews = scopedData.previews.filter(item => (!authorizedWorkspaceId || item.workspaceId === authorizedWorkspaceId) && (!conversationScope || previewConversationScope(item.id) === conversationScope));
+  if (authorizedWorkspaceId && name === 'web_preview_status' && Array.isArray(scopedData.previews)) {
+    scopedData.previews = scopedData.previews.filter(item => item.workspaceId === authorizedWorkspaceId);
     syncTextContent(result);
   }
   if (principal?.workspaceIds?.length) {
     const allowed = new Set(principal.workspaceIds);
     const data = result.structuredContent;
-
     if (['list_workspaces', 'gateway_status'].includes(name)) {
       data.workspaces = filterArray(data.workspaces, allowed, 'id');
       if (data.activeWorkspace && !allowed.has(data.activeWorkspace.id)) data.activeWorkspace = null;
@@ -229,9 +201,7 @@ function filterResult(name, result, principal, authorizedWorkspaceId = null, con
     }
     if (name === 'list_processes') {
       data.processes = filterArray(data.processes, allowed);
-      data.running = Array.isArray(data.processes)
-        ? data.processes.filter(item => ['running', 'stopping'].includes(item.status)).length
-        : 0;
+      data.running = Array.isArray(data.processes) ? data.processes.filter(item => ['running', 'stopping'].includes(item.status)).length : 0;
     }
     if (name === 'web_preview_status') {
       data.previews = filterArray(data.previews, allowed);
@@ -241,40 +211,49 @@ function filterResult(name, result, principal, authorizedWorkspaceId = null, con
       data.trustedWritableRoots = filterArray(data.trustedWritableRoots, allowed, 'id');
       data.persistentProcesses = filterArray(data.persistentProcesses, allowed);
     }
-    if (name === 'list_trusted_roots') {
-      data.roots = filterArray(data.roots, allowed, 'id');
-    }
+    if (name === 'list_trusted_roots') data.roots = filterArray(data.roots, allowed, 'id');
     syncTextContent(result);
   }
   return sanitizeToolResult(name, result);
 }
 
-function conversationBindingRequired(current) {
-  const error = new Error('This ChatGPT conversation is not bound to a project. Call workspace_bind first. If the user supplied an absolute local path, bind that exact path; otherwise choose an explicit workspaceId from list_workspaces. DevMate will not silently use the current VS Code or Obsidian workspace.');
-  error.code = 'conversation_workspace_binding_required';
-  error.workspaces = (current.workspaces || []).filter(item => item && !item.reference && item.mode !== 'readonly').map(item => ({ id: item.id, name: item.name, root: item.root }));
-  return error;
+function defaultConversationWorkspace(current) {
+  const workspaces = Array.isArray(current?.workspaces) ? current.workspaces : [];
+  return workspaces.find(item => item?.id === current?.activeWorkspaceId && !item.reference && item.mode !== 'readonly')
+    || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')
+    || workspaces[0]
+    || null;
 }
-function assertConversationResourceScope(kind, id, actualScope, expectedScope) {
-  if (!expectedScope) return;
-  if (actualScope && actualScope === expectedScope) return;
-  const error = new Error(`${kind} ${id} belongs to another or legacy unscoped ChatGPT conversation and will not be adopted automatically`);
-  error.code = 'conversation_resource_conflict';
-  throw error;
+
+function persistDefaultConversationBinding(scope, workspace) {
+  if (!scope || !workspace) return null;
+  let result = null;
+  mutateConfig(config => {
+    normalizeInstanceConfig(config);
+    const existing = conversationWorkspace(config, scope);
+    if (existing) { result = existing; return config; }
+    result = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'default' });
+    return config;
+  }, { retries: 4 });
+  return result;
 }
+
 function prepareConversationWorkspace(name, args, current) {
   const scope = requestConversationScope();
   const inferred = inferredWorkspace(name, args);
   let authorizationArgs = inferred && !args.workspaceId ? { ...args, workspaceId: inferred } : args;
   if (!scope || !workspaceScopedTool(name)) return { current, args: authorizationArgs };
-  if (args.id && ['process_status', 'read_process_output', 'send_process_input', 'stop_process'].includes(name)) {
-    assertConversationResourceScope('process', args.id, processConversationScope(args.id), scope);
+
+  let binding = conversationWorkspace(current, scope);
+  if (!binding) {
+    const fallback = defaultConversationWorkspace(current);
+    if (!fallback) throw new Error('No workspace configured');
+    persistDefaultConversationBinding(scope, fallback);
+    current = normalizeInstanceConfig(readConfig());
+    binding = conversationWorkspace(current, scope);
   }
-  if (args.id && ['web_preview_status', 'web_preview_stop'].includes(name)) {
-    assertConversationResourceScope('preview', args.id, previewConversationScope(args.id), scope);
-  }
-  const binding = conversationWorkspace(current, scope);
-  if (!binding) throw conversationBindingRequired(current);
+  if (!binding) throw new Error('No workspace configured');
+
   if (authorizationArgs.workspaceId) {
     const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
     assertConversationWorkspaceMatch(current, scope, requested);
@@ -297,11 +276,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
   const executionArgs = bindAuthorizedWorkspaceArgs(authorizationArgs, authorized);
 
   if (name !== 'job_cancel') {
-    assertDrainAllows({
-      principal: authorized.principal,
-      capability: authorized.capability,
-      tool: name
-    });
+    assertDrainAllows({ principal: authorized.principal, capability: authorized.capability, tool: name });
   }
 
   const leaseProtected = !name.startsWith('workspace_lease_');
@@ -321,9 +296,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
     role: authorized.principal.role,
     source: authorized.principal.source
   };
-  const active = authorized.workspaceId
-    ? activeWorkSession(authorized.principal.id, authorized.workspaceId, requestConversationScope())
-    : null;
+  const active = authorized.workspaceId ? activeWorkSession(authorized.principal.id, authorized.workspaceId) : null;
   let leaseHold = null;
   const releaseLeaseHoldSafely = async stage => {
     if (!leaseHold) return;
@@ -350,6 +323,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
       }, { workSessionId: active?.id || null });
     }
   };
+
   try {
     if (leaseProtected) {
       leaseHold = acquireWorkspaceLeaseHold({
@@ -367,8 +341,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
       tool: name,
       capability: authorized.capability,
       workspaceId: authorized.workspaceId,
-      args: executionArgs,
-      conversationScope: requestConversationScope()
+      args: executionArgs
     });
     if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
 
@@ -381,15 +354,10 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
     } finally {
       await releaseLeaseHoldSafely('post-handler');
     }
-    const result = filterResult(
-      name,
-      markGitFailure(name, rawResult),
-      authorized.principal,
-      authorized.workspaceId,
-      requestConversationScope()
-    );
+
+    const result = filterResult(name, markGitFailure(name, rawResult), authorized.principal, authorized.workspaceId);
     const session = authorized.workspaceId
-      ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true, conversationScope: requestConversationScope() })
+      ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true })
       : null;
     const workSessionId = session?.id || active?.id || null;
     const toolStatus = result?.isError === true ? 'error' : 'success';
@@ -412,7 +380,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
   } catch (error) {
     await releaseLeaseHoldSafely('error-path');
     const session = authorized.workspaceId
-      ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true, conversationScope: requestConversationScope() })
+      ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
       : null;
     const workSessionId = session?.id || active?.id || null;
     const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
@@ -438,9 +406,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
 export function wrapAuthorizedTool(name, config, handler) {
   return async function authorizedToolHandler(args = {}, ...rest) {
     const conversationScope = conversationScopeFromToolContext(rest[0]);
-    return runWithConversationScope(conversationScope, () =>
-      authorizedToolExecution(name, config, handler, args, rest)
-    );
+    return runWithConversationScope(conversationScope, () => authorizedToolExecution(name, config, handler, args, rest));
   };
 }
 
@@ -469,10 +435,12 @@ export const __test = {
   bindAuthorizedWorkspaceArgs,
   cleanOrigin,
   commandResultFailed,
+  defaultConversationWorkspace,
   failedGitPhase,
   filterResult,
   inferredWorkspace,
   markGitFailure,
+  persistDefaultConversationBinding,
   prepareConversationWorkspace,
   publicDeployment,
   redactCommandResultPayload,
