@@ -29,8 +29,8 @@ jobs:
         run: git diff --exit-code -- package.json
       - name: Verify lockfile installs
         run: npm ci --ignore-scripts
-      - name: Verify repository contracts
-        run: npm run check
+      - name: Verify core repository contracts
+        run: npm run version:check && node scripts/check-repository.mjs && node scripts/check-obsidian-release.mjs
       - name: Commit lockfile and remove temporary workflow
         shell: bash
         run: |
