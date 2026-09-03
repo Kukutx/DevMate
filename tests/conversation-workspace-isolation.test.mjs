@@ -12,16 +12,16 @@ import { clearWorkspaceLeases } from '../gateway/workspace-leases.mjs';
 const scopeA = 'chatgpt-' + 'a'.repeat(32);
 const scopeB = 'chatgpt-' + 'b'.repeat(32);
 
-test('conversation metadata is stable and conversation identity outranks transport session identity', () => {
+test('documented ChatGPT session metadata is the canonical conversation identity', () => {
   const a1 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-a' } } });
   const a2 = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/conversationId': 'conversation-a' } } });
   const b = conversationScopeFromToolContext({ mcpReq: { _meta: { 'openai/session': 'conversation-b' } } });
   const preferred = conversationScopeFromToolContext({ mcpReq: { _meta: {
-    'openai/session': 'reconnect-transport-session',
-    'openai/conversationId': 'conversation-a'
+    'openai/session': 'conversation-a',
+    'openai/conversationId': 'conflicting-compatibility-hint'
   } } });
   assert.equal(a1, a2);
-  assert.equal(preferred, a2);
+  assert.equal(preferred, a1);
   assert.notEqual(a1, b);
   assert.match(a1, /^chatgpt-[a-f0-9]{32}$/);
 });
@@ -58,6 +58,8 @@ test('authorization refuses silent host adoption and scopes secondary resources'
   assert.match(source, /conversation_workspace_binding_required/);
   assert.match(source, /DevMate will not silently use the current VS Code or Obsidian workspace/);
   assert.doesNotMatch(source, /source:\s*'auto'/);
+  assert.doesNotMatch(source, /persistExplicitConversationBinding/);
+  assert.match(source, /const binding = conversationWorkspace\(current, scope\);\n  if \(!binding\) throw conversationBindingRequired\(current\);/);
   assert.match(source, /processConversationScope/);
   assert.match(source, /previewConversationScope/);
   const approvals = fs.readFileSync(new URL('../gateway/approvals.mjs', import.meta.url), 'utf8');

@@ -3,9 +3,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 const storage = new AsyncLocalStorage();
 const CONVERSATION_META_KEYS = Object.freeze([
+  'openai/session',
   'openai/conversationId', 'openai/conversation_id', 'openai/conversation',
-  'openai/threadId', 'openai/thread_id', 'openai/thread',
-  'openai/session', 'openai/widgetSessionId'
+  'openai/threadId', 'openai/thread_id', 'openai/thread'
 ]);
 
 function cleanMetaString(value, max = 4096) {
