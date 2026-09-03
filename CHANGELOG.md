@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.2
+- Isolated ChatGPT project work by conversation across reconnects.
+- Explicit absolute local paths now take precedence over VS Code/Obsidian host defaults through conversation workspace binding.
+- Scoped sessions, jobs, approvals, processes, and previews to prevent cross-conversation adoption.
+- Added regression coverage for workspace isolation and path precedence.
+
 ## 3.6.1
 
 - Restored the single-owner contract: `auth.mode: none` is the default for both local and public MCP ingress, including ngrok, without OAuth or copied credentials.

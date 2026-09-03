@@ -9,10 +9,11 @@ import {
   readAuditEntries,
   readConfig
 } from './local-shared.mjs';
+import { requestConversationScope } from './request-context.mjs';
 import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from './sensitive-path-policy.mjs';
 import { normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
-import { resolveWorkspace } from './workspace-resolver.mjs';
+import { assertOperationalWorkspaceRoot, resolveWorkspace } from './workspace-resolver.mjs';
 
 const BACKUP_ROOT = CONFIG_PATH ? path.join(path.dirname(CONFIG_PATH), 'state', 'backups') : '';
 const ROLLBACK_ACTIONS = new Set(['write_file', 'create_file', 'apply_patch', 'delete_file', 'move_file', 'restore_backup']);
@@ -162,11 +163,30 @@ async function removePath(config, workspace, rel, dryRun) {
   return { path: rel, currentBackup, removed: true };
 }
 
-async function rollbackEntry(config, entry, dryRun) {
+function rollbackWorkspace(config, start, entry) {
+  if (
+    start?.workspaceRoot &&
+    start?.workspace &&
+    entry.workspace === start.workspace &&
+    path.isAbsolute(String(start.workspaceRoot))
+  ) {
+    return assertOperationalWorkspaceRoot({
+      id: entry.workspace,
+      name: start.workspaceName || entry.workspace,
+      root: start.workspaceRoot,
+      mode: 'workspace-write',
+      reference: false,
+      role: 'conversation-rollback'
+    }, 'Recorded work-session workspace root');
+  }
+  return resolveWorkspace(config, entry.workspace);
+}
+
+async function rollbackEntry(config, start, entry, dryRun) {
   if (!ROLLBACK_ACTIONS.has(entry.action)) {
     return { action: entry.action, skipped: true, reason: 'no safe automatic rollback for this action' };
   }
-  const workspace = resolveWorkspace(config, entry.workspace);
+  const workspace = rollbackWorkspace(config, start, entry);
   if (entry.action === 'write_file' || entry.action === 'apply_patch' || entry.action === 'create_file') {
     return entry.backup
       ? restoreBackup(config, workspace, entry.backup, entry.path, dryRun)
@@ -191,7 +211,28 @@ async function rollbackEntry(config, entry, dryRun) {
   return { action: entry.action, skipped: true, reason: 'unsupported rollback action' };
 }
 
-export async function rollbackWorkSession({ workSessionId, principal, dryRun = false, force = false, limit = 1000 }) {
+function assertRollbackConversation(start, principal, currentScope, force) {
+  const recorded = String(start?.conversationScope || '').trim() || null;
+  const current = String(currentScope || '').trim() || null;
+  if (recorded === current) return;
+  const canForce = ['owner', 'maintainer'].includes(principal?.role);
+  if (force && canForce) return;
+  const error = new Error(recorded
+    ? 'This work session belongs to another ChatGPT conversation. Rollback from this conversation requires force=true for maintainer/owner.'
+    : 'This work session predates conversation isolation. A scoped ChatGPT conversation must use force=true as maintainer/owner before rolling it back.');
+  error.code = 'work_session_conversation_conflict';
+  error.recordedConversationScoped = !!recorded;
+  throw error;
+}
+
+export async function rollbackWorkSession({
+  workSessionId,
+  principal,
+  dryRun = false,
+  force = false,
+  limit = 1000,
+  conversationScope = requestConversationScope()
+}) {
   const id = String(workSessionId || '').trim();
   if (!id) throw new Error('workSessionId is required');
   if (!principal?.id) throw new Error('Authenticated principal is required');
@@ -213,6 +254,7 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
       throw new Error(`Rollback of another principal's work session requires force=true: ${id}`);
     }
   }
+  assertRollbackConversation(start, principal, conversationScope, force);
 
   const workspaceIds = [...new Set(entries.map(entry => entry.workspace).filter(Boolean))];
   if (!workspaceIds.length) throw new Error(`Work session has no rollback workspace metadata: ${id}`);
@@ -226,7 +268,7 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
   const results = [];
   for (const entry of entries.slice().reverse()) {
     if (SESSION_ACTIONS.has(entry.action)) continue;
-    try { results.push({ entry, rollback: await rollbackEntry(config, entry, dryRun) }); }
+    try { results.push({ entry, rollback: await rollbackEntry(config, start, entry, dryRun) }); }
     catch (error) { results.push({ entry, rollback: { failed: true, error: error.message, code: error.code || null } }); }
   }
   await audit('work_session_rollback', {
@@ -235,7 +277,8 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
     dryRun,
     force,
     resultCount: results.length,
-    workspaces: workspaceIds
+    workspaces: workspaceIds,
+    conversationScope: String(conversationScope || '') || null
   }, { workSessionId: id });
   return { workSessionId: id, dryRun, force, results };
 }
@@ -243,10 +286,12 @@ export async function rollbackWorkSession({ workSessionId, principal, dryRun = f
 export const __test = {
   MAX_ROLLBACK_SCAN_ENTRIES,
   assertBackupSource,
+  assertRollbackConversation,
   assertSafeRollbackRel,
   assertTreeSafe,
   assertWorkspaceTarget,
   backupOriginalRelative,
   isInside,
-  rollbackEntry
+  rollbackEntry,
+  rollbackWorkspace
 };

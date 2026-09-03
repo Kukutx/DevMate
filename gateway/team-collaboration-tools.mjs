@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { audit, readConfig, toolText } from './local-shared.mjs';
+import { audit, mutateConfig, permissionProfile, readConfig, toolText } from './local-shared.mjs';
+import {
+  bindConversationWorkspaceToPath,
+  bindConversationWorkspaceToWorkspace,
+  clearConversationWorkspaceBinding,
+  publicConversationWorkspaceBinding
+} from './conversation-workspaces.mjs';
+import { requestConversationScope } from './request-context.mjs';
 import { normalizeInstanceConfig } from './team-access.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
 import {
@@ -8,6 +15,7 @@ import {
   revokePreviewShare
 } from './published-previews.mjs';
 import {
+  activeWorkSession,
   finishWorkSession,
   listWorkSessions,
   startWorkSession,
@@ -21,14 +29,7 @@ import {
   workspaceLease
 } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
-import { resolveWorkspaceId } from './workspace-resolver.mjs';
-
-function resolveWorkspace(config, value) {
-  const id = resolveWorkspaceId(config, String(value || '').trim());
-  const workspace = config.workspaces?.find(item => item.id === id);
-  if (!workspace) throw new Error(`Workspace not found: ${value}`);
-  return workspace;
-}
+import { resolveWorkspace } from './workspace-resolver.mjs';
 
 function assertVisibleWorkspace(principal, workspaceId, action = 'access') {
   if (principal.workspaceIds?.length && !principal.workspaceIds.includes(workspaceId)) {
@@ -36,12 +37,121 @@ function assertVisibleWorkspace(principal, workspaceId, action = 'access') {
   }
 }
 
+function assertConversationScope() {
+  const scope = requestConversationScope();
+  if (scope) return scope;
+  const error = new Error('ChatGPT conversation metadata is unavailable. Conversation workspace binding cannot be used safely; pass an explicit workspaceId on every project tool call.');
+  error.code = 'conversation_scope_unavailable';
+  throw error;
+}
+
+function assertNoActiveConversationSession(config, principal, scope) {
+  const binding = publicConversationWorkspaceBinding(config, scope);
+  if (!binding) return;
+  const session = activeWorkSession(principal.id, binding.workspaceId, scope);
+  if (!session) return;
+  const error = new Error(`This ChatGPT conversation has active work session ${session.id}. Finish it before rebinding or unbinding the project.`);
+  error.code = 'conversation_workspace_session_active';
+  error.sessionId = session.id;
+  error.workspaceId = binding.workspaceId;
+  throw error;
+}
+
+function bindWorkspace(input, principal) {
+  const scope = assertConversationScope();
+  const preview = normalizeInstanceConfig(readConfig());
+  assertNoActiveConversationSession(preview, principal, scope);
+  let result = null;
+  mutateConfig(config => {
+    normalizeInstanceConfig(config);
+    if (input.path) {
+      result = bindConversationWorkspaceToPath(config, scope, input.path, {
+        source: 'explicit-path',
+        allowExternalWrite: permissionProfile(config) === 'fullAccess'
+      });
+    } else {
+      const workspace = resolveWorkspace(config, input.workspaceId);
+      result = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'explicit-workspace' });
+    }
+    return config;
+  }, { retries: 4 });
+  return result;
+}
+
 export function registerTeamCollaborationTools(register, annotations) {
   const { ro, rw } = annotations;
 
+  register('workspace_binding_status', {
+    title: 'Conversation workspace binding',
+    description: 'Show the workspace pinned to this ChatGPT conversation. The binding is isolated from VS Code and Obsidian active-workspace changes.',
+    inputSchema: {},
+    annotations: ro
+  }, async () => {
+    const config = normalizeInstanceConfig(readConfig());
+    return toolText({
+      conversationScoped: !!requestConversationScope(),
+      binding: publicConversationWorkspaceBinding(config),
+      rule: 'If the user supplied an absolute local path, bind that path before project work. Do not substitute the editor or vault active workspace.'
+    });
+  });
+
+  register('workspace_bind', {
+    title: 'Bind this conversation to a workspace',
+    description: 'Pin this ChatGPT conversation to one project. Use path when the user provides an absolute local project/file path; that explicit path takes precedence over VS Code or Obsidian. Use workspaceId only for a configured DevMate workspace. Rebind deliberately to switch projects.',
+    inputSchema: {
+      path: z.string().min(1).optional(),
+      workspaceId: z.string().min(1).optional()
+    },
+    annotations: { ...rw, idempotentHint: true }
+  }, async input => {
+    const hasPath = !!String(input.path || '').trim();
+    const hasWorkspace = !!String(input.workspaceId || '').trim();
+    if (hasPath === hasWorkspace) throw new Error('workspace_bind requires exactly one of path or workspaceId');
+    const principal = principalNow();
+    const binding = bindWorkspace(input, principal);
+    await audit('workspace_bind', {
+      workspace: binding.workspaceId,
+      root: binding.root,
+      source: binding.source,
+      conversationScope: requestConversationScope()
+    });
+    return toolText({
+      bound: true,
+      binding: {
+        workspaceId: binding.workspaceId,
+        name: binding.name,
+        root: binding.root,
+        mode: binding.mode,
+        source: binding.source,
+        expiresAt: binding.expiresAt
+      },
+      instruction: 'Use this bound workspace for subsequent project tools. Do not switch because VS Code/Obsidian changes or reconnects.'
+    });
+  });
+
+  register('workspace_unbind', {
+    title: 'Unbind this conversation workspace',
+    description: 'Remove this ChatGPT conversation workspace pin. Only use when the user explicitly wants to stop or change the current project association.',
+    inputSchema: {},
+    annotations: { ...rw, idempotentHint: true }
+  }, async () => {
+    const scope = assertConversationScope();
+    const principal = principalNow();
+    const preview = normalizeInstanceConfig(readConfig());
+    assertNoActiveConversationSession(preview, principal, scope);
+    let removed = false;
+    mutateConfig(config => {
+      normalizeInstanceConfig(config);
+      removed = clearConversationWorkspaceBinding(config, scope);
+      return config;
+    }, { retries: 4 });
+    await audit('workspace_unbind', { removed, conversationScope: scope });
+    return toolText({ removed });
+  });
+
   register('work_session_start', {
     title: 'Start work session',
-    description: 'Start a principal-scoped work session and acquire its workspace lease. The same session model is used for owner and member workflows.',
+    description: 'Start a conversation-scoped work session and acquire its workspace lease. A session in one ChatGPT conversation is never adopted automatically by another conversation.',
     inputSchema: {
       workspaceId: z.string().min(1),
       title: z.string().max(500).optional(),
@@ -58,12 +168,16 @@ export function registerTeamCollaborationTools(register, annotations) {
     const session = startWorkSession({
       ...input,
       workspaceId: workspace.id,
-      principal
+      principal,
+      conversationScope: requestConversationScope()
     });
     await audit('work_session_start', {
       principalId: principal.id,
       principalName: principal.name,
       workspace: workspace.id,
+      workspaceName: workspace.name || workspace.id,
+      workspaceRoot: workspace.root,
+      conversationScope: session.conversationScope,
       leaseId: session.leaseId,
       title: session.title,
       purpose: session.purpose
@@ -73,7 +187,7 @@ export function registerTeamCollaborationTools(register, annotations) {
 
   register('work_session_status', {
     title: 'Work session status',
-    description: 'Inspect one visible work session or list the caller sessions. Maintainers and owners may list all visible sessions.',
+    description: 'Inspect work sessions for this ChatGPT conversation. Maintainers and owners may deliberately pass all=true to inspect other conversation scopes.',
     inputSchema: {
       id: z.string().optional(),
       workspaceId: z.string().optional(),
@@ -83,22 +197,28 @@ export function registerTeamCollaborationTools(register, annotations) {
   }, async ({ id, workspaceId, all = false }) => {
     const principal = principalNow();
     const config = normalizeInstanceConfig(readConfig());
+    const scope = requestConversationScope();
+    const canSeeAll = ['owner', 'maintainer'].includes(principal.role);
     if (id) {
       const item = workSession(id);
       if (!item) return toolText({ session: null });
       assertVisibleWorkspace(principal, item.workspaceId);
-      const canSeeOthers = ['owner', 'maintainer'].includes(principal.role);
-      if (item.principalId !== principal.id && !canSeeOthers) {
+      if (item.principalId !== principal.id && !canSeeAll) {
         throw new Error(`Work session ${id} belongs to ${item.principalName || item.principalId}`);
+      }
+      if (scope && item.conversationScope !== scope && !(all && canSeeAll)) {
+        const error = new Error(`Work session ${id} belongs to another ChatGPT conversation. Pass all=true only for deliberate cross-conversation inspection.`);
+        error.code = 'work_session_conversation_conflict';
+        throw error;
       }
       return toolText({ session: item });
     }
     const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;
     if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);
-    const canSeeAll = ['owner', 'maintainer'].includes(principal.role);
     let items = listWorkSessions({
       principalId: all && canSeeAll ? undefined : principal.id,
-      workspaceId: resolvedWorkspaceId
+      workspaceId: resolvedWorkspaceId,
+      conversationScope: all && canSeeAll ? undefined : scope
     });
     if (principal.workspaceIds?.length) {
       items = items.filter(item => principal.workspaceIds.includes(item.workspaceId));
@@ -108,7 +228,7 @@ export function registerTeamCollaborationTools(register, annotations) {
 
   register('work_session_finish', {
     title: 'Finish work session',
-    description: 'Finish a work session and optionally release the lease that belongs to that session tenure.',
+    description: 'Finish a work session in this conversation and optionally release its lease. Finishing another conversation session requires force=true for maintainer/owner.',
     inputSchema: {
       id: z.string().min(1),
       force: z.boolean().optional(),
@@ -117,10 +237,11 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: { ...rw, idempotentHint: true }
   }, async ({ id, force = false, releaseLease = true }) => {
     const principal = principalNow();
-    const result = finishWorkSession({ id, principal, force, releaseLease });
+    const result = finishWorkSession({ id, principal, force, releaseLease, conversationScope: requestConversationScope() });
     await audit('work_session_finish', {
       principalId: principal.id,
       workspace: result.session?.workspaceId || null,
+      conversationScope: requestConversationScope(),
       finished: result.finished,
       leaseReleased: result.lease?.released === true
     }, { workSessionId: id });
@@ -129,7 +250,7 @@ export function registerTeamCollaborationTools(register, annotations) {
 
   register('work_session_rollback', {
     title: 'Rollback work session',
-    description: 'Rollback safe file mutations recorded in a work session. Non-owner callers must hold the affected workspace lease; commands and Git history are never automatically reversed. Maintainers and owners must pass force=true to rollback another principal session.',
+    description: 'Rollback safe file mutations recorded in this conversation work session. Cross-conversation rollback requires force=true for maintainer/owner. Commands and Git history are never automatically reversed.',
     inputSchema: {
       workSessionId: z.string().min(1),
       dryRun: z.boolean().optional(),
@@ -139,7 +260,7 @@ export function registerTeamCollaborationTools(register, annotations) {
     annotations: rw
   }, async ({ workSessionId, dryRun = false, force = false, limit = 1000 }) => {
     const principal = principalNow();
-    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit }));
+    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit, conversationScope: requestConversationScope() }));
   });
 
   register('published_preview_share', {

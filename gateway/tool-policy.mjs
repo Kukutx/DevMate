@@ -43,6 +43,7 @@ const EXECUTE_TOOLS = new Set([
 
 const WRITE_TOOLS = new Set([
   'write_file', 'create_file', 'apply_patch', 'delete_file', 'move_file', 'restore_backup',
+  'workspace_bind', 'workspace_unbind',
   'godot_qa_bridge_install', 'godot_qa_bridge_remove', 'godot_quick_setup',
   'godot_performance_baseline_update', 'godot_automation_bootstrap', 'job_cancel', 'codex_proposal_apply'
 ]);
@@ -50,6 +51,7 @@ const WRITE_TOOLS = new Set([
 const NON_WORKSPACE_TOOLS = new Set([
   'gateway_status', 'gateway_self_test', 'maintenance_status', 'connection_diagnostics',
   'devmate_status_panel', 'devmate_team_panel', 'list_workspaces',
+  'workspace_bind', 'workspace_binding_status', 'workspace_unbind',
   'add_trusted_root', 'remove_trusted_root',
   'work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback',
   'plugin_catalog', 'plugin_diagnostics', 'plugin_enable', 'plugin_disable', 'plugin_configure', 'devmate_plugins_panel',
@@ -131,14 +133,16 @@ export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
   return explicitCapabilityForTool(name, annotations, args) || 'admin';
 }
 
-export function toolWorkspaceId(name, args = {}, config = {}) {
+export function workspaceScopedTool(name) {
   const tool = String(name || '');
-  if (
-    NON_WORKSPACE_TOOLS.has(tool) ||
-    tool.startsWith('team_') ||
-    tool.startsWith('deployment_') ||
-    tool.startsWith('runner_')
-  ) return null;
+  return !NON_WORKSPACE_TOOLS.has(tool) &&
+    !tool.startsWith('team_') &&
+    !tool.startsWith('deployment_') &&
+    !tool.startsWith('runner_');
+}
+
+export function toolWorkspaceId(name, args = {}, config = {}) {
+  if (!workspaceScopedTool(name)) return null;
   const explicit = String(args?.workspaceId || '').trim();
   return resolveWorkspaceId(config, explicit);
 }
@@ -182,7 +186,7 @@ export function validateToolRegistration(name, config = {}) {
   return {
     name: tool,
     capability: requiredCapabilityForTool(tool, annotations || {}),
-    workspaceScoped: !NON_WORKSPACE_TOOLS.has(tool) && !tool.startsWith('team_') && !tool.startsWith('deployment_') && !tool.startsWith('runner_'),
+    workspaceScoped: workspaceScopedTool(tool),
     ownerOnly: ownerOnlyTool(tool),
     job: jobTargetPolicy(tool) ? {
       requiredCapabilities: [...jobTargetPolicy(tool).requiredCapabilities],

@@ -2,6 +2,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import processTreeRuntime from '../host/runtime/process-tree.js';
+import { requestConversationScope } from './request-context.mjs';
 import {
   assertCanMutate, assertCommandAllowed, audit, getWritableWorkspace, normalizeSlash, now,
   processLimits, readConfig, redactSensitiveString, resolveWorkspaceCwd, syncTrustedRootsIntoConfig
@@ -59,6 +60,7 @@ export function processPublic(record) {
     outputBytes: record.outputBytes, outputLimitBytes: record.outputLimitBytes
   };
 }
+export function processConversationScope(id) { return registry.get(id)?.conversationScope || null; }
 export function processRecord(id) {
   const record = registry.get(id);
   if (!record) throw new Error(`Persistent process not found: ${id}`);
@@ -139,6 +141,7 @@ async function startPersistentChild({
     id, label: String(label || '').trim() || displayCommand.slice(0, 80), command: displayCommand, cwd: directory,
     workspaceId: workspace.id, workspaceName: workspace.name, child, pid: child.pid || null,
     status: 'running', startedAt: now(), finishedAt: null, exitCode: null, signal: null, error: null,
+    conversationScope: requestConversationScope(),
     sequence: 0, firstSequence: 1, events: [], outputBytes: 0,
     outputLimitBytes: limits.outputBytes, autoStopTimer: null
   };
