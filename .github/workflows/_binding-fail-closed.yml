@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: fix/conversation-binding-fail-closed
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
@@ -28,16 +29,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def rw(path, old, new, label):
-              p = Path(path)
-              s = p.read_text()
-              if old not in s:
-                  raise SystemExit(f'missing replacement target: {label}')
-              p.write_text(s.replace(old, new, 1))
-
-          # The documented ChatGPT client key is openai/session, described by
-          # OpenAI as the anonymized conversation id. Prefer it over any
-          # compatibility hints so reconnect transport details cannot win.
           p = Path('gateway/request-context.mjs')
           s = p.read_text()
           old = "const CONVERSATION_META_KEYS = Object.freeze([\n  'openai/conversationId', 'openai/conversation_id', 'openai/conversation',\n  'openai/threadId', 'openai/thread_id', 'openai/thread',\n  'openai/session', 'openai/widgetSessionId'\n]);"
@@ -45,10 +36,6 @@ jobs:
           if old not in s: raise SystemExit('missing conversation metadata key block')
           p.write_text(s.replace(old, new, 1))
 
-          # A ChatGPT project tool may not create a binding implicitly from a
-          # workspaceId. Every new chat must deliberately call workspace_bind;
-          # this is what makes an explicit local path authoritative and prevents
-          # the model from accidentally adopting an editor/vault default.
           p = Path('gateway/team-capabilities.mjs')
           s = p.read_text()
           s = s.replace("import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';", "import { audit, readConfig, redactSensitiveString } from './local-shared.mjs';")
@@ -63,7 +50,6 @@ jobs:
           s = s.replace('  persistExplicitConversationBinding,\n', '')
           p.write_text(s)
 
-          # Strengthen regression tests around the two properties above.
           p = Path('tests/conversation-workspace-isolation.test.mjs')
           s = p.read_text()
           s = s.replace("test('conversation metadata is stable and conversation identity outranks transport session identity', () => {", "test('documented ChatGPT session metadata is the canonical conversation identity', () => {")
@@ -81,25 +67,27 @@ jobs:
           s = p.read_text()
           if '## 3.6.3' not in s:
               entry = "# Changelog\n\n## 3.6.3\n- Made ChatGPT project selection fail closed: every new conversation must deliberately bind a project before project-scoped tools can run, so an editor/vault default cannot be adopted implicitly.\n- Made the documented `openai/session` client metadata the canonical ChatGPT conversation identity while retaining compatibility fallbacks.\n- Strengthened regression coverage for reconnect identity and explicit path precedence.\n"
-              s = s.replace('# Changelog\n', entry, 1)
-              p.write_text(s)
+              p.write_text(s.replace('# Changelog\n', entry, 1))
           PY
 
           npm ci
           npm version 3.6.3 --no-git-tag-version
           npm run version:sync
           node --test tests/conversation-workspace-isolation.test.mjs tests/approval-execution-boundary.test.cjs
+          git rm .github/workflows/_binding-fail-closed.yml
           npm run check
           npm run test:unit
           npm run smoke:gateway
           npm run package:vsix
       - name: Commit verified follow-up
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git rm .github/workflows/_binding-fail-closed.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "fix: require deliberate ChatGPT workspace binding"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:fix/conversation-binding-fail-closed
