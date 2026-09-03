@@ -35,7 +35,7 @@ jobs:
           npm run test:unit
           npm run smoke:gateway
           npm run package:vsix
-          if grep -R "conversation_resource_conflict\|work_session_conversation_conflict\|conversation_workspace_durable_job_unsafe\|belongs to another ChatGPT conversation\|must deliberately bind" gateway tests --exclude='server.bundle.mjs'; then exit 1; fi
+          if grep -R "conversation_resource_conflict\|work_session_conversation_conflict\|conversation_workspace_durable_job_unsafe\|belongs to another ChatGPT conversation\|must deliberately bind" gateway --exclude='server.bundle.mjs'; then exit 1; fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
