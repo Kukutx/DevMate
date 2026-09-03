@@ -37,10 +37,13 @@ jobs:
 
           let jobs = fs.readFileSync('gateway/job-tools.mjs', 'utf8');
           jobs = jobs.replace("import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';\n", "import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';\nimport { conversationWorkspace } from './conversation-workspaces.mjs';\n");
-          jobs = jobs.replace("function ensureVisible(job, principal) {\n", "function currentProjectWorkspaceId() {\n  const config = normalizeInstanceConfig(readConfig());\n  const bound = conversationWorkspace(config);\n  if (bound?.id) return bound.id;\n  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];\n  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;\n}\n\nfunction ensureVisible(job, principal) {\n  const currentWorkspaceId = currentProjectWorkspaceId();\n  if (currentWorkspaceId && job.workspaceId && job.workspaceId !== currentWorkspaceId) {\n    throw new Error(`Job ${job.id} belongs to a different project workspace`);\n  }\n");
+          jobs = jobs.replace("function ensureVisible(job, principal) {\n", "function currentProjectWorkspaceId() {\n  const config = normalizeInstanceConfig(readConfig());\n  const bound = conversationWorkspace(config);\n  if (bound?.id) return bound.id;\n  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];\n  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;\n}\n\nfunction ensureCurrentProjectJob(job) {\n  const currentWorkspaceId = currentProjectWorkspaceId();\n  if (currentWorkspaceId && job.workspaceId && job.workspaceId !== currentWorkspaceId) {\n    throw new Error(`Job ${job.id} belongs to a different project workspace`);\n  }\n  return job;\n}\n\nfunction ensureVisible(job, principal) {\n");
           jobs = jobs.replace("    const args = withWorkspace(rawArgs, workspaceId);", "    const args = withWorkspace(rawArgs, workspaceId || currentProjectWorkspaceId());");
           jobs = jobs.replace("  }, async ({ status, workspaceId, limit = 100 }) => toolText({\n    jobs: listJobs({ principal: principalNow(), status, workspaceId, limit })\n  }));", "  }, async ({ status, workspaceId, limit = 100 }) => toolText({\n    jobs: listJobs({ principal: principalNow(), status, workspaceId: workspaceId || currentProjectWorkspaceId(), limit })\n  }));");
-          jobs = jobs.replace("  withWorkspace\n};", "  currentProjectWorkspaceId,\n  withWorkspace\n};");
+          jobs = jobs.replace("    return toolText({ job: ensureVisible(getJob(id, { includeArguments, includeResult }), principal) });", "    return toolText({ job: ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments, includeResult }), principal)) });");
+          jobs = jobs.replace("    const job = ensureVisible(getJob(id), principal);", "    const job = ensureCurrentProjectJob(ensureVisible(getJob(id), principal));");
+          jobs = jobs.replace("    ensureVisible(getJob(id), principal);\n    const result = cancelJob", "    ensureCurrentProjectJob(ensureVisible(getJob(id), principal));\n    const result = cancelJob");
+          jobs = jobs.replace("    const existing = ensureVisible(getJob(id, { includeArguments: true }), principal);", "    const existing = ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments: true }), principal));");
           fs.writeFileSync('gateway/job-tools.mjs', jobs);
 
           fs.writeFileSync('tests/conversation-workspace-isolation.test.mjs', `import test from 'node:test';
@@ -108,7 +111,7 @@ jobs:
           npm ci
           npm version 3.6.4 --no-git-tag-version
           npm run version:sync
-          node --test tests/conversation-workspace-isolation.test.mjs tests/approval-execution-boundary.test.cjs
+          node --test tests/conversation-workspace-isolation.test.mjs tests/approval-execution-boundary.test.cjs tests/job-tools-visibility.test.mjs
           npm run check
           npm run test:unit
           npm run smoke:gateway
