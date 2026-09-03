@@ -1187,6 +1187,7 @@ function activate(context){
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100); statusBar.command='devMate.open'; context.subscriptions.push(statusBar); setStatus('DevMate');
   syncConfig(context,false);
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(()=>scheduleContextRefresh(context)));
+  context.subscriptions.push(vscode.window.onDidChangeWindowState(()=>scheduleContextRefresh(context)));
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event=>{
     if(event?.textEditor?.document?.uri?.scheme !== 'output') scheduleContextRefresh(context);
   }));
