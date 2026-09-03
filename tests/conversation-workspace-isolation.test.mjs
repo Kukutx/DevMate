@@ -51,13 +51,12 @@ test('same-project work records remain shareable across conversations', () => {
   clearWorkspaceLeases();
 });
 
-
 test('project selection does not expire just because a conversation is old', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-stable-project-'));
   const config = { activeWorkspaceId: 'app', workspaces: [{ id: 'app', name: 'App', root, mode: 'workspace-write', reference: false }] };
   bindConversationWorkspaceToPath(config, scopeA, root, { allowExternalWrite: true, now: 0 });
   pruneConversationWorkspaceBindings(config, 365 * 24 * 60 * 60 * 1000);
-  assert.equal(conversationWorkspaceBinding(config, scopeA)?.workspaceId, 'app');
+  assert.equal(conversationWorkspaceBinding(config, scopeA)?.root, fs.realpathSync.native(root));
 });
 
 test('project resource fences do not restore conversation ownership locks', () => {
