@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
+import { audit, readConfig, redactSensitiveString } from './local-shared.mjs';
 import {
   conversationScopeFromToolContext,
   requestContext,
@@ -10,9 +10,7 @@ import {
 } from './request-context.mjs';
 import {
   assertConversationWorkspaceMatch,
-  bindConversationWorkspaceToWorkspace,
-  conversationWorkspace,
-  conversationWorkspaceBinding
+  conversationWorkspace
 } from './conversation-workspaces.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses, processConversationScope } from './persistent-processes.mjs';
@@ -251,17 +249,6 @@ function filterResult(name, result, principal, authorizedWorkspaceId = null, con
   return sanitizeToolResult(name, result);
 }
 
-function persistExplicitConversationBinding(scope, workspace) {
-  if (!scope || !workspace) return null;
-  let binding = null;
-  mutateConfig(config => {
-    normalizeInstanceConfig(config);
-    binding = conversationWorkspaceBinding(config, scope);
-    if (!binding) binding = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'explicit-tool' });
-    return config;
-  }, { retries: 4 });
-  return binding;
-}
 function conversationBindingRequired(current) {
   const error = new Error('This ChatGPT conversation is not bound to a project. Call workspace_bind first. If the user supplied an absolute local path, bind that exact path; otherwise choose an explicit workspaceId from list_workspaces. DevMate will not silently use the current VS Code or Obsidian workspace.');
   error.code = 'conversation_workspace_binding_required';
@@ -286,14 +273,7 @@ function prepareConversationWorkspace(name, args, current) {
   if (args.id && ['web_preview_status', 'web_preview_stop'].includes(name)) {
     assertConversationResourceScope('preview', args.id, previewConversationScope(args.id), scope);
   }
-  let binding = conversationWorkspace(current, scope);
-  if (!binding) {
-    if (!String(authorizationArgs.workspaceId || '').trim()) throw conversationBindingRequired(current);
-    const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
-    persistExplicitConversationBinding(scope, requested);
-    current = normalizeInstanceConfig(readConfig());
-    binding = conversationWorkspace(current, scope);
-  }
+  const binding = conversationWorkspace(current, scope);
   if (!binding) throw conversationBindingRequired(current);
   if (authorizationArgs.workspaceId) {
     const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
@@ -493,7 +473,6 @@ export const __test = {
   filterResult,
   inferredWorkspace,
   markGitFailure,
-  persistExplicitConversationBinding,
   prepareConversationWorkspace,
   publicDeployment,
   redactCommandResultPayload,

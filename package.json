@@ -2,7 +2,7 @@
   "name": "devmate",
   "displayName": "DevMate",
   "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
-  "version": "3.6.2",
+  "version": "3.6.3",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "repository": {

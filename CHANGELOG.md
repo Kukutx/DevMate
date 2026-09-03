@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.6.3
+- Made ChatGPT project selection fail closed: every new conversation must deliberately bind a project before project-scoped tools can run, so an editor/vault default cannot be adopted implicitly.
+- Made the documented `openai/session` client metadata the canonical ChatGPT conversation identity while retaining compatibility fallbacks.
+- Strengthened regression coverage for reconnect identity and explicit path precedence.
+
 ## 3.6.2
 - Isolated ChatGPT project work by conversation across reconnects.
 - Explicit absolute local paths now take precedence over VS Code/Obsidian host defaults through conversation workspace binding.
