@@ -31,17 +31,19 @@ jobs:
                   raise SystemExit(f'missing replacement target: {label}')
               p.write_text(s.replace(old, new, 1))
 
+          # Project choice is memory, not ownership. Do not expire it by time.
           p = Path('gateway/conversation-workspaces.mjs')
           s = p.read_text()
           s = s.replace("export const CONVERSATION_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;\n", '')
-          s = s.replace(",\n    expiresAt: new Date(now + CONVERSATION_BINDING_TTL_MS).toISOString()\n  };", "\n  };")
+          s = s.replace("    updatedAt: timestamp,\n    expiresAt: new Date(now + CONVERSATION_BINDING_TTL_MS).toISOString()", "    updatedAt: timestamp")
           s = s.replace("  const expires = Date.parse(value.expiresAt || '');\n  if (!Number.isFinite(expires)) return null;\n", '')
-          s = s.replace(",\n    expiresAt: new Date(expires).toISOString()\n  };", "\n  };")
+          s = s.replace("    updatedAt: value.updatedAt || null,\n    expiresAt: new Date(expires).toISOString()", "    updatedAt: value.updatedAt || null")
           s = s.replace("    if (!binding || Date.parse(binding.expiresAt) <= now) continue;", "    if (!binding) continue;")
           s = s.replace("    binding.expiresAt = new Date(now + CONVERSATION_BINDING_TTL_MS).toISOString();\n", '')
-          s = s.replace(",\n    expiresAt: binding.expiresAt\n  };", "\n  };")
+          s = s.replace("    source: binding.source,\n    expiresAt: binding.expiresAt", "    source: binding.source")
           p.write_text(s)
 
+          # Keep active conversation project selections fresh for bounded LRU retention.
           replace_once(
               'gateway/team-capabilities.mjs',
               "  bindConversationWorkspaceToWorkspace,\n  conversationWorkspace\n} from './conversation-workspaces.mjs';",
@@ -61,50 +63,200 @@ jobs:
               'binding refresh use'
           )
 
+          # Non-workspace collaboration tools still need a ChatGPT-only project fence.
           replace_once(
-              'gateway/tool-policy.mjs',
-              "  'workspace_bind', 'workspace_binding_status', 'workspace_unbind',\n  'add_trusted_root', 'remove_trusted_root',\n  'work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback',\n  'plugin_catalog', 'plugin_diagnostics', 'plugin_enable', 'plugin_disable', 'plugin_configure', 'devmate_plugins_panel',\n  'team_status', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',\n  'team_activity_status', 'team_configure', 'deployment_status', 'deployment_readiness', 'deployment_policy_template',\n  'workspace_lease_status', 'published_preview_share', 'published_preview_list', 'published_preview_revoke',\n  'job_target_catalog', 'job_runtime_configure', 'job_submit', 'job_list', 'job_status', 'job_artifacts', 'job_cancel', 'job_retry', 'runner_status',",
-              "  'workspace_bind', 'workspace_binding_status', 'workspace_unbind',\n  'add_trusted_root', 'remove_trusted_root',\n  'plugin_catalog', 'plugin_diagnostics', 'plugin_enable', 'plugin_disable', 'plugin_configure', 'devmate_plugins_panel',\n  'team_status', 'team_member_list', 'team_member_create', 'team_member_update', 'team_member_rotate', 'team_member_revoke',\n  'team_activity_status', 'team_configure', 'deployment_status', 'deployment_readiness', 'deployment_policy_template',\n  'job_target_catalog', 'job_runtime_configure', 'runner_status',",
-              'project-scoped resource tools'
+              'gateway/team-collaboration-tools.mjs',
+              "import {\n  bindConversationWorkspaceToPath,\n  bindConversationWorkspaceToWorkspace,\n  clearConversationWorkspaceBinding,\n  publicConversationWorkspaceBinding\n} from './conversation-workspaces.mjs';",
+              "import {\n  assertConversationWorkspaceMatch,\n  bindConversationWorkspaceToPath,\n  bindConversationWorkspaceToWorkspace,\n  clearConversationWorkspaceBinding,\n  conversationWorkspace,\n  publicConversationWorkspaceBinding\n} from './conversation-workspaces.mjs';",
+              'collaboration conversation imports'
           )
-
+          replace_once(
+              'gateway/team-collaboration-tools.mjs',
+              "function bindWorkspace(input) {",
+              "function defaultConversationWorkspace(config) {\n  const workspaces = Array.isArray(config?.workspaces) ? config.workspaces : [];\n  return workspaces.find(item => item?.id === config?.activeWorkspaceId && !item.reference && item.mode !== 'readonly')\n    || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')\n    || workspaces[0]\n    || null;\n}\n\nfunction selectedConversationProject(requested = '') {\n  const scope = requestConversationScope();\n  let config = normalizeInstanceConfig(readConfig());\n  if (!scope) return { config, scope: null, workspace: null };\n  let workspace = conversationWorkspace(config, scope);\n  if (!workspace) {\n    const fallback = defaultConversationWorkspace(config);\n    if (!fallback) throw new Error('No workspace configured');\n    mutateConfig(current => {\n      normalizeInstanceConfig(current);\n      if (!conversationWorkspace(current, scope)) {\n        bindConversationWorkspaceToWorkspace(current, scope, fallback, { source: 'default' });\n      }\n      return current;\n    }, { retries: 4 });\n    config = normalizeInstanceConfig(readConfig());\n    workspace = conversationWorkspace(config, scope);\n  }\n  if (!workspace) throw new Error('No workspace configured');\n  if (requested) {\n    const candidate = resolveWorkspace(config, requested);\n    assertConversationWorkspaceMatch(config, scope, candidate);\n  }\n  return { config, scope, workspace };\n}\n\nfunction bindWorkspace(input) {",
+              'collaboration selected project helper'
+          )
           p = Path('gateway/team-collaboration-tools.mjs')
           s = p.read_text()
+          s = s.replace("        source: binding.source,\n        expiresAt: binding.expiresAt", "        source: binding.source")
           s = s.replace("      workspaceId: z.string().min(1),\n      title:", "      workspaceId: z.string().min(1).optional(),\n      title:", 1)
+          s = s.replace(
+              "    const config = normalizeInstanceConfig(readConfig());\n    const principal = principalNow();\n    const workspace = resolveWorkspace(config, input.workspaceId);\n    assertVisibleWorkspace(principal, workspace.id, 'start a session for');",
+              "    const selected = selectedConversationProject(input.workspaceId);\n    const config = selected.config;\n    const principal = principalNow();\n    const workspace = selected.scope ? selected.workspace : resolveWorkspace(config, input.workspaceId);\n    assertVisibleWorkspace(principal, workspace.id, 'start a session for');",
+              1
+          )
           old = "  }, async ({ id, workspaceId, all = false }) => {\n    const principal = principalNow();\n    const config = normalizeInstanceConfig(readConfig());\n    if (id) {\n      const item = workSession(id);\n      if (!item) return toolText({ session: null });\n      assertVisibleWorkspace(principal, item.workspaceId);"
-          new = "  }, async ({ id, workspaceId, all = false }) => {\n    const principal = principalNow();\n    const config = normalizeInstanceConfig(readConfig());\n    const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;\n    if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);\n    if (id) {\n      const item = workSession(id);\n      if (!item) return toolText({ session: null });\n      if (resolvedWorkspaceId && item.workspaceId !== resolvedWorkspaceId) throw new Error(`Work session ${id} belongs to a different project workspace`);\n      assertVisibleWorkspace(principal, item.workspaceId);"
+          new = "  }, async ({ id, workspaceId, all = false }) => {\n    const principal = principalNow();\n    const selected = selectedConversationProject(workspaceId);\n    const config = selected.config;\n    if (id) {\n      const item = workSession(id);\n      if (!item) return toolText({ session: null });\n      if (selected.scope && item.workspaceId !== selected.workspace.id) throw new Error(`Work session ${id} belongs to a different project workspace`);\n      assertVisibleWorkspace(principal, item.workspaceId);"
           if old not in s: raise SystemExit('missing work session status header')
           s = s.replace(old, new, 1)
-          s = s.replace("    const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;\n    if (resolvedWorkspaceId) assertVisibleWorkspace(principal, resolvedWorkspaceId);\n    const canSeeAll", "    const canSeeAll", 1)
-          s = s.replace("      id: z.string().min(1),\n      force: z.boolean().optional(),\n      releaseLease:", "      id: z.string().min(1),\n      workspaceId: z.string().optional(),\n      force: z.boolean().optional(),\n      releaseLease:", 1)
-          s = s.replace("  }, async ({ id, force = false, releaseLease = true }) => {\n    const principal = principalNow();\n    const result = finishWorkSession({ id, principal, force, releaseLease });", "  }, async ({ id, workspaceId, force = false, releaseLease = true }) => {\n    const principal = principalNow();\n    const config = normalizeInstanceConfig(readConfig());\n    const item = workSession(id);\n    if (item && workspaceId && item.workspaceId !== resolveWorkspace(config, workspaceId).id) throw new Error(`Work session ${id} belongs to a different project workspace`);\n    const result = finishWorkSession({ id, principal, force, releaseLease });", 1)
-          s = s.replace("      workSessionId: z.string().min(1),\n      dryRun:", "      workSessionId: z.string().min(1),\n      workspaceId: z.string().optional(),\n      dryRun:", 1)
-          s = s.replace("  }, async ({ workSessionId, dryRun = false, force = false, limit = 1000 }) => {\n    const principal = principalNow();\n    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit }));", "  }, async ({ workSessionId, workspaceId, dryRun = false, force = false, limit = 1000 }) => {\n    const principal = principalNow();\n    const config = normalizeInstanceConfig(readConfig());\n    const item = workSession(workSessionId);\n    if (item && workspaceId && item.workspaceId !== resolveWorkspace(config, workspaceId).id) throw new Error(`Work session ${workSessionId} belongs to a different project workspace`);\n    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit }));", 1)
-          s = s.replace("      previewId: z.string().min(1),\n      ttlSeconds:", "      previewId: z.string().min(1),\n      workspaceId: z.string().optional(),\n      ttlSeconds:", 1)
-          s = s.replace("    const preview = getPreview(input.previewId);\n    assertVisibleWorkspace(principal, preview.workspaceId, 'publish');\n    const result = createPreviewShare({\n      ...input,", "    const preview = getPreview(input.previewId);\n    const selectedWorkspaceId = input.workspaceId ? resolveWorkspace(config, input.workspaceId).id : null;\n    if (selectedWorkspaceId && preview.workspaceId !== selectedWorkspaceId) throw new Error(`Preview ${input.previewId} belongs to a different project workspace`);\n    assertVisibleWorkspace(principal, preview.workspaceId, 'publish');\n    const { workspaceId: _workspaceId, ...shareInput } = input;\n    const result = createPreviewShare({\n      ...shareInput,", 1)
-          s = s.replace("    inputSchema: { id: z.string().min(1) },", "    inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },", 1)
-          s = s.replace("  }, async ({ id }) => {\n    const principal = principalNow();\n    const item = listPreviewShares().find(value => value.id === id);\n    if (item) assertVisibleWorkspace(principal, item.workspaceId, 'revoke a share for');", "  }, async ({ id, workspaceId }) => {\n    const principal = principalNow();\n    const config = normalizeInstanceConfig(readConfig());\n    const item = listPreviewShares().find(value => value.id === id);\n    if (item && workspaceId && item.workspaceId !== resolveWorkspace(config, workspaceId).id) throw new Error(`Published preview ${id} belongs to a different project workspace`);\n    if (item) assertVisibleWorkspace(principal, item.workspaceId, 'revoke a share for');", 1)
-          s = s.replace(",\n        source: binding.source,\n        expiresAt: binding.expiresAt\n      }", ",\n        source: binding.source\n      }", 1)
+          s = s.replace(
+              "    const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;",
+              "    const resolvedWorkspaceId = selected.scope ? selected.workspace.id : (workspaceId ? resolveWorkspace(config, workspaceId).id : undefined);",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ id, force = false, releaseLease = true }) => {\n    const principal = principalNow();\n    const result = finishWorkSession({ id, principal, force, releaseLease });",
+              "  }, async ({ id, force = false, releaseLease = true }) => {\n    const principal = principalNow();\n    const selected = selectedConversationProject();\n    const item = workSession(id);\n    if (selected.scope && item && item.workspaceId !== selected.workspace.id) throw new Error(`Work session ${id} belongs to a different project workspace`);\n    const result = finishWorkSession({ id, principal, force, releaseLease });",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ workSessionId, dryRun = false, force = false, limit = 1000 }) => {\n    const principal = principalNow();\n    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit }));",
+              "  }, async ({ workSessionId, dryRun = false, force = false, limit = 1000 }) => {\n    const principal = principalNow();\n    const selected = selectedConversationProject();\n    const item = workSession(workSessionId);\n    if (selected.scope && item && item.workspaceId !== selected.workspace.id) throw new Error(`Work session ${workSessionId} belongs to a different project workspace`);\n    return toolText(await rollbackWorkSession({ workSessionId, principal, dryRun, force, limit }));",
+              1
+          )
+          s = s.replace(
+              "    const config = normalizeInstanceConfig(readConfig());\n    const principal = principalNow();\n    const preview = getPreview(input.previewId);\n    assertVisibleWorkspace(principal, preview.workspaceId, 'publish');",
+              "    const selected = selectedConversationProject();\n    const config = selected.config;\n    const principal = principalNow();\n    const preview = getPreview(input.previewId);\n    if (selected.scope && preview.workspaceId !== selected.workspace.id) throw new Error(`Preview ${input.previewId} belongs to a different project workspace`);\n    assertVisibleWorkspace(principal, preview.workspaceId, 'publish');",
+              1
+          )
+          s = s.replace(
+              "  }, async filters => {\n    const principal = principalNow();\n    let items = listPreviewShares(filters);",
+              "  }, async filters => {\n    const principal = principalNow();\n    const selected = selectedConversationProject(filters.workspaceId);\n    const effectiveFilters = selected.scope ? { ...filters, workspaceId: selected.workspace.id } : filters;\n    let items = listPreviewShares(effectiveFilters);",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ id }) => {\n    const principal = principalNow();\n    const item = listPreviewShares().find(value => value.id === id);\n    if (item) assertVisibleWorkspace(principal, item.workspaceId, 'revoke a share for');",
+              "  }, async ({ id }) => {\n    const principal = principalNow();\n    const selected = selectedConversationProject();\n    const item = listPreviewShares().find(value => value.id === id);\n    if (selected.scope && item && item.workspaceId !== selected.workspace.id) throw new Error(`Published preview ${id} belongs to a different project workspace`);\n    if (item) assertVisibleWorkspace(principal, item.workspaceId, 'revoke a share for');",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ workspaceId }) => {\n    const principal = principalNow();\n    const config = normalizeInstanceConfig(readConfig());\n    const resolvedWorkspaceId = workspaceId ? resolveWorkspace(config, workspaceId).id : undefined;",
+              "  }, async ({ workspaceId }) => {\n    const principal = principalNow();\n    const selected = selectedConversationProject(workspaceId);\n    const config = selected.config;\n    const resolvedWorkspaceId = selected.scope ? selected.workspace.id : (workspaceId ? resolveWorkspace(config, workspaceId).id : undefined);",
+              1
+          )
           p.write_text(s)
 
+          # Durable jobs remain non-workspace control-plane tools, but ChatGPT calls are fenced to the selected project only.
           replace_once(
               'gateway/job-tools.mjs',
-              "function currentProjectWorkspaceId() {\n  const config = normalizeInstanceConfig(readConfig());\n  const bound = conversationWorkspace(config);\n  if (bound?.id) return bound.id;\n  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];\n  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;\n}\n\nfunction ensureCurrentProjectJob(job) {\n  const currentWorkspaceId = currentProjectWorkspaceId();",
-              "function currentConversationWorkspaceId() {\n  const config = normalizeInstanceConfig(readConfig());\n  return conversationWorkspace(config)?.id || null;\n}\n\nfunction currentProjectWorkspaceId() {\n  const config = normalizeInstanceConfig(readConfig());\n  const bound = conversationWorkspace(config);\n  if (bound?.id) return bound.id;\n  const workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];\n  return config.activeWorkspaceId || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')?.id || workspaces[0]?.id || null;\n}\n\nfunction ensureCurrentProjectJob(job) {\n  const currentWorkspaceId = currentConversationWorkspaceId();",
-              'job project fence only for conversations'
+              "import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';\nimport { conversationWorkspace } from './conversation-workspaces.mjs';",
+              "import { audit, mutateConfig, readConfig, toolText, writeConfig } from './local-shared.mjs';\nimport {\n  assertConversationWorkspaceMatch,\n  bindConversationWorkspaceToWorkspace,\n  conversationWorkspace\n} from './conversation-workspaces.mjs';\nimport { requestConversationScope } from './request-context.mjs';",
+              'job imports'
           )
+          replace_once(
+              'gateway/job-tools.mjs',
+              "import { principalNow } from './team-tool-data.mjs';",
+              "import { principalNow } from './team-tool-data.mjs';\nimport { resolveWorkspace } from './workspace-resolver.mjs';",
+              'job resolver import'
+          )
+          p = Path('gateway/job-tools.mjs')
+          s = p.read_text()
+          start = s.index('function currentProjectWorkspaceId()')
+          end = s.index('function ensureVisible(', start)
+          helper = """function defaultConversationWorkspace(config) {
+  const workspaces = Array.isArray(config?.workspaces) ? config.workspaces : [];
+  return workspaces.find(item => item?.id === config?.activeWorkspaceId && !item.reference && item.mode !== 'readonly')
+    || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')
+    || workspaces[0]
+    || null;
+}
 
+function selectedConversationProject(requested = '') {
+  const scope = requestConversationScope();
+  if (!scope) return { scope: null, workspace: null };
+  let config = normalizeInstanceConfig(readConfig());
+  let workspace = conversationWorkspace(config, scope);
+  if (!workspace) {
+    const fallback = defaultConversationWorkspace(config);
+    if (!fallback) throw new Error('No workspace configured');
+    mutateConfig(current => {
+      normalizeInstanceConfig(current);
+      if (!conversationWorkspace(current, scope)) {
+        bindConversationWorkspaceToWorkspace(current, scope, fallback, { source: 'default' });
+      }
+      return current;
+    }, { retries: 4 });
+    config = normalizeInstanceConfig(readConfig());
+    workspace = conversationWorkspace(config, scope);
+  }
+  if (!workspace) throw new Error('No workspace configured');
+  if (requested) {
+    const candidate = resolveWorkspace(config, requested);
+    assertConversationWorkspaceMatch(config, scope, candidate);
+  }
+  return { scope, workspace };
+}
+
+function selectedJobWorkspaceId(requested = '') {
+  const selected = selectedConversationProject(requested);
+  return selected.scope ? selected.workspace.id : String(requested || '').trim() || null;
+}
+
+function ensureCurrentProjectJob(job, requested = '') {
+  const selected = selectedConversationProject(requested);
+  if (selected.scope && job.workspaceId && job.workspaceId !== selected.workspace.id) {
+    throw new Error(`Job ${job.id} belongs to a different project workspace`);
+  }
+  return job;
+}
+
+"""
+          s = s[:start] + helper + s[end:]
+          s = s.replace(
+              "    const args = withWorkspace(rawArgs, workspaceId || currentProjectWorkspaceId());",
+              "    const scope = requestConversationScope();\n    const args = scope\n      ? { ...rawArgs, workspaceId: selectedJobWorkspaceId(workspaceId || rawArgs.workspaceId) }\n      : withWorkspace(rawArgs, workspaceId);",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ status, workspaceId, limit = 100 }) => toolText({\n    jobs: listJobs({ principal: principalNow(), status, workspaceId: workspaceId || currentProjectWorkspaceId(), limit })\n  }));",
+              "  }, async ({ status, workspaceId, limit = 100 }) => {\n    const effectiveWorkspaceId = requestConversationScope() ? selectedJobWorkspaceId(workspaceId) : workspaceId;\n    return toolText({ jobs: listJobs({ principal: principalNow(), status, workspaceId: effectiveWorkspaceId, limit }) });\n  });",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ id, includeArguments = false, includeResult = true }) => {\n    const principal = principalNow();\n    return toolText({ job: ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments, includeResult }), principal)) });",
+              "  }, async ({ id, workspaceId, includeArguments = false, includeResult = true }) => {\n    const principal = principalNow();\n    return toolText({ job: ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments, includeResult }), principal), workspaceId) });",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ id }) => {\n    const principal = principalNow();\n    const job = ensureCurrentProjectJob(ensureVisible(getJob(id), principal));",
+              "  }, async ({ id, workspaceId }) => {\n    const principal = principalNow();\n    const job = ensureCurrentProjectJob(ensureVisible(getJob(id), principal), workspaceId);",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ id, force = false }) => {\n    const principal = principalNow();\n    ensureCurrentProjectJob(ensureVisible(getJob(id), principal));",
+              "  }, async ({ id, workspaceId, force = false }) => {\n    const principal = principalNow();\n    ensureCurrentProjectJob(ensureVisible(getJob(id), principal), workspaceId);",
+              1
+          )
+          s = s.replace(
+              "  }, async ({ id }) => {\n    const principal = principalNow();\n    const existing = ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments: true }), principal));",
+              "  }, async ({ id, workspaceId }) => {\n    const principal = principalNow();\n    const existing = ensureCurrentProjectJob(ensureVisible(getJob(id, { includeArguments: true }), principal), workspaceId);",
+              1
+          )
+          p.write_text(s)
+
+          # Regression coverage for exactly the requested behavior.
           p = Path('tests/conversation-workspace-isolation.test.mjs')
           s = p.read_text()
-          s = s.replace("import { bindConversationWorkspaceToPath } from '../gateway/conversation-workspaces.mjs';", "import { bindConversationWorkspaceToPath, conversationWorkspaceBinding, pruneConversationWorkspaceBindings } from '../gateway/conversation-workspaces.mjs';")
-          s = s.replace("import { __test as capabilityTest } from '../gateway/team-capabilities.mjs';", "import { __test as capabilityTest } from '../gateway/team-capabilities.mjs';\nimport { workspaceScopedTool } from '../gateway/tool-policy.mjs';")
-          s += "\n\ntest('project selection does not expire just because a conversation is old', () => {\n  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-stable-project-'));\n  const config = { activeWorkspaceId: 'app', workspaces: [{ id: 'app', name: 'App', root, mode: 'workspace-write', reference: false }] };\n  bindConversationWorkspaceToPath(config, scopeA, root, { allowExternalWrite: true, now: 0 });\n  pruneConversationWorkspaceBindings(config, 365 * 24 * 60 * 60 * 1000);\n  assert.equal(conversationWorkspaceBinding(config, scopeA)?.workspaceId, 'app');\n});\n\ntest('project-tied records are scoped by project, not by conversation owner', () => {\n  for (const name of ['work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback', 'workspace_lease_status', 'published_preview_share', 'published_preview_list', 'published_preview_revoke', 'job_submit', 'job_list', 'job_status', 'job_artifacts', 'job_cancel', 'job_retry']) {\n    assert.equal(workspaceScopedTool(name), true, name);\n  }\n});\n"
+          s = s.replace(
+              "import { bindConversationWorkspaceToPath } from '../gateway/conversation-workspaces.mjs';",
+              "import { bindConversationWorkspaceToPath, conversationWorkspaceBinding, pruneConversationWorkspaceBindings } from '../gateway/conversation-workspaces.mjs';"
+          )
+          s += """
+
+test('project selection does not expire just because a conversation is old', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-stable-project-'));
+  const config = { activeWorkspaceId: 'app', workspaces: [{ id: 'app', name: 'App', root, mode: 'workspace-write', reference: false }] };
+  bindConversationWorkspaceToPath(config, scopeA, root, { allowExternalWrite: true, now: 0 });
+  pruneConversationWorkspaceBindings(config, 365 * 24 * 60 * 60 * 1000);
+  assert.equal(conversationWorkspaceBinding(config, scopeA)?.workspaceId, 'app');
+});
+
+test('project resource fences do not restore conversation ownership locks', () => {
+  const capabilitySource = fs.readFileSync(new URL('../gateway/team-capabilities.mjs', import.meta.url), 'utf8');
+  const collaborationSource = fs.readFileSync(new URL('../gateway/team-collaboration-tools.mjs', import.meta.url), 'utf8');
+  const jobSource = fs.readFileSync(new URL('../gateway/job-tools.mjs', import.meta.url), 'utf8');
+  const combined = capabilitySource + collaborationSource + jobSource;
+  assert.doesNotMatch(combined, /conversation_resource_conflict|work_session_conversation_conflict|conversation_workspace_durable_job_unsafe|belongs to another ChatGPT conversation|must deliberately bind/);
+  assert.match(collaborationSource, /different project workspace/);
+  assert.match(jobSource, /different project workspace/);
+});
+"""
           p.write_text(s)
 
           p = Path('CHANGELOG.md')
           s = p.read_text()
           if '## 3.6.5' not in s:
-              s = s.replace('# Changelog\n', '# Changelog\n\n## 3.6.5\n- Audited project isolation so project selection stays stable without expiring, while same-project sessions and records remain shareable.\n- Applied the selected-project boundary consistently to work sessions, leases, previews, and durable jobs.\n')
+              s = s.replace('# Changelog\n', '# Changelog\n\n## 3.6.5\n- Kept each ChatGPT conversation on its selected project across long gaps and reconnects without expiring the project choice.\n- Applied the same project boundary to sessions, leases, previews, and jobs while keeping same-project records shareable across conversations.\n')
           p.write_text(s)
           PY
 
@@ -112,7 +264,7 @@ jobs:
           npm ci
           npm version 3.6.5 --no-git-tag-version
           npm run version:sync
-          node --test tests/conversation-workspace-isolation.test.mjs tests/job-tools-visibility.test.mjs tests/approval-execution-boundary.test.cjs
+          node --test tests/conversation-workspace-isolation.test.mjs tests/job-tools-visibility.test.mjs tests/team-access.test.mjs tests/approval-execution-boundary.test.cjs
           npm run check
           npm run test:unit
           npm run smoke:gateway
@@ -121,5 +273,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "fix: audit project isolation boundaries"
+          git commit -m "fix: complete project isolation audit"
           git push origin HEAD:fix/project-isolation-audit
