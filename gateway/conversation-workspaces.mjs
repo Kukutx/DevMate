@@ -80,7 +80,10 @@ function bindingFromWorkspace(scope, workspace, { source = 'auto', now = Date.no
   const root = rootOverride ? normalizeLocalRoot(rootOverride) : fs.realpathSync.native(workspaceRoot(workspace));
   assertSafeWorkspaceRoot(root, 'Conversation workspace root');
   const exactConfigured = !rootOverride || pathKey(root) === pathKey(workspaceRoot(workspace));
-  const id = exactConfigured && workspace?.id ? String(workspace.id) : syntheticWorkspaceId(scope, root);
+  // Preserve a configured parent workspace ID even when the conversation is pinned
+  // to one of its subdirectories. Authorization remains tied to the configured
+  // workspace while path resolution is narrowed to the conversation root.
+  const id = workspace?.id ? String(workspace.id) : syntheticWorkspaceId(scope, root);
   const readonly = workspace?.reference === true || workspace?.mode === 'readonly';
   const timestamp = new Date(now).toISOString();
   return {
