@@ -1,6 +1,19 @@
 import { z } from 'zod';
-import { audit, readConfig, redactSensitiveString } from './local-shared.mjs';
-import { requestContext, runWithRequestSignal, runWithWorkSessionContext } from './request-context.mjs';
+import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
+import {
+  conversationScopeFromToolContext,
+  requestContext,
+  requestConversationScope,
+  runWithConversationScope,
+  runWithRequestSignal,
+  runWithWorkSessionContext
+} from './request-context.mjs';
+import {
+  assertConversationWorkspaceMatch,
+  bindConversationWorkspaceToWorkspace,
+  conversationWorkspace,
+  conversationWorkspaceBinding
+} from './conversation-workspaces.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { listPersistentProcesses } from './persistent-processes.mjs';
 import { getPreview } from './plugins/preview-manager.mjs';
@@ -20,6 +33,8 @@ import { incrementCounter, observeDuration } from './observability.mjs';
 import { registerServerInitializer, registerToolDecorator } from './server-extension-host.mjs';
 import { registerTeamManagementTools } from './team-management-tools.mjs';
 import { registerTeamCollaborationTools } from './team-collaboration-tools.mjs';
+import { toolWorkspaceId, workspaceScopedTool } from './tool-policy.mjs';
+import { resolveWorkspace } from './workspace-resolver.mjs';
 import {
   cleanOrigin,
   principalNow,
@@ -226,156 +241,207 @@ function filterResult(name, result, principal) {
   return sanitizeToolResult(name, result);
 }
 
-export function wrapAuthorizedTool(name, config, handler) {
-  return async function authorizedToolHandler(args = {}, ...rest) {
-    const current = normalizeInstanceConfig(readConfig());
-    const inferred = inferredWorkspace(name, args);
-    const authorizationArgs = inferred && !args.workspaceId
-      ? { ...args, workspaceId: inferred }
-      : args;
-    const authorized = authorizeToolCall({
-      name,
-      annotations: config?.annotations || {},
-      args: authorizationArgs,
-      config: current,
-      principal: principalNow()
-    });
-    const executionArgs = bindAuthorizedWorkspaceArgs(authorizationArgs, authorized);
-
-    if (name !== 'job_cancel') {
-      assertDrainAllows({
-        principal: authorized.principal,
-        capability: authorized.capability,
-        tool: name
-      });
+function persistAutoConversationBinding(scope, workspace) {
+  if (!scope || !workspace) return null;
+  let binding = null;
+  mutateConfig(config => {
+    normalizeInstanceConfig(config);
+    binding = conversationWorkspaceBinding(config, scope);
+    if (!binding) {
+      binding = bindConversationWorkspaceToWorkspace(config, scope, workspace, { source: 'auto' });
     }
+    return config;
+  }, { retries: 4 });
+  return binding;
+}
 
-    const leaseProtected = !name.startsWith('workspace_lease_');
+function prepareConversationWorkspace(name, args, current) {
+  const scope = requestConversationScope();
+  if (!scope || !workspaceScopedTool(name)) return { current, args };
+
+  const inferred = inferredWorkspace(name, args);
+  let authorizationArgs = inferred && !args.workspaceId
+    ? { ...args, workspaceId: inferred }
+    : args;
+  let binding = conversationWorkspace(current, scope);
+
+  if (!binding) {
+    const proposedId = toolWorkspaceId(name, authorizationArgs, current);
+    const proposed = proposedId ? resolveWorkspace(current, proposedId) : null;
+    if (proposed) {
+      persistAutoConversationBinding(scope, proposed);
+      current = normalizeInstanceConfig(readConfig());
+      binding = conversationWorkspace(current, scope);
+    }
+  }
+
+  if (!binding) return { current, args: authorizationArgs };
+
+  if (authorizationArgs.workspaceId) {
+    const requested = resolveWorkspace(current, authorizationArgs.workspaceId);
+    assertConversationWorkspaceMatch(current, scope, requested);
+  }
+  authorizationArgs = { ...authorizationArgs, workspaceId: binding.id };
+  return { current, args: authorizationArgs };
+}
+
+async function authorizedToolExecution(name, config, handler, args, rest) {
+  let current = normalizeInstanceConfig(readConfig());
+  const prepared = prepareConversationWorkspace(name, args, current);
+  current = prepared.current;
+  const authorizationArgs = prepared.args;
+  const authorized = authorizeToolCall({
+    name,
+    annotations: config?.annotations || {},
+    args: authorizationArgs,
+    config: current,
+    principal: principalNow()
+  });
+  const executionArgs = bindAuthorizedWorkspaceArgs(authorizationArgs, authorized);
+
+  if (name !== 'job_cancel') {
+    assertDrainAllows({
+      principal: authorized.principal,
+      capability: authorized.capability,
+      tool: name
+    });
+  }
+
+  const leaseProtected = !name.startsWith('workspace_lease_');
+  if (leaseProtected) {
+    assertWorkspaceLease({
+      workspaceId: authorized.workspaceId,
+      principal: authorized.principal,
+      capability: authorized.capability,
+      config: current
+    });
+  }
+
+  const started = Date.now();
+  const labels = {
+    tool: name,
+    capability: authorized.capability,
+    role: authorized.principal.role,
+    source: authorized.principal.source
+  };
+  const active = authorized.workspaceId
+    ? activeWorkSession(authorized.principal.id, authorized.workspaceId, requestConversationScope())
+    : null;
+  let leaseHold = null;
+  const releaseLeaseHoldSafely = async stage => {
+    if (!leaseHold) return;
+    const hold = leaseHold;
+    leaseHold = null;
+    try {
+      releaseWorkspaceLeaseHold({
+        workspaceId: hold.workspaceId,
+        holdId: hold.id,
+        leaseId: hold.leaseId,
+        principalId: hold.principalId
+      });
+    } catch (cleanupError) {
+      incrementCounter('devmate_workspace_lease_hold_cleanup_total', { tool: name, stage, status: 'error' }, 1);
+      await audit('workspace_lease_hold_release_failed', {
+        requestId: requestContext()?.requestId || null,
+        principalId: authorized.principal.id,
+        tool: name,
+        capability: authorized.capability,
+        workspace: hold.workspaceId,
+        holdId: hold.id,
+        stage,
+        error: String(cleanupError?.message || cleanupError).slice(0, 1000)
+      }, { workSessionId: active?.id || null });
+    }
+  };
+  try {
     if (leaseProtected) {
-      assertWorkspaceLease({
+      leaseHold = acquireWorkspaceLeaseHold({
         workspaceId: authorized.workspaceId,
         principal: authorized.principal,
         capability: authorized.capability,
-        config: current
+        config: current,
+        purpose: name
       });
     }
 
-    const started = Date.now();
-    const labels = {
+    const approval = ensureToolApproval({
+      config: current,
+      principal: authorized.principal,
       tool: name,
       capability: authorized.capability,
-      role: authorized.principal.role,
-      source: authorized.principal.source
-    };
-    const active = authorized.workspaceId
-      ? activeWorkSession(authorized.principal.id, authorized.workspaceId)
-      : null;
-    let leaseHold = null;
-    const releaseLeaseHoldSafely = async stage => {
-      if (!leaseHold) return;
-      const hold = leaseHold;
-      leaseHold = null;
-      try {
-        releaseWorkspaceLeaseHold({
-          workspaceId: hold.workspaceId,
-          holdId: hold.id,
-          leaseId: hold.leaseId,
-          principalId: hold.principalId
-        });
-      } catch (cleanupError) {
-        incrementCounter('devmate_workspace_lease_hold_cleanup_total', { tool: name, stage, status: 'error' }, 1);
-        await audit('workspace_lease_hold_release_failed', {
-          requestId: requestContext()?.requestId || null,
-          principalId: authorized.principal.id,
-          tool: name,
-          capability: authorized.capability,
-          workspace: hold.workspaceId,
-          holdId: hold.id,
-          stage,
-          error: String(cleanupError?.message || cleanupError).slice(0, 1000)
-        }, { workSessionId: active?.id || null });
-      }
-    };
+      workspaceId: authorized.workspaceId,
+      args: executionArgs,
+      conversationScope: requestConversationScope()
+    });
+    if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
+
+    const invocationSignal = rest[0]?.mcpReq?.signal || rest[0]?.signal || requestContext()?.signal || null;
+    let rawResult;
     try {
-      if (leaseProtected) {
-        leaseHold = acquireWorkspaceLeaseHold({
-          workspaceId: authorized.workspaceId,
-          principal: authorized.principal,
-          capability: authorized.capability,
-          config: current,
-          purpose: name
-        });
-      }
-
-      const approval = ensureToolApproval({
-        config: current,
-        principal: authorized.principal,
-        tool: name,
-        capability: authorized.capability,
-        workspaceId: authorized.workspaceId,
-        args: executionArgs
-      });
-      if (approval?.approved) incrementCounter('devmate_approvals_total', { status: 'consumed', tool: name }, 1);
-
-      const invocationSignal = rest[0]?.signal || requestContext()?.signal || null;
-      let rawResult;
-      try {
-        rawResult = await runWithRequestSignal(invocationSignal, () =>
-          runWithWorkSessionContext(active?.id || null, () => handler(executionArgs, ...rest))
-        );
-      } finally {
-        await releaseLeaseHoldSafely('post-handler');
-      }
-      const result = filterResult(
-        name,
-        markGitFailure(name, rawResult),
-        authorized.principal
+      rawResult = await runWithRequestSignal(invocationSignal, () =>
+        runWithWorkSessionContext(active?.id || null, () => handler(executionArgs, ...rest))
       );
-      const session = authorized.workspaceId
-        ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true })
-        : null;
-      const workSessionId = session?.id || active?.id || null;
-      const toolStatus = result?.isError === true ? 'error' : 'success';
-      incrementCounter('devmate_tool_calls_total', { ...labels, status: toolStatus }, 1);
-      observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
-      const failedPhase = result?.structuredContent?.failedPhase;
-      await audit('tool_call', {
-        requestId: requestContext()?.requestId || null,
-        principalId: authorized.principal.id,
-        principalRole: authorized.principal.role,
-        tool: name,
-        capability: authorized.capability,
-        workspace: authorized.workspaceId,
-        approvalId: approval?.request?.id || null,
-        ok: result?.isError !== true,
-        durationMs: Date.now() - started,
-        ...(result?.isError === true ? { error: failedPhase ? `Git subprocess failed during ${failedPhase}` : 'Tool returned an MCP error result' } : {})
-      }, { workSessionId });
-      return result;
-    } catch (error) {
-      await releaseLeaseHoldSafely('error-path');
-      const session = authorized.workspaceId
-        ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true })
-        : null;
-      const workSessionId = session?.id || active?.id || null;
-      const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
-      incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
-      observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
-      if (error?.code === 'approval_required') incrementCounter('devmate_approvals_total', { status: 'pending', tool: name }, 1);
-      await audit('tool_call', {
-        requestId: requestContext()?.requestId || null,
-        principalId: authorized.principal.id,
-        principalRole: authorized.principal.role,
-        tool: name,
-        capability: authorized.capability,
-        workspace: authorized.workspaceId,
-        approvalId: error?.approvalRequest?.id || null,
-        ok: false,
-        durationMs: Date.now() - started,
-        error: String(error?.message || error).slice(0, 1000)
-      }, { workSessionId });
-      throw error;
+    } finally {
+      await releaseLeaseHoldSafely('post-handler');
     }
+    const result = filterResult(
+      name,
+      markGitFailure(name, rawResult),
+      authorized.principal
+    );
+    const session = authorized.workspaceId
+      ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true, conversationScope: requestConversationScope() })
+      : null;
+    const workSessionId = session?.id || active?.id || null;
+    const toolStatus = result?.isError === true ? 'error' : 'success';
+    incrementCounter('devmate_tool_calls_total', { ...labels, status: toolStatus }, 1);
+    observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
+    const failedPhase = result?.structuredContent?.failedPhase;
+    await audit('tool_call', {
+      requestId: requestContext()?.requestId || null,
+      principalId: authorized.principal.id,
+      principalRole: authorized.principal.role,
+      tool: name,
+      capability: authorized.capability,
+      workspace: authorized.workspaceId,
+      approvalId: approval?.request?.id || null,
+      ok: result?.isError !== true,
+      durationMs: Date.now() - started,
+      ...(result?.isError === true ? { error: failedPhase ? `Git subprocess failed during ${failedPhase}` : 'Tool returned an MCP error result' } : {})
+    }, { workSessionId });
+    return result;
+  } catch (error) {
+    await releaseLeaseHoldSafely('error-path');
+    const session = authorized.workspaceId
+      ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: true, conversationScope: requestConversationScope() })
+      : null;
+    const workSessionId = session?.id || active?.id || null;
+    const status = error?.code === 'approval_required' ? 'approval_required' : 'error';
+    incrementCounter('devmate_tool_calls_total', { ...labels, status }, 1);
+    observeDuration('devmate_tool_duration_ms', labels, Date.now() - started);
+    if (error?.code === 'approval_required') incrementCounter('devmate_approvals_total', { status: 'pending', tool: name }, 1);
+    await audit('tool_call', {
+      requestId: requestContext()?.requestId || null,
+      principalId: authorized.principal.id,
+      principalRole: authorized.principal.role,
+      tool: name,
+      capability: authorized.capability,
+      workspace: authorized.workspaceId,
+      approvalId: error?.approvalRequest?.id || null,
+      ok: false,
+      durationMs: Date.now() - started,
+      error: String(error?.message || error).slice(0, 1000)
+    }, { workSessionId });
+    throw error;
+  }
+}
+
+export function wrapAuthorizedTool(name, config, handler) {
+  return async function authorizedToolHandler(args = {}, ...rest) {
+    const conversationScope = conversationScopeFromToolContext(rest[0]);
+    return runWithConversationScope(conversationScope, () =>
+      authorizedToolExecution(name, config, handler, args, rest)
+    );
   };
 }
 
@@ -408,6 +474,8 @@ export const __test = {
   filterResult,
   inferredWorkspace,
   markGitFailure,
+  persistAutoConversationBinding,
+  prepareConversationWorkspace,
   publicDeployment,
   redactCommandResultPayload,
   redactProcessOutputEvents,
