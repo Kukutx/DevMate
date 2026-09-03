@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { mutateDurableDocument, readDurableNamespace } from './durable-state.mjs';
+import { requestConversationScope } from './request-context.mjs';
 import {
   acquireWorkspaceLeaseInDocument,
   releaseWorkspaceLeaseInDocument,
@@ -28,6 +29,21 @@ function validTimestamp(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
+function normalizeConversationScope(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const scope = String(value).trim();
+  if (!/^chatgpt-[a-f0-9]{32}$/.test(scope)) {
+    const error = new Error('Invalid work-session conversation scope');
+    error.code = 'work_session_scope_invalid';
+    throw error;
+  }
+  return scope;
+}
+
+function sameConversationScope(left, right) {
+  return normalizeConversationScope(left) === normalizeConversationScope(right);
+}
+
 function normalizeSession(item, index) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw sessionStateError(`session ${index} must be an object`, { sessionIndex: index });
@@ -43,7 +59,7 @@ function normalizeSession(item, index) {
       throw sessionStateError(`session ${item.id} has invalid ${field}`, { sessionId: item.id });
     }
   }
-  return { ...item };
+  return { ...item, conversationScope: normalizeConversationScope(item.conversationScope) };
 }
 
 function sessionMap(values) {
@@ -102,14 +118,47 @@ function prune(now = Date.now()) {
   return true;
 }
 
-export function startWorkSession({ principal, workspaceId, title = '', purpose = '', ttlSeconds = 3600, force = false }) {
+export function startWorkSession({
+  principal,
+  workspaceId,
+  title = '',
+  purpose = '',
+  ttlSeconds = 3600,
+  force = false,
+  conversationScope = requestConversationScope()
+}) {
   if (!principal?.id) throw new Error('Authenticated principal is required');
+  const scope = normalizeConversationScope(conversationScope);
   const ttl = Math.min(86400, Math.max(300, Math.trunc(Number(ttlSeconds) || 3600)));
   const now = Date.now();
   let result = null;
   mutateDurableDocument(document => {
     const values = documentSessionMap(document);
     pruneSessionMap(values, now);
+
+    const sameTarget = [...values.values()].filter(item =>
+      item.principalId === principal.id && item.workspaceId === workspaceId
+    );
+    const otherConversation = sameTarget.find(item =>
+      item.conversationScope && scope && !sameConversationScope(item.conversationScope, scope)
+    );
+    if (otherConversation) {
+      const canForce = ['owner', 'maintainer'].includes(principal.role);
+      if (!(force && canForce)) {
+        const error = new Error(`Workspace ${workspaceId} already has an active work session in another ChatGPT conversation. Finish that session first or deliberately use force=true as maintainer/owner.`);
+        error.code = 'work_session_conversation_conflict';
+        error.workspaceId = workspaceId;
+        error.sessionId = otherConversation.id;
+        throw error;
+      }
+    }
+
+    for (const existing of sameTarget) {
+      if (sameConversationScope(existing.conversationScope, scope) || (scope && !existing.conversationScope) || (force && ['owner', 'maintainer'].includes(principal.role))) {
+        values.delete(existing.id);
+      }
+    }
+
     const lease = acquireWorkspaceLeaseInDocument(document, {
       workspaceId,
       principal,
@@ -118,8 +167,6 @@ export function startWorkSession({ principal, workspaceId, title = '', purpose =
       force,
       now
     });
-    const existing = [...values.values()].find(item => item.principalId === principal.id && item.workspaceId === workspaceId);
-    if (existing) values.delete(existing.id);
     const timestamp = nowIso(now);
     const session = {
       id: `work-${crypto.randomBytes(8).toString('hex')}`,
@@ -127,6 +174,7 @@ export function startWorkSession({ principal, workspaceId, title = '', purpose =
       principalName: principal.name || principal.id,
       principalRole: principal.role,
       workspaceId,
+      conversationScope: scope,
       title: String(title || '').trim().slice(0, 500),
       purpose: String(purpose || '').trim().slice(0, 1000),
       startedAt: timestamp,
@@ -145,9 +193,14 @@ export function startWorkSession({ principal, workspaceId, title = '', purpose =
   return { ...result.session, lease: result.lease };
 }
 
-export function activeWorkSession(principalId, workspaceId) {
+export function activeWorkSession(principalId, workspaceId, conversationScope = requestConversationScope()) {
   prune();
-  const session = [...sessions.values()].find(item => item.principalId === principalId && (!workspaceId || item.workspaceId === workspaceId));
+  const scope = normalizeConversationScope(conversationScope);
+  const session = [...sessions.values()].find(item =>
+    item.principalId === principalId &&
+    (!workspaceId || item.workspaceId === workspaceId) &&
+    sameConversationScope(item.conversationScope, scope)
+  );
   return session ? { ...session } : null;
 }
 
@@ -157,16 +210,21 @@ export function workSession(id) {
   return session ? { ...session, lease: workspaceLease(session.workspaceId) } : null;
 }
 
-export function touchWorkSession(principalId, workspaceId, { failed = false } = {}) {
+export function touchWorkSession(principalId, workspaceId, { failed = false, conversationScope = requestConversationScope() } = {}) {
+  const scope = normalizeConversationScope(conversationScope);
   const now = Date.now();
   prune(now);
-  const existing = [...sessions.values()].find(item => item.principalId === principalId && item.workspaceId === workspaceId);
+  const existing = [...sessions.values()].find(item =>
+    item.principalId === principalId && item.workspaceId === workspaceId && sameConversationScope(item.conversationScope, scope)
+  );
   if (!existing) return null;
   let touched = null;
   mutateDurableDocument(document => {
     const values = documentSessionMap(document);
     pruneSessionMap(values, now);
-    const session = [...values.values()].find(item => item.principalId === principalId && item.workspaceId === workspaceId);
+    const session = [...values.values()].find(item =>
+      item.principalId === principalId && item.workspaceId === workspaceId && sameConversationScope(item.conversationScope, scope)
+    );
     if (!session) {
       writeDocumentSessions(document, values.values());
       return document;
@@ -182,15 +240,27 @@ export function touchWorkSession(principalId, workspaceId, { failed = false } = 
   return touched;
 }
 
-export function listWorkSessions({ principalId, workspaceId } = {}) {
+export function listWorkSessions({ principalId, workspaceId, conversationScope } = {}) {
   prune();
+  const filterScope = conversationScope === undefined ? undefined : normalizeConversationScope(conversationScope);
   return [...sessions.values()]
-    .filter(item => (!principalId || item.principalId === principalId) && (!workspaceId || item.workspaceId === workspaceId))
+    .filter(item =>
+      (!principalId || item.principalId === principalId) &&
+      (!workspaceId || item.workspaceId === workspaceId) &&
+      (filterScope === undefined || sameConversationScope(item.conversationScope, filterScope))
+    )
     .map(item => ({ ...item, lease: workspaceLease(item.workspaceId) }))
     .sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)));
 }
 
-export function finishWorkSession({ id, principal, force = false, releaseLease = true }) {
+export function finishWorkSession({
+  id,
+  principal,
+  force = false,
+  releaseLease = true,
+  conversationScope = requestConversationScope()
+}) {
+  const scope = normalizeConversationScope(conversationScope);
   const now = Date.now();
   let result = null;
   mutateDurableDocument(document => {
@@ -206,8 +276,14 @@ export function finishWorkSession({ id, principal, force = false, releaseLease =
       throw new Error(`Principal ${principal.id} is not allowed to finish a session for workspace ${session.workspaceId}`);
     }
     const canForce = principal?.role === 'owner' || principal?.role === 'maintainer';
-    if (session.principalId !== principal?.id && !(force && canForce)) {
-      throw new Error(`Work session ${id} belongs to ${session.principalName || session.principalId}`);
+    const differentPrincipal = session.principalId !== principal?.id;
+    const differentConversation = !sameConversationScope(session.conversationScope, scope);
+    if ((differentPrincipal || differentConversation) && !(force && canForce)) {
+      const error = new Error(differentConversation
+        ? `Work session ${id} belongs to another ChatGPT conversation; force=true is required to finish it from this conversation`
+        : `Work session ${id} belongs to ${session.principalName || session.principalId}`);
+      error.code = differentConversation ? 'work_session_conversation_conflict' : 'work_session_owner_conflict';
+      throw error;
     }
 
     let lease = null;
@@ -247,8 +323,10 @@ export function clearWorkSessions() {
 
 export const __test = {
   documentSessionMap,
+  normalizeConversationScope,
   normalizeSession,
   pruneSessionMap,
+  sameConversationScope,
   sessionMap,
   sessionStateError,
   sessions,
