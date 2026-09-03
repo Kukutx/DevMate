@@ -3,7 +3,6 @@ import fsp from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { requestConversationScope } from '../request-context.mjs';
 import { isSensitiveWorkspacePath } from '../sensitive-path-policy.mjs';
 
 export const MAX_ACTIVE_PREVIEWS = 32;
@@ -181,7 +180,6 @@ export async function startPreview({ workspaceId, root, entryPath = 'index.html'
     const record = {
       id, workspaceId, root: realRoot, entryPath: entry, host: '127.0.0.1', port: 0, url: '',
       crossOriginIsolation: !!crossOriginIsolation, spaFallback: !!spaFallback,
-      conversationScope: requestConversationScope(),
       startedAt: new Date().toISOString(), requests: 0, lastRequestAt: null, server: null
     };
     server = http.createServer((req, res) => {
@@ -243,8 +241,6 @@ export async function startPreview({ workspaceId, root, entryPath = 'index.html'
 export function listPreviews({ workspaceId } = {}) {
   return [...previews.values()].filter(item => !workspaceId || item.workspaceId === workspaceId).map(publicPreview);
 }
-
-export function previewConversationScope(id) { return previews.get(id)?.conversationScope || null; }
 
 export function getPreview(id) {
   const record = previews.get(id);

@@ -1,12 +1,5 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText, writeConfig } from './local-shared.mjs';
-import {
-  assertConversationResource,
-  bindConversationResource,
-  filterConversationResources
-} from './conversation-resources.mjs';
-import { conversationWorkspace, sameWorkspaceRoot } from './conversation-workspaces.mjs';
-import { requestConversationScope } from './request-context.mjs';
 import { authorizeToolCall, normalizeInstanceConfig } from './team-access.mjs';
 import { assertWorkspaceLease } from './workspace-leases.mjs';
 import { principalNow } from './team-tool-data.mjs';
@@ -52,8 +45,7 @@ function targetAuthorization(target, args, principal) {
   return authorized;
 }
 
-function ensureVisible(job, principal, conversationScope = requestConversationScope()) {
-  if (conversationScope) assertConversationResource('job', job.id, conversationScope);
+function ensureVisible(job, principal) {
   if (
     principal.workspaceIds?.length &&
     job.workspaceId &&
@@ -130,7 +122,7 @@ export function registerJobTools(register, annotations) {
 
   register('job_submit', {
     title: 'Submit durable DevMate job',
-    description: 'Queue a reviewed build, validation, Browser QA, Godot acceptance, report, or safe Git-save tool for durable execution. In ChatGPT the durable job stays bound to the conversation that submitted it.',
+    description: 'Queue a reviewed build, validation, Browser QA, Godot acceptance, report, or safe Git-save tool for durable execution. Credential-like arguments and arbitrary shell commands are rejected.',
     inputSchema: {
       workspaceId: z.string().optional(),
       tool: z.string().min(1).max(200),
@@ -165,16 +157,6 @@ export function registerJobTools(register, annotations) {
     }
     const principal = principalNow();
     const authorized = targetAuthorization(target, args, principal);
-    const currentConfig = normalizeInstanceConfig(readConfig());
-    const bound = conversationWorkspace(currentConfig);
-    if (bound) {
-      const configured = currentConfig.workspaces.find(item => item?.id === authorized.workspaceId);
-      if (!configured || !sameWorkspaceRoot(bound, configured)) {
-        const error = new Error('Durable jobs are disabled for conversation-only or path-narrowed workspace bindings because they outlive the ChatGPT conversation. Run the tool synchronously, or bind the exact configured workspace root first.');
-        error.code = 'conversation_workspace_durable_job_unsafe';
-        throw error;
-      }
-    }
     const capabilities = [...new Set([
       ...target.requiredCapabilities,
       ...requiredCapabilities.map(value => String(value).trim().toLowerCase()).filter(Boolean)
@@ -191,24 +173,11 @@ export function registerJobTools(register, annotations) {
       requiredCapabilities: capabilities,
       artifactPaths
     });
-    const conversationScope = requestConversationScope();
-    if (conversationScope) {
-      try {
-        bindConversationResource('job', job.id, {
-          scope: conversationScope,
-          workspaceId: authorized.workspaceId
-        });
-      } catch (error) {
-        try { cancelJob({ id: job.id, principal, force: false }); } catch {}
-        throw error;
-      }
-    }
     await audit('job_submit', {
       principalId: principal.id,
       jobId: job.id,
       tool,
       workspace: authorized.workspaceId,
-      conversationScope: conversationScope || null,
       priority,
       maxAttempts,
       requiredCapabilities: capabilities
@@ -218,21 +187,20 @@ export function registerJobTools(register, annotations) {
 
   register('job_list', {
     title: 'List DevMate jobs',
-    description: 'List durable jobs visible to the current principal and, in ChatGPT, only this conversation.',
+    description: 'List durable jobs visible to the current principal.',
     inputSchema: {
       status: jobStatusSchema.optional(),
       workspaceId: z.string().optional(),
       limit: z.number().int().min(1).max(500).optional()
     },
     annotations: ro
-  }, async ({ status, workspaceId, limit = 100 }) => {
-    const jobs = listJobs({ principal: principalNow(), status, workspaceId, limit });
-    return toolText({ jobs: filterConversationResources('job', jobs) });
-  });
+  }, async ({ status, workspaceId, limit = 100 }) => toolText({
+    jobs: listJobs({ principal: principalNow(), status, workspaceId, limit })
+  }));
 
   register('job_status', {
     title: 'DevMate job status',
-    description: 'Read one durable job, including bounded events and indexed artifacts. ChatGPT cannot adopt a job created by another conversation.',
+    description: 'Read one durable job, including bounded events and indexed artifacts.',
     inputSchema: {
       id: z.string().min(1),
       workspaceId: z.string().optional(),
@@ -247,7 +215,7 @@ export function registerJobTools(register, annotations) {
 
   register('job_artifacts', {
     title: 'DevMate job artifacts',
-    description: 'List indexed local or remote files produced by a completed durable job in this conversation.',
+    description: 'List indexed local or remote files produced by a completed durable job.',
     inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: ro
   }, async ({ id }) => {
@@ -258,7 +226,7 @@ export function registerJobTools(register, annotations) {
 
   register('job_cancel', {
     title: 'Cancel DevMate job',
-    description: 'Cancel a queued/deferred job immediately or request cooperative cancellation of a running job in this conversation.',
+    description: 'Cancel a queued/deferred job immediately or request cooperative cancellation of a running embedded or external job.',
     inputSchema: {
       id: z.string().min(1),
       workspaceId: z.string().optional(),
@@ -269,13 +237,13 @@ export function registerJobTools(register, annotations) {
     const principal = principalNow();
     ensureVisible(getJob(id), principal);
     const result = cancelJob({ id, principal, force });
-    await audit('job_cancel', { principalId: principal.id, jobId: id, force, cancelled: result.cancelled, conversationScope: requestConversationScope() });
+    await audit('job_cancel', { principalId: principal.id, jobId: id, force, cancelled: result.cancelled });
     return toolText(result);
   });
 
   register('job_retry', {
     title: 'Retry DevMate job',
-    description: 'Requeue a failed, cancelled, approval-blocked, or lease-blocked job from this conversation after correcting its prerequisite.',
+    description: 'Requeue a failed, cancelled, approval-blocked, or lease-blocked job after correcting its prerequisite.',
     inputSchema: { id: z.string().min(1), workspaceId: z.string().optional() },
     annotations: rw
   }, async ({ id }) => {
@@ -285,7 +253,7 @@ export function registerJobTools(register, annotations) {
     if (!target) throw new Error(`Job target is not currently available: ${existing.tool}`);
     targetAuthorization(target, existing.arguments || {}, principal);
     const job = retryJob({ id, principal });
-    await audit('job_retry', { principalId: principal.id, jobId: id, tool: job.tool, workspace: job.workspaceId, conversationScope: requestConversationScope() });
+    await audit('job_retry', { principalId: principal.id, jobId: id, tool: job.tool, workspace: job.workspaceId });
     return toolText({ job });
   });
 
