@@ -8,8 +8,8 @@ const test = require('node:test');
 const source = fs.readFileSync(path.resolve(__dirname, '..', 'gateway', 'team-capabilities.mjs'), 'utf8');
 
 function authorizationBlock() {
-  const start = source.indexOf('export function wrapAuthorizedTool');
-  const end = source.indexOf('export function installTeamCapabilities', start);
+  const start = source.indexOf('async function authorizedToolExecution');
+  const end = source.indexOf('export function wrapAuthorizedTool', start);
   assert.ok(start >= 0 && end > start);
   return source.slice(start, end);
 }
