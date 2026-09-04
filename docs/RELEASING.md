@@ -6,7 +6,7 @@ DevMate releases are generated from immutable semantic version tags.
 
 1. Update `package.json` and `CHANGELOG.md` so the first changelog release matches the package version.
 2. Run `npm run version:sync` and commit every synchronized version file.
-3. Commit and push the release candidate to `master`.
+3. Commit and push the release candidate to `main`.
 4. Wait for the Windows/Linux CI matrix to pass on that exact commit.
 5. Create and push the exact matching semantic-version tag.
 
