@@ -101,8 +101,8 @@ class VscodeHostLifecycle {
     this.active = true;
     this.lifecycleGeneration += 1;
 
-    if (!this.workspaceRootAtActivation) {
-      this.diagnostics.append('No VS Code workspace is open; DevMate is idle and will not initialize or start a project runtime.');
+    if (!this.workspaceRootAtActivation && !fs.existsSync(runtimeConfigPath(this.runtimeContext))) {
+      this.diagnostics.append('No VS Code workspace or shared desktop config is available; DevMate is idle and will not initialize a project runtime.');
       return { idle: true, reason: 'no-workspace' };
     }
 
