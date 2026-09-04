@@ -98,12 +98,12 @@ function sameHostContext(left, right) {
   return JSON.stringify(comparableHostContext(left)) === JSON.stringify(comparableHostContext(right));
 }
 
-function mergeHostContexts(currentValue, candidateValue) {
+function mergeHostContexts(currentValue, candidateValue, { refreshHostId = '' } = {}) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
   const merged = { ...current };
   for (const [hostId, context] of Object.entries(candidate)) {
-    merged[hostId] = has(current, hostId) && sameHostContext(current[hostId], context)
+    merged[hostId] = hostId !== refreshHostId && has(current, hostId) && sameHostContext(current[hostId], context)
       ? current[hostId]
       : context;
   }
@@ -158,7 +158,10 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
-    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts);
+    const refreshHostId = has(candidate, 'activeHostId') && candidate.activeHostId !== current.activeHostId
+      ? String(candidate.activeHostId || '')
+      : '';
+    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, { refreshHostId });
   }
   if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
   delete merged.vscodeContext;
