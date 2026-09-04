@@ -1,10 +1,18 @@
 # DevMate
 
+[![CI](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml/badge.svg)](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Kukutx/DevMate?display_name=tag)](https://github.com/Kukutx/DevMate/releases/latest)
+[![License](https://img.shields.io/github/license/Kukutx/DevMate)](LICENSE)
+
 **Local-first MCP development gateway for ChatGPT.**
 
 DevMate connects ChatGPT to a real development environment. It can inspect and edit project files, run commands, test changes, use live editor context, and hand long-running work to durable jobs or remote Runners — while workspace and runtime state stay on machines you control.
 
 It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.
+
+<p align="center">
+  <img src="docs/media/devmate-flow.png" alt="DevMate flow from ChatGPT through the MCP Gateway to local project surfaces and remote Runners" width="100%">
+</p>
 
 ## What stands out
 
