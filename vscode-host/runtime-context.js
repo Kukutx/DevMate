@@ -22,8 +22,7 @@ function setting(vscode, name, fallback) {
 }
 
 function resolveVscodeStateDirectory(vscode, context) {
-  const workspaceRoot = currentWorkspaceRoot(vscode);
-  if (!workspaceRoot) return context.globalStorageUri.fsPath;
+  const workspaceRoot = currentWorkspaceRoot(vscode) || context.globalStorageUri.fsPath;
   const stateDirectory = resolveStateDirectory({
     workspaceRoot,
     overrideDirectory: String(setting(vscode, 'sharedStateDirectory', '') || '').trim()
