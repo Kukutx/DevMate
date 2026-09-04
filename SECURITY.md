@@ -8,7 +8,7 @@ DevMate is a local-first development gateway with filesystem, process, Git, brow
 - A provider-native connection, reverse proxy, VPN, or other HTTPS ingress exposes the intended public MCP endpoint.
 - `/control/health` and `/control/metrics` remain local-control surfaces and must not be exposed as public MCP endpoints.
 - MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
-- `auth.mode: "none"` is valid only for trusted loopback MCP and grants local owner access without an access token; it does not authorize remote requests.
+- `auth.mode: "none"` is the explicit single-owner trust model for local and configured public MCP ingress. Any request that can reach `/mcp` in this mode receives owner authority, so the endpoint itself must remain private to that owner.
 - Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity.
 - `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
 - Runner control requests have their own bounded body, rate and protocol-version requirements.
@@ -29,8 +29,9 @@ The Gateway, desktop preflight, packaged VSIX/Obsidian smoke tests, and external
 
 ## OAuth credentials and identities
 
-- Desktop public MCP defaults to OAuth. `none` is an explicit loopback-only option and never authorizes remote MCP requests.
-- When OAuth is enabled, MCP accepts OAuth access tokens; copied static owner/member credentials remain unsupported.
+- Desktop single-owner MCP defaults to `none` for both local and configured public ingress. OAuth is opt-in for shared team/member identity.
+- When OAuth is enabled, non-loopback MCP requests require OAuth access tokens; copied static owner/member credentials remain unsupported.
+- Loopback owner recovery remains available even when OAuth is configured.
 - OAuth signing material and the rotating owner approval code live under private DevMate state with restrictive permissions, not in `config.json`.
 - OAuth client identity uses Client ID Metadata Documents (CIMD). The retired dynamic client-registration endpoint is not exposed.
 - CIMD metadata must use a clean HTTPS client ID, safe redirects, bounded metadata, and public-network destinations; private/loopback/link-local metadata targets are rejected.

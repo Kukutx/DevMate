@@ -1,10 +1,24 @@
 {
   "name": "devmate",
   "displayName": "DevMate",
-  "description": "Local-first MCP development control plane for ChatGPT with one-click desktop connectivity, team access, durable jobs, external Runners, approvals, Git workflows, and optional platform plugins.",
+  "description": "Local-first MCP development gateway for ChatGPT, with VS Code, Obsidian, CLI, durable jobs, and remote Runners.",
+  "keywords": [
+    "mcp",
+    "chatgpt",
+    "developer-tools",
+    "vscode",
+    "obsidian",
+    "local-first",
+    "automation",
+    "devtools"
+  ],
   "version": "3.6.6",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
+  "homepage": "https://github.com/Kukutx/DevMate#readme",
+  "bugs": {
+    "url": "https://github.com/Kukutx/DevMate/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Kukutx/DevMate.git"

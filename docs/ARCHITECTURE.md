@@ -1,6 +1,6 @@
 # DevMate architecture
 
-DevMate is a local-first development control plane. VS Code, Obsidian, standalone deployment, OAuth member access, external Runners and optional platform capabilities all use one Gateway and one current capability model.
+DevMate is a local-first development gateway. VS Code, Obsidian, standalone deployment, OAuth member access, external Runners and optional platform capabilities all use one Gateway and one current capability model.
 
 ## Runtime topology
 
@@ -10,7 +10,7 @@ VS Code / Obsidian / standalone CLI
                     ▼
               DevMate Gateway
         ├─ MCP 2026 stateless transport
-        ├─ OAuth resource + authorization server
+        ├─ optional OAuth resource + authorization server
         ├─ HTTP request policy and observability
         ├─ Capability Host
         ├─ tool policy / RBAC / workspace scope
@@ -18,7 +18,7 @@ VS Code / Obsidian / standalone CLI
         ├─ durable jobs / approvals / leases
         └─ audit / backups / maintenance
                     │
-        public HTTPS │ OAuth access token
+        public HTTPS │ configured MCP auth mode
                     ▼
              ChatGPT / MCP clients
 
@@ -61,18 +61,19 @@ The external Runner client pins `2026-07-28`; it does not negotiate down to an o
 
 ## Authentication and identity
 
-Loopback and remote ingress are distinct trust boundaries:
+Authentication mode and connection provider are independent capabilities:
 
-- verified loopback MCP requests are the local owner;
-- every non-loopback `/mcp` request requires OAuth;
-- `auth.mode: "none"` means loopback-only MCP, never unauthenticated public MCP;
-- OAuth is the default for VS Code/Obsidian public access, Team/Control-plane bootstrap, member-enabled bootstrap, and standalone initialization with an explicit public URL.
+- verified loopback MCP requests resolve to the local owner;
+- `auth.mode: "none"` is the default single-owner trust model for both local and configured public MCP ingress;
+- in `none` mode, any request that can reach `/mcp` receives owner authority, so the endpoint itself must remain private to that owner;
+- `auth.mode: "oauth"` requires OAuth for non-loopback MCP requests while preserving local owner recovery;
+- Personal and Runner bootstrap default to `none`; Team and Control-plane bootstrap default to OAuth member identity.
 
 OAuth uses protected-resource discovery, authorization-server discovery, HTTPS Client ID Metadata Documents, Authorization Code + PKCE S256, exact `resource` binding, issuer-bound access/refresh tokens and durable refresh-token rotation.
 
-`config.json` stores only authentication mode and non-plaintext identity metadata. OAuth signing material and the owner approval code live in protected instance state and are loaded fail-closed at Gateway startup.
+`config.json` stores only authentication mode and non-plaintext identity metadata. OAuth signing material and the owner approval code live in protected instance state and are loaded fail-closed when OAuth is configured.
 
-Remote identities resolve as:
+OAuth identities resolve as:
 
 ```text
 OAuth claims
@@ -115,7 +116,7 @@ Runner `dmr_` credentials are separate machine/service credentials for `/runner/
 
 Capabilities compose independently. Unsupported instance fields and schema versions fail closed rather than being translated at runtime.
 
-Standalone invariants are enforced below bootstrap: public URLs imply OAuth unless explicitly invalidated, public URL + `none` is rejected, and member creation/rotation ensures OAuth private state. This prevents alternate CLI paths from manufacturing half-configured shared instances.
+Standalone initialization defaults to the single-owner `none` mode, including when a public HTTPS origin is configured. Team/Control-plane bootstrap and member-oriented workflows use OAuth by construction. This keeps connection topology independent from identity policy while preventing alternate CLI paths from inventing unsupported authentication shapes.
 
 ## Capability Host
 
@@ -133,7 +134,7 @@ Member roles are cumulative:
 observer → reviewer → developer → maintainer → owner
 ```
 
-Every remote member request is re-resolved against current member state before tool authorization. Durable jobs persist `authVersion` and re-evaluate current identity/policy before execution. Invalid providers, roles, request limits, concurrency values and credentials fail explicitly.
+Every OAuth member request is re-resolved against current member state before tool authorization. Durable jobs persist `authVersion` and re-evaluate current identity/policy before execution. Invalid providers, roles, request limits, concurrency values and credentials fail explicitly.
 
 Approval policy applies to current `oauth-member` principals. It is independent of ingress provider and no longer relies on a static Team bearer identity.
 
@@ -163,12 +164,14 @@ Unsupported future durable-state versions are rejected rather than overwritten o
 Start
   → start/attach Gateway
   → start/attach configured public connection
-  → obtain short-lived internal owner preflight token
+  → verify with the configured auth mode
   → MCP 2026 server/discover
   → tools/list
   → real tools/call probe
   → Ready
 ```
+
+When OAuth is enabled, desktop preflight mints a short-lived internal owner access token from protected instance state. When `none` is enabled, the same verification path uses the single-owner no-auth contract.
 
 Ready evidence is bound to the exact live Gateway generation and provider runtime generation. Gateway restart, provider restart, ownership transfer or endpoint generation change invalidates prior evidence even when the hostname is unchanged.
 
@@ -180,7 +183,7 @@ VS Code uses `vscode-host/public-tunnel-verifier.js` for automatic generation-aw
 
 The controller provides shared startup lease, strict configuration matching, one ownership record, ownership heartbeat, native provider launch/readiness, fail-closed cleanup on ownership loss, bounded auto-restart, and ownership-aware stop/dispose semantics.
 
-A public connection never weakens the authentication boundary: remote `/mcp` access still requires OAuth.
+A public connection never chooses or rewrites the authentication policy. The configured `none` or `oauth` mode is enforced unchanged by the Gateway.
 
 ## Workspaces and filesystem boundary
 
