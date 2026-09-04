@@ -1,12 +1,15 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 const {
   SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
   readJson,
+  recoverConfigReplacement,
   updateConfig
 } = require('../shared/config-store.cjs');
+const { withFileLockSync } = require('../config-file-lock.cjs');
 const { assertSupportedInstanceShape } = require('../shared/instance-config.cjs');
 const { normalizeAuthentication } = require('../shared/auth-config.cjs');
 
@@ -84,6 +87,29 @@ function preserveCurrentObject(merged, current, key) {
   else delete merged[key];
 }
 
+function comparableHostContext(value) {
+  const context = { ...object(value) };
+  delete context.capturedAt;
+  delete context.updatedAt;
+  return context;
+}
+
+function sameHostContext(left, right) {
+  return JSON.stringify(comparableHostContext(left)) === JSON.stringify(comparableHostContext(right));
+}
+
+function mergeHostContexts(currentValue, candidateValue, { refreshHostId = '' } = {}) {
+  const current = object(currentValue);
+  const candidate = object(candidateValue);
+  const merged = { ...current };
+  for (const [hostId, context] of Object.entries(candidate)) {
+    merged[hostId] = hostId !== refreshHostId && has(current, hostId) && sameHostContext(current[hostId], context)
+      ? current[hostId]
+      : context;
+  }
+  return merged;
+}
+
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
@@ -132,17 +158,31 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
-    merged.hostContexts = { ...object(current.hostContexts), ...object(candidate.hostContexts) };
+    const refreshHostId = has(candidate, 'activeHostId') && candidate.activeHostId !== current.activeHostId
+      ? String(candidate.activeHostId || '')
+      : '';
+    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, { refreshHostId });
   }
   if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
   delete merged.vscodeContext;
   return merged;
 }
 
-function readExtensionConfig(file) {
+function parseExtensionConfig(file) {
   const config = readJson(file, null, { strict: true, supportedVersion: true });
   if (config) assertSupportedInstanceShape(config);
   return config;
+}
+
+function readExtensionConfig(file) {
+  const directory = path.dirname(path.resolve(file));
+  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) return null;
+  const current = parseExtensionConfig(file);
+  if (current) return current;
+  return withFileLockSync(file, () => {
+    recoverConfigReplacement(file);
+    return parseExtensionConfig(file);
+  });
 }
 
 function writeExtensionConfig(file, candidate) {
@@ -159,6 +199,7 @@ function writeExtensionConfig(file, candidate) {
 
 module.exports = {
   mergeExtensionConfig,
+  mergeHostContexts,
   mergeWorkspaces,
   readExtensionConfig,
   syncCurrentWorkspace,

@@ -21,12 +21,12 @@ function setting(vscode, name, fallback) {
   return value === undefined ? fallback : value;
 }
 
-function resolveVscodeStateDirectory(vscode, context) {
-  const workspaceRoot = currentWorkspaceRoot(vscode);
-  if (!workspaceRoot) return context.globalStorageUri.fsPath;
+function resolveVscodeStateDirectory(vscode, context, { homeDirectory } = {}) {
+  const workspaceRoot = currentWorkspaceRoot(vscode) || context.globalStorageUri.fsPath;
   const stateDirectory = resolveStateDirectory({
     workspaceRoot,
-    overrideDirectory: String(setting(vscode, 'sharedStateDirectory', '') || '').trim()
+    overrideDirectory: String(setting(vscode, 'sharedStateDirectory', '') || '').trim(),
+    ...(homeDirectory ? { homeDirectory } : {})
   });
   fs.mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(stateDirectory, 0o700); } catch {}
