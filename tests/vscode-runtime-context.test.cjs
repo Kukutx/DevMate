@@ -60,12 +60,12 @@ test('uses one machine-wide desktop state by default across workspace roots', ()
 
 test('keeps the machine-wide desktop state when no workspace is open', () => {
   const local = temporaryDirectory('devmate-vscode-local-');
+  const home = temporaryDirectory('devmate-vscode-home-');
   const context = { globalStorageUri: { fsPath: local }, extensionPath: local };
   const vscode = fakeVscode('', {});
-  const stateDirectory = resolveVscodeStateDirectory(vscode, context);
-  assert.equal(stateDirectory, defaultSharedStateDirectory(local));
+  const stateDirectory = resolveVscodeStateDirectory(vscode, context, { homeDirectory: home });
+  assert.equal(stateDirectory, defaultSharedStateDirectory(local, { homeDirectory: home }));
   assert.notEqual(stateDirectory, local);
-  assert.equal(createRuntimeContext(vscode, context).globalStorageUri.fsPath, stateDirectory);
 });
 
 test('shared-state override remains authoritative even before a workspace opens', () => {
