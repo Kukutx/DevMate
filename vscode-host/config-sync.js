@@ -168,16 +168,21 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   return merged;
 }
 
+function parseExtensionConfig(file) {
+  const config = readJson(file, null, { strict: true, supportedVersion: true });
+  if (config) assertSupportedInstanceShape(config);
+  return config;
+}
+
 function readExtensionConfig(file) {
   const directory = path.dirname(path.resolve(file));
-  const readCurrent = () => {
-    recoverConfigReplacement(file);
-    const config = readJson(file, null, { strict: true, supportedVersion: true });
-    if (config) assertSupportedInstanceShape(config);
-    return config;
-  };
   if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) return null;
-  return withFileLockSync(file, readCurrent);
+  const current = parseExtensionConfig(file);
+  if (current) return current;
+  return withFileLockSync(file, () => {
+    recoverConfigReplacement(file);
+    return parseExtensionConfig(file);
+  });
 }
 
 function writeExtensionConfig(file, candidate) {
