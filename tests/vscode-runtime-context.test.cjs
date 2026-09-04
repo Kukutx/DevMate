@@ -58,10 +58,23 @@ test('uses one machine-wide desktop state by default across workspace roots', ()
   assert.equal(defaultSharedStateDirectory(second, { homeDirectory: home }), path.join(home, '.devmate', 'desktop'));
 });
 
-test('uses extension storage only when no workspace is open', () => {
+test('keeps the machine-wide desktop state when no workspace is open', () => {
   const local = temporaryDirectory('devmate-vscode-local-');
   const context = { globalStorageUri: { fsPath: local }, extensionPath: local };
-  assert.equal(resolveVscodeStateDirectory(fakeVscode('', {}), context), local);
+  const vscode = fakeVscode('', {});
+  const stateDirectory = resolveVscodeStateDirectory(vscode, context);
+  assert.equal(stateDirectory, defaultSharedStateDirectory(local));
+  assert.notEqual(stateDirectory, local);
+  assert.equal(createRuntimeContext(vscode, context).globalStorageUri.fsPath, stateDirectory);
+});
+
+test('shared-state override remains authoritative even before a workspace opens', () => {
+  const local = temporaryDirectory('devmate-vscode-local-');
+  const shared = temporaryDirectory('devmate-vscode-shared-');
+  const context = { globalStorageUri: { fsPath: local }, extensionPath: local };
+  const vscode = fakeVscode('', { sharedStateDirectory: shared });
+  assert.equal(resolveVscodeStateDirectory(vscode, context), shared);
+  assert.equal(createRuntimeContext(vscode, context).globalStorageUri.fsPath, shared);
 });
 
 test('uses only the packaged Gateway bundle at runtime', () => {
