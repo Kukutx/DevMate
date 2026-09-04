@@ -1,0 +1,53 @@
+name: Portfolio README Polish
+
+on:
+  push:
+    branches:
+      - portfolio/visual-release-polish-final
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: true
+
+      - name: Add badges and visual overview
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('README.md')
+          text = path.read_text()
+          badges = '''[![CI](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml/badge.svg)](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml)
+          [![Release](https://img.shields.io/github/v/release/Kukutx/DevMate?display_name=tag)](https://github.com/Kukutx/DevMate/releases/latest)
+          [![License](https://img.shields.io/github/license/Kukutx/DevMate)](LICENSE)
+          '''
+          if '[![CI](' not in text:
+              text = text.replace('# DevMate\n\n', '# DevMate\n\n' + badges + '\n', 1)
+          visual = '<p align="center">\n  <img src="docs/media/devmate-flow.svg" alt="DevMate flow from ChatGPT through the MCP Gateway to local project surfaces and remote Runners" width="100%">\n</p>\n'
+          anchor = 'It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.\n'
+          if 'docs/media/devmate-flow.svg' not in text:
+              text = text.replace(anchor, anchor + '\n' + visual, 1)
+          path.write_text(text)
+          PY
+
+      - name: Commit polish
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- README.md; then
+            echo "README already polished"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: add portfolio badges and visual overview"
+          git push origin HEAD:portfolio/visual-release-polish-final
