@@ -1,19 +1,23 @@
 # Authentication policy
 
-DevMate supports two current MCP 2026 authentication modes: OAuth by default, plus an explicit loopback-only `none` mode. There is no static MCP credential mode.
+DevMate supports two current MCP 2026 authentication modes: `none` and `oauth`. There is no static MCP credential mode.
+
+`auth.mode: "none"` is the default single-owner mode for both local and public MCP access. OAuth is opt-in for team/member identity and shared access.
 
 ## Security boundary
 
-- `auth.mode: "oauth"` is the default and is required for remote/public MCP ingress.
-- `auth.mode: "none"` is the default single-owner mode for both local and public MCP access.
-- Loopback requests remain frictionless and receive the local owner principal.
-- Remote requests are never promoted to owner because authentication is disabled; a remote request without valid OAuth authorization is rejected.
+- Loopback MCP requests remain frictionless and resolve to the local owner principal.
+- `auth.mode: "none"` is an explicit single-owner trust model: any request that can reach the configured MCP ingress is treated as the owner.
+- Public HTTPS ingress can therefore use `none`, but `none` is not an access-control mechanism. Use it only when the endpoint itself is private to the owner.
+- `auth.mode: "oauth"` requires OAuth authorization for non-loopback MCP requests while preserving local owner recovery on loopback.
 - When OAuth is enabled, access tokens use the standard `Authorization: Bearer <access-token>` header. DevMate does not expose a user-configured static MCP Bearer credential.
-- Host allowlisting, ingress provider configuration, TLS, and authentication are separate controls; none substitutes for another.
+- Host allowlisting, ingress-provider configuration, TLS, and authentication are separate controls; none substitutes for another.
+
+Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity.
 
 ## OAuth 2026 flow
 
-DevMate implements the current MCP OAuth profile directly:
+When OAuth is enabled, DevMate implements the current MCP OAuth profile directly:
 
 1. The MCP client discovers `/.well-known/oauth-protected-resource/mcp`.
 2. The resource metadata identifies the DevMate authorization server and MCP resource.
@@ -36,7 +40,7 @@ When OAuth is enabled, the host creates a high-entropy owner approval code in th
 
 Use **DevMate: Copy OAuth Approval Code** only when the DevMate authorization page asks for it. A successful owner authorization rotates that code immediately. Authorization-code redemption is one-time and durably tracked, so a Gateway restart cannot make an issued code reusable.
 
-Desktop public preflight does not expose this code to MCP. It creates a short-lived owner access token from private instance state and uses that token only to verify the current public Gateway/provider generation.
+Desktop public preflight uses the authentication mode configured for the instance. When OAuth is enabled, preflight mints a short-lived owner access token from private instance state; when `none` is enabled, verification uses the same single-owner no-auth path exposed by `/mcp`.
 
 ## Member authorization and RBAC
 
@@ -52,7 +56,7 @@ Successful member authorization issues normal OAuth access/refresh tokens whose 
 
 Rotating a member login code increments `authVersion`, immediately invalidating existing member OAuth credentials. Disabling, revoking, expiring, changing scope, or changing authorization version also makes stale authorization unusable.
 
-Standalone `member-create` and `member-rotate` do not silently weaken the selected authentication mode. Public-capable configurations should retain OAuth.
+Team and Control-plane bootstrap presets use OAuth by default. Personal and Runner presets use `none` by default.
 
 ## Secret storage
 
@@ -63,8 +67,8 @@ Member login-code verifiers and Runner credential verifiers remain one-way store
 ## Invariants
 
 - Credentials are never accepted from URL query parameters.
-- Public/remote MCP requires OAuth.
-- No-auth is trusted-loopback-only and cannot authorize a remote request.
+- `none` is the default single-owner trust model for local and configured public MCP ingress.
+- OAuth is required when team/member identity is enabled.
 - Active shared member identity uses OAuth, never a static MCP credential.
 - Unsupported authentication fields fail closed.
 - OAuth tokens are issuer- and resource-bound.
