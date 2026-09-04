@@ -97,14 +97,19 @@ class VscodeHostLifecycle {
 
     context.subscriptions.push(this.vscode.commands.registerCommand('devMate.copyHostDiagnostics', () => this.copyDiagnostics()));
     context.subscriptions.push(this.vscode.commands.registerCommand('devMate.hostSelfCheck', () => this.runSelfCheck(true)));
+    this.registerHostListeners(context);
+    this.active = true;
+    this.lifecycleGeneration += 1;
+
+    if (!this.workspaceRootAtActivation) {
+      this.diagnostics.append('No VS Code workspace is open; DevMate is idle and will not initialize or start a project runtime.');
+      return { idle: true, reason: 'no-workspace' };
+    }
 
     try {
       this.platformActivationAttempted = true;
       await this.platformExtension.activate(this.runtimeContext);
       this.platformActivated = true;
-      this.registerHostListeners(context);
-      this.active = true;
-      this.lifecycleGeneration += 1;
       const check = this.runSelfCheck(false);
       if (!check.ok) this.diagnostics.append('Host activated with self-check failures; automatic Start is suppressed.', 'error');
       else this.scheduleAutomaticStart();
@@ -121,7 +126,7 @@ class VscodeHostLifecycle {
           const requested = setting(this.vscode, 'authenticationMode', 'oauth') === 'none' ? 'none' : 'oauth';
           const policy = setDesktopAuthenticationMode(runtimeConfigPath(this.runtimeContext), requested);
           this.diagnostics?.append(`Shared MCP authentication changed explicitly to ${policy.mode}.`);
-          if (this.active) {
+          if (this.platformActivated) {
             this.vscode.commands.executeCommand('devMate.start', { quiet: true }).then(
               () => {},
               error => this.diagnostics?.recordFailure(error, { phase: 'authentication-change' })
