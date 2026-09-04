@@ -7,7 +7,7 @@ DevMate is a local-first development gateway. A single instance can combine publ
 A current instance can compose:
 
 - **Connection** — `ngrok`, `cloudflare-quick`, `cloudflare-managed`, or `external` HTTPS ingress.
-- **MCP access** — loopback-only `none`, or OAuth. Every remote/public MCP request requires OAuth.
+- **MCP access** — single-owner `none`, or OAuth. `none` can serve local and configured public MCP; OAuth is the shared identity mode for team/member access.
 - **Member identity** — one-time `dmc_` login codes that enter the OAuth flow; MCP never accepts them directly as Bearer tokens.
 - **Coordination** — work sessions and optional workspace-lease enforcement for shared mutations.
 - **Approval** — optional dual-control policy for selected high-risk capabilities.
@@ -46,9 +46,9 @@ Current providers:
 
 `cloudflare-managed` and `external` require an explicit clean HTTPS origin. Dynamic providers may publish their runtime origin automatically.
 
-Desktop public MCP defaults to OAuth. `auth.mode: "none"` trusts only genuine loopback traffic and cannot authorize public ingress.
+Single-owner desktop MCP defaults to `auth.mode: "none"` for both local and configured public ingress. In this mode, any request that can reach `/mcp` receives owner authority, so the endpoint itself must remain private to that owner. Use OAuth for shared/team access.
 
-Ready is not derived from provider status alone. The active **Gateway + provider generation** must pass OAuth-authenticated MCP `server/discover`, `tools/list`, and a real read-only `gateway_status` call with protocol pinned to `2026-07-28`. The transport is stateless; there is no retained MCP session identifier. A Gateway restart, provider restart or ownership transfer invalidates prior verification even when the hostname is unchanged.
+Ready is not derived from provider status alone. The active **Gateway + provider generation** must pass MCP `server/discover`, `tools/list`, and a real read-only `gateway_status` call with protocol pinned to `2026-07-28` using the configured authentication mode. The transport is stateless; there is no retained MCP session identifier. A Gateway restart, provider restart or ownership transfer invalidates prior verification even when the hostname is unchanged.
 
 See `TUNNELS.md` and `HOST_INTEGRATION.md`.
 
@@ -150,14 +150,15 @@ The initial share token is exchanged for a path-scoped `HttpOnly`, `SameSite=Str
 
 ```text
 ChatGPT / trusted MCP clients
-        │ HTTPS + OAuth
+        │ HTTPS MCP
         ▼
 managed tunnel / reverse proxy / VPN ingress
         │
         ▼
 DevMate Gateway
   ├─ explicit workspaces
-  ├─ current OAuth member authorization
+  ├─ configured MCP authentication
+  ├─ current OAuth member authorization when enabled
   ├─ request policy
   ├─ leases / approvals
   ├─ durable jobs / audit / metrics
@@ -189,7 +190,7 @@ The `deployment_*` prefix identifies operational status APIs; it does not imply 
 Before exposing a long-lived instance remotely:
 
 1. Choose and verify the intended public connection provider.
-2. Require OAuth for MCP; do not expose `none` through public ingress.
+2. Choose the trust model deliberately: keep `none` only for a private single-owner endpoint; use OAuth for shared/team access.
 3. Configure explicit Host policy where required.
 4. Use separate DevMate instances for unrelated users or trust domains.
 5. Create members with scoped roles/workspaces and deliver `dmc_` login codes securely.
