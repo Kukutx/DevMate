@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.6
+- Hardened authoritative VS Code shared-config reads so Windows atomic replacement can no longer surface a healthy config as missing.
+- Kept one machine-wide desktop state authority across empty windows and project switches, while preserving existing shared sessions and explicit overrides.
+- Reduced focus-driven shared-state churn by deduplicating timestamp-only editor context updates without losing real active-host handoffs.
+- Added deterministic regression coverage for config replacement races, empty-window lifecycle behavior, existing-session attachment, and project handoff safety.
+
 ## 3.6.5
 - Kept each ChatGPT conversation on its selected project across long gaps and reconnects without expiring the project choice.
 - Applied the same project boundary to sessions, leases, previews, and jobs while keeping same-project records shareable across conversations.
