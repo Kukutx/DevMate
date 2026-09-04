@@ -23,6 +23,11 @@ async function waitForFile(file, timeoutMs = 5000) {
 }
 
 function waitForExit(child) {
+  if (child.exitCode !== null) {
+    return child.exitCode === 0
+      ? Promise.resolve()
+      : Promise.reject(new Error(`child exited with code=${child.exitCode} signal=${child.signalCode || ''}`));
+  }
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => {
@@ -110,7 +115,7 @@ test('authoritative VS Code config reads wait out an in-progress replacement win
     }
   `;
   const child = spawn(process.execPath, ['-e', childScript, lockModule, file, marker], {
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: 'ignore'
   });
   t.after(() => {
     if (child.exitCode === null) child.kill();
