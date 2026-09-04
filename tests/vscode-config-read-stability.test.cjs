@@ -7,7 +7,11 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { SUPPORTED_CONFIG_VERSION, atomicWriteJson } = require('../shared/config-store.cjs');
-const { mergeHostContexts, readExtensionConfig } = require('../vscode-host/config-sync.js');
+const {
+  mergeExtensionConfig,
+  mergeHostContexts,
+  readExtensionConfig
+} = require('../vscode-host/config-sync.js');
 
 function temporaryDirectory(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -82,6 +86,31 @@ test('a semantic VS Code context change still advances the host record', () => {
   const merged = mergeHostContexts(current, candidate);
   assert.equal(merged.vscode, candidate.vscode);
   assert.equal(merged.vscode.activeEditor.path, 'src/other.js');
+});
+
+test('a real active-host handoff refreshes freshness even when editor semantics are unchanged', () => {
+  const currentContext = {
+    capturedAt: 'old',
+    updatedAt: 'old',
+    hostId: 'vscode',
+    kind: 'editor',
+    workspaceRoot: '/workspace/app',
+    activeEditor: { path: 'src/app.js', languageId: 'javascript' }
+  };
+  const candidateContext = { ...currentContext, capturedAt: 'new', updatedAt: 'new' };
+  const merged = mergeExtensionConfig({
+    version: SUPPORTED_CONFIG_VERSION,
+    activeHostId: 'obsidian',
+    hostContexts: { vscode: currentContext, obsidian: { hostId: 'obsidian', updatedAt: 'middle' } }
+  }, {
+    version: SUPPORTED_CONFIG_VERSION,
+    activeHostId: 'vscode',
+    hostContexts: { vscode: candidateContext }
+  });
+
+  assert.equal(merged.activeHostId, 'vscode');
+  assert.equal(merged.hostContexts.vscode, candidateContext);
+  assert.equal(merged.hostContexts.vscode.updatedAt, 'new');
 });
 
 test('authoritative VS Code config reads wait out an in-progress replacement window', async t => {
