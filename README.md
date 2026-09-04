@@ -1,138 +1,134 @@
 # DevMate
 
-DevMate is a local-first MCP development gateway for ChatGPT. It can inspect, modify, run, test, and review controlled workspaces from VS Code, Obsidian, standalone deployments, trusted team access, and central control planes with external Runner hosts.
+**Local-first MCP development gateway for ChatGPT.**
 
-## Fastest setup
+DevMate connects ChatGPT to a real development environment. It can inspect and edit project files, run commands, test changes, use live editor context, and hand long-running work to durable jobs or remote Runners — while workspace and runtime state stay on machines you control.
 
-Choose one bootstrap preset to compose a complete starting configuration:
+It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.
 
-```bash
-# One developer: OAuth-ready public connection + frictionless local loopback
-npx devmate bootstrap --preset personal --workspace /srv/project
+## What stands out
 
-# Trusted team: OAuth MCP + first member login code
-npx devmate bootstrap \
-  --preset team \
-  --workspace /srv/project \
-  --member-name Alice
+- **Real project access** — files, commands, Git, previews, diagnostics, testing, and project-aware context through MCP.
+- **Project isolation** — each ChatGPT conversation stays bound to its selected project across reconnects; explicit local paths remain authoritative.
+- **Local-first runtime** — the Gateway, project state, credentials, backups, and execution stay on your machine or your own Runner hosts.
+- **One desktop runtime** — VS Code and Obsidian share one machine-wide Gateway and public connection instead of competing for separate processes.
+- **Durable work** — reviewed jobs survive MCP request boundaries and Gateway restarts.
+- **Remote execution when needed** — scoped external Runners can handle platform-specific or long-running work without owning central policy state.
+- **Current MCP only** — protocol `2026-07-28`, `server/discover` negotiation, stateless HTTP transport, and legacy transport rejection.
+- **Built-in safety boundaries** — workspace containment, protected-path filtering, bounded command output, optional approvals/leases, audit metadata, and ownership-aware process cleanup.
 
-# Hardened control plane: OAuth MCP + member + Runner credential
-npx devmate bootstrap \
-  --preset control-plane \
-  --workspace /srv/project \
-  --public-url https://devmate.example.com \
-  --member-name Operations \
-  --member-role maintainer \
-  --runner-name Linux-Builder
+Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.
 
-# Local configuration for an external Runner host
-npx devmate bootstrap \
-  --preset runner \
-  --workspace /srv/project \
-  --config /var/lib/devmate-runner/config.json
-```
+## Quick start
 
-Presets compose the same capability-based instance schema; they are not runtime modes. Public-capable presets default to `auth.mode: "oauth"`. The Runner-host preset uses `auth.mode: "none"` because its MCP surface is loopback-only. Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.
-
-Member creation returns a one-time `dmc_` OAuth login code. Only its salted verifier and the member `authVersion` are persisted. Runner creation returns a one-time `dmr_` Runner credential; only its salted verifier is persisted. Neither plaintext credential is written to `config.json`.
-
-Inspect a configuration without exposing credentials:
-
-```bash
-npx devmate status --config /srv/devmate/config.json
-```
-
-See [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) for all presets and options.
-
-## VS Code desktop setup
-
-The normal desktop path is:
+### VS Code
 
 1. Open a project.
-2. Run `DevMate: Start` — or leave the default auto-start enabled.
-3. DevMate automatically starts/attaches the Gateway, starts/attaches the public connection, verifies MCP 2026 with `server/discover` → `tools/list` → a real `gateway_status` tool call, then reaches Ready and copies the verified HTTPS `/mcp` URL.
-4. Add that URL to ChatGPT and use OAuth for the public connection. If the authorization page asks for approval, use **DevMate: Copy OAuth Approval Code**.
+2. Run **DevMate: Start** — or keep the default auto-start enabled.
+3. DevMate starts or attaches to the shared Gateway and configured public connection.
+4. Before reporting Ready, DevMate verifies MCP with `server/discover` against protocol `2026-07-28`, then runs `tools/list` and a real read-only `gateway_status` call.
+5. Add the verified HTTPS `/mcp` URL to ChatGPT.
 
-Fresh desktop instances use **ngrok**. Configure ngrok once, then DevMate keeps using the account-owned HTTPS endpoint across normal restarts. Cloudflare and external HTTPS ingress remain optional providers, not defaults.
+Fresh desktop instances use **ngrok** by default. Cloudflare Quick, Cloudflare managed tunnels, and existing external HTTPS ingress are also supported.
 
-Routine Start never requires a separate tunnel-start or verification command. Trusted loopback access remains frictionless; remote/public MCP requires OAuth. Public MCP never accepts credentials in URLs. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) and [`docs/TUNNELS.md`](docs/TUNNELS.md).
+The default single-owner `auth.mode: "none"` works for both loopback and configured public MCP. Enable OAuth when the endpoint is shared with team/member identities.
 
-## Obsidian setup
+### Standalone CLI
 
-DevMate also ships a desktop-only Obsidian host. Build it with `npm run build:obsidian`, copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, and enable it under Community Plugins.
+```bash
+# Personal instance: single-owner no-auth + embedded execution
+npx devmate bootstrap --preset personal --workspace /srv/project
 
-Obsidian has the same complete Start semantics as VS Code: bridge/context → shared Gateway → shared provider-native public connection → MCP 2026 preflight using OAuth for public ingress → Ready. It can own or attach to the same shared Gateway and connection as VS Code; neither editor is a passive ingress client.
+# Start the Gateway owned by the CLI
+npx devmate start
 
-VS Code and Obsidian also share one generation-scoped public verification. They do not compete with duplicate startup probes; a temporary edge timeout keeps the current URL alive while automatic recovery continues. Ready evidence is periodically refreshed so a process that is still running cannot hide a remote endpoint failure indefinitely.
+# Inspect current state without exposing credentials
+npx devmate status
+```
 
-The host also provides incremental note queries, Property schema audits, public-API note mutations, and preview/apply/rollback Property batches.
+For explicit service layouts, custom config paths, Team/Control-plane presets, and portable Windows/Linux packages, see [`docs/STANDALONE.md`](docs/STANDALONE.md) and [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md).
 
-See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md), [`obsidian-plugin/README.md`](obsidian-plugin/README.md), and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
+### Obsidian
 
-## Capability presets
+DevMate also ships a desktop-only Obsidian host. It publishes vault context and note workflows through the same shared Gateway/public connection model used by VS Code.
+
+```bash
+npm run build:obsidian
+```
+
+Copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, then enable the plugin under Community Plugins.
+
+See [`obsidian-plugin/README.md`](obsidian-plugin/README.md) and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
+
+## Product surfaces
+
+| Surface | Purpose |
+| --- | --- |
+| VS Code | Project context, desktop lifecycle, commands, diagnostics, shared public MCP |
+| Obsidian | Vault context, note/Property workflows, shared desktop lifecycle |
+| Standalone CLI | Editor-independent setup, lifecycle, workspace, plugin, job, and Runner administration |
+| DevMate Gateway | MCP server, policy, workspaces, jobs, audit, previews, and plugin capabilities |
+| External Runner | Scoped execution on another machine or platform without duplicating central state |
+
+## Authentication presets
 
 | Preset | MCP identity | Execution | Best for |
-|---|---|---|---|
-| Personal | OAuth by default; trusted loopback remains local owner | Embedded Runner | One developer |
-| Team | OAuth members | Embedded Runner, optional external Runners | Trusted shared workflows |
-| Control-plane | OAuth members | External Runners by default | Hardened long-lived control plane |
-| Runner host | No-auth loopback MCP + `dmr_` central credential | Local toolchain | Platform-specific execution |
+| --- | --- | --- | --- |
+| Personal | `none` by default | Embedded Runner | One developer |
+| Team | OAuth members | Embedded Runner, optional external Runners | Trusted shared development |
+| Control-plane | OAuth members | External Runners by default | Long-lived managed deployment |
+| Runner host | No-auth loopback MCP + scoped `dmr_` credential | Local toolchain | Platform-specific execution |
 
-These presets compose connection, access, request policy and Runner capabilities. They do not create mutually exclusive runtime modes. DevMate supports ngrok, Cloudflare Quick Tunnel, Cloudflare managed tunnels, and existing external HTTPS ingress independently of access or Runner topology.
+Presets are setup defaults, not runtime modes. Connection provider, authentication, request policy, workspace coordination, and Runner topology remain independent capabilities.
 
 ## Architecture
 
 ```text
-ChatGPT / OAuth members
-        │ HTTPS MCP 2026 (OAuth on public ingress)
-        ▼
-DevMate Gateway
-  ├─ Capability Host and tool contracts
-  ├─ centralized RBAC/workspace/Job policy
-  ├─ leases and optional dual-control approvals
-  ├─ durable job queue
-  ├─ audit, metrics, backups, and previews
-  └─ optional Browser QA / Godot plugins
-        │ /runner/v1 + scoped dmr_ credential
-        ▼
-External Runner hosts
-  └─ loopback DevMate Gateway + local toolchain
+VS Code / Obsidian / CLI
+          │
+          │ local host control + project context
+          ▼
+    DevMate Gateway
+    ├─ MCP 2026 transport
+    ├─ workspace + tool policy
+    ├─ files / commands / Git / previews
+    ├─ leases / approvals / audit
+    ├─ durable job queue
+    └─ optional platform plugins
+          │
+          │ HTTPS /mcp
+          ▼
+       ChatGPT
+
+    DevMate Gateway
+          │ /runner/v1 + scoped dmr_ credential
+          ▼
+    External Runner hosts
+          └─ local toolchains and workspaces
 ```
 
-MCP transport is current-only: protocol `2026-07-28`, `server/discover` negotiation, stateless HTTP handling, and legacy transport rejection. Desktop hosts additionally coordinate one shared provider-native public connection. Ready is bound to the **current complete Gateway + provider generation**: a Gateway restart, provider restart, ownership transfer, or endpoint generation change makes previous MCP verification stale even when the public hostname is unchanged.
+The central Gateway remains authoritative for workspace scope, identity, approvals, leases, job ownership, retries, and cancellation. External Runners distribute execution only.
 
-DevMate uses one deterministic Capability Host for registration and initialization. `gateway/tool-policy.mjs` is the shared source of truth for member capability, workspace scope and durable Runner requirements. Plugins extend through a validated composition API rather than manually installing competing MCP prototype hooks.
+VS Code and Obsidian coordinate one machine-wide desktop state directory and one provider-native public connection. Ready evidence is generation-bound: a Gateway restart, provider restart, ownership transfer, or endpoint-generation change invalidates stale verification even if the public hostname stays the same.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full runtime model.
 
-## Team controls
+## Project and workspace model
 
-Roles:
+DevMate treats project selection as a real boundary, not UI state:
 
-```text
-observer → reviewer → developer → maintainer → owner
-```
+- explicit absolute local paths take precedence over editor/vault defaults;
+- new ChatGPT conversations can adopt the current VS Code/Obsidian project when no path is supplied;
+- reconnects do not silently drift a conversation to another project;
+- sessions, leases, previews, and jobs remain project-scoped;
+- same-project conversations can still continue shared work records where policy allows it;
+- writable and readonly/reference workspaces remain distinct.
 
-Core protections include:
-
-- one-time `dmc_` member login codes with salted verifiers and monotonic `authVersion`;
-- short-lived OAuth access tokens and single-use rotating refresh-token families;
-- refresh-token replay detection that revokes the whole family;
-- current-role and current-workspace-scope re-evaluation on member requests and durable jobs;
-- scoped `dmr_` Runner credentials kept separate from MCP identity;
-- optional exclusive workspace leases for shared mutations;
-- optional dual-control approval for configured capabilities or tools;
-- high-risk shell and Git guards;
-- request, tool, approval, and Runner audit metadata;
-- bounded rate, request-size, timeout, and concurrency policies.
-
-Rotating a member login code increments `authVersion`, invalidating previously issued member OAuth credentials. Disabling, revoking, expiring, or changing a member is enforced from current member state rather than trusted from stale token claims.
-
-Use work sessions or acquire a workspace lease before shared mutations when lease policy is enabled.
+This keeps normal project switching lightweight without mixing work between unrelated repositories.
 
 ## Durable jobs and Runners
 
-Long operations can survive MCP requests and Gateway restarts:
+Long-running work can continue beyond one MCP request:
 
 ```text
 job_target_catalog
@@ -145,65 +141,77 @@ job_retry
 runner_status
 ```
 
-The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot project audits, native/Web acceptance, performance budgets and regressions, deterministic capture, GUT/GdUnit4 test runs, single/matrix exports, quality/release reports, snapshots, and non-pushing `git_save`. Arbitrary shell commands, direct push, force operations, and credential-bearing arguments cannot be queued.
+The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot audits/tests, performance checks, capture, exports, release reports, snapshots, and non-pushing `git_save`. Arbitrary queued shell commands, direct push, force operations, and credential-bearing arguments are rejected.
 
-External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Capabilities and workspace IDs reported by a Runner are intersected with its credential scope. Results are bounded and redacted; artifact files remain on the Runner host and only metadata is returned. Base requirements come from the central policy—for example, browser-driven Godot jobs require `browser-qa` in addition to `godot`.
+External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Runner-reported capabilities and workspace IDs are intersected with credential scope; they cannot widen their own authorization.
 
 See [`docs/JOBS.md`](docs/JOBS.md) and [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md).
 
 ## Optional capabilities
 
-Optional plugins are disabled until enabled:
+Optional plugins stay disabled until enabled.
 
-- `devmate.browser-qa`: local previews, Playwright scenarios, screenshots, reports, and structured application-state assertions.
-- `devmate.godot`: runtime verification, dependency graphs, deep audit, QA Bridge installation, native/headless state and performance tests, deterministic Movie Maker capture, GUT/GdUnit4 JUnit workflows, Web acceptance, execution planning, quality reports, performance baselines/regressions, release evidence gates, and multi-platform export matrices.
+- **Browser QA** — local previews, Playwright scenarios, screenshots, reports, and structured app-state assertions.
+- **Godot** — project/runtime audit, dependency graphs, native and Web acceptance, performance budgets/regressions, deterministic Movie Maker capture, GUT/GdUnit4 workflows, quality reports, release gates, and multi-platform exports.
+- **Codex Collaboration** — proposal-snapshot collaboration with network-off supervised execution and explicit reviewed apply boundaries.
 
-Repeatable scenarios, performance budgets, capture plans, framework tests, and export targets are stored in `.devmate/automation.json` and can be reviewed in Git.
+Repeatable project automation can be committed in `.devmate/automation.json`.
 
-## Godot development loop
+See [`docs/PLUGINS.md`](docs/PLUGINS.md), [`docs/AUTOMATION_MANIFEST.md`](docs/AUTOMATION_MANIFEST.md), and the Godot documentation linked below.
 
-DevMate can run a mature Godot workflow:
+## Security model
 
-```text
-godot_quick_setup
-→ godot_automation_bootstrap
-→ godot_runtime_status
-→ godot_project_audit
-→ godot_dependency_graph
-→ godot_automation_plan
-→ godot_validate
-→ godot_native_test and/or godot_acceptance_test
-→ godot_test_run
-→ godot_performance_test
-→ godot_performance_baseline_update (deliberate)
-→ godot_performance_regression
-→ godot_movie_capture
-→ godot_quality_report
-→ godot_export_matrix
-→ godot_release_gate
+`auth.mode: "none"` is the intentional single-owner trust model. It grants owner access to requests that can reach the configured MCP ingress, so use it only when that endpoint is private to the owner. OAuth is opt-in for team/member identity and shared access.
+
+Other important boundaries:
+
+- the Gateway binds to loopback by default;
+- credentials are never accepted in MCP URLs;
+- real `.env` files, keys, databases, logs, and credential-shaped paths are blocked from normal file tools;
+- workspace operations enforce lexical and realpath containment;
+- commands run as the DevMate OS identity and are not a hostile-code sandbox;
+- Runner credentials, OAuth identities, provider credentials, preview shares, and MCP access are separate trust domains;
+- configuration and durable coordination state use cross-process locking and crash-safe atomic replacement;
+- unsupported future config/state versions fail closed rather than being silently downgraded.
+
+For shared or organizational deployments, use OAuth, scoped members, optional workspace leases, approvals, bounded request policy, and separate OS/VM/container trust domains where appropriate.
+
+See [`SECURITY.md`](SECURITY.md) and [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
+
+## Verification and engineering quality
+
+The repository runs more than source-level tests. CI covers the actual packaged/runtime boundaries used by the product:
+
+- Windows + Node 24 + real VS Code Extension Host E2E;
+- Node Current compatibility;
+- Linux runtime, Docker network smoke, and real Godot validation;
+- packaged VSIX runtime and shared-tunnel smoke tests;
+- Obsidian bundle/runtime smoke tests;
+- portable Windows and Linux CLI packages;
+- dependency audits, architecture contracts, unit/policy tests, and Gateway smoke tests.
+
+Local verification:
+
+```bash
+npm ci
+npm run check
+npm run test:unit
+npm run smoke:gateway
+npm run package:vsix
 ```
 
-Key capabilities:
+## Godot support
 
-- verify the actual Godot version, Standard/Mono build, export templates, .NET readiness, and host capability labels;
-- verify main scene, Autoload, icon, InputMap, C# setup, addons, export presets, and missing `res://` references;
-- build bounded scene/resource/script dependency graphs with cycles and reverse dependencies;
-- preflight saved exports and Web/native tests before assigning them to Runners;
-- install or upgrade QA Bridge v3 with project-local backups;
-- replay declared Godot Input actions and assert native runtime state/checkpoints;
-- sample bounded Godot Performance monitors and enforce percentile/memory/node/draw-call budgets;
-- preserve reviewed performance baselines and identify directional regressions;
-- capture frame-bound AVI evidence through Godot Movie Maker mode;
-- detect and run project-local GUT or GdUnit4 tests with required JUnit evidence;
-- preserve browser-driven Web acceptance with screenshots and network/console checks;
-- export desktop, mobile, Web, dedicated-server, or custom presets;
-- route platform-specific exports to matching external Runners;
-- generate consolidated HTML/JSON quality reports and policy-driven release decisions;
-- save mixed Web/native, performance, capture, test-framework, and export workflows in `.devmate/automation.json`.
+The optional Godot capability is deliberately broader than a command wrapper. It can verify the editor/toolchain, audit project structure, build dependency graphs, install the QA bridge, run native/Web acceptance, sample performance monitors, compare reviewed baselines, capture deterministic AVI evidence, run GUT/GdUnit4 tests, produce quality reports, and route exports to matching Runners.
 
-The repository runs a separate real Godot 4.7.1 Linux CI job. It verifies the official editor archive with SHA-512, parses QA Bridge v3 in the real editor, runs real native QA and performance sampling, and records a real frame-bound AVI under Xvfb. Export templates and platform SDKs remain requirements of the selected Runner.
+The repository's Linux CI uses a real Godot 4.7.1 editor under Xvfb for native QA, performance sampling, and deterministic Movie Maker capture.
 
-See [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md), [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md), [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md), and [`docs/GODOT_RELEASE_MATURITY.md`](docs/GODOT_RELEASE_MATURITY.md).
+See:
+
+- [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md)
+- [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md)
+- [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md)
+- [`docs/GODOT_RELEASE_MATURITY.md`](docs/GODOT_RELEASE_MATURITY.md)
 
 ## Operations
 
@@ -213,61 +221,23 @@ Prometheus-compatible metrics are loopback-only:
 http://127.0.0.1:8787/control/metrics
 ```
 
-Deployment templates:
-
-- central systemd: `deploy/systemd/devmate.service.example`
-- external Runner systemd: `deploy/systemd/devmate-runner.service.example`
-- central Docker: `deploy/docker/Dockerfile` and `deploy/docker/compose.example.yml`
-- external Runner Docker: `deploy/docker/runner.compose.example.yml`
-- reverse proxy: `deploy/caddy/Caddyfile.example`
-
-Use drain controls before upgrades so new mutations and job claims stop while in-flight work settles.
-
-## Safety boundary
-
-- Gateways bind to `127.0.0.1` by default; container deployments opt into an explicit container bind host while host publishing remains loopback-bound.
-- `auth.mode: "oauth"` is the default for public-capable instances. `auth.mode: "none"` authorizes only trusted loopback requests and never promotes remote requests to owner.
-- OAuth signing material and owner approval codes live in private state, not `config.json`.
-- Member, Runner, provider, preview, and MCP credentials are distinct trust domains.
-- Workspace paths use realpath containment and block secrets, keys, databases, logs, and real `.env` files.
-- Runner capabilities are scheduling metadata, not an operating-system sandbox.
-- Godot QA inputs are limited to declared InputMap actions; report, movie, and export paths remain workspace-contained.
-- Performance sampling is off by default and uses a fixed reviewed monitor set.
-- Test adapters accept bounded framework paths and filters, not arbitrary Godot command-line arguments.
-- Config and durable coordination state use restrictive atomic replacement; unknown future state versions are not overwritten by older binaries.
-- DevMate is intended for trusted organizational collaboration, not hostile multi-tenancy.
-- Use separate OS accounts, containers, VMs, machines, or DevMate instances for unrelated trust domains.
-- The central durable state is single-host. External Runners do not make the control plane horizontally replicated.
-
-## Development checks
-
-```bash
-npm install
-npm run check       # syntax, architecture/current-only contracts, workflows, release metadata
-npm run test:unit   # discovers all normal tests
-npm run smoke:gateway
-npm run package:vsix
-```
+Deployment examples are included for systemd, Docker, external Runner hosts, and Caddy reverse proxying under `deploy/`.
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md)
-- [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md)
-- [`docs/MAINTAINABILITY.md`](docs/MAINTAINABILITY.md)
-- [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)
-- [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md)
-- [`docs/JOBS.md`](docs/JOBS.md)
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-- [`docs/TEAM_DEPLOYMENT.md`](docs/TEAM_DEPLOYMENT.md)
-- [`docs/TUNNELS.md`](docs/TUNNELS.md)
-- [`docs/STANDALONE.md`](docs/STANDALONE.md)
-- [`docs/LOCAL_CAPABILITIES.md`](docs/LOCAL_CAPABILITIES.md)
-- [`docs/PLUGINS.md`](docs/PLUGINS.md)
-- [`docs/AUTOMATION_MANIFEST.md`](docs/AUTOMATION_MANIFEST.md)
-- [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md)
-- [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md)
-- [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md)
-- [`docs/GODOT_RELEASE_MATURITY.md`](docs/GODOT_RELEASE_MATURITY.md)
-- [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md)
-- [`SECURITY.md`](SECURITY.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — runtime topology and current architecture
+- [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — single-owner and OAuth identity model
+- [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) — setup presets
+- [`docs/STANDALONE.md`](docs/STANDALONE.md) — CLI, service, and portable usage
+- [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md) — VS Code/Obsidian lifecycle
+- [`docs/JOBS.md`](docs/JOBS.md) — durable jobs
+- [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md) — Runner protocol and deployment
+- [`docs/TEAM_DEPLOYMENT.md`](docs/TEAM_DEPLOYMENT.md) — shared access and hardened deployments
+- [`docs/TUNNELS.md`](docs/TUNNELS.md) — public connection providers
+- [`docs/PLUGINS.md`](docs/PLUGINS.md) — optional capability plugins
+- [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) — tool catalog
+- [`SECURITY.md`](SECURITY.md) — trust boundaries and security policy
+
+## License
+
+MIT
