@@ -22,7 +22,13 @@ function pathKey(value) {
 
 function workspaceRootKey(value) {
   const root = String(value || '').trim();
-  return root ? pathKey(root) : '';
+  if (!root) return '';
+  const resolved = path.resolve(root);
+  try {
+    return pathKey(fs.realpathSync.native(resolved));
+  } catch {
+    return pathKey(resolved);
+  }
 }
 
 function protectedRootReason(value) {
@@ -73,7 +79,7 @@ function normalizedAdditionalWorkspaces(config) {
   for (const item of Array.isArray(config?.trustedWritableRoots) ? config.trustedWritableRoots : []) {
     try {
       const normalized = normalizeAdditionalWorkspace(item?.root || item?.path || item, item?.name || '');
-      const key = pathKey(normalized.root);
+      const key = workspaceRootKey(normalized.root);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(normalized);
@@ -85,7 +91,7 @@ function normalizedAdditionalWorkspaces(config) {
 function syncAdditionalWorkspaceEntries(config) {
   config.workspaces = Array.isArray(config.workspaces) ? config.workspaces : [];
   const trusted = normalizedAdditionalWorkspaces(config);
-  const trustedKeys = new Set(trusted.map(item => pathKey(item.root)));
+  const trustedKeys = new Set(trusted.map(item => workspaceRootKey(item.root)));
   const base = config.workspaces.filter(item => {
     if (!item) return false;
     if (item.trusted === true || item.role === 'trusted') return false;
@@ -152,7 +158,7 @@ function addWorkspaceAccess(configFile, inputRoot, name = '') {
     syncAdditionalWorkspaceEntries(config);
     assertFullAccess(config, 'Adding an additional workspace');
     const candidate = normalizeAdditionalWorkspace(inputRoot, name);
-    const candidateKey = pathKey(candidate.root);
+    const candidateKey = workspaceRootKey(candidate.root);
     const ordinary = (config.workspaces || []).find(item =>
       item && item.trusted !== true && item.role !== 'trusted' && workspaceRootKey(item.root) === candidateKey
     );
@@ -166,7 +172,7 @@ function addWorkspaceAccess(configFile, inputRoot, name = '') {
       return config;
     }
     const trusted = normalizedAdditionalWorkspaces(config);
-    const existing = trusted.find(item => pathKey(item.root) === candidateKey);
+    const existing = trusted.find(item => workspaceRootKey(item.root) === candidateKey);
     if (existing) {
       result = { added: false, reason: 'already-added', workspace: publicWorkspace(existing), snapshot: workspaceAccessSnapshot(config) };
       return config;
@@ -185,7 +191,8 @@ function removeWorkspaceAccess(configFile, { id = '', root = '' } = {}) {
     syncAdditionalWorkspaceEntries(config);
     assertFullAccess(config, 'Removing an additional workspace');
     const trusted = normalizedAdditionalWorkspaces(config);
-    const target = trusted.find(item => id ? item.id === id : root ? pathKey(item.root) === pathKey(root) : false);
+    const rootKey = root ? workspaceRootKey(root) : '';
+    const target = trusted.find(item => id ? item.id === id : rootKey ? workspaceRootKey(item.root) === rootKey : false);
     if (!target) {
       result = { removed: false, reason: 'not-found', snapshot: workspaceAccessSnapshot(config) };
       return config;
@@ -214,5 +221,6 @@ module.exports = {
   protectedRootReason,
   removeWorkspaceAccess,
   syncAdditionalWorkspaceEntries,
-  workspaceAccessSnapshot
+  workspaceAccessSnapshot,
+  workspaceRootKey
 };
