@@ -9,24 +9,36 @@ function read(relative) {
   return fs.readFileSync(path.join(root, relative), 'utf8');
 }
 
-test('VS Code exposes the workspace manager as part of the normal extension entry chain', () => {
+test('VS Code exposes workspace management without replacing the shared-tunnel extension entry', () => {
   const pkg = JSON.parse(read('package.json'));
-  assert.equal(pkg.main, './extension-entry-workspaces.js');
+  assert.equal(pkg.main, './extension-entry-shared-tunnel.js');
   const commands = new Map((pkg.contributes?.commands || []).map(item => [item.command, item.title]));
   assert.equal(commands.get('devMate.manageWorkspaces'), 'DevMate: Manage Workspaces');
   assert.equal(commands.get('devMate.addWorkspace'), 'DevMate: Add Workspace');
   assert.ok(pkg.activationEvents.includes('onCommand:devMate.manageWorkspaces'));
   assert.ok(pkg.activationEvents.includes('onCommand:devMate.addWorkspace'));
+
+  const platform = read('extension-entry-platform.js');
+  assert.match(platform, /require\('\.\/extension-entry-workspaces\.js'\)/);
+  assert.match(platform, /await activateWorkspaceManagement\(context\)/);
+  assert.match(platform, /await deactivateWorkspaceManagement\(\)/);
+
+  const manager = read('extension-entry-workspaces.js');
+  assert.doesNotMatch(manager, /require\('\.\/extension-entry-shared-tunnel\.js'\)/);
 });
 
-test('workspace manager uses the product contract terminology and keeps the shared-tunnel runtime underneath', () => {
+test('workspace manager uses the product contract terminology and exposes multiple writable workspace controls', () => {
   const source = read('extension-entry-workspaces.js');
-  assert.match(source, /require\('\.\/extension-entry-shared-tunnel\.js'\)/);
   assert.match(source, />Current Project</);
   assert.match(source, />Additional Workspaces</);
   assert.match(source, /default for ChatGPT conversations until a conversation explicitly selects another workspace/);
   assert.match(source, /different conversations can use different workspaces at the same time/);
-  assert.match(source, /explicit conversation pin never changes/i);
+  assert.match(source, /Add Workspace/);
+  assert.match(source, /Browse/);
+  assert.match(source, /From Clipboard/);
+  assert.match(source, /Copy ID/);
+  assert.match(source, /Open in New Window/);
+  assert.match(source, /explicit selection, a conversation follows the current VS Code\/Obsidian project/);
 });
 
 test('main DevMate panel exposes Current Project and the workspace manager entry point', () => {
@@ -45,4 +57,5 @@ test('routing documentation forbids both fail-closed rollback and global multi-a
   assert.match(contract, /does \*\*not\*\* mean mutating a single global `activeWorkspaceId` into an array/);
   assert.match(contract, /adding another writable workspace changes the Current Project/);
   assert.match(contract, /all writable roots become implicit defaults/);
+  assert.match(contract, /every new ChatGPT conversation must bind before doing project work/);
 });
