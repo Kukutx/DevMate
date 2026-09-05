@@ -29,6 +29,15 @@ test('workspace manager uses the product contract terminology and keeps the shar
   assert.match(source, /explicit conversation pin never changes/i);
 });
 
+test('main DevMate panel exposes Current Project and the workspace manager entry point', () => {
+  const source = read('extension.js');
+  assert.match(source, /<b>Current Project<\/b>/);
+  assert.doesNotMatch(source, /<b>Active project<\/b>/);
+  assert.match(source, /data-cmd="manageWorkspaces">Manage Workspaces<\/button>/);
+  assert.match(source, /if\(m\.cmd==='manageWorkspaces'\) await vscode\.commands\.executeCommand\('devMate\.manageWorkspaces'\)/);
+  assert.match(source, /Additional writable workspaces can be managed separately and selected per ChatGPT conversation/);
+});
+
 test('routing documentation forbids both fail-closed rollback and global multi-active semantics', () => {
   const contract = read('docs/CHATGPT_WORKSPACE_ROUTING.md');
   assert.match(contract, /Current Project/);
