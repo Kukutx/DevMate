@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mutateConfig, permissionProfile, readConfig } from './local-shared.mjs';
 import {
+  IMPLICIT_CONVERSATION_BINDING_SOURCES,
   bindConversationWorkspaceToPath,
   bindConversationWorkspaceToWorkspace,
   conversationWorkspaceBinding,
@@ -25,7 +26,7 @@ function selectorFromArgs(args = {}) {
 }
 
 function implicitBinding(binding) {
-  return !!binding && ['auto', 'default'].includes(String(binding.source || '').trim());
+  return !!binding && IMPLICIT_CONVERSATION_BINDING_SOURCES.includes(String(binding.source || '').trim());
 }
 
 function requiresConversationRoute(name) {
