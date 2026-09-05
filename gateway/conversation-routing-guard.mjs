@@ -5,7 +5,6 @@ import {
   bindConversationWorkspaceToPath,
   bindConversationWorkspaceToWorkspace,
   conversationWorkspaceBinding,
-  implicitConversationWorkspaceBinding,
   sameWorkspaceRoot
 } from './conversation-workspaces.mjs';
 import { conversationScopeFromToolContext } from './request-context.mjs';
