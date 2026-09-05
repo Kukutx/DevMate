@@ -38,6 +38,8 @@
     "onCommand:devMate.stop",
     "onCommand:devMate.restart",
     "onCommand:devMate.copyUrl",
+    "onCommand:devMate.manageWorkspaces",
+    "onCommand:devMate.addWorkspace",
     "onCommand:devMate.addReference",
     "onCommand:devMate.clearReferences",
     "onCommand:devMate.doctor",
@@ -59,7 +61,7 @@
     "onCommand:devMate.copyHostDiagnostics",
     "onCommand:devMate.hostSelfCheck"
   ],
-  "main": "./extension-entry-shared-tunnel.js",
+  "main": "./extension-entry-workspaces.js",
   "contributes": {
     "commands": [
       {
@@ -81,6 +83,14 @@
       {
         "command": "devMate.copyUrl",
         "title": "DevMate: Copy MCP URL"
+      },
+      {
+        "command": "devMate.manageWorkspaces",
+        "title": "DevMate: Manage Workspaces"
+      },
+      {
+        "command": "devMate.addWorkspace",
+        "title": "DevMate: Add Workspace"
       },
       {
         "command": "devMate.connectionSetup",
