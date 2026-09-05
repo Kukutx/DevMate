@@ -61,6 +61,8 @@ test('shared desktop lifecycle serializes activation and fences stale recovery w
   assert.match(source, /hostLifecycleOperations\.run\('deactivate'/);
   assert.match(source, /sessionRecoveryEpoch/);
   assert.match(source, /expectedEpoch !== sessionRecoveryEpoch/);
+  assert.match(source, /lifecycle\?\.startupPending\?\.\(\)/);
+  assert.match(source, /lifecycle\?\.markRecoveredStart\?\.\(\{ toolCount: result\.toolCount \}\)/);
   assert.doesNotMatch(source, /let activation = null/);
   assert.doesNotMatch(source, /let deactivation = null/);
   assert.match(source, /dispose\(\{ stopOwned: false \}\)/);

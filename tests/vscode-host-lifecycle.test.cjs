@@ -178,3 +178,57 @@ test('activation rollback still requests a full platform cleanup', async () => {
   await assert.rejects(harness.lifecycle.activate(harness.context), /synthetic activation failure/);
   assert.deepEqual(deactivationOptions, { preserveSession: false });
 });
+
+test('automatic Start stays visible as pending until the Start command settles', async () => {
+  const platform = {
+    async activate() {},
+    async deactivate() {}
+  };
+  const harness = createHarness({ platform });
+  harness.settings.autoStart = true;
+  let resolveStart = null;
+  let startCalls = 0;
+  harness.lifecycle.vscode.commands.executeCommand = async id => {
+    if (id !== 'devMate.start') return undefined;
+    startCalls += 1;
+    return new Promise(resolve => {
+      resolveStart = resolve;
+    });
+  };
+
+  await harness.lifecycle.activate(harness.context);
+  for (let attempt = 0; !resolveStart && attempt < 50; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+
+  assert.equal(startCalls, 1);
+  assert.equal(typeof resolveStart, 'function');
+  assert.equal(harness.lifecycle.startupPending(), true);
+
+  resolveStart({ ok: false, recovering: true });
+  for (let attempt = 0; harness.lifecycle.startupPending() && attempt < 50; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+
+  assert.equal(harness.lifecycle.startupPending(), false);
+  await harness.lifecycle.deactivate();
+});
+
+test('verified shared-session recovery clears a stale automatic Start failure', async () => {
+  const platform = {
+    async activate() {},
+    async deactivate() {}
+  };
+  const harness = createHarness({ platform });
+  await harness.lifecycle.activate(harness.context);
+  harness.lifecycle.diagnostics.store.recordFailure(
+    Object.assign(new Error('synthetic startup failure'), { code: 'START_FAIL' }),
+    { phase: 'automatic-start' }
+  );
+
+  assert.equal(harness.lifecycle.diagnostics.store.lastFailure?.code, 'START_FAIL');
+  harness.lifecycle.markRecoveredStart({ toolCount: 142 });
+  assert.equal(harness.lifecycle.diagnostics.store.lastFailure, null);
+  assert.match(harness.lifecycle.diagnostics.store.tail(20), /Shared session recovery reached verified Ready state; tools=142/);
+  await harness.lifecycle.deactivate();
+});

@@ -27,6 +27,7 @@ class VscodeHostLifecycle {
     this.output = null;
     this.diagnostics = null;
     this.startupTimer = null;
+    this.startupPromise = null;
     this.active = false;
     this.lifecycleGeneration = 0;
     this.activating = null;
@@ -39,6 +40,10 @@ class VscodeHostLifecycle {
 
   autoStart() {
     return setting(this.vscode, 'autoStart', true) !== false;
+  }
+
+  startupPending() {
+    return !!this.startupTimer || !!this.startupPromise;
   }
 
   async activate(context) {
@@ -184,7 +189,13 @@ class VscodeHostLifecycle {
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null;
       if (!this.active || generation !== this.lifecycleGeneration) return;
-      this.startAutomatically(generation).catch(error => this.handleStartupFailure(error, generation));
+      let startup;
+      startup = this.startAutomatically(generation)
+        .catch(error => this.handleStartupFailure(error, generation))
+        .finally(() => {
+          if (this.startupPromise === startup) this.startupPromise = null;
+        });
+      this.startupPromise = startup;
     }, 0);
   }
 
@@ -256,6 +267,14 @@ class VscodeHostLifecycle {
     );
     if (choice === 'Copy diagnostics') await this.copyDiagnostics();
     if (choice === 'Open Host Log') await this.openHostLog();
+  }
+
+  markRecoveredStart({ toolCount = 0 } = {}) {
+    this.diagnostics?.clearFailure();
+    const count = Number(toolCount) || 0;
+    this.diagnostics?.append(count > 0
+      ? `Shared session recovery reached verified Ready state; tools=${count}.`
+      : 'Shared session recovery reached verified Ready state.');
   }
 
   async copyDiagnostics() {

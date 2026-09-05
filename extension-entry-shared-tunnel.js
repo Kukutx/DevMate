@@ -209,6 +209,7 @@ function stopSessionRecoveryWatcher() {
 
 function requestedSessionNeedsRecovery() {
   if (!runtime || !runtimeStateDirectory || !sharedSessionRequested()) return false;
+  if (lifecycle?.startupPending?.()) return false;
   const config = readJson(path.join(runtimeStateDirectory, 'config.json'), null, { strict: true, supportedVersion: true });
   const port = Number(config?.server?.port || 0);
   if (!Number.isInteger(port) || port <= 0) return false;
@@ -241,6 +242,7 @@ async function recoverRequestedSession(expectedEpoch = sessionRecoveryEpoch) {
     throw error;
   }
   sessionRecoveryNextAt = 0;
+  lifecycle?.markRecoveredStart?.({ toolCount: result.toolCount });
   log(`Recovered shared DevMate session generation ${recoveryToken.generation}; tools=${result.toolCount}.`);
   return { recovered: true, result, generation: recoveryToken.generation };
 }
