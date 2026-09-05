@@ -5,6 +5,7 @@ import { requestConversationScope } from './request-context.mjs';
 import { assertSafeWorkspaceRoot } from './sensitive-path-policy.mjs';
 
 export const MAX_CONVERSATION_BINDINGS = 256;
+export const IMPLICIT_CONVERSATION_BINDING_SOURCES = Object.freeze(['auto', 'default']);
 const STORE_KEY = 'conversationWorkspaceBindings';
 
 function pathKey(value) {
@@ -40,6 +41,14 @@ function workspaceRoot(workspace) {
   return String(workspace?.root || workspace?.path || '').trim();
 }
 
+function defaultConfiguredWorkspace(config) {
+  const workspaces = configuredWorkspaces(config);
+  return workspaces.find(item => item?.id === config?.activeWorkspaceId && !item.reference && item.mode !== 'readonly')
+    || workspaces.find(item => item && !item.reference && item.mode !== 'readonly')
+    || workspaces[0]
+    || null;
+}
+
 function containingWorkspace(config, root) {
   const matches = configuredWorkspaces(config)
     .filter(item => workspaceRoot(item) && isInside(workspaceRoot(item), root))
@@ -73,6 +82,10 @@ function syntheticWorkspaceId(scope, root) {
   const scopePart = cleanScope(scope).slice(-10) || 'session';
   const rootPart = crypto.createHash('sha256').update(pathKey(root), 'utf8').digest('hex').slice(0, 12);
   return `chat-${scopePart}-${rootPart}`;
+}
+
+function implicitBindingSource(value) {
+  return IMPLICIT_CONVERSATION_BINDING_SOURCES.includes(String(value || '').trim());
 }
 
 function bindingFromWorkspace(scope, workspace, { source = 'auto', now = Date.now(), rootOverride = '' } = {}) {
@@ -116,6 +129,23 @@ function normalizeBinding(scope, value) {
   };
 }
 
+function workspaceFromBinding(config, binding) {
+  const exact = configuredWorkspaces(config).find(item =>
+    item?.id === binding.workspaceId && workspaceRoot(item) && pathKey(workspaceRoot(item)) === pathKey(binding.root)
+  );
+  if (exact) return { ...exact, conversationBound: true, conversationScope: binding.scope };
+  return {
+    id: binding.workspaceId,
+    name: binding.name,
+    root: binding.root,
+    mode: binding.mode,
+    reference: binding.reference,
+    role: 'conversation',
+    conversationBound: true,
+    conversationScope: binding.scope
+  };
+}
+
 export function pruneConversationWorkspaceBindings(config, now = Date.now()) {
   const values = [];
   for (const [scope, raw] of Object.entries(store(config))) {
@@ -142,35 +172,67 @@ export function conversationWorkspaceBinding(config, scope = requestConversation
   return { ...binding };
 }
 
+export function implicitConversationWorkspaceBinding(config, scope = requestConversationScope()) {
+  const binding = conversationWorkspaceBinding(config, scope);
+  return binding && implicitBindingSource(binding.source) ? binding : null;
+}
+
+export function explicitConversationWorkspaceBinding(config, scope = requestConversationScope()) {
+  const binding = conversationWorkspaceBinding(config, scope);
+  return binding && !implicitBindingSource(binding.source) ? binding : null;
+}
+
 export function publicConversationWorkspaceBinding(config, scope = requestConversationScope()) {
   const binding = conversationWorkspaceBinding(config, scope);
   if (!binding) return null;
+  if (implicitBindingSource(binding.source)) {
+    const active = defaultConfiguredWorkspace(config);
+    if (active) {
+      return {
+        workspaceId: active.id,
+        name: active.name,
+        root: workspaceRoot(active),
+        mode: active.mode || (active.reference ? 'readonly' : 'workspace-write'),
+        source: binding.source,
+        implicit: true
+      };
+    }
+  }
   return {
     workspaceId: binding.workspaceId,
     name: binding.name,
     root: binding.root,
     mode: binding.mode,
-    source: binding.source
+    source: binding.source,
+    implicit: false
   };
 }
 
 export function conversationWorkspace(config, scope = requestConversationScope()) {
   const binding = conversationWorkspaceBinding(config, scope);
   if (!binding) return null;
-  const exact = configuredWorkspaces(config).find(item =>
-    item?.id === binding.workspaceId && workspaceRoot(item) && pathKey(workspaceRoot(item)) === pathKey(binding.root)
-  );
-  if (exact) return { ...exact, conversationBound: true, conversationScope: binding.scope };
-  return {
-    id: binding.workspaceId,
-    name: binding.name,
-    root: binding.root,
-    mode: binding.mode,
-    reference: binding.reference,
-    role: 'conversation',
-    conversationBound: true,
-    conversationScope: binding.scope
-  };
+
+  // Product contract: source=auto/default is not a pinned ChatGPT project.
+  // It means "follow the host default until the user explicitly selects a project".
+  // Therefore an implicit binding resolves dynamically to the current writable
+  // VS Code/Obsidian workspace and may never trap the conversation on an old host root.
+  if (implicitBindingSource(binding.source)) {
+    const active = defaultConfiguredWorkspace(config);
+    if (!active) return null;
+    return {
+      ...active,
+      conversationBound: false,
+      conversationDefault: true,
+      conversationScope: binding.scope
+    };
+  }
+
+  return workspaceFromBinding(config, binding);
+}
+
+export function explicitConversationWorkspace(config, scope = requestConversationScope()) {
+  const binding = explicitConversationWorkspaceBinding(config, scope);
+  return binding ? workspaceFromBinding(config, binding) : null;
 }
 
 export function bindConversationWorkspaceToWorkspace(config, scope, workspace, options = {}) {
@@ -228,7 +290,7 @@ export function sameWorkspaceRoot(left, right) {
 }
 
 export function assertConversationWorkspaceMatch(config, scope, workspace) {
-  const binding = conversationWorkspace(config, scope);
+  const binding = explicitConversationWorkspace(config, scope);
   if (!binding || !workspace) return binding;
   if (sameWorkspaceRoot(binding, workspace)) return binding;
   const error = new Error(`This ChatGPT conversation is bound to ${binding.root}; refusing to access a different workspace (${workspaceRoot(workspace) || workspace.id}). Call workspace_bind to switch this conversation deliberately.`);
@@ -242,9 +304,12 @@ export const __test = {
   STORE_KEY,
   cleanScope,
   containingWorkspace,
+  defaultConfiguredWorkspace,
+  implicitBindingSource,
   isInside,
   normalizeBinding,
   normalizeLocalRoot,
   pathKey,
-  syntheticWorkspaceId
+  syntheticWorkspaceId,
+  workspaceFromBinding
 };

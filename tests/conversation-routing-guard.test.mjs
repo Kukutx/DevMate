@@ -4,9 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  assertConversationWorkspaceMatch,
   bindConversationWorkspaceToPath,
   bindConversationWorkspaceToWorkspace,
-  conversationWorkspaceBinding
+  conversationWorkspace,
+  conversationWorkspaceBinding,
+  explicitConversationWorkspaceBinding,
+  publicConversationWorkspaceBinding
 } from '../gateway/conversation-workspaces.mjs';
 import { installConversationRoutingGuard, __test as routingTest } from '../gateway/conversation-routing-guard.mjs';
 import { serverExtensionHostStatus } from '../gateway/server-extension-host.mjs';
@@ -25,31 +29,50 @@ function workspaceConfig() {
   };
 }
 
-test('unbound ChatGPT project tools fail closed instead of adopting the editor workspace', () => {
+test('unbound ChatGPT project tools keep the current VS Code workspace as the default', () => {
   const config = workspaceConfig();
   const decision = routingTest.routeDecision(config, scope, 'run_command', {});
-  assert.equal(decision.kind, 'error');
-  assert.equal(decision.error.code, 'conversation_workspace_binding_required');
-  assert.match(decision.error.message, /will not use the active VS Code or Obsidian workspace automatically/);
+  assert.equal(decision.kind, 'pass');
+  assert.deepEqual(decision.args, {});
 });
 
-test('legacy default bindings are ignored until the caller selects a project explicitly', () => {
+test('implicit default follows host workspace changes instead of pinning the conversation', () => {
   const config = workspaceConfig();
   bindConversationWorkspaceToWorkspace(config, scope, config.workspaces[0], { source: 'default' });
 
-  const blocked = routingTest.routeDecision(config, scope, 'workspace_map', {});
-  assert.equal(blocked.kind, 'error');
-  assert.equal(blocked.error.code, 'conversation_workspace_binding_required');
-  assert.match(blocked.error.message, /legacy implicit binding/);
+  assert.equal(conversationWorkspace(config, scope).id, 'crew');
+  assert.equal(publicConversationWorkspaceBinding(config, scope).workspaceId, 'crew');
+  assert.equal(publicConversationWorkspaceBinding(config, scope).implicit, true);
+  assert.equal(explicitConversationWorkspaceBinding(config, scope), null);
 
-  const explicit = routingTest.routeDecision(config, scope, 'workspace_map', { workspaceId: 'app' });
-  assert.equal(explicit.kind, 'bind');
-  assert.equal(explicit.selector, 'app');
+  config.activeWorkspaceId = 'app';
+
+  assert.equal(conversationWorkspace(config, scope).id, 'app');
+  assert.equal(publicConversationWorkspaceBinding(config, scope).workspaceId, 'app');
+  assert.equal(conversationWorkspaceBinding(config, scope).workspaceId, 'crew');
 });
 
-test('an explicit conversation binding remains sticky and rejects silent project switches', () => {
+test('an explicit selector replaces an unbound or implicit default route', () => {
+  const config = workspaceConfig();
+  const unbound = routingTest.routeDecision(config, scope, 'workspace_map', { workspaceId: 'app' });
+  assert.equal(unbound.kind, 'bind');
+  assert.equal(unbound.selector, 'app');
+
+  bindConversationWorkspaceToWorkspace(config, scope, config.workspaces[0], { source: 'default' });
+  const implicit = routingTest.routeDecision(config, scope, 'workspace_map', { workspaceId: 'app' });
+  assert.equal(implicit.kind, 'bind');
+  assert.equal(implicit.selector, 'app');
+
+  assert.doesNotThrow(() => assertConversationWorkspaceMatch(config, scope, config.workspaces[1]));
+});
+
+test('an explicit conversation binding remains sticky across host switches', () => {
   const config = workspaceConfig();
   bindConversationWorkspaceToWorkspace(config, scope, config.workspaces[1], { source: 'explicit-workspace' });
+
+  config.activeWorkspaceId = 'crew';
+  assert.equal(conversationWorkspace(config, scope).id, 'app');
+  assert.equal(publicConversationWorkspaceBinding(config, scope).implicit, false);
 
   const same = routingTest.routeDecision(config, scope, 'run_command', { workspaceId: 'app', command: 'echo ok' });
   assert.equal(same.kind, 'pass');
@@ -76,13 +99,13 @@ test('absolute workspaceId compatibility selectors preserve exact path bindings'
   assert.equal(binding.root, fs.realpathSync.native(nested));
 });
 
-test('project-level non-workspace tools are guarded while routing control tools remain available', () => {
-  assert.equal(routingTest.requiresExplicitConversationRoute('job_submit'), true);
-  assert.equal(routingTest.requiresExplicitConversationRoute('work_session_start'), true);
-  assert.equal(routingTest.requiresExplicitConversationRoute('published_preview_list'), true);
-  assert.equal(routingTest.requiresExplicitConversationRoute('workspace_binding_status'), false);
-  assert.equal(routingTest.requiresExplicitConversationRoute('workspace_bind'), false);
-  assert.equal(routingTest.requiresExplicitConversationRoute('list_workspaces'), false);
+test('project-level non-workspace tools are routed while control tools stay available', () => {
+  assert.equal(routingTest.requiresConversationRoute('job_submit'), true);
+  assert.equal(routingTest.requiresConversationRoute('work_session_start'), true);
+  assert.equal(routingTest.requiresConversationRoute('published_preview_list'), true);
+  assert.equal(routingTest.requiresConversationRoute('workspace_binding_status'), false);
+  assert.equal(routingTest.requiresConversationRoute('workspace_bind'), false);
+  assert.equal(routingTest.requiresConversationRoute('list_workspaces'), false);
 });
 
 test('conversation routing decorator executes outside authorization at order 11', () => {

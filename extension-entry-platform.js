@@ -23,6 +23,7 @@ const {
   resolveTunnelExecutable
 } = require('./vscode-host/tunnel-executable.js');
 const { publicConnectionStability } = require('./shared/connection-stability.cjs');
+const { activateWorkspaceManagement, deactivateWorkspaceManagement } = require('./extension-entry-workspaces.js');
 
 const CLOUDFLARE_TOKEN_SECRET = 'devMate.cloudflareTunnelToken';
 const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/';
@@ -460,13 +461,17 @@ async function activate(context) {
 
   innerExtension = require('./extension-entry');
   await innerExtension.activate(context);
+  await activateWorkspaceManagement(context);
   const settings = tunnelSettings(context);
   log(`Connection integration ready: provider=${settings.provider}.`);
 }
 
 async function deactivate(options = {}) {
   try {
-    if (innerExtension?.deactivate) await innerExtension.deactivate(options);
+    try { await deactivateWorkspaceManagement(); }
+    finally {
+      if (innerExtension?.deactivate) await innerExtension.deactivate(options);
+    }
   } finally {
     innerExtension = null;
   }

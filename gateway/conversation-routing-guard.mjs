@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mutateConfig, permissionProfile, readConfig } from './local-shared.mjs';
 import {
+  IMPLICIT_CONVERSATION_BINDING_SOURCES,
   bindConversationWorkspaceToPath,
   bindConversationWorkspaceToWorkspace,
   conversationWorkspaceBinding,
-  publicConversationWorkspaceBinding,
   sameWorkspaceRoot
 } from './conversation-workspaces.mjs';
 import { conversationScopeFromToolContext } from './request-context.mjs';
@@ -14,7 +14,6 @@ import { normalizeInstanceConfig } from './team-access.mjs';
 import { workspaceScopedTool } from './tool-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 
-const IMPLICIT_BINDING_SOURCES = new Set(['auto', 'default']);
 const CONVERSATION_PROJECT_TOOLS = new Set([
   'work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback',
   'workspace_lease_status',
@@ -27,10 +26,10 @@ function selectorFromArgs(args = {}) {
 }
 
 function implicitBinding(binding) {
-  return !!binding && IMPLICIT_BINDING_SOURCES.has(String(binding.source || '').trim());
+  return !!binding && IMPLICIT_CONVERSATION_BINDING_SOURCES.includes(String(binding.source || '').trim());
 }
 
-function requiresExplicitConversationRoute(name) {
+function requiresConversationRoute(name) {
   return workspaceScopedTool(name) || CONVERSATION_PROJECT_TOOLS.has(String(name || ''));
 }
 
@@ -64,19 +63,6 @@ function canonicalWorkspaceArgs(args, binding) {
   return { ...args, workspaceId: binding.workspaceId };
 }
 
-function bindingRequiredError(config, scope, binding = null) {
-  const implicit = implicitBinding(binding)
-    ? ` A legacy implicit binding to ${binding.root} exists but is intentionally ignored until the project is selected explicitly.`
-    : '';
-  const error = new Error(
-    `This ChatGPT conversation is not explicitly bound to a project.${implicit} ` +
-    'Call workspace_bind when that tool is available. If the client cached an older tool list and workspace_bind is unavailable, call list_workspaces and retry the intended project tool with workspaceId set to the desired workspace ID or exact absolute local path. DevMate will not use the active VS Code or Obsidian workspace automatically.'
-  );
-  error.code = 'conversation_workspace_binding_required';
-  error.boundWorkspace = publicConversationWorkspaceBinding(config, scope);
-  return error;
-}
-
 function bindingConflictError(binding, selector) {
   const error = new Error(
     `This ChatGPT conversation is explicitly bound to ${binding.root}; refusing to switch it implicitly to ${selector}. ` +
@@ -95,12 +81,16 @@ function bindingConflictError(binding, selector) {
 }
 
 function routeDecision(config, scope, name, args = {}) {
-  if (!scope || !requiresExplicitConversationRoute(name)) return { kind: 'pass', args, binding: null };
+  if (!scope || !requiresConversationRoute(name)) return { kind: 'pass', args, binding: null };
   const binding = conversationWorkspaceBinding(config, scope);
   const selector = selectorFromArgs(args);
 
+  // Product contract:
+  // - no explicit selector => keep following the current VS Code/Obsidian workspace;
+  // - first explicit selector => pin this ChatGPT conversation to that project;
+  // - an explicit binding stays sticky until workspace_bind deliberately changes it.
   if (!binding || implicitBinding(binding)) {
-    if (!selector) return { kind: 'error', error: bindingRequiredError(config, scope, binding), binding };
+    if (!selector) return { kind: 'pass', args, binding };
     return { kind: 'bind', selector, binding };
   }
 
@@ -149,7 +139,7 @@ export function installConversationRoutingGuard(McpServerClass) {
     id: 'devmate.conversation-routing',
     order: 11,
     decorate({ name, handler }) {
-      if (!requiresExplicitConversationRoute(name)) return { handler };
+      if (!requiresConversationRoute(name)) return { handler };
       return {
         handler: async function conversationRoutedHandler(args = {}, ...rest) {
           const scope = conversationScopeFromToolContext(rest[0]);
@@ -163,13 +153,11 @@ export function installConversationRoutingGuard(McpServerClass) {
 
 export const __test = {
   CONVERSATION_PROJECT_TOOLS,
-  IMPLICIT_BINDING_SOURCES,
   bindingConflictError,
-  bindingRequiredError,
   canonicalWorkspaceArgs,
   implicitBinding,
   normalizedLocalSelectorRoot,
-  requiresExplicitConversationRoute,
+  requiresConversationRoute,
   routeDecision,
   selectorFromArgs,
   selectorMatchesBinding

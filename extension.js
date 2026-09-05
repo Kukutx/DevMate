@@ -1059,7 +1059,7 @@ function panelHtml(ctx, webview){
   <h2>DevMate ${VERSION}</h2>
   <div class="ready-card"><strong>${esc(statusLabel(publicState))}</strong><span class="muted">${esc(publicState.verified ? chatgptDetail : ['failed','recovering'].includes(publicState.state) ? connectionErrorSummary({message:publicState.failure,code:publicState.failureCode}) : 'DevMate is preparing the public MCP connection automatically.')}</span></div>
   <div class="status-grid">
-    <b>Active project</b><code>${esc(root || 'Open a VS Code folder first')}</code>
+    <b>Current Project</b><code>${esc(root || 'Open a VS Code folder first')}</code>
     <b>MCP</b><code>${esc(mcpDisplay)}</code>
     <b>Connection</b><code>${esc(ingressDisplay)}</code>
   </div>
@@ -1069,6 +1069,7 @@ function panelHtml(ctx, webview){
     <button class="secondary" data-cmd="restart">Restart</button>
     <button data-cmd="copyUrl">Copy MCP URL</button>
     <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>
+    <button class="secondary" data-cmd="manageWorkspaces">Manage Workspaces</button>
   </div>
   <p class="flow muted">${esc(chatgptFlow)}</p>
   <details>
@@ -1111,7 +1112,7 @@ function panelHtml(ctx, webview){
   </details>
   <details>
     <summary>Workspace state</summary>
-    <p class="muted">DevMate keeps one writable active workspace. Add other projects as readonly references.</p>
+    <p class="muted">The Current Project follows VS Code. Additional writable workspaces can be managed separately and selected per ChatGPT conversation; reference projects remain readonly.</p>
     <pre>${esc(JSON.stringify(workspaceState,null,2))}</pre>
   </details>
   <script nonce="${n}">
@@ -1142,6 +1143,7 @@ function openPanel(ctx){
     if(m.cmd==='restart') await lifecycleOperations.run('restart',()=>restartAll(ctx));
     if(m.cmd==='doctor') await doctor(ctx);
     if(m.cmd==='connectionSetup') await vscode.commands.executeCommand('devMate.connectionSetup');
+    if(m.cmd==='manageWorkspaces') await vscode.commands.executeCommand('devMate.manageWorkspaces');
     if(m.cmd==='addReference') await addReference(ctx);
     if(m.cmd==='addReferenceInput') await addReferenceInput(ctx, m.value);
     if(m.cmd==='addReferenceClipboard') await addReferenceFromClipboard(ctx);
