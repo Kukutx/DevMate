@@ -61,7 +61,7 @@
     "onCommand:devMate.copyHostDiagnostics",
     "onCommand:devMate.hostSelfCheck"
   ],
-  "main": "./extension-entry-workspaces.js",
+  "main": "./extension-entry-shared-tunnel.js",
   "contributes": {
     "commands": [
       {
