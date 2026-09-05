@@ -1,0 +1,52 @@
+name: Fix workspace panel newlines
+
+on:
+  push:
+    branches:
+      - fix/pin-project-only-after-explicit-selection
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/pin-project-only-after-explicit-selection
+      - name: Normalize source newlines
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'extension.js';
+          let source = fs.readFileSync(file, 'utf8');
+          const changes = [
+            [
+              '<button class="secondary" data-cmd="connectionSetup">Connection Setup</button>\\n    <button class="secondary" data-cmd="manageWorkspaces">Manage Workspaces</button>',
+              '<button class="secondary" data-cmd="connectionSetup">Connection Setup</button>\n    <button class="secondary" data-cmd="manageWorkspaces">Manage Workspaces</button>'
+            ],
+            [
+              "if(m.cmd==='connectionSetup') await vscode.commands.executeCommand('devMate.connectionSetup');\\n    if(m.cmd==='manageWorkspaces') await vscode.commands.executeCommand('devMate.manageWorkspaces');",
+              "if(m.cmd==='connectionSetup') await vscode.commands.executeCommand('devMate.connectionSetup');\n    if(m.cmd==='manageWorkspaces') await vscode.commands.executeCommand('devMate.manageWorkspaces');"
+            ]
+          ];
+          for (const [from, to] of changes) {
+            const count = source.split(from).length - 1;
+            if (count !== 1) throw new Error(`Expected exactly one newline patch match, found ${count}`);
+            source = source.replace(from, to);
+          }
+          fs.writeFileSync(file, source);
+          NODE
+      - name: Commit normalized source and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/fix-workspace-panel-newlines.yml
+          git config user.name "DevMate CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add extension.js .github/workflows/fix-workspace-panel-newlines.yml
+          git commit -m "fix: normalize workspace panel source"
+          git push origin HEAD:fix/pin-project-only-after-explicit-selection
