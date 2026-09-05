@@ -25,22 +25,26 @@ function workspaceConfig() {
   };
 }
 
-test('unbound ChatGPT project tools fail closed instead of adopting the editor workspace', () => {
+test('unbound ChatGPT project tools preserve the current editor default when no project was specified', () => {
   const config = workspaceConfig();
   const decision = routingTest.routeDecision(config, scope, 'run_command', {});
-  assert.equal(decision.kind, 'error');
-  assert.equal(decision.error.code, 'conversation_workspace_binding_required');
-  assert.match(decision.error.message, /will not use the active VS Code or Obsidian workspace automatically/);
+  assert.equal(decision.kind, 'pass');
+  assert.deepEqual(decision.args, {});
 });
 
-test('legacy default bindings are ignored until the caller selects a project explicitly', () => {
+test('an explicit selector on an unbound conversation wins over the editor default', () => {
+  const config = workspaceConfig();
+  const decision = routingTest.routeDecision(config, scope, 'run_command', { workspaceId: 'app', command: 'echo ok' });
+  assert.equal(decision.kind, 'bind');
+  assert.equal(decision.selector, 'app');
+});
+
+test('default bindings remain usable until the caller explicitly selects another project', () => {
   const config = workspaceConfig();
   bindConversationWorkspaceToWorkspace(config, scope, config.workspaces[0], { source: 'default' });
 
-  const blocked = routingTest.routeDecision(config, scope, 'workspace_map', {});
-  assert.equal(blocked.kind, 'error');
-  assert.equal(blocked.error.code, 'conversation_workspace_binding_required');
-  assert.match(blocked.error.message, /legacy implicit binding/);
+  const inherited = routingTest.routeDecision(config, scope, 'workspace_map', {});
+  assert.equal(inherited.kind, 'pass');
 
   const explicit = routingTest.routeDecision(config, scope, 'workspace_map', { workspaceId: 'app' });
   assert.equal(explicit.kind, 'bind');
