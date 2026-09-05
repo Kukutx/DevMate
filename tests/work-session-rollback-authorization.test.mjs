@@ -10,6 +10,7 @@ const workspaceRoot = path.join(temp, 'workspace');
 const configPath = path.join(temp, 'config.json');
 await fsp.mkdir(workspaceRoot, { recursive: true });
 process.env.DEVMATE_CONFIG = configPath;
+process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const config = configStore.newInstanceConfig({ workspaceRoot, appVersion: configStore.DEFAULT_VERSION });
 config.auth = { mode: 'oauth' };
@@ -24,67 +25,93 @@ configStore.atomicWriteJson(configPath, config);
 const alice = teamAccess.verifyMemberLoginCode(aliceCreated.loginCode, config);
 const bob = teamAccess.verifyMemberLoginCode(bobCreated.loginCode, config);
 
-const { audit } = await import('../gateway/local-shared.mjs');
-const { drainAllAuditLogs } = await import('../gateway/audit-log-coordinator.mjs');
+const store = await import('../gateway/backup-store.mjs');
+const { runWithWorkSessionContext } = await import('../gateway/request-context.mjs');
 const { rollbackWorkSession } = await import('../gateway/work-session-rollback.mjs');
+const { startWorkSession, clearWorkSessions } = await import('../gateway/work-sessions.mjs');
 const { acquireWorkspaceLease, clearWorkspaceLeases } = await import('../gateway/workspace-leases.mjs');
+const workspace = { id: 'app', name: 'app', root: workspaceRoot };
+await store.initializeBackupStore({ purgeLegacy: true });
 
-async function recordCreatedSession(id, principal, fileName) {
+async function recordCreatedSession(principal, fileName) {
+  const session = startWorkSession({ principal, workspaceId: 'app', ttlSeconds: 300 });
   const file = path.join(workspaceRoot, fileName);
+  const snapshot = await runWithWorkSessionContext(session.id, () => store.createBackupSnapshot({
+    workspace,
+    action: 'create_file',
+    entries: [{ role: 'target-before', originalPath: fileName, sourcePath: null }]
+  }));
+  await store.completeBackupSnapshot(snapshot.id);
   await fsp.writeFile(file, 'created in session', 'utf8');
-  await audit('work_session_start', {
-    principalId: principal.id,
-    principalName: principal.name,
-    workspace: 'app'
-  }, { workSessionId: id });
-  await audit('create_file', {
-    workspace: 'app',
-    path: fileName,
-    backup: null
-  }, { workSessionId: id });
-  return file;
+  return { session, file };
 }
 
-test('maintainer must opt in with force before rolling back another OAuth member work session', async () => {
+test('maintainer must opt in with force before rolling back another principal manifest history', async () => {
   clearWorkspaceLeases();
-  const id = 'work-owned-by-alice';
-  const file = await recordCreatedSession(id, alice, 'alice-created.txt');
+  clearWorkSessions();
+  const { session, file } = await recordCreatedSession(alice, 'alice-created.txt');
+  clearWorkspaceLeases();
   acquireWorkspaceLease({ workspaceId: 'app', principal: bob, ttlSeconds: 300 });
 
   await assert.rejects(
-    rollbackWorkSession({ workSessionId: id, principal: bob }),
+    rollbackWorkSession({ workSessionId: session.id, principal: bob }),
     /requires force=true/
   );
   assert.equal(await fsp.stat(file).then(() => true, () => false), true);
 
-  const result = await rollbackWorkSession({ workSessionId: id, principal: bob, force: true });
+  const result = await rollbackWorkSession({ workSessionId: session.id, principal: bob, force: true });
   assert.equal(result.force, true);
+  assert.equal(result.snapshots, 1);
   assert.equal(await fsp.stat(file).then(() => true, () => false), false);
 });
 
-test('rollback refuses audit history when work-session ownership metadata is unavailable', async () => {
+test('rollback does not depend on audit history and fails closed for unknown session ids', async () => {
   clearWorkspaceLeases();
-  const id = 'work-missing-owner';
-  const fileName = 'unknown-created.txt';
-  const file = path.join(workspaceRoot, fileName);
-  await fsp.writeFile(file, 'unknown owner', 'utf8');
-  await audit('create_file', {
-    workspace: 'app',
-    path: fileName,
-    backup: null
-  }, { workSessionId: id });
   acquireWorkspaceLease({ workspaceId: 'app', principal: alice, ttlSeconds: 300 });
-
   await assert.rejects(
-    rollbackWorkSession({ workSessionId: id, principal: alice }),
-    /ownership metadata is unavailable/
+    rollbackWorkSession({ workSessionId: 'work-no-manifest-history', principal: alice }),
+    /backup history not found/
   );
-  assert.equal(await fsp.stat(file).then(() => true, () => false), true);
+});
+
+test('rollback restores crash-unknown prepared snapshots but skips explicitly failed snapshots', async () => {
+  clearWorkspaceLeases();
+  clearWorkSessions();
+  const session = startWorkSession({ principal: alice, workspaceId: 'app', ttlSeconds: 300 });
+  const crashFileName = 'crash-unknown-created.txt';
+  const failedFileName = 'failed-created-later.txt';
+
+  const prepared = await runWithWorkSessionContext(session.id, () => store.createBackupSnapshot({
+    workspace,
+    action: 'create_file',
+    entries: [{ role: 'target-before', originalPath: crashFileName, sourcePath: null }]
+  }));
+  assert.equal(prepared.mutationState, 'prepared');
+  await fsp.writeFile(path.join(workspaceRoot, crashFileName), 'mutation happened before crash metadata', 'utf8');
+
+  const failed = await runWithWorkSessionContext(session.id, () => store.createBackupSnapshot({
+    workspace,
+    action: 'create_file',
+    entries: [{ role: 'target-before', originalPath: failedFileName, sourcePath: null }]
+  }));
+  const simulated = new Error('known mutation failure');
+  simulated.code = 'KNOWN_FAILURE';
+  await store.failBackupSnapshot(failed.id, simulated);
+  await fsp.writeFile(path.join(workspaceRoot, failedFileName), 'later unrelated file', 'utf8');
+
+  clearWorkspaceLeases();
+  acquireWorkspaceLease({ workspaceId: 'app', principal: alice, ttlSeconds: 300 });
+  const result = await rollbackWorkSession({ workSessionId: session.id, principal: alice });
+  assert.equal(result.snapshots, 1);
+  assert.equal(result.failedSnapshotsSkipped, 1);
+  assert.equal(await fsp.stat(path.join(workspaceRoot, crashFileName)).then(() => true, () => false), false);
+  assert.equal(await fsp.readFile(path.join(workspaceRoot, failedFileName), 'utf8'), 'later unrelated file');
 });
 
 test.after(async () => {
   clearWorkspaceLeases();
-  await drainAllAuditLogs();
+  clearWorkSessions();
+  delete process.env.DEVMATE_DISABLE_INSTANCE_LOCK;
   delete process.env.DEVMATE_CONFIG;
   await fsp.rm(temp, { recursive: true, force: true });
 });

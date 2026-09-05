@@ -3,67 +3,86 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import configStore from '../shared/config-store.cjs';
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-backup-access-guard-'));
+const workspaceRoot = path.join(root, 'workspace');
 const configPath = path.join(root, 'config.json');
-const backupRoot = path.join(root, 'state', 'backups');
+await fsp.mkdir(workspaceRoot, { recursive: true });
 process.env.DEVMATE_CONFIG = configPath;
-await fsp.mkdir(backupRoot, { recursive: true });
-await fsp.writeFile(configPath, '{"version":11}\n', 'utf8');
+process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
+const config = configStore.newInstanceConfig({ workspaceRoot, appVersion: configStore.DEFAULT_VERSION });
+config.activeWorkspaceId = 'app';
+config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'App', role: 'active' };
+configStore.atomicWriteJson(configPath, config);
 
+const store = await import('../gateway/backup-store.mjs');
 const guard = await import('../gateway/backup-access-guard.mjs');
+const workspace = { id: 'app', name: 'App', root: workspaceRoot };
+await store.initializeBackupStore({ purgeLegacy: true });
 
-function backupPath(rel, stamp = '2026-08-24T00-00-00-000Z-1-deadbeef') {
-  return path.join(backupRoot, stamp, ...rel.split('/'));
+async function safeBackup(originalPath, content = 'safe') {
+  const source = path.join(workspaceRoot, ...String(originalPath).split('/').filter(Boolean));
+  await fsp.mkdir(path.dirname(source), { recursive: true });
+  await fsp.writeFile(source, content, 'utf8');
+  const snapshot = await store.createBackupSnapshot({
+    workspace,
+    action: 'write_file',
+    entries: [{ role: 'target-before', originalPath, sourcePath: source }]
+  });
+  await store.completeBackupSnapshot(snapshot.id);
+  return snapshot.id;
 }
 
-test('derives the original workspace path from automatic backup layout', () => {
-  assert.equal(guard.__test.backupOriginalRelative(backupPath('src/app.js')), 'src/app.js');
-  assert.equal(guard.__test.backupOriginalRelative(backupPath('.aws/credentials')), '.aws/credentials');
-});
+test('new backup access uses manifest identity and store blocks protected paths', async () => {
+  const id = await safeBackup('src/app.js');
+  const source = await guard.__test.assertBackupAccess(id, 'src/app.js');
+  assert.equal(source.entry.originalPath, 'src/app.js');
 
-test('restore access rejects protected historical backup sources even with a safe future target', () => {
   for (const rel of ['.env', '.npmrc', '.aws/credentials', '.docker/config.json', 'keys/release.p12']) {
-    assert.throws(
-      () => guard.__test.assertBackupAccess(backupPath(rel)),
-      error => error?.code === 'sensitive_workspace_path'
+    const file = path.join(workspaceRoot, `secret-${Math.random().toString(16).slice(2)}.txt`);
+    await fsp.writeFile(file, 'secret-like payload', 'utf8');
+    await assert.rejects(
+      store.createBackupSnapshot({
+        workspace,
+        action: 'write_file',
+        entries: [{ role: 'target-before', originalPath: rel, sourcePath: file }]
+      }),
+      error => error?.cause?.code === 'sensitive_workspace_path' || error?.code === 'sensitive_workspace_path'
     );
   }
-  const safe = guard.__test.assertBackupAccess(backupPath('src/app.js'));
-  assert.equal(safe.originalRel, 'src/app.js');
 });
 
-test('backup paths outside the automatic backup root fail closed', () => {
-  assert.throws(
-    () => guard.__test.assertBackupAccess(path.join(root, 'elsewhere', 'stamp', 'src', 'app.js')),
-    error => error?.code === 'backup_path_invalid'
+test('legacy path identifiers have no fallback', async () => {
+  await assert.rejects(
+    guard.__test.assertBackupAccess(path.join(root, 'state', 'backups', 'legacy', 'src', 'app.js')),
+    error => error?.code === 'backup_id_invalid'
   );
-  assert.throws(
-    () => guard.__test.assertBackupAccess(path.join(backupRoot, 'orphan-without-original-path')),
-    error => error?.code === 'backup_path_invalid'
+  await assert.rejects(
+    guard.__test.assertBackupAccess('2026-08-24T00-00-00-000Z-legacy'),
+    error => error?.code === 'backup_id_invalid'
   );
 });
 
-test('list_backups hides protected historical entries and reports the omission count', () => {
+test('list filtering remains fail-closed for protected manifest entries', () => {
+  const safe = { id: 'bkp-safe', entries: [{ originalPath: 'src/app.js' }] };
   const result = {
-    structuredContent: {
-      backups: [
-        { path: backupPath('src/app.js'), size: 10 },
-        { path: backupPath('.env'), size: 20 },
-        { path: backupPath('.kube/config'), size: 30 },
-        { path: path.join(root, 'not-a-backup'), size: 40 }
-      ]
-    },
+    structuredContent: { backups: [
+      safe,
+      { id: 'bkp-secret', entries: [{ originalPath: '.env' }] },
+      { id: 'bkp-nested', entries: [{ originalPath: '.kube/config' }] },
+      { id: 'bkp-invalid', entries: [] }
+    ] },
     content: [{ type: 'text', text: '{}' }]
   };
   guard.__test.filterBackupList(result);
-  assert.deepEqual(result.structuredContent.backups, [{ path: backupPath('src/app.js'), size: 10 }]);
+  assert.deepEqual(result.structuredContent.backups, [safe]);
   assert.equal(result.structuredContent.sensitiveBackupsOmitted, 3);
-  assert.match(result.content[0].text, /sensitiveBackupsOmitted/);
   assert.doesNotMatch(result.content[0].text, /\.env|\.kube/);
 });
 
 test.after(async () => {
+  delete process.env.DEVMATE_DISABLE_INSTANCE_LOCK;
   delete process.env.DEVMATE_CONFIG;
   await fsp.rm(root, { recursive: true, force: true });
 });

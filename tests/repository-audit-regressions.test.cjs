@@ -13,7 +13,10 @@ test('instance lock lease uses current requestPolicy timeout', () => {
 });
 
 test('automatic backups fail closed before destructive file mutations', () => {
-  const server = source('gateway/server.mjs');
-  assert.match(server, /Backup failed before mutation/);
-  assert.doesNotMatch(server, /return `backup_failed:/);
+  const store = source('gateway/backup-store.mjs');
+  const mutations = source('gateway/file-mutation-safety.mjs');
+  assert.match(store, /Backup failed before mutation/);
+  assert.match(mutations, /createMutationSnapshot[\s\S]*transactionalDelete/);
+  assert.match(mutations, /createMutationSnapshot[\s\S]*transactionalMove/);
+  assert.doesNotMatch(store, /backup_failed:/);
 });

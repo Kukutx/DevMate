@@ -11,9 +11,9 @@ Every current instance uses the same work-session model:
 - `work_session_finish`
 - `work_session_rollback`
 
-`work_session_start` binds the caller to one workspace and acquires that workspace lease when required by policy. Core file, command, validation and Git calls made while the session is active are associated with its `workSessionId` in the audit log.
+`work_session_start` binds the caller to one workspace and acquires that workspace lease when required by policy. Core file mutations made while the session is active create committed automatic backup snapshots tagged with the session and principal. Audit events remain observability data; rollback correctness does not depend on audit-log retention.
 
-`work_session_rollback` safely reverses recorded file mutations such as create, write, patch, delete, move and backup restore. It does not automatically reverse shell commands or Git history. When workspace-lease policy applies to the caller, the caller must hold the affected workspace lease before rollback. A finished session can therefore be rolled back later after reacquiring the lease.
+`work_session_rollback` safely reverses committed snapshot history for create, write, patch, delete, move and backup restore, including directory snapshots. It does not automatically reverse shell commands or Git history. When workspace-lease policy applies to the caller, the caller must hold the affected workspace lease before rollback. A finished session can therefore be rolled back later after reacquiring the lease while its backup snapshots remain retained.
 
 ## Instance, connection and team operations
 
@@ -241,6 +241,8 @@ Process and preview identifiers are resolved back to their workspace before team
 
 - `read_file`, `write_file`, `create_file`, `apply_patch`, `delete_file`, `move_file`
 - `list_backups`, `restore_backup`, `read_audit_log`
+
+`list_backups` reads the rebuildable append-only backup index and can filter by workspace, original path, action, time window, work session and mutation state (`prepared`, `completed`, or `failed`). `restore_backup` addresses only the current manifest format by `backupId` plus optional `entryPath`; it validates the snapshot hash and workspace/root identity before restoring a file, directory or recorded absence. No legacy backup-path fallback exists.
 
 ## Commands
 

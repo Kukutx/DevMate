@@ -269,7 +269,8 @@ try {
   const finish = await rpc('tools/call', { name: 'work_session_finish', arguments: { id: workSessionId } });
   assert(finish.response.ok && finish.text.includes('finished'), `work_session_finish failed: ${finish.text}`);
   const rollback = await rpc('tools/call', { name: 'work_session_rollback', arguments: { workSessionId } });
-  assert(rollback.response.ok && rollback.text.includes('removed'), `work_session_rollback failed: ${rollback.text}`);
+  const rollbackJson = JSON.parse(rollback.json.result.content[0].text);
+  assert(rollback.response.ok && rollbackJson.snapshots === 1 && rollbackJson.results?.[0]?.backupId && rollbackJson.results?.[0]?.restored?.length === 1, `work_session_rollback failed: ${rollback.text}`);
   const rolledBackRead = await rpc('tools/call', { name: 'read_file', arguments: { path: tempPath } });
   assertToolError(rolledBackRead, 'rollback removed file');
 

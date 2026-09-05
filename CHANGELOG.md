@@ -1,6 +1,8 @@
 # Changelog
 
 ## 3.6.6
+- Replaced the legacy path-based automatic backup layout with committed manifest snapshots, an append-only rebuildable `index.jsonl`, canonical workspace/root identity, integrity hashes, file and directory restore, explicit prepared/completed/failed mutation states, and no legacy fallback. Existing legacy automatic backup directories are purged when the new Gateway starts.
+- Made work-session rollback read durable backup manifest history instead of the bounded audit log, preserve crash-unknown prepared snapshots while skipping explicit failures, added no-op backup suppression, 20k snapshot/tree bounds, pre-mutation capacity fencing, fair multi-workspace retention, a 24-hour session recovery grace window, and increased the default automatic-backup budget to 512 MiB.
 - Hardened authoritative VS Code shared-config reads so Windows atomic replacement can no longer surface a healthy config as missing.
 - Kept one machine-wide desktop state authority across empty windows and project switches, while preserving existing shared sessions and explicit overrides.
 - Reduced focus-driven shared-state churn by deduplicating timestamp-only editor context updates without losing real active-host handoffs.

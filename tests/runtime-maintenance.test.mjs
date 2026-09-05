@@ -16,6 +16,8 @@ await fsp.mkdir(backupRoot, { recursive: true });
 
 const config = configStore.newInstanceConfig({ workspaceRoot: workspace, port: 8787, appVersion: configStore.DEFAULT_VERSION });
 config.jobs.embeddedRunnerEnabled = false;
+config.activeWorkspaceId = 'app';
+config.workspaces[0] = { ...config.workspaces[0], id: 'app', name: 'App', role: 'active' };
 config.maintenance = {
   backupRetentionDays: 30,
   auditRetentionDays: 30,
@@ -26,6 +28,7 @@ configStore.atomicWriteJson(configPath, config);
 process.env.DEVMATE_CONFIG = configPath;
 process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
+const store = await import('../gateway/backup-store.mjs');
 const {
   runRuntimeMaintenanceOnce,
   runtimeMaintenanceStatus,
@@ -33,45 +36,49 @@ const {
   stopRuntimeMaintenance
 } = await import('../gateway/runtime-maintenance.mjs');
 const { sharedHttpRequestConcurrency } = await import('../gateway/request-concurrency.mjs');
+const workspaceDescriptor = { id: 'app', name: 'App', root: workspace };
 
-test('runtime maintenance trims audit high-water and changed backup state only while idle', async () => {
+async function createSnapshot(name, bytes, maxBackupBytes = 2 * 1024 * 1024) {
+  const file = path.join(workspace, name);
+  await fsp.writeFile(file, Buffer.alloc(bytes, 1));
+  const snapshot = await store.createBackupSnapshot({
+    workspace: workspaceDescriptor,
+    action: 'delete_file',
+    entries: [{ role: 'target-before', originalPath: name, sourcePath: file }],
+    maxBackupBytes
+  });
+  await store.completeBackupSnapshot(snapshot.id);
+  return { id: snapshot.id, setRoot: path.join(backupRoot, snapshot.id) };
+}
+
+test('runtime maintenance trims audit high-water and indexed backup state only while idle', async () => {
+  await store.initializeBackupStore({ purgeLegacy: true });
   const auditLines = Array.from({ length: 2200 }, (_, index) => JSON.stringify({
-    time: new Date().toISOString(),
-    index,
-    action: 'tool_call',
-    payload: 'x'.repeat(180)
+    time: new Date().toISOString(), index, action: 'tool_call', payload: 'x'.repeat(180)
   }));
   await fsp.writeFile(auditLog, `${auditLines.join('\n')}\n`, 'utf8');
-
-  const oldest = path.join(backupRoot, '2026-08-20T00-00-00-000Z-old');
-  const newest = path.join(backupRoot, '2026-08-20T00-00-01-000Z-new');
-  await fsp.mkdir(oldest, { recursive: true });
-  await fsp.mkdir(newest, { recursive: true });
-  await fsp.writeFile(path.join(oldest, 'snapshot.bin'), Buffer.alloc(700 * 1024, 1));
-  await fsp.writeFile(path.join(newest, 'snapshot.bin'), Buffer.alloc(700 * 1024, 2));
-  const oldDate = new Date('2026-08-20T00:00:00.000Z');
-  const newDate = new Date('2026-08-20T00:00:01.000Z');
-  await fsp.utimes(oldest, oldDate, oldDate);
-  await fsp.utimes(newest, newDate, newDate);
+  const oldest = await createSnapshot('old.bin', 700 * 1024);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const newest = await createSnapshot('new.bin', 700 * 1024, 3 * 1024 * 1024);
+  assert.equal((await store.backupStoreStatus()).backupSets, 2);
   const healthFile = path.join(stateRoot, 'runtime-maintenance.json');
   await fsp.writeFile(healthFile, '{"version":1,"status":"degraded"}\n', 'utf8');
 
   startRuntimeMaintenance({
-    paths: { stateRoot, backupRoot, auditLog },
+    paths: { stateRoot, backupRoot, auditLog, configFile: configPath },
     options: config.maintenance,
     intervalMs: 60_000
   });
-
   try {
-    const first = await runRuntimeMaintenanceOnce();
+    const first = await runRuntimeMaintenanceOnce({ force: true });
     assert.equal(first.skipped, false);
     assert(first.audit.afterBytes <= config.maintenance.maxAuditBytes);
     assert(first.audit.removedEntries > 0);
     assert(first.backups.afterBytes <= config.maintenance.maxBackupBytes);
     assert.equal(first.backups.afterSets, 1);
-    await assert.rejects(fsp.stat(oldest));
-    await fsp.stat(newest);
-    await assert.rejects(fsp.stat(healthFile), 'a successful maintenance check must clear a marker from a previous process');
+    await assert.rejects(fsp.stat(oldest.setRoot));
+    await fsp.stat(newest.setRoot);
+    await assert.rejects(fsp.stat(healthFile), 'successful maintenance clears stale degraded marker');
 
     const second = await runRuntimeMaintenanceOnce();
     assert.equal(second.skipped, true);
@@ -83,13 +90,12 @@ test('runtime maintenance trims audit high-water and changed backup state only w
 
 test('runtime maintenance skips retention work while an HTTP request is active', async () => {
   startRuntimeMaintenance({
-    paths: { stateRoot, backupRoot, auditLog },
+    paths: { stateRoot, backupRoot, auditLog, configFile: configPath },
     options: config.maintenance,
     intervalMs: 60_000
   });
   const request = sharedHttpRequestConcurrency.enter('maintenance-busy-test', 4, 4);
   assert.equal(request.allowed, true);
-
   try {
     const result = await runRuntimeMaintenanceOnce();
     assert.equal(result.skipped, true);
@@ -100,40 +106,27 @@ test('runtime maintenance skips retention work while an HTTP request is active',
   }
 });
 
-test('runtime maintenance fences stale completion when the scheduler is reconfigured', async () => {
+test('runtime maintenance fences stale completion when scheduler paths are reconfigured', async () => {
   const oldState = path.join(root, 'old-generation');
   const newState = path.join(root, 'new-generation');
-  const oldBackups = path.join(oldState, 'backups');
-  const newBackups = path.join(newState, 'backups');
-  await fsp.mkdir(oldBackups, { recursive: true });
-  await fsp.mkdir(newBackups, { recursive: true });
-  for (const name of ['a', 'b']) {
-    const set = path.join(oldBackups, name);
-    await fsp.mkdir(set);
-    await fsp.writeFile(path.join(set, 'snapshot.bin'), Buffer.alloc(32, 1));
-  }
-  const newSet = path.join(newBackups, 'current');
-  await fsp.mkdir(newSet);
-  await fsp.writeFile(path.join(newSet, 'snapshot.bin'), Buffer.alloc(32, 2));
-
+  await fsp.mkdir(oldState, { recursive: true });
+  await fsp.mkdir(newState, { recursive: true });
   startRuntimeMaintenance({
-    paths: { stateRoot: oldState, backupRoot: oldBackups, auditLog: path.join(oldState, 'audit.jsonl') },
+    paths: { stateRoot: oldState, backupRoot: path.join(oldState, 'backups'), auditLog: path.join(oldState, 'audit.jsonl'), configFile: path.join(root, 'old-config.json') },
     options: config.maintenance,
     intervalMs: 60_000
   });
   const oldRun = runRuntimeMaintenanceOnce({ force: true });
-
   const newStart = startRuntimeMaintenance({
-    paths: { stateRoot: newState, backupRoot: newBackups, auditLog: path.join(newState, 'audit.jsonl') },
+    paths: { stateRoot: newState, backupRoot: path.join(newState, 'backups'), auditLog: path.join(newState, 'audit.jsonl'), configFile: path.join(root, 'new-config.json') },
     options: config.maintenance,
     intervalMs: 60_000
   });
   const newRun = runRuntimeMaintenanceOnce({ force: true });
-
   try {
     const [oldResult, newResult] = await Promise.all([oldRun, newRun]);
-    assert.equal(oldResult.backups.beforeSets, 2);
-    assert.equal(newResult.backups.beforeSets, 1, 'a caller after reconfigure must receive the current generation result');
+    assert.equal(oldResult.skipped, false);
+    assert.equal(newResult.skipped, false);
     const status = runtimeMaintenanceStatus();
     assert.equal(status.generation, newStart.generation);
     assert.deepEqual(status.lastResult, newResult, 'stale completion must not overwrite current generation status');
@@ -149,11 +142,11 @@ test('runtime maintenance refuses paths that could escape its state boundary', (
     /cannot be a filesystem root/
   );
   assert.throws(
-    () => startRuntimeMaintenance({ paths: { stateRoot, backupRoot: path.join(root, 'outside-backups'), auditLog } }),
+    () => startRuntimeMaintenance({ paths: { stateRoot, backupRoot: path.join(root, 'outside-backups'), auditLog, configFile: configPath } }),
     /backupRoot must be inside stateRoot/
   );
   assert.throws(
-    () => startRuntimeMaintenance({ paths: { stateRoot, backupRoot, auditLog: path.join(root, 'outside-audit.jsonl') } }),
+    () => startRuntimeMaintenance({ paths: { stateRoot, backupRoot, auditLog: path.join(root, 'outside-audit.jsonl'), configFile: configPath } }),
     /auditLog must be inside stateRoot/
   );
 });

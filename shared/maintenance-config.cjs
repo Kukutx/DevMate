@@ -3,7 +3,7 @@
 const DEFAULT_MAINTENANCE = Object.freeze({
   backupRetentionDays: 30,
   auditRetentionDays: 30,
-  maxBackupBytes: 256 * 1024 * 1024,
+  maxBackupBytes: 512 * 1024 * 1024,
   maxAuditBytes: 5 * 1024 * 1024
 });
 

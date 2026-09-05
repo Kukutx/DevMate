@@ -122,15 +122,7 @@ async function assertNoSensitiveDescendants(workspace, rel) {
 }
 
 function restoreTargetRelative(args = {}) {
-  if (args.targetPath) return String(args.targetPath);
-  const configPath = String(process.env.DEVMATE_CONFIG || '').trim();
-  const backupPath = String(args.backupPath || '').trim();
-  if (!configPath || !backupPath) return '';
-  const backupRoot = path.join(path.dirname(path.resolve(configPath)), 'state', 'backups');
-  const full = path.resolve(backupPath);
-  if (!isInside(backupRoot, full)) return '';
-  const parts = path.relative(backupRoot, full).split(path.sep).filter(Boolean);
-  return parts.length >= 2 ? normalizeSlash(parts.slice(1).join('/')) : '';
+  return String(args.targetPath || args.entryPath || '');
 }
 
 function guardExplicitPaths(name, args = {}) {

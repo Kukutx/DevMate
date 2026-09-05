@@ -151,7 +151,7 @@ Refresh-family mutation persists revocation before surfacing replay, binding-mis
 Other state includes:
 
 - `state/audit.jsonl`: bounded, redacted audit events;
-- `state/backups/`: automatic file backups;
+- `state/backups/`: committed automatic mutation snapshots. Each backup set has a versioned manifest, payload integrity hashes, a commit marker, workspace/root identity, optional work-session metadata, and a rebuildable `index.jsonl` append-only event index. Legacy path-only backup sets are not read and are purged by current Gateway startup;
 - `references/github/`: readonly reference clones;
 - provider ownership and startup-lease records;
 - workspace-contained plugin/project artifacts.

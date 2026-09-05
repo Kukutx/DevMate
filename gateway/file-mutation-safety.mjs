@@ -18,6 +18,13 @@ import {
   transactionalDelete,
   transactionalMove
 } from './file-transactions.mjs';
+import {
+  assertBackupWorkspace,
+  backupEntry,
+  completeBackupSnapshot,
+  createBackupSnapshot,
+  failBackupSnapshot
+} from './backup-store.mjs';
 
 const CONFIG_PATH = String(process.env.DEVMATE_CONFIG || '').trim();
 const CONFIG_DIR = CONFIG_PATH ? path.dirname(CONFIG_PATH) : '';
@@ -218,84 +225,54 @@ async function assertExpectedRegularFileSha(full, stat, expected, label = 'Targe
   return text;
 }
 
-function backupSafeRel(rel) {
-  const parts = normalizeSlash(rel).split('/').filter(part => part && part !== '.' && part !== '..');
-  const safe = parts.map(part => part.replace(/[<>:"|?*\x00-\x1F]/g, '_'));
-  return safe.length ? safe.join('/') : 'workspace-root';
+function backupPolicy(config) {
+  return {
+    backupRetentionDays: config.maintenance?.backupRetentionDays,
+    maxBackupBytes: config.maintenance?.maxBackupBytes
+  };
 }
 
-function backupDestination(rel) {
-  const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-  return path.join(BACKUP_ROOT, stamp, backupSafeRel(rel));
+async function createMutationSnapshot(config, workspace, action, entries, { attachWorkSession = true } = {}) {
+  return createBackupSnapshot({ workspace, action, entries, attachWorkSession, ...backupPolicy(config) });
 }
 
-async function syncFile(file) {
-  let handle = null;
+async function completeMutationSnapshot(snapshot, transaction = null) {
+  if (!snapshot?.id) return snapshot || null;
   try {
-    handle = await fsp.open(file, 'r');
-    await handle.sync();
-  } catch {
-  } finally {
-    if (handle) await handle.close().catch(() => {});
-  }
-}
-
-function fsyncDirectory(directory) {
-  let fd = null;
-  try {
-    fd = fs.openSync(directory, 'r');
-    fs.fsyncSync(fd);
-  } catch {
-  } finally {
-    if (fd != null) try { fs.closeSync(fd); } catch {}
-  }
-}
-
-async function syncTree(root) {
-  const stat = await fsp.lstat(root);
-  if (stat.isSymbolicLink()) return;
-  if (stat.isFile()) {
-    await syncFile(root);
-    fsyncDirectory(path.dirname(root));
-    return;
-  }
-  if (!stat.isDirectory()) return;
-  const entries = await fsp.readdir(root, { withFileTypes: true });
-  for (const entry of entries) await syncTree(path.join(root, entry.name));
-  fsyncDirectory(root);
-  fsyncDirectory(path.dirname(root));
-}
-
-async function durableBackup(source, rel, destination = backupDestination(rel)) {
-  const stat = await fsp.lstat(source).catch(() => null);
-  if (!stat) return null;
-  await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-  try {
-    if (stat.isDirectory()) {
-      await fsp.cp(source, destination, { recursive: true, force: false, errorOnExist: true, dereference: false });
-    } else if (stat.isFile()) {
-      await fsp.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
-      try { await fsp.chmod(destination, stat.mode & 0o777); } catch {}
-    } else {
-      throw new Error('Unsupported backup target type');
-    }
-    await syncTree(destination);
-    return destination;
+    return await completeBackupSnapshot(snapshot.id, { transactionId: transaction?.transactionId || null });
   } catch (error) {
-    await fsp.rm(path.dirname(destination), { recursive: true, force: true }).catch(() => {});
-    throw new Error(`Backup failed before mutation: ${error.message || error}`);
+    return {
+      ...snapshot,
+      metadataWarning: String(error?.message || error).slice(0, 1000)
+    };
   }
 }
 
-function backupRelativePath(backupFull) {
-  const backupRoot = fs.realpathSync.native(BACKUP_ROOT);
-  const stat = fs.lstatSync(backupFull, { throwIfNoEntry: false });
-  if (!stat?.isFile() || stat.isSymbolicLink()) throw new Error('Only regular-file backup restore is supported');
-  const full = fs.realpathSync.native(backupFull);
-  if (!isInside(backupRoot, full)) throw new Error('Backup path is outside DevMate backup root');
-  const parts = path.relative(backupRoot, full).split(path.sep).filter(Boolean);
-  if (parts.length < 2) throw new Error('Backup path does not include an original relative path');
-  return normalizeSlash(parts.slice(1).join('/'));
+async function failMutationSnapshot(snapshot, error) {
+  if (!snapshot?.id) return;
+  try {
+    await failBackupSnapshot(snapshot.id, error);
+  } catch (metadataError) {
+    if (error && typeof error === 'object') {
+      error.backupMetadataWarning = String(metadataError?.message || metadataError).slice(0, 1000);
+    }
+  }
+}
+
+async function restoreDirectoryPayload(workspace, payloadPath, target, overwrite) {
+  const temporary = path.join(path.dirname(target), '.' + path.basename(target) + '.devmate-restore-' + crypto.randomBytes(6).toString('hex'));
+  try {
+    await fsp.cp(payloadPath, temporary, { recursive: true, force: false, errorOnExist: true, dereference: false });
+    return await transactionalMove({
+      transactionRoot: TRANSACTION_ROOT,
+      workspaceRoot: workspace.root,
+      source: temporary,
+      target,
+      overwrite
+    });
+  } finally {
+    await fsp.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function withPathLocks(paths, fn) {
@@ -323,27 +300,33 @@ async function writeFileTool(args = {}) {
   return withPathLocks([full], async () => {
     const stat = existingRegularFile(full);
     const expected = expectedHash(expectedSha256);
-    if (expected && !stat) throw new Error(`sha256 mismatch: expected ${expected}, actual missing`);
-    let before = '';
-    if (stat && (append || expected)) {
-      if (stat.size > MAX_FILE_BYTES) throw new Error(`File too large: ${stat.size} bytes`);
-      before = await fsp.readFile(full, 'utf8');
-      if (expected) {
-        const actual = sha256(before);
-        if (actual !== expected) throw new Error(`sha256 mismatch: expected ${expected}, actual ${actual}`);
-      }
+    if (expected && !stat) throw new Error('sha256 mismatch: expected ' + expected + ', actual missing');
+    let before = null;
+    if (stat && stat.size <= MAX_FILE_BYTES) before = await fsp.readFile(full, 'utf8');
+    if (stat && stat.size > MAX_FILE_BYTES && (append || expected)) throw new Error('File too large: ' + stat.size + ' bytes');
+    if (expected && sha256(before) !== expected) throw new Error('sha256 mismatch: expected ' + expected + ', actual ' + sha256(before));
+    const next = append ? String(before || '') + String(content) : String(content);
+    if (stat && before !== null && next === before) {
+      return toolText({ workspace: workspacePublic(workspace), path: rel, backupId: null, sha256: sha256(next), written: false, noOp: true });
     }
-    const backup = stat ? await durableBackup(full, rel) : null;
-    const next = append ? `${before}${content}` : String(content);
-    const transaction = await atomicWriteText({
-      transactionRoot: TRANSACTION_ROOT,
-      workspaceRoot: workspace.root,
-      target: full,
-      content: next,
-      createDirs: createDirs !== false
-    });
-    await audit('write_file', { workspace: workspace.id, path: rel, append: !!append, backup, transactionId: transaction.transactionId });
-    return toolText({ workspace: workspacePublic(workspace), path: rel, backup, sha256: sha256(next), written: true });
+    const snapshot = await createMutationSnapshot(config, workspace, 'write_file', [
+      { role: 'target-before', originalPath: rel, sourcePath: stat ? full : null }
+    ]);
+    try {
+      const transaction = await atomicWriteText({
+        transactionRoot: TRANSACTION_ROOT,
+        workspaceRoot: workspace.root,
+        target: full,
+        content: next,
+        createDirs: createDirs !== false
+      });
+      const backup = await completeMutationSnapshot(snapshot, transaction);
+      await audit('write_file', { workspace: workspace.id, path: rel, append: !!append, backupId: backup.id, transactionId: transaction.transactionId });
+      return toolText({ workspace: workspacePublic(workspace), path: rel, backupId: backup.id, sha256: sha256(next), written: true });
+    } catch (error) {
+      await failMutationSnapshot(snapshot, error);
+      throw error;
+    }
   });
 }
 
@@ -356,20 +339,35 @@ async function createFileTool(args = {}) {
   return withPathLocks([full], async () => {
     const stat = existingRegularFile(full);
     if (stat && !overwrite) throw new Error('File exists; pass overwrite=true or use write_file/apply_patch');
-    const backup = stat ? await durableBackup(full, rel) : null;
-    const transaction = await atomicWriteText({
-      transactionRoot: TRANSACTION_ROOT,
-      workspaceRoot: workspace.root,
-      target: full,
-      content: String(content),
-      createDirs: createDirs !== false,
-      mode
-    });
-    await audit('create_file', { workspace: workspace.id, path: rel, overwrite: !!overwrite, backup, transactionId: transaction.transactionId });
-    return toolText({
-      workspace: workspacePublic(workspace), path: rel, backup, sha256: sha256(content),
-      created: !stat, overwritten: !!stat
-    });
+    const next = String(content);
+    if (stat && stat.size <= MAX_FILE_BYTES) {
+      const before = await fsp.readFile(full, 'utf8');
+      if (before === next) {
+        return toolText({ workspace: workspacePublic(workspace), path: rel, backupId: null, sha256: sha256(next), created: false, overwritten: false, noOp: true });
+      }
+    }
+    const snapshot = await createMutationSnapshot(config, workspace, 'create_file', [
+      { role: 'target-before', originalPath: rel, sourcePath: stat ? full : null }
+    ]);
+    try {
+      const transaction = await atomicWriteText({
+        transactionRoot: TRANSACTION_ROOT,
+        workspaceRoot: workspace.root,
+        target: full,
+        content: next,
+        createDirs: createDirs !== false,
+        mode
+      });
+      const backup = await completeMutationSnapshot(snapshot, transaction);
+      await audit('create_file', { workspace: workspace.id, path: rel, overwrite: !!overwrite, backupId: backup.id, transactionId: transaction.transactionId });
+      return toolText({
+        workspace: workspacePublic(workspace), path: rel, backupId: backup.id, sha256: sha256(next),
+        created: !stat, overwritten: !!stat
+      });
+    } catch (error) {
+      await failMutationSnapshot(snapshot, error);
+      throw error;
+    }
   });
 }
 
@@ -384,29 +382,40 @@ async function applyPatchTool(args = {}) {
   return withPathLocks([full], async () => {
     const stat = existingRegularFile(full);
     if (!stat) throw new Error('File does not exist');
-    if (stat.size > MAX_FILE_BYTES) throw new Error(`File too large: ${stat.size} bytes`);
+    if (stat.size > MAX_FILE_BYTES) throw new Error('File too large: ' + stat.size + ' bytes');
     const text = await fsp.readFile(full, 'utf8');
     const beforeSha = sha256(text);
     const expected = expectedHash(expectedSha256);
-    if (expected && expected !== beforeSha) throw new Error(`sha256 mismatch: expected ${expected}, actual ${beforeSha}`);
+    if (expected && expected !== beforeSha) throw new Error('sha256 mismatch: expected ' + expected + ', actual ' + beforeSha);
     if (!text.includes(oldText)) throw new Error('oldText not found');
     if (!allOccurrences && text.indexOf(oldText) !== text.lastIndexOf(oldText)) {
       throw new Error('oldText appears multiple times; set allOccurrences=true or provide more specific oldText');
     }
     const next = allOccurrences ? text.split(oldText).join(newText) : text.replace(oldText, newText);
-    const backup = await durableBackup(full, rel);
-    const transaction = await atomicWriteText({
-      transactionRoot: TRANSACTION_ROOT,
-      workspaceRoot: workspace.root,
-      target: full,
-      content: next,
-      createDirs: false
-    });
-    await audit('apply_patch', { workspace: workspace.id, path: rel, backup, transactionId: transaction.transactionId });
-    return toolText({
-      workspace: workspacePublic(workspace), path: rel, backup,
-      oldSha256: beforeSha, newSha256: sha256(next), changed: true
-    });
+    if (next === text) {
+      return toolText({ workspace: workspacePublic(workspace), path: rel, backupId: null, oldSha256: beforeSha, newSha256: beforeSha, changed: false, noOp: true });
+    }
+    const snapshot = await createMutationSnapshot(config, workspace, 'apply_patch', [
+      { role: 'target-before', originalPath: rel, sourcePath: full }
+    ]);
+    try {
+      const transaction = await atomicWriteText({
+        transactionRoot: TRANSACTION_ROOT,
+        workspaceRoot: workspace.root,
+        target: full,
+        content: next,
+        createDirs: false
+      });
+      const backup = await completeMutationSnapshot(snapshot, transaction);
+      await audit('apply_patch', { workspace: workspace.id, path: rel, backupId: backup.id, transactionId: transaction.transactionId });
+      return toolText({
+        workspace: workspacePublic(workspace), path: rel, backupId: backup.id,
+        oldSha256: beforeSha, newSha256: sha256(next), changed: true
+      });
+    } catch (error) {
+      await failMutationSnapshot(snapshot, error);
+      throw error;
+    }
   });
 }
 
@@ -421,21 +430,25 @@ async function deleteFileTool(args = {}) {
     const expected = expectedHash(expectedSha256);
     if (expected) await assertExpectedRegularFileSha(full, stat, expected);
     if (stat.isDirectory() && !recursive) throw new Error('Target is directory; pass recursive=true');
-    let backup = null;
-    const transaction = await transactionalDelete({
-      transactionRoot: TRANSACTION_ROOT,
-      workspaceRoot: workspace.root,
-      target: full,
-      backup: async rollback => {
-        backup = await durableBackup(rollback, rel);
-        return backup;
-      }
-    });
-    await audit('delete_file', {
-      workspace: workspace.id, path: rel, recursive: !!recursive,
-      backup, transactionId: transaction.transactionId
-    });
-    return toolText({ workspace: workspacePublic(workspace), path: rel, backup, deleted: true });
+    const snapshot = await createMutationSnapshot(config, workspace, 'delete_file', [
+      { role: 'target-before', originalPath: rel, sourcePath: full }
+    ]);
+    try {
+      const transaction = await transactionalDelete({
+        transactionRoot: TRANSACTION_ROOT,
+        workspaceRoot: workspace.root,
+        target: full
+      });
+      const backup = await completeMutationSnapshot(snapshot, transaction);
+      await audit('delete_file', {
+        workspace: workspace.id, path: rel, recursive: !!recursive,
+        backupId: backup.id, transactionId: transaction.transactionId
+      });
+      return toolText({ workspace: workspacePublic(workspace), path: rel, backupId: backup.id, deleted: true });
+    } catch (error) {
+      await failMutationSnapshot(snapshot, error);
+      throw error;
+    }
   });
 }
 
@@ -447,63 +460,92 @@ async function moveFileTool(args = {}) {
   const source = assertWritable(config, workspace, from);
   const target = assertWritable(config, workspace, to);
   if (pathKey(source) === pathKey(target)) {
-    return toolText({ workspace: workspacePublic(workspace), from, to, sourceBackup: null, destBackup: null, moved: false, noOp: true });
+    return toolText({ workspace: workspacePublic(workspace), from, to, backupId: null, moved: false, noOp: true });
   }
   return withPathLocks([source, target], async () => {
     const sourceStat = await assertDirectoryMutationAllowed(config, workspace, source, from);
     const targetStat = fs.lstatSync(target, { throwIfNoEntry: false });
-    if (targetStat?.isSymbolicLink()) throw new Error(`Write blocked: symlink/reparse target: ${to}`);
+    if (targetStat?.isSymbolicLink()) throw new Error('Write blocked: symlink/reparse target: ' + to);
     if (targetStat && !overwrite) throw new Error('Destination exists; pass overwrite=true');
     if (targetStat) await assertDirectoryMutationAllowed(config, workspace, target, to);
-    const sourceBackup = await durableBackup(source, from);
-    const destBackup = targetStat ? await durableBackup(target, to) : null;
-    const transaction = await transactionalMove({
-      transactionRoot: TRANSACTION_ROOT,
-      workspaceRoot: workspace.root,
-      source,
-      target,
-      overwrite: !!overwrite
-    });
-    await audit('move_file', {
-      workspace: workspace.id, from, to, overwrite: !!overwrite,
-      sourceIsDirectory: sourceStat.isDirectory(), sourceBackup, destBackup,
-      transactionId: transaction.transactionId
-    });
-    return toolText({ workspace: workspacePublic(workspace), from, to, sourceBackup, destBackup, moved: true });
+    const snapshot = await createMutationSnapshot(config, workspace, 'move_file', [
+      { role: 'source-before', originalPath: from, sourcePath: source },
+      { role: 'target-before', originalPath: to, sourcePath: targetStat ? target : null }
+    ]);
+    try {
+      const transaction = await transactionalMove({
+        transactionRoot: TRANSACTION_ROOT,
+        workspaceRoot: workspace.root,
+        source,
+        target,
+        overwrite: !!overwrite
+      });
+      const backup = await completeMutationSnapshot(snapshot, transaction);
+      await audit('move_file', {
+        workspace: workspace.id, from, to, overwrite: !!overwrite,
+        sourceIsDirectory: sourceStat.isDirectory(), backupId: backup.id,
+        transactionId: transaction.transactionId
+      });
+      return toolText({ workspace: workspacePublic(workspace), from, to, backupId: backup.id, moved: true });
+    } catch (error) {
+      await failMutationSnapshot(snapshot, error);
+      throw error;
+    }
   });
 }
 
 async function restoreBackupTool(args = {}) {
   requireStateRoots();
-  const { workspaceId, backupPath: requestedBackup, targetPath, overwrite = true } = args;
+  const { workspaceId, backupId, entryPath = '', targetPath, overwrite = true } = args;
   const config = readConfig();
   const workspace = getWritableWorkspace(config, workspaceId);
-  const backupFull = path.resolve(String(requestedBackup || ''));
-  const rel = targetPath || backupRelativePath(backupFull);
+  const source = await backupEntry(String(backupId || ''), entryPath);
+  assertBackupWorkspace(source.manifest, workspace);
+  const rel = targetPath || source.entry.originalPath;
   const target = assertWritable(config, workspace, rel);
   return withPathLocks([target], async () => {
-    backupRelativePath(backupFull);
     const current = fs.lstatSync(target, { throwIfNoEntry: false });
-    if (current?.isSymbolicLink()) throw new Error(`Write blocked: symlink/reparse target: ${rel}`);
-    if (current && !current.isFile()) throw new Error('Restore target is not a regular file');
+    if (current?.isSymbolicLink()) throw new Error('Write blocked: symlink/reparse target: ' + rel);
     if (current && !overwrite) throw new Error('Target exists; pass overwrite=true to restore over it');
-    const currentBackup = current ? await durableBackup(target, rel) : null;
-    const transaction = await atomicCopyFile({
-      transactionRoot: TRANSACTION_ROOT,
-      workspaceRoot: workspace.root,
-      source: backupFull,
-      target,
-      createDirs: true
-    });
-    const restored = await fsp.readFile(target);
-    await audit('restore_backup', {
-      workspace: workspace.id, backupPath: backupFull, targetPath: rel,
-      currentBackup, transactionId: transaction.transactionId
-    });
-    return toolText({
-      workspace: workspacePublic(workspace), backupPath: backupFull, targetPath: rel,
-      currentBackup, sha256: crypto.createHash('sha256').update(restored).digest('hex'), restored: true
-    });
+    if (current?.isDirectory()) await assertDirectoryMutationAllowed(config, workspace, target, rel);
+    if (!current && source.entry.kind === 'absent') {
+      return toolText({ workspace: workspacePublic(workspace), backupId, entryPath: source.entry.originalPath, targetPath: rel, currentBackupId: null, restored: false, noOp: true });
+    }
+    const snapshot = await createMutationSnapshot(config, workspace, 'restore_backup', [
+      { role: 'target-before', originalPath: rel, sourcePath: current ? target : null }
+    ], { attachWorkSession: args._rollbackInternal !== true });
+    try {
+      let transaction = null;
+      if (source.entry.kind === 'absent') {
+        transaction = await transactionalDelete({ transactionRoot: TRANSACTION_ROOT, workspaceRoot: workspace.root, target });
+      } else if (source.entry.kind === 'file') {
+        if (current && !current.isFile()) throw new Error('Restore target type does not match file backup');
+        transaction = await atomicCopyFile({
+          transactionRoot: TRANSACTION_ROOT,
+          workspaceRoot: workspace.root,
+          source: source.payloadPath,
+          target,
+          createDirs: true
+        });
+      } else {
+        if (current && !current.isDirectory()) throw new Error('Restore target type does not match directory backup');
+        await fsp.mkdir(path.dirname(target), { recursive: true });
+        transaction = await restoreDirectoryPayload(workspace, source.payloadPath, target, !!overwrite);
+      }
+      const currentBackup = await completeMutationSnapshot(snapshot, transaction);
+      await audit('restore_backup', {
+        workspace: workspace.id, backupId: source.backupId, entryPath: source.entry.originalPath,
+        targetPath: rel, currentBackupId: currentBackup.id, transactionId: transaction?.transactionId || null
+      });
+      return toolText({
+        workspace: workspacePublic(workspace), backupId: source.backupId, entryPath: source.entry.originalPath,
+        targetPath: rel, currentBackupId: currentBackup.id, sha256: source.entry.sha256 || null,
+        kind: source.entry.kind, restored: true
+      });
+    } catch (error) {
+      await failMutationSnapshot(snapshot, error);
+      throw error;
+    }
   });
 }
 
@@ -544,8 +586,6 @@ export const __test = {
   assertDirectoryMutationAllowed,
   assertExpectedRegularFileSha,
   assertWritable,
-  backupRelativePath,
-  durableBackup,
   expectedHash,
   isBinaryOrSecret,
   isTextAllowed,

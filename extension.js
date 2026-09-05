@@ -107,7 +107,7 @@ function maintenanceConfig(){
   return {
     backupRetentionDays: Number(cfg().get('backupRetentionDays') || 30),
     auditRetentionDays: Number(cfg().get('auditRetentionDays') || 30),
-    maxBackupBytes: Number(cfg().get('maxBackupBytes') || 268435456),
+    maxBackupBytes: Number(cfg().get('maxBackupBytes') || 536870912),
     maxAuditBytes: Number(cfg().get('maxAuditBytes') || 5242880)
   };
 }

@@ -176,7 +176,8 @@ export async function stateSummary(paths = {}) {
   if (!isInside(locations.stateRoot, auditLog) || auditLog === locations.stateRoot) {
     throw new Error('Maintenance auditLog must be inside stateRoot');
   }
-  const backupSets = await listBackupSets(backupRoot);
+  const backupSummary = paths.backupSummary && typeof paths.backupSummary === 'object' ? paths.backupSummary : null;
+  const backupSets = backupSummary ? null : await listBackupSets(backupRoot);
   const auditStat = await statOrNull(auditLog);
   const recovery = recoveryStateSummary({ ...paths, stateRoot: locations.stateRoot, configFile: locations.configFile });
   let auditEntries = 0;
@@ -185,9 +186,9 @@ export async function stateSummary(paths = {}) {
     auditEntries = text.split(/\r?\n/).filter(Boolean).length;
   } catch {}
   return {
-    backupSets: backupSets.length,
-    backupFiles: backupSets.reduce((sum, item) => sum + item.fileCount, 0),
-    backupBytes: backupSets.reduce((sum, item) => sum + item.sizeBytes, 0),
+    backupSets: backupSummary ? Number(backupSummary.backupSets || 0) : backupSets.length,
+    backupFiles: backupSummary ? Number(backupSummary.backupFiles || 0) : backupSets.reduce((sum, item) => sum + item.fileCount, 0),
+    backupBytes: backupSummary ? Number(backupSummary.backupBytes || 0) : backupSets.reduce((sum, item) => sum + item.sizeBytes, 0),
     auditEntries,
     auditBytes: auditStat?.size || 0,
     recoveryFiles: recovery.totalFiles,

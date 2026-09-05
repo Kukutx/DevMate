@@ -22,6 +22,7 @@ import { drainRuntimeMaintenance, runRuntimeMaintenanceOnce, startRuntimeMainten
 import { beginStartupProgress, completeStartupProgress, enterStartupStage, failStartupProgress } from './startup-progress.mjs';
 import { installRunnerControlPlane, resetRunnerControlState } from './runner-control-plane.mjs';
 import { recoverFileTransactions } from './file-transactions.mjs';
+import { initializeBackupStore } from './backup-store.mjs';
 import { reconcileAgentSnapshotStorage } from './agent-snapshot.mjs';
 import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
 import { assertConfiguredWorkspaceRootsSafe } from './workspace-resolver.mjs';
@@ -87,6 +88,9 @@ try {
     error.blocked = fileRecovery.blocked;
     throw error;
   }
+
+  enterStartupStage('backup_store_recovery');
+  await initializeBackupStore({ purgeLegacy: true });
 
   enterStartupStage('codex_apply_recovery');
   const codexApplyRecovery = await codexCollaboration.recoverCodexApplyAfterFileTransactions();

@@ -1,7 +1,8 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { clearHealthMarker, writeDegradedHealth } from './health-marker.mjs';
-import { maintenanceOptions, pruneAuditLog, pruneBackups, pruneRecoveryState } from './maintenance.mjs';
+import { maintenanceOptions, pruneAuditLog, pruneRecoveryState } from './maintenance.mjs';
+import { pruneBackupStore } from './backup-store.mjs';
 import { sharedHttpRequestConcurrency } from './request-concurrency.mjs';
 import { jobRuntimeStatus } from './job-runtime.mjs';
 
@@ -150,7 +151,7 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
       recovery
     };
     if (auditNeedsPrune) result.audit = await pruneAuditLog(auditLog, options);
-    if (backupChanged) result.backups = await pruneBackups(backupRoot, options);
+    if (backupChanged) result.backups = await pruneBackupStore(options);
     const afterBackupStat = await statOrNull(backupRoot);
     const afterBackupMtimeMs = afterBackupStat?.mtimeMs || 0;
     result.completedAt = now();

@@ -221,8 +221,10 @@ Back up the central config directory while drained/stopped or from a consistent 
 config.json
 state/runtime-state.json
 state/audit.jsonl
-state/backups/
+state/backups/   # manifest snapshots + commit markers + rebuildable index
 ```
+
+Automatic mutation backups under `state/backups/` are local rollback snapshots, not disaster recovery. Current Gateway startup accepts only the versioned manifest format and removes legacy path-only backup directories and interrupted/uncommitted leftovers. The index is rebuildable from committed manifests.
 
 Runner-local configs and workspaces are separate backup domains. Central artifact metadata is not a backup of remote artifacts.
 

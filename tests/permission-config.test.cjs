@@ -58,12 +58,12 @@ test('Gateway validates permission configuration before acquiring the central in
   assert.ok(config >= 0 && permissions > config && lock > permissions);
 });
 
-test('move overwrite cannot delete an existing destination directory without the directory-mutation gate', () => {
-  const source = fs.readFileSync(path.join(root, 'gateway', 'server.mjs'), 'utf8');
-  const start = source.indexOf("server.registerTool('move_file'");
-  const end = source.indexOf("server.registerTool('run_command'", start);
+test('move overwrite cannot replace an existing destination directory without the directory-mutation gate', () => {
+  const source = fs.readFileSync(path.join(root, 'gateway', 'file-mutation-safety.mjs'), 'utf8');
+  const start = source.indexOf('async function moveFileTool(');
+  const end = source.indexOf('async function restoreBackupTool(', start);
   assert.ok(start >= 0 && end > start);
   const move = source.slice(start, end);
-  assert.match(move, /const destinationStat=destinationExists\?await assertDirectoryMutationAllowed\(cfg,w,dst,to\):null/);
-  assert.match(move, /fsp\.rm\(dst,\{recursive:destinationStat\.isDirectory\(\),force:true\}\)/);
+  assert.match(move, /if \(targetStat\) await assertDirectoryMutationAllowed\(config, workspace, target, to\)/);
+  assert.match(move, /transactionalMove\(\{[\s\S]*overwrite: !!overwrite/);
 });

@@ -315,7 +315,7 @@
         },
         "devMate.maxBackupBytes": {
           "type": "number",
-          "default": 268435456,
+          "default": 536870912,
           "minimum": 1048576,
           "maximum": 10737418240,
           "description": "Maximum retained backup bytes."
