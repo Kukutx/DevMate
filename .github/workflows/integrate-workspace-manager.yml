@@ -1,0 +1,66 @@
+name: Integrate workspace manager
+
+on:
+  push:
+    branches:
+      - fix/pin-project-only-after-explicit-selection
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          ref: fix/pin-project-only-after-explicit-selection
+      - name: Preserve the shared-tunnel entry and integrate workspace management in the platform layer
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replaceExactly(file, from, to) {
+            let source = fs.readFileSync(file, 'utf8');
+            const count = source.split(from).length - 1;
+            if (count !== 1) throw new Error(`${file}: expected exactly one match, found ${count}: ${from.slice(0, 100)}`);
+            source = source.replace(from, to);
+            fs.writeFileSync(file, source);
+          }
+
+          replaceExactly(
+            'package.json',
+            '"main": "./extension-entry-workspaces.js",',
+            '"main": "./extension-entry-shared-tunnel.js",'
+          );
+
+          replaceExactly(
+            'extension-entry-platform.js',
+            "const { publicConnectionStability } = require('./shared/connection-stability.cjs');",
+            "const { publicConnectionStability } = require('./shared/connection-stability.cjs');\nconst { activateWorkspaceManagement, deactivateWorkspaceManagement } = require('./extension-entry-workspaces.js');"
+          );
+
+          replaceExactly(
+            'extension-entry-platform.js',
+            "  innerExtension = require('./extension-entry');\n  await innerExtension.activate(context);\n  const settings = tunnelSettings(context);",
+            "  innerExtension = require('./extension-entry');\n  await innerExtension.activate(context);\n  await activateWorkspaceManagement(context);\n  const settings = tunnelSettings(context);"
+          );
+
+          replaceExactly(
+            'extension-entry-platform.js',
+            "async function deactivate(options = {}) {\n  try {\n    if (innerExtension?.deactivate) await innerExtension.deactivate(options);\n  } finally {\n    innerExtension = null;\n  }\n}",
+            "async function deactivate(options = {}) {\n  try {\n    try { await deactivateWorkspaceManagement(); }\n    finally {\n      if (innerExtension?.deactivate) await innerExtension.deactivate(options);\n    }\n  } finally {\n    innerExtension = null;\n  }\n}"
+          );
+          NODE
+      - name: Commit integrated source and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/integrate-workspace-manager.yml
+          git config user.name "DevMate CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add package.json extension-entry-platform.js .github/workflows/integrate-workspace-manager.yml
+          git commit -m "refactor: preserve shared tunnel entry for workspace manager"
+          git push origin HEAD:fix/pin-project-only-after-explicit-selection
