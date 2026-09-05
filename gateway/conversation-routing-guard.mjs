@@ -64,19 +64,6 @@ function canonicalWorkspaceArgs(args, binding) {
   return { ...args, workspaceId: binding.workspaceId };
 }
 
-function bindingRequiredError(config, scope, binding = null) {
-  const implicit = implicitBinding(binding)
-    ? ` A legacy implicit binding to ${binding.root} exists but is intentionally ignored until the project is selected explicitly.`
-    : '';
-  const error = new Error(
-    `This ChatGPT conversation is not explicitly bound to a project.${implicit} ` +
-    'Call workspace_bind when that tool is available. If the client cached an older tool list and workspace_bind is unavailable, call list_workspaces and retry the intended project tool with workspaceId set to the desired workspace ID or exact absolute local path. DevMate will not use the active VS Code or Obsidian workspace automatically.'
-  );
-  error.code = 'conversation_workspace_binding_required';
-  error.boundWorkspace = publicConversationWorkspaceBinding(config, scope);
-  return error;
-}
-
 function bindingConflictError(binding, selector) {
   const error = new Error(
     `This ChatGPT conversation is explicitly bound to ${binding.root}; refusing to switch it implicitly to ${selector}. ` +
@@ -99,8 +86,13 @@ function routeDecision(config, scope, name, args = {}) {
   const binding = conversationWorkspaceBinding(config, scope);
   const selector = selectorFromArgs(args);
 
+  // Preserve DevMate's intended default behavior: before the user explicitly
+  // selects another project, the conversation may use the current VS Code /
+  // Obsidian workspace chosen by the existing authorization/handler layer.
+  // A default/auto binding is deliberately replaceable by the first explicit
+  // workspace selector, so the editor default can never trap the conversation.
   if (!binding || implicitBinding(binding)) {
-    if (!selector) return { kind: 'error', error: bindingRequiredError(config, scope, binding), binding };
+    if (!selector) return { kind: 'pass', args, binding };
     return { kind: 'bind', selector, binding };
   }
 
@@ -165,7 +157,6 @@ export const __test = {
   CONVERSATION_PROJECT_TOOLS,
   IMPLICIT_BINDING_SOURCES,
   bindingConflictError,
-  bindingRequiredError,
   canonicalWorkspaceArgs,
   implicitBinding,
   normalizedLocalSelectorRoot,
