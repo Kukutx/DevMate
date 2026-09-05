@@ -2,7 +2,6 @@
 
 const path = require('node:path');
 const vscode = require('vscode');
-const baseExtension = require('./extension-entry-shared-tunnel.js');
 const { readLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
 const { currentWorkspaceRoot, resolveVscodeStateDirectory } = require('./vscode-host/runtime-context.js');
 const {
@@ -13,7 +12,7 @@ const {
 
 let workspacePanel = null;
 let workspaceContext = null;
-let workspaceOutput = null;
+let commandDisposables = [];
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>'"]/g, character => ({
@@ -214,36 +213,39 @@ function openWorkspacePanel(context) {
   refreshWorkspacePanel();
 }
 
-function register(context, id, handler) {
-  context.subscriptions.push(vscode.commands.registerCommand(id, handler));
-}
-
-async function activate(context) {
-  workspaceContext = context;
-  workspaceOutput = vscode.window.createOutputChannel('DevMate Workspaces');
-  context.subscriptions.push(workspaceOutput);
-  await baseExtension.activate(context);
-  register(context, 'devMate.manageWorkspaces', () => openWorkspacePanel(context));
-  register(context, 'devMate.addWorkspace', () => browseWorkspace(context));
-}
-
-async function deactivate() {
-  try {
-    workspacePanel?.dispose();
-    workspacePanel = null;
-    workspaceContext = null;
-  } finally {
-    return baseExtension.deactivate();
+function disposeCommands() {
+  for (const disposable of commandDisposables.splice(0)) {
+    try { disposable.dispose(); } catch {}
   }
 }
 
+function register(id, handler) {
+  const disposable = vscode.commands.registerCommand(id, handler);
+  commandDisposables.push(disposable);
+  return disposable;
+}
+
+async function activateWorkspaceManagement(context) {
+  workspaceContext = context;
+  disposeCommands();
+  register('devMate.manageWorkspaces', () => openWorkspacePanel(context));
+  register('devMate.addWorkspace', () => browseWorkspace(context));
+  return { active: true };
+}
+
+async function deactivateWorkspaceManagement() {
+  disposeCommands();
+  workspacePanel?.dispose();
+  workspacePanel = null;
+  workspaceContext = null;
+}
+
 module.exports = {
-  activate,
+  activateWorkspaceManagement,
   addWorkspacePath,
   browseWorkspace,
-  deactivate,
+  deactivateWorkspaceManagement,
   openWorkspacePanel,
   refreshWorkspacePanel,
-  removeWorkspace,
-  runtimeDiagnostics: () => baseExtension.runtimeDiagnostics?.() || null
+  removeWorkspace
 };
