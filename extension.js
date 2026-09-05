@@ -1068,7 +1068,8 @@ function panelHtml(ctx, webview){
     <button class="secondary danger" data-cmd="stop">Stop</button>
     <button class="secondary" data-cmd="restart">Restart</button>
     <button data-cmd="copyUrl">Copy MCP URL</button>
-    <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>\n    <button class="secondary" data-cmd="manageWorkspaces">Manage Workspaces</button>
+    <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>
+    <button class="secondary" data-cmd="manageWorkspaces">Manage Workspaces</button>
   </div>
   <p class="flow muted">${esc(chatgptFlow)}</p>
   <details>
@@ -1141,7 +1142,8 @@ function openPanel(ctx){
     if(m.cmd==='stop') await lifecycleOperations.run('stop',()=>stopAll());
     if(m.cmd==='restart') await lifecycleOperations.run('restart',()=>restartAll(ctx));
     if(m.cmd==='doctor') await doctor(ctx);
-    if(m.cmd==='connectionSetup') await vscode.commands.executeCommand('devMate.connectionSetup');\n    if(m.cmd==='manageWorkspaces') await vscode.commands.executeCommand('devMate.manageWorkspaces');
+    if(m.cmd==='connectionSetup') await vscode.commands.executeCommand('devMate.connectionSetup');
+    if(m.cmd==='manageWorkspaces') await vscode.commands.executeCommand('devMate.manageWorkspaces');
     if(m.cmd==='addReference') await addReference(ctx);
     if(m.cmd==='addReferenceInput') await addReferenceInput(ctx, m.value);
     if(m.cmd==='addReferenceClipboard') await addReferenceFromClipboard(ctx);
