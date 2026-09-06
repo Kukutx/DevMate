@@ -20,3 +20,9 @@ test('automatic backups fail closed before destructive file mutations', () => {
   assert.match(mutations, /createMutationSnapshot[\s\S]*transactionalMove/);
   assert.doesNotMatch(store, /backup_failed:/);
 });
+
+test('disk-heavy Gateway startup stress runs in an isolated test batch', () => {
+  const runner = source('scripts/run-tests.mjs');
+  assert.match(runner, /SERIAL_TEST_FILES[\s\S]*gateway-large-state-startup\.test\.mjs/);
+  assert.match(runner, /if \(SERIAL_TEST_FILES\.has\(relative\(file\)\)\)[\s\S]*batches\.push\(\[file\]\)/);
+});

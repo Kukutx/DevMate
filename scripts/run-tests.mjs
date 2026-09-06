@@ -15,6 +15,9 @@ const diagnosticTimeoutArg = process.argv.find(value => value.startsWith('--diag
 const batchSize = Math.min(100, Math.max(1, Number(batchSizeArg?.split('=')[1]) || 24));
 const batchTimeoutMs = Math.min(10 * 60_000, Math.max(30_000, Number(batchTimeoutArg?.split('=')[1]) || 90_000));
 const diagnosticTimeoutMs = Math.min(5 * 60_000, Math.max(10_000, Number(diagnosticTimeoutArg?.split('=')[1]) || 45_000));
+const SERIAL_TEST_FILES = new Set([
+  'tests/gateway-large-state-startup.test.mjs'
+]);
 
 function relative(file) {
   return path.relative(root, file).replace(/\\/g, '/');
@@ -56,6 +59,27 @@ function discover(directory = testsRoot, output = []) {
     output.push(full);
   }
   return output;
+}
+
+function testBatches(files, maxBatchSize = batchSize) {
+  const batches = [];
+  let current = [];
+  const flush = () => {
+    if (!current.length) return;
+    batches.push(current);
+    current = [];
+  };
+  for (const file of files) {
+    if (SERIAL_TEST_FILES.has(relative(file))) {
+      flush();
+      batches.push([file]);
+      continue;
+    }
+    current.push(file);
+    if (current.length >= maxBatchSize) flush();
+  }
+  flush();
+  return batches;
 }
 
 function run(files, stdio = 'inherit', timeoutMs = batchTimeoutMs) {
@@ -151,9 +175,10 @@ if (!files.length) {
   process.exit(1);
 }
 
-for (let index = 0; index < files.length; index += batchSize) {
-  const batch = files.slice(index, index + batchSize);
-  console.log(`Running test batch ${Math.floor(index / batchSize) + 1}: ${batch.map(relative).join(', ')}`);
+const batches = testBatches(files);
+for (let index = 0; index < batches.length; index += 1) {
+  const batch = batches[index];
+  console.log(`Running test batch ${index + 1}: ${batch.map(relative).join(', ')}`);
   const result = run(batch);
   if (timedOut(result)) {
     console.error(`Batch timed out after ${batchTimeoutMs}ms; bisecting ${batch.length} test files...`);
