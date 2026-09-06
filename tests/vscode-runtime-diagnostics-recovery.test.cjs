@@ -105,6 +105,13 @@ test('verification evidence older than the failed attempt cannot rewrite startup
   assert.equal(result.success, false);
 });
 
+test('missing or invalid failure ordering fails closed instead of guessing recovery', () => {
+  const { config, record, startup } = fixture({ failedAt: 'not-a-timestamp' });
+  const result = reconcileRecoveredStartup(startup, config, record);
+  assert.equal(result, startup);
+  assert.equal(result.success, false);
+});
+
 test('verification for a different tunnel generation cannot reconcile startup', () => {
   const { config, record, startup } = fixture();
   config.connection.lastTunnelGeneration = 'stale-tunnel-generation';
