@@ -20,7 +20,7 @@ function reconcileRecoveredStartup(startup, config, tunnelRecord) {
   const verifiedAt = String(config?.connection?.lastPreflightAt || '');
   const verifiedMs = timestamp(verifiedAt);
   const failedMs = timestamp(startup.failedAt);
-  if (verifiedMs == null || (failedMs != null && verifiedMs < failedMs)) return startup;
+  if (verifiedMs == null || failedMs == null || verifiedMs < failedMs) return startup;
 
   const recovered = {
     ...startup,
