@@ -48,6 +48,28 @@ function waitWithTimeout(promise, timeoutMs) {
   });
 }
 
+function processGroupAlive(pid, killImpl = process.kill) {
+  const groupId = Number(pid || 0);
+  if (!Number.isInteger(groupId) || groupId <= 0) return false;
+  try {
+    killImpl(-groupId, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    if (error?.code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs, killImpl = process.kill) {
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  while (processGroupAlive(pid, killImpl)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return true;
+}
+
 function appendBounded(current, chunk, limit) {
   const value = current + String(chunk || '');
   return value.length <= limit ? value : value.slice(-limit);
@@ -83,20 +105,30 @@ export async function terminateProcessTree(child, { graceMs = 1500, forceMs = 25
     return { terminated: true, forced: true, exitConfirmed: !!exit };
   }
 
-  try { process.kill(-child.pid, 'SIGTERM'); }
+  const pid = Number(child.pid || 0);
+  const exitPromise = waitForExit(child);
+  const graceDeadline = Date.now() + Math.max(0, Number(graceMs) || 0);
+  try { process.kill(-pid, 'SIGTERM'); }
   catch (error) {
-    if (error.code === 'ESRCH') return { terminated: false, forced: false, exitConfirmed: true };
+    if (error.code === 'ESRCH') {
+      const exit = await waitWithTimeout(exitPromise, 100);
+      return { terminated: false, forced: false, exitConfirmed: !!exit };
+    }
     throw error;
   }
-  let exit = await waitWithTimeout(waitForExit(child), graceMs);
-  if (exit) return { terminated: true, forced: false, exitConfirmed: true };
+  let exit = await waitWithTimeout(exitPromise, graceMs);
+  let groupExited = await waitForProcessGroupExit(pid, Math.max(0, graceDeadline - Date.now()));
+  if (exit && groupExited) return { terminated: true, forced: false, exitConfirmed: true };
 
-  try { process.kill(-child.pid, 'SIGKILL'); }
+  const forceDeadline = Date.now() + Math.max(0, Number(forceMs) || 0);
+  try { process.kill(-pid, 'SIGKILL'); }
   catch (error) {
     if (error.code !== 'ESRCH') throw error;
   }
-  exit = await waitWithTimeout(waitForExit(child), forceMs);
-  return { terminated: true, forced: true, exitConfirmed: !!exit };
+  exit ||= await waitWithTimeout(exitPromise, forceMs);
+  groupExited = await waitForProcessGroupExit(pid, Math.max(0, forceDeadline - Date.now()));
+  if (!exit && groupExited) exit = await waitWithTimeout(exitPromise, 100);
+  return { terminated: true, forced: true, exitConfirmed: !!exit && groupExited };
 }
 
 export async function executeCommand(command, args = [], {
@@ -183,4 +215,4 @@ export function activeCommandProcessCount() {
   return activeProcesses.size;
 }
 
-export const __test = { ipcCleanupSupervisor, waitForExit, waitWithTimeout };
+export const __test = { ipcCleanupSupervisor, processGroupAlive, waitForExit, waitForProcessGroupExit, waitWithTimeout };

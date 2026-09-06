@@ -6,6 +6,7 @@
 - Ignore unavailable historical workspace roots when matching the current desktop workspace, so a deleted VS Code E2E or Vault path cannot block another host from activating.
 - Isolated machine-scoped VS Code Extension Host E2E settings and strengthened Obsidian, VSIX, portable CLI, and release-asset regression coverage.
 - Isolated standalone CLI and nested VS Code test child processes from desktop/Electron-only launch flags, preventing host-specific lifecycle fencing or `ELECTRON_RUN_AS_NODE` from contaminating their runtime behavior.
+- Confirm POSIX command process groups are fully gone before timeout/cancellation returns, preventing a terminated parent from hiding a still-running descendant during concurrent CI or real command execution.
 - Made cross-platform portable CLI dependency installation target the packaged OS and CPU explicitly, and added packaged Obsidian plus Linux portable CLI smoke tests to the release build itself.
 - Restored installation on the current stable Obsidian 1.12.7 host instead of incorrectly requiring the 1.13.4 early-access build.
 

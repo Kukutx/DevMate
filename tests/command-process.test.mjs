@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { activeCommandProcessCount, commandEnvironment, executeCommand } from '../gateway/command-process.mjs';
+import { __test as commandProcessTest, activeCommandProcessCount, commandEnvironment, executeCommand } from '../gateway/command-process.mjs';
 
 test('normal commands preserve bounded output and exit metadata', async () => {
   const result = await executeCommand(process.execPath, ['-e', "process.stdout.write('abcdef')"], {
@@ -38,6 +38,31 @@ test('Git commands are forced non-interactive because MCP commands have no stdin
   assert.equal(nodeEnv.SAMPLE, 'kept');
   assert.equal(nodeEnv.GIT_TERMINAL_PROMPT, undefined);
   assert.equal(nodeEnv.GCM_INTERACTIVE, undefined);
+});
+
+test('process-group exit confirmation waits until no group member remains', async () => {
+  assert.equal(commandProcessTest.processGroupAlive(123, () => {}), true);
+  assert.equal(commandProcessTest.processGroupAlive(123, () => {
+    const error = new Error('gone');
+    error.code = 'ESRCH';
+    throw error;
+  }), false);
+  assert.equal(commandProcessTest.processGroupAlive(123, () => {
+    const error = new Error('alive but inaccessible');
+    error.code = 'EPERM';
+    throw error;
+  }), true);
+
+  let probes = 0;
+  const exited = await commandProcessTest.waitForProcessGroupExit(123, 200, () => {
+    probes += 1;
+    if (probes < 3) return;
+    const error = new Error('gone');
+    error.code = 'ESRCH';
+    throw error;
+  });
+  assert.equal(exited, true);
+  assert.ok(probes >= 3);
 });
 
 test('Git HTTP credential challenges fail instead of hanging an MCP tool call', async t => {
