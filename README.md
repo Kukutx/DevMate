@@ -10,6 +10,14 @@ DevMate connects ChatGPT to a real development environment. It can inspect and e
 
 It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.
 
+## VS Code experience
+
+<p align="center">
+  <img src="docs/media/devmate-vscode-overview.webp" alt="DevMate VS Code control panel showing project binding, verified MCP connection, diagnostics, permissions, and workspace state" width="100%">
+</p>
+
+DevMate keeps the active project, verified MCP ingress, Gateway lifecycle controls, diagnostics, permissions, and workspace state visible in one place. Project boundaries and connection state stay explicit instead of being hidden behind background processes.
+
 <p align="center">
   <img src="docs/media/devmate-flow.png" alt="DevMate flow from ChatGPT through the MCP Gateway to local project surfaces and remote Runners" width="100%">
 </p>
