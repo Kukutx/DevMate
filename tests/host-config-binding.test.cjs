@@ -65,3 +65,27 @@ test('registers multiple workspace roots in one desktop state without changing t
   assert.equal(normalizedWorkspaceRoot(active.root), normalizedWorkspaceRoot(secondRoot));
   assert.equal(activated.workspaces.filter(item => item.role === 'active').length, 1);
 });
+
+test('a deleted registered workspace cannot block another desktop host from activating', () => {
+  const staleRoot = temporaryDirectory('devmate-binding-stale-');
+  const currentRoot = temporaryDirectory('devmate-binding-current-');
+  const state = temporaryDirectory('devmate-binding-stale-state-');
+  const configFile = path.join(state, 'config.json');
+
+  try {
+    const original = ensureInstanceConfig({ configFile, workspaceRoot: staleRoot });
+    fs.rmSync(staleRoot, { recursive: true, force: true });
+
+    const registered = ensureInstanceConfig({ configFile, workspaceRoot: currentRoot });
+    assert.equal(registered.workspaces.length, 2);
+    assert.equal(registered.activeWorkspaceId, original.activeWorkspaceId);
+
+    const activated = activateInstanceWorkspace({ configFile, workspaceRoot: currentRoot });
+    const active = activated.workspaces.find(item => item.id === activated.activeWorkspaceId);
+    assert.equal(normalizedWorkspaceRoot(active.root), normalizedWorkspaceRoot(currentRoot));
+  } finally {
+    fs.rmSync(staleRoot, { recursive: true, force: true });
+    fs.rmSync(currentRoot, { recursive: true, force: true });
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});

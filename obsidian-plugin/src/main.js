@@ -6,6 +6,7 @@ const { connectionErrorSummary, redactUrl, transientPublicMcpError } = require('
 const { verifySharedPublicMcp } = require('../../host/shared-public-mcp-verification.js');
 const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
+const { createSupervisedChildProcess } = require('../../host/runtime/supervised-child-process.js');
 const { RuntimeController, resolveStateDirectory, workspaceRuntimeId } = require('../../host/runtime-controller.js');
 const { configureAuthentication, updateConfig } = require('../../shared/config-store.cjs');
 const { preflightAccessToken } = require('../../shared/oauth-tokens.cjs');
@@ -192,8 +193,31 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.nodeRuntime = runtime;
     this.nodeRuntimeKey = key;
     this.controller.nodeExecutable = runtime.executable;
+    if (this.tunnelController) {
+      this.tunnelController.childProcess = this.createProviderChildProcess(this.pluginDirectory(), runtime.executable);
+    }
     this.logRuntime(`Using Node ${runtime.nodeVersion} Gateway runtime from ${runtime.source}: ${runtime.executable}`);
     return runtime;
+  }
+
+  createProviderChildProcess(pluginDirectory, nodeExecutable) {
+    return createSupervisedChildProcess({
+      nodeExecutable,
+      supervisorEntry: path.join(pluginDirectory, 'provider-supervisor.cjs')
+    });
+  }
+
+  createTunnelController(pluginDirectory, stateDirectory) {
+    const nodeRuntime = this.ensureNodeRuntime();
+    const childProcess = this.createProviderChildProcess(pluginDirectory, nodeRuntime.executable);
+    return new DesktopTunnelController({
+      stateDirectory,
+      settings: () => this.tunnelSettings(stateDirectory),
+      getSecrets: async () => this.tunnelSecrets(),
+      childProcess,
+      hostId: this.hostInstanceId,
+      logger: message => this.logRuntime(message)
+    });
   }
 
   tunnelSecrets() {
@@ -494,13 +518,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         hostId: this.hostInstanceId,
         logger: message => this.logRuntime(message)
       });
-      this.tunnelController = new DesktopTunnelController({
-        stateDirectory,
-        settings: () => this.tunnelSettings(stateDirectory),
-        getSecrets: async () => this.tunnelSecrets(),
-        hostId: this.hostInstanceId,
-        logger: message => this.logRuntime(message)
-      });
+      this.tunnelController = this.createTunnelController(pluginDirectory, stateDirectory);
       this.logRuntime(`Configured shared DevMate Gateway and public connection lifecycle for ${this.vaultRoot}.`);
     } else {
       await this.bridge?.stop();
@@ -508,13 +526,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       this.controller.preferredPort = this.settings.preferredPort;
       this.runtimeDiagnostics?.setStateDirectory(stateDirectory);
       if (!this.tunnelController) {
-        this.tunnelController = new DesktopTunnelController({
-          stateDirectory,
-          settings: () => this.tunnelSettings(stateDirectory),
-          getSecrets: async () => this.tunnelSecrets(),
-          hostId: this.hostInstanceId,
-          logger: message => this.logRuntime(message)
-        });
+        this.tunnelController = this.createTunnelController(pluginDirectory, stateDirectory);
       }
     }
     this.controller.ensureConfig();

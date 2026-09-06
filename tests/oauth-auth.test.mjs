@@ -112,7 +112,7 @@ test('OAuth Gateway keeps secrets out of config, publishes current metadata, rej
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, DEVMATE_CONFIG: configPath },
+    env: { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DESKTOP_LIFECYCLE_FENCE: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
   });

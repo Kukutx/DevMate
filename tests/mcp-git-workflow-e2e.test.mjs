@@ -111,7 +111,7 @@ test('MCP Git can push repeatedly, surface failures, recover, and fail closed ac
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, DEVMATE_CONFIG: configPath },
+    env: { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DESKTOP_LIFECYCLE_FENCE: '0' },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });

@@ -68,3 +68,13 @@ test('Gateway build is self-contained and shared across host packages', () => {
   assert.match(obsidianBuild, /buildGatewayBundle/);
   assert.doesNotMatch(obsidianBuild, /packages:\s*['"]external['"]/);
 });
+
+test('VS Code Extension Host E2E isolates machine-scoped DevMate settings', () => {
+  const harness = fs.readFileSync(path.join(root, 'scripts', 'test-vscode-host.mjs'), 'utf8');
+  assert.match(harness, /const userDataDirectory = fs\.mkdtempSync/);
+  assert.match(harness, /const settingsDirectory = path\.join\(userDataDirectory, 'User'\)/);
+  assert.match(harness, /`--user-data-dir=\$\{userDataDirectory\}`/);
+  assert.match(harness, /delete process\.env\.ELECTRON_RUN_AS_NODE/);
+  assert.match(harness, /process\.env\.ELECTRON_RUN_AS_NODE = inheritedElectronRunAsNode/);
+  assert.doesNotMatch(harness, /path\.join\(workspace, '\.vscode'\)/);
+});

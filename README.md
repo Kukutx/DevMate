@@ -198,6 +198,8 @@ The repository runs more than source-level tests. CI covers the actual packaged/
 - portable Windows and Linux CLI packages;
 - dependency audits, architecture contracts, unit/policy tests, and Gateway smoke tests.
 
+Each tagged release publishes the VSIX, the complete Obsidian plugin ZIP, portable Windows and Linux CLI archives, and `SHA256SUMS`. The portable CLI assets are named `devmate-<version>-windows-x64.zip` and `devmate-<version>-linux-x64.tar.gz`.
+
 Local verification:
 
 ```bash
@@ -206,6 +208,7 @@ npm run check
 npm run test:unit
 npm run smoke:gateway
 npm run package:vsix
+npm run package:obsidian
 ```
 
 ## Godot support

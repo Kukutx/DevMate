@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.6.7
+- Fixed packaged Obsidian provider supervision so `provider-supervisor.cjs` is resolved from the installed plugin directory with the already selected Node runtime, without changing the generic VS Code supervisor path.
+- Treat TLS disconnects before the secure handshake as temporary public MCP network failures, allowing the bounded verifier retry window to recover instead of reporting a protocol failure immediately.
+- Ignore unavailable historical workspace roots when matching the current desktop workspace, so a deleted VS Code E2E or Vault path cannot block another host from activating.
+- Isolated machine-scoped VS Code Extension Host E2E settings and strengthened Obsidian, VSIX, portable CLI, and release-asset regression coverage.
+- Isolated standalone CLI and nested VS Code test child processes from desktop/Electron-only launch flags, preventing host-specific lifecycle fencing or `ELECTRON_RUN_AS_NODE` from contaminating their runtime behavior.
+- Made cross-platform portable CLI dependency installation target the packaged OS and CPU explicitly, and added packaged Obsidian plus Linux portable CLI smoke tests to the release build itself.
+- Restored installation on the current stable Obsidian 1.12.7 host instead of incorrectly requiring the 1.13.4 early-access build.
+
 ## 3.6.6
 - Replaced the legacy path-based automatic backup layout with committed manifest snapshots, an append-only rebuildable `index.jsonl`, canonical workspace/root identity, integrity hashes, file and directory restore, explicit prepared/completed/failed mutation states, and no legacy fallback. Existing legacy automatic backup directories are purged when the new Gateway starts.
 - Made work-session rollback read durable backup manifest history instead of the bounded audit log, preserve crash-unknown prepared snapshots while skipping explicit failures, added no-op backup suppression, 20k snapshot/tree bounds, pre-mutation capacity fencing, fair multi-workspace retention, a 24-hour session recovery grace window, and increased the default automatic-backup budget to 512 MiB.

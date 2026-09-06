@@ -55,6 +55,6 @@ test('release authority is limited to publishing, CI verification, and provenanc
 });
 
 test('Obsidian release metadata requires the verified stable host', () => {
-  assert.equal(manifest.minAppVersion, '1.13.4');
-  assert.equal(versions[manifest.version], '1.13.4');
+  assert.equal(manifest.minAppVersion, '1.12.7');
+  assert.equal(versions[manifest.version], '1.12.7');
 });

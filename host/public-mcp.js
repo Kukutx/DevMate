@@ -195,7 +195,7 @@ function transientPublicMcpError(error) {
   const status = Number(error?.response?.status || 0);
   if (status >= 500 && status <= 599) return true;
   const detail = `${error?.response?.error || ''} ${error?.response?.body || ''} ${error?.message || ''}`;
-  return /\b(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|ENOTFOUND)\b|socket hang up|timed?\s*out|error code:\s*1033/i.test(detail);
+  return /\b(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|ENOTFOUND)\b|socket hang up|socket disconnected before secure TLS connection|timed?\s*out|error code:\s*1033/i.test(detail);
 }
 
 function publicMcpErrorKind(error) {

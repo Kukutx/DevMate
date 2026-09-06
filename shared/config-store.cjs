@@ -23,11 +23,15 @@ function normalizedWorkspaceRoot(root) {
   return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
+function workspaceRootMatches(item, rootKey) {
+  if (!item || item.reference) return false;
+  try { return normalizedWorkspaceRoot(String(item.root || '.')) === rootKey; }
+  catch { return false; }
+}
+
 function workspaceForRoot(config, workspaceRoot) {
   const rootKey = normalizedWorkspaceRoot(path.resolve(workspaceRoot));
-  return (config?.workspaces || []).find(item =>
-    item && !item.reference && normalizedWorkspaceRoot(String(item.root || '.')) === rootKey
-  ) || null;
+  return (config?.workspaces || []).find(item => workspaceRootMatches(item, rootKey)) || null;
 }
 
 function configError(message, code, file, cause = null) {
@@ -514,9 +518,7 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
     configureAuthentication(config);
     config.hostContexts ||= {};
     config.workspaces ||= [];
-    let workspace = config.workspaces.find(item =>
-      item && !item.reference && normalizedWorkspaceRoot(String(item.root || '.')) === rootKey
-    );
+    let workspace = config.workspaces.find(item => workspaceRootMatches(item, rootKey));
     if (!workspace) {
       const base = workspaceId(root);
       let id = base;
@@ -549,9 +551,7 @@ function activateInstanceWorkspace({ configFile, workspaceRoot }) {
   const rootKey = normalizedWorkspaceRoot(root);
   return updateConfig(file, current => {
     const config = normalizeInstanceConfig(current);
-    const workspace = (config.workspaces || []).find(item =>
-      item && !item.reference && normalizedWorkspaceRoot(String(item.root || '.')) === rootKey
-    );
+    const workspace = (config.workspaces || []).find(item => workspaceRootMatches(item, rootKey));
     if (!workspace) {
       const error = configError('Workspace is not registered in the DevMate desktop instance', 'config_workspace_missing', file);
       error.requestedWorkspaceRoot = rootKey;

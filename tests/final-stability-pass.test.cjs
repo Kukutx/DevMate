@@ -45,7 +45,8 @@ test('shared tunnel activation refuses to overwrite a controller left by incompl
 test('Obsidian keeps controller settings bound to the state directory captured at construction', () => {
   const main = source('obsidian-plugin/src/main.js');
   assert.match(main, /tunnelSettings\(stateDirectory = this\.stateDirectory\(\)\)/);
-  assert.equal((main.match(/settings: \(\) => this\.tunnelSettings\(stateDirectory\)/g) || []).length, 2);
+  assert.equal((main.match(/this\.tunnelController = this\.createTunnelController\(pluginDirectory, stateDirectory\)/g) || []).length, 2);
+  assert.equal((main.match(/settings: \(\) => this\.tunnelSettings\(stateDirectory\)/g) || []).length, 1);
 });
 
 test('Obsidian state-directory reconfigure and disable both gate Gateway shutdown on public ingress release', () => {

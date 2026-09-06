@@ -19,6 +19,24 @@ test('desktop hosts use the shared child-process Gateway controller', () => {
   assert.match(obsidian, /resolveNodeRuntime/);
 });
 
+test('packaged Obsidian provider supervision is rooted in the installed plugin directory', () => {
+  const obsidian = source('obsidian-plugin/src/main.js');
+  const createStart = obsidian.indexOf('createProviderChildProcess(pluginDirectory, nodeExecutable)');
+  const createEnd = obsidian.indexOf('createTunnelController(pluginDirectory, stateDirectory)', createStart);
+  const createBlock = obsidian.slice(createStart, createEnd);
+  const tunnelStart = createEnd;
+  const tunnelEnd = obsidian.indexOf('\n  tunnelSecrets() {', tunnelStart);
+  const tunnelBlock = obsidian.slice(tunnelStart, tunnelEnd);
+
+  assert.ok(createStart >= 0 && createEnd > createStart);
+  assert.match(obsidian, /createSupervisedChildProcess/);
+  assert.match(createBlock, /nodeExecutable/);
+  assert.match(createBlock, /supervisorEntry: path\.join\(pluginDirectory, 'provider-supervisor\.cjs'\)/);
+  assert.match(tunnelBlock, /const nodeRuntime = this\.ensureNodeRuntime\(\)/);
+  assert.match(tunnelBlock, /const childProcess = this\.createProviderChildProcess\(pluginDirectory, nodeRuntime\.executable\)/);
+  assert.match(tunnelBlock, /new DesktopTunnelController\(\{[\s\S]*childProcess/);
+});
+
 test('Gateway uses the current DEVMATE_CONFIG instance contract', () => {
   const store = require('../shared/config-store.cjs');
   assert.match(source('gateway/local-shared.mjs'), /DEVMATE_CONFIG/);

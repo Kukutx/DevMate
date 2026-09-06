@@ -12,7 +12,7 @@
     "automation",
     "devtools"
   ],
-  "version": "3.6.6",
+  "version": "3.6.7",
   "icon": "assets/icon.png",
   "publisher": "local-ai",
   "homepage": "https://github.com/Kukutx/DevMate#readme",
@@ -363,11 +363,12 @@
     "compile": "npm run build",
     "vscode:prepublish": "npm run build",
     "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs",
+    "test": "npm run test:unit",
     "test:unit": "node scripts/run-tests.mjs",
     "test:vscode-host": "node scripts/test-vscode-host.mjs",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package",
-    "package:obsidian": "npm run build:obsidian",
+    "package:obsidian": "npm run build:obsidian && node scripts/smoke-obsidian-runtime.mjs",
     "publish:vsix": "npm run build && vsce publish",
     "devmate": "node scripts/devmate-command.mjs",
     "runner": "node scripts/devmate-runner.mjs"

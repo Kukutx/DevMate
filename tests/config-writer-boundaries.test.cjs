@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, '..');
 const SKIP_DIRECTORIES = new Set([
   '.git', 'node_modules', 'tests', 'dist', 'build', 'coverage', '.cache', 'tmp'
 ]);
+const SKIP_FILES = new Set(['gateway/server.bundle.mjs']);
 const SOURCE_EXTENSIONS = new Set(['.js', '.cjs', '.mjs']);
 
 function productionSources(directory = root, relativeBase = '') {
@@ -21,7 +22,9 @@ function productionSources(directory = root, relativeBase = '') {
       files.push(...productionSources(full, relative));
       continue;
     }
-    if (entry.isFile() && SOURCE_EXTENSIONS.has(path.extname(entry.name))) files.push({ relative, full });
+    if (entry.isFile() && !SKIP_FILES.has(relative) && SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
+      files.push({ relative, full });
+    }
   }
   return files;
 }

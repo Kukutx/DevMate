@@ -22,8 +22,36 @@ test('release workflow verifies, packages, checksums, attests, and publishes ass
     'node scripts/check-release-tag.mjs',
     'npm run test:unit',
     'npm run smoke:gateway',
+    'npm run package:obsidian',
+    'provider-supervisor.cjs',
+    'gateway/server.mjs',
+    'scripts/package-portable.mjs',
+    'scripts/smoke-portable-cli.mjs',
+    'devmate-${version}-windows-x64.zip',
+    'devmate-${version}-linux-x64.tar.gz',
     'SHA256SUMS',
     'gh release create'
   ]) assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(workflow, /actions\/attest@[a-f0-9]{40}\b/i);
+});
+
+test('portable packaging installs production dependencies for the target platform', async () => {
+  const { __test } = await import('../scripts/package-portable.mjs');
+  assert.deepEqual(__test.productionInstallArgs('win32', 'x64'), [
+    'ci',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--os=win32',
+    '--cpu=x64'
+  ]);
+  assert.deepEqual(__test.productionInstallArgs('linux', 'arm64').slice(-2), [
+    '--os=linux',
+    '--cpu=arm64'
+  ]);
+  if (process.platform === 'win32') {
+    assert.equal(__test.npmCommand().shell, false);
+    assert.match(__test.npmCommand().command, /(?:cmd|node)(?:\.exe)?$/i);
+  }
 });

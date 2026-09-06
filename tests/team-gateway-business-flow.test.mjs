@@ -69,7 +69,7 @@ test('real loopback no-auth MCP closes work-session, write, finish, and rollback
 
   const child = spawn(process.execPath, ['gateway/server-runtime.mjs'], {
     cwd: root,
-    env: { ...process.env, DEVMATE_CONFIG: configPath },
+    env: { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DESKTOP_LIFECYCLE_FENCE: '0' },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   DEFAULT_MAINTENANCE,
+  __test,
   maintenanceOptions,
   pruneAuditLog,
   pruneBackups,
@@ -33,6 +34,20 @@ test('maintenanceOptions clamps invalid values to safe bounds', () => {
     maxBackupBytes: 1024 * 1024,
     maxAuditBytes: 256 * 1024
   });
+});
+
+test('explicit maintenance configFile overrides ambient DEVMATE_CONFIG', () => {
+  const stateRoot = path.join(os.tmpdir(), 'devmate-maintenance-explicit', 'state');
+  const configFile = path.join(path.dirname(stateRoot), 'custom-config.json');
+  const previous = process.env.DEVMATE_CONFIG;
+  process.env.DEVMATE_CONFIG = path.join(os.tmpdir(), 'devmate-maintenance-unrelated', 'config.json');
+  try {
+    const locations = __test.recoveryLocations({ stateRoot, configFile });
+    assert.equal(locations.configFile, configFile);
+  } finally {
+    if (previous === undefined) delete process.env.DEVMATE_CONFIG;
+    else process.env.DEVMATE_CONFIG = previous;
+  }
 });
 
 test('pruneAuditLog removes expired JSON entries and keeps recent or unparsable lines', async () => {
@@ -144,7 +159,12 @@ test('pruneBackups removes expired backup sets and trims oldest sets by size', a
     await assert.rejects(fsp.stat(middleSet));
     await fsp.stat(newestSet);
 
-    const summary = await stateSummary({ backupRoot, auditLog: path.join(dir, 'audit.jsonl') });
+    const summary = await stateSummary({
+      stateRoot: dir,
+      backupRoot,
+      auditLog: path.join(dir, 'audit.jsonl'),
+      configFile: path.join(path.dirname(dir), 'config.json')
+    });
     assert.equal(summary.backupSets, 1);
     assert.equal(summary.backupFiles, 1);
   } finally {
@@ -158,7 +178,8 @@ test('pruneState creates missing state folders and reports current storage summa
     const paths = {
       stateRoot: path.join(dir, 'state'),
       backupRoot: path.join(dir, 'state', 'backups'),
-      auditLog: path.join(dir, 'state', 'audit.jsonl')
+      auditLog: path.join(dir, 'state', 'audit.jsonl'),
+      configFile: path.join(dir, 'config.json')
     };
     const result = await pruneState(paths, {}, Date.now());
     const summary = await stateSummary(paths);

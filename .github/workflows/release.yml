@@ -91,7 +91,7 @@ jobs:
           node_version=$(node -p "process.versions.node")
           mkdir -p release "$RUNNER_TEMP/devmate-node"
           npx vsce package --out "release/devmate-${version}.vsix"
-          npm run build:obsidian
+          npm run package:obsidian
           (
             cd obsidian-plugin/dist
             zip -q -9 "$GITHUB_WORKSPACE/release/devmate-obsidian-${version}.zip" \
@@ -121,6 +121,8 @@ jobs:
             --arch x64 \
             --node "$RUNNER_TEMP/devmate-node/node-v${node_version}-linux-x64/bin/node" \
             --out "$RUNNER_TEMP/devmate-portable-linux"
+          node scripts/smoke-portable-cli.mjs \
+            --root "$RUNNER_TEMP/devmate-portable-linux"
 
           (
             cd "$RUNNER_TEMP/devmate-portable-win"

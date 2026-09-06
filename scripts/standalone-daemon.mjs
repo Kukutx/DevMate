@@ -243,6 +243,7 @@ export async function startDaemon(options = {}) {
         ...process.env,
         DEVMATE_CONFIG: file,
         DEVMATE_PUBLIC_HEALTH_DETAILS: '0',
+        DEVMATE_DESKTOP_LIFECYCLE_FENCE: '0',
         DEVMATE_RUNTIME_OWNER_ID: ownerId,
         DEVMATE_RUNTIME_PARENT_PID: String(process.pid),
         DEVMATE_RUNTIME_LAUNCH_MODE: CLI_LAUNCH_MODE

@@ -44,12 +44,27 @@ function writeExecutable(file, content) {
 function npmCommand() {
   const cli = String(process.env.npm_execpath || '').trim();
   if (cli && fs.statSync(cli, { throwIfNoEntry: false })?.isFile()) return { command: process.execPath, args: [cli], shell: false };
-  return { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: [], shell: process.platform === 'win32' };
+  if (process.platform === 'win32') {
+    return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', 'npm.cmd'], shell: false };
+  }
+  return { command: 'npm', args: [], shell: false };
 }
 
-function installProductionDependencies(appDirectory) {
+function productionInstallArgs(platform, arch) {
+  return [
+    'ci',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    `--os=${platform}`,
+    `--cpu=${arch}`
+  ];
+}
+
+function installProductionDependencies(appDirectory, platform, arch) {
   const npm = npmCommand();
-  const result = spawnSync(npm.command, [...npm.args, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
+  const result = spawnSync(npm.command, [...npm.args, ...productionInstallArgs(platform, arch)], {
     cwd: appDirectory,
     encoding: 'utf8',
     windowsHide: true,
@@ -115,7 +130,7 @@ export function packagePortable(options = {}) {
     copy(path.join(root, 'vscode-host', file), path.join(appDirectory, 'vscode-host', file));
   }
 
-  installProductionDependencies(appDirectory);
+  installProductionDependencies(appDirectory, platform, arch);
 
   const runtimeName = platform === 'win32' ? 'node.exe' : 'node';
   copy(nodeBinary, path.join(runtimeDirectory, runtimeName));
@@ -153,4 +168,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
   }
 }
 
-export const __test = { launcherContent, nodeLicense, targetArch, targetPlatform };
+export const __test = { launcherContent, nodeLicense, npmCommand, productionInstallArgs, targetArch, targetPlatform };

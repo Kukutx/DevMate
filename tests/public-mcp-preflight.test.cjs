@@ -8,6 +8,7 @@ const {
   parseJsonPayload,
   preflightPublicMcp,
   publicEndpointLookup,
+  publicMcpErrorKind,
   transientPublicMcpError
 } = require('../host/public-mcp.js');
 
@@ -152,6 +153,17 @@ test('public MCP preflight retries only transient tunnel propagation failures', 
   assert.equal(discoveries, 3);
   assert.equal(transientPublicMcpError({ response: { status: 401 } }), false);
   assert.equal(transientPublicMcpError({ response: { error: 'getaddrinfo ENOTFOUND edge.example' } }), true);
+});
+
+test('public MCP treats a pre-handshake TLS disconnect as a transient network failure', () => {
+  const error = {
+    code: 'DEVMATE_PUBLIC_MCP_TOOLS_FAILED',
+    response: {
+      error: 'Client network socket disconnected before secure TLS connection was established'
+    }
+  };
+  assert.equal(transientPublicMcpError(error), true);
+  assert.equal(publicMcpErrorKind(error), 'temporary-network');
 });
 
 test('Cloudflare quick endpoints bypass the Windows lookup cache without changing other providers', async () => {

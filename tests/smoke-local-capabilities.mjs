@@ -32,7 +32,7 @@ configStore.atomicWriteJson(configPath, config);
 
 const child = spawn(process.execPath, [gatewayScript], {
   cwd: root,
-  env: { ...process.env, DEVMATE_CONFIG: configPath },
+  env: { ...process.env, DEVMATE_CONFIG: configPath, DEVMATE_DESKTOP_LIFECYCLE_FENCE: '0' },
   windowsHide: true,
   stdio: ['ignore', 'pipe', 'pipe']
 });

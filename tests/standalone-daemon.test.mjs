@@ -61,7 +61,15 @@ test('standalone daemon starts a real Gateway, reports CLI ownership, and confir
     try { await stopDaemon({ config, timeout: 10000 }); } catch {}
   });
 
-  const result = await startDaemon({ config, timeout: 30000 });
+  const inheritedDesktopFence = process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE;
+  process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE = '1';
+  let result;
+  try {
+    result = await startDaemon({ config, timeout: 30000 });
+  } finally {
+    if (inheritedDesktopFence === undefined) delete process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE;
+    else process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE = inheritedDesktopFence;
+  }
   started = result.started === true || result.cliOwned === true;
   assert.equal(result.ok, true);
   assert.equal(result.started, true);
