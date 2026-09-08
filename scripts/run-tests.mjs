@@ -108,7 +108,7 @@ function reportIsolatedFailure(file, result) {
   console.error(`\nFAIL: ${rel}`);
   printCaptured(result);
   if (timedOut(result)) {
-    const message = `Isolated test file timed out after ${diagnosticTimeoutMs}ms, indicating a leaked/open runtime handle or an unbounded operation.`;
+    const message = `Isolated test file timed out after ${diagnosticTimeoutMs}ms, the cause is unconfirmed. Inspect phase timings, slow operations, and open runtime handles.`;
     console.error(message);
     githubError(rel, message);
     return rel;
@@ -130,7 +130,9 @@ function diagnoseBatch(batch) {
     failures.push(reportIsolatedFailure(file, result));
   }
   if (!failures.length) {
-    const message = 'The failed test batch passed file-by-file, indicating an inter-test or concurrency interaction.';
+    const message = batch.length === 1
+      ? 'The test file failed initially but passed on retry. The failure is intermittent; its cause is unconfirmed.'
+      : 'The failed test batch passed file-by-file. The failure was not reproduced; concurrency is only one possible cause.';
     console.error(message);
     githubError('.github', message);
   } else {
@@ -145,7 +147,7 @@ function diagnoseTimedOutGroup(group) {
     if (!timedOut(result) && result.error) throw result.error;
     if (!timedOut(result) && result.status === 0) {
       const rel = relative(group[0]);
-      const message = 'Test file passed in isolation after its batch timed out, indicating an inter-test or concurrency interaction.';
+      const message = 'Test file passed on retry after a timeout. The timeout was not reproduced; its cause is unconfirmed.';
       console.error(`${rel}: ${message}`);
       githubError(rel, message);
       return [];
@@ -183,7 +185,7 @@ for (let index = 0; index < batches.length; index += 1) {
   if (timedOut(result)) {
     console.error(`Batch timed out after ${batchTimeoutMs}ms; bisecting ${batch.length} test files...`);
     const failures = diagnoseTimedOutGroup(batch);
-    if (!failures.length) githubError('.github', 'A test batch timed out but no single-file failure was reproduced; investigate inter-test resource leakage.');
+    if (!failures.length) githubError('.github', 'A test batch timed out but diagnostic reruns did not reproduce a failure. Inspect original output and phase timings; the cause is unconfirmed.');
     process.exit(1);
   }
   if (result.error) throw result.error;
