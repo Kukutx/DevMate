@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 function normalizedAddress(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -13,6 +15,7 @@ export function remoteAddress(req) {
 
 export function isLoopbackAddress(value) {
   const address = normalizedAddress(value);
+  if (!isIP(address)) return false;
   return address === '::1' ||
     address === '127.0.0.1' ||
     address.startsWith('127.') ||
@@ -26,24 +29,24 @@ export function loopbackSocket(req) {
 
 export function hostCandidates(req) {
   const raw = String(req?.headers?.host || '').trim().toLowerCase();
-  if (!raw) return [];
-  const candidates = new Set([raw]);
+  // Host is an authority, not a URL. Reject userinfo, paths, escapes and
+  // malformed ports before using URL normalization for host matching.
+  if (!raw || /[\s\\/@?#%]/.test(raw)) return [];
+  if (!/^(?:\[[^\]]+\]|[^:[\]]+)(?::[0-9]+)?$/.test(raw)) return [];
   try {
     const parsed = new URL(`http://${raw}`);
-    candidates.add(parsed.hostname.toLowerCase());
-  } catch {}
-  return [...candidates];
+    return [...new Set([raw, parsed.hostname.toLowerCase()])];
+  } catch {
+    return [];
+  }
 }
 
 export function loopbackHost(req) {
   return hostCandidates(req).some(value =>
     value === 'localhost' ||
-    value.startsWith('localhost:') ||
     value === '127.0.0.1' ||
-    value.startsWith('127.0.0.1:') ||
     value === '::1' ||
-    value === '[::1]' ||
-    value.startsWith('[::1]:')
+    value === '[::1]'
   );
 }
 
@@ -53,6 +56,7 @@ export function isLocalRequest(req) {
 
 export function hostAllowed(req, config) {
   const candidates = hostCandidates(req);
+  if (!candidates.length) return false;
   const localHost = loopbackHost(req);
   if (localHost) return loopbackSocket(req);
 
