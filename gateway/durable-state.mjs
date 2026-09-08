@@ -153,7 +153,19 @@ export function recoverDurableStateReplacement() {
     if (compatibility === 'unsupported') return null;
   }
   const candidate = candidates.find(item => validDurableFile(item.file));
-  if (!candidate) return null;
+  if (!candidate) {
+    if (!fs.existsSync(RUNTIME_STATE_PATH) && candidates.length) {
+      const incompatible = candidates.some(item => durableFileCompatibility(item.file) === 'unsupported');
+      const error = new Error(incompatible
+        ? 'DevMate durable state recovery found incompatible replacement data; preserved for a compatible version'
+        : 'DevMate durable state is missing and interrupted replacement files are not valid');
+      error.code = incompatible ? 'durable_state_recovery_incompatible' : 'durable_state_recovery_failed';
+      error.statePath = RUNTIME_STATE_PATH;
+      error.replacementCandidates = candidates.map(item => item.file);
+      throw error;
+    }
+    return null;
+  }
   if (fs.existsSync(RUNTIME_STATE_PATH)) {
     try { fs.renameSync(RUNTIME_STATE_PATH, `${RUNTIME_STATE_PATH}.corrupt-${Date.now()}`); }
     catch { try { fs.rmSync(RUNTIME_STATE_PATH, { force: true }); } catch {} }
@@ -273,6 +285,7 @@ export function mutateDurableNamespace(name, fallback, mutator) {
   if (typeof mutator !== 'function') throw new TypeError('Durable state mutator must be a function');
   const current = readDurableNamespace(name, fallback);
   const result = mutator(current);
+  if (result && typeof result.then === 'function') throw new TypeError('Durable state mutator must be synchronous');
   const next = result === undefined ? current : result;
   writeDurableNamespace(name, next);
   return clone(next);
