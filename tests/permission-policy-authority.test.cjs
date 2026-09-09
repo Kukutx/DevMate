@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const configStore = require('../shared/config-store.cjs');
 const {
+  DEFAULT_PERMISSION_POLICY,
   configurePermissionPolicy,
   permissionPolicyGeneration,
   permissionPolicyInitialized,
@@ -57,6 +58,34 @@ test('routine host initialization cannot replace an established shared permissio
   assert.equal(permissionPolicyGeneration(staleHost.config), 1);
 });
 
+test('desktop startup canonicalizes legacy fullAccess storage without inventing a policy transition', t => {
+  const { root, file } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  configStore.updateConfig(file, current => {
+    current.permissions = {
+      profile: 'fullAccess',
+      readOnly: false,
+      blockDangerousOperations: true,
+      confirmBeforePush: true,
+      allowDirectoryMutations: false
+    };
+    current.hostRuntime ||= {};
+    current.hostRuntime.permissionPolicyInitialized = true;
+    current.hostRuntime.permissionPolicyGeneration = 6;
+    return current;
+  });
+
+  const normalized = ensureDesktopPermissionPolicy(file, { fresh: false });
+  assert.deepEqual(normalized.permissions, DEFAULT_PERMISSION_POLICY);
+  assert.deepEqual(normalized.config.permissions, DEFAULT_PERMISSION_POLICY);
+  assert.equal(permissionPolicyGeneration(normalized.config), 6);
+
+  const persisted = configStore.readConfigSnapshot(file);
+  assert.deepEqual(persisted.permissions, DEFAULT_PERMISSION_POLICY);
+  assert.equal(permissionPolicyGeneration(persisted), 6);
+});
+
 test('routine permission configuration is monotonic unless explicitly replaced', () => {
   const config = {
     permissions: {
@@ -67,6 +96,7 @@ test('routine permission configuration is monotonic unless explicitly replaced',
   };
   configurePermissionPolicy(config, { profile: 'readOnly', readOnly: true });
   assert.equal(permissionPolicySnapshot(config).profile, 'fullAccess');
+  assert.deepEqual(config.permissions, DEFAULT_PERMISSION_POLICY);
   assert.equal(permissionPolicyGeneration(config), 4);
 
   configurePermissionPolicy(config, { profile: 'readOnly', readOnly: true }, { replace: true });
@@ -97,6 +127,12 @@ test('generic VS Code context refresh preserves shared permissions even with a s
   assert.deepEqual(merged.permissions, current.permissions);
   assert.equal(merged.hostRuntime.permissionPolicyGeneration, 3);
   assert.deepEqual(merged.hostContexts.staleWindow, { capturedAt: 'later' });
+});
+
+test('fullAccess does not overwrite dormant balanced guard preferences in VS Code settings', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'vscode-host', 'lifecycle.js'), 'utf8');
+  assert.match(source, /const expected = \{ permissionProfile: permissions\.profile \}/);
+  assert.match(source, /if \(permissions\.profile !== 'fullAccess'\)/);
 });
 
 test('shared authentication and permission settings are machine-scoped in VS Code', () => {
