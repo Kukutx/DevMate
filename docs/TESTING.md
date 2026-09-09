@@ -74,7 +74,7 @@ With VS Code and Obsidian using the default machine-wide desktop state directory
 4. Run `show_changes` and review the change summary.
 5. Run `work_session_finish` and confirm the session-owned lease is released.
 6. Run `work_session_rollback` for the finished session and confirm recorded file mutations are restored. If the caller is subject to workspace-lease policy, reacquire the lease first.
-7. Confirm directory delete/move remains blocked unless `devMate.allowDirectoryMutations` is explicitly enabled.
+7. Confirm `balanced` blocks directory delete/move unless `devMate.allowDirectoryMutations` is enabled, while `fullAccess` permits directory mutations subject to normal workspace and sensitive-path protections.
 8. Confirm `add_trusted_root` rejects the filesystem root and relative paths.
 9. Verify trusted-root write, command and Git operations stay contained to the selected workspace ID.
 
