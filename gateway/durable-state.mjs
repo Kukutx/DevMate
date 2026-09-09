@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import atomicJsonFile from '../shared/atomic-json-file.cjs';
 import { threadId } from 'node:worker_threads';
 import { CONFIG_PATH, now, readConfig } from './local-shared.mjs';
+
+const { atomicWriteJsonFile } = atomicJsonFile;
 
 export const STATE_ROOT = CONFIG_PATH ? path.join(path.dirname(CONFIG_PATH), 'state') : '';
 export const RUNTIME_STATE_PATH = STATE_ROOT ? path.join(STATE_ROOT, 'runtime-state.json') : '';
@@ -210,50 +213,18 @@ function atomicWrite(document) {
   }
   recoverDurableStateReplacement();
   normalized.updatedAt = now();
-  const temporary = `${RUNTIME_STATE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  const payload = `${JSON.stringify(normalized, null, 2)}\n`;
-  const payloadBytes = Buffer.byteLength(payload, 'utf8');
-  if (payloadBytes > MAX_DURABLE_STATE_BYTES) {
-    const error = new Error(`DevMate durable state exceeds the ${MAX_DURABLE_STATE_BYTES} byte limit (${payloadBytes} bytes)`);
-    error.code = 'durable_state_too_large';
+  try {
+    atomicWriteJsonFile(RUNTIME_STATE_PATH, normalized, { maxBytes: MAX_DURABLE_STATE_BYTES });
+  } catch (error) {
+    if (error?.code === 'atomic_json_too_large') {
+      const wrapped = new Error(`DevMate durable state exceeds the ${MAX_DURABLE_STATE_BYTES} byte limit (${error.bytes} bytes)`);
+      wrapped.code = 'durable_state_too_large';
+      wrapped.cause = error;
+      throw wrapped;
+    }
     throw error;
   }
-  let fd = null;
-  try {
-    fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, payload, 'utf8');
-    try { fs.fsyncSync(fd); } catch {}
-    fs.closeSync(fd);
-    fd = null;
-    try {
-      fs.renameSync(temporary, RUNTIME_STATE_PATH);
-    } catch (error) {
-      if (process.platform !== 'win32') throw error;
-      const previous = `${RUNTIME_STATE_PATH}.replace-${process.pid}-${Date.now()}`;
-      let movedPrevious = false;
-      try {
-        if (fs.existsSync(RUNTIME_STATE_PATH)) {
-          fs.renameSync(RUNTIME_STATE_PATH, previous);
-          movedPrevious = true;
-        }
-        fs.renameSync(temporary, RUNTIME_STATE_PATH);
-        if (movedPrevious) fs.rmSync(previous, { force: true });
-      } catch (replacementError) {
-        if (!fs.existsSync(RUNTIME_STATE_PATH) && movedPrevious && fs.existsSync(previous)) {
-          try { fs.renameSync(previous, RUNTIME_STATE_PATH); } catch {}
-        }
-        throw replacementError;
-      }
-    }
-    try { fs.chmodSync(RUNTIME_STATE_PATH, 0o600); } catch {}
-    fsyncDirectory(STATE_ROOT);
-    cache = normalized;
-  } finally {
-    if (fd != null) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.rmSync(temporary, { force: true }); } catch {}
-  }
+  cache = normalized;
 }
 
 export function mutateDurableDocument(mutator) {

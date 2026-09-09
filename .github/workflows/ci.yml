@@ -36,6 +36,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Persistence fault regressions
+        run: node --test tests/atomic-json-file.test.cjs tests/durable-state.test.mjs tests/config-persistence.test.mjs
+
       - name: Audit runtime dependencies
         run: npm audit --omit=dev --audit-level=moderate
 

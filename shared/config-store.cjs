@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { atomicWriteJsonFile } = require('./atomic-json-file.cjs');
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
 const { configureAuthentication, DEFAULT_AUTHENTICATION_MODE } = require('./auth-config.cjs');
@@ -149,9 +150,20 @@ function attachConfigSnapshot(value, file, state) {
 
 function readConfigSnapshot(file) {
   const target = path.resolve(file);
-  recoverConfigReplacement(target);
-  const state = readConfigState(target);
-  return attachConfigSnapshot(state.value, target, state);
+  // Healthy snapshots are read-only. Their content hash still fences a later
+  // replacement, and readers need not serialize behind unrelated host writes.
+  try {
+    const state = readConfigState(target);
+    if (state.exists) return attachConfigSnapshot(state.value, target, state);
+  } catch (error) {
+    if (error?.code === 'unsupported_config_version') throw error;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  return withFileLockSync(target, () => {
+    recoverConfigReplacementLocked(target);
+    const state = readConfigState(target);
+    return attachConfigSnapshot(state.value, target, state);
+  });
 }
 
 function configConflict(file) {
@@ -246,6 +258,12 @@ function cleanupReplacementCandidates(candidates, except = '') {
 }
 
 function recoverConfigReplacement(file) {
+  const target = path.resolve(file);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  return withFileLockSync(target, () => recoverConfigReplacementLocked(target));
+}
+
+function recoverConfigReplacementLocked(file) {
   const candidates = replacementCandidates(file);
   let main = null;
   let mainError = null;
@@ -310,48 +328,13 @@ function atomicWriteJson(file, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw configError('DevMate config write requires a JSON object', 'config_invalid_write', file);
   }
-  const directory = path.dirname(file);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(directory, 0o700); } catch {}
-  const payload = `${JSON.stringify(value, null, 2)}\n`;
-  if (Buffer.byteLength(payload, 'utf8') > MAX_CONFIG_BYTES) {
-    throw configError(`DevMate config exceeds ${MAX_CONFIG_BYTES} bytes`, 'config_too_large', file);
-  }
-  const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  let fd = null;
   try {
-    fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, payload, 'utf8');
-    try { fs.fsyncSync(fd); } catch {}
-    fs.closeSync(fd);
-    fd = null;
-    try {
-      fs.renameSync(temporary, file);
-    } catch (error) {
-      if (process.platform !== 'win32') throw error;
-      const previous = `${file}.replace-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-      let moved = false;
-      try {
-        if (fs.existsSync(file)) {
-          fs.renameSync(file, previous);
-          moved = true;
-        }
-        fs.renameSync(temporary, file);
-        if (moved) fs.rmSync(previous, { force: true });
-      } catch (replacementError) {
-        if (!fs.existsSync(file) && moved && fs.existsSync(previous)) {
-          try { fs.renameSync(previous, file); } catch {}
-        }
-        throw replacementError;
-      }
+    atomicWriteJsonFile(file, value, { maxBytes: MAX_CONFIG_BYTES });
+  } catch (error) {
+    if (error?.code === 'atomic_json_too_large') {
+      throw configError(`DevMate config exceeds ${MAX_CONFIG_BYTES} bytes`, 'config_too_large', file, error);
     }
-    try { fs.chmodSync(file, 0o600); } catch {}
-    fsyncDirectory(directory);
-  } finally {
-    if (fd != null) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.rmSync(temporary, { force: true }); } catch {}
+    throw error;
   }
 }
 

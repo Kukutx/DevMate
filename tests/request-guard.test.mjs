@@ -130,3 +130,25 @@ test('Host restrictions are explicit request policy rather than a deployment mod
   assert.equal(hostAllowed(publicRequest('devmate.example.com'), restricted), true);
   assert.equal(hostAllowed(publicRequest('evil.example.com'), restricted), false);
 });
+
+test('real HTTP requests with malformed local-looking Host authorities are rejected before dispatch', async () => {
+  for (const host of ['localhost:8787/path', 'localhost:8787@attacker.example', '127.0.0.1:invalid']) {
+    const status = await new Promise((resolve, reject) => {
+      const request = http.request({
+        hostname: '127.0.0.1',
+        port: server.address().port,
+        path: '/mcp',
+        method: 'POST',
+        headers: { host, 'content-type': 'application/json' }
+      }, response => {
+        response.resume();
+        response.once('end', () => resolve(response.statusCode));
+        response.once('error', reject);
+      });
+      request.setTimeout(5000, () => request.destroy(new Error('request timed out')));
+      request.once('error', reject);
+      request.end('{}');
+    });
+    assert.equal(status, 421, host);
+  }
+});

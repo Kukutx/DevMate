@@ -43,3 +43,38 @@ test('an empty Host allowlist permits public Hosts but never treats spoofed loca
   assert.equal(hostAllowed(request('devmate.example.com', '203.0.113.10'), unrestricted), true);
   assert.equal(hostAllowed(request('localhost:8787', '203.0.113.10'), unrestricted), false);
 });
+
+test('loopback prefixes cannot turn hostnames or malformed addresses into loopback IPs', () => {
+  for (const value of ['127.attacker.example', '127.0.0.1.attacker.example', '127.999.0.1', '::ffff:127.attacker.example']) {
+    assert.equal(isLoopbackAddress(value), false, value);
+    assert.equal(isLoopbackHostname(value), false, value);
+  }
+});
+
+test('malformed Host authorities cannot select local trust or pass an empty allowlist', () => {
+  for (const host of [
+    'localhost:8787@attacker.example',
+    '127.0.0.1:8787@attacker.example',
+    'localhost:8787/path',
+    'localhost:8787?query',
+    'localhost:8787#fragment',
+    'localhost:invalid',
+    'localhost:',
+    'localhost:99999',
+    'local%68ost:8787',
+    'localhost:8787\\\\attacker.example',
+    '',
+    '::1'
+  ]) {
+    const req = request(host, '127.0.0.1');
+    assert.equal(loopbackHost(req), false, host);
+    assert.equal(isLocalRequest(req), false, host);
+    assert.equal(hostAllowed(req, { requestPolicy: { allowedHosts: [] } }), false, host);
+  }
+});
+
+test('valid loopback authorities retain local access after strict Host parsing', () => {
+  for (const host of ['localhost', 'LOCALHOST:8787', '127.0.0.1:8787', '[::1]', '[::1]:8787']) {
+    assert.equal(isLocalRequest(request(host, '127.0.0.1')), true, host);
+  }
+});

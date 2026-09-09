@@ -30,6 +30,28 @@ test('persists namespaced runtime state atomically', () => {
 });
 
 
+test('failed durable file fsync preserves both persisted and cached state', t => {
+  durable.resetDurableStateForTests();
+  durable.writeDurableNamespace('fsync-failure', { count: 1 });
+  const before = fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8');
+  const failure = Object.assign(new Error('injected durable fsync failure'), { code: 'EIO' });
+  const sync = t.mock.method(fs, 'fsyncSync', () => { throw failure; });
+  try {
+    assert.throws(
+      () => durable.writeDurableNamespace('fsync-failure', { count: 2 }),
+      error => error === failure
+    );
+  } finally {
+    sync.mock.restore();
+  }
+  assert.equal(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8'), before);
+  assert.deepEqual(durable.readDurableNamespace('fsync-failure', null), { count: 1 });
+  assert.equal(fs.readdirSync(path.dirname(durable.RUNTIME_STATE_PATH)).some(name => name.endsWith('.tmp')), false);
+  durable.resetDurableStateForTests();
+  assert.deepEqual(durable.readDurableNamespace('fsync-failure', null), { count: 1 });
+});
+
+
 test('namespace mutations reject asynchronous callbacks without changing disk or cache', () => {
   durable.resetDurableStateForTests();
   durable.writeDurableNamespace('synchronous-only', { count: 1 });
