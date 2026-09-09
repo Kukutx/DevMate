@@ -62,19 +62,22 @@ test('desktop startup canonicalizes legacy fullAccess storage without inventing 
   const { root, file } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  configStore.updateConfig(file, current => {
-    current.permissions = {
-      profile: 'fullAccess',
-      readOnly: false,
-      blockDangerousOperations: true,
-      confirmBeforePush: true,
-      allowDirectoryMutations: false
-    };
-    current.hostRuntime ||= {};
-    current.hostRuntime.permissionPolicyInitialized = true;
-    current.hostRuntime.permissionPolicyGeneration = 6;
-    return current;
-  });
+  // Build an on-disk historical fixture directly. Production config writers are
+  // intentionally not allowed to forge a generation jump, which is exactly the
+  // invariant this migration must preserve.
+  const seeded = configStore.readConfigSnapshot(file);
+  const legacy = JSON.parse(JSON.stringify(seeded));
+  legacy.permissions = {
+    profile: 'fullAccess',
+    readOnly: false,
+    blockDangerousOperations: true,
+    confirmBeforePush: true,
+    allowDirectoryMutations: false
+  };
+  legacy.hostRuntime ||= {};
+  legacy.hostRuntime.permissionPolicyInitialized = true;
+  legacy.hostRuntime.permissionPolicyGeneration = 6;
+  fs.writeFileSync(file, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
 
   const normalized = ensureDesktopPermissionPolicy(file, { fresh: false });
   assert.deepEqual(normalized.permissions, DEFAULT_PERMISSION_POLICY);
