@@ -6,10 +6,13 @@ DevMate plugins add platform-specific tools without expanding the default MCP su
 
 | Plugin | Default | Purpose |
 |---|---:|---|
+| `devmate.browser-control` | off | Long-lived interactive Playwright sessions, multi-tab navigation, semantic snapshots, and bounded browser actions |
 | `devmate.browser-qa` | off | Local previews, Playwright browser automation, structured state assertions, and saved scenarios |
 | `devmate.godot` | off | Godot inspection, validation, execution, Web export, QA bridge support, and acceptance suites |
 
-`devmate.godot` depends on `devmate.browser-qa`. Enabling Godot automatically enables Browser QA.
+`devmate.godot` depends on `devmate.browser-qa`. Enabling Godot automatically enables Browser QA. Browser Control is independent from Browser QA because interactive browsing and deterministic acceptance testing have different lifecycle and security requirements.
+
+Browser Control is owner-only. It keeps managed Chromium sessions alive across MCP requests inside the current Gateway process, caps session/tab counts, binds every session to one workspace, rejects stale semantic element refs after actions, and closes sessions when the capability is disabled or the Gateway shuts down. Remote URLs are blocked by default. Browser Control does not attach to the user's normal Chrome profile and does not persist browser cookies/session state across Gateway restarts.
 
 ## Management tools
 
@@ -31,8 +34,14 @@ Plugin state is stored in DevMate's global-storage `config.json`, never in the u
 ```json
 {
   "plugins": {
-    "enabled": ["devmate.browser-qa", "devmate.godot"],
+    "enabled": ["devmate.browser-control", "devmate.browser-qa", "devmate.godot"],
     "settings": {
+      "devmate.browser-control": {
+        "playwrightModulePath": "",
+        "chromiumExecutablePath": "",
+        "allowRemoteUrls": false,
+        "defaultHeadless": false
+      },
       "devmate.godot": {
         "executablePath": "",
         "defaultProjectSubpath": ".",
@@ -122,8 +131,8 @@ Existing DevMate path containment, permission profiles, command guards, process 
 3. It resolves enabled plugins and dependencies in topological order.
 4. Each plugin activates once and may publish declared services.
 5. Consumers activate only after providers.
-6. Long-lived preview and process services are tracked outside individual requests.
-7. Gateway shutdown stops previews and supervised process trees.
+6. Long-lived previews, Browser Control sessions, and process services are tracked outside individual requests.
+7. Gateway shutdown stops Browser Control sessions, previews, and supervised process trees.
 
 ## External plugin roadmap
 
