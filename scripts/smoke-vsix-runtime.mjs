@@ -106,9 +106,19 @@ try {
   const manifest = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
   assert.equal(manifest.name, 'devmate');
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
-  const authenticationMode = manifest.contributes?.configuration?.properties?.['devMate.authenticationMode'];
+  const configuration = manifest.contributes?.configuration?.properties || {};
+  const authenticationMode = configuration['devMate.authenticationMode'];
   assert.equal(authenticationMode?.default, 'none', 'Packaged VSIX must default desktop MCP authentication to single-owner no-auth');
   assert.deepEqual(authenticationMode?.enum, ['none', 'oauth'], 'Packaged VSIX must retain explicit loopback no-auth and OAuth options');
+  for (const name of [
+    'devMate.authenticationMode',
+    'devMate.permissionProfile',
+    'devMate.blockDangerousOperations',
+    'devMate.confirmBeforePush',
+    'devMate.allowDirectoryMutations'
+  ]) {
+    assert.equal(configuration[name]?.scope, 'machine', `Packaged VSIX must make ${name} a machine-wide shared policy setting`);
+  }
 
   const requiredFiles = [
     'extension.js',
@@ -122,6 +132,8 @@ try {
     'host/runtime-controller.js',
     'host/runtime/node-runtime.js',
     'shared/auth-config.cjs',
+    'shared/permission-config.cjs',
+    'shared/desktop-permission-policy.cjs',
     'shared/lifecycle-intent.cjs',
     'shared/oauth-secrets.cjs',
     'shared/oauth-tokens.cjs',
@@ -177,7 +189,7 @@ try {
   assert.match(gatewayBundleSource, /legacy\s*:\s*["']reject["']/, 'Packaged Gateway must reject legacy MCP transport eras');
 
   const requireFromVsix = createRequire(packageFile);
-  const { RuntimeController } = requireFromVsix('./host/runtime-controller.js');
+  const { RuntimeController, DETACHED_DESKTOP_LAUNCH_MODE } = requireFromVsix('./host/runtime-controller.js');
   const { resolveNodeRuntime } = requireFromVsix('./host/runtime/node-runtime.js');
   const { updateConfig } = requireFromVsix('./shared/config-store.cjs');
   const { configureAuthentication } = requireFromVsix('./shared/auth-config.cjs');
@@ -223,10 +235,10 @@ try {
   const startupLock = path.join(stateDirectory, 'gateway.start.lock');
   const lock = JSON.parse(fs.readFileSync(instanceLock, 'utf8'));
   assert.equal(lock.runtimeOwnerId, owner.lastLaunch.ownerId);
-  assert.equal(lock.launchMode, 'child_process');
+  assert.equal(lock.launchMode, DETACHED_DESKTOP_LAUNCH_MODE);
   assert.equal(lock.threadId, 0);
   assert.ok(Number(lock.pid) > 0);
-  assert.notEqual(lock.pid, process.pid, 'Gateway must run in an isolated process');
+  assert.notEqual(lock.pid, process.pid, 'Gateway must run in an isolated detached process');
   assert.equal(fs.existsSync(startupLock), false, 'Startup lease must be released after convergence');
 
   const followerStop = await follower.stop();
@@ -237,7 +249,7 @@ try {
 
   const restarted = await owner.start({ timeoutMs: 20000 });
   assert.equal(restarted.started, true);
-  assert.equal(owner.lastLaunch.mode, 'child_process');
+  assert.equal(owner.lastLaunch.mode, DETACHED_DESKTOP_LAUNCH_MODE);
   assert.equal((await owner.stop()).stopped, true);
   assert.equal(fs.existsSync(instanceLock), false, 'Same-port restart must release the Gateway lock again');
   assert.equal(fs.existsSync(startupLock), false, 'Restart must release the startup lease');
@@ -252,9 +264,11 @@ try {
     launchMode: lock.launchMode,
     gateway: path.relative(extensionPath, gatewayEntry),
     sharedGatewayOwnershipVerified: true,
+    detachedDesktopGatewayVerified: true,
     isolatedProcessVerified: true,
     samePortRestartVerified: true,
     ownerLockVerified: true,
+    sharedPermissionScopeVerified: true,
     singleOwnerNoAuthDefaultVerified: true,
     loopbackNoAuthOptionVerified: true,
     statelessMcp2026Verified: true,
