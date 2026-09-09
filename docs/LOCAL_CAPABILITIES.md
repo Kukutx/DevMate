@@ -12,9 +12,13 @@ These features extend convenience without turning the normal file tools into unr
 - The current VS Code folder remains the active writable workspace.
 - Readonly References remain readonly.
 - Adding or removing a trusted writable root requires the `fullAccess` permission profile.
-- Persistent process execution is blocked by `readOnly` and follows the existing dangerous-command guard in `balanced` mode.
+- `fullAccess` is a complete trusted-workspace development preset: DevMate does not add the balanced-mode dangerous-command, push, or directory-mutation guards on top of it.
+- `blockDangerousOperations`, `confirmBeforePush`, and `allowDirectoryMutations` are balanced-mode preferences. They do not partially restrict `fullAccess`, so the profile remains semantically complete.
+- Persistent process execution is blocked by `readOnly` and follows the configurable dangerous-command guard in `balanced` mode.
 - Processes run as the operating-system user that launched VS Code. DevMate cannot bypass UAC, filesystem ACLs, `sudo`, containers, Remote SSH boundaries, or other OS controls.
 - Public MCP defaults to OAuth. Explicit `auth.mode: "none"` is limited to trusted loopback-only MCP and never authorizes a remote request.
+
+`fullAccess` does not disable containment or credential protections. Workspace/reference state, protected control-plane paths, credential and secret path filtering, path traversal/symlink/reparse fencing, operating-system permissions, and remote OAuth role/scope/lease rules remain independent security boundaries.
 
 ## Trusted writable roots
 
@@ -113,11 +117,10 @@ A user who deliberately runs only the local loopback Gateway may select no-auth:
 ```json
 {
   "devMate.permissionProfile": "fullAccess",
-  "devMate.blockDangerousOperations": false,
-  "devMate.confirmBeforePush": false,
-  "devMate.allowDirectoryMutations": true,
   "devMate.authenticationMode": "none"
 }
 ```
+
+`fullAccess` itself activates the DevMate development capabilities inside trusted writable workspaces; no secondary permission toggles are required.
 
 This does **not** make a tunnel, reverse proxy, or other remote ingress trusted. Remote MCP requests are rejected in `none` mode. Keep the default `"oauth"` whenever DevMate is exposed through a public/shared connection.
