@@ -156,7 +156,9 @@ function normalizeInstanceConfig(config) {
   // for trusted loopback use; public MCP ingress still requires OAuth at request time.
   // Authentication secrets live outside the instance configuration.
   config.auth = normalizeAuthentication(config);
-  config.permissions = permissionPolicySnapshot(config);
+  if (config.permissions !== undefined && config.permissions !== null) {
+    config.permissions = permissionPolicySnapshot(config);
+  }
 
   const team = object(config.team, 'team');
   team.members = Array.isArray(team.members) ? team.members : [];
