@@ -90,7 +90,9 @@ test('VSIX smoke contract includes the provider-native tunnel runtime and curren
   const smoke = fs.readFileSync(path.join(root, 'scripts', 'smoke-vsix-runtime.mjs'), 'utf8');
   assert.match(smoke, /extension-entry-shared-tunnel\.js/);
   assert.doesNotMatch(smoke, /extension-entry-host\.js/);
-  assert.match(smoke, /launchMode, 'desktop-detached'/);
+  assert.match(smoke, /RuntimeController, DETACHED_DESKTOP_LAUNCH_MODE/);
+  assert.match(smoke, /assert\.equal\(lock\.launchMode, DETACHED_DESKTOP_LAUNCH_MODE\)/);
+  assert.match(smoke, /assert\.equal\(owner\.lastLaunch\.mode, DETACHED_DESKTOP_LAUNCH_MODE\)/);
   assert.match(smoke, /configuration\[name\]\?\.scope, 'machine'/);
 
   const controller = fs.readFileSync(path.join(root, 'vscode-host', 'tunnel-controller.js'), 'utf8');
