@@ -27,7 +27,10 @@ function desktopSpawn(spawnImpl) {
         DEVMATE_RUNTIME_LAUNCH_MODE: DETACHED_DESKTOP_LAUNCH_MODE
       }
     });
-    if (child && typeof child === 'object') child.devMateDesktopDetached = true;
+    if (child && typeof child === 'object') {
+      child.devMateDesktopDetached = true;
+      child.launchMode = DETACHED_DESKTOP_LAUNCH_MODE;
+    }
     return child;
   };
 }
