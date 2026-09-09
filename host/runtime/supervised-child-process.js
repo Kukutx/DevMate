@@ -33,6 +33,19 @@ function serializableSpawnOptions(options = {}) {
   return next;
 }
 
+function serializableSupervisorControl(value = null) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('DevMate supervisor control must be an object');
+  const next = {};
+  for (const key of ['stateDirectory', 'ownerId', 'hostId', 'provider', 'configurationKey']) {
+    if (value[key] !== undefined) next[key] = String(value[key]);
+  }
+  for (const key of ['port', 'leaseMs']) {
+    if (value[key] !== undefined) next[key] = Number(value[key]);
+  }
+  return next;
+}
+
 function createSupervisedChildProcess({
   childProcess = defaultChildProcess,
   nodeExecutable = process.execPath,
@@ -44,6 +57,7 @@ function createSupervisedChildProcess({
     spawn(command, args = [], options = {}) {
       const entry = resolveProviderSupervisorEntry(supervisorEntry);
       const supervisor = childProcess.spawn(nodeExecutable, [entry], {
+        detached: true,
         env: {
           ...process.env,
           ELECTRON_RUN_AS_NODE: '1',
@@ -54,11 +68,14 @@ function createSupervisedChildProcess({
       });
       supervisor.devMateSupervised = true;
       supervisor.devMateSupervisorEntry = entry;
+      const control = serializableSupervisorControl(options.devMateSupervisor);
+      supervisor.devMateHandoffCapable = !!control;
       const payload = {
         type: 'devmate:provider-start',
         command: String(command || ''),
         args: Array.isArray(args) ? args.map(value => String(value)) : [],
-        options: serializableSpawnOptions(options)
+        options: serializableSpawnOptions(options),
+        control
       };
       const send = () => {
         if (!supervisor.connected || typeof supervisor.send !== 'function') return false;
@@ -95,5 +112,6 @@ module.exports = {
   createSupervisedChildProcess,
   resolveProviderSupervisorEntry,
   serializableSpawnOptions,
+  serializableSupervisorControl,
   supervisorCandidates
 };
