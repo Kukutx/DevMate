@@ -39,7 +39,7 @@ test('routine host workspace sync registers its root without stealing the shared
   assert.equal(config.workspaces.find(item => item.id === 'trusted')?.trusted, true);
 });
 
-test('merges host-owned fields without replacing shared capability or Current Project state', () => {
+test('merges stale host workspace snapshots without replacing shared capability or Current Project state', () => {
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
@@ -52,7 +52,10 @@ test('merges host-owned fields without replacing shared capability or Current Pr
     runnerControl: { enabled: true },
     trustedWritableRoots: [{ id: 'trusted' }],
     runtime: { maxConcurrentJobs: 4, defaultCommandTimeoutMs: 1000 },
-    workspaces: [{ id: 'app' }, { id: 'trusted', trusted: true, role: 'trusted' }]
+    workspaces: [
+      { id: 'app', root: path.join(path.sep, 'workspace', 'app'), mode: 'workspace-write', reference: false, role: 'active' },
+      { id: 'trusted', root: path.join(path.sep, 'workspace', 'trusted'), mode: 'workspace-write', trusted: true, role: 'trusted' }
+    ]
   };
   const candidate = {
     version: SUPPORTED_CONFIG_VERSION,
@@ -64,16 +67,20 @@ test('merges host-owned fields without replacing shared capability or Current Pr
     team: { requireWorkspaceLeaseForWrites: false, members: [] },
     requestPolicy: { allowedHosts: [], requestsPerMinute: 9999 },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 },
-    workspaces: [{ id: 'app' }]
+    workspaces: [
+      { id: 'background-window', root: path.join(path.sep, 'workspace', 'background'), mode: 'workspace-write', reference: false, role: 'workspace' }
+    ]
   };
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.instanceId, 'stable');
   assert.equal(merged.activeWorkspaceId, 'app');
+  assert.equal(merged.workspaces.some(item => item.id === 'app'), true);
+  assert.equal(merged.workspaces.some(item => item.id === 'background-window'), true);
+  assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
   assert.deepEqual(merged.server, current.server);
   assert.deepEqual(merged.auth, { mode: 'none' });
   assert.equal(merged.runtime.maxConcurrentJobs, 4);
   assert.equal(merged.runtime.defaultCommandTimeoutMs, 2000);
-  assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
   assert.deepEqual(merged.connection, current.connection);
   assert.deepEqual(merged.team, current.team);
   assert.deepEqual(merged.requestPolicy, current.requestPolicy);
@@ -145,10 +152,7 @@ test('retired auth fields are rejected instead of silently stripped or preserved
     { mode: 'none', token: 'legacy-static-token' },
     { mode: 'oauth', forgedPolicy: true }
   ]) {
-    assert.throws(
-      () => mergeExtensionConfig({}, { version: SUPPORTED_CONFIG_VERSION, auth }),
-      /Unsupported authentication fields/
-    );
+    assert.throws(() => mergeExtensionConfig({}, { version: SUPPORTED_CONFIG_VERSION, auth }), /Unsupported authentication fields/);
   }
 });
 
@@ -207,13 +211,11 @@ test('VS Code config boundary rejects unsupported instance fields instead of pre
 test('rejects malformed and future configuration without replacement', () => {
   const malformed = tempFile();
   fs.writeFileSync(malformed, '{broken', 'utf8');
-  assert.throws(() => writeExtensionConfig(malformed, { version: SUPPORTED_CONFIG_VERSION }),
-    error => error.code === 'config_invalid_json');
+  assert.throws(() => writeExtensionConfig(malformed, { version: SUPPORTED_CONFIG_VERSION }), error => error.code === 'config_invalid_json');
 
   const future = tempFile();
   const original = `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION + 1 })}\n`;
   fs.writeFileSync(future, original, 'utf8');
-  assert.throws(() => writeExtensionConfig(future, { version: SUPPORTED_CONFIG_VERSION }),
-    error => error.code === 'unsupported_config_version');
+  assert.throws(() => writeExtensionConfig(future, { version: SUPPORTED_CONFIG_VERSION }), error => error.code === 'unsupported_config_version');
   assert.equal(fs.readFileSync(future, 'utf8'), original);
 });
