@@ -4,6 +4,7 @@ const CONNECTION_PROVIDERS = Object.freeze(['ngrok', 'cloudflare-quick', 'cloudf
 const TEAM_ROLES = Object.freeze(['observer', 'reviewer', 'developer', 'maintainer', 'owner']);
 const LIFECYCLE_STATES = Object.freeze(['running', 'stopped']);
 const { normalizeAuthentication } = require('./auth-config.cjs');
+const { permissionPolicySnapshot } = require('./permission-config.cjs');
 
 const REQUEST_POLICY_LIMITS = Object.freeze({
   maxRequestBytes: Object.freeze([64 * 1024, 32 * 1024 * 1024]),
@@ -155,6 +156,7 @@ function normalizeInstanceConfig(config) {
   // for trusted loopback use; public MCP ingress still requires OAuth at request time.
   // Authentication secrets live outside the instance configuration.
   config.auth = normalizeAuthentication(config);
+  config.permissions = permissionPolicySnapshot(config);
 
   const team = object(config.team, 'team');
   team.members = Array.isArray(team.members) ? team.members : [];
