@@ -158,6 +158,19 @@ Preview is a bounded validation operation; apply and rollback require write perm
 - `plugin_catalog`, `plugin_diagnostics`, `plugin_enable`, `plugin_disable`, `plugin_configure`, `devmate_plugins_panel`
 - `automation_manifest_status`, `automation_manifest_template`
 
+### Browser Control
+
+Enable `devmate.browser-control`. These tools are owner-only and intentionally are not durable Job targets because they operate a live interactive browser session:
+
+- `browser_control_status`
+- `browser_control_start`
+- `browser_control_tabs`
+- `browser_control_snapshot`
+- `browser_control_act`
+- `browser_control_stop`
+
+Browser Control keeps a bounded Playwright Chromium session alive across MCP requests in the current Gateway process. It defaults to a visible browser, blocks remote URLs unless explicitly enabled, binds sessions to the selected workspace, and returns snapshot-scoped element refs for safer actions. Browser sessions are closed when the plugin is disabled or the Gateway shuts down; they do not reuse the user's normal Chrome profile or survive a Gateway restart.
+
 ### Browser QA
 
 Enable `devmate.browser-qa`:

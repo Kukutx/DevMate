@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { audit, readConfig, toolText } from '../local-shared.mjs';
 import { builtinPlugins } from './builtins.mjs';
+import { shutdownBrowserControl } from './browser-control-runtime.mjs';
 import { createPluginRuntime, createPluginServiceRegistry } from './plugin-runtime.mjs';
 import { shutdownPreviews } from './preview-manager.mjs';
 import { toolNameAllowed } from './plugin-sdk.mjs';
@@ -129,6 +130,7 @@ function registerManagementTools(server, plugins, states, registeredToolNames, s
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   }, async ({ id, cascade = false }) => {
     const result = disablePlugin(id, cascade, plugins);
+    if (result.disabled === 'devmate.browser-control' || result.cascaded.includes('devmate.browser-control')) await shutdownBrowserControl();
     await audit('plugin_disable', { pluginId: id, cascaded: result.cascaded });
     return toolText({ ...result, reconnectRecommended: true });
   });
@@ -208,7 +210,7 @@ export async function registerPluginHost(server, plugins = builtinPlugins) {
 }
 
 export async function shutdownPluginServices() {
-  await shutdownPreviews();
+  await Promise.all([shutdownBrowserControl(), shutdownPreviews()]);
 }
 
 export const __test = {

@@ -90,6 +90,7 @@ async function main() {
     assert.equal(path.resolve(initialized.config), path.resolve(config));
 
     const plugins = invoke(portableRoot, ['plugin', 'list', '--config', config]);
+    assert.ok(plugins.plugins.some(item => item.id === 'devmate.browser-control'));
     assert.ok(plugins.plugins.some(item => item.id === 'devmate.browser-qa'));
     assert.ok(plugins.plugins.some(item => item.id === 'devmate.godot'));
 

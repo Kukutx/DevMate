@@ -19,7 +19,8 @@ const OWNER_ONLY_TOOLS = new Set([
   'team_approval_configure',
   'runner_control_configure', 'runner_credential_list', 'runner_credential_create', 'runner_credential_update', 'runner_credential_rotate', 'runner_credential_revoke',
   'read_audit_log', 'list_backups', 'restore_backup',
-  'codex_collaboration_status', 'codex_collaboration_configure'
+  'codex_collaboration_status', 'codex_collaboration_configure',
+  'browser_control_status', 'browser_control_start', 'browser_control_tabs', 'browser_control_snapshot', 'browser_control_act', 'browser_control_stop'
 ]);
 
 const PUBLISH_TOOLS = new Set([
