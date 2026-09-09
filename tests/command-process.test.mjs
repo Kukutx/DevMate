@@ -78,7 +78,20 @@ test('Git HTTP credential challenges fail instead of hanging an MCP tool call', 
   const port = server.address().port;
 
   const started = Date.now();
-  const result = await executeCommand('git', ['ls-remote', `http://127.0.0.1:${port}/repo.git`], {
+  const result = await executeCommand('git', [
+    '-c', 'credential.helper=',
+    '-c', 'core.askPass=',
+    'ls-remote', `http://127.0.0.1:${port}/repo.git`
+  ], {
+    // Exercise Git's own non-interactive challenge handling, independent of
+    // runner-specific credential stores, GUI helpers or editor askpass hooks.
+    environment: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_ASKPASS: '',
+      SSH_ASKPASS: ''
+    },
     timeoutMs: 15000,
     maxOutputChars: 4000
   });
