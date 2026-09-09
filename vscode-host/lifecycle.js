@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
 const { ensureDesktopAuthenticationPolicy, setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
+const { ensureDesktopPermissionPolicy, setDesktopPermissionPolicy } = require('../shared/desktop-permission-policy.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { connectionErrorSummary } = require('../host/public-mcp.js');
@@ -16,6 +17,40 @@ const {
 
 const RELOAD_SETTINGS = ['devMate.sharedStateDirectory'];
 const AUTHENTICATION_SETTING = 'devMate.authenticationMode';
+const PERMISSION_SETTINGS = Object.freeze([
+  'devMate.permissionProfile',
+  'devMate.blockDangerousOperations',
+  'devMate.confirmBeforePush',
+  'devMate.allowDirectoryMutations'
+]);
+
+function localPermissionPolicy(vscode) {
+  const requested = String(setting(vscode, 'permissionProfile', 'fullAccess') || 'fullAccess');
+  const profile = ['readOnly', 'balanced', 'fullAccess'].includes(requested) ? requested : 'fullAccess';
+  return {
+    profile,
+    readOnly: profile === 'readOnly',
+    blockDangerousOperations: setting(vscode, 'blockDangerousOperations', true) !== false,
+    confirmBeforePush: setting(vscode, 'confirmBeforePush', false) === true,
+    allowDirectoryMutations: setting(vscode, 'allowDirectoryMutations', false) === true
+  };
+}
+
+async function alignLocalPermissionSettings(vscode, permissions) {
+  if (!permissions) return;
+  const configuration = vscode.workspace.getConfiguration('devMate');
+  const target = vscode.ConfigurationTarget?.Global ?? true;
+  const expected = {
+    permissionProfile: permissions.profile,
+    blockDangerousOperations: permissions.blockDangerousOperations,
+    confirmBeforePush: permissions.confirmBeforePush,
+    allowDirectoryMutations: permissions.allowDirectoryMutations
+  };
+  for (const [name, value] of Object.entries(expected)) {
+    if (setting(vscode, name, undefined) === value) continue;
+    try { await configuration.update(name, value, target); } catch {}
+  }
+}
 
 class VscodeHostLifecycle {
   constructor({ vscode, platformExtension = null, runtimeSnapshot = null }) {
@@ -84,6 +119,11 @@ class VscodeHostLifecycle {
           );
         } catch {}
       }
+      const permissionPolicy = ensureDesktopPermissionPolicy(configFile, {
+        fresh,
+        defaults: localPermissionPolicy(this.vscode)
+      });
+      await alignLocalPermissionSettings(this.vscode, permissionPolicy.permissions);
     }
 
     this.output = this.vscode.window.createOutputChannel('DevMate Host');
@@ -139,6 +179,18 @@ class VscodeHostLifecycle {
           }
         } catch (error) {
           this.diagnostics?.recordFailure(error, { phase: 'authentication-change' });
+        }
+      }
+
+      if (PERMISSION_SETTINGS.some(name => event.affectsConfiguration(name)) && this.runtimeContext) {
+        try {
+          const policy = setDesktopPermissionPolicy(
+            runtimeConfigPath(this.runtimeContext),
+            localPermissionPolicy(this.vscode)
+          );
+          this.diagnostics?.append(`Shared DevMate permission policy changed explicitly to ${policy.permissions.profile}.`);
+        } catch (error) {
+          this.diagnostics?.recordFailure(error, { phase: 'permission-change' });
         }
       }
 
@@ -326,4 +378,11 @@ class VscodeHostLifecycle {
   }
 }
 
-module.exports = { AUTHENTICATION_SETTING, RELOAD_SETTINGS, VscodeHostLifecycle };
+module.exports = {
+  AUTHENTICATION_SETTING,
+  PERMISSION_SETTINGS,
+  RELOAD_SETTINGS,
+  VscodeHostLifecycle,
+  alignLocalPermissionSettings,
+  localPermissionPolicy
+};
