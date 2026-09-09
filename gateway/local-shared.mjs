@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import configStore from '../shared/config-store.cjs';
+import permissionConfig from '../shared/permission-config.cjs';
 import { withAuditLogLock } from './audit-log-coordinator.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 import { requestWorkSessionId } from './request-context.mjs';
@@ -32,7 +33,11 @@ export function recoverConfigReplacement() {
 
 export function readConfig() {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
-  return configStore.readConfigSnapshot(CONFIG_PATH);
+  const config = configStore.readConfigSnapshot(CONFIG_PATH);
+  if (config.permissions !== undefined && config.permissions !== null) {
+    config.permissions = permissionConfig.permissionPolicySnapshot(config);
+  }
+  return config;
 }
 
 export function writeConfig(config) {

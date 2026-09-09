@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import permissionConfig from '../shared/permission-config.cjs';
 import {
   installFileMutationSafety,
   safeFileMutationHandler,
@@ -44,4 +48,54 @@ test('mutation policy treats direct secrets, hidden paths and non-text writes as
   assert.equal(safety.isBinaryOrSecret('src/app.js'), false);
   assert.equal(safety.isTextAllowed('src/app.js'), true);
   assert.equal(safety.isTextAllowed('image.png'), false);
+});
+
+test('canonical fullAccess reaches the directory mutation gate without a secondary opt-in', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-full-access-directory-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'safe-directory');
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, 'file.txt'), 'safe', 'utf8');
+
+  const config = {
+    permissions: permissionConfig.permissionPolicySnapshot({
+      permissions: {
+        profile: 'fullAccess',
+        readOnly: false,
+        blockDangerousOperations: true,
+        confirmBeforePush: true,
+        allowDirectoryMutations: false
+      }
+    })
+  };
+  const workspace = { id: 'app', name: 'App', root, mode: 'workspace-write', reference: false };
+
+  const stat = await safety.assertDirectoryMutationAllowed(config, workspace, directory, 'safe-directory');
+  assert.equal(stat.isDirectory(), true);
+  assert.equal(config.permissions.allowDirectoryMutations, true);
+});
+
+test('balanced still requires its explicit directory-mutation preference', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-balanced-directory-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'safe-directory');
+  fs.mkdirSync(directory);
+
+  const config = {
+    permissions: permissionConfig.permissionPolicySnapshot({
+      permissions: {
+        profile: 'balanced',
+        readOnly: false,
+        blockDangerousOperations: true,
+        confirmBeforePush: false,
+        allowDirectoryMutations: false
+      }
+    })
+  };
+  const workspace = { id: 'app', name: 'App', root, mode: 'workspace-write', reference: false };
+
+  await assert.rejects(
+    safety.assertDirectoryMutationAllowed(config, workspace, directory, 'safe-directory'),
+    /Directory mutation blocked/
+  );
 });

@@ -5,7 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const {
+  DEFAULT_PERMISSION_POLICY,
   PERMISSION_PROFILES,
+  configurePermissionPolicy,
+  permissionPolicySnapshot,
   validatePermissionConfig
 } = require('../shared/permission-config.cjs');
 
@@ -22,8 +25,16 @@ test('accepts only the current explicit permission profiles', () => {
   );
 });
 
-test('missing permissions uses the current default but a provided policy requires an explicit profile', () => {
+test('missing permissions uses the complete fullAccess default but a provided policy requires an explicit profile', () => {
   assert.deepEqual(validatePermissionConfig({}), { profile: 'fullAccess' });
+  assert.deepEqual(permissionPolicySnapshot({}), DEFAULT_PERMISSION_POLICY);
+  assert.deepEqual(DEFAULT_PERMISSION_POLICY, {
+    profile: 'fullAccess',
+    readOnly: false,
+    blockDangerousOperations: false,
+    confirmBeforePush: false,
+    allowDirectoryMutations: true
+  });
   assert.throws(
     () => validatePermissionConfig({ permissions: {} }),
     error => error?.code === 'DEVMATE_PERMISSION_CONFIG_INVALID' && error.field === 'permissions.profile'
@@ -36,6 +47,41 @@ test('missing permissions uses the current default but a provided policy require
     () => validatePermissionConfig({ permissions: { readOnly: false } }),
     error => error?.code === 'DEVMATE_PERMISSION_CONFIG_INVALID' && error.field === 'permissions.profile'
   );
+});
+
+test('legacy restrictive booleans cannot partially restrict fullAccess', () => {
+  const config = {
+    permissions: {
+      profile: 'fullAccess',
+      readOnly: false,
+      blockDangerousOperations: true,
+      confirmBeforePush: true,
+      allowDirectoryMutations: false
+    },
+    hostRuntime: { permissionPolicyInitialized: true, permissionPolicyGeneration: 9 }
+  };
+  assert.deepEqual(permissionPolicySnapshot(config), DEFAULT_PERMISSION_POLICY);
+  configurePermissionPolicy(config, config.permissions, { replace: true });
+  assert.deepEqual(config.permissions, DEFAULT_PERMISSION_POLICY);
+  assert.equal(config.hostRuntime.permissionPolicyGeneration, 9, 'canonical representation is not a semantic policy change');
+});
+
+test('balanced keeps independent guard preferences while fullAccess always stays canonical', () => {
+  const config = {
+    permissions: {
+      profile: 'balanced',
+      readOnly: false,
+      blockDangerousOperations: false,
+      confirmBeforePush: true,
+      allowDirectoryMutations: true
+    },
+    hostRuntime: { permissionPolicyInitialized: true, permissionPolicyGeneration: 3 }
+  };
+  assert.deepEqual(permissionPolicySnapshot(config), config.permissions);
+
+  configurePermissionPolicy(config, { profile: 'fullAccess', readOnly: false, blockDangerousOperations: true, confirmBeforePush: true, allowDirectoryMutations: false }, { replace: true });
+  assert.deepEqual(config.permissions, DEFAULT_PERMISSION_POLICY);
+  assert.equal(config.hostRuntime.permissionPolicyGeneration, 4);
 });
 
 test('rejects contradictory or wrong-typed permission policy instead of entering a partial profile state', () => {

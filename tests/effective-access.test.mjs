@@ -61,7 +61,7 @@ function blockerCodes(snapshot, capability = 'write') {
   return snapshot.capabilities[capability].blockers.map(item => item.code);
 }
 
-test('fullAccess local owner on writable workspace has effective write access', () => {
+test('fullAccess local owner on writable workspace has complete effective development access', () => {
   const snapshot = effectiveAccessSnapshot({
     config: config(),
     principal: principal(),
@@ -71,10 +71,16 @@ test('fullAccess local owner on writable workspace has effective write access', 
   });
   assert.equal(snapshot.permissionPolicy.profile, 'fullAccess');
   assert.equal(snapshot.permissionPolicy.generation, 7);
+  assert.equal(snapshot.permissionPolicy.blockDangerousOperations, false);
+  assert.equal(snapshot.permissionPolicy.confirmBeforePush, false);
+  assert.equal(snapshot.permissionPolicy.allowDirectoryMutations, true);
   assert.equal(snapshot.capabilities.write.allowed, true);
   assert.equal(snapshot.capabilities.execute.allowed, true);
   assert.equal(snapshot.capabilities.git.allowed, true);
   assert.equal(snapshot.capabilities.publish.allowed, true);
+  assert.equal(snapshot.conditionalGuards.dangerousOperationsGuarded, false);
+  assert.equal(snapshot.conditionalGuards.confirmBeforePush, false);
+  assert.equal(snapshot.conditionalGuards.directoryMutationsAllowed, true);
   assert.equal(snapshot.workspace.root, undefined);
   assert.equal(snapshot.conversationBinding.root, undefined);
 });

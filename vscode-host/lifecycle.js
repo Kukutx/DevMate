@@ -40,12 +40,14 @@ async function alignLocalPermissionSettings(vscode, permissions) {
   if (!permissions) return;
   const configuration = vscode.workspace.getConfiguration('devMate');
   const target = vscode.ConfigurationTarget?.Global ?? true;
-  const expected = {
-    permissionProfile: permissions.profile,
-    blockDangerousOperations: permissions.blockDangerousOperations,
-    confirmBeforePush: permissions.confirmBeforePush,
-    allowDirectoryMutations: permissions.allowDirectoryMutations
-  };
+  const expected = { permissionProfile: permissions.profile };
+  // fullAccess has canonical unrestricted semantics. Keep the subordinate guard
+  // settings dormant so a user's balanced-mode preferences survive round trips.
+  if (permissions.profile !== 'fullAccess') {
+    expected.blockDangerousOperations = permissions.blockDangerousOperations;
+    expected.confirmBeforePush = permissions.confirmBeforePush;
+    expected.allowDirectoryMutations = permissions.allowDirectoryMutations;
+  }
   for (const [name, value] of Object.entries(expected)) {
     if (setting(vscode, name, undefined) === value) continue;
     try { await configuration.update(name, value, target); } catch {}

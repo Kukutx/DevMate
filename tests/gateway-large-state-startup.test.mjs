@@ -16,6 +16,7 @@ const { DEFAULT_MAINTENANCE } = require('../shared/maintenance-config.cjs');
 const { RuntimeController } = require('../host/runtime-controller.js');
 
 const root = path.resolve(import.meta.dirname, '..');
+const INDEXED_FIXTURE_TEST_TIMEOUT_MS = 90000;
 
 async function freePort() {
   const server = net.createServer();
@@ -138,7 +139,7 @@ test('Gateway purges legacy backup layouts during startup and still trims large 
   }
 });
 
-test('Gateway uses the append-only backup index fast path for thousands of current-format snapshots', { timeout: 30000 }, async () => {
+test('Gateway uses the append-only backup index fast path for thousands of current-format snapshots', { timeout: INDEXED_FIXTURE_TEST_TIMEOUT_MS }, async () => {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-indexed-state-'));
   let workspaceRoot;
   let controller;
@@ -173,7 +174,10 @@ test('Gateway uses the append-only backup index fast path for thousands of curre
     for (let index = 0; index < setCount; index += 1) {
       const id = `bkp-2026-09-05T12-00-00-000Z-${10000 + index}-deadbeef`;
       const setRoot = path.join(backupRoot, id);
-      fs.mkdirSync(path.join(setRoot, 'payload'), { recursive: true });
+      // Every synthetic entry is `absent`, so current-format manifests have no
+      // payload to persist. Avoid thousands of meaningless empty payload folders;
+      // the stress surface is the snapshot/index cardinality, not directory IO.
+      fs.mkdirSync(setRoot);
       const originalPath = `synthetic/${String(index).padStart(5, '0')}.txt`;
       const manifest = {
         version: 1,
@@ -267,6 +271,8 @@ test('Gateway uses the append-only backup index fast path for thousands of curre
 
     assert.equal(result.started, true);
     assert.equal(result.port, port);
+    // This is the actual product performance gate. The larger outer timeout only
+    // accommodates constructing/cleaning thousands of files on slow Windows CI.
     assert.ok(readyMs < 7000, `indexed Gateway Ready exceeded startup budget: ${readyMs}ms`);
     assert.equal(
       fs.existsSync(path.join(backupRoot, 'bkp-2026-09-05T12-00-00-000Z-10000-deadbeef')),
