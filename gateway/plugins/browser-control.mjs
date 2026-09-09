@@ -80,7 +80,19 @@ export const browserControlPlugin = definePlugin({
   },
   async diagnose(context) {
     const workspace = serviceWorkspace(context, undefined, { writable: false });
-    return browserControlStatus(workspace.root, context.settings);
+    const status = browserControlStatus(workspace.root, context.settings);
+    return {
+      available: status.available,
+      moduleConfigured: status.moduleConfigured,
+      chromiumExecutableConfigured: !!status.chromiumExecutablePath,
+      chromiumExecutableExists: status.chromiumExecutableExists,
+      chromiumExecutableAllowed: status.chromiumExecutableAllowed,
+      allowRemoteUrls: status.allowRemoteUrls,
+      defaultHeadless: status.defaultHeadless,
+      maxSessions: status.maxSessions,
+      activeSessions: status.activeSessions,
+      error: status.error
+    };
   },
   activate(context) {
     const { server } = context;
@@ -118,7 +130,7 @@ export const browserControlPlugin = definePlugin({
         sessionId: result.session.id,
         headless: result.session.headless,
         allowRemoteUrls: result.session.allowRemoteUrls,
-        initialUrl: url || null
+        hasInitialUrl: !!url
       });
       return context.toolText({ workspace: { id: workspace.id, name: workspace.name }, ...result });
     });
@@ -168,8 +180,7 @@ export const browserControlPlugin = definePlugin({
         workspace: workspace.id,
         sessionId,
         tabId: result.tab?.id || tabId || null,
-        actionType: action.type,
-        currentUrl: result.tab?.url || null
+        actionType: action.type
       });
       return context.toolText({ workspace: { id: workspace.id, name: workspace.name }, ...result });
     });
