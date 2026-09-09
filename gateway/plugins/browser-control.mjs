@@ -135,7 +135,7 @@ export const browserControlPlugin = definePlugin({
         allowRemoteUrls: result.session.allowRemoteUrls,
         hasInitialUrl: !!url
       });
-      return context.toolText({ workspace: { id: workspace.id, name: workspace.name }, ...result });
+      return context.toolText({ workspace: { id: workspace.id, name: workspace.name }, session: result.session });
     });
 
     server.registerTool('browser_control_tabs', {
