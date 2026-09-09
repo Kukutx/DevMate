@@ -81,7 +81,24 @@ Both hosts should resolve the same machine-wide desktop state directory and may 
 4. If the remaining host still requested the session, allow its recovery loop to recreate/attach the missing Gateway/provider and re-run MCP preflight.
 5. If provider shutdown is unconfirmed, inspect diagnostics instead of repeatedly forcing Restart; cleanup intentionally fails closed.
 
-A host must not intentionally preserve its own Gateway child merely because the provider is owned by another host.
+Normal VS Code host reload/deactivation is not an implicit DevMate Stop. A desktop Gateway and an owned supervised public provider remain governed by the shared lifecycle while the host reloads; explicit `DevMate: Stop` remains the authority that tears them down.
+
+## `fullAccess` is shown but a write is blocked
+
+`fullAccess` is the shared local permission profile, not a promise that every authenticated caller may mutate every workspace. Effective access is the intersection of independent controls.
+
+Call `effective_access_status` for the affected workspace. It reports the current principal, conversation binding, workspace mode, lease state, shared permission generation, and a blocker list for read, validate, write, execute, Git, and publish capabilities.
+
+Common write blockers are:
+
+- `permission_profile_readonly` — the machine-wide DevMate permission policy is actually read-only;
+- `role_capability_missing` — the authenticated OAuth role does not grant that capability;
+- `principal_workspace_scope` — the OAuth member is not scoped to that workspace;
+- `workspace_readonly` — the workspace is a readonly/reference project;
+- `workspace_lease_required` — team policy requires this remote principal to acquire the workspace lease;
+- `workspace_leased_by_other` — another principal currently owns the required lease.
+
+The VS Code permission settings are machine-scoped and explicit changes are written through one shared permission policy. Routine editor, diagnostics, focus, and context refreshes do not change this policy.
 
 ## Model switch looks disconnected
 
@@ -96,9 +113,11 @@ When the ChatGPT surface cannot call MCP tools, `Copy Context` provides bounded 
 
 ## Wrong workspace
 
-DevMate uses the active VS Code folder as the writable workspace by default. Open the intended folder and run Start again. Use `list_workspaces` or `gateway_status` to verify the active workspace.
+For a new ChatGPT conversation, the first project-scoped call uses the current writable VS Code/Obsidian workspace as its initial default and persists that choice for the conversation. Later focus changes or activity in another desktop window do not silently move the conversation to another project.
 
-Other projects can be added as readonly references without making them writable.
+Use `workspace_binding_status` to inspect the conversation binding. Use `workspace_bind` (or an explicit compatible workspace selector on the first project call) to deliberately switch/select a different project. `list_workspaces` shows the available configured workspace IDs.
+
+Reference projects remain readonly regardless of visibility in a desktop host.
 
 ## Reference project management
 
