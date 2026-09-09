@@ -29,7 +29,7 @@ Remove the stable ngrok URL and use the selected account's default endpoint, or 
 
 ## DevMate Start does not reach Ready
 
-`Ready` requires the current **Gateway + public-connection session generation** to pass MCP `initialize` and `tools/list`.
+`Ready` requires the current **Gateway + public-connection session generation** to pass MCP `server/discover`, `tools/list`, and a real read-only `gateway_status` tool call.
 
 A local Gateway, a provider process, or an HTTPS URL alone is insufficient.
 
@@ -113,7 +113,7 @@ When the ChatGPT surface cannot call MCP tools, `Copy Context` provides bounded 
 
 ## Wrong workspace
 
-For a new ChatGPT conversation, the first project-scoped call uses the current writable VS Code/Obsidian workspace as its initial default and persists that choice for the conversation. Later focus changes or activity in another desktop window do not silently move the conversation to another project.
+For a new ChatGPT conversation, the first project-scoped call uses the shared Current Project as its initial default and persists that choice for the conversation. The Current Project changes through an authoritative DevMate Start/workspace activation, not through routine editor, selection, diagnostics, or background host-context refreshes.
 
 Use `workspace_binding_status` to inspect the conversation binding. Use `workspace_bind` (or an explicit compatible workspace selector on the first project call) to deliberately switch/select a different project. `list_workspaces` shows the available configured workspace IDs.
 
