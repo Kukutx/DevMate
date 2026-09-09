@@ -35,6 +35,12 @@ function desktopSpawn(spawnImpl) {
   };
 }
 
+function releaseParentPipes(child) {
+  for (const stream of [child?.stdout, child?.stderr]) {
+    try { stream?.destroy?.(); } catch {}
+  }
+}
+
 class RuntimeController extends processRuntime.RuntimeController {
   constructor(options = {}) {
     const lifecycleFence = options.lifecycleFence !== false;
@@ -89,6 +95,7 @@ class RuntimeController extends processRuntime.RuntimeController {
   detachOwnedGateway() {
     const child = this.activeOwnedChild();
     if (child) {
+      releaseParentPipes(child);
       try {
         if (child.connected && typeof child.disconnect === 'function') child.disconnect();
       } catch {}
@@ -123,5 +130,6 @@ module.exports = {
   DETACHED_DESKTOP_LAUNCH_MODE,
   SHARED_STOP_WAIT_MS,
   RuntimeController,
-  desktopSpawn
+  desktopSpawn,
+  releaseParentPipes
 };
