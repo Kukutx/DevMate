@@ -39,13 +39,6 @@ jobs:
       - name: Persistence fault regressions
         run: node --test tests/atomic-json-file.test.cjs tests/durable-state.test.mjs tests/config-persistence.test.mjs
 
-      - name: Generate reviewed dependency security update
-        shell: pwsh
-        run: |
-          Copy-Item package-lock.json "$env:RUNNER_TEMP/devmate-before-lock.json"
-          npm audit fix --package-lock-only --ignore-scripts
-          node -e 'const fs = require("node:fs"); const path = require("node:path"); const before = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, "devmate-before-lock.json"), "utf8")); const after = JSON.parse(fs.readFileSync("package-lock.json", "utf8")); const delta = {}; for (const key of new Set([...Object.keys(before.packages), ...Object.keys(after.packages)])) { if (JSON.stringify(before.packages[key]) !== JSON.stringify(after.packages[key])) delta[key] = after.packages[key] ?? null; } console.log("DEVMATE_LOCK_DELTA=" + JSON.stringify(delta));'
-
       - name: Audit runtime dependencies
         run: npm audit --omit=dev --audit-level=moderate
 
