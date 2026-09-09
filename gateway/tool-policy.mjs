@@ -67,7 +67,10 @@ const NON_WORKSPACE_TOOLS = new Set([
 ]);
 
 function jobPolicy(requiredCapabilities, pluginId = null) {
-  return Object.freeze({ requiredCapabilities: Object.freeze([...new Set(requiredCapabilities)]), pluginId });
+  return Object.freeze({
+    requiredCapabilities: Object.freeze([...new Set(requiredCapabilities)]),
+    pluginId
+  });
 }
 
 const JOB_TARGET_POLICIES = Object.freeze({
@@ -103,7 +106,9 @@ export function ownerOnlyTool(name) {
 }
 
 function gitRawCommand(args = {}) {
-  const values = Array.isArray(args?.args) ? args.args.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const values = Array.isArray(args?.args)
+    ? args.args.map(value => String(value || '').trim()).filter(Boolean)
+    : [];
   return values.find(value => !value.startsWith('-'))?.toLowerCase() || '';
 }
 
@@ -131,7 +136,10 @@ export function requiredCapabilityForTool(name, annotations = {}, args = {}) {
 
 export function workspaceScopedTool(name) {
   const tool = String(name || '');
-  return !NON_WORKSPACE_TOOLS.has(tool) && !tool.startsWith('team_') && !tool.startsWith('deployment_') && !tool.startsWith('runner_');
+  return !NON_WORKSPACE_TOOLS.has(tool) &&
+    !tool.startsWith('team_') &&
+    !tool.startsWith('deployment_') &&
+    !tool.startsWith('runner_');
 }
 
 export function toolWorkspaceId(name, args = {}, config = {}) {
@@ -167,17 +175,24 @@ export function validateToolRegistration(name, config = {}) {
     for (const key of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']) {
       if (typeof annotations[key] !== 'boolean') errors.push(`Tool ${tool || '(empty)'} annotation ${key} must be boolean`);
     }
-    if (annotations.readOnlyHint === true && annotations.destructiveHint === true) errors.push(`Tool ${tool || '(empty)'} cannot be both read-only and destructive`);
+    if (annotations.readOnlyHint === true && annotations.destructiveHint === true) {
+      errors.push(`Tool ${tool || '(empty)'} cannot be both read-only and destructive`);
+    }
     const explicitCapability = explicitCapabilityForTool(tool, annotations);
     if (!explicitCapability) errors.push(`Tool ${tool || '(empty)'} has no explicit capability policy`);
-    if (annotations.readOnlyHint === true && requiredCapabilityForTool(tool, annotations) !== 'read') warnings.push(`Tool ${tool} is annotated read-only but policy requires ${requiredCapabilityForTool(tool, annotations)}`);
+    if (annotations.readOnlyHint === true && requiredCapabilityForTool(tool, annotations) !== 'read') {
+      warnings.push(`Tool ${tool} is annotated read-only but policy requires ${requiredCapabilityForTool(tool, annotations)}`);
+    }
   }
   return {
     name: tool,
     capability: requiredCapabilityForTool(tool, annotations || {}),
     workspaceScoped: workspaceScopedTool(tool),
     ownerOnly: ownerOnlyTool(tool),
-    job: jobTargetPolicy(tool) ? { requiredCapabilities: [...jobTargetPolicy(tool).requiredCapabilities], pluginId: jobTargetPolicy(tool).pluginId } : null,
+    job: jobTargetPolicy(tool) ? {
+      requiredCapabilities: [...jobTargetPolicy(tool).requiredCapabilities],
+      pluginId: jobTargetPolicy(tool).pluginId
+    } : null,
     errors,
     warnings,
     ok: errors.length === 0
