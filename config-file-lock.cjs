@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_STALE_MS = 60000;
@@ -76,7 +77,8 @@ function removeStaleLock(lockPath, staleMs) {
 }
 
 function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAULT_STALE_MS } = {}) {
-  const lockPath = `${file}.lock`;
+  const target = path.resolve(file);
+  const lockPath = `${target}.lock`;
   const existing = held.get(lockPath);
   if (existing) {
     existing.depth += 1;
@@ -84,7 +86,7 @@ function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAU
   }
   const deadline = Date.now() + Math.max(100, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   const token = crypto.randomBytes(16).toString('hex');
-  const payload = { token, pid: process.pid, acquiredAt: new Date().toISOString(), file };
+  const payload = { token, pid: process.pid, acquiredAt: new Date().toISOString(), file: target };
   while (Date.now() <= deadline) {
     try {
       const fd = fs.openSync(lockPath, 'wx', 0o600);
@@ -124,8 +126,15 @@ function releaseFileLock(lock) {
 function withFileLockSync(file, fn, options) {
   if (typeof fn !== 'function') throw new TypeError('File lock callback must be a function');
   const lock = acquireFileLock(file, options);
-  try { return fn(lock); }
-  finally { releaseFileLock(lock); }
+  try {
+    const result = fn(lock);
+    if (result && typeof result.then === 'function') {
+      throw new TypeError('File lock callback must be synchronous');
+    }
+    return result;
+  } finally {
+    releaseFileLock(lock);
+  }
 }
 
 function clearFileLocksForTests() {
