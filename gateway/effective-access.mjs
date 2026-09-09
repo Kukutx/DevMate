@@ -11,7 +11,7 @@ import { publicConversationWorkspaceBinding } from './conversation-workspaces.mj
 import { requestConversationScope, requestPrincipal } from './request-context.mjs';
 import { registerServerInitializer } from './server-extension-host.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
-import { workspaceLease, __test as workspaceLeaseTest } from './workspace-leases.mjs';
+import { workspaceLease } from './workspace-leases.mjs';
 
 const WORKSPACE_CAPABILITIES = Object.freeze(['read', 'validate', 'write', 'execute', 'git', 'publish']);
 const MUTATING_CAPABILITIES = new Set(['write', 'execute', 'git', 'publish']);
@@ -41,6 +41,13 @@ function blocker(code, message, detail = {}) {
   return { code, message, ...detail };
 }
 
+function leaseRequired({ config, principal, workspaceId, capability }) {
+  return !!workspaceId &&
+    config?.team?.requireWorkspaceLeaseForWrites === true &&
+    MUTATING_CAPABILITIES.has(capability) &&
+    principal?.source !== 'local';
+}
+
 function commonWorkspaceScopeBlocker(principal, workspace) {
   if (principal?.source !== 'oauth-member') return null;
   if (Array.isArray(principal.workspaceIds) && principal.workspaceIds.includes(workspace.id)) return null;
@@ -59,7 +66,7 @@ function mutationBlockers({ config, principal, workspace, capability, lease, per
   if (workspace.reference || workspace.mode === 'readonly') {
     blockers.push(blocker('workspace_readonly', `Workspace ${workspace.id} is readonly/reference`, { workspaceId: workspace.id }));
   }
-  if (workspaceLeaseTest.leaseRequired({ workspaceId: workspace.id, principal, capability, config })) {
+  if (leaseRequired({ config, principal, workspaceId: workspace.id, capability })) {
     if (!lease) {
       blockers.push(blocker(
         'workspace_lease_required',
@@ -160,5 +167,6 @@ export const __test = {
   MUTATING_CAPABILITIES,
   WORKSPACE_CAPABILITIES,
   commonWorkspaceScopeBlocker,
+  leaseRequired,
   mutationBlockers
 };
