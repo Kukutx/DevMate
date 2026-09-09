@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { SUPPORTED_CONFIG_VERSION, atomicWriteJson } = require('../shared/config-store.cjs');
+const { SUPPORTED_CONFIG_VERSION, atomicWriteJson, readConfigSnapshot, recoverConfigReplacement } = require('../shared/config-store.cjs');
 const {
   mergeExtensionConfig,
   mergeHostContexts,
@@ -113,47 +113,53 @@ test('a real active-host handoff refreshes freshness even when editor semantics 
   assert.equal(merged.hostContexts.vscode.updatedAt, 'new');
 });
 
-test('authoritative VS Code config reads wait out an in-progress replacement window', async t => {
-  const directory = temporaryDirectory('devmate-config-read-race-');
-  const file = path.join(directory, 'config.json');
-  const marker = path.join(directory, 'replacement-open');
-  atomicWriteJson(file, {
-    version: SUPPORTED_CONFIG_VERSION,
-    instanceId: 'stable-instance',
-    server: { port: 8787, mcpPath: '/mcp' },
-    auth: { mode: 'none' },
-    connection: { provider: 'ngrok', publicUrl: '' },
-    workspaces: []
-  });
+for (const [name, read] of [
+  ['VS Code config', readExtensionConfig],
+  ['shared config snapshot', readConfigSnapshot],
+  ['explicit config recovery', file => recoverConfigReplacement(file).value]
+]) {
+  test(`${name} waits out an in-progress replacement window`, async t => {
+    const directory = temporaryDirectory('devmate-config-read-race-');
+    const file = path.join(directory, 'config.json');
+    const marker = path.join(directory, 'replacement-open');
+    atomicWriteJson(file, {
+      version: SUPPORTED_CONFIG_VERSION,
+      instanceId: 'stable-instance',
+      server: { port: 8787, mcpPath: '/mcp' },
+      auth: { mode: 'none' },
+      connection: { provider: 'ngrok', publicUrl: '' },
+      workspaces: []
+    });
 
-  const lockModule = path.resolve(__dirname, '..', 'config-file-lock.cjs');
-  const childScript = `
-    const fs = require('node:fs');
-    const { acquireFileLock, releaseFileLock } = require(process.argv[1]);
-    const file = process.argv[2];
-    const marker = process.argv[3];
-    const replacement = file + '.replace-race';
-    const lock = acquireFileLock(file);
-    try {
-      fs.renameSync(file, replacement);
-      fs.writeFileSync(marker, 'open', 'utf8');
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
-      fs.renameSync(replacement, file);
-    } finally {
-      releaseFileLock(lock);
-    }
-  `;
-  const child = spawn(process.execPath, ['-e', childScript, lockModule, file, marker], {
-    stdio: 'ignore'
-  });
-  t.after(() => {
-    if (child.exitCode === null) child.kill();
-    fs.rmSync(directory, { recursive: true, force: true });
-  });
+    const lockModule = path.resolve(__dirname, '..', 'config-file-lock.cjs');
+    const childScript = `
+      const fs = require('node:fs');
+      const { acquireFileLock, releaseFileLock } = require(process.argv[1]);
+      const file = process.argv[2];
+      const marker = process.argv[3];
+      const replacement = file + '.replace-race';
+      const lock = acquireFileLock(file);
+      try {
+        fs.renameSync(file, replacement);
+        fs.writeFileSync(marker, 'open', 'utf8');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+        fs.renameSync(replacement, file);
+      } finally {
+        releaseFileLock(lock);
+      }
+    `;
+    const child = spawn(process.execPath, ['-e', childScript, lockModule, file, marker], {
+      stdio: 'ignore'
+    });
+    t.after(() => {
+      if (child.exitCode === null) child.kill();
+      fs.rmSync(directory, { recursive: true, force: true });
+    });
 
-  await waitForFile(marker);
-  const config = readExtensionConfig(file);
-  assert.equal(config?.instanceId, 'stable-instance');
-  assert.equal(config?.version, SUPPORTED_CONFIG_VERSION);
-  await waitForExit(child);
-});
+    await waitForFile(marker);
+    const config = read(file);
+    assert.equal(config?.instanceId, 'stable-instance');
+    assert.equal(config?.version, SUPPORTED_CONFIG_VERSION);
+    await waitForExit(child);
+  });
+}

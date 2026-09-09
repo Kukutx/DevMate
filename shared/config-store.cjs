@@ -150,9 +150,20 @@ function attachConfigSnapshot(value, file, state) {
 
 function readConfigSnapshot(file) {
   const target = path.resolve(file);
-  recoverConfigReplacement(target);
-  const state = readConfigState(target);
-  return attachConfigSnapshot(state.value, target, state);
+  // Healthy snapshots are read-only. Their content hash still fences a later
+  // replacement, and readers need not serialize behind unrelated host writes.
+  try {
+    const state = readConfigState(target);
+    if (state.exists) return attachConfigSnapshot(state.value, target, state);
+  } catch (error) {
+    if (error?.code === 'unsupported_config_version') throw error;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  return withFileLockSync(target, () => {
+    recoverConfigReplacementLocked(target);
+    const state = readConfigState(target);
+    return attachConfigSnapshot(state.value, target, state);
+  });
 }
 
 function configConflict(file) {
@@ -247,6 +258,12 @@ function cleanupReplacementCandidates(candidates, except = '') {
 }
 
 function recoverConfigReplacement(file) {
+  const target = path.resolve(file);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  return withFileLockSync(target, () => recoverConfigReplacementLocked(target));
+}
+
+function recoverConfigReplacementLocked(file) {
   const candidates = replacementCandidates(file);
   let main = null;
   let mainError = null;
