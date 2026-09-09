@@ -32,7 +32,7 @@ The desktop UX uses these terms consistently:
 - **Additional Workspaces** — explicit writable roots that DevMate may access without changing the Current Project. They are backed by `trustedWritableRoots` and appear as normal writable workspace IDs.
 - **Reference Projects** — readonly context only. They never become writable merely because they are visible in the desktop host.
 
-There is one shared Current Project for the desktop DevMate instance. Multiple VS Code/Obsidian hosts may register writable roots concurrently, but routine context refresh cannot steal Current Project authority from another host.
+There is one shared Current Project for the desktop DevMate instance. Multiple VS Code/Obsidian hosts may register writable roots concurrently, but routine context refresh cannot steal Current Project authority from another host. Multiple workspaces does **not** mean mutating a single global `activeWorkspaceId` into an array or making every writable root active at once.
 
 This supports the intended workflow:
 
