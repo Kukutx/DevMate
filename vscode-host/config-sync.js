@@ -66,7 +66,6 @@ function syncCurrentWorkspace(candidate, root) {
   let id = String(existing?.id || workspaceIdForRoot(workspaceRoot));
   if (retained.some(item => item?.id === id)) id = uniqueWorkspaceId(retained, workspaceIdForRoot(workspaceRoot));
   const { trusted: _trusted, ...currentWorkspace } = existing || {};
-  candidate.activeWorkspaceId = id;
   candidate.workspaces = [
     {
       ...currentWorkspace,
@@ -75,7 +74,7 @@ function syncCurrentWorkspace(candidate, root) {
       root: workspaceRoot,
       mode: 'workspace-write',
       reference: false,
-      role: 'active'
+      role: id === candidate.activeWorkspaceId ? 'active' : 'workspace'
     },
     ...retained
   ];
@@ -121,11 +120,11 @@ function mergeExtensionConfig(currentValue, candidateValue) {
 
   const merged = { ...current };
   for (const key of [
-    'appVersion', 'maintenance', 'commands',
-    'activeWorkspaceId'
+    'appVersion', 'maintenance', 'commands'
   ]) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
+  if (initializing && has(candidate, 'activeWorkspaceId')) merged.activeWorkspaceId = candidate.activeWorkspaceId;
 
   merged.version = SUPPORTED_CONFIG_VERSION;
   merged.instanceId = has(current, 'instanceId') ? current.instanceId : candidate.instanceId;
@@ -151,10 +150,10 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
 
   for (const key of [
-    'permissions', 'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
+    'activeWorkspaceId', 'permissions', 'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
     'jobs', 'runnerControl', 'trustedWritableRoots'
   ]) {
-    preserveCurrentObject(merged, current, key);
+    if (!initializing || key !== 'activeWorkspaceId') preserveCurrentObject(merged, current, key);
   }
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
