@@ -34,7 +34,9 @@ export function recoverConfigReplacement() {
 export function readConfig() {
   if (!CONFIG_PATH) throw new Error('DEVMATE_CONFIG is required');
   const config = configStore.readConfigSnapshot(CONFIG_PATH);
-  config.permissions = permissionConfig.permissionPolicySnapshot(config);
+  if (config.permissions !== undefined && config.permissions !== null) {
+    config.permissions = permissionConfig.permissionPolicySnapshot(config);
+  }
   return config;
 }
 
