@@ -100,3 +100,33 @@ test('recovers an old unreadable lock only after the stale threshold', async t =
   assert.equal(fs.existsSync(lockPath), false);
   assert.equal(fs.readdirSync(directory).some(name => name.includes('.lock.stale-')), false);
 });
+
+test('relative and dot-segment paths share the same reentrant lock', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-lock-alias-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  const aliases = [
+    path.relative(process.cwd(), file),
+    directory + path.sep + '.' + path.sep + 'config.json'
+  ];
+  withFileLockSync(file, first => {
+    for (const alias of aliases) {
+      withFileLockSync(alias, nested => {
+        assert.equal(nested.reentrant, true);
+        assert.equal(nested.token, first.token);
+        assert.equal(nested.lockPath, first.lockPath);
+      }, { timeoutMs: 100 });
+      assert.equal(fs.existsSync(first.lockPath), true);
+    }
+  });
+  assert.equal(fs.existsSync(file + '.lock'), false);
+});
+
+test('synchronous lock callbacks reject thenables and release the lock on error', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-lock-async-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  assert.throws(() => withFileLockSync(file, () => Promise.resolve('later')), /must be synchronous/);
+  assert.equal(fs.existsSync(file + '.lock'), false);
+  assert.equal(withFileLockSync(file, () => 'next'), 'next');
+});
