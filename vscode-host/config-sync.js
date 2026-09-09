@@ -31,7 +31,9 @@ function sameWorkspacePath(left, right) {
 }
 
 function mergeWorkspaces(candidate, current) {
-  const requested = (Array.isArray(candidate) ? candidate : []).filter(Boolean);
+  const requested = (Array.isArray(candidate) ? candidate : []).filter(item =>
+    item && item.trusted !== true && item.role !== 'trusted'
+  );
   const retainedWritable = (Array.isArray(current) ? current : []).filter(item =>
     item && (item.trusted === true || item.role === 'trusted' || (!item.reference && item.mode !== 'readonly'))
   );
