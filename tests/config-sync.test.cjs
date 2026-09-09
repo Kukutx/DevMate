@@ -18,7 +18,7 @@ function tempFile() {
   return path.join(directory, 'config.json');
 }
 
-test('switching the active VS Code workspace preserves an Obsidian workspace registration', () => {
+test('routine host workspace sync registers its root without stealing the shared Current Project', () => {
   const projectRoot = path.join(path.sep, 'workspace', 'devmate');
   const vaultRoot = path.join(path.sep, 'vaults', 'obsidian');
   const config = {
@@ -32,16 +32,18 @@ test('switching the active VS Code workspace preserves an Obsidian workspace reg
 
   syncCurrentWorkspace(config, projectRoot);
 
-  assert.equal(config.activeWorkspaceId, 'devmate');
+  assert.equal(config.activeWorkspaceId, 'obsidian-vault');
+  assert.equal(config.workspaces.find(item => item.id === 'devmate')?.role, 'workspace');
   assert.equal(config.workspaces.find(item => item.id === 'obsidian-vault')?.root, vaultRoot);
   assert.equal(config.workspaces.find(item => item.id === 'reference')?.reference, true);
   assert.equal(config.workspaces.find(item => item.id === 'trusted')?.trusted, true);
 });
 
-test('merges host-owned fields without replacing shared capability state', () => {
+test('merges host-owned fields without replacing shared capability or Current Project state', () => {
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
+    activeWorkspaceId: 'app',
     server: { port: 8788, mcpPath: '/mcp' },
     auth: { mode: 'oauth' },
     connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com', lastPreflightAt: 'current' },
@@ -55,6 +57,7 @@ test('merges host-owned fields without replacing shared capability state', () =>
   const candidate = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
+    activeWorkspaceId: 'background-window',
     server: { port: 9999, mcpPath: '/mcp' },
     auth: { mode: 'none' },
     connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
@@ -65,6 +68,7 @@ test('merges host-owned fields without replacing shared capability state', () =>
   };
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.instanceId, 'stable');
+  assert.equal(merged.activeWorkspaceId, 'app');
   assert.deepEqual(merged.server, current.server);
   assert.deepEqual(merged.auth, { mode: 'none' });
   assert.equal(merged.runtime.maxConcurrentJobs, 4);
@@ -107,6 +111,7 @@ test('pure merge accepts only current auth shape and never manufactures shared n
   const merged = mergeExtensionConfig({}, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new',
+    activeWorkspaceId: 'app',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { mode: 'oauth' },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000, maxConcurrentJobs: 99 },
@@ -121,6 +126,7 @@ test('pure merge accepts only current auth shape and never manufactures shared n
     hostRuntime: { owner: 'forged' }
   });
   assert.equal(merged.instanceId, 'new');
+  assert.equal(merged.activeWorkspaceId, 'app');
   assert.deepEqual(merged.server, { port: 8787, mcpPath: '/mcp' });
   assert.deepEqual(merged.auth, { mode: 'oauth' });
   assert.deepEqual(merged.runtime, { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 });
@@ -157,11 +163,12 @@ test('generic VS Code writer refuses to recreate a missing shared config', () =>
   assert.equal(fs.existsSync(file), false);
 });
 
-test('writes host context through the shared locked atomic store without replacing connection or auth', () => {
+test('writes host context through the shared locked atomic store without replacing connection, auth, or active workspace', () => {
   const file = tempFile();
   atomicWriteJson(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'one',
+    activeWorkspaceId: 'app',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { mode: 'oauth' },
     connection: { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' }
@@ -169,10 +176,12 @@ test('writes host context through the shared locked atomic store without replaci
   writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
+    activeWorkspaceId: 'background-window',
     hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   });
   const config = readExtensionConfig(file);
   assert.equal(config.instanceId, 'one');
+  assert.equal(config.activeWorkspaceId, 'app');
   assert.deepEqual(config.auth, { mode: 'oauth' });
   assert.deepEqual(config.connection, { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' });
   assert.deepEqual(config.hostContexts.vscode, { capturedAt: 'now' });
