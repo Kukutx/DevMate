@@ -46,6 +46,12 @@ function serializableSupervisorControl(value = null) {
   return next;
 }
 
+function releaseSupervisorPipes(supervisor) {
+  for (const stream of [supervisor?.stdout, supervisor?.stderr]) {
+    try { stream?.destroy?.(); } catch {}
+  }
+}
+
 function createSupervisedChildProcess({
   childProcess = defaultChildProcess,
   nodeExecutable = process.execPath,
@@ -90,6 +96,12 @@ function createSupervisedChildProcess({
           return false;
         }
       };
+      // A successful desktop handoff disconnects IPC. Close the old host's
+      // stdout/stderr pipe ends at the same boundary so the detached supervisor
+      // has no lingering parent handles. The supervisor runtime tolerates the
+      // resulting EPIPE/stream-destroyed condition and continues under shared
+      // lifecycle ownership.
+      supervisor.once?.('disconnect', () => releaseSupervisorPipes(supervisor));
       // Generic RuntimeController escalation calls forceTerminate() before it
       // would otherwise SIGKILL a child. A provider supervisor must never be
       // SIGKILLed merely because its provider tree has not yet been confirmed
@@ -110,6 +122,7 @@ function createSupervisedChildProcess({
 
 module.exports = {
   createSupervisedChildProcess,
+  releaseSupervisorPipes,
   resolveProviderSupervisorEntry,
   serializableSpawnOptions,
   serializableSupervisorControl,
