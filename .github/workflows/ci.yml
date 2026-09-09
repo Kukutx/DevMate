@@ -39,6 +39,9 @@ jobs:
       - name: Persistence fault regressions
         run: node --test tests/atomic-json-file.test.cjs tests/durable-state.test.mjs tests/config-persistence.test.mjs
 
+      - name: Inspect Hono security patch metadata
+        run: npm view hono@4.13.5 dist --json
+
       - name: Audit runtime dependencies
         run: npm audit --omit=dev --audit-level=moderate
 
