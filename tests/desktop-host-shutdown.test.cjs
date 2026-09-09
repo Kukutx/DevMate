@@ -78,6 +78,10 @@ test('desktop Gateway and tunnel supervisor survive host disconnect only under s
   assert.match(gatewayRuntime, /DETACHED_DESKTOP_RUNTIME && DESKTOP_LIFECYCLE_FENCE/);
   assert.match(gatewayRuntime, /LIFECYCLE_CONFIG_FAILURE_GRACE_MS = 5000/);
   assert.match(gatewayRuntime, /unavailableForMs >= LIFECYCLE_CONFIG_FAILURE_GRACE_MS/);
+  assert.match(gatewayRuntime, /ignoreDetachedPipeError\(process\.stdout\)/);
+  assert.match(gatewayRuntime, /ignoreDetachedPipeError\(process\.stderr\)/);
+  assert.match(gatewayRuntime, /EPIPE/);
+  assert.match(gatewayRuntime, /ERR_STREAM_DESTROYED/);
 
   assert.match(supervised, /detached:\s*true/);
   assert.match(supervised, /devMateSupervisor/);
