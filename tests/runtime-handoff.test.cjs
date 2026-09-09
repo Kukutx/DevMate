@@ -11,7 +11,15 @@ const {
   RuntimeController,
   desktopSpawn
 } = require('../host/runtime-controller.js');
+const { releaseSupervisorPipes } = require('../host/runtime/supervised-child-process.js');
 const { DesktopTunnelController } = require('../vscode-host/desktop-tunnel-controller.js');
+
+function fakeStream() {
+  return {
+    destroyCalls: 0,
+    destroy() { this.destroyCalls += 1; }
+  };
+}
 
 function fakeChild(pid = 43210) {
   const child = new EventEmitter();
@@ -20,6 +28,8 @@ function fakeChild(pid = 43210) {
   child.signalCode = null;
   child.connected = true;
   child.killed = false;
+  child.stdout = fakeStream();
+  child.stderr = fakeStream();
   child.disconnectCalls = 0;
   child.unrefCalls = 0;
   child.killCalls = 0;
@@ -45,7 +55,7 @@ test('desktop Gateway spawn is OS-detached and marks lifecycle-owned launch mode
   assert.deepEqual(captured.options.stdio, ['ignore', 'pipe', 'pipe', 'ipc']);
 });
 
-test('Gateway preserve-session dispose disconnects and unreferences without killing the child', async t => {
+test('Gateway preserve-session dispose releases parent pipes and IPC without killing the child', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-gateway-handoff-'));
   const gatewayEntry = path.join(root, 'gateway.mjs');
   fs.writeFileSync(gatewayEntry, '// fake gateway\n');
@@ -65,12 +75,23 @@ test('Gateway preserve-session dispose disconnects and unreferences without kill
   const result = await controller.dispose({ stopOwned: false });
   assert.equal(result.disposed, true);
   assert.equal(result.detached, true);
+  assert.equal(child.stdout.destroyCalls, 1);
+  assert.equal(child.stderr.destroyCalls, 1);
   assert.equal(child.disconnectCalls, 1);
   assert.equal(child.unrefCalls, 1);
   assert.equal(child.killCalls, 0);
   assert.equal(controller.child, null);
   assert.equal(controller.owned, false);
   assert.equal(controller.disposed, true);
+});
+
+test('supervisor pipe release closes only parent stream handles', () => {
+  const child = fakeChild(43214);
+  releaseSupervisorPipes(child);
+  assert.equal(child.stdout.destroyCalls, 1);
+  assert.equal(child.stderr.destroyCalls, 1);
+  assert.equal(child.disconnectCalls, 0);
+  assert.equal(child.killCalls, 0);
 });
 
 test('tunnel handoff requires supervisor ACK and persisted supervisor ownership before detaching', async t => {
