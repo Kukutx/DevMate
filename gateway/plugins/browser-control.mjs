@@ -69,7 +69,10 @@ export const browserControlPlugin = definePlugin({
     capabilities: ['tools', 'browser-automation', 'interactive-browser', 'multi-tab', 'screenshots'],
     provides: [],
     consumes: [],
-    permissions: { executablePatterns: [] }
+    permissions: {
+      executablePatterns: [],
+      secretSettingKeys: ['playwrightModulePath', 'chromiumExecutablePath']
+    }
   },
   settingsSchema,
   defaultSettings: {
