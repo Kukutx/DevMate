@@ -4,6 +4,26 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const renameSleeper = new Int32Array(new SharedArrayBuffer(4));
+const WINDOWS_RENAME_RETRIES = 3;
+const WINDOWS_RENAME_RETRY_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+
+function replaceFile(temporary, target) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(temporary, target);
+      return;
+    } catch (error) {
+      if (process.platform !== 'win32' ||
+          !WINDOWS_RENAME_RETRY_CODES.has(error?.code) ||
+          attempt >= WINDOWS_RENAME_RETRIES) throw error;
+      // Keep the committed file visible while a Windows reader or scanner
+      // temporarily prevents replacement. Never move it out of the way.
+      Atomics.wait(renameSleeper, 0, 0, 10 * (attempt + 1));
+    }
+  }
+}
+
 function fsyncDirectory(directory) {
   let fd = null;
   try {
@@ -42,30 +62,11 @@ function atomicWriteJsonFile(file, value, { maxBytes = Number.MAX_SAFE_INTEGER, 
   try {
     fd = fs.openSync(temporary, 'wx', mode);
     fs.writeFileSync(fd, payload, 'utf8');
-    try { fs.fsyncSync(fd); } catch {}
+    fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = null;
 
-    try {
-      fs.renameSync(temporary, target);
-    } catch (error) {
-      if (process.platform !== 'win32') throw error;
-      const previous = `${target}.replace-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-      let movedPrevious = false;
-      try {
-        if (fs.existsSync(target)) {
-          fs.renameSync(target, previous);
-          movedPrevious = true;
-        }
-        fs.renameSync(temporary, target);
-        if (movedPrevious) fs.rmSync(previous, { force: true });
-      } catch (replacementError) {
-        if (!fs.existsSync(target) && movedPrevious && fs.existsSync(previous)) {
-          try { fs.renameSync(previous, target); } catch {}
-        }
-        throw replacementError;
-      }
-    }
+    replaceFile(temporary, target);
 
     try { fs.chmodSync(target, mode); } catch {}
     fsyncDirectory(directory);
