@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import instance from '../shared/instance-config.cjs';
+import permission from '../shared/permission-config.cjs';
 import { __test, requiredCapabilityForTool } from '../gateway/tool-policy.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -15,9 +16,19 @@ test('every process-spawning core command has execute capability', () => {
   }
 });
 
-test('fullAccess does not silently enable directory mutations', () => {
+test('fullAccess is canonical while directory guard remains a balanced-mode preference', () => {
   const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
   assert.match(source, /allowDirectoryMutations = cfg\(\)\.get\('allowDirectoryMutations'\) === true/);
+  assert.deepEqual(permission.permissionPolicySnapshot({
+    permissions: {
+      profile: 'fullAccess',
+      readOnly: false,
+      blockDangerousOperations: true,
+      confirmBeforePush: true,
+      allowDirectoryMutations: false
+    }
+  }), permission.DEFAULT_PERMISSION_POLICY);
+  assert.equal(permission.DEFAULT_PERMISSION_POLICY.allowDirectoryMutations, true);
 });
 
 test('Gateway delegates configuration and audit state to shared services', () => {
