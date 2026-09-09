@@ -7,6 +7,7 @@ const { atomicWriteJsonFile } = require('./atomic-json-file.cjs');
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { CONNECTION_PROVIDERS, normalizeInstanceConfig } = require('./instance-config.cjs');
 const { configureAuthentication, DEFAULT_AUTHENTICATION_MODE } = require('./auth-config.cjs');
+const { DEFAULT_PERMISSION_POLICY } = require('./permission-config.cjs');
 const { enforcePolicyGenerations, policyGenerationBaseline } = require('./config-policy-invariants.cjs');
 const { DEFAULT_MAINTENANCE } = require('./maintenance-config.cjs');
 const { DEFAULT_PORT, strictPort } = require('./port.cjs');
@@ -438,13 +439,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
     maintenance: { ...DEFAULT_MAINTENANCE },
     connection: { provider, publicUrl: '', policyGeneration: 0 },
     auth: { mode: DEFAULT_AUTHENTICATION_MODE },
-    permissions: {
-      profile: 'fullAccess',
-      readOnly: false,
-      blockDangerousOperations: true,
-      confirmBeforePush: false,
-      allowDirectoryMutations: false
-    },
+    permissions: { ...DEFAULT_PERMISSION_POLICY },
     team: {
       members: [],
       requireWorkspaceLeaseForWrites: false,
