@@ -280,25 +280,25 @@
             "balanced",
             "fullAccess"
           ],
-          "description": "Permission preset. readOnly blocks mutation; balanced adds destructive-operation guards; fullAccess enables advanced local development operations."
+          "description": "Permission preset. readOnly blocks mutation; balanced uses configurable safety guards; fullAccess grants unrestricted DevMate development operations inside trusted writable workspaces while credential/path, OS, and remote identity boundaries remain enforced."
         },
         "devMate.blockDangerousOperations": {
           "type": "boolean",
           "default": true,
           "scope": "machine",
-          "description": "Block recognized destructive shell and Git patterns in balanced mode. fullAccess intentionally bypasses this guard and should be treated as trusted execution."
+          "description": "Balanced mode only: block recognized destructive shell and Git patterns. fullAccess intentionally bypasses this extra guard."
         },
         "devMate.confirmBeforePush": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
-          "description": "Require confirmation before Git push."
+          "description": "Balanced mode only: block Git push while this guard is enabled. fullAccess never applies this extra guard."
         },
         "devMate.allowDirectoryMutations": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
-          "description": "Allow directory move/delete operations."
+          "description": "Balanced mode only: allow directory move/delete operations after normal workspace and sensitive-path checks. fullAccess always allows them."
         },
         "devMate.defaultCommandTimeoutMs": {
           "type": "number",
