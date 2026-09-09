@@ -5,6 +5,11 @@ const {
   authenticationMode,
   authenticationPolicyGeneration
 } = require('./auth-config.cjs');
+const {
+  PERMISSION_POLICY_GENERATION_KEY,
+  permissionPolicyGeneration,
+  permissionPolicySnapshot
+} = require('./permission-config.cjs');
 const { connectionPolicySnapshot, LIFECYCLE_STATES } = require('./instance-config.cjs');
 
 function policyInvariantError(message, code, file, details = {}) {
@@ -43,6 +48,10 @@ function lifecyclePolicySnapshot(config) {
 function policyGenerationBaseline(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
   const authGeneration = config?.hostRuntime?.[AUTH_POLICY_GENERATION_KEY];
+  const permissionGeneration = config?.hostRuntime?.[PERMISSION_POLICY_GENERATION_KEY];
+  const hostRuntime = {};
+  if (authGeneration !== undefined) hostRuntime[AUTH_POLICY_GENERATION_KEY] = authGeneration;
+  if (permissionGeneration !== undefined) hostRuntime[PERMISSION_POLICY_GENERATION_KEY] = permissionGeneration;
   const connection = config?.connection && typeof config.connection === 'object' && !Array.isArray(config.connection)
     ? config.connection
     : {};
@@ -54,9 +63,10 @@ function policyGenerationBaseline(config) {
     auth: config.auth && typeof config.auth === 'object' && !Array.isArray(config.auth)
       ? { mode: config.auth.mode }
       : undefined,
-    hostRuntime: authGeneration === undefined
-      ? undefined
-      : { [AUTH_POLICY_GENERATION_KEY]: authGeneration },
+    permissions: config.permissions && typeof config.permissions === 'object' && !Array.isArray(config.permissions)
+      ? { ...config.permissions }
+      : undefined,
+    hostRuntime: Object.keys(hostRuntime).length ? hostRuntime : undefined,
     connection: {
       provider: connection.provider,
       publicUrl: connection.publicUrl,
@@ -133,6 +143,50 @@ function enforceAuthenticationGeneration(before, next, file = '') {
       'authentication_policy_generation_invalid_transition',
       file,
       { beforeMode, nextMode, beforeGeneration, nextGeneration, expectedGeneration: expected }
+    );
+  }
+  return { changed: true, generation: expected, repaired: false };
+}
+
+function enforcePermissionGeneration(before, next, file = '') {
+  const previous = permissionPolicySnapshot(before);
+  const current = permissionPolicySnapshot(next);
+  const beforeGeneration = permissionPolicyGeneration(before);
+  const nextGeneration = permissionPolicyGeneration(next);
+  const changed = JSON.stringify(previous) !== JSON.stringify(current);
+
+  if (!changed) {
+    if (nextGeneration !== beforeGeneration) {
+      throw policyInvariantError(
+        'Permission policy generation changed without a committed permission change',
+        'permission_policy_generation_unjustified',
+        file,
+        { beforePolicy: previous, nextPolicy: current, beforeGeneration, nextGeneration }
+      );
+    }
+    return { changed: false, generation: beforeGeneration };
+  }
+
+  if (beforeGeneration >= Number.MAX_SAFE_INTEGER) {
+    throw policyInvariantError(
+      'Permission policy generation is exhausted',
+      'permission_policy_generation_exhausted',
+      file,
+      { beforePolicy: previous, nextPolicy: current, beforeGeneration }
+    );
+  }
+  const expected = beforeGeneration + 1;
+  if (nextGeneration === beforeGeneration) {
+    next.hostRuntime ||= {};
+    next.hostRuntime[PERMISSION_POLICY_GENERATION_KEY] = expected;
+    return { changed: true, generation: expected, repaired: true };
+  }
+  if (nextGeneration !== expected) {
+    throw policyInvariantError(
+      'Permission policy generation must advance exactly once for one committed permission change',
+      'permission_policy_generation_invalid_transition',
+      file,
+      { beforePolicy: previous, nextPolicy: current, beforeGeneration, nextGeneration, expectedGeneration: expected }
     );
   }
   return { changed: true, generation: expected, repaired: false };
@@ -224,15 +278,16 @@ function enforceLifecycleGeneration(before, next, file = '') {
 
 function enforcePolicyGenerations(before, next, file = '') {
   if (!before || !next) {
-    return { sameInstance: false, authentication: null, connection: null, lifecycle: null };
+    return { sameInstance: false, authentication: null, permission: null, connection: null, lifecycle: null };
   }
   assertInstanceIdentityPreserved(before, next, file);
   if (!sameInstance(before, next)) {
-    return { sameInstance: false, authentication: null, connection: null, lifecycle: null };
+    return { sameInstance: false, authentication: null, permission: null, connection: null, lifecycle: null };
   }
   return {
     sameInstance: true,
     authentication: enforceAuthenticationGeneration(before, next, file),
+    permission: enforcePermissionGeneration(before, next, file),
     connection: enforceConnectionGeneration(before, next, file),
     lifecycle: enforceLifecycleGeneration(before, next, file)
   };
@@ -243,6 +298,7 @@ module.exports = {
   enforceAuthenticationGeneration,
   enforceConnectionGeneration,
   enforceLifecycleGeneration,
+  enforcePermissionGeneration,
   enforcePolicyGenerations,
   lifecyclePolicySnapshot,
   policyGenerationBaseline,

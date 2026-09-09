@@ -1,5 +1,6 @@
 import { installBackupAccessGuard } from './backup-access-guard.mjs';
 import { installConversationRoutingGuard } from './conversation-routing-guard.mjs';
+import { installEffectiveAccessCapability } from './effective-access.mjs';
 import { installEmbeddedRunnerCapability } from './embedded-runner-capability.mjs';
 import { installFileAccessHardening } from './file-access-hardening.mjs';
 import { installFileMutationSafety } from './file-mutation-safety.mjs';
@@ -38,6 +39,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
   installHostContextCapabilities(McpServerClass);
   installObsidianHostCapabilities(McpServerClass);
   installLocalCapabilities(McpServerClass);
+  installEffectiveAccessCapability(McpServerClass);
   registerServerInitializer(McpServerClass, {
     id: 'devmate.plugin-host',
     order: 40,

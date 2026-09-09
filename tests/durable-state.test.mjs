@@ -51,6 +51,52 @@ test('failed durable file fsync preserves both persisted and cached state', t =>
   assert.deepEqual(durable.readDurableNamespace('fsync-failure', null), { count: 1 });
 });
 
+
+test('namespace mutations reject asynchronous callbacks without changing disk or cache', () => {
+  durable.resetDurableStateForTests();
+  durable.writeDurableNamespace('synchronous-only', { count: 1 });
+  const before = fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8');
+  assert.throws(() => durable.mutateDurableNamespace('synchronous-only', {}, async current => {
+    current.count = 2;
+    return current;
+  }), /must be synchronous/);
+  assert.equal(fs.readFileSync(durable.RUNTIME_STATE_PATH, 'utf8'), before);
+  assert.deepEqual(durable.readDurableNamespace('synchronous-only', null), { count: 1 });
+  durable.resetDurableStateForTests();
+  assert.deepEqual(durable.readDurableNamespace('synchronous-only', null), { count: 1 });
+});
+
+test('missing durable state with unusable replacements cannot be silently reinitialized', () => {
+  const directory = path.dirname(durable.RUNTIME_STATE_PATH);
+  const replacement = `${durable.RUNTIME_STATE_PATH}.replace-protected`;
+  const cases = [
+    {
+      payload: JSON.stringify({ version: durable.DOCUMENT_VERSION + 1, namespaces: { protected: true } }),
+      code: 'durable_state_recovery_incompatible'
+    },
+    {
+      payload: JSON.stringify({ namespaces: { protected: true } }),
+      code: 'durable_state_recovery_incompatible'
+    },
+    { payload: '{interrupted', code: 'durable_state_recovery_failed' }
+  ];
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    for (const { payload, code } of cases) {
+      fs.rmSync(durable.RUNTIME_STATE_PATH, { force: true });
+      fs.writeFileSync(replacement, payload, 'utf8');
+      durable.resetDurableStateForTests();
+      assert.throws(() => durable.readDurableNamespace('protected', null), error => error.code === code);
+      assert.throws(() => durable.writeDurableNamespace('new', {}), error => error.code === code);
+      assert.equal(fs.existsSync(durable.RUNTIME_STATE_PATH), false);
+      assert.equal(fs.readFileSync(replacement, 'utf8'), payload);
+    }
+  } finally {
+    fs.rmSync(replacement, { force: true });
+    durable.resetDurableStateForTests();
+  }
+});
+
 test('accepts only the current durable state schema version', () => {
   assert.deepEqual(durable.__test.normalizeDocument({
     version: durable.DOCUMENT_VERSION,

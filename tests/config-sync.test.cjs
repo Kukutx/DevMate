@@ -18,7 +18,7 @@ function tempFile() {
   return path.join(directory, 'config.json');
 }
 
-test('switching the active VS Code workspace preserves an Obsidian workspace registration', () => {
+test('routine host workspace sync registers its root without stealing the shared Current Project', () => {
   const projectRoot = path.join(path.sep, 'workspace', 'devmate');
   const vaultRoot = path.join(path.sep, 'vaults', 'obsidian');
   const config = {
@@ -32,16 +32,18 @@ test('switching the active VS Code workspace preserves an Obsidian workspace reg
 
   syncCurrentWorkspace(config, projectRoot);
 
-  assert.equal(config.activeWorkspaceId, 'devmate');
+  assert.equal(config.activeWorkspaceId, 'obsidian-vault');
+  assert.equal(config.workspaces.find(item => item.id === 'devmate')?.role, 'workspace');
   assert.equal(config.workspaces.find(item => item.id === 'obsidian-vault')?.root, vaultRoot);
   assert.equal(config.workspaces.find(item => item.id === 'reference')?.reference, true);
   assert.equal(config.workspaces.find(item => item.id === 'trusted')?.trusted, true);
 });
 
-test('merges host-owned fields without replacing shared capability state', () => {
+test('merges stale host workspace snapshots without replacing shared capability or Current Project state', () => {
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stable',
+    activeWorkspaceId: 'app',
     server: { port: 8788, mcpPath: '/mcp' },
     auth: { mode: 'oauth' },
     connection: { provider: 'cloudflare-managed', publicUrl: 'https://team.example.com', lastPreflightAt: 'current' },
@@ -50,26 +52,35 @@ test('merges host-owned fields without replacing shared capability state', () =>
     runnerControl: { enabled: true },
     trustedWritableRoots: [{ id: 'trusted' }],
     runtime: { maxConcurrentJobs: 4, defaultCommandTimeoutMs: 1000 },
-    workspaces: [{ id: 'app' }, { id: 'trusted', trusted: true, role: 'trusted' }]
+    workspaces: [
+      { id: 'app', root: path.join(path.sep, 'workspace', 'app'), mode: 'workspace-write', reference: false, role: 'active' },
+      { id: 'trusted', root: path.join(path.sep, 'workspace', 'trusted'), mode: 'workspace-write', trusted: true, role: 'trusted' }
+    ]
   };
   const candidate = {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
+    activeWorkspaceId: 'background-window',
     server: { port: 9999, mcpPath: '/mcp' },
     auth: { mode: 'none' },
     connection: { provider: 'ngrok', publicUrl: '', lastPreflightAt: 'stale' },
     team: { requireWorkspaceLeaseForWrites: false, members: [] },
     requestPolicy: { allowedHosts: [], requestsPerMinute: 9999 },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 },
-    workspaces: [{ id: 'app' }]
+    workspaces: [
+      { id: 'background-window', root: path.join(path.sep, 'workspace', 'background'), mode: 'workspace-write', reference: false, role: 'workspace' }
+    ]
   };
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.instanceId, 'stable');
+  assert.equal(merged.activeWorkspaceId, 'app');
+  assert.equal(merged.workspaces.some(item => item.id === 'app'), true);
+  assert.equal(merged.workspaces.some(item => item.id === 'background-window'), true);
+  assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
   assert.deepEqual(merged.server, current.server);
   assert.deepEqual(merged.auth, { mode: 'none' });
   assert.equal(merged.runtime.maxConcurrentJobs, 4);
   assert.equal(merged.runtime.defaultCommandTimeoutMs, 2000);
-  assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
   assert.deepEqual(merged.connection, current.connection);
   assert.deepEqual(merged.team, current.team);
   assert.deepEqual(merged.requestPolicy, current.requestPolicy);
@@ -107,6 +118,7 @@ test('pure merge accepts only current auth shape and never manufactures shared n
   const merged = mergeExtensionConfig({}, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'new',
+    activeWorkspaceId: 'app',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { mode: 'oauth' },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000, maxConcurrentJobs: 99 },
@@ -121,6 +133,7 @@ test('pure merge accepts only current auth shape and never manufactures shared n
     hostRuntime: { owner: 'forged' }
   });
   assert.equal(merged.instanceId, 'new');
+  assert.equal(merged.activeWorkspaceId, 'app');
   assert.deepEqual(merged.server, { port: 8787, mcpPath: '/mcp' });
   assert.deepEqual(merged.auth, { mode: 'oauth' });
   assert.deepEqual(merged.runtime, { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 });
@@ -139,10 +152,7 @@ test('retired auth fields are rejected instead of silently stripped or preserved
     { mode: 'none', token: 'legacy-static-token' },
     { mode: 'oauth', forgedPolicy: true }
   ]) {
-    assert.throws(
-      () => mergeExtensionConfig({}, { version: SUPPORTED_CONFIG_VERSION, auth }),
-      /Unsupported authentication fields/
-    );
+    assert.throws(() => mergeExtensionConfig({}, { version: SUPPORTED_CONFIG_VERSION, auth }), /Unsupported authentication fields/);
   }
 });
 
@@ -157,11 +167,12 @@ test('generic VS Code writer refuses to recreate a missing shared config', () =>
   assert.equal(fs.existsSync(file), false);
 });
 
-test('writes host context through the shared locked atomic store without replacing connection or auth', () => {
+test('writes host context through the shared locked atomic store without replacing connection, auth, or active workspace', () => {
   const file = tempFile();
   atomicWriteJson(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'one',
+    activeWorkspaceId: 'app',
     server: { port: 8787, mcpPath: '/mcp' },
     auth: { mode: 'oauth' },
     connection: { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' }
@@ -169,10 +180,12 @@ test('writes host context through the shared locked atomic store without replaci
   writeExtensionConfig(file, {
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
+    activeWorkspaceId: 'background-window',
     hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   });
   const config = readExtensionConfig(file);
   assert.equal(config.instanceId, 'one');
+  assert.equal(config.activeWorkspaceId, 'app');
   assert.deepEqual(config.auth, { mode: 'oauth' });
   assert.deepEqual(config.connection, { provider: 'external', publicUrl: 'https://current.example.com', lastPreflightAt: 'current' });
   assert.deepEqual(config.hostContexts.vscode, { capturedAt: 'now' });
@@ -198,13 +211,11 @@ test('VS Code config boundary rejects unsupported instance fields instead of pre
 test('rejects malformed and future configuration without replacement', () => {
   const malformed = tempFile();
   fs.writeFileSync(malformed, '{broken', 'utf8');
-  assert.throws(() => writeExtensionConfig(malformed, { version: SUPPORTED_CONFIG_VERSION }),
-    error => error.code === 'config_invalid_json');
+  assert.throws(() => writeExtensionConfig(malformed, { version: SUPPORTED_CONFIG_VERSION }), error => error.code === 'config_invalid_json');
 
   const future = tempFile();
   const original = `${JSON.stringify({ version: SUPPORTED_CONFIG_VERSION + 1 })}\n`;
   fs.writeFileSync(future, original, 'utf8');
-  assert.throws(() => writeExtensionConfig(future, { version: SUPPORTED_CONFIG_VERSION }),
-    error => error.code === 'unsupported_config_version');
+  assert.throws(() => writeExtensionConfig(future, { version: SUPPORTED_CONFIG_VERSION }), error => error.code === 'unsupported_config_version');
   assert.equal(fs.readFileSync(future, 'utf8'), original);
 });

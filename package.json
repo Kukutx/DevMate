@@ -249,7 +249,7 @@
           "minimum": 0,
           "maximum": 100,
           "scope": "machine",
-          "description": "Maximum automatic public connection restarts after unexpected exits."
+          "description": "Maximum automatic public connection restarts after unexpected exit."
         },
         "devMate.autoCopyUrl": {
           "type": "boolean",
@@ -264,6 +264,7 @@
         "devMate.authenticationMode": {
           "type": "string",
           "default": "none",
+          "scope": "machine",
           "enum": [
             "none",
             "oauth"
@@ -273,6 +274,7 @@
         "devMate.permissionProfile": {
           "type": "string",
           "default": "fullAccess",
+          "scope": "machine",
           "enum": [
             "readOnly",
             "balanced",
@@ -283,16 +285,19 @@
         "devMate.blockDangerousOperations": {
           "type": "boolean",
           "default": true,
+          "scope": "machine",
           "description": "Block recognized destructive shell and Git patterns in balanced mode. fullAccess intentionally bypasses this guard and should be treated as trusted execution."
         },
         "devMate.confirmBeforePush": {
           "type": "boolean",
           "default": false,
+          "scope": "machine",
           "description": "Require confirmation before Git push."
         },
         "devMate.allowDirectoryMutations": {
           "type": "boolean",
           "default": false,
+          "scope": "machine",
           "description": "Allow directory move/delete operations."
         },
         "devMate.defaultCommandTimeoutMs": {

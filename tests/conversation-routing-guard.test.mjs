@@ -29,14 +29,14 @@ function workspaceConfig() {
   };
 }
 
-test('unbound ChatGPT project tools keep the current VS Code workspace as the default', () => {
+test('unbound ChatGPT project tools keep the current VS Code workspace as the first default candidate', () => {
   const config = workspaceConfig();
   const decision = routingTest.routeDecision(config, scope, 'run_command', {});
   assert.equal(decision.kind, 'pass');
   assert.deepEqual(decision.args, {});
 });
 
-test('implicit default follows host workspace changes instead of pinning the conversation', () => {
+test('implicit default remains sticky after other hosts change activeWorkspaceId', () => {
   const config = workspaceConfig();
   bindConversationWorkspaceToWorkspace(config, scope, config.workspaces[0], { source: 'default' });
 
@@ -47,9 +47,10 @@ test('implicit default follows host workspace changes instead of pinning the con
 
   config.activeWorkspaceId = 'app';
 
-  assert.equal(conversationWorkspace(config, scope).id, 'app');
-  assert.equal(publicConversationWorkspaceBinding(config, scope).workspaceId, 'app');
+  assert.equal(conversationWorkspace(config, scope).id, 'crew');
+  assert.equal(publicConversationWorkspaceBinding(config, scope).workspaceId, 'crew');
   assert.equal(conversationWorkspaceBinding(config, scope).workspaceId, 'crew');
+  assert.equal(conversationWorkspace(config, scope).conversationDefault, true);
 });
 
 test('an explicit selector replaces an unbound or implicit default route', () => {

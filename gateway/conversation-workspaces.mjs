@@ -185,26 +185,13 @@ export function explicitConversationWorkspaceBinding(config, scope = requestConv
 export function publicConversationWorkspaceBinding(config, scope = requestConversationScope()) {
   const binding = conversationWorkspaceBinding(config, scope);
   if (!binding) return null;
-  if (implicitBindingSource(binding.source)) {
-    const active = defaultConfiguredWorkspace(config);
-    if (active) {
-      return {
-        workspaceId: active.id,
-        name: active.name,
-        root: workspaceRoot(active),
-        mode: active.mode || (active.reference ? 'readonly' : 'workspace-write'),
-        source: binding.source,
-        implicit: true
-      };
-    }
-  }
   return {
     workspaceId: binding.workspaceId,
     name: binding.name,
     root: binding.root,
     mode: binding.mode,
     source: binding.source,
-    implicit: false
+    implicit: implicitBindingSource(binding.source)
   };
 }
 
@@ -212,22 +199,16 @@ export function conversationWorkspace(config, scope = requestConversationScope()
   const binding = conversationWorkspaceBinding(config, scope);
   if (!binding) return null;
 
-  // Product contract: source=auto/default is not a pinned ChatGPT project.
-  // It means "follow the host default until the user explicitly selects a project".
-  // Therefore an implicit binding resolves dynamically to the current writable
-  // VS Code/Obsidian workspace and may never trap the conversation on an old host root.
-  if (implicitBindingSource(binding.source)) {
-    const active = defaultConfiguredWorkspace(config);
-    if (!active) return null;
-    return {
-      ...active,
-      conversationBound: false,
-      conversationDefault: true,
-      conversationScope: binding.scope
-    };
-  }
-
-  return workspaceFromBinding(config, binding);
+  // A default/auto selection is sticky once a ChatGPT conversation first uses
+  // a project. Other VS Code/Obsidian windows may continue updating the shared
+  // activeWorkspaceId as an ephemeral UI hint, but they can no longer reroute
+  // an existing conversation. Passing an explicit selector is still allowed to
+  // replace an implicit binding, and workspace_bind remains the deliberate way
+  // to switch an explicitly bound conversation.
+  const workspace = workspaceFromBinding(config, binding);
+  return implicitBindingSource(binding.source)
+    ? { ...workspace, conversationDefault: true }
+    : workspace;
 }
 
 export function explicitConversationWorkspace(config, scope = requestConversationScope()) {

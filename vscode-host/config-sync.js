@@ -21,21 +21,6 @@ function has(value, key) {
   return Object.hasOwn(value, key);
 }
 
-function mergeWorkspaces(candidate, current) {
-  const requested = (Array.isArray(candidate) ? candidate : []).filter(item =>
-    item?.trusted !== true && item?.role !== 'trusted'
-  );
-  const trusted = (Array.isArray(current) ? current : []).filter(item =>
-    item?.trusted === true || item?.role === 'trusted'
-  );
-  const output = [...requested];
-  const ids = new Set(output.map(item => item?.id).filter(Boolean));
-  for (const workspace of trusted) {
-    if (!ids.has(workspace.id)) output.push(workspace);
-  }
-  return output;
-}
-
 function workspacePathKey(value) {
   const resolved = path.resolve(String(value || '.'));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -43,6 +28,26 @@ function workspacePathKey(value) {
 
 function sameWorkspacePath(left, right) {
   return !!left && !!right && workspacePathKey(left) === workspacePathKey(right);
+}
+
+function mergeWorkspaces(candidate, current) {
+  const requested = (Array.isArray(candidate) ? candidate : []).filter(item =>
+    item && item.trusted !== true && item.role !== 'trusted'
+  );
+  const retainedWritable = (Array.isArray(current) ? current : []).filter(item =>
+    item && (item.trusted === true || item.role === 'trusted' || (!item.reference && item.mode !== 'readonly'))
+  );
+  const output = [...requested];
+  const ids = new Set(output.map(item => item?.id).filter(Boolean));
+  const roots = new Set(output.map(item => item?.root).filter(Boolean).map(workspacePathKey));
+  for (const workspace of retainedWritable) {
+    const rootKey = workspace?.root ? workspacePathKey(workspace.root) : '';
+    if (ids.has(workspace.id) || (rootKey && roots.has(rootKey))) continue;
+    output.push(workspace);
+    if (workspace.id) ids.add(workspace.id);
+    if (rootKey) roots.add(rootKey);
+  }
+  return output;
 }
 
 function workspaceIdForRoot(root) {
@@ -66,7 +71,6 @@ function syncCurrentWorkspace(candidate, root) {
   let id = String(existing?.id || workspaceIdForRoot(workspaceRoot));
   if (retained.some(item => item?.id === id)) id = uniqueWorkspaceId(retained, workspaceIdForRoot(workspaceRoot));
   const { trusted: _trusted, ...currentWorkspace } = existing || {};
-  candidate.activeWorkspaceId = id;
   candidate.workspaces = [
     {
       ...currentWorkspace,
@@ -75,7 +79,7 @@ function syncCurrentWorkspace(candidate, root) {
       root: workspaceRoot,
       mode: 'workspace-write',
       reference: false,
-      role: 'active'
+      role: id === candidate.activeWorkspaceId ? 'active' : 'workspace'
     },
     ...retained
   ];
@@ -120,12 +124,10 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   assertSupportedInstanceShape(candidate);
 
   const merged = { ...current };
-  for (const key of [
-    'appVersion', 'permissions', 'maintenance', 'commands',
-    'activeWorkspaceId'
-  ]) {
+  for (const key of ['appVersion', 'maintenance', 'commands']) {
     if (has(candidate, key)) merged[key] = candidate[key];
   }
+  if (initializing && has(candidate, 'activeWorkspaceId')) merged.activeWorkspaceId = candidate.activeWorkspaceId;
 
   merged.version = SUPPORTED_CONFIG_VERSION;
   merged.instanceId = has(current, 'instanceId') ? current.instanceId : candidate.instanceId;
@@ -144,17 +146,14 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     if (has(candidateRuntime, key)) merged.runtime[key] = candidateRuntime[key];
   }
 
-  if (has(candidate, 'workspaces')) {
-    merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
-  } else if (has(current, 'workspaces')) {
-    merged.workspaces = current.workspaces;
-  }
+  if (has(candidate, 'workspaces')) merged.workspaces = mergeWorkspaces(candidate.workspaces, current.workspaces);
+  else if (has(current, 'workspaces')) merged.workspaces = current.workspaces;
 
   for (const key of [
-    'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
+    'activeWorkspaceId', 'permissions', 'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
     'jobs', 'runnerControl', 'trustedWritableRoots'
   ]) {
-    preserveCurrentObject(merged, current, key);
+    if (!initializing || key !== 'activeWorkspaceId') preserveCurrentObject(merged, current, key);
   }
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {

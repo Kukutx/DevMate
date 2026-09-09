@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { RuntimeController } = require('../host/runtime-controller.js');
+const { RuntimeController, DETACHED_DESKTOP_LAUNCH_MODE } = require('../host/runtime-controller.js');
 const { MINIMUM_NODE_MAJOR, nodeMajor, resolveNodeRuntime } = require('../host/runtime/node-runtime.js');
 const { updateConfig } = require('../shared/config-store.cjs');
 const { configureAuthentication } = require('../shared/auth-config.cjs');
@@ -104,9 +104,9 @@ try {
 
   const first = await controller.start({ timeoutMs: 15000 });
   assert.equal(first.started, true);
-  assert.equal(controller.lastLaunch?.mode, 'child_process');
+  assert.equal(controller.lastLaunch?.mode, DETACHED_DESKTOP_LAUNCH_MODE);
   const firstLock = JSON.parse(fs.readFileSync(instanceLock, 'utf8'));
-  assert.equal(firstLock.launchMode, 'child_process');
+  assert.equal(firstLock.launchMode, DETACHED_DESKTOP_LAUNCH_MODE);
   assert.ok(Number(firstLock.pid) > 0);
   assert.notEqual(firstLock.pid, process.pid);
 
@@ -117,12 +117,14 @@ try {
   const second = await controller.start({ timeoutMs: 15000 });
   assert.equal(second.started, true);
   assert.equal(second.port, first.port);
-  assert.equal(controller.lastLaunch?.mode, 'child_process');
+  assert.equal(controller.lastLaunch?.mode, DETACHED_DESKTOP_LAUNCH_MODE);
+  const secondLock = JSON.parse(fs.readFileSync(instanceLock, 'utf8'));
+  assert.equal(secondLock.launchMode, DETACHED_DESKTOP_LAUNCH_MODE);
   const secondStop = await controller.stop();
   assert.equal(secondStop.stopped, true);
   assert.equal(fs.existsSync(instanceLock), false, `Gateway instance lock remained after restart stop: ${instanceLock}`);
 
-  console.log(`Obsidian child-process + provider-native MCP 2026 bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
+  console.log(`Obsidian detached child-process + provider-native MCP 2026 bundle smoke passed on port ${first.port} with Node ${nodeRuntime.nodeVersion}.`);
 } finally {
   await controller.dispose({ stopOwned: true }).catch(() => {});
   fs.rmSync(temporaryRoot, { recursive: true, force: true });

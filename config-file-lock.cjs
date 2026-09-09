@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_STALE_MS = 60000;
@@ -23,6 +24,25 @@ function processAlive(pid) {
   } catch (error) {
     return error?.code === 'EPERM';
   }
+}
+
+function canonicalLockTarget(file) {
+  const resolved = path.resolve(String(file || ''));
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    const parent = path.dirname(resolved);
+    try {
+      return path.join(fs.realpathSync.native(parent), path.basename(resolved));
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+function lockIdentity(target) {
+  const value = String(target || '');
+  return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 function readLockState(lockPath) {
@@ -76,15 +96,17 @@ function removeStaleLock(lockPath, staleMs) {
 }
 
 function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAULT_STALE_MS } = {}) {
-  const lockPath = `${file}.lock`;
-  const existing = held.get(lockPath);
+  const target = canonicalLockTarget(file);
+  const identity = lockIdentity(target);
+  const lockPath = `${target}.lock`;
+  const existing = held.get(identity);
   if (existing) {
     existing.depth += 1;
     return { ...existing, reentrant: true };
   }
   const deadline = Date.now() + Math.max(100, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   const token = crypto.randomBytes(16).toString('hex');
-  const payload = { token, pid: process.pid, acquiredAt: new Date().toISOString(), file };
+  const payload = { token, pid: process.pid, acquiredAt: new Date().toISOString(), file: target };
   while (Date.now() <= deadline) {
     try {
       const fd = fs.openSync(lockPath, 'wx', 0o600);
@@ -94,8 +116,8 @@ function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAU
       } finally {
         fs.closeSync(fd);
       }
-      const record = { lockPath, token, pid: process.pid, acquiredAt: payload.acquiredAt, depth: 1 };
-      held.set(lockPath, record);
+      const record = { identity, lockPath, token, pid: process.pid, acquiredAt: payload.acquiredAt, depth: 1 };
+      held.set(identity, record);
       return { ...record, reentrant: false };
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
@@ -110,11 +132,12 @@ function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAU
 }
 
 function releaseFileLock(lock) {
-  const current = held.get(lock.lockPath);
+  const identity = String(lock?.identity || lockIdentity(String(lock?.lockPath || '').replace(/\.lock$/, '')));
+  const current = held.get(identity);
   if (!current || current.token !== lock.token) return false;
   current.depth -= 1;
   if (current.depth > 0) return true;
-  held.delete(lock.lockPath);
+  held.delete(identity);
   const persisted = readLock(lock.lockPath);
   if (persisted?.token !== lock.token || Number(persisted?.pid) !== process.pid) return false;
   try { fs.rmSync(lock.lockPath, { force: true }); return true; }
@@ -124,8 +147,15 @@ function releaseFileLock(lock) {
 function withFileLockSync(file, fn, options) {
   if (typeof fn !== 'function') throw new TypeError('File lock callback must be a function');
   const lock = acquireFileLock(file, options);
-  try { return fn(lock); }
-  finally { releaseFileLock(lock); }
+  try {
+    const result = fn(lock);
+    if (result && typeof result.then === 'function') {
+      throw new TypeError('File lock callback must be synchronous');
+    }
+    return result;
+  } finally {
+    releaseFileLock(lock);
+  }
 }
 
 function clearFileLocksForTests() {
@@ -140,7 +170,9 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   MAX_LOCK_BYTES,
   acquireFileLock,
+  canonicalLockTarget,
   clearFileLocksForTests,
+  lockIdentity,
   processAlive,
   readLock,
   readLockState,

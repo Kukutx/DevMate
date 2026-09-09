@@ -37,7 +37,19 @@ const AUDIT_LOG = STATE_ROOT ? path.join(STATE_ROOT, 'audit.jsonl') : '';
 const FILE_TRANSACTION_ROOT = STATE_ROOT ? path.join(STATE_ROOT, 'file-transactions') : '';
 const SHUTDOWN_HEALTH = STATE_ROOT ? path.join(STATE_ROOT, 'shutdown-health.json') : '';
 const DESKTOP_LIFECYCLE_FENCE = process.env.DEVMATE_DESKTOP_LIFECYCLE_FENCE === '1';
+const DETACHED_DESKTOP_RUNTIME = process.env.DEVMATE_RUNTIME_LAUNCH_MODE === 'desktop-detached';
 const LIFECYCLE_WATCH_MS = 500;
+const LIFECYCLE_CONFIG_FAILURE_GRACE_MS = 5000;
+
+function ignoreDetachedPipeError(stream) {
+  if (!DETACHED_DESKTOP_RUNTIME || !stream?.on) return;
+  stream.on('error', error => {
+    if (error?.code !== 'EPIPE' && error?.code !== 'ERR_STREAM_DESTROYED') return;
+  });
+}
+
+ignoreDetachedPipeError(process.stdout);
+ignoreDetachedPipeError(process.stderr);
 
 beginStartupProgress('runtime_config');
 
@@ -156,6 +168,7 @@ try {
   }
 
   let lifecycleWatch = null;
+  let lifecycleConfigFailureSince = 0;
   let shutdownPromise = null;
   async function shutdown(reason = '') {
     if (shutdownPromise) return shutdownPromise;
@@ -215,7 +228,13 @@ try {
   });
 
   if (typeof process.send === 'function') {
-    process.once('disconnect', () => shutdownAndExit('parent-disconnect'));
+    process.once('disconnect', () => {
+      if (DETACHED_DESKTOP_RUNTIME && DESKTOP_LIFECYCLE_FENCE) {
+        console.error('DevMate desktop host disconnected; detached Gateway remains governed by shared lifecycle.');
+        return;
+      }
+      shutdownAndExit('parent-disconnect');
+    });
     process.on('message', message => {
       if (message?.type !== 'devmate:shutdown') return;
       const expectedOwner = String(process.env.DEVMATE_RUNTIME_OWNER_ID || '');
@@ -245,10 +264,17 @@ try {
     lifecycleWatch = setInterval(() => {
       if (shutdownPromise) return;
       try {
-        if (readConfig().lifecycle?.desiredState !== 'running') shutdownAndExit('lifecycle-stopped');
+        const config = readConfig();
+        lifecycleConfigFailureSince = 0;
+        if (config.lifecycle?.desiredState !== 'running') shutdownAndExit('lifecycle-stopped');
       } catch (error) {
-        console.error(`DevMate lifecycle config became unavailable: ${error?.message || error}`);
-        shutdownAndExit('lifecycle-config-unavailable');
+        const now = Date.now();
+        if (!lifecycleConfigFailureSince) lifecycleConfigFailureSince = now;
+        const unavailableForMs = now - lifecycleConfigFailureSince;
+        console.error(`DevMate lifecycle config read failed (${unavailableForMs}ms): ${error?.message || error}`);
+        if (unavailableForMs >= LIFECYCLE_CONFIG_FAILURE_GRACE_MS) {
+          shutdownAndExit('lifecycle-config-unavailable');
+        }
       }
     }, LIFECYCLE_WATCH_MS);
     lifecycleWatch.unref?.();
@@ -274,3 +300,9 @@ try {
 } finally {
   httpBootstrap?.restore();
 }
+
+export const __test = {
+  DETACHED_DESKTOP_RUNTIME,
+  LIFECYCLE_CONFIG_FAILURE_GRACE_MS,
+  LIFECYCLE_WATCH_MS
+};

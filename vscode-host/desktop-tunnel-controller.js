@@ -6,6 +6,12 @@ const { withConnectionMutationLease } = require('./connection-mutation-lease.js'
 const { TunnelController } = require('./tunnel-controller.js');
 
 const DEFAULT_LIFECYCLE_WATCH_MS = 500;
+const SUPERVISOR_HANDOFF_TIMEOUT_MS = 2000;
+const REMOTE_STOP_WAIT_MS = 8000;
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, Math.max(1, Number(ms) || 1)));
+}
 
 function lifecycleStoppedError(intent = null) {
   const error = new Error('Desktop public connection is stopped by the shared DevMate lifecycle');
@@ -25,6 +31,29 @@ class DesktopTunnelController extends TunnelController {
     );
     this.lifecycleWatch = null;
     this.lifecycleCleanup = null;
+
+    // The supervisor receives enough bounded shared-state metadata to become
+    // the lease/lifecycle owner before this VS Code host disconnects. The real
+    // provider spawn options deliberately do not include this private field.
+    const delegate = this.childProcess;
+    this.childProcess = {
+      spawnSync: delegate.spawnSync.bind(delegate),
+      spawn: (command, args = [], spawnOptions = {}) => {
+        const match = this.match(this.port);
+        return delegate.spawn(command, args, {
+          ...spawnOptions,
+          devMateSupervisor: {
+            stateDirectory: this.stateDirectory,
+            ownerId: this.ownerId,
+            hostId: this.hostId,
+            port: match.port,
+            provider: match.provider,
+            configurationKey: match.configurationKey,
+            leaseMs: this.runtimeLeaseMs
+          }
+        });
+      }
+    };
   }
 
   lifecycleIntent() {
@@ -92,21 +121,129 @@ class DesktopTunnelController extends TunnelController {
     });
   }
 
+  async waitForRemoteLifecycleStop(result, timeoutMs = REMOTE_STOP_WAIT_MS) {
+    let intent;
+    try { intent = this.lifecycleIntent(); }
+    catch { return result; }
+    if (intent.desiredState !== 'stopped') return result;
+    const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || REMOTE_STOP_WAIT_MS);
+    while (Date.now() <= deadline) {
+      try {
+        const record = this.store.read();
+        if (!record) {
+          return { stopped: true, detached: false, reason: 'stopped-by-shared-lifecycle', publicUrl: result?.publicUrl || '' };
+        }
+      } catch (error) {
+        if (error?.code !== 'DEVMATE_TUNNEL_SUPERVISOR_CLEANUP_PENDING') throw error;
+      }
+      await delay(100);
+    }
+    return { ...result, reason: 'shared-lifecycle-stop-timeout' };
+  }
+
   async stop() {
     this.stopLifecycleWatch();
     if (this.lifecycleCleanup) await this.lifecycleCleanup.catch(() => null);
-    return super.stop();
+    const result = await super.stop();
+    if (result?.stopped === false && result?.reason === 'managed-by-another-host') {
+      return this.waitForRemoteLifecycleStop(result);
+    }
+    return result;
   }
 
-  async dispose(options = {}) {
+  async handoffSupervisor(child, ownerId, timeoutMs = SUPERVISOR_HANDOFF_TIMEOUT_MS) {
+    if (!child?.devMateSupervised || !child?.devMateHandoffCapable || !child.connected || typeof child.send !== 'function') return false;
+    return new Promise(resolve => {
+      let settled = false;
+      let timer = null;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        child.off?.('message', onMessage);
+        resolve(value);
+      };
+      const onMessage = message => {
+        if (message?.type !== 'devmate:provider-handoff-ready') return;
+        if (String(message.ownerId || '') !== String(ownerId || '')) return;
+        finish(true);
+      };
+      child.on?.('message', onMessage);
+      timer = setTimeout(() => finish(false), Math.max(250, Number(timeoutMs) || SUPERVISOR_HANDOFF_TIMEOUT_MS));
+      try {
+        child.send({ type: 'devmate:provider-handoff' }, error => {
+          if (error) finish(false);
+        });
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
+  async detachForHostHandoff() {
+    this.stopLifecycleWatch();
     if (this.lifecycleCleanup) await this.lifecycleCleanup.catch(() => null);
-    const result = await super.dispose(options);
+    const child = this.child;
+    const ownerId = this.ownerId;
+
+    if (child && child.devMateSupervised === true && child.devMateHandoffCapable === true && ownerId) {
+      // Stop the parent heartbeat before requesting the supervisor write, or the
+      // parent could race the ACK and restore its soon-to-die hostPid.
+      this.stopHeartbeat();
+      const confirmed = await this.handoffSupervisor(child, ownerId);
+      if (!confirmed) {
+        this.startHeartbeat();
+        return { disposed: false, reason: 'supervisor-handoff-unconfirmed' };
+      }
+      let record = null;
+      try { record = this.store.read({ includeStale: true }); } catch {}
+      if (!record || record.ownerId !== ownerId || Number(record.hostPid) !== Number(child.pid) || record.childKind !== 'supervisor') {
+        this.startHeartbeat();
+        return { disposed: false, reason: 'supervisor-ownership-not-persisted' };
+      }
+
+      this.child = null;
+      this.childReady = false;
+      this.clearLocalOwnership(ownerId);
+      try { if (child.connected) child.disconnect(); } catch {}
+      try { child.unref?.(); } catch {}
+      this.disposed = true;
+      return {
+        disposed: true,
+        detached: true,
+        stop: { stopped: false, detached: true, reason: 'host-detached', publicUrl: record.publicUrl || '' }
+      };
+    }
+
+    // Borrowed/external providers are not owned process trees. Removing the
+    // local shared record does not terminate their public endpoint and prevents
+    // the dead host PID from poisoning later attachment.
+    if (!child && ownerId) {
+      await super.stop().catch(() => null);
+      this.stopHeartbeat();
+      this.disposed = true;
+      return { disposed: true, detached: true, stop: { stopped: false, detached: true, reason: 'host-detached-nonowned-provider' } };
+    }
+
+    if (!child) {
+      this.stopHeartbeat();
+      this.disposed = true;
+      return { disposed: true, detached: true, stop: { stopped: false, detached: true, reason: 'host-detached-attached-provider' } };
+    }
+
+    // A custom/legacy unsupervised child has no independent lifecycle fence;
+    // fail closed instead of orphaning a provider that cannot clean itself up.
+    return super.dispose();
+  }
+
+  async dispose({ stopOwned = true } = {}) {
+    if (this.disposed) return { disposed: true, alreadyDisposed: true };
+    if (!stopOwned) return this.detachForHostHandoff();
+    if (this.lifecycleCleanup) await this.lifecycleCleanup.catch(() => null);
+    const result = await super.dispose();
     if (result?.disposed === true) {
       this.stopLifecycleWatch();
     } else {
-      // A clean host detach may deliberately leave an owned shared provider alive
-      // until another host adopts it or this process exits. Keep the lifecycle
-      // fence active so a remote explicit Stop still converges immediately.
       try {
         if (this.lifecycleIntent().desiredState === 'running') this.startLifecycleWatch();
       } catch {}
@@ -130,6 +267,8 @@ class DesktopTunnelController extends TunnelController {
 
 module.exports = {
   DEFAULT_LIFECYCLE_WATCH_MS,
+  REMOTE_STOP_WAIT_MS,
+  SUPERVISOR_HANDOFF_TIMEOUT_MS,
   DesktopTunnelController,
   lifecycleStoppedError
 };

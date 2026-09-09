@@ -8,7 +8,9 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   acquireFileLock,
+  canonicalLockTarget,
   clearFileLocksForTests,
+  lockIdentity,
   readLock,
   releaseFileLock,
   staleLock,
@@ -39,11 +41,7 @@ test('recovers dead lock records immediately', async t => {
   const file = path.join(directory, 'config.json');
   const lockPath = `${file}.lock`;
   await fsp.writeFile(file, '{}\n');
-  await fsp.writeFile(lockPath, JSON.stringify({
-    token: 'stale',
-    pid: 2147483647,
-    acquiredAt: new Date(Date.now() - 120000).toISOString()
-  }));
+  await fsp.writeFile(lockPath, JSON.stringify({ token: 'stale', pid: 2147483647, acquiredAt: new Date(Date.now() - 120000).toISOString() }));
   const acquired = acquireFileLock(file, { timeoutMs: 500, staleMs: 1000 });
   assert.notEqual(acquired.token, 'stale');
   assert.equal(releaseFileLock(acquired), true);
@@ -57,11 +55,7 @@ test('does not remove a fresh live lock owned by another token', async t => {
   const file = path.join(directory, 'config.json');
   const lockPath = `${file}.lock`;
   await fsp.writeFile(file, '{}\n');
-  await fsp.writeFile(lockPath, JSON.stringify({
-    token: 'other',
-    pid: process.pid,
-    acquiredAt: new Date().toISOString()
-  }));
+  await fsp.writeFile(lockPath, JSON.stringify({ token: 'other', pid: process.pid, acquiredAt: new Date().toISOString() }));
   assert.equal(staleLock(readLock(lockPath), 60000), false);
   assert.throws(() => acquireFileLock(file, { timeoutMs: 100, staleMs: 60000 }), error => {
     assert.equal(error.code, 'file_lock_timeout');
@@ -99,4 +93,63 @@ test('recovers an old unreadable lock only after the stale threshold', async t =
   assert.equal(releaseFileLock(acquired), true);
   assert.equal(fs.existsSync(lockPath), false);
   assert.equal(fs.readdirSync(directory).some(name => name.includes('.lock.stale-')), false);
+});
+
+test('relative and dot-segment paths share the same reentrant lock', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-lock-alias-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  await fsp.writeFile(file, '{}\n');
+  const aliases = [path.relative(process.cwd(), file), directory + path.sep + '.' + path.sep + 'config.json'];
+  withFileLockSync(file, first => {
+    for (const alias of aliases) {
+      withFileLockSync(alias, nested => {
+        assert.equal(nested.reentrant, true);
+        assert.equal(nested.token, first.token);
+        assert.equal(nested.lockPath, first.lockPath);
+      }, { timeoutMs: 100 });
+      assert.equal(fs.existsSync(first.lockPath), true);
+    }
+  });
+  assert.equal(fs.existsSync(file + '.lock'), false);
+});
+
+test('symlinked parent aliases resolve to one reentrant lock identity', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-lock-symlink-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const realDirectory = path.join(directory, 'real');
+  const aliasDirectory = path.join(directory, 'alias');
+  await fsp.mkdir(realDirectory);
+  try {
+    await fsp.symlink(realDirectory, aliasDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    t.skip(`symlink/junction unavailable: ${error.code || error.message}`);
+    return;
+  }
+  const file = path.join(realDirectory, 'config.json');
+  const alias = path.join(aliasDirectory, 'config.json');
+  await fsp.writeFile(file, '{}\n');
+  assert.equal(canonicalLockTarget(alias), canonicalLockTarget(file));
+  withFileLockSync(file, first => {
+    withFileLockSync(alias, nested => {
+      assert.equal(nested.reentrant, true);
+      assert.equal(nested.token, first.token);
+      assert.equal(nested.identity, first.identity);
+    }, { timeoutMs: 100 });
+  });
+});
+
+test('Windows lock identity normalizes case without changing the physical canonical target', () => {
+  const target = path.resolve('MixedCase', 'config.json');
+  if (process.platform === 'win32') assert.equal(lockIdentity(target), target.toLowerCase());
+  else assert.equal(lockIdentity(target), target);
+});
+
+test('synchronous lock callbacks reject thenables and release the lock on error', async t => {
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-lock-async-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  assert.throws(() => withFileLockSync(file, () => Promise.resolve('later')), /must be synchronous/);
+  assert.equal(fs.existsSync(file + '.lock'), false);
+  assert.equal(withFileLockSync(file, () => 'next'), 'next');
 });
