@@ -120,6 +120,15 @@ function writeManagedHeartbeat() {
   return true;
 }
 
+function acknowledgeManagedHandoff() {
+  if (!control || !store || shuttingDown) return false;
+  writeManagedHeartbeat();
+  try {
+    if (process.connected) process.send?.({ type: 'devmate:provider-handoff-ready', ownerId: control.ownerId, pid: process.pid });
+  } catch {}
+  return true;
+}
+
 function releaseManagedRecord() {
   if (!control || !store) return false;
   try { writeManagedHeartbeat(); } catch {}
@@ -251,6 +260,15 @@ process.on('message', message => {
     void shutdown('parent-stop', 0);
     return;
   }
+  if (message?.type === 'devmate:provider-handoff') {
+    try {
+      if (!acknowledgeManagedHandoff()) throw new Error('Managed provider handoff is unavailable');
+    } catch (error) {
+      fail(`provider handoff failed: ${error?.message || error}`);
+      void shutdown('handoff-failed', 1);
+    }
+    return;
+  }
   try {
     launch(message);
     if (started) clearTimeout(startTimer);
@@ -274,6 +292,7 @@ process.once('SIGTERM', () => { void shutdown('SIGTERM', 0); });
 module.exports = {
   MANAGED_CONFIG_FAILURE_GRACE_MS,
   MANAGED_WATCH_MS,
+  acknowledgeManagedHandoff,
   cleanControl,
   cleanOptions,
   validateStartMessage
