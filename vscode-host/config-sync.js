@@ -13,6 +13,12 @@ const { withFileLockSync } = require('../config-file-lock.cjs');
 const { assertSupportedInstanceShape } = require('../shared/instance-config.cjs');
 const { normalizeAuthentication } = require('../shared/auth-config.cjs');
 
+const HOST_REGISTRY_RUNTIME_FIELDS = Object.freeze([
+  'focusedHostId',
+  'lastInteractiveHostId',
+  'lastInteractiveAt'
+]);
+
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -114,6 +120,17 @@ function mergeHostContexts(currentValue, candidateValue, { refreshHostId = '' } 
   return merged;
 }
 
+function mergeHostRuntime(currentValue, candidateValue) {
+  const current = object(currentValue);
+  const candidate = object(candidateValue);
+  const merged = { ...current };
+  for (const key of HOST_REGISTRY_RUNTIME_FIELDS) {
+    if (has(candidate, key)) merged[key] = candidate[key];
+    else delete merged[key];
+  }
+  return merged;
+}
+
 function mergeExtensionConfig(currentValue, candidateValue) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
@@ -150,11 +167,12 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   else if (has(current, 'workspaces')) merged.workspaces = current.workspaces;
 
   for (const key of [
-    'activeWorkspaceId', 'permissions', 'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
+    'activeWorkspaceId', 'permissions', 'connection', 'team', 'requestPolicy', 'plugins',
     'jobs', 'runnerControl', 'trustedWritableRoots'
   ]) {
     if (!initializing || key !== 'activeWorkspaceId') preserveCurrentObject(merged, current, key);
   }
+  merged.hostRuntime = mergeHostRuntime(current.hostRuntime, candidate.hostRuntime);
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
     const refreshHostId = has(candidate, 'activeHostId') && candidate.activeHostId !== current.activeHostId
@@ -163,6 +181,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, { refreshHostId });
   }
   if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
+  else delete merged.activeHostId;
   delete merged.vscodeContext;
   return merged;
 }
@@ -197,8 +216,10 @@ function writeExtensionConfig(file, candidate) {
 }
 
 module.exports = {
+  HOST_REGISTRY_RUNTIME_FIELDS,
   mergeExtensionConfig,
   mergeHostContexts,
+  mergeHostRuntime,
   mergeWorkspaces,
   readExtensionConfig,
   syncCurrentWorkspace,
