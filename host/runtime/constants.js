@@ -5,11 +5,11 @@ const {
   MAX_CONFIG_BYTES,
   SUPPORTED_CONFIG_VERSION
 } = require('../../shared/config-store.cjs');
+const { MAX_HOST_CONTEXT_CHARS } = require('../../shared/host-registry.cjs');
 const { DEFAULT_PORT } = require('../../shared/port.cjs');
 
 const DEFAULT_VERSION = packageJson.version;
 const DEFAULT_START_TIMEOUT_MS = 15000;
-const MAX_HOST_CONTEXT_CHARS = 200000;
 
 module.exports = {
   DEFAULT_PORT,
