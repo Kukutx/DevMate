@@ -2,6 +2,7 @@
 
 const DEFAULT_DEAD_HOST_GRACE_MS = 30000;
 const DEFAULT_STALE_HOST_MS = 10 * 60 * 1000;
+const HOST_CONTEXT_PUBLISHER = Symbol.for('devmate.hostContextPublisher');
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -32,6 +33,19 @@ function hostEntries(config) {
 
 function selectionExists(config, hostId) {
   return !!hostId && !!object(config?.hostContexts)[hostId];
+}
+
+function markPublisher(config, hostId) {
+  Object.defineProperty(config, HOST_CONTEXT_PUBLISHER, {
+    value: String(hostId || ''),
+    enumerable: false,
+    configurable: true,
+    writable: true
+  });
+}
+
+function publisherHostId(config) {
+  return String(config?.[HOST_CONTEXT_PUBLISHER] || '');
 }
 
 function repairSelection(config) {
@@ -97,6 +111,7 @@ function publishHostContext(config, hostId, context = {}, options = {}) {
     updatedAt: stamp
   };
   config.hostContexts[id] = next;
+  markPublisher(config, id);
 
   const focused = context.focused === true;
   const current = String(config.activeHostId || '');
@@ -141,11 +156,14 @@ function selectHostContext(config, hostId = '') {
 module.exports = {
   DEFAULT_DEAD_HOST_GRACE_MS,
   DEFAULT_STALE_HOST_MS,
+  HOST_CONTEXT_PUBLISHER,
   clearHostContext,
   hostEntries,
+  markPublisher,
   processAlive,
   pruneStaleHostContexts,
   publishHostContext,
+  publisherHostId,
   repairSelection,
   selectHostContext,
   timestampMs
