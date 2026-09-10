@@ -198,6 +198,7 @@
           "default": 8787,
           "minimum": 1024,
           "maximum": 65535,
+          "scope": "machine",
           "description": "Preferred internal loopback Gateway port. An existing shared Gateway port remains authoritative."
         },
         "devMate.ngrokCommandPath": {
@@ -310,57 +311,59 @@
           "default": 180000,
           "minimum": 1000,
           "maximum": 1800000,
-          "description": "Default command timeout."
+          "scope": "machine",
+          "description": "Default command timeout for the shared Gateway."
         },
         "devMate.maxOutputChars": {
           "type": "number",
           "default": 120000,
           "minimum": 1000,
           "maximum": 500000,
-          "description": "Maximum returned command output."
+          "scope": "machine",
+          "description": "Maximum returned command output for the shared Gateway."
         },
         "devMate.backupRetentionDays": {
           "type": "number",
           "default": 30,
           "minimum": 1,
           "maximum": 3650,
-          "description": "Backup retention period."
+          "scope": "machine",
+          "description": "Backup retention period for shared DevMate state."
         },
         "devMate.auditRetentionDays": {
           "type": "number",
           "default": 30,
           "minimum": 1,
           "maximum": 3650,
-          "description": "Audit retention period."
+          "scope": "machine",
+          "description": "Audit retention period for shared DevMate state."
         },
         "devMate.maxBackupBytes": {
           "type": "number",
           "default": 536870912,
           "minimum": 1048576,
           "maximum": 10737418240,
-          "description": "Maximum retained backup bytes."
+          "scope": "machine",
+          "description": "Maximum retained backup bytes in shared DevMate state."
         },
         "devMate.maxAuditBytes": {
           "type": "number",
           "default": 5242880,
           "minimum": 262144,
           "maximum": 104857600,
-          "description": "Maximum audit log bytes."
+          "scope": "machine",
+          "description": "Maximum audit log bytes in shared DevMate state."
         },
         "devMate.defaultStartCommand": {
           "type": "string",
           "default": "",
           "description": "Optional project command started after the local Gateway is ready."
         },
-        "devMate.publicHealthDetails": {
-          "type": "boolean",
-          "default": false,
-          "description": "Expose detailed public health information."
-        },
         "devMate.embeddedRunnerEnabled": {
           "type": "boolean",
           "default": false,
-          "description": "Enable the in-process durable Job runner for this VS Code host. Disabled by default; external Runners remain available."
+          "scope": "machine",
+          "description": "Enable the in-process durable Job runner for the machine-wide shared Gateway on its next Shared Runtime start. Disabled by default; external Runners remain available."
         }
       }
     }
