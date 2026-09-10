@@ -89,9 +89,9 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.addRibbonIcon('bot', 'Open DevMate', () => this.openView());
     this.addSettingTab(new DevMateSettingTab(this.app, this));
 
-    this.addCommand({ id: 'start', name: 'Start', callback: () => this.startRuntime() });
-    this.addCommand({ id: 'stop', name: 'Stop', callback: () => this.stopRuntime() });
-    this.addCommand({ id: 'restart', name: 'Restart', callback: () => this.restartRuntime() });
+    this.addCommand({ id: 'start', name: 'Start / activate Current Project', callback: () => this.startRuntime() });
+    this.addCommand({ id: 'stop', name: 'Stop shared runtime', callback: () => this.stopRuntime() });
+    this.addCommand({ id: 'restart', name: 'Restart shared runtime', callback: () => this.restartRuntime() });
     this.addCommand({ id: 'open', name: 'Open panel', callback: () => this.openView() });
     this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });
     this.addCommand({ id: 'copy-oauth-approval-code', name: 'Copy OAuth approval code', callback: () => this.copyOAuthApprovalCode() });
@@ -120,8 +120,8 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     await this.reconfigureRuntime({ startBridge: true, capture: true });
     if (this.settings.enabled) {
       const recoveryToken = lifecycleRecoveryToken(this.controller.configFile);
-      if (recoveryToken) await this.startRuntime({ quiet: true, recoveryToken });
-      else if (this.settings.autoStart) await this.startRuntime({ quiet: true });
+      if (recoveryToken) await this.startRuntime({ quiet: true, recoveryToken, activateWorkspace: false });
+      else if (this.settings.autoStart) await this.startRuntime({ quiet: true, activateWorkspace: false });
       else await this.refreshStatus();
     } else {
       await this.refreshStatus();
@@ -315,7 +315,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         });
       } catch (error) {
         if (recoveryToken && this.settings.enabled && !stopState.remoteOwner) {
-          try { await this.startRuntime({ quiet: true, recoveryToken }); }
+          try { await this.startRuntime({ quiet: true, recoveryToken, activateWorkspace: false }); }
           catch (recoveryError) {
             if (recoveryError?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED' && recoveryError?.code !== 'DEVMATE_TUNNEL_LIFECYCLE_STOPPED') {
               error.recoveryError = recoveryError?.message || String(recoveryError);
@@ -327,7 +327,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
       this.clearPublicVerification();
       if (recoveryToken && this.settings.enabled && !stopState.remoteOwner) {
-        try { await this.startRuntime({ quiet: true, recoveryToken }); }
+        try { await this.startRuntime({ quiet: true, recoveryToken, activateWorkspace: false }); }
         catch (error) {
           if (error?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED' && error?.code !== 'DEVMATE_TUNNEL_LIFECYCLE_STOPPED') throw error;
         }
@@ -375,7 +375,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       this.invalidateTunnelSecrets();
       this.clearPublicVerification();
       if (recoveryToken && this.settings.enabled && !stopState.remoteOwner) {
-        try { await this.startRuntime({ quiet: true, recoveryToken }); }
+        try { await this.startRuntime({ quiet: true, recoveryToken, activateWorkspace: false }); }
         catch (error) {
           if (error?.code !== 'DEVMATE_LIFECYCLE_RECOVERY_CANCELLED' && error?.code !== 'DEVMATE_TUNNEL_LIFECYCLE_STOPPED') throw error;
         }
@@ -743,7 +743,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       !this.recoveryPromise &&
       Date.now() >= this.recoveryNextAt
     ) {
-      this.recoveryPromise = this.startRuntime({ quiet: true, recoveryToken })
+      this.recoveryPromise = this.startRuntime({ quiet: true, recoveryToken, activateWorkspace: false })
         .then(result => {
           if (!result?.ok || !result?.mcpUrl || Number(result?.toolCount || 0) <= 0) {
             throw new Error(result?.error || 'DevMate recovery did not reach verified Ready state');
@@ -776,7 +776,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     });
   }
 
-  async startRuntimeInternal({ quiet = false, recoveryToken = null } = {}) {
+  async startRuntimeInternal({ quiet = false, recoveryToken = null, activateWorkspace = true } = {}) {
     if (!this.settings.enabled) {
       if (!quiet) new Notice('DevMate is disabled in Obsidian settings.');
       return { ok: false, reason: 'disabled' };
@@ -796,8 +796,11 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
 
       this.logRuntime(recoveryToken
         ? `Recovering DevMate generation ${recoveryToken.generation}: Gateway -> public connection -> MCP verification.`
-        : 'Starting DevMate: Gateway -> public connection -> MCP verification.');
-      this.controller.activateWorkspace();
+        : activateWorkspace
+          ? 'Starting DevMate and activating this vault as the machine Current Project.'
+          : 'Starting or attaching DevMate without changing the machine Current Project.');
+      if (activateWorkspace) this.controller.activateWorkspace();
+      else this.controller.ensureConfig();
       gateway = await this.controller.start();
       assertRecovery();
       this.logRuntime(gateway.attached
@@ -842,6 +845,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
         mcpUrl: preflight.mcpUrl,
         toolCount: preflight.toolCount,
         server: preflight.server,
+        activatedWorkspace: activateWorkspace,
         copied,
         copyError
       };
