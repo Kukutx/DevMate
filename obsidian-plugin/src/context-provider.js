@@ -16,6 +16,14 @@ class ObsidianContextProvider {
   constructor(plugin) {
     this.plugin = plugin;
     this.lastCaptureSignature = '';
+    if (typeof window !== 'undefined' && typeof plugin.registerDomEvent === 'function') {
+      const publishFocus = () => {
+        this.invalidateCapture();
+        plugin.scheduleContextCapture?.();
+      };
+      plugin.registerDomEvent(window, 'focus', publishFocus);
+      plugin.registerDomEvent(window, 'blur', publishFocus);
+    }
   }
 
   activeEditorContext() {
