@@ -16,6 +16,12 @@ function setVisible(element, visible) {
   if (element.style.display !== display) element.style.display = display;
 }
 
+function currentProjectRoot(plugin) {
+  const config = plugin.controller?.readConfig?.();
+  const workspaces = Array.isArray(config?.workspaces) ? config.workspaces : [];
+  return workspaces.find(item => item?.id === config?.activeWorkspaceId)?.root || 'No Current Project';
+}
+
 class DevMateView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -60,9 +66,9 @@ class DevMateView extends ItemView {
       };
       return button;
     };
-    action('Start', () => this.plugin.startRuntime());
-    action('Stop', () => this.plugin.stopRuntime());
-    action('Restart', () => this.plugin.restartRuntime());
+    action('Start / Activate Project', () => this.plugin.startRuntime());
+    action('Stop Shared Runtime', () => this.plugin.stopRuntime());
+    action('Restart Shared Runtime', () => this.plugin.restartRuntime());
     action('Copy MCP URL', () => this.plugin.copyConnectionUrl());
 
     const more = container.createEl('details');
@@ -87,7 +93,8 @@ class DevMateView extends ItemView {
       list.createEl('dt', { text: name });
       return list.createEl('dd');
     };
-    const vault = detail('Vault');
+    const currentProject = detail('Current Project');
+    const vault = detail('This Vault');
     const startup = detail('Automatic start');
 
     const failureSection = container.createDiv();
@@ -111,6 +118,7 @@ class DevMateView extends ItemView {
     this.ui = {
       statusLabel,
       statusDetail,
+      currentProject,
       vault,
       startup,
       failureSection,
@@ -136,8 +144,9 @@ class DevMateView extends ItemView {
 
     setText(this.ui.statusLabel, resolvedStatus.label);
     setText(this.ui.statusDetail, resolvedStatus.detail);
+    setText(this.ui.currentProject, currentProjectRoot(this.plugin));
     setText(this.ui.vault, this.plugin.vaultRoot || 'Unavailable');
-    setText(this.ui.startup, this.plugin.settings.autoStart ? 'On' : 'Off');
+    setText(this.ui.startup, this.plugin.settings.autoStart ? 'On · attach only' : 'Off');
 
     setVisible(this.ui.failureSection, !!failure);
     if (failure) setText(this.ui.failureMessage, failure.message);
@@ -155,4 +164,4 @@ class DevMateView extends ItemView {
   }
 }
 
-module.exports = { DevMateView, VIEW_TYPE, setText, setVisible };
+module.exports = { DevMateView, VIEW_TYPE, currentProjectRoot, setText, setVisible };
