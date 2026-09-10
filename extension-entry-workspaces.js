@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const path = require('node:path');
 const vscode = require('vscode');
 const { readLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
@@ -49,7 +50,7 @@ function workspacePanelHtml(context, webview) {
         </div>
       </div>`).join('')
     : '<p class="muted">No additional writable workspaces yet.</p>';
-  const nonce = String(Date.now()) + Math.random().toString(36).slice(2);
+  const nonce = crypto.randomBytes(16).toString('base64');
   return `<!doctype html><html><head>
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <style>
@@ -165,13 +166,13 @@ async function removeWorkspace(context, id) {
     await vscode.commands.executeCommand('devMate.stop');
     const result = removeWorkspaceAccess(configFile(context), { id });
     refreshWorkspacePanel();
-    if (restart) await vscode.commands.executeCommand('devMate.start', { quiet: true });
+    if (restart) await vscode.commands.executeCommand('devMate.start', { quiet: true, activateWorkspace: false });
     vscode.window.showInformationMessage(`DevMate workspace removed: ${target.name || target.root}`);
     return result;
   } catch (error) {
     vscode.window.showErrorMessage(`Could not remove DevMate workspace: ${error.message || error}`);
     if (restart) {
-      try { await vscode.commands.executeCommand('devMate.start', { quiet: true }); } catch {}
+      try { await vscode.commands.executeCommand('devMate.start', { quiet: true, activateWorkspace: false }); } catch {}
     }
     return null;
   }
