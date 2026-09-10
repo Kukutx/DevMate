@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  MAX_HOST_CONTEXT_CHARS,
   clearHostContext,
   pruneStaleHostContexts,
   publishHostContext,
@@ -41,6 +42,28 @@ test('background host context updates do not steal focused host authority', () =
   assert.equal(config.hostRuntime.focusedHostId, 'vscode-b');
   assert.equal(config.hostRuntime.lastInteractiveHostId, 'vscode-b');
   assert.equal(selectHostContext(config).workspaceRoot, 'B');
+});
+
+test('oversized host context stays bounded without losing control-plane metadata', () => {
+  const config = { hostRuntime: {}, hostContexts: {} };
+  const published = publishHostContext(config, 'vscode-large', {
+    focused: true,
+    pid: 150,
+    kind: 'editor',
+    workspaceRoot: 'C:\\projects\\large',
+    updatedAt: '2026-09-10T10:03:00.000Z',
+    activeEditor: { path: 'large.txt', selectedText: 'x'.repeat(MAX_HOST_CONTEXT_CHARS + 50000) }
+  }, { processAliveImpl: () => true });
+
+  assert.ok(JSON.stringify(published).length <= MAX_HOST_CONTEXT_CHARS);
+  assert.equal(published.truncated, true);
+  assert.equal(published.hostId, 'vscode-large');
+  assert.equal(published.pid, 150);
+  assert.equal(published.kind, 'editor');
+  assert.equal(published.focused, true);
+  assert.equal(published.workspaceRoot, 'C:\\projects\\large');
+  assert.equal(config.hostRuntime.focusedHostId, 'vscode-large');
+  assert.equal(config.activeHostId, 'vscode-large');
 });
 
 test('focus loss is explicit and falls back without fabricating focused state', () => {
