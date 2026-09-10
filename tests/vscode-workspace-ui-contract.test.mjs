@@ -46,11 +46,11 @@ test('main DevMate panel exposes Current Project and the workspace manager entry
   assert.match(source, /devMate\.manageWorkspaces/);
 });
 
-test('routing documentation forbids both fail-closed rollback and global multi-active semantics', () => {
+test('routing documentation preserves singular Current Project and sticky conversation semantics', () => {
   const routing = read('docs/CHATGPT_WORKSPACE_ROUTING.md');
-  assert.match(routing, /one machine-wide Current Project/i);
-  assert.match(routing, /does not silently rebind/i);
-  assert.match(routing, /automatic host startup does not change Current Project/i);
-  assert.match(routing, /sticky/i);
+  assert.match(routing, /one shared Current Project/i);
+  assert.match(routing, /later host workspace change silently moves an already-used conversation/i);
+  assert.match(routing, /automatic host startup\/recovery does not replace `activeWorkspaceId` by default/i);
+  assert.match(routing, /explicit binding survives host switches and reconnect-style reuse/i);
   assert.match(routing, /conversation/i);
 });
