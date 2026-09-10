@@ -56,7 +56,9 @@ assert.match(mainSource, /childProcess,\s*hostId:/, 'Obsidian bundle must inject
 assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Node runtime diagnostics');
 assert.match(mainSource, /SharedTunnelRecordStore/, 'Obsidian bundle must contain the shared provider ownership record store');
 assert.match(mainSource, /TunnelController/, 'Obsidian bundle must contain the provider-native public connection lifecycle');
-assert.match(mainSource, /Starting DevMate: Gateway -> public connection -> MCP verification/, 'Obsidian Start must package the complete one-click lifecycle');
+assert.match(mainSource, /Starting DevMate and activating this vault as the machine Current Project/, 'Obsidian manual Start must package authoritative Current Project activation');
+assert.match(mainSource, /Starting or attaching DevMate without changing the machine Current Project/, 'Obsidian automatic Start must package attach-only Current Project semantics');
+assert.match(mainSource, /Recovering DevMate generation.*Gateway -> public connection -> MCP verification/, 'Obsidian recovery must package the complete one-click Ready lifecycle');
 assert.match(mainSource, /server\/discover/, 'Obsidian bundle must package MCP 2026 discovery');
 assert.match(mainSource, /2026-07-28/, 'Obsidian bundle must be pinned to MCP 2026-07-28');
 assert.equal(mainSource.toLowerCase().includes(retiredSessionHeader), false, 'Obsidian bundle must not restore sessionful MCP transport state');
