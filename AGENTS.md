@@ -36,5 +36,5 @@
 ## Safety
 
 - Never touch secrets, env files, or unrelated config unless requested.
-- Keep public MCP URLs token-protected by default.
+- Preserve single-owner `auth.mode: none` as the default for local and configured public MCP; OAuth remains optional for team/shared identity. In `none` mode, keep the endpoint private to the owner because any caller that can reach `/mcp` receives owner authority.
 - Do not reintroduce retired personal task tools or team-specific work-session APIs.
