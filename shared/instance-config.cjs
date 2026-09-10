@@ -152,9 +152,9 @@ function normalizeInstanceConfig(config) {
     policyGeneration: strictInteger(previousConnection.policyGeneration, 0, 0, Number.MAX_SAFE_INTEGER, 'connection.policyGeneration')
   };
 
-  // Missing authentication state normalizes to OAuth. Explicit `none` is retained only
-  // for trusted loopback use; public MCP ingress still requires OAuth at request time.
-  // Authentication secrets live outside the instance configuration.
+  // Missing authentication state normalizes to the canonical single-owner `none`
+  // mode. OAuth is an explicit opt-in for team/shared member identity; connection
+  // topology does not change the authentication default.
   config.auth = normalizeAuthentication(config);
   if (config.permissions !== undefined && config.permissions !== null) {
     config.permissions = permissionPolicySnapshot(config);
