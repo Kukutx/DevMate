@@ -229,7 +229,7 @@ async function recoverRequestedSession(expectedEpoch = sessionRecoveryEpoch) {
 
   log(`Recovering shared DevMate session generation ${recoveryToken.generation} through the complete Start lifecycle.`);
   const result = await runWithLifecycleRecoveryToken(configFile, recoveryToken, () =>
-    vscode.commands.executeCommand('devMate.start', { quiet: true })
+    vscode.commands.executeCommand('devMate.start', { quiet: true, activateWorkspace: false })
   );
 
   if (expectedEpoch !== sessionRecoveryEpoch || !runtime || !lifecycle) {
