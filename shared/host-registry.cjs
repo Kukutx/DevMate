@@ -3,6 +3,7 @@
 const DEFAULT_DEAD_HOST_GRACE_MS = 30000;
 const DEFAULT_STALE_HOST_MS = 10 * 60 * 1000;
 const HOST_CONTEXT_PUBLISHER = Symbol.for('devmate.hostContextPublisher');
+const HOST_CONTEXT_PRUNED = Symbol.for('devmate.hostContextPruned');
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -48,6 +49,19 @@ function publisherHostId(config) {
   return String(config?.[HOST_CONTEXT_PUBLISHER] || '');
 }
 
+function markPrunedContexts(config, contexts) {
+  Object.defineProperty(config, HOST_CONTEXT_PRUNED, {
+    value: { ...object(contexts) },
+    enumerable: false,
+    configurable: true,
+    writable: true
+  });
+}
+
+function prunedHostContexts(config) {
+  return object(config?.[HOST_CONTEXT_PRUNED]);
+}
+
 function repairSelection(config) {
   config.hostRuntime ||= {};
   const focusedHostId = String(config.hostRuntime.focusedHostId || '');
@@ -75,6 +89,7 @@ function pruneStaleHostContexts(config, {
 } = {}) {
   config.hostContexts ||= {};
   const removed = [];
+  const removedContexts = {};
   const deadGrace = Math.max(0, Number(deadHostGraceMs) || DEFAULT_DEAD_HOST_GRACE_MS);
   const staleLimit = Math.max(deadGrace, Number(staleHostMs) || DEFAULT_STALE_HOST_MS);
 
@@ -88,12 +103,14 @@ function pruneStaleHostContexts(config, {
       ? age >= deadGrace && !processAliveImpl(pid)
       : age >= staleLimit;
     if (!stale) continue;
+    removedContexts[hostId] = context;
     delete config.hostContexts[hostId];
     removed.push(hostId);
   }
 
+  if (removed.length) markPrunedContexts(config, removedContexts);
   repairSelection(config);
-  return { removed };
+  return { removed, removedContexts };
 }
 
 function publishHostContext(config, hostId, context = {}, options = {}) {
@@ -156,12 +173,15 @@ function selectHostContext(config, hostId = '') {
 module.exports = {
   DEFAULT_DEAD_HOST_GRACE_MS,
   DEFAULT_STALE_HOST_MS,
+  HOST_CONTEXT_PRUNED,
   HOST_CONTEXT_PUBLISHER,
   clearHostContext,
   hostEntries,
+  markPrunedContexts,
   markPublisher,
   processAlive,
   pruneStaleHostContexts,
+  prunedHostContexts,
   publishHostContext,
   publisherHostId,
   repairSelection,
