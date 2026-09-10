@@ -179,13 +179,16 @@ test('Obsidian uses the desktop lifecycle wrapper over provider-native connectio
   assert.doesNotMatch(build, /target: 'node18'/);
 });
 
-test('Obsidian normal panel exposes one user-facing Ready state, not internal transport layers', () => {
+test('Obsidian panel distinguishes Current Project, this vault and shared lifecycle actions', () => {
   const view = source('obsidian-plugin/src/view.js');
-  assert.match(view, /action\('Start'/);
-  assert.match(view, /action\('Stop'/);
-  assert.doesNotMatch(view, /moreAction\('Stop'/);
-  assert.match(view, /action\('Restart'/);
+  assert.match(view, /action\('Start \/ Activate Project'/);
+  assert.match(view, /action\('Stop Shared Runtime'/);
+  assert.doesNotMatch(view, /moreAction\('Stop/);
+  assert.match(view, /action\('Restart Shared Runtime'/);
   assert.match(view, /action\('Copy MCP URL'/);
+  assert.match(view, /detail\('Current Project'\)/);
+  assert.match(view, /detail\('This Vault'\)/);
+  assert.match(view, /On · attach only/);
   assert.doesNotMatch(view, /Public MCP|Public connection|Public ingress|Internal Gateway|Verification|internal only/);
   assert.doesNotMatch(view, /Copy Bearer Token/);
   assert.match(view, /setText\(this\.ui\.statusLabel, resolvedStatus\.label\)/);
