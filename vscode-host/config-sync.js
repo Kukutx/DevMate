@@ -172,7 +172,9 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   ]) {
     if (!initializing || key !== 'activeWorkspaceId') preserveCurrentObject(merged, current, key);
   }
-  merged.hostRuntime = mergeHostRuntime(current.hostRuntime, candidate.hostRuntime);
+  const hostRuntime = mergeHostRuntime(current.hostRuntime, candidate.hostRuntime);
+  if (Object.keys(hostRuntime).length || has(current, 'hostRuntime')) merged.hostRuntime = hostRuntime;
+  else delete merged.hostRuntime;
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
     const refreshHostId = has(candidate, 'activeHostId') && candidate.activeHostId !== current.activeHostId
@@ -181,7 +183,6 @@ function mergeExtensionConfig(currentValue, candidateValue) {
     merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, { refreshHostId });
   }
   if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
-  else delete merged.activeHostId;
   delete merged.vscodeContext;
   return merged;
 }
