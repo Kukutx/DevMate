@@ -11,7 +11,7 @@ const {
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
 const { activateInstanceWorkspace, ensureInstanceConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
-const { clearHostContext, publishHostContext } = require('../../shared/host-registry.cjs');
+const { boundedHostContext, clearHostContext, publishHostContext } = require('../../shared/host-registry.cjs');
 const { cleanupOwnedGatewayInstanceLock } = require('./instance-lock-cleanup.js');
 const { choosePort, healthAt, healthMatches } = require('./network.js');
 const { OperationCoordinator } = require('./operation-coordinator.js');
@@ -30,13 +30,7 @@ function delay(ms) {
 }
 
 function boundedContext(value, maxChars = MAX_HOST_CONTEXT_CHARS) {
-  const serialized = JSON.stringify(value ?? null);
-  if (serialized.length <= maxChars) return value;
-  return {
-    truncated: true,
-    originalChars: serialized.length,
-    preview: serialized.slice(0, maxChars)
-  };
+  return boundedHostContext(value, maxChars);
 }
 
 function appendOutput(current, chunk, maxChars = MAX_LAUNCH_OUTPUT_CHARS) {
