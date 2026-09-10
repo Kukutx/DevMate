@@ -42,6 +42,7 @@ test('routine host workspace sync registers its root without stealing the shared
 test('merges stale host workspace snapshots without replacing shared capability or Current Project state', () => {
   const current = {
     version: SUPPORTED_CONFIG_VERSION,
+    appVersion: '3.6.8',
     instanceId: 'stable',
     activeWorkspaceId: 'app',
     server: { port: 8788, mcpPath: '/mcp' },
@@ -52,6 +53,7 @@ test('merges stale host workspace snapshots without replacing shared capability 
     runnerControl: { enabled: true },
     trustedWritableRoots: [{ id: 'trusted' }],
     runtime: { maxConcurrentJobs: 4, defaultCommandTimeoutMs: 1000 },
+    commands: [{ key: 'current-command', command: 'node --version' }],
     workspaces: [
       { id: 'app', root: path.join(path.sep, 'workspace', 'app'), mode: 'workspace-write', reference: false, role: 'active' },
       { id: 'trusted', root: path.join(path.sep, 'workspace', 'trusted'), mode: 'workspace-write', trusted: true, role: 'trusted' }
@@ -59,6 +61,7 @@ test('merges stale host workspace snapshots without replacing shared capability 
   };
   const candidate = {
     version: SUPPORTED_CONFIG_VERSION,
+    appVersion: '3.6.7',
     instanceId: 'stale',
     activeWorkspaceId: 'background-window',
     server: { port: 9999, mcpPath: '/mcp' },
@@ -67,23 +70,32 @@ test('merges stale host workspace snapshots without replacing shared capability 
     team: { requireWorkspaceLeaseForWrites: false, members: [] },
     requestPolicy: { allowedHosts: [], requestsPerMinute: 9999 },
     runtime: { defaultCommandTimeoutMs: 2000, maxOutputChars: 3000 },
+    commands: [{ key: 'stale-command', command: 'echo stale' }],
     workspaces: [
       { id: 'background-window', root: path.join(path.sep, 'workspace', 'background'), mode: 'workspace-write', reference: false, role: 'workspace' }
     ]
   };
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.instanceId, 'stable');
+  assert.equal(merged.appVersion, '3.6.8');
   assert.equal(merged.activeWorkspaceId, 'app');
   assert.equal(merged.workspaces.some(item => item.id === 'app'), true);
   assert.equal(merged.workspaces.some(item => item.id === 'background-window'), true);
   assert.equal(merged.workspaces.some(item => item.id === 'trusted'), true);
   assert.deepEqual(merged.server, current.server);
-  assert.deepEqual(merged.auth, { mode: 'none' });
+  assert.deepEqual(merged.auth, current.auth);
+  assert.deepEqual(merged.commands, current.commands);
   assert.equal(merged.runtime.maxConcurrentJobs, 4);
   assert.equal(merged.runtime.defaultCommandTimeoutMs, 2000);
   assert.deepEqual(merged.connection, current.connection);
   assert.deepEqual(merged.team, current.team);
   assert.deepEqual(merged.requestPolicy, current.requestPolicy);
+});
+
+test('host sync may advance appVersion but cannot downgrade it', () => {
+  const base = { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.7', instanceId: 'stable' };
+  assert.equal(mergeExtensionConfig(base, { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.8' }).appVersion, '3.6.8');
+  assert.equal(mergeExtensionConfig({ ...base, appVersion: '3.6.8' }, { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.7' }).appVersion, '3.6.8');
 });
 
 test('partial extension updates preserve existing workspaces and shared connection', () => {
@@ -181,6 +193,7 @@ test('writes host context through the shared locked atomic store without replaci
     version: SUPPORTED_CONFIG_VERSION,
     instanceId: 'stale',
     activeWorkspaceId: 'background-window',
+    auth: { mode: 'none' },
     hostContexts: { vscode: { capturedAt: 'now' } }, activeHostId: 'vscode'
   });
   const config = readExtensionConfig(file);
