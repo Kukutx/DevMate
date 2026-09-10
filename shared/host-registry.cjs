@@ -133,7 +133,10 @@ function clearHostContext(config, hostId, options = {}) {
 function selectHostContext(config, hostId = '') {
   const contexts = object(config?.hostContexts);
   const requested = String(hostId || '').trim();
-  if (requested) return contexts[requested] || null;
+  if (requested) {
+    if (contexts[requested]) return contexts[requested];
+    return hostEntries(config).find(([id, context]) => id === requested || context.hostId === requested)?.[1] || null;
+  }
   const focused = String(config?.hostRuntime?.focusedHostId || '');
   if (focused && contexts[focused]) return contexts[focused];
   const active = String(config?.activeHostId || '');
