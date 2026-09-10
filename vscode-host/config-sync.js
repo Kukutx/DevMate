@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
   SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
+  newerVersion,
   readJson,
   recoverConfigReplacement,
   updateConfig
@@ -203,9 +204,14 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   assertSupportedInstanceShape(candidate);
 
   const merged = { ...current };
-  for (const key of ['appVersion', 'maintenance', 'commands']) {
-    if (has(candidate, key)) merged[key] = candidate[key];
+  if (has(candidate, 'appVersion')) {
+    merged.appVersion = has(current, 'appVersion')
+      ? newerVersion(current.appVersion, candidate.appVersion)
+      : candidate.appVersion;
   }
+  if (has(candidate, 'maintenance')) merged.maintenance = candidate.maintenance;
+  if (initializing && has(candidate, 'commands')) merged.commands = candidate.commands;
+  else preserveCurrentObject(merged, current, 'commands');
   if (initializing && has(candidate, 'activeWorkspaceId')) merged.activeWorkspaceId = candidate.activeWorkspaceId;
 
   merged.version = SUPPORTED_CONFIG_VERSION;
@@ -214,8 +220,8 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   if (has(current, 'server')) merged.server = current.server;
   else if (has(candidate, 'server')) merged.server = candidate.server;
 
-  if (has(candidate, 'auth')) merged.auth = normalizeAuthentication({ auth: candidate.auth });
-  else if (has(current, 'auth')) merged.auth = normalizeAuthentication({ auth: current.auth });
+  if (has(current, 'auth')) merged.auth = normalizeAuthentication({ auth: current.auth, hostRuntime: current.hostRuntime });
+  else if (initializing && has(candidate, 'auth')) merged.auth = normalizeAuthentication({ auth: candidate.auth, hostRuntime: candidate.hostRuntime });
   else delete merged.auth;
 
   const currentRuntime = object(current.runtime);
