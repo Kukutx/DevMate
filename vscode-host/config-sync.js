@@ -165,23 +165,27 @@ function mergeHostRuntime(currentValue, candidateValue, {
     return merged;
   }
 
+  const currentWriterContext = object(currentContexts)[refreshHostId];
   const writerContext = object(candidateContexts)[refreshHostId];
   const currentFocusedId = String(current.focusedHostId || '');
   const currentFocusedContext = object(currentContexts)[currentFocusedId];
   const writerStamp = timestampMs(writerContext);
   const focusedStamp = timestampMs(currentFocusedContext);
   const writerFocused = writerContext?.focused === true;
+  const semanticNoop = currentFocusedId === refreshHostId && sameHostContext(currentWriterContext, writerContext);
   const writerCanTakeFocus = writerFocused && (
     !currentFocusedId || currentFocusedId === refreshHostId || writerStamp >= focusedStamp
   );
 
   if (writerCanTakeFocus) {
     merged.focusedHostId = refreshHostId;
-    const candidateInteractiveAt = String(candidate.lastInteractiveAt || writerContext.updatedAt || writerContext.capturedAt || '');
-    const currentInteractiveAt = String(current.lastInteractiveAt || '');
-    if (!currentInteractiveAt || !candidateInteractiveAt || candidateInteractiveAt >= currentInteractiveAt) {
-      merged.lastInteractiveHostId = refreshHostId;
-      if (candidateInteractiveAt) merged.lastInteractiveAt = candidateInteractiveAt;
+    if (!semanticNoop) {
+      const candidateInteractiveAt = String(candidate.lastInteractiveAt || writerContext.updatedAt || writerContext.capturedAt || '');
+      const currentInteractiveAt = String(current.lastInteractiveAt || '');
+      if (!currentInteractiveAt || !candidateInteractiveAt || candidateInteractiveAt >= currentInteractiveAt) {
+        merged.lastInteractiveHostId = refreshHostId;
+        if (candidateInteractiveAt) merged.lastInteractiveAt = candidateInteractiveAt;
+      }
     }
   } else if (!writerFocused && currentFocusedId === refreshHostId) {
     delete merged.focusedHostId;
@@ -246,6 +250,10 @@ function mergeExtensionConfig(currentValue, candidateValue) {
       refreshHostId,
       prunedContexts: staleContexts
     });
+  }
+
+  if (merged.hostRuntime?.focusedHostId && !merged.hostContexts?.[merged.hostRuntime.focusedHostId]) {
+    delete merged.hostRuntime.focusedHostId;
   }
 
   if (refreshHostId) {
