@@ -41,21 +41,14 @@ function repairSelection(config) {
     config.activeHostId = focusedHostId;
     return focusedHostId;
   }
+  if (focusedHostId) delete config.hostRuntime.focusedHostId;
 
   const activeHostId = String(config.activeHostId || '');
-  if (selectionExists(config, activeHostId)) {
-    config.hostRuntime.focusedHostId = activeHostId;
-    return activeHostId;
-  }
+  if (selectionExists(config, activeHostId)) return activeHostId;
 
   const next = hostEntries(config)[0]?.[0] || '';
-  if (next) {
-    config.activeHostId = next;
-    config.hostRuntime.focusedHostId = next;
-  } else {
-    delete config.activeHostId;
-    delete config.hostRuntime.focusedHostId;
-  }
+  if (next) config.activeHostId = next;
+  else delete config.activeHostId;
   return next;
 }
 
@@ -107,13 +100,14 @@ function publishHostContext(config, hostId, context = {}, options = {}) {
 
   const focused = context.focused === true;
   const current = String(config.activeHostId || '');
-  if (focused || !selectionExists(config, current)) {
+  if (focused) {
     config.activeHostId = id;
     config.hostRuntime.focusedHostId = id;
-  }
-  if (focused) {
     config.hostRuntime.lastInteractiveHostId = id;
     config.hostRuntime.lastInteractiveAt = stamp;
+  } else {
+    if (config.hostRuntime.focusedHostId === id) delete config.hostRuntime.focusedHostId;
+    if (!selectionExists(config, current)) config.activeHostId = id;
   }
   repairSelection(config);
   return next;
