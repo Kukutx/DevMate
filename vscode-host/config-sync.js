@@ -12,7 +12,11 @@ const {
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { assertSupportedInstanceShape } = require('../shared/instance-config.cjs');
 const { normalizeAuthentication } = require('../shared/auth-config.cjs');
-const { publisherHostId, timestampMs } = require('../shared/host-registry.cjs');
+const {
+  prunedHostContexts,
+  publisherHostId,
+  timestampMs
+} = require('../shared/host-registry.cjs');
 
 const HOST_REGISTRY_RUNTIME_FIELDS = Object.freeze([
   'focusedHostId',
@@ -109,6 +113,10 @@ function sameHostContext(left, right) {
   return JSON.stringify(comparableHostContext(left)) === JSON.stringify(comparableHostContext(right));
 }
 
+function samePersistedHostContext(left, right) {
+  return JSON.stringify(object(left)) === JSON.stringify(object(right));
+}
+
 function mergeOneHostContext(currentContext, candidateContext) {
   if (!currentContext) return candidateContext;
   if (!candidateContext) return currentContext;
@@ -116,10 +124,18 @@ function mergeOneHostContext(currentContext, candidateContext) {
   return sameHostContext(currentContext, candidateContext) ? currentContext : candidateContext;
 }
 
-function mergeHostContexts(currentValue, candidateValue, { refreshHostId = '' } = {}) {
+function mergeHostContexts(currentValue, candidateValue, {
+  refreshHostId = '',
+  prunedContexts = {}
+} = {}) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
   const merged = { ...current };
+
+  for (const [hostId, staleSnapshot] of Object.entries(object(prunedContexts))) {
+    if (has(current, hostId) && samePersistedHostContext(current[hostId], staleSnapshot)) delete merged[hostId];
+  }
+
   if (refreshHostId) {
     if (has(candidate, refreshHostId)) {
       merged[refreshHostId] = mergeOneHostContext(current[refreshHostId], candidate[refreshHostId]);
@@ -216,6 +232,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   }
 
   const refreshHostId = publisherHostId(candidate);
+  const staleContexts = prunedHostContexts(candidate);
   const hostRuntime = mergeHostRuntime(current.hostRuntime, candidate.hostRuntime, {
     refreshHostId,
     currentContexts: current.hostContexts,
@@ -225,7 +242,10 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   else delete merged.hostRuntime;
 
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
-    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, { refreshHostId });
+    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, {
+      refreshHostId,
+      prunedContexts: staleContexts
+    });
   }
 
   if (refreshHostId) {
