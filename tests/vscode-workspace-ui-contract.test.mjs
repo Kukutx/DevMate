@@ -45,9 +45,11 @@ test('main DevMate panel exposes Current Project and the workspace manager entry
   const source = read('extension.js');
   assert.match(source, /<b>Current Project<\/b>/);
   assert.doesNotMatch(source, /<b>Active project<\/b>/);
+  assert.match(source, /<b>This VS Code<\/b>/);
   assert.match(source, /data-cmd="manageWorkspaces">Manage Workspaces<\/button>/);
   assert.match(source, /if\(m\.cmd==='manageWorkspaces'\) await vscode\.commands\.executeCommand\('devMate\.manageWorkspaces'\)/);
-  assert.match(source, /Additional writable workspaces can be managed separately and selected per ChatGPT conversation/);
+  assert.match(source, /The Current Project is machine-wide/);
+  assert.match(source, /use Start \/ Activate Project when this host should become the default for new ChatGPT conversations/);
 });
 
 test('routing documentation forbids both fail-closed rollback and global multi-active semantics', () => {
