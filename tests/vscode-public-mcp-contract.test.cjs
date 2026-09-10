@@ -12,7 +12,7 @@ test('VS Code Start remains Gateway -> tunnel -> current-generation MCP verifica
   const end = extension.indexOf('async function stopAll()', start);
   assert.ok(start >= 0 && end > start);
   const block = extension.slice(start, end);
-  const gateway = block.indexOf('gateway = await startGateway(ctx)');
+  const gateway = block.indexOf('gateway = await startGateway(ctx,{activateWorkspace})');
   const tunnel = block.indexOf('tunnel = await startPublicTunnel(ctx)');
   const verify = block.indexOf('await verifyCurrentTunnel(publicUrl, tunnel.record, ctx)');
   const readySync = block.indexOf('await syncPublicUiState(ctx)');
@@ -20,6 +20,7 @@ test('VS Code Start remains Gateway -> tunnel -> current-generation MCP verifica
   assert.ok(gateway >= 0 && tunnel > gateway && verify > tunnel && readySync > verify && copy > readySync);
   assert.match(block, /mcpUrl:test\.mcpUrl/);
   assert.match(block, /toolCount:test\.toolCount/);
+  assert.match(block, /activatedWorkspace:activateWorkspace/);
   assert.match(block, /rollbackFailedStart/);
 });
 
