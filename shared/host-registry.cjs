@@ -2,8 +2,18 @@
 
 const DEFAULT_DEAD_HOST_GRACE_MS = 30000;
 const DEFAULT_STALE_HOST_MS = 10 * 60 * 1000;
+const MAX_HOST_CONTEXT_CHARS = 200000;
 const HOST_CONTEXT_PUBLISHER = Symbol.for('devmate.hostContextPublisher');
 const HOST_CONTEXT_PRUNED = Symbol.for('devmate.hostContextPruned');
+const HOST_CONTEXT_CONTROL_FIELDS = Object.freeze([
+  'hostId',
+  'pid',
+  'kind',
+  'focused',
+  'workspaceRoot',
+  'capturedAt',
+  'updatedAt'
+]);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -24,6 +34,48 @@ function processAlive(pid) {
   } catch (error) {
     return error?.code === 'EPERM';
   }
+}
+
+function boundedHostContext(value, maxChars = MAX_HOST_CONTEXT_CHARS) {
+  const context = object(value);
+  const limit = Math.max(1024, Math.trunc(Number(maxChars) || MAX_HOST_CONTEXT_CHARS));
+  const serialized = JSON.stringify(context);
+  if (serialized.length <= limit) return context;
+
+  const control = {};
+  for (const key of HOST_CONTEXT_CONTROL_FIELDS) {
+    if (Object.hasOwn(context, key)) control[key] = context[key];
+  }
+  let base = {
+    ...control,
+    truncated: true,
+    originalChars: serialized.length,
+    preview: ''
+  };
+  if (JSON.stringify(base).length > limit) {
+    base = {
+      hostId: String(control.hostId || '').slice(0, 256),
+      pid: Number.isInteger(Number(control.pid)) && Number(control.pid) > 0 ? Number(control.pid) : process.pid,
+      kind: String(control.kind || '').slice(0, 64),
+      focused: control.focused === true,
+      workspaceRoot: String(control.workspaceRoot || '').slice(0, Math.max(0, limit - 1024)),
+      capturedAt: String(control.capturedAt || '').slice(0, 64),
+      updatedAt: String(control.updatedAt || '').slice(0, 64),
+      truncated: true,
+      originalChars: serialized.length,
+      preview: ''
+    };
+  }
+
+  let low = 0;
+  let high = serialized.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = { ...base, preview: serialized.slice(0, middle) };
+    if (JSON.stringify(candidate).length <= limit) low = middle;
+    else high = middle - 1;
+  }
+  return { ...base, preview: serialized.slice(0, low) };
 }
 
 function hostEntries(config) {
@@ -121,16 +173,16 @@ function publishHostContext(config, hostId, context = {}, options = {}) {
   pruneStaleHostContexts(config, { ...options, keepHostId: id });
   config.hostContexts ||= {};
   config.hostRuntime ||= {};
-  const next = {
+  const next = boundedHostContext({
     ...context,
     hostId: id,
     pid: Number.isInteger(Number(context.pid)) && Number(context.pid) > 0 ? Number(context.pid) : process.pid,
     updatedAt: stamp
-  };
+  });
   config.hostContexts[id] = next;
   markPublisher(config, id);
 
-  const focused = context.focused === true;
+  const focused = next.focused === true;
   const current = String(config.activeHostId || '');
   if (focused) {
     config.activeHostId = id;
@@ -175,6 +227,8 @@ module.exports = {
   DEFAULT_STALE_HOST_MS,
   HOST_CONTEXT_PRUNED,
   HOST_CONTEXT_PUBLISHER,
+  MAX_HOST_CONTEXT_CHARS,
+  boundedHostContext,
   clearHostContext,
   hostEntries,
   markPrunedContexts,
