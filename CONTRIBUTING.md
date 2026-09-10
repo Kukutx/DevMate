@@ -4,7 +4,7 @@ This project is optimized for one-person local development first.
 
 Principles:
 
-- Single VS Code extension runtime.
+- One central Gateway per shared state directory; VS Code and Obsidian desktop hosts attach to that runtime.
 - No separate gateway ZIP for daily use.
 - Keep the default UX: open project, run DevMate: Start, paste URL into ChatGPT.
 - Add advanced behavior as MCP tools or settings, not as daily manual steps.
