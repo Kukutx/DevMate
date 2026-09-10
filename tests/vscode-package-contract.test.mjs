@@ -25,6 +25,32 @@ const REMOVED_GLOBAL_BUSINESS_SETTINGS = [
   'devMate.allowedPublicHosts'
 ];
 
+const SHARED_RUNTIME_MACHINE_SETTINGS = [
+  'devMate.sharedStateDirectory',
+  'devMate.port',
+  'devMate.ngrokCommandPath',
+  'devMate.ngrokUseManagedAccount',
+  'devMate.ngrokUrl',
+  'devMate.ngrokPoolingEnabled',
+  'devMate.ngrokTrafficPolicyFile',
+  'devMate.cloudflareCommandPath',
+  'devMate.publicUrl',
+  'devMate.tunnelAutoRestart',
+  'devMate.tunnelMaxRestarts',
+  'devMate.authenticationMode',
+  'devMate.permissionProfile',
+  'devMate.blockDangerousOperations',
+  'devMate.confirmBeforePush',
+  'devMate.allowDirectoryMutations',
+  'devMate.defaultCommandTimeoutMs',
+  'devMate.maxOutputChars',
+  'devMate.backupRetentionDays',
+  'devMate.auditRetentionDays',
+  'devMate.maxBackupBytes',
+  'devMate.maxAuditBytes',
+  'devMate.embeddedRunnerEnabled'
+];
+
 test('VS Code manifest exposes host diagnostics and self-check commands', () => {
   for (const command of ['devMate.copyHostDiagnostics', 'devMate.hostSelfCheck']) {
     assert.equal(commandIds.has(command), true, `Missing contributed command ${command}`);
@@ -38,6 +64,14 @@ test('instance business state is not exposed as machine-global VS Code settings'
   }
   assert.match(properties['devMate.ngrokUrl']?.description || '', /machine-local.*candidate/i);
   assert.match(properties['devMate.publicUrl']?.description || '', /machine-local.*candidate/i);
+});
+
+test('shared Gateway settings are machine-scoped and dead public-health UI is absent', () => {
+  for (const settingName of SHARED_RUNTIME_MACHINE_SETTINGS) {
+    assert.equal(properties[settingName]?.scope, 'machine', `${settingName} must be machine-scoped because all desktop hosts share one runtime`);
+  }
+  assert.equal(Object.hasOwn(properties, 'devMate.publicHealthDetails'), false, 'unimplemented publicHealthDetails setting must not be exposed');
+  assert.match(properties['devMate.embeddedRunnerEnabled']?.description || '', /next Shared Runtime start/i);
 });
 
 test('canonical request-policy limits are enforced by the shared instance schema', () => {
