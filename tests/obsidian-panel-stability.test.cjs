@@ -19,12 +19,12 @@ test('Obsidian panel builds DOM once and patches state without clearing the view
   assert.doesNotMatch(view, /finally\s*\{[^}]*await this\.render\(\)/s);
 });
 
-test('Obsidian Stop remains a visible primary lifecycle action', () => {
+test('Obsidian shared Stop remains a visible primary lifecycle action', () => {
   const view = source('obsidian-plugin/src/view.js');
-  const primary = view.slice(view.indexOf("action('Start'"), view.indexOf('const more ='));
+  const primary = view.slice(view.indexOf("action('Start / Activate Project'"), view.indexOf('const more ='));
   const secondary = view.slice(view.indexOf('const more ='));
-  assert.match(primary, /action\('Stop', \(\) => this\.plugin\.stopRuntime\(\)\)/);
-  assert.doesNotMatch(secondary, /moreAction\('Stop'/);
+  assert.match(primary, /action\('Stop Shared Runtime', \(\) => this\.plugin\.stopRuntime\(\)\)/);
+  assert.doesNotMatch(secondary, /moreAction\('Stop/);
 });
 
 test('periodic status polling reuses the stable panel and context writes are deduplicated', () => {
