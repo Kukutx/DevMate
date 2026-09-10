@@ -8,7 +8,7 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('Obsidian Start owns the complete lifecycle and recovery never rewrites shared intent', () => {
+test('Obsidian Start owns the complete lifecycle and project activation is explicit', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async startRuntimeInternal');
   const end = main.indexOf('stopRuntime()', start);
@@ -16,16 +16,34 @@ test('Obsidian Start owns the complete lifecycle and recovery never rewrites sha
   const block = main.slice(start, end);
 
   assert.match(main, /runWithLifecycleRecoveryToken/);
+  assert.match(block, /activateWorkspace = true/);
   assert.match(block, /setLifecycleIntent\(this\.controller\.configFile, 'running'/);
   assert.match(block, /if \(recoveryToken\) assertRecovery\(\)/);
+  assert.match(block, /if \(activateWorkspace\) this\.controller\.activateWorkspace\(\)/);
+  assert.match(block, /else this\.controller\.ensureConfig\(\)/);
   assert.match(block, /gateway = await this\.controller\.start\(\)/);
   assert.match(block, /tunnel = await this\.tunnelController\.start\(gateway\.port\)/);
   assert.match(block, /const preflight = await this\.verifyPublicEndpoint\(publicUrl, tunnel\.record\)/);
   assert.match(block, /state: 'ready'/);
   assert.match(block, /mcpUrl: preflight\.mcpUrl/);
   assert.match(block, /toolCount: preflight\.toolCount/);
+  assert.match(block, /activatedWorkspace: activateWorkspace/);
   assert.doesNotMatch(main, /sessionRequested/);
   assert.match(block, /lifecycleCancelled[\s\S]*this\.controller\.stop\(\)/);
+});
+
+test('Obsidian automatic startup and recovery never change Current Project', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  const layoutStart = main.indexOf('async initializeLayoutReady()');
+  const layoutEnd = main.indexOf('async onunload()', layoutStart);
+  const layout = main.slice(layoutStart, layoutEnd);
+  assert.match(layout, /recoveryToken, activateWorkspace: false/);
+  assert.match(layout, /this\.settings\.autoStart\) await this\.startRuntime\(\{ quiet: true, activateWorkspace: false \}\)/);
+
+  const refreshStart = main.indexOf('async refreshStatus()');
+  const refreshEnd = main.indexOf('startRuntime(options', refreshStart);
+  const refresh = main.slice(refreshStart, refreshEnd);
+  assert.match(refresh, /this\.startRuntime\(\{ quiet: true, recoveryToken, activateWorkspace: false \}\)/);
 });
 
 test('Obsidian Ready is bound to current Gateway, tunnel, auth and connection policy generations', () => {
@@ -66,7 +84,7 @@ test('Obsidian connection and credential mutations are serialized against failov
   const write = configure.indexOf('updated = updateConfig(');
   assert.ok(stop >= 0 && write > stop, 'provider must stop or safely attach before shared connection mutation');
   assert.match(configure, /!stopState\.remoteOwner/);
-  assert.match(configure, /this\.startRuntime\(\{ quiet: true, recoveryToken \}\)/);
+  assert.match(configure, /this\.startRuntime\(\{ quiet: true, recoveryToken, activateWorkspace: false \}\)/);
 
   const credentialStart = main.indexOf('async configureTunnelCredential');
   const credentialEnd = main.indexOf('updateConnectionSnapshot', credentialStart);
@@ -74,6 +92,7 @@ test('Obsidian connection and credential mutations are serialized against failov
   assert.match(credential, /this\.withConnectionMutation\(`credential-\$\{provider\}`/);
   assert.match(credential, /assertTunnelSafeForCredentialChange/);
   assert.match(credential, /await this\.saveSettings\(\)/);
+  assert.match(credential, /this\.startRuntime\(\{ quiet: true, recoveryToken, activateWorkspace: false \}\)/);
   assert.match(settings, /plugin\.configureTunnelCredential\(settingKey, encryptSecret\(secret\)\)/);
   assert.match(settings, /plugin\.configureTunnelCredential\(settingKey, ''\)/);
 });
@@ -87,7 +106,7 @@ test('Obsidian recovery follows shared generation and explicit Stop wins globall
   assert.match(refresh, /recoveryToken = lifecycleRecoveryToken\(this\.controller\.configFile\)/);
   assert.match(refresh, /const needsFullRecovery = !!recoveryToken && this\.settings\.enabled/);
   assert.match(refresh, /status\.gateway\?\.state !== 'running' \|\| !status\.tunnel\?\.running/);
-  assert.match(refresh, /this\.startRuntime\(\{ quiet: true, recoveryToken \}\)/);
+  assert.match(refresh, /this\.startRuntime\(\{ quiet: true, recoveryToken, activateWorkspace: false \}\)/);
 
   const stopStart = main.indexOf('async stopRuntimeInternal');
   const stopEnd = main.indexOf('restartRuntime()', stopStart);
@@ -160,13 +179,16 @@ test('Obsidian uses the desktop lifecycle wrapper over provider-native connectio
   assert.doesNotMatch(build, /target: 'node18'/);
 });
 
-test('Obsidian normal panel exposes one user-facing Ready state, not internal transport layers', () => {
+test('Obsidian panel distinguishes Current Project, this vault and shared lifecycle actions', () => {
   const view = source('obsidian-plugin/src/view.js');
-  assert.match(view, /action\('Start'/);
-  assert.match(view, /action\('Stop'/);
-  assert.doesNotMatch(view, /moreAction\('Stop'/);
-  assert.match(view, /action\('Restart'/);
+  assert.match(view, /action\('Start \/ Activate Project'/);
+  assert.match(view, /action\('Stop Shared Runtime'/);
+  assert.doesNotMatch(view, /moreAction\('Stop/);
+  assert.match(view, /action\('Restart Shared Runtime'/);
   assert.match(view, /action\('Copy MCP URL'/);
+  assert.match(view, /detail\('Current Project'\)/);
+  assert.match(view, /detail\('This Vault'\)/);
+  assert.match(view, /On · attach only/);
   assert.doesNotMatch(view, /Public MCP|Public connection|Public ingress|Internal Gateway|Verification|internal only/);
   assert.doesNotMatch(view, /Copy Bearer Token/);
   assert.match(view, /setText\(this\.ui\.statusLabel, resolvedStatus\.label\)/);

@@ -12,6 +12,7 @@ const { childExited, terminateProcessTree } = require('./host/runtime/process-tr
 const { healthAt, healthMatches } = require('./host/runtime/network.js');
 const { resolveNodeRuntime } = require('./host/runtime/node-runtime.js');
 const { configureAuthentication, updateConfig } = require('./shared/config-store.cjs');
+const { publishHostContext } = require('./shared/host-registry.cjs');
 const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
 const { ensureOAuthSecrets } = require('./shared/oauth-secrets.cjs');
 const { setLifecycleIntent } = require('./shared/lifecycle-intent.cjs');
@@ -175,6 +176,7 @@ function collectVsCodeContext(){
   }
   return {
     capturedAt: new Date().toISOString(),
+    focused: vscode.window.state?.focused === true,
     workspaceRoot: root,
     activeEditor: active,
     visibleEditors,
@@ -234,14 +236,13 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   data.maintenance = maintenanceConfig();
   data.connection ||= {};
   const vscodeContext = collectVsCodeContext();
-  data.hostContexts ||= {};
-  data.hostContexts[hostId] = {
+  publishHostContext(data, hostId, {
     ...vscodeContext,
     hostId,
     kind: 'editor',
+    pid: process.pid,
     updatedAt: vscodeContext.capturedAt
-  };
-  data.activeHostId = hostId;
+  });
   delete data.vscodeContext;
   configureAuthentication(data, authenticationMode());
   if(data.auth.mode === 'oauth') ensureOAuthSecrets(p);
@@ -451,10 +452,11 @@ function runDefaultStartCommand(){
     refreshPanel();
   });
 }
-async function startGateway(ctx){
+async function startGateway(ctx,{activateWorkspace=true}={}){
   const controller = await ensureGatewayController(ctx);
-  controller.activateWorkspace();
-  syncConfig(ctx,true);
+  if(activateWorkspace) controller.activateWorkspace();
+  else controller.ensureConfig();
+  syncConfig(ctx,activateWorkspace);
   const result = await controller.start({timeoutMs:20000});
   gatewayProcess = controller.child;
   trackGatewayProcess(gatewayProcess);
@@ -578,19 +580,19 @@ async function rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommand
     if(!stopped.stopped && stopped.reason !== 'not-running') log(`Could not roll back default start command: ${stopped.reason}`);
   }
 }
-async function quickStart(ctx,{quiet=false}={}){
+async function quickStart(ctx,{quiet=false,activateWorkspace=true}={}){
   let gateway = null;
   let tunnel = null;
   let tunnelWasRunning = false;
   const startCommandWasRunning = !!startCommandProcess && !childExited(startCommandProcess);
-  const trace = { startedAt:new Date().toISOString(), totalMs:0, success:false, stages:{} };
+  const trace = { startedAt:new Date().toISOString(), totalMs:0, success:false, activateWorkspace, stages:{} };
   const overallStarted = Date.now();
   lastStartupTrace = trace;
   try{
     if(!currentRoot()) throw new Error('Open a VS Code project folder first.');
     setDesiredLifecycleState(ctx,'running','start');
     let stageStarted = Date.now();
-    gateway = await startGateway(ctx);
+    gateway = await startGateway(ctx,{activateWorkspace});
     trace.stages.gatewayMs = Date.now() - stageStarted;
     try { tunnelWasRunning = currentTunnelStatus(ctx)?.running === true; } catch {}
     stageStarted = Date.now();
@@ -631,7 +633,7 @@ async function quickStart(ctx,{quiet=false}={}){
     trace.success = true;
     trace.totalMs = Date.now() - overallStarted;
     trace.readyAt = new Date().toISOString();
-    return {ok:true,gateway,tunnel,publicUrl,mcpUrl:test.mcpUrl,toolCount:test.toolCount,server:test.server,copied,copyError,startupTrace:trace};
+    return {ok:true,gateway,tunnel,publicUrl,mcpUrl:test.mcpUrl,toolCount:test.toolCount,server:test.server,copied,copyError,activatedWorkspace:activateWorkspace,startupTrace:trace};
   }catch(e){
     const recovering = transientPublicMcpError(e);
     await rollbackFailedStart({gateway,tunnel,tunnelWasRunning,startCommandWasRunning,preserveConnection:recovering});
@@ -1013,12 +1015,14 @@ function panelHtml(ctx, webview){
     ? 'Ready for the configured persistent ChatGPT app address.'
     : publicState.stability?.message || 'DevMate is preparing the public MCP connection automatically.';
   const chatgptFlow = publicState.stability?.chatgptEligible
-    ? 'Press Start once. DevMate verifies the configured stable endpoint; use Copy MCP URL in the DevMate ChatGPT connection.'
+    ? 'Use Start / Activate Project when this VS Code folder should become the Current Project; DevMate verifies the stable endpoint before reporting Ready.'
     : 'This verified endpoint is a current-session share. For a persistent ChatGPT app address, use Connection Setup and choose an account-owned stable HTTPS endpoint.';
   const references = (data.workspaces || []).filter(w => w.reference);
   const activeWorkspace = (data.workspaces || []).find(w => w.id === data.activeWorkspaceId) || (data.workspaces || []).find(w => !w.reference);
   const workspaceState = {
     active: activeWorkspace ? {id:activeWorkspace.id,name:activeWorkspace.name,root:activeWorkspace.root,mode:activeWorkspace.mode} : null,
+    thisHost: {hostId:vscodeHostInstanceId(root),workspaceRoot:root || null,focused:vscode.window.state?.focused === true},
+    focusedHostId: data.hostRuntime?.focusedHostId || null,
     references: references.length
   };
   const referenceJson = JSON.stringify(references.map(w => ({id:w.id,name:w.name,root:w.root})), null, 2);
@@ -1059,14 +1063,15 @@ function panelHtml(ctx, webview){
   <h2>DevMate ${VERSION}</h2>
   <div class="ready-card"><strong>${esc(statusLabel(publicState))}</strong><span class="muted">${esc(publicState.verified ? chatgptDetail : ['failed','recovering'].includes(publicState.state) ? connectionErrorSummary({message:publicState.failure,code:publicState.failureCode}) : 'DevMate is preparing the public MCP connection automatically.')}</span></div>
   <div class="status-grid">
-    <b>Current Project</b><code>${esc(root || 'Open a VS Code folder first')}</code>
+    <b>Current Project</b><code>${esc(activeWorkspace?.root || 'No Current Project')}</code>
+    <b>This VS Code</b><code>${esc(root || 'No workspace open')}</code>
     <b>MCP</b><code>${esc(mcpDisplay)}</code>
     <b>Connection</b><code>${esc(ingressDisplay)}</code>
   </div>
   <div class="toolbar">
-    <button data-cmd="quickStart">Start</button>
-    <button class="secondary danger" data-cmd="stop">Stop</button>
-    <button class="secondary" data-cmd="restart">Restart</button>
+    <button data-cmd="quickStart">Start / Activate Project</button>
+    <button class="secondary danger" data-cmd="stop">Stop Shared Runtime</button>
+    <button class="secondary" data-cmd="restart">Restart Shared Runtime</button>
     <button data-cmd="copyUrl">Copy MCP URL</button>
     <button class="secondary" data-cmd="connectionSetup">Connection Setup</button>
     <button class="secondary" data-cmd="manageWorkspaces">Manage Workspaces</button>
@@ -1084,6 +1089,7 @@ function panelHtml(ctx, webview){
       <b>Local</b><code>127.0.0.1:${esc(data.server.port)}/mcp · internal only</code>
       <b>Auth</b><code>${esc(data.auth?.mode === 'oauth' ? 'OAuth' : 'none')}</code>
       <b>Permissions</b><code>${esc(data.permissions?.profile || 'fullAccess')}</code>
+      <b>Focused Host</b><code>${esc(data.hostRuntime?.focusedHostId || 'none')}</code>
       <b>Last preflight</b><code>${esc(data.connection?.lastPreflightAt ? `${data.connection.lastPreflightAt} ${data.connection.lastPublicHost || ''}` : 'not recorded')}</code>
       <b>Start command</b><code>${esc(startCommandProcess ? 'running' : (String(cfg().get('defaultStartCommand') || '').trim() || 'not configured'))}</code>
     </div>
@@ -1112,7 +1118,7 @@ function panelHtml(ctx, webview){
   </details>
   <details>
     <summary>Workspace state</summary>
-    <p class="muted">The Current Project follows VS Code. Additional writable workspaces can be managed separately and selected per ChatGPT conversation; reference projects remain readonly.</p>
+    <p class="muted">The Current Project is machine-wide. Opening another VS Code or Obsidian host only registers its workspace and context; use Start / Activate Project when this host should become the default for new ChatGPT conversations.</p>
     <pre>${esc(JSON.stringify(workspaceState,null,2))}</pre>
   </details>
   <script nonce="${n}">
@@ -1247,6 +1253,12 @@ function runtimeDiagnostics(){
   return {
     startup: lastStartupTrace,
     lifecycle: config?.lifecycle || null,
+    host: {
+      id: vscodeHostInstanceId(currentRoot()),
+      focused: vscode.window.state?.focused === true,
+      currentProjectId: config?.activeWorkspaceId || null,
+      focusedHostId: config?.hostRuntime?.focusedHostId || null
+    },
     jobs: { embeddedRunnerEnabled: config?.jobs?.embeddedRunnerEnabled === true },
     gateway: typeof gatewayController?.diagnosticSnapshot === 'function' ? gatewayController.diagnosticSnapshot() : null,
     tunnel: tunnel ? { running:tunnel.running, owned:tunnel.owned, attached:tunnel.attached, provider:tunnel.provider, publicUrl:tunnel.publicUrl || null, port:tunnel.port || null } : null,

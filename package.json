@@ -66,7 +66,7 @@
     "commands": [
       {
         "command": "devMate.start",
-        "title": "DevMate: Start"
+        "title": "DevMate: Start / Activate Current Project"
       },
       {
         "command": "devMate.open",
@@ -74,11 +74,11 @@
       },
       {
         "command": "devMate.stop",
-        "title": "DevMate: Stop"
+        "title": "DevMate: Stop Shared Runtime"
       },
       {
         "command": "devMate.restart",
-        "title": "DevMate: Restart"
+        "title": "DevMate: Restart Shared Runtime"
       },
       {
         "command": "devMate.copyUrl",
@@ -180,7 +180,12 @@
         "devMate.autoStart": {
           "type": "boolean",
           "default": true,
-          "description": "Bring the complete DevMate connection to Ready automatically after VS Code opens a workspace."
+          "description": "Bring the shared DevMate connection to Ready automatically after VS Code opens a workspace. By default this attaches without changing the machine Current Project."
+        },
+        "devMate.activateWorkspaceOnAutoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also make this VS Code workspace the machine-wide Current Project during automatic startup. Leave disabled for deterministic multi-window behavior; manual DevMate Start always activates the current project."
         },
         "devMate.sharedStateDirectory": {
           "type": "string",
@@ -259,7 +264,7 @@
         "devMate.autoUseCurrentWorkspace": {
           "type": "boolean",
           "default": true,
-          "description": "Use the current VS Code folder as the active writable workspace."
+          "description": "Register the current VS Code folder as a writable DevMate workspace during host refresh. This does not change the machine Current Project."
         },
         "devMate.authenticationMode": {
           "type": "string",

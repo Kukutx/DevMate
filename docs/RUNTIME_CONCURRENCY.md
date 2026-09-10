@@ -1,6 +1,6 @@
 # Runtime concurrency and recovery
 
-DevMate desktop hosts share one machine-wide state directory by default and may be open at the same time. Start, Stop, Restart, recovery, reconfiguration and unload are coordinated state transitions rather than independent button handlers. Opening another project registers it with the same desktop instance; an explicit Start selects that host's project as active.
+DevMate desktop hosts share one machine-wide state directory by default and may be open at the same time. Start, Stop, Restart, recovery, reconfiguration and unload are coordinated state transitions rather than independent button handlers. Opening another project registers it with the same desktop instance. Automatic host startup starts or attaches the shared runtime without changing the machine Current Project; an explicit user Start/Restart is an authoritative project activation.
 
 ## Host operation serialization
 
@@ -14,6 +14,26 @@ idle -> starting -> running -> stopping -> idle
 ```
 
 Repeated Start calls reuse an owned Gateway or attach to the matching shared instance. Stop and Restart wait for locally owned Gateway children to exit before the next local transition begins.
+
+## Current Project authority
+
+The machine-wide Current Project is distinct from host registration and runtime availability.
+
+- VS Code automatic startup defaults to **attach-only** project semantics: it ensures the shared Gateway/public connection reaches Ready but does not change `activeWorkspaceId`.
+- `devMate.activateWorkspaceOnAutoStart` is an explicit VS Code compatibility opt-in for automatic project activation.
+- Obsidian automatic startup and lifecycle recovery are attach-only.
+- A manual `DevMate: Start / Activate Current Project` or explicit Restart is authoritative and may change the machine Current Project to that host's workspace/vault.
+- Routine editor, selection, diagnostics, note, vault or host-context refreshes may register/update a workspace but never change the Current Project.
+
+This keeps opening background windows from changing the default project for new ChatGPT conversations while preserving deliberate project switching.
+
+## Desktop Host Registry
+
+Each live desktop host publishes an isolated host context keyed by its process-scoped host ID. VS Code IDs include the workspace runtime identity and process ID; Obsidian IDs include the vault runtime identity and process ID.
+
+Host context includes process identity, update time, workspace/vault root and explicit focus state. `hostRuntime.focusedHostId` represents an actually focused desktop host, while `activeHostId` remains the compatibility/default context selector. A background host refresh does not replace the focused host. When no host reports focus, the existing active selector remains valid and the newest surviving context is only a fallback.
+
+Normal host shutdown deletes only that host's context. Abnormal exits are recovered opportunistically: host registration prunes sufficiently old contexts whose recorded process is no longer alive, while legacy contexts without a PID use a longer age bound. The current publisher is never pruned during its own update. This avoids a separate heartbeat write loop and keeps stale crash records bounded without adding config write pressure.
 
 ## Cross-host Gateway startup lease
 
@@ -75,7 +95,7 @@ Stop is ownership-aware on both resources.
 - A host terminates only Gateway/provider processes that it owns.
 - An attached host does not terminate a compatible resource owned by another host.
 - A host does **not** keep its own Gateway child alive merely because the provider is remotely owned.
-- If another host still requests the session after an owner exits, that host recovers through the same complete Start lifecycle and re-verifies MCP.
+- If another host still requests the session after an owner exits, that host recovers through the same complete Start lifecycle and re-verifies MCP without changing the Current Project.
 - If provider shutdown cannot be confirmed, cleanup fails closed instead of tearing down the local Gateway underneath an uncertain provider state.
 
 This avoids both duplicate processes and intentionally orphaned locally owned processes.
@@ -91,8 +111,10 @@ This avoids both duplicate processes and intentionally orphaned locally owned pr
 - Unsupported historical instance fields fail closed; hosts do not translate them into current capabilities during startup.
 - Changed writes remain atomic, restrictive and protected by the cross-process config lock.
 - A locked mutation that produces identical JSON returns without replacing `config.json`.
+- VS Code config synchronization may update only the Host Registry-owned `hostRuntime` fields (`focusedHostId`, `lastInteractiveHostId`, `lastInteractiveAt`); authentication/permission generations and other shared runtime authority are preserved from the current locked snapshot.
+- Timestamp-only VS Code host-context refreshes reuse the existing context object, allowing the shared config store's equality check to turn those refreshes into no-op writes.
 
-Obsidian deduplicates identical host-context snapshots before writing them. Its status poll updates existing panel fields rather than clearing and rebuilding the panel DOM.
+Obsidian deduplicates identical host-context snapshots before writing them. Its focus flag is part of that signature, so focus transitions persist while unchanged background polling does not create writes. Its status poll updates existing panel fields rather than clearing and rebuilding the panel DOM.
 
 ## Explicit VS Code runtime boundaries
 
@@ -100,7 +122,7 @@ VS Code uses the same shared `RuntimeController` Gateway lifecycle as Obsidian. 
 
 `TunnelController` receives the current connection capability, machine-local executable settings and secure host credentials directly. `extension-entry.js` owns ngrok account/setup concerns; `extension-entry-platform.js` owns generic connection configuration and diagnostics. Neither layer implements an alternate Gateway/public-connection lifecycle.
 
-VS Code's generic config sync writes host-owned context/settings fields only. It cannot overwrite the shared `connection` capability and rejects unsupported historical instance fields.
+VS Code's generic config sync writes host-owned context/settings fields only. It cannot overwrite the shared `connection` capability, authentication/permission authority or unrelated `hostRuntime` fields, and it rejects unsupported historical instance fields.
 
 ## Desktop Node runtime
 
@@ -119,10 +141,12 @@ Provider readiness capture is likewise bounded. Provider-specific discovery must
 Runtime changes must pass on Windows and Linux:
 
 1. operation ordering, startup lease, config recovery/current-schema rejection, no-op config writes, bounded health reads and Node resolution;
-2. two Gateway controllers starting concurrently against one state directory with exactly one owned Gateway child;
-3. provider owner/follower convergence, configuration conflict handling, launch failure cleanup, readiness timeout and ownership-loss cleanup;
-4. complete-session generation tests proving both Gateway and provider generation changes stale verification;
-5. cross-host Stop/recovery tests proving a local owner is released without killing remote ownership and without leaving an intentional orphan;
-6. packaged VSIX Gateway/public-connection smoke tests;
-7. packaged Obsidian Start/health/Stop/recovery smoke tests;
-8. existing Gateway, MCP, Docker and real Godot regression gates.
+2. concurrent multi-process Host Registry writes against one state directory without lost host contexts or policy-generation changes;
+3. two Gateway controllers starting concurrently against one state directory with exactly one owned Gateway child;
+4. provider owner/follower convergence, configuration conflict handling, launch failure cleanup, readiness timeout and ownership-loss cleanup;
+5. complete-session generation tests proving both Gateway and provider generation changes stale verification;
+6. cross-host Stop/recovery tests proving a local owner is released without killing remote ownership and without leaving an intentional orphan;
+7. automatic VS Code/Obsidian attach does not change Current Project, while explicit Start does;
+8. packaged VSIX Gateway/public-connection smoke tests;
+9. packaged Obsidian Start/health/Stop/recovery smoke tests;
+10. existing Gateway, MCP, Docker and real Godot regression gates.

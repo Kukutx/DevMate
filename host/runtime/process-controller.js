@@ -11,6 +11,7 @@ const {
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
 const { activateInstanceWorkspace, ensureInstanceConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
+const { clearHostContext, publishHostContext } = require('../../shared/host-registry.cjs');
 const { cleanupOwnedGatewayInstanceLock } = require('./instance-lock-cleanup.js');
 const { choosePort, healthAt, healthMatches } = require('./network.js');
 const { OperationCoordinator } = require('./operation-coordinator.js');
@@ -222,29 +223,20 @@ class RuntimeController {
   updateHostContext(context) {
     if (this.disposed) throw new Error('Runtime controller is disposed');
     return updateConfig(this.configFile, config => {
-      config.hostContexts ||= {};
-      config.hostContexts[this.hostId] = boundedContext({
+      publishHostContext(config, this.hostId, boundedContext({
         ...context,
         hostId: this.hostId,
+        pid: process.pid,
         updatedAt: context?.updatedAt || now(),
         workspaceRoot: context?.workspaceRoot || this.workspaceRoot
-      });
-      config.activeHostId = this.hostId;
+      }));
       return config;
     });
   }
 
   clearHostContext() {
     return updateConfig(this.configFile, config => {
-      if (!config.hostContexts?.[this.hostId]) return config;
-      delete config.hostContexts[this.hostId];
-      if (config.activeHostId === this.hostId) {
-        const next = Object.entries(config.hostContexts)
-          .filter(([, context]) => context && typeof context === 'object')
-          .sort(([, left], [, right]) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))[0];
-        if (next) config.activeHostId = next[0];
-        else delete config.activeHostId;
-      }
+      clearHostContext(config, this.hostId);
       return config;
     });
   }

@@ -12,6 +12,17 @@ const {
 const { withFileLockSync } = require('../config-file-lock.cjs');
 const { assertSupportedInstanceShape } = require('../shared/instance-config.cjs');
 const { normalizeAuthentication } = require('../shared/auth-config.cjs');
+const {
+  prunedHostContexts,
+  publisherHostId,
+  timestampMs
+} = require('../shared/host-registry.cjs');
+
+const HOST_REGISTRY_RUNTIME_FIELDS = Object.freeze([
+  'focusedHostId',
+  'lastInteractiveHostId',
+  'lastInteractiveAt'
+]);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -102,14 +113,82 @@ function sameHostContext(left, right) {
   return JSON.stringify(comparableHostContext(left)) === JSON.stringify(comparableHostContext(right));
 }
 
-function mergeHostContexts(currentValue, candidateValue, { refreshHostId = '' } = {}) {
+function samePersistedHostContext(left, right) {
+  return JSON.stringify(object(left)) === JSON.stringify(object(right));
+}
+
+function mergeOneHostContext(currentContext, candidateContext) {
+  if (!currentContext) return candidateContext;
+  if (!candidateContext) return currentContext;
+  if (timestampMs(currentContext) > timestampMs(candidateContext)) return currentContext;
+  return sameHostContext(currentContext, candidateContext) ? currentContext : candidateContext;
+}
+
+function mergeHostContexts(currentValue, candidateValue, {
+  refreshHostId = '',
+  prunedContexts = {}
+} = {}) {
   const current = object(currentValue);
   const candidate = object(candidateValue);
   const merged = { ...current };
+
+  for (const [hostId, staleSnapshot] of Object.entries(object(prunedContexts))) {
+    if (has(current, hostId) && samePersistedHostContext(current[hostId], staleSnapshot)) delete merged[hostId];
+  }
+
+  if (refreshHostId) {
+    if (has(candidate, refreshHostId)) {
+      merged[refreshHostId] = mergeOneHostContext(current[refreshHostId], candidate[refreshHostId]);
+    }
+    return merged;
+  }
   for (const [hostId, context] of Object.entries(candidate)) {
-    merged[hostId] = hostId !== refreshHostId && has(current, hostId) && sameHostContext(current[hostId], context)
-      ? current[hostId]
-      : context;
+    merged[hostId] = mergeOneHostContext(current[hostId], context);
+  }
+  return merged;
+}
+
+function mergeHostRuntime(currentValue, candidateValue, {
+  refreshHostId = '',
+  currentContexts = {},
+  candidateContexts = {}
+} = {}) {
+  const current = object(currentValue);
+  const candidate = object(candidateValue);
+  const merged = { ...current };
+
+  if (!refreshHostId) {
+    for (const key of HOST_REGISTRY_RUNTIME_FIELDS) {
+      if (has(candidate, key)) merged[key] = candidate[key];
+      else delete merged[key];
+    }
+    return merged;
+  }
+
+  const currentWriterContext = object(currentContexts)[refreshHostId];
+  const writerContext = object(candidateContexts)[refreshHostId];
+  const currentFocusedId = String(current.focusedHostId || '');
+  const currentFocusedContext = object(currentContexts)[currentFocusedId];
+  const writerStamp = timestampMs(writerContext);
+  const focusedStamp = timestampMs(currentFocusedContext);
+  const writerFocused = writerContext?.focused === true;
+  const semanticNoop = currentFocusedId === refreshHostId && sameHostContext(currentWriterContext, writerContext);
+  const writerCanTakeFocus = writerFocused && (
+    !currentFocusedId || currentFocusedId === refreshHostId || writerStamp >= focusedStamp
+  );
+
+  if (writerCanTakeFocus) {
+    merged.focusedHostId = refreshHostId;
+    if (!semanticNoop) {
+      const candidateInteractiveAt = String(candidate.lastInteractiveAt || writerContext.updatedAt || writerContext.capturedAt || '');
+      const currentInteractiveAt = String(current.lastInteractiveAt || '');
+      if (!currentInteractiveAt || !candidateInteractiveAt || candidateInteractiveAt >= currentInteractiveAt) {
+        merged.lastInteractiveHostId = refreshHostId;
+        if (candidateInteractiveAt) merged.lastInteractiveAt = candidateInteractiveAt;
+      }
+    }
+  } else if (!writerFocused && currentFocusedId === refreshHostId) {
+    delete merged.focusedHostId;
   }
   return merged;
 }
@@ -150,19 +229,43 @@ function mergeExtensionConfig(currentValue, candidateValue) {
   else if (has(current, 'workspaces')) merged.workspaces = current.workspaces;
 
   for (const key of [
-    'activeWorkspaceId', 'permissions', 'connection', 'team', 'requestPolicy', 'hostRuntime', 'plugins',
+    'activeWorkspaceId', 'permissions', 'connection', 'team', 'requestPolicy', 'plugins',
     'jobs', 'runnerControl', 'trustedWritableRoots'
   ]) {
     if (!initializing || key !== 'activeWorkspaceId') preserveCurrentObject(merged, current, key);
   }
 
+  const refreshHostId = publisherHostId(candidate);
+  const staleContexts = prunedHostContexts(candidate);
+  const hostRuntime = mergeHostRuntime(current.hostRuntime, candidate.hostRuntime, {
+    refreshHostId,
+    currentContexts: current.hostContexts,
+    candidateContexts: candidate.hostContexts
+  });
+  if (Object.keys(hostRuntime).length || has(current, 'hostRuntime')) merged.hostRuntime = hostRuntime;
+  else delete merged.hostRuntime;
+
   if (has(candidate, 'hostContexts') || has(current, 'hostContexts')) {
-    const refreshHostId = has(candidate, 'activeHostId') && candidate.activeHostId !== current.activeHostId
-      ? String(candidate.activeHostId || '')
-      : '';
-    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, { refreshHostId });
+    merged.hostContexts = mergeHostContexts(current.hostContexts, candidate.hostContexts, {
+      refreshHostId,
+      prunedContexts: staleContexts
+    });
   }
-  if (has(candidate, 'activeHostId')) merged.activeHostId = candidate.activeHostId;
+
+  if (merged.hostRuntime?.focusedHostId && !merged.hostContexts?.[merged.hostRuntime.focusedHostId]) {
+    delete merged.hostRuntime.focusedHostId;
+  }
+
+  if (refreshHostId) {
+    const focusedHostId = String(merged.hostRuntime?.focusedHostId || '');
+    if (focusedHostId && merged.hostContexts?.[focusedHostId]) merged.activeHostId = focusedHostId;
+    else if (!merged.hostContexts?.[merged.activeHostId]) {
+      if (candidate.activeHostId && merged.hostContexts?.[candidate.activeHostId]) merged.activeHostId = candidate.activeHostId;
+      else if (merged.hostContexts?.[refreshHostId]) merged.activeHostId = refreshHostId;
+    }
+  } else if (has(candidate, 'activeHostId')) {
+    merged.activeHostId = candidate.activeHostId;
+  }
   delete merged.vscodeContext;
   return merged;
 }
@@ -197,8 +300,10 @@ function writeExtensionConfig(file, candidate) {
 }
 
 module.exports = {
+  HOST_REGISTRY_RUNTIME_FIELDS,
   mergeExtensionConfig,
   mergeHostContexts,
+  mergeHostRuntime,
   mergeWorkspaces,
   readExtensionConfig,
   syncCurrentWorkspace,

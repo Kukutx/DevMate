@@ -7,19 +7,21 @@ const test = require('node:test');
 
 const extension = fs.readFileSync(path.resolve(__dirname, '..', 'extension.js'), 'utf8');
 
-test('VS Code unified panel exposes the complete necessary lifecycle actions', () => {
+test('VS Code unified panel exposes explicit Current Project and shared lifecycle actions', () => {
   const panelStart = extension.indexOf('function panelHtml(ctx, webview)');
   const panelEnd = extension.indexOf('function refreshPanel()', panelStart);
   assert.ok(panelStart >= 0 && panelEnd > panelStart);
   const panel = extension.slice(panelStart, panelEnd);
   const primaryToolbarEnd = panel.indexOf('</div>', panel.indexOf('<div class="toolbar">'));
   const primaryToolbar = panel.slice(0, primaryToolbarEnd);
-  assert.match(primaryToolbar, /data-cmd="quickStart">Start<\/button>/);
-  assert.match(primaryToolbar, /data-cmd="stop">Stop<\/button>/);
-  assert.match(primaryToolbar, /data-cmd="restart">Restart<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="quickStart">Start \/ Activate Project<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="stop">Stop Shared Runtime<\/button>/);
+  assert.match(primaryToolbar, /data-cmd="restart">Restart Shared Runtime<\/button>/);
   assert.match(primaryToolbar, /data-cmd="copyUrl">Copy MCP URL<\/button>/);
   assert.match(primaryToolbar, /data-cmd="connectionSetup">Connection Setup<\/button>/);
-  assert.match(primaryToolbar, /class="secondary danger" data-cmd="stop">Stop<\/button>/);
+  assert.match(primaryToolbar, /class="secondary danger" data-cmd="stop">Stop Shared Runtime<\/button>/);
+  assert.match(panel, /<b>Current Project<\/b>/);
+  assert.match(panel, /<b>This VS Code<\/b>/);
   assert.doesNotMatch(panel, /data-cmd="copyUrl">Copy URL<\/button>/);
 });
 
@@ -33,7 +35,7 @@ test('VS Code panel creates its CSP nonce at runtime', () => {
   assert.match(panel, /script-src 'nonce-\$\{n\}'/);
 });
 
-test('panel and command Restart share the same complete stop then Start lifecycle', () => {
+test('panel and command Restart share the same complete stop then authoritative Start lifecycle', () => {
   const restartStart = extension.indexOf('async function restartAll(ctx)');
   const restartEnd = extension.indexOf('async function copyUrl()', restartStart);
   assert.ok(restartStart >= 0 && restartEnd > restartStart);

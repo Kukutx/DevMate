@@ -23,7 +23,7 @@ test('persistent Windows process termination uses the bounded taskkill helper', 
   assert.equal(persistent.includes("const killer = spawn('taskkill'"), false);
 });
 
-test('config reads are pure and VS Code publishes an isolated host context', () => {
+test('config reads are pure and VS Code publishes an isolated focused host context', () => {
   const extension = source('extension.js');
   const readStart = extension.indexOf('function ensureConfig(ctx)');
   const syncStart = extension.indexOf('function syncConfig(ctx', readStart);
@@ -32,8 +32,10 @@ test('config reads are pure and VS Code publishes an isolated host context', () 
   assert.equal(/writeJson|collectVsCodeContext/.test(readBlock), false);
   const syncBlock = extension.slice(syncStart, extension.indexOf('function scheduleContextRefresh', syncStart));
   assert.equal(syncBlock.includes('const hostId = vscodeHostInstanceId(root);'), true);
-  assert.equal(syncBlock.includes('data.hostContexts[hostId]'), true);
+  assert.equal(syncBlock.includes('publishHostContext(data, hostId'), true);
+  assert.equal(syncBlock.includes('pid: process.pid'), true);
   assert.equal(syncBlock.includes('delete data.vscodeContext'), true);
+  assert.equal(extension.includes('focused: vscode.window.state?.focused === true'), true);
   assert.equal(fs.existsSync(path.join(root, 'vscode-host', 'context-mirror.js')), false);
 });
 

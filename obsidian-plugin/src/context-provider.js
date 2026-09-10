@@ -8,10 +8,22 @@ function clampText(value, max = 20000) {
   return text.length > max ? `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]` : text;
 }
 
+function windowFocused() {
+  return typeof document === 'undefined' || typeof document.hasFocus !== 'function' ? true : document.hasFocus();
+}
+
 class ObsidianContextProvider {
   constructor(plugin) {
     this.plugin = plugin;
     this.lastCaptureSignature = '';
+    if (typeof window !== 'undefined' && typeof plugin.registerDomEvent === 'function') {
+      const publishFocus = () => {
+        this.invalidateCapture();
+        plugin.scheduleContextCapture?.();
+      };
+      plugin.registerDomEvent(window, 'focus', publishFocus);
+      plugin.registerDomEvent(window, 'blur', publishFocus);
+    }
   }
 
   activeEditorContext() {
@@ -67,6 +79,7 @@ class ObsidianContextProvider {
     if (!controller || !this.plugin.settings.enabled) return null;
     const context = {
       kind: 'knowledge-base',
+      focused: windowFocused(),
       workspaceRoot: this.plugin.vaultRoot,
       vault: this.vaultSummary(),
       activeDocument: this.currentNoteContext(),
@@ -109,5 +122,6 @@ class ObsidianContextProvider {
 
 module.exports = {
   ObsidianContextProvider,
-  clampText
+  clampText,
+  windowFocused
 };

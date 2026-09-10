@@ -17,6 +17,8 @@ const { RuntimeController } = require('../host/runtime-controller.js');
 
 const root = path.resolve(import.meta.dirname, '..');
 const INDEXED_FIXTURE_TEST_TIMEOUT_MS = 90000;
+const LARGE_STATE_MAINTENANCE_TIMEOUT_MS = process.platform === 'win32' ? 30000 : 15000;
+const LARGE_STATE_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60000 : 30000;
 
 async function freePort() {
   const server = net.createServer();
@@ -29,7 +31,7 @@ async function freePort() {
   return port;
 }
 
-async function waitForMaintenance(paths, predicate, timeoutMs = 15000) {
+async function waitForMaintenance(paths, predicate, timeoutMs = LARGE_STATE_MAINTENANCE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   let summary = await stateSummary(paths);
   while (!predicate(summary) && Date.now() < deadline) {
@@ -39,7 +41,7 @@ async function waitForMaintenance(paths, predicate, timeoutMs = 15000) {
   return summary;
 }
 
-test('Gateway purges legacy backup layouts during startup and still trims large audit state', { timeout: 30000 }, async () => {
+test('Gateway purges legacy backup layouts during startup and still trims large audit state', { timeout: LARGE_STATE_TEST_TIMEOUT_MS }, async () => {
   const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-large-state-'));
   let workspaceRoot;
   let controller;

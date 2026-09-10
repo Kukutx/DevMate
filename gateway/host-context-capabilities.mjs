@@ -28,6 +28,11 @@ function selectContext(config, hostId = '') {
   const entries = contextEntries(config);
   const requested = String(hostId || '').trim();
   if (requested) return entries.find(item => item.id === requested || item.hostId === requested) || null;
+  const focused = String(config?.hostRuntime?.focusedHostId || '').trim();
+  if (focused) {
+    const context = entries.find(item => item.id === focused || item.hostId === focused);
+    if (context) return context;
+  }
   const active = String(config?.activeHostId || '').trim();
   return entries.find(item => item.id === active || item.hostId === active) || entries[0] || null;
 }
@@ -56,16 +61,22 @@ export function registerHostContextTools(server) {
       id: context.id,
       hostId: context.hostId || context.id,
       kind: context.kind || 'unknown',
+      focused: context.focused === true,
+      pid: Number.isInteger(Number(context.pid)) ? Number(context.pid) : null,
       updatedAt: context.updatedAt || context.capturedAt || null,
       workspaceRoot: context.workspaceRoot || null,
       activeDocument: context.activeDocument?.path || context.activeEditor?.path || null
     }));
-    return toolText({ activeHostId: config.activeHostId || null, hosts });
+    return toolText({
+      activeHostId: config.activeHostId || null,
+      focusedHostId: config.hostRuntime?.focusedHostId || null,
+      hosts
+    });
   });
 
   registerTool(server, 'host_context', {
     title: 'Read host context',
-    description: 'Read the current or requested DevMate host context, including the active editor or Obsidian note when available.',
+    description: 'Read the focused or requested DevMate host context, including the active editor or Obsidian note when available.',
     inputSchema: { hostId: z.string().optional(), workspaceId: z.string().optional() },
     annotations: {
       readOnlyHint: true,
@@ -78,6 +89,7 @@ export function registerHostContextTools(server) {
     const context = selectContext(config, hostId);
     return toolText({
       activeHostId: config.activeHostId || null,
+      focusedHostId: config.hostRuntime?.focusedHostId || null,
       requestedHostId: hostId || null,
       context: bounded(context)
     });
