@@ -115,3 +115,76 @@ test('one VS Code writer cannot replay stale context or focus over a newer host'
   assert.equal(merged.hostRuntime.lastInteractiveHostId, 'obsidian-b');
   assert.equal(merged.activeHostId, 'obsidian-b');
 });
+
+test('stale cleanup removes only the exact dead snapshot observed by the publisher', () => {
+  const dead = {
+    hostId: 'dead-host',
+    focused: false,
+    pid: 3001,
+    updatedAt: '2026-09-10T09:00:00.000Z'
+  };
+  const current = {
+    version: SUPPORTED_CONFIG_VERSION,
+    instanceId: 'stable',
+    hostRuntime: {},
+    hostContexts: { 'dead-host': dead },
+    activeHostId: 'dead-host'
+  };
+  const candidate = structuredClone(current);
+  publishHostContext(candidate, 'vscode-writer', {
+    focused: false,
+    pid: 3002,
+    updatedAt: '2026-09-10T10:00:00.000Z'
+  }, {
+    nowMs: Date.parse('2026-09-10T10:00:00.000Z'),
+    deadHostGraceMs: 30000,
+    processAliveImpl: pid => pid === 3002
+  });
+
+  const merged = mergeExtensionConfig(current, candidate);
+  assert.equal(merged.hostContexts['dead-host'], undefined);
+  assert.ok(merged.hostContexts['vscode-writer']);
+});
+
+test('stale cleanup evidence cannot delete a host that refreshed before the writer acquired the config lock', () => {
+  const stale = {
+    hostId: 'recovering-host',
+    focused: false,
+    pid: 4001,
+    updatedAt: '2026-09-10T09:00:00.000Z',
+    activeEditor: { path: 'old.js' }
+  };
+  const base = {
+    version: SUPPORTED_CONFIG_VERSION,
+    instanceId: 'stable',
+    hostRuntime: {},
+    hostContexts: { 'recovering-host': stale },
+    activeHostId: 'recovering-host'
+  };
+  const candidate = structuredClone(base);
+  publishHostContext(candidate, 'vscode-writer', {
+    focused: false,
+    pid: 4002,
+    updatedAt: '2026-09-10T10:00:00.000Z'
+  }, {
+    nowMs: Date.parse('2026-09-10T10:00:00.000Z'),
+    deadHostGraceMs: 30000,
+    processAliveImpl: pid => pid === 4002
+  });
+
+  const current = structuredClone(base);
+  current.hostContexts['recovering-host'] = {
+    hostId: 'recovering-host',
+    focused: true,
+    pid: 4003,
+    updatedAt: '2026-09-10T10:00:01.000Z',
+    activeEditor: { path: 'recovered.js' }
+  };
+  current.hostRuntime.focusedHostId = 'recovering-host';
+  current.activeHostId = 'recovering-host';
+
+  const merged = mergeExtensionConfig(current, candidate);
+  assert.equal(merged.hostContexts['recovering-host'].activeEditor.path, 'recovered.js');
+  assert.equal(merged.hostRuntime.focusedHostId, 'recovering-host');
+  assert.equal(merged.activeHostId, 'recovering-host');
+});
