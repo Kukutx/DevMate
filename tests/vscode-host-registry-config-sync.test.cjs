@@ -70,6 +70,44 @@ test('timestamp-only VS Code context refresh reuses current context to avoid wri
   assert.equal(merged.hostContexts['vscode-a'], currentContext);
 });
 
+test('focused timestamp-only refresh does not advance interaction metadata', () => {
+  const current = {
+    version: SUPPORTED_CONFIG_VERSION,
+    instanceId: 'stable',
+    hostRuntime: {
+      focusedHostId: 'vscode-a',
+      lastInteractiveHostId: 'vscode-a',
+      lastInteractiveAt: '2026-09-10T10:00:00.000Z'
+    },
+    hostContexts: {
+      'vscode-a': {
+        hostId: 'vscode-a',
+        focused: true,
+        kind: 'editor',
+        pid: 1501,
+        workspaceRoot: 'C:/work/a',
+        capturedAt: '2026-09-10T10:00:00.000Z',
+        updatedAt: '2026-09-10T10:00:00.000Z'
+      }
+    },
+    activeHostId: 'vscode-a'
+  };
+  const candidate = structuredClone(current);
+  publishHostContext(candidate, 'vscode-a', {
+    ...candidate.hostContexts['vscode-a'],
+    capturedAt: '2026-09-10T10:00:05.000Z',
+    updatedAt: '2026-09-10T10:00:05.000Z'
+  }, {
+    nowMs: Date.parse('2026-09-10T10:00:05.000Z'),
+    processAliveImpl: () => true
+  });
+
+  const merged = mergeExtensionConfig(current, candidate);
+  assert.equal(merged.hostContexts['vscode-a'], current.hostContexts['vscode-a']);
+  assert.equal(merged.hostRuntime.lastInteractiveAt, '2026-09-10T10:00:00.000Z');
+  assert.equal(merged.hostRuntime.lastInteractiveHostId, 'vscode-a');
+});
+
 test('one VS Code writer cannot replay stale context or focus over a newer host', () => {
   const base = {
     version: SUPPORTED_CONFIG_VERSION,
@@ -144,6 +182,37 @@ test('stale cleanup removes only the exact dead snapshot observed by the publish
   const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.hostContexts['dead-host'], undefined);
   assert.ok(merged.hostContexts['vscode-writer']);
+});
+
+test('stale focused host cleanup clears focusedHostId after exact snapshot removal', () => {
+  const stale = {
+    hostId: 'dead-focused',
+    focused: true,
+    pid: 3501,
+    updatedAt: '2026-09-10T09:00:00.000Z'
+  };
+  const current = {
+    version: SUPPORTED_CONFIG_VERSION,
+    instanceId: 'stable',
+    hostRuntime: { focusedHostId: 'dead-focused' },
+    hostContexts: { 'dead-focused': stale },
+    activeHostId: 'dead-focused'
+  };
+  const candidate = structuredClone(current);
+  publishHostContext(candidate, 'vscode-writer', {
+    focused: false,
+    pid: 3502,
+    updatedAt: '2026-09-10T10:00:00.000Z'
+  }, {
+    nowMs: Date.parse('2026-09-10T10:00:00.000Z'),
+    deadHostGraceMs: 30000,
+    processAliveImpl: pid => pid === 3502
+  });
+
+  const merged = mergeExtensionConfig(current, candidate);
+  assert.equal(merged.hostContexts['dead-focused'], undefined);
+  assert.equal(merged.hostRuntime.focusedHostId, undefined);
+  assert.equal(merged.activeHostId, 'vscode-writer');
 });
 
 test('stale cleanup evidence cannot delete a host that refreshed before the writer acquired the config lock', () => {
