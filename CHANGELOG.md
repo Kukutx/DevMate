@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.8
+- Stabilized multi-host desktop control so automatic VS Code and Obsidian startup/recovery attaches to the shared runtime without changing Current Project; explicit Start/Restart remains authoritative.
+- Hardened shared Host Registry and configuration merging against stale cross-host authentication/context replay, app-version downgrade, crashed-host residue, and oversized contexts losing focus/workspace identity.
+- Made workspace-removal and public-connection recovery attach-only, strengthened Workspace Manager CSP nonce generation, and kept focused-host selection independent from ChatGPT project routing.
+- Aligned machine-wide Gateway, maintenance, and embedded Runner settings with shared-state authority while removing the unused public-health setting.
+- Updated local-first single-owner no-auth documentation and expanded regression coverage for multi-host lifecycle, context bounds, recovery, settings, and configuration authority.
+
 ## 3.6.7
 - Fixed packaged Obsidian provider supervision so `provider-supervisor.cjs` is resolved from the installed plugin directory with the already selected Node runtime, without changing the generic VS Code supervisor path.
 - Treat TLS disconnects before the secure handshake as temporary public MCP network failures, allowing the bounded verifier retry window to recover instead of reporting a protocol failure immediately.
