@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { SUPPORTED_CONFIG_VERSION, atomicWriteJson, readConfigSnapshot, recoverConfigReplacement } = require('../shared/config-store.cjs');
+const { publishHostContext } = require('../shared/host-registry.cjs');
 const {
   mergeExtensionConfig,
   mergeHostContexts,
@@ -68,16 +69,16 @@ test('timestamp-only VS Code context refreshes preserve the existing host record
 test('a semantic VS Code context change still advances the host record', () => {
   const current = {
     vscode: {
-      capturedAt: 'old',
-      updatedAt: 'old',
+      capturedAt: '2026-09-04T10:00:00.000Z',
+      updatedAt: '2026-09-04T10:00:00.000Z',
       workspaceRoot: '/workspace/app',
       activeEditor: { path: 'src/app.js', languageId: 'javascript' }
     }
   };
   const candidate = {
     vscode: {
-      capturedAt: 'new',
-      updatedAt: 'new',
+      capturedAt: '2026-09-04T10:00:10.000Z',
+      updatedAt: '2026-09-04T10:00:10.000Z',
       workspaceRoot: '/workspace/app',
       activeEditor: { path: 'src/other.js', languageId: 'javascript' }
     }
@@ -88,29 +89,42 @@ test('a semantic VS Code context change still advances the host record', () => {
   assert.equal(merged.vscode.activeEditor.path, 'src/other.js');
 });
 
-test('a real active-host handoff refreshes freshness even when editor semantics are unchanged', () => {
+test('a real focused-host handoff refreshes freshness even when editor semantics are unchanged', () => {
   const currentContext = {
-    capturedAt: 'old',
-    updatedAt: 'old',
+    capturedAt: '2026-09-04T10:00:00.000Z',
+    updatedAt: '2026-09-04T10:00:00.000Z',
     hostId: 'vscode',
+    focused: false,
     kind: 'editor',
     workspaceRoot: '/workspace/app',
     activeEditor: { path: 'src/app.js', languageId: 'javascript' }
   };
-  const candidateContext = { ...currentContext, capturedAt: 'new', updatedAt: 'new' };
-  const merged = mergeExtensionConfig({
+  const current = {
     version: SUPPORTED_CONFIG_VERSION,
     activeHostId: 'obsidian',
-    hostContexts: { vscode: currentContext, obsidian: { hostId: 'obsidian', updatedAt: 'middle' } }
+    hostRuntime: { focusedHostId: 'obsidian' },
+    hostContexts: {
+      vscode: currentContext,
+      obsidian: { hostId: 'obsidian', focused: true, pid: 8001, updatedAt: '2026-09-04T10:00:05.000Z' }
+    }
+  };
+  const candidate = structuredClone(current);
+  publishHostContext(candidate, 'vscode', {
+    ...currentContext,
+    focused: true,
+    pid: 8002,
+    capturedAt: '2026-09-04T10:00:10.000Z',
+    updatedAt: '2026-09-04T10:00:10.000Z'
   }, {
-    version: SUPPORTED_CONFIG_VERSION,
-    activeHostId: 'vscode',
-    hostContexts: { vscode: candidateContext }
+    nowMs: Date.parse('2026-09-04T10:00:10.000Z'),
+    processAliveImpl: () => true
   });
 
+  const merged = mergeExtensionConfig(current, candidate);
   assert.equal(merged.activeHostId, 'vscode');
-  assert.equal(merged.hostContexts.vscode, candidateContext);
-  assert.equal(merged.hostContexts.vscode.updatedAt, 'new');
+  assert.equal(merged.hostRuntime.focusedHostId, 'vscode');
+  assert.notEqual(merged.hostContexts.vscode, currentContext);
+  assert.equal(merged.hostContexts.vscode.updatedAt, '2026-09-04T10:00:10.000Z');
 });
 
 for (const [name, read] of [
