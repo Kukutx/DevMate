@@ -37,3 +37,12 @@ test('periodic status polling reuses the stable panel and context writes are ded
   assert.match(context, /signature === this\.lastCaptureSignature/);
   assert.match(context, /reason: 'unchanged'/);
 });
+
+test('Obsidian publishes focus and blur transitions through the existing debounced context path', () => {
+  const context = source('obsidian-plugin/src/context-provider.js');
+  assert.match(context, /plugin\.registerDomEvent\(window, 'focus', publishFocus\)/);
+  assert.match(context, /plugin\.registerDomEvent\(window, 'blur', publishFocus\)/);
+  assert.match(context, /this\.invalidateCapture\(\)/);
+  assert.match(context, /plugin\.scheduleContextCapture\?\.\(\)/);
+  assert.match(context, /focused: windowFocused\(\)/);
+});
