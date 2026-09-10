@@ -1,7 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
-const { ensureInstanceConfig, readJson } = require('../shared/config-store.cjs');
+const { ensureInstanceConfig, readJson, updateConfig } = require('../shared/config-store.cjs');
 const { ensureDesktopAuthenticationPolicy, setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
 const { ensureDesktopPermissionPolicy, setDesktopPermissionPolicy } = require('../shared/desktop-permission-policy.cjs');
 const { version: APP_VERSION } = require('../package.json');
@@ -18,6 +18,7 @@ const {
 const RELOAD_SETTINGS = ['devMate.sharedStateDirectory'];
 const AUTHENTICATION_SETTING = 'devMate.authenticationMode';
 const AUTO_START_ACTIVATION_SETTING = 'devMate.activateWorkspaceOnAutoStart';
+const EMBEDDED_RUNNER_SETTING = 'devMate.embeddedRunnerEnabled';
 const PERMISSION_SETTINGS = Object.freeze([
   'devMate.permissionProfile',
   'devMate.blockDangerousOperations',
@@ -53,6 +54,26 @@ async function alignLocalPermissionSettings(vscode, permissions) {
     if (setting(vscode, name, undefined) === value) continue;
     try { await configuration.update(name, value, target); } catch {}
   }
+}
+
+async function alignLocalEmbeddedRunnerSetting(vscode, enabled) {
+  const expected = enabled === true;
+  if (setting(vscode, 'embeddedRunnerEnabled', false) === expected) return;
+  try {
+    await vscode.workspace.getConfiguration('devMate').update(
+      'embeddedRunnerEnabled',
+      expected,
+      vscode.ConfigurationTarget?.Global ?? true
+    );
+  } catch {}
+}
+
+function setEmbeddedRunnerPreference(configFile, enabled) {
+  return updateConfig(configFile, config => {
+    config.jobs ||= {};
+    config.jobs.embeddedRunnerEnabled = enabled === true;
+    return config;
+  });
 }
 
 class VscodeHostLifecycle {
@@ -116,7 +137,7 @@ class VscodeHostLifecycle {
         defaultConnectionProvider: 'ngrok'
       });
       const policy = ensureDesktopAuthenticationPolicy(configFile, { fresh });
-      const localMode = setting(this.vscode, 'authenticationMode', 'oauth') === 'none' ? 'none' : 'oauth';
+      const localMode = setting(this.vscode, 'authenticationMode', 'none') === 'oauth' ? 'oauth' : 'none';
       if (localMode !== policy.mode) {
         try {
           await this.vscode.workspace.getConfiguration('devMate').update(
@@ -131,6 +152,8 @@ class VscodeHostLifecycle {
         defaults: localPermissionPolicy(this.vscode)
       });
       await alignLocalPermissionSettings(this.vscode, permissionPolicy.permissions);
+      const sharedConfig = readJson(configFile, null);
+      await alignLocalEmbeddedRunnerSetting(this.vscode, sharedConfig?.jobs?.embeddedRunnerEnabled === true);
     }
 
     this.output = this.vscode.window.createOutputChannel('DevMate Host');
@@ -175,7 +198,7 @@ class VscodeHostLifecycle {
     context.subscriptions.push(this.vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration(AUTHENTICATION_SETTING) && this.runtimeContext) {
         try {
-          const requested = setting(this.vscode, 'authenticationMode', 'oauth') === 'none' ? 'none' : 'oauth';
+          const requested = setting(this.vscode, 'authenticationMode', 'none') === 'oauth' ? 'oauth' : 'none';
           const policy = setDesktopAuthenticationMode(runtimeConfigPath(this.runtimeContext), requested);
           this.diagnostics?.append(`Shared MCP authentication changed explicitly to ${policy.mode}.`);
           if (this.platformActivated) {
@@ -198,6 +221,16 @@ class VscodeHostLifecycle {
           this.diagnostics?.append(`Shared DevMate permission policy changed explicitly to ${policy.permissions.profile}.`);
         } catch (error) {
           this.diagnostics?.recordFailure(error, { phase: 'permission-change' });
+        }
+      }
+
+      if (event.affectsConfiguration(EMBEDDED_RUNNER_SETTING) && this.runtimeContext) {
+        try {
+          const enabled = setting(this.vscode, 'embeddedRunnerEnabled', false) === true;
+          setEmbeddedRunnerPreference(runtimeConfigPath(this.runtimeContext), enabled);
+          this.diagnostics?.append(`Shared embedded Runner preference changed explicitly to ${enabled ? 'enabled' : 'disabled'}; it applies on the next Shared Runtime start.`);
+        } catch (error) {
+          this.diagnostics?.recordFailure(error, { phase: 'embedded-runner-change' });
         }
       }
 
@@ -391,9 +424,12 @@ class VscodeHostLifecycle {
 module.exports = {
   AUTHENTICATION_SETTING,
   AUTO_START_ACTIVATION_SETTING,
+  EMBEDDED_RUNNER_SETTING,
   PERMISSION_SETTINGS,
   RELOAD_SETTINGS,
   VscodeHostLifecycle,
+  alignLocalEmbeddedRunnerSetting,
   alignLocalPermissionSettings,
-  localPermissionPolicy
+  localPermissionPolicy,
+  setEmbeddedRunnerPreference
 };
