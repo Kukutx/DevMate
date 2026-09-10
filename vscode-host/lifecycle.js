@@ -17,6 +17,7 @@ const {
 
 const RELOAD_SETTINGS = ['devMate.sharedStateDirectory'];
 const AUTHENTICATION_SETTING = 'devMate.authenticationMode';
+const AUTO_START_ACTIVATION_SETTING = 'devMate.activateWorkspaceOnAutoStart';
 const PERMISSION_SETTINGS = Object.freeze([
   'devMate.permissionProfile',
   'devMate.blockDangerousOperations',
@@ -77,6 +78,10 @@ class VscodeHostLifecycle {
 
   autoStart() {
     return setting(this.vscode, 'autoStart', true) !== false;
+  }
+
+  activateWorkspaceOnAutoStart() {
+    return setting(this.vscode, 'activateWorkspaceOnAutoStart', false) === true;
   }
 
   startupPending() {
@@ -174,7 +179,7 @@ class VscodeHostLifecycle {
           const policy = setDesktopAuthenticationMode(runtimeConfigPath(this.runtimeContext), requested);
           this.diagnostics?.append(`Shared MCP authentication changed explicitly to ${policy.mode}.`);
           if (this.platformActivated) {
-            this.vscode.commands.executeCommand('devMate.start', { quiet: true }).then(
+            this.vscode.commands.executeCommand('devMate.start', { quiet: true, activateWorkspace: false }).then(
               () => {},
               error => this.diagnostics?.recordFailure(error, { phase: 'authentication-change' })
             );
@@ -281,8 +286,11 @@ class VscodeHostLifecycle {
     if (!check.ok) throw Object.assign(new Error('VS Code host self-check failed before DevMate Start'), {
       code: 'DEVMATE_VSCODE_SELF_CHECK_FAILED'
     });
-    this.diagnostics?.append('Starting DevMate automatically and waiting for verified public MCP Ready state.');
-    const commandResult = await this.vscode.commands.executeCommand('devMate.start', { quiet: true });
+    const activateWorkspace = this.activateWorkspaceOnAutoStart();
+    this.diagnostics?.append(activateWorkspace
+      ? 'Starting DevMate automatically and activating this workspace as the machine Current Project.'
+      : 'Starting or attaching DevMate automatically without changing the machine Current Project.');
+    const commandResult = await this.vscode.commands.executeCommand('devMate.start', { quiet: true, activateWorkspace });
     if (!this.active || generation !== this.lifecycleGeneration) {
       return { cancelled: true, reason: 'host-deactivating' };
     }
@@ -306,7 +314,7 @@ class VscodeHostLifecycle {
       return { cancelled: true, reason: 'host-deactivating' };
     }
     this.diagnostics?.clearFailure();
-    this.diagnostics?.append(`Automatic DevMate Start verified on port ${ready.port}; tools=${commandResult.toolCount}.`);
+    this.diagnostics?.append(`Automatic DevMate Start verified on port ${ready.port}; tools=${commandResult.toolCount}; activateWorkspace=${activateWorkspace}.`);
     return { ...ready, mcpUrl: commandResult.mcpUrl, toolCount: commandResult.toolCount };
   }
 
@@ -382,6 +390,7 @@ class VscodeHostLifecycle {
 
 module.exports = {
   AUTHENTICATION_SETTING,
+  AUTO_START_ACTIVATION_SETTING,
   PERMISSION_SETTINGS,
   RELOAD_SETTINGS,
   VscodeHostLifecycle,
