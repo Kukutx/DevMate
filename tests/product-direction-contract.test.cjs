@@ -30,6 +30,7 @@ test('VS Code manifest keeps lifecycle preferences and provider execution settin
   const properties = json('package.json').contributes.configuration.properties;
   for (const key of [
     'devMate.autoStart',
+    'devMate.activateWorkspaceOnAutoStart',
     'devMate.ngrokUrl',
     'devMate.publicUrl',
     'devMate.ngrokCommandPath',
@@ -68,13 +69,15 @@ test('Obsidian is a first-class owner or attacher of the same provider-native sh
   assert.match(settings, /cloudflareTunnelTokenEncrypted/);
 });
 
-test('normal Obsidian UI presents Ready as one product state', () => {
+test('normal Obsidian UI presents Ready as one product state with explicit shared lifecycle actions', () => {
   const view = source('obsidian-plugin/src/view.js');
-  assert.match(view, /action\('Start'/);
-  assert.match(view, /action\('Stop'/);
-  assert.doesNotMatch(view, /moreAction\('Stop'/);
-  assert.match(view, /action\('Restart'/);
+  assert.match(view, /action\('Start \/ Activate Project'/);
+  assert.match(view, /action\('Stop Shared Runtime'/);
+  assert.doesNotMatch(view, /moreAction\('Stop/);
+  assert.match(view, /action\('Restart Shared Runtime'/);
   assert.match(view, /action\('Copy MCP URL'/);
+  assert.match(view, /detail\('Current Project'\)/);
+  assert.match(view, /detail\('This Vault'\)/);
 });
 
 test('shared provider ownership identity includes current provider execution details', () => {
