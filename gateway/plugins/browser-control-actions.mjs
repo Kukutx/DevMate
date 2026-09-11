@@ -132,10 +132,15 @@ async function performAction(session, metadata, action) {
     const output = safeBrowserWorkspaceOutput(session.workspaceRoot, action.path, 'Browser download');
     await fsp.mkdir(path.dirname(output.resolved), { recursive: true });
     const pending = page.waitForEvent('download', { timeout });
-    await locator.click({ button: action.button || 'left', timeout });
-    const download = await pending;
-    await download.saveAs(output.resolved);
-    return { type, path: output.relative, suggestedFilename: String(download.suggestedFilename?.() || '').slice(0, 500) || null };
+    try {
+      await locator.click({ button: action.button || 'left', timeout });
+      const download = await pending;
+      await download.saveAs(output.resolved);
+      return { type, path: output.relative, suggestedFilename: String(download.suggestedFilename?.() || '').slice(0, 500) || null };
+    } catch (error) {
+      void pending.catch(() => {});
+      throw error;
+    }
   }
   if (type === 'open_tab') {
     if (session.pages.size >= MAX_TABS_PER_SESSION) throw new Error(`Browser control tab limit reached (${MAX_TABS_PER_SESSION})`);

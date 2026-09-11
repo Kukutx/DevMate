@@ -22,6 +22,7 @@ const PRIVATE_STATE_ROOT = CONFIG_PATH
   : '';
 const sessions = new Map();
 const persistentProfileOwners = new Map();
+let pendingSessionStarts = 0;
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -102,6 +103,13 @@ export function requestUrlAllowed(rawUrl, allowRemoteUrls) {
   } catch { return false; }
 }
 
+export function webSocketUrlAllowed(rawUrl, allowRemoteUrls) {
+  try {
+    const parsed = new URL(String(rawUrl || ''));
+    return ['ws:', 'wss:'].includes(parsed.protocol) && (allowRemoteUrls || isLoopbackHostname(parsed.hostname));
+  } catch { return false; }
+}
+
 async function loadPlaywright(workspaceRoot, settings) {
   const modulePath = resolveModuleFromWorkspace(workspaceRoot, settings.playwrightModulePath || '');
   if (!modulePath) throw new Error('Playwright is not installed in the active workspace. Install playwright or playwright-core first.');
@@ -160,18 +168,27 @@ async function persistentProfileDirectory(workspaceId, workspaceRoot) {
   if (!PRIVATE_STATE_ROOT) throw new Error('Persistent Browser Control profiles require DEVMATE_CONFIG-backed private state');
   const key = profileKey(workspaceId, workspaceRoot);
   const directory = path.join(PRIVATE_STATE_ROOT, 'profiles', key);
-  await fsp.mkdir(directory, { recursive: true });
+  await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+  try { await fsp.chmod(directory, 0o700); } catch {}
   return { key, directory };
 }
 
-function cleanupSession(session) {
-  if (!session || session.cleanedUp) return;
-  session.cleanedUp = true;
-  session.closed = true;
-  sessions.delete(session.id);
-  if (session.profileKey && persistentProfileOwners.get(session.profileKey) === session.id) persistentProfileOwners.delete(session.profileKey);
-  for (const metadata of session.pages.values()) metadata.refs.clear();
-  session.pages.clear();
+function releasePersistentProfile(session) {
+  if (!session?.profileKey || session.profileReleased) return;
+  if (persistentProfileOwners.get(session.profileKey) === session.id) persistentProfileOwners.delete(session.profileKey);
+  session.profileReleased = true;
+}
+
+function cleanupSession(session, { releaseProfile = true } = {}) {
+  if (!session) return;
+  if (!session.cleanedUp) {
+    session.cleanedUp = true;
+    session.closed = true;
+    sessions.delete(session.id);
+    for (const metadata of session.pages.values()) metadata.refs.clear();
+    session.pages.clear();
+  }
+  if (releaseProfile) releasePersistentProfile(session);
 }
 
 export function getBrowserSession(sessionId, workspaceId) {
@@ -236,9 +253,11 @@ export function browserControlStatus(workspaceRoot, settings = {}) {
     allowRemoteUrls: !!settings.allowRemoteUrls,
     defaultHeadless: !!settings.defaultHeadless,
     persistentProfilesAvailable: !!PRIVATE_STATE_ROOT,
-    activePersistentProfiles: persistentProfileOwners.size,
+    activePersistentProfiles: [...persistentProfileOwners.values()].filter(owner => !String(owner).startsWith('starting-')).length,
+    startingPersistentProfiles: [...persistentProfileOwners.values()].filter(owner => String(owner).startsWith('starting-')).length,
     maxSessions: MAX_SESSIONS,
     activeSessions: sessions.size,
+    startingSessions: pendingSessionStarts,
     error: error || (!executableAllowed
       ? `Configured browser executable is not Chrome/Chromium/Edge: ${executablePath}`
       : !executableExists ? `Chromium executable not found: ${executablePath}` : null)
@@ -258,28 +277,36 @@ function viewportOptions(viewport = {}) {
 }
 
 export async function startBrowserControl({ workspaceId, workspaceRoot, settings = {}, url = '', headless, viewport = {}, profileMode = 'ephemeral' }) {
-  if (sessions.size >= MAX_SESSIONS) throw new Error(`Browser control session limit reached (${MAX_SESSIONS})`);
+  if (sessions.size + pendingSessionStarts >= MAX_SESSIONS) throw new Error(`Browser control session limit reached (${MAX_SESSIONS})`);
   const resolvedProfileMode = String(profileMode || 'ephemeral');
   if (!['ephemeral', 'workspace'].includes(resolvedProfileMode)) throw new Error(`Unsupported Browser Control profile mode: ${resolvedProfileMode}`);
   const allowRemoteUrls = !!settings.allowRemoteUrls;
   const initialUrl = String(url || '').trim();
   const targetUrl = initialUrl ? assertAllowedUrl(initialUrl, allowRemoteUrls) : null;
-  const { api, modulePath } = await loadPlaywright(workspaceRoot, settings);
-  const resolvedHeadless = headless == null ? !!settings.defaultHeadless : !!headless;
-  const launchOptions = { headless: resolvedHeadless };
-  if (settings.chromiumExecutablePath) {
-    if (!browserExecutableAllowed(settings.chromiumExecutablePath)) throw new Error('Configured browser executable must be Chrome, Chromium, Chrome Headless Shell, or Edge');
-    launchOptions.executablePath = settings.chromiumExecutablePath;
-  }
+  pendingSessionStarts += 1;
   let browser = null;
   let context = null;
   let session = null;
   let profile = null;
+  let profileReservation = null;
   try {
-    const contextOptions = { acceptDownloads: true, viewport: viewportOptions(viewport) };
+    const { api, modulePath } = await loadPlaywright(workspaceRoot, settings);
+    const resolvedHeadless = headless == null ? !!settings.defaultHeadless : !!headless;
+    const launchOptions = { headless: resolvedHeadless };
+    if (settings.chromiumExecutablePath) {
+      if (!browserExecutableAllowed(settings.chromiumExecutablePath)) throw new Error('Configured browser executable must be Chrome, Chromium, Chrome Headless Shell, or Edge');
+      launchOptions.executablePath = settings.chromiumExecutablePath;
+    }
+    const contextOptions = {
+      acceptDownloads: true,
+      viewport: viewportOptions(viewport),
+      ...(!allowRemoteUrls ? { serviceWorkers: 'block' } : {})
+    };
     if (resolvedProfileMode === 'workspace') {
       profile = await persistentProfileDirectory(workspaceId, workspaceRoot);
-      if (persistentProfileOwners.has(profile.key)) throw new Error('A live Browser Control session already owns this workspace persistent profile');
+      if (persistentProfileOwners.has(profile.key)) throw new Error('A live or starting Browser Control session already owns this workspace persistent profile');
+      profileReservation = `starting-${crypto.randomUUID()}`;
+      persistentProfileOwners.set(profile.key, profileReservation);
       if (typeof api.chromium.launchPersistentContext !== 'function') throw new Error('Configured Playwright runtime does not support persistent Chromium contexts');
       context = await api.chromium.launchPersistentContext(profile.directory, { ...launchOptions, ...contextOptions });
       browser = typeof context.browser === 'function' ? context.browser() : null;
@@ -289,12 +316,23 @@ export async function startBrowserControl({ workspaceId, workspaceRoot, settings
     }
     if (!allowRemoteUrls) {
       await context.route('**/*', async route => requestUrlAllowed(route.request().url(), false) ? route.continue() : route.abort('blockedbyclient'));
+      if (typeof context.routeWebSocket !== 'function') {
+        throw new Error('Browser Control loopback-only mode requires Playwright 1.48 or newer for WebSocket routing');
+      }
+      await context.routeWebSocket('**/*', async webSocket => {
+        if (webSocketUrlAllowed(webSocket.url(), false)) {
+          webSocket.connectToServer();
+          return;
+        }
+        await webSocket.close({ code: 1008, reason: 'Blocked by DevMate Browser Control' });
+      });
     }
     const id = `browser-${crypto.randomUUID()}`;
     const now = new Date().toISOString();
     session = {
       id, workspaceId, workspaceRoot, browser, context, modulePath, headless: resolvedHeadless, allowRemoteUrls,
-      profileMode: resolvedProfileMode, profileKey: profile?.key || null, controlMode: 'agent', closed: false, cleanedUp: false,
+      profileMode: resolvedProfileMode, profileKey: profile?.key || null, profileReleased: false,
+      controlMode: 'agent', closed: false, cleanedUp: false,
       createdAt: now, lastUsedAt: now, activeTabId: null, nextTabId: 1, pages: new Map(), pageIds: new WeakMap()
     };
     sessions.set(id, session);
@@ -311,28 +349,33 @@ export async function startBrowserControl({ workspaceId, workspaceRoot, settings
     if (targetUrl) await page.goto(targetUrl.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
     return { session: await browserSessionSummary(session), modulePath };
   } catch (error) {
-    if (session) cleanupSession(session);
-    if (profile?.key && persistentProfileOwners.get(profile.key) === session?.id) persistentProfileOwners.delete(profile.key);
+    if (session) cleanupSession(session, { releaseProfile: false });
     if (context) await context.close().catch(() => {});
     if (browser?.close) await browser.close().catch(() => {});
+    if (session) cleanupSession(session, { releaseProfile: true });
+    if (profile?.key && profileReservation && persistentProfileOwners.get(profile.key) === profileReservation) persistentProfileOwners.delete(profile.key);
     throw error;
+  } finally {
+    pendingSessionStarts = Math.max(0, pendingSessionStarts - 1);
   }
 }
 
 export async function stopBrowserControl({ workspaceId, sessionId }) {
   const session = getBrowserSession(sessionId, workspaceId);
-  cleanupSession(session);
+  cleanupSession(session, { releaseProfile: false });
   try { await session.context.close(); } catch {}
   try { if (session.browser?.close) await session.browser.close(); } catch {}
+  cleanupSession(session, { releaseProfile: true });
   return { stopped: true, id: session.id, workspaceId: session.workspaceId, profileMode: session.profileMode };
 }
 
 export async function shutdownBrowserControl() {
   const active = [...sessions.values()];
-  for (const session of active) cleanupSession(session);
+  for (const session of active) cleanupSession(session, { releaseProfile: false });
   await Promise.all(active.map(async session => {
     try { await session.context.close(); } catch {}
     try { if (session.browser?.close) await session.browser.close(); } catch {}
+    cleanupSession(session, { releaseProfile: true });
   }));
 }
 
@@ -426,5 +469,6 @@ export const __test = {
   requestUrlAllowed,
   resolveModuleFromWorkspace,
   resolveContainedWorkspacePath,
+  webSocketUrlAllowed,
   profileKey
 };
