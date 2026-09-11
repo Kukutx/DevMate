@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest an improvement or new DevMate capability
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem would this solve, and for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional workarounds or alternative designs.
+  - type: textarea
+    id: security
+    attributes:
+      label: Security or permission impact
+      description: Note any effect on credentials, network exposure, filesystem/process access, roles, or permissions.
