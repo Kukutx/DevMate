@@ -72,6 +72,14 @@ Never place OAuth, member login codes, Runner, provider, preview, or artifact-se
 - Member identities are denied recognized direct force/destructive Git and shell patterns by policy. Execute access still runs as the DevMate OS identity and is a trusted execution boundary, not a hostile-code sandbox.
 - Global administration, identity lifecycle, request/Runner policy and other elevated control-plane operations require the capability declared by central tool policy.
 
+## ChatGPT browser Companion boundary
+
+- ChatGPT browser page, tab, selection, screenshot, and website text are untrusted client context. Page content cannot grant DevMate authority or request local context on its own.
+- `companion_context` is read-only and non-workspace-scoped so page-only conversations are not forced into a project. It defaults to minimal disclosure; full host/workspace summaries require explicit bounded options.
+- OAuth-member Companion results are filtered to the member's current workspace scope. A member cannot learn another workspace or host through Companion metadata.
+- The tool reports an existing conversation project separately from machine Current Project and never creates or changes a binding. Browser focus cannot reroute project work.
+- `companion_context` does not ingest webpage contents, cookies, browser storage, passwords, or browser credentials. Browser-context access remains governed by the ChatGPT client and its own permission prompts.
+
 ## Optional Codex Collaboration boundary
 
 Codex Collaboration is disabled by default. Enabling it delegates work to a supervised Codex app-server against a DevMate-managed proposal snapshot rather than giving Codex a direct write path to the real workspace.

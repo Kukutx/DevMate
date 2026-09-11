@@ -109,7 +109,7 @@ When a protected capability is configured to require approval, the tool call cre
 
 - `companion_context`
 
-`companion_context` is a read-only, non-workspace tool for combining ChatGPT's client-native browser page/tab/selection context with DevMate's local context. It returns Current Project, focused VS Code/Obsidian host, workspace summaries, routing invariants, safety guidance, and recommended follow-up tools. It does not ingest or mirror the webpage itself and does not require a DevMate-managed model API key. See `COMPANION.md`.
+`companion_context` is a read-only, non-workspace tool for combining ChatGPT's client-native browser page/tab/selection context with DevMate's local context. It returns minimal Current Project, existing conversation-project binding, focused-host, routing, and safety metadata by default; bounded host/workspace lists are opt-in and OAuth-member scoped. It never creates a project binding, does not ingest or mirror the webpage itself, and does not require a DevMate-managed model API key. Page content is untrusted and cannot request local context or authorize DevMate actions. See `COMPANION.md`.
 
 ## Tool discovery
 

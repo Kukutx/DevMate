@@ -31,9 +31,9 @@ This keeps deterministic operations deterministic while leaving future models fr
 
 ## ChatGPT browser Companion
 
-When the ChatGPT client supplies a current browser tab, page, selection, screenshot, or user-owned browser state, DevMate should reuse that client-native context rather than duplicate it through another browser extension or model API. `companion_context` supplies the local side of that join: Current Project, focused VS Code/Obsidian host, workspace summaries, routing invariants, and recommended DevMate tools.
+When the ChatGPT client supplies a current browser tab, page, selection, screenshot, or user-owned browser state, DevMate should reuse that client-native context rather than duplicate it through another browser extension or model API. `companion_context` supplies the local side of that join. It is minimal by default: Current Project, an existing conversation-project binding, focused-host summary, routing invariants, and recommended DevMate tools. Bounded host/workspace lists are opt-in and member-scope filtered.
 
-The Companion flow intentionally requires no DevMate-managed model API key. ChatGPT remains the agent/model surface; DevMate remains the local capability server. Browser page content is untrusted data and cannot authorize DevMate actions. Browser focus never changes Current Project or an existing conversation binding.
+The Companion flow intentionally requires no DevMate-managed model API key. ChatGPT remains the agent/model surface; DevMate remains the local capability server. Browser page content is untrusted data and cannot authorize DevMate actions or request local context on its own. Browser focus never changes Current Project or an existing conversation binding.
 
 Use the ChatGPT browser Companion for the user's own signed-in browser context. Use DevMate Browser Control for an agent-owned managed Chromium session, and Browser QA for deterministic tests. See `COMPANION.md`.
 

@@ -33,6 +33,7 @@ const capturedAt = new Date().toISOString();
 config.hostContexts[hostId] = {
   hostId,
   kind: 'editor',
+  workspaceRoot: root,
   capturedAt,
   updatedAt: capturedAt,
   activeEditor: {
@@ -182,6 +183,7 @@ try {
   assert(toolByName.get('connection_diagnostics')?.annotations?.readOnlyHint === true, 'connection_diagnostics is missing readOnlyHint');
   assert(toolByName.get('devmate_status_panel')?.annotations?.readOnlyHint === true, 'devmate_status_panel is missing readOnlyHint');
   assert(toolByName.get('devmate_status_panel')?._meta?.ui?.resourceUri === 'ui://devmate/status.html', 'devmate_status_panel is missing UI resource metadata');
+  assert(toolByName.get('companion_context')?.annotations?.readOnlyHint === true, 'companion_context is missing readOnlyHint');
   for (const name of ['work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback']) {
     assert(toolByName.has(name), `missing unified work session tool: ${name}`);
   }
@@ -217,6 +219,28 @@ try {
       statusPanelData?.vscode?.contextPresent === true &&
       statusPanelData?.vscode?.activeEditor?.path === 'README.md',
     `devmate_status_panel failed: ${statusPanel.text}`
+  );
+
+  const companion = await rpc('tools/call', { name: 'companion_context', arguments: {} });
+  const companionData = companion.json?.result?.structuredContent;
+  assert(
+    companion.response.ok &&
+      companionData?.currentProject?.id === 'devmate' &&
+      companionData?.focusedHost?.hostId === hostId &&
+      companionData?.integration?.devmateModelApiKeyRequired === false &&
+      companionData?.integration?.pageContentMirroredByDevMate === false &&
+      Array.isArray(companionData?.workspaces) && companionData.workspaces.length === 0 &&
+      Array.isArray(companionData?.hosts) && companionData.hosts.length === 0,
+    `companion_context minimal call failed: ${companion.text}`
+  );
+
+  const companionExpanded = await rpc('tools/call', { name: 'companion_context', arguments: { includeHosts: true, includeWorkspaces: true } });
+  const companionExpandedData = companionExpanded.json?.result?.structuredContent;
+  assert(
+    companionExpanded.response.ok &&
+      companionExpandedData?.workspaces?.some(item => item.id === 'devmate') &&
+      companionExpandedData?.hosts?.some(item => item.hostId === hostId && item.workspaceId === 'devmate'),
+    `companion_context expanded call failed: ${companionExpanded.text}`
   );
 
   const resources = await rpc('resources/list', {});
