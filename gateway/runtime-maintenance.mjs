@@ -8,6 +8,8 @@ import { jobRuntimeStatus } from './job-runtime.mjs';
 
 export const DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS = 30_000;
 export const AUDIT_HIGH_WATER_RATIO = 1.25;
+export const INITIAL_RUNTIME_MAINTENANCE_RETRY_INTERVAL_MS = 250;
+export const INITIAL_RUNTIME_MAINTENANCE_RETRY_WINDOW_MS = 5_000;
 
 let timer = null;
 let running = null;
@@ -17,6 +19,8 @@ let lastBackupRootMtimeMs = null;
 let lastResult = null;
 let lastError = null;
 let healthKnownClean = false;
+let initialRetryTimer = null;
+let initialRetryDeadlineMs = 0;
 
 function now() {
   return new Date().toISOString();
@@ -71,6 +75,38 @@ function isCurrent(runConfig) {
   return !!configured && configured.generation === runConfig?.generation;
 }
 
+function clearInitialRetry() {
+  if (initialRetryTimer) clearTimeout(initialRetryTimer);
+  initialRetryTimer = null;
+  initialRetryDeadlineMs = 0;
+}
+
+function scheduleInitialRetry(runConfig) {
+  clearInitialRetry();
+  initialRetryDeadlineMs = Date.now() + INITIAL_RUNTIME_MAINTENANCE_RETRY_WINDOW_MS;
+
+  const scheduleNext = () => {
+    if (!isCurrent(runConfig) || Date.now() >= initialRetryDeadlineMs) {
+      clearInitialRetry();
+      return;
+    }
+    const remainingMs = initialRetryDeadlineMs - Date.now();
+    initialRetryTimer = setTimeout(() => {
+      initialRetryTimer = null;
+      void runRuntimeMaintenanceOnce().then(result => {
+        if (result?.skipped && result.reason === 'busy' && isCurrent(runConfig)) {
+          scheduleNext();
+          return;
+        }
+        clearInitialRetry();
+      }, () => clearInitialRetry());
+    }, Math.min(INITIAL_RUNTIME_MAINTENANCE_RETRY_INTERVAL_MS, remainingMs));
+    initialRetryTimer.unref?.();
+  };
+
+  scheduleNext();
+}
+
 async function markHealthClean(file, runConfig) {
   if (healthKnownClean && isCurrent(runConfig)) return;
   await clearHealthMarker(file);
@@ -79,6 +115,7 @@ async function markHealthClean(file, runConfig) {
 
 async function recordSuccess(runConfig, healthPath, result, backupMtimeMs = null) {
   if (!isCurrent(runConfig)) return;
+  clearInitialRetry();
   if (backupMtimeMs != null) lastBackupRootMtimeMs = backupMtimeMs;
   lastResult = result;
   lastError = null;
@@ -160,6 +197,7 @@ export async function runRuntimeMaintenanceOnce({ force = false } = {}) {
     return result;
   })().catch(async error => {
     if (isCurrent(runConfig)) {
+      clearInitialRetry();
       healthKnownClean = false;
       lastError = {
         at: now(),
@@ -202,12 +240,14 @@ export function startRuntimeMaintenance({
     void runRuntimeMaintenanceOnce().catch(() => {});
   }, configured.intervalMs);
   timer.unref?.();
+  scheduleInitialRetry(configured);
   return runtimeMaintenanceStatus();
 }
 
 export function stopRuntimeMaintenance() {
   if (timer) clearInterval(timer);
   timer = null;
+  clearInitialRetry();
   configured = null;
   generation += 1;
   lastBackupRootMtimeMs = null;
@@ -220,10 +260,12 @@ export async function drainRuntimeMaintenance() {
 }
 
 export const __test = {
+  clearInitialRetry,
   currentOptions,
   healthFile,
   isCurrent,
   isInside,
   normalizePaths,
-  runtimeIdle
+  runtimeIdle,
+  scheduleInitialRetry
 };

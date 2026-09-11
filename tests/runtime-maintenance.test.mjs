@@ -106,6 +106,42 @@ test('runtime maintenance skips retention work while an HTTP request is active',
   }
 });
 
+test('runtime maintenance retries initial cleanup after brief startup request activity', async () => {
+  const auditLines = Array.from({ length: 2200 }, (_, index) => JSON.stringify({
+    time: new Date().toISOString(), index, action: 'startup_tool_call', payload: 'y'.repeat(180)
+  }));
+  await fsp.writeFile(auditLog, `${auditLines.join('\n')}\n`, 'utf8');
+  const request = sharedHttpRequestConcurrency.enter('maintenance-startup-retry-test', 4, 4);
+  assert.equal(request.allowed, true);
+  let released = false;
+  const releaseTimer = setTimeout(() => {
+    request.release();
+    released = true;
+  }, 100);
+
+  startRuntimeMaintenance({
+    paths: { stateRoot, backupRoot, auditLog, configFile: configPath },
+    options: config.maintenance,
+    intervalMs: 60_000
+  });
+  try {
+    const deadline = Date.now() + 4_000;
+    let auditBytes = (await fsp.stat(auditLog)).size;
+    while (auditBytes > config.maintenance.maxAuditBytes && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      auditBytes = (await fsp.stat(auditLog)).size;
+    }
+    assert.ok(auditBytes <= config.maintenance.maxAuditBytes, `initial maintenance did not retry after startup became idle: ${auditBytes} bytes`);
+    const status = runtimeMaintenanceStatus();
+    assert.equal(status.lastResult?.skipped, false);
+    assert.ok(status.lastResult?.audit?.afterBytes <= config.maintenance.maxAuditBytes);
+  } finally {
+    clearTimeout(releaseTimer);
+    if (!released) request.release();
+    stopRuntimeMaintenance();
+  }
+});
+
 test('runtime maintenance fences stale completion when scheduler paths are reconfigured', async () => {
   const oldState = path.join(root, 'old-generation');
   const newState = path.join(root, 'new-generation');
