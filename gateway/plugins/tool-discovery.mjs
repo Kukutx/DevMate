@@ -8,7 +8,8 @@ import {
 } from '../tool-policy.mjs';
 import { definePlugin } from './plugin-sdk.mjs';
 
-const MAX_SEARCH_RESULTS = 100;
+const MAX_PAGE_SIZE = 100;
+const DEFAULT_SEARCH_PAGE_SIZE = 20;
 const FAMILY_RULES = Object.freeze([
   ['browser', /^(?:browser_|web_preview_)/],
   ['godot', /^godot_/],
@@ -24,6 +25,17 @@ const FAMILY_RULES = Object.freeze([
 
 function compact(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function boundedPageSize(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(number)));
+}
+
+function boundedOffset(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : 0;
 }
 
 export function toolFamily(name) {
@@ -83,42 +95,58 @@ function searchScore(tool, query) {
   return score;
 }
 
-export function searchCatalogEntries(tools, { query = '', family = '', capability = '', limit = 20 } = {}) {
+export function rankCatalogEntries(tools, { query = '', family = '', capability = '' } = {}) {
   const familyFilter = compact(family).toLowerCase();
   const capabilityFilter = compact(capability).toLowerCase();
-  const max = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Number(limit) || 20));
   return tools
     .filter(tool => !familyFilter || tool.family === familyFilter)
     .filter(tool => !capabilityFilter || tool.capability === capabilityFilter)
     .map(tool => ({ tool, score: searchScore(tool, query) }))
     .filter(entry => entry.score > 0)
     .sort((a, b) => (b.score - a.score) || a.tool.name.localeCompare(b.tool.name))
-    .slice(0, max)
     .map(entry => entry.tool);
 }
 
-function summarize(tools, includeDescriptions = true) {
+export function paginateCatalogEntries(tools, { offset = 0, limit = DEFAULT_SEARCH_PAGE_SIZE } = {}) {
+  const start = boundedOffset(offset);
+  const pageSize = boundedPageSize(limit, DEFAULT_SEARCH_PAGE_SIZE);
+  const page = tools.slice(start, start + pageSize);
+  const nextOffset = start + page.length < tools.length ? start + page.length : null;
+  return {
+    total: tools.length,
+    count: page.length,
+    offset: start,
+    limit: pageSize,
+    nextOffset,
+    tools: page
+  };
+}
+
+export function searchCatalogEntries(tools, options = {}) {
+  return paginateCatalogEntries(rankCatalogEntries(tools, options), options).tools;
+}
+
+function summarize(tools) {
   const families = {};
   const capabilities = {};
   for (const tool of tools) {
     families[tool.family] = (families[tool.family] || 0) + 1;
     capabilities[tool.capability] = (capabilities[tool.capability] || 0) + 1;
   }
-  return {
-    count: tools.length,
-    families,
-    capabilities,
-    tools: includeDescriptions ? tools : tools.map(({ description, ...tool }) => tool)
-  };
+  return { families, capabilities };
+}
+
+function publicTools(tools, includeDescriptions) {
+  return includeDescriptions ? tools : tools.map(({ description, ...tool }) => tool);
 }
 
 export const toolDiscoveryPlugin = definePlugin({
   manifest: {
     id: 'devmate.tool-discovery',
     name: 'Tool Discovery',
-    version: '1.0.0',
+    version: '1.1.0',
     apiVersion: '1',
-    description: 'Model-neutral discovery for the currently registered DevMate MCP tool surface.',
+    description: 'Model-neutral, paginated discovery for the currently registered DevMate MCP tool surface.',
     core: true,
     defaultEnabled: true,
     toolPrefixes: [],
@@ -131,33 +159,55 @@ export const toolDiscoveryPlugin = definePlugin({
     const { server } = context;
     server.registerTool('devmate_tool_catalog', {
       title: 'DevMate tool catalog',
-      description: 'Describe the currently registered DevMate MCP tools, their families, authorization capability, scope, and safety annotations without changing tool availability.',
+      description: 'Describe the currently registered DevMate MCP tools, their families, authorization capability, scope, and safety annotations without changing tool availability. Results are paginated; use nextOffset until null to enumerate the full surface.',
       inputSchema: {
         family: z.string().max(100).optional(),
         capability: z.string().max(100).optional(),
-        includeDescriptions: z.boolean().optional()
+        includeDescriptions: z.boolean().optional(),
+        offset: z.number().int().min(0).max(1000000).optional(),
+        limit: z.number().int().min(1).max(MAX_PAGE_SIZE).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-    }, async ({ family = '', capability = '', includeDescriptions = true }) => {
-      const tools = searchCatalogEntries(buildToolCatalog(server), { family, capability, limit: MAX_SEARCH_RESULTS });
-      return context.toolText(summarize(tools, includeDescriptions));
+    }, async ({ family = '', capability = '', includeDescriptions = true, offset = 0, limit = MAX_PAGE_SIZE }) => {
+      const matches = rankCatalogEntries(buildToolCatalog(server), { family, capability });
+      const page = paginateCatalogEntries(matches, { offset, limit });
+      return context.toolText({
+        ...summarize(matches),
+        ...page,
+        tools: publicTools(page.tools, includeDescriptions)
+      });
     });
 
     server.registerTool('devmate_tool_search', {
       title: 'Search DevMate tools',
-      description: 'Search the currently registered DevMate MCP tool surface by intent keywords, family, or capability. This is descriptive only and does not alter authorization or registration.',
+      description: 'Search the currently registered DevMate MCP tool surface by intent keywords, family, or capability. Results are ranked and paginated; discovery is descriptive only and does not alter authorization or registration.',
       inputSchema: {
         query: z.string().max(500).optional(),
         family: z.string().max(100).optional(),
         capability: z.string().max(100).optional(),
-        limit: z.number().int().min(1).max(MAX_SEARCH_RESULTS).optional()
+        offset: z.number().int().min(0).max(1000000).optional(),
+        limit: z.number().int().min(1).max(MAX_PAGE_SIZE).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-    }, async ({ query = '', family = '', capability = '', limit = 20 }) => {
-      const matches = searchCatalogEntries(buildToolCatalog(server), { query, family, capability, limit });
-      return context.toolText({ query, family: family || null, capability: capability || null, count: matches.length, tools: matches });
+    }, async ({ query = '', family = '', capability = '', offset = 0, limit = DEFAULT_SEARCH_PAGE_SIZE }) => {
+      const matches = rankCatalogEntries(buildToolCatalog(server), { query, family, capability });
+      const page = paginateCatalogEntries(matches, { offset, limit });
+      return context.toolText({
+        query,
+        family: family || null,
+        capability: capability || null,
+        ...page
+      });
     });
   }
 });
 
-export const __test = { FAMILY_RULES, MAX_SEARCH_RESULTS, searchScore, summarize };
+export const __test = {
+  DEFAULT_SEARCH_PAGE_SIZE,
+  FAMILY_RULES,
+  MAX_PAGE_SIZE,
+  boundedOffset,
+  boundedPageSize,
+  searchScore,
+  summarize
+};

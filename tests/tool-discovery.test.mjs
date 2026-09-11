@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   describeToolRegistration,
+  paginateCatalogEntries,
+  rankCatalogEntries,
   searchCatalogEntries,
   toolDiscoveryPlugin,
   toolFamily
@@ -12,6 +14,7 @@ import { requiredCapabilityForTool, workspaceScopedTool } from '../gateway/tool-
 test('Tool Discovery is a core descriptive plugin and keeps discovery tools non-workspace read operations', () => {
   assert.equal(toolDiscoveryPlugin.manifest.core, true);
   assert.equal(toolDiscoveryPlugin.manifest.defaultEnabled, true);
+  assert.equal(toolDiscoveryPlugin.manifest.version, '1.1.0');
   assert.equal(builtinPlugins[0].manifest.id, 'devmate.tool-discovery');
   for (const name of ['devmate_tool_catalog', 'devmate_tool_search']) {
     assert.equal(workspaceScopedTool(name), false, name);
@@ -23,6 +26,8 @@ test('Tool Discovery is a core descriptive plugin and keeps discovery tools non-
     toolText(payload) { return payload; }
   });
   assert.deepEqual([...tools.keys()], ['devmate_tool_catalog', 'devmate_tool_search']);
+  assert.equal(Object.hasOwn(tools.get('devmate_tool_catalog').config.inputSchema, 'offset'), true);
+  assert.equal(Object.hasOwn(tools.get('devmate_tool_search').config.inputSchema, 'limit'), true);
 });
 
 test('tool discovery assigns stable model-neutral families and policy metadata', () => {
@@ -56,4 +61,33 @@ test('tool search ranks exact names and supports family/capability filters witho
     'browser_control_act'
   ]);
   assert.deepEqual(searchCatalogEntries(tools, { capability: 'read' }).map(item => item.name), ['read_file']);
+});
+
+test('tool discovery paginates arbitrarily large catalogs without silently losing tools', () => {
+  const tools = Array.from({ length: 205 }, (_, index) => ({
+    name: `future_tool_${String(index).padStart(3, '0')}`,
+    title: `Future tool ${index}`,
+    description: 'Future model-neutral capability',
+    family: 'platform',
+    capability: 'read'
+  }));
+  const ranked = rankCatalogEntries(tools, { query: 'future' });
+  const first = paginateCatalogEntries(ranked, { offset: 0, limit: 100 });
+  const second = paginateCatalogEntries(ranked, { offset: first.nextOffset, limit: 100 });
+  const third = paginateCatalogEntries(ranked, { offset: second.nextOffset, limit: 100 });
+  assert.deepEqual(
+    [first.total, first.count, first.offset, first.nextOffset],
+    [205, 100, 0, 100]
+  );
+  assert.deepEqual(
+    [second.total, second.count, second.offset, second.nextOffset],
+    [205, 100, 100, 200]
+  );
+  assert.deepEqual(
+    [third.total, third.count, third.offset, third.nextOffset],
+    [205, 5, 200, null]
+  );
+  const all = [...first.tools, ...second.tools, ...third.tools];
+  assert.equal(all.length, 205);
+  assert.equal(new Set(all.map(tool => tool.name)).size, 205);
 });
