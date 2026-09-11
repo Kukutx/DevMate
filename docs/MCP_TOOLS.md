@@ -105,6 +105,12 @@ When a protected capability is configured to require approval, the tool call cre
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
 
+## ChatGPT browser Companion
+
+- `companion_context`
+
+`companion_context` is a read-only, non-workspace tool for combining ChatGPT's client-native browser page/tab/selection context with DevMate's local context. It returns Current Project, focused VS Code/Obsidian host, workspace summaries, routing invariants, safety guidance, and recommended follow-up tools. It does not ingest or mirror the webpage itself and does not require a DevMate-managed model API key. See `COMPANION.md`.
+
 ## Tool discovery
 
 The core `devmate.tool-discovery` capability provides a model-neutral fallback for clients that do not have provider-native tool search or deferred loading:

@@ -27,6 +27,7 @@ DevMate keeps the active project, verified MCP ingress, Gateway lifecycle contro
 - **Real project access** — files, commands, Git, previews, diagnostics, testing, and project-aware context through MCP.
 - **Project isolation** — each ChatGPT conversation stays bound to its selected project across reconnects; explicit local paths remain authoritative.
 - **Local-first runtime** — the Gateway, project state, credentials, backups, and execution stay on your machine or your own Runner hosts.
+- **ChatGPT browser Companion** — use the official ChatGPT browser side chat as the agent UI, combine the current page with DevMate local capabilities, and keep model access on the user's ChatGPT plan instead of storing a DevMate model API key.
 - **One desktop runtime** — VS Code and Obsidian share one machine-wide Gateway and public connection instead of competing for separate processes.
 - **Durable work** — reviewed jobs survive MCP request boundaries and Gateway restarts.
 - **Remote execution when needed** — scoped external Runners can handle platform-specific or long-running work without owning central policy state.
@@ -81,6 +82,7 @@ See [`obsidian-plugin/README.md`](obsidian-plugin/README.md) and [`docs/OBSIDIAN
 | Surface | Purpose |
 | --- | --- |
 | VS Code | Project context, desktop lifecycle, commands, diagnostics, shared public MCP |
+| ChatGPT browser Companion | Current-page assistance through the official ChatGPT browser side chat, combined with DevMate local context and tools |
 | Obsidian | Vault context, note/Property workflows, shared desktop lifecycle |
 | Standalone CLI | Editor-independent setup, lifecycle, workspace, plugin, job, and Runner administration |
 | DevMate Gateway | MCP server, policy, workspaces, jobs, audit, previews, and plugin capabilities |

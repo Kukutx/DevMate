@@ -52,7 +52,7 @@ const WRITE_TOOLS = new Set([
 
 const NON_WORKSPACE_TOOLS = new Set([
   'gateway_status', 'gateway_self_test', 'maintenance_status', 'connection_diagnostics',
-  'devmate_status_panel', 'devmate_team_panel', 'devmate_tool_catalog', 'devmate_tool_search', 'list_workspaces',
+  'devmate_status_panel', 'devmate_team_panel', 'devmate_tool_catalog', 'devmate_tool_search', 'companion_context', 'list_workspaces',
   'workspace_bind', 'workspace_binding_status', 'workspace_unbind',
   'add_trusted_root', 'remove_trusted_root',
   'work_session_start', 'work_session_status', 'work_session_finish', 'work_session_rollback',

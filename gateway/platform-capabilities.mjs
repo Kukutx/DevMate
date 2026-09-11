@@ -1,5 +1,6 @@
 import { installBackupAccessGuard } from './backup-access-guard.mjs';
 import { installConversationRoutingGuard } from './conversation-routing-guard.mjs';
+import { installCompanionCapabilities } from './companion-capabilities.mjs';
 import { installEffectiveAccessCapability } from './effective-access.mjs';
 import { installEmbeddedRunnerCapability } from './embedded-runner-capability.mjs';
 import { installFileAccessHardening } from './file-access-hardening.mjs';
@@ -37,6 +38,7 @@ export function installPlatformCapabilities(McpServerClass, plugins = builtinPlu
   installConversationRoutingGuard(McpServerClass);
   installRunnerCapabilities(McpServerClass);
   installHostContextCapabilities(McpServerClass);
+  installCompanionCapabilities(McpServerClass);
   installObsidianHostCapabilities(McpServerClass);
   installLocalCapabilities(McpServerClass);
   installEffectiveAccessCapability(McpServerClass);

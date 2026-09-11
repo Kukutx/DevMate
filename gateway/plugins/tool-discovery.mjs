@@ -11,6 +11,7 @@ import { definePlugin } from './plugin-sdk.mjs';
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_SEARCH_PAGE_SIZE = 20;
 const FAMILY_RULES = Object.freeze([
+  ['companion', /^companion_/],
   ['browser', /^(?:browser_|web_preview_)/],
   ['godot', /^godot_/],
   ['obsidian', /^obsidian_/],
