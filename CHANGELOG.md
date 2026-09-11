@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.7.0
+- Added model-neutral Tool Discovery with paginated `devmate_tool_catalog` and `devmate_tool_search`, exposing registered tool families, required capabilities, workspace scope, owner-only policy, Job eligibility, and MCP safety annotations without hiding or mutating the tool surface.
+- Upgraded Browser Control with combined semantic/ARIA/visual snapshots, double-click and drag actions, workspace-safe upload/download capture, isolated persistent workspace profiles, and explicit human takeover/resume while preserving the existing status/start/tabs/snapshot/act/stop flow.
+- Hardened Browser Control startup and shutdown concurrency so global session limits and persistent-profile ownership are reserved before asynchronous launch and remain held until browser teardown finishes.
+- Tightened loopback-only Browser Control networking by blocking service-worker request bypasses and remote WebSocket destinations; loopback-only mode now requires Playwright 1.48 or newer for WebSocket routing.
+- Kept persistent browser profiles in DevMate-private 0700 state, preserved stale-ref rejection and workspace path containment, and prevented failed download triggers from leaving unhandled pending download failures.
+- Documented the structured-first, GUI-when-needed agent harness so future clients can combine DevMate MCP tools with native Computer Use and provider-native tool search without changing authorization boundaries.
+
+
 ## 3.6.8
 - Stabilized multi-host desktop control so automatic VS Code and Obsidian startup/recovery attaches to the shared runtime without changing Current Project; explicit Start/Restart remains authoritative.
 - Hardened shared Host Registry and configuration merging against stale cross-host authentication/context replay, app-version downgrade, crashed-host residue, and oversized contexts losing focus/workspace identity.

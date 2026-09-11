@@ -107,7 +107,7 @@ Takeover is coordination, not an OS-level lock: the user always remains physical
 
 Browser Control remains owner-only.
 
-Remote network access remains opt-in through `allowRemoteUrls`. When disabled, both top-level navigation and subresource requests are restricted to loopback-compatible URLs.
+Remote network access remains opt-in through `allowRemoteUrls`. When disabled, top-level navigation, subresource requests, service workers, and WebSocket destinations are fenced to loopback-compatible URLs. Loopback-only mode requires Playwright 1.48 or newer so DevMate can route WebSocket handshakes instead of leaving an unobserved network path.
 
 Uploads:
 
