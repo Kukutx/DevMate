@@ -14,7 +14,7 @@ import {
   startBrowserControl,
   stopBrowserControl
 } from '../gateway/plugins/browser-control-runtime.mjs';
-import { browserControlActionSchema, browserControlPlugin } from '../gateway/plugins/browser-control.mjs';
+import { __test as pluginTest, browserControlActionSchema, browserControlPlugin } from '../gateway/plugins/browser-control.mjs';
 import { builtinPlugins } from '../gateway/plugins/builtins.mjs';
 import { ownerOnlyTool, requiredCapabilityForTool, validateToolRegistration } from '../gateway/tool-policy.mjs';
 
@@ -27,11 +27,16 @@ test('Browser Control defaults to loopback-only URLs and bounded action schemas'
   assert.equal(__test.requestUrlAllowed('https://example.com/', false), false);
   assert.equal(__test.requestUrlAllowed('https://example.com/', true), true);
   assert.equal(browserControlActionSchema.parse({ type: 'click', ref: 'e1', snapshotId: 'snap-1' }).type, 'click');
+  assert.equal(browserControlActionSchema.parse({ type: 'double_click', x: 10, y: 20 }).type, 'double_click');
+  assert.equal(browserControlActionSchema.parse({ type: 'upload', selector: 'input[type=file]', paths: ['fixture.txt'] }).type, 'upload');
+  const drag = browserControlActionSchema.parse({ type: 'drag', selector: '#source', destinationSelector: '#target' });
+  assert.equal(pluginTest.runtimeAction(drag).targetSelector, '#target');
   assert.throws(() => browserControlActionSchema.parse({ type: 'evaluate', script: 'alert(1)' }));
   assert.throws(() => browserControlActionSchema.parse({ type: 'click', unexpected: true }));
   for (const name of [
     'browser_control_status', 'browser_control_start', 'browser_control_tabs',
-    'browser_control_snapshot', 'browser_control_act', 'browser_control_stop'
+    'browser_control_snapshot', 'browser_control_act', 'browser_control_takeover',
+    'browser_control_resume', 'browser_control_stop'
   ]) {
     assert.equal(ownerOnlyTool(name), true, name);
     assert.equal(requiredCapabilityForTool(name, { readOnlyHint: name.includes('status') || name.includes('tabs') || name.includes('snapshot') }), 'admin', name);
@@ -46,7 +51,8 @@ test('registers Browser Control as an optional owner-only plugin with valid tool
   browserControlPlugin.activate({ server: { registerTool(name, config, handler) { tools.set(name, { config, handler }); } } });
   assert.deepEqual([...tools.keys()], [
     'browser_control_status', 'browser_control_start', 'browser_control_tabs',
-    'browser_control_snapshot', 'browser_control_act', 'browser_control_stop'
+    'browser_control_snapshot', 'browser_control_act', 'browser_control_takeover',
+    'browser_control_resume', 'browser_control_stop'
   ]);
   for (const [name, entry] of tools) {
     const policy = validateToolRegistration(name, entry.config);
@@ -125,6 +131,8 @@ export const chromium = { launch:async()=>new FakeBrowser() };
   const started = await startBrowserControl({ workspaceId: 'workspace-a', workspaceRoot: root, settings, url: 'http://127.0.0.1:4173/' });
   const sessionId = started.session.id;
   assert.equal(started.session.workspaceId, 'workspace-a');
+  assert.equal(started.session.profileMode, 'ephemeral');
+  assert.equal(started.session.controlMode, 'agent');
   assert.equal(started.session.tabCount, 1);
 
   const listed = await listBrowserTabs({ workspaceId: 'workspace-a', sessionId });
