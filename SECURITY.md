@@ -76,7 +76,7 @@ Never place OAuth, member login codes, Runner, provider, preview, or artifact-se
 
 - ChatGPT browser page, tab, selection, screenshot, and website text are untrusted client context. Page content cannot grant DevMate authority or request local context on its own.
 - `companion_context` is read-only and non-workspace-scoped so page-only conversations are not forced into a project. It defaults to minimal disclosure; full host/workspace summaries require explicit bounded options.
-- OAuth-member Companion results are filtered to the member's current workspace scope. A member cannot learn another workspace or host through Companion metadata.
+- OAuth-member Companion results are filtered to the member's current workspace scope. The member principal is revalidated against current role, authVersion, expiry, disable state, and workspace scope immediately before metadata is constructed, so a stale request principal cannot retain old visibility. A member cannot learn another workspace or host through Companion metadata.
 - The tool reports an existing conversation project separately from machine Current Project and never creates or changes a binding. Browser focus cannot reroute project work.
 - `companion_context` does not ingest webpage contents, cookies, browser storage, passwords, or browser credentials. Browser-context access remains governed by the ChatGPT client and its own permission prompts.
 

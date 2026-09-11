@@ -143,16 +143,31 @@ test('OAuth members see only their workspace scope and cannot learn another work
         updatedAt: '2026-09-11T02:01:00.000Z'
       }
     },
+    team: {
+      members: [{
+        id: 'member-a',
+        name: 'Member A',
+        role: 'observer',
+        workspaceIds: ['app'],
+        loginSalt: 'test-salt',
+        loginHash: 'test-hash',
+        authVersion: 2,
+        createdAt: '2026-09-11T01:00:00.000Z',
+        updatedAt: '2026-09-11T02:00:00.000Z',
+        expiresAt: null,
+        disabled: false
+      }]
+    },
     conversationWorkspaceBindings: {
       [scope]: binding('app', root.app, { name: 'App', source: 'default' })
     }
   };
   const principal = {
     id: 'member-a',
-    role: 'observer',
+    role: 'maintainer',
     source: 'oauth-member',
-    authVersion: 1,
-    workspaceIds: ['app']
+    authVersion: 2,
+    workspaceIds: ['app', 'secret']
   };
 
   const context = buildCompanionContext(config, {
@@ -172,6 +187,52 @@ test('OAuth members see only their workspace scope and cannot learn another work
   assert.equal(context.focusedHost.hostId, 'app-host');
   assert.deepEqual(context.hosts.map(item => item.hostId), ['app-host']);
   assert.doesNotMatch(serialized, /Secret Project|secret-host|hidden\.js/);
+  assert.match(context.guidance.join(' '), /workspace mode only/i);
+  assert.deepEqual(context.recommendedTools.effectiveAccess, ['effective_access_status']);
+});
+
+test('Companion revalidates OAuth member authorization state before constructing local metadata', () => {
+  const root = roots();
+  const config = {
+    activeWorkspaceId: 'secret',
+    workspaces: [
+      { id: 'app', name: 'App', root: root.app, mode: 'workspace-write' },
+      { id: 'secret', name: 'Secret Project', root: root.secret, mode: 'workspace-write' }
+    ],
+    hostContexts: {},
+    team: {
+      members: [{
+        id: 'member-a',
+        name: 'Member A',
+        role: 'observer',
+        workspaceIds: ['app'],
+        loginSalt: 'test-salt',
+        loginHash: 'test-hash',
+        authVersion: 3,
+        createdAt: '2026-09-11T01:00:00.000Z',
+        updatedAt: '2026-09-11T02:00:00.000Z',
+        expiresAt: null,
+        disabled: false
+      }]
+    }
+  };
+
+  const staleScopePrincipal = {
+    id: 'member-a',
+    role: 'maintainer',
+    source: 'oauth-member',
+    authVersion: 3,
+    workspaceIds: ['app', 'secret']
+  };
+  const refreshed = buildCompanionContext(config, { principal: staleScopePrincipal, includeWorkspaces: true });
+  assert.deepEqual(refreshed.workspaces.map(item => item.id), ['app']);
+  assert.equal(refreshed.currentProject, null);
+  assert.doesNotMatch(JSON.stringify(refreshed), /Secret Project/);
+
+  assert.throws(() => buildCompanionContext(config, {
+    principal: { ...staleScopePrincipal, authVersion: 2 },
+    includeWorkspaces: true
+  }), /authorization was rotated/);
 });
 
 test('companion path summaries are portable and do not expose foreign absolute paths', () => {

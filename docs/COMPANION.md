@@ -42,7 +42,7 @@ The default response is intentionally small. It reports:
 - routing and safety invariants;
 - recommended DevMate tools for the next step.
 
-Full host and workspace summaries are opt-in through `includeHosts` and `includeWorkspaces`. They are bounded per response. OAuth members see only workspaces and hosts inside their current workspace scope.
+Full host and workspace summaries are opt-in through `includeHosts` and `includeWorkspaces`. They are bounded per response. OAuth members see only workspaces and hosts inside their current workspace scope, and that scope is revalidated from current member state when the result is built.
 
 The tool intentionally does **not** ingest or duplicate the current webpage. Page/tab/selection/screenshot context belongs to the ChatGPT client.
 
