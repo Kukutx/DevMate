@@ -110,6 +110,7 @@ class FakePage extends EventEmitter {
 class FakeContext extends EventEmitter {
   constructor(){ super(); this.items=[]; }
   async route(){}
+  async routeWebSocket(){}
   async newPage(){ const page=new FakePage(this); this.items.push(page); this.emit('page', page); return page; }
   async close(){ for(const page of [...this.items]) await page.close(); }
 }
