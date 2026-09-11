@@ -105,6 +105,17 @@ When a protected capability is configured to require approval, the tool call cre
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
 
+## Tool discovery
+
+The core `devmate.tool-discovery` capability provides a model-neutral fallback for clients that do not have provider-native tool search or deferred loading:
+
+- `devmate_tool_catalog`
+- `devmate_tool_search`
+
+These tools describe the currently registered MCP surface; they do not hide tools, enable plugins, grant authority, or create a second authorization layer. Metadata includes tool family, required capability, workspace scope, owner-only policy, durable-Job eligibility, and MCP safety annotations.
+
+Discovery is bounded per response rather than bounded in total. Both tools accept `offset` and `limit` (maximum page size 100) and return `total`, `count`, and `nextOffset`. Continue from `nextOffset` until it is `null` to enumerate every matching tool, even as the DevMate surface grows beyond 100 tools. Clients with provider-native tool search should prefer that native mechanism and use DevMate discovery as a compatibility fallback.
+
 ## Optional Codex Collaboration
 
 Codex Collaboration is off by default and runs delegated Codex work only inside a DevMate-managed isolated snapshot:
@@ -167,9 +178,21 @@ Enable `devmate.browser-control`. These tools are owner-only and intentionally a
 - `browser_control_tabs`
 - `browser_control_snapshot`
 - `browser_control_act`
+- `browser_control_takeover`
+- `browser_control_resume`
 - `browser_control_stop`
 
-Browser Control keeps a bounded Playwright Chromium session alive across MCP requests in the current Gateway process. It defaults to a visible browser, blocks remote URLs unless explicitly enabled, binds sessions to the selected workspace, and returns snapshot-scoped element refs for safer actions. Browser sessions are closed when the plugin is disabled or the Gateway shuts down; they do not reuse the user's normal Chrome profile or survive a Gateway restart.
+Browser Control keeps a bounded Playwright Chromium session alive across MCP requests. It defaults to a visible browser, blocks remote URLs and subresources unless `allowRemoteUrls` is explicitly enabled, binds sessions to the selected workspace, and returns snapshot-scoped element refs so page-changing actions cannot silently reuse stale targets.
+
+`browser_control_snapshot` can combine bounded page text, ARIA state, semantic interactive-element refs with geometry, frame metadata, recent console/page/request diagnostics, and an optional inline PNG/JPEG screenshot. This lets capable models combine structural and visual reasoning instead of choosing one representation.
+
+`browser_control_act` supports navigation/history/reload/waits, click/double-click, typing/keyboard/focus/hover/scroll, select/check/uncheck, drag/drop, workspace-safe file upload, workspace-safe download capture, tab management, and explicit workspace-contained screenshots. Generic raw page-script evaluation is intentionally not exposed.
+
+The default browser profile is `profileMode: "ephemeral"`. An owner can explicitly start a session with `profileMode: "workspace"`; that profile is stored under DevMate private plugin state keyed to the workspace, never inside the project and never by reusing the user's normal Chrome/Edge profile. Only one live session owns a workspace persistent profile at a time. Gateway/plugin shutdown closes live sessions, while opted-in profile state can survive for a later managed session.
+
+`browser_control_takeover` pauses model-driven actions for a visible session while the user interacts manually. `browser_control_resume` returns control to the model. Both transitions invalidate existing element refs, so the next model action should begin with a fresh snapshot.
+
+Uploads must resolve to existing non-protected files inside the selected workspace. Download and explicit screenshot destinations must remain inside the workspace and outside DevMate-protected credential paths. Symlink/reparse traversal outside the workspace is rejected.
 
 ### Browser QA
 

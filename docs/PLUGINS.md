@@ -1,18 +1,23 @@
 # DevMate capability plugins
 
-DevMate plugins add platform-specific tools without expanding the default MCP surface. The plugin host is always available, while optional plugins are disabled until explicitly enabled.
+DevMate plugins add focused capabilities while keeping one shared MCP security and workspace model. The core Tool Discovery plugin is always enabled; optional capability plugins remain disabled until explicitly enabled.
 
 ## Built-in catalog
 
 | Plugin | Default | Purpose |
 |---|---:|---|
-| `devmate.browser-control` | off | Long-lived interactive Playwright sessions, multi-tab navigation, semantic snapshots, and bounded browser actions |
+| `devmate.tool-discovery` | core | Model-neutral, paginated discovery of the complete currently registered DevMate tool surface |
+| `devmate.browser-control` | off | Long-lived interactive Playwright sessions with semantic + visual snapshots, file transfer, persistent workspace profiles, human takeover, and bounded browser actions |
 | `devmate.browser-qa` | off | Local previews, Playwright browser automation, structured state assertions, and saved scenarios |
 | `devmate.godot` | off | Godot inspection, validation, execution, Web export, QA bridge support, and acceptance suites |
 
 `devmate.godot` depends on `devmate.browser-qa`. Enabling Godot automatically enables Browser QA. Browser Control is independent from Browser QA because interactive browsing and deterministic acceptance testing have different lifecycle and security requirements.
 
-Browser Control is owner-only. It keeps managed Chromium sessions alive across MCP requests inside the current Gateway process, caps session/tab counts, binds every session to one workspace, rejects stale semantic element refs after actions, and closes sessions when the capability is disabled or the Gateway shuts down. Remote URLs are blocked by default. Browser Control does not attach to the user's normal Chrome profile and does not persist browser cookies/session state across Gateway restarts.
+Tool Discovery is descriptive only. `devmate_tool_catalog` and `devmate_tool_search` report the tools that are already registered, including family, required capability, workspace scope, owner-only policy, Job eligibility, and MCP safety annotations. They never hide tools, grant authority, or create a second authorization layer. Results are paginated with `offset` / `limit` and return `total`, `count`, and `nextOffset`, so a growing tool surface is bounded per response without being silently truncated. Clients with provider-native tool search or deferred loading should continue to prefer that native mechanism.
+
+Browser Control is owner-only. It keeps managed Chromium sessions alive across MCP requests, caps session/tab counts, binds every session to one workspace, and rejects stale semantic element refs after page-changing actions. Remote URLs remain blocked by default. Snapshots can combine bounded text, ARIA state, semantic element refs/geometry, diagnostics, and an optional inline screenshot. Actions include click/double-click, typing, keyboard input, scrolling, selection, drag/drop, workspace-safe upload/download capture, tab control, waits, and explicit screenshot artifacts.
+
+Browser Control starts with `profileMode: "ephemeral"`. An explicit `profileMode: "workspace"` session stores browser state under DevMate private plugin state keyed to that workspace; it never writes cookies/session state into the project and never reuses the user's normal Chrome/Edge profile. Live sessions still close when Browser Control is disabled or the Gateway shuts down, while an opted-in workspace profile can survive for a later managed session. `browser_control_takeover` pauses model-driven actions for a visible session and `browser_control_resume` returns control to the agent; both invalidate existing element refs.
 
 ## Management tools
 
@@ -29,7 +34,7 @@ A newly enabled plugin is registered on the next MCP server instance. ChatGPT cl
 
 ## Configuration storage
 
-Plugin state is stored in DevMate's global-storage `config.json`, never in the user's project:
+Plugin configuration is stored in DevMate's global-storage `config.json`, never in the user's project:
 
 ```json
 {
@@ -58,7 +63,9 @@ Plugin state is stored in DevMate's global-storage `config.json`, never in the u
 }
 ```
 
-Use `plugin_configure` instead of editing this file manually. Version-controlled acceptance criteria belong in `.devmate/automation.json`; see `AUTOMATION_MANIFEST.md`.
+Browser Control persistent workspace profiles are runtime state rather than `config.json` settings. They live only in DevMate private plugin state and should be treated as sensitive local state because they may contain authenticated browser sessions.
+
+Use `plugin_configure` instead of editing `config.json` manually. Version-controlled acceptance criteria belong in `.devmate/automation.json`; see `AUTOMATION_MANIFEST.md`.
 
 ## Plugin contract
 
@@ -128,11 +135,11 @@ Existing DevMate path containment, permission profiles, command guards, process 
 
 1. DevMate creates a new MCP server for a request.
 2. The plugin host registers management and automation tools.
-3. It resolves enabled plugins and dependencies in topological order.
+3. It resolves core and enabled optional plugins plus dependencies in topological order.
 4. Each plugin activates once and may publish declared services.
 5. Consumers activate only after providers.
 6. Long-lived previews, Browser Control sessions, and process services are tracked outside individual requests.
-7. Gateway shutdown stops Browser Control sessions, previews, and supervised process trees.
+7. Gateway shutdown stops live Browser Control sessions, previews, and supervised process trees; opted-in Browser Control workspace-profile state remains private and reusable.
 
 ## External plugin roadmap
 
