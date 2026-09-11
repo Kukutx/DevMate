@@ -37,7 +37,7 @@ jobs:
             exit 1
           }
 
-      - name: Verify required CI gate passed for tagged commit
+      - name: Verify required CI checks passed for tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
