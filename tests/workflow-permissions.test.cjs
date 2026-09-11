@@ -15,10 +15,12 @@ function pinnedAction(name, major) {
   return new RegExp(`${name.replace('/', '\\/')}@[a-f0-9]{40}\\s+# v${major}`, 'i');
 }
 
-const requiredReleaseChecks = [
-  'Windows, VS Code 1.133, Node 24 LTS',
-  'Node 26 Current compatibility',
-  'Linux and Real Godot 4.7.1'
+const mandatoryCiJobs = [
+  ['verify', 'Windows, VS Code 1.133, Node 24 LTS'],
+  ['node-current', 'Node 26 Current compatibility'],
+  ['godot-real', 'Linux and Real Godot 4.7.1'],
+  ['portable-windows', 'Portable CLI Windows'],
+  ['portable-linux', 'Portable CLI Linux']
 ];
 
 test('permanent CI is read-only and never mutates source branches', () => {
@@ -46,9 +48,12 @@ test('release authority is limited to publishing, CI verification, and provenanc
   assert.match(release, /id-token:\s*write/);
   assert.match(release, /attestations:\s*write/);
   assert.match(release, /Verify required CI checks passed for tagged commit/);
-  for (const checkName of requiredReleaseChecks) {
-    assert.match(ci, new RegExp(`name:\\s*${checkName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-    assert.equal(release.includes(`"${checkName}"`), true, `release must require CI check: ${checkName}`);
+  assert.equal(ci.includes('name: Validation Gate'), true, 'CI must publish the stable Validation Gate check');
+  assert.equal(release.includes('"Validation Gate"'), true, 'release must require the stable Validation Gate check');
+  for (const [jobId, checkName] of mandatoryCiJobs) {
+    assert.equal(ci.includes(`name: ${checkName}`), true, `CI must retain mandatory job: ${checkName}`);
+    assert.equal(ci.includes(`      - ${jobId}`), true, `Validation Gate must depend on job: ${jobId}`);
+    assert.equal(release.includes(`"${checkName}"`), false, `release must not hard-code mutable CI check name: ${checkName}`);
   }
   assert.equal(release.includes('for required in "verify"'), false);
   assert.doesNotMatch(release, /pull-requests:\s*write|issues:\s*write|actions:\s*write/);
