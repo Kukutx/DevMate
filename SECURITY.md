@@ -64,7 +64,7 @@ Never place OAuth, member login codes, Runner, provider, preview, or artifact-se
 
 ## Authorization and coordination
 
-- Workspace scopes are checked for tools, processes, previews, leases, approvals, work sessions, jobs, and Runner credentials.
+- Workspace scopes are checked for tools, processes, previews, leases, approvals, work sessions, jobs, and Runner credentials. OAuth-member host/editor/diagnostic results are also filtered after execution so a globally focused desktop host cannot expose metadata from another workspace.
 - An instance may require exclusive workspace leases for scoped remote mutations through `team.requireWorkspaceLeaseForWrites`.
 - Dual-control approval is an explicit optional policy and is disabled by default.
 - Approval policy applies to current `oauth-member` principals. Approval records store a canonical argument digest and redacted summary rather than raw secrets.

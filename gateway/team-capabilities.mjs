@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { audit, mutateConfig, readConfig, redactSensitiveString } from './local-shared.mjs';
+import { audit, mutateConfig, pathKey, readConfig, redactSensitiveString } from './local-shared.mjs';
 import {
   conversationScopeFromToolContext,
   requestContext,
@@ -81,6 +81,133 @@ function bindAuthorizedWorkspaceArgs(args, authorized) {
 
 function filterArray(items, allowed, field = 'workspaceId') {
   return Array.isArray(items) ? items.filter(item => allowed.has(item?.[field] || item?.id)) : items;
+}
+
+function workspaceIdForContextRoot(context, current) {
+  const root = String(context?.workspaceRoot || '').trim();
+  if (!root) return null;
+  const key = pathKey(root);
+  const workspaces = Array.isArray(current?.workspaces) ? current.workspaces : [];
+  return workspaces.find(workspace => pathKey(workspace?.root || workspace?.path || '') === key)?.id || null;
+}
+
+function allowedContextWorkspaceIds(principal, authorizedWorkspaceId = null) {
+  if (!principal?.workspaceIds?.length) return null;
+  const authorized = String(authorizedWorkspaceId || '').trim();
+  if (authorized) return new Set([authorized]);
+  return new Set(principal.workspaceIds.map(value => String(value || '').trim()).filter(Boolean));
+}
+
+function hostContextAllowed(context, allowed, current) {
+  if (!allowed) return true;
+  const workspaceId = workspaceIdForContextRoot(context, current);
+  return !!workspaceId && allowed.has(workspaceId);
+}
+
+function visibleHostIds(current, allowed) {
+  if (!allowed) return null;
+  const visible = new Set();
+  for (const [id, context] of Object.entries(current?.hostContexts || {})) {
+    if (!context || typeof context !== 'object' || Array.isArray(context)) continue;
+    if (!hostContextAllowed(context, allowed, current)) continue;
+    visible.add(String(id));
+    if (context.hostId) visible.add(String(context.hostId));
+  }
+  return visible;
+}
+
+function replaceObject(target, replacement) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return replacement;
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, replacement);
+  return target;
+}
+
+function emptyVscodeContext() {
+  return {
+    capturedAt: null,
+    workspaceRoot: null,
+    activeEditor: null,
+    visibleEditors: [],
+    diagnostics: []
+  };
+}
+
+function emptyEditorContext() {
+  return { capturedAt: null, workspaceId: null, activeEditor: null };
+}
+
+function emptyDiagnosticsContext() {
+  return { capturedAt: null, workspaceId: null, diagnostics: [], total: 0 };
+}
+
+function emptyDiagnosticSummary() {
+  return { total: 0, bySeverity: { error: 0, warning: 0, information: 0, hint: 0 } };
+}
+
+function scrubConnectionVscode(data) {
+  data.vscode = {
+    contextPresent: false,
+    capturedAt: null,
+    contextAgeSeconds: null,
+    fresh: false,
+    workspaceId: null,
+    activeEditor: null,
+    visibleEditorCount: 0,
+    diagnostics: emptyDiagnosticSummary()
+  };
+}
+
+function filterHostContextResult(name, result, principal, authorizedWorkspaceId, current) {
+  if (!result?.structuredContent || !current) return result;
+  const allowed = allowedContextWorkspaceIds(principal, authorizedWorkspaceId);
+  if (!allowed) return result;
+  const data = result.structuredContent;
+  const visibleIds = visibleHostIds(current, allowed);
+
+  if (name === 'host_context_list') {
+    data.hosts = Array.isArray(data.hosts)
+      ? data.hosts.filter(context => hostContextAllowed(context, allowed, current))
+      : [];
+    if (data.activeHostId && !visibleIds.has(String(data.activeHostId))) data.activeHostId = null;
+    if (data.focusedHostId && !visibleIds.has(String(data.focusedHostId))) data.focusedHostId = null;
+    syncTextContent(result);
+    return result;
+  }
+
+  if (name === 'host_context') {
+    if (!hostContextAllowed(data.context, allowed, current)) data.context = null;
+    if (data.activeHostId && !visibleIds.has(String(data.activeHostId))) data.activeHostId = null;
+    if (data.focusedHostId && !visibleIds.has(String(data.focusedHostId))) data.focusedHostId = null;
+    syncTextContent(result);
+    return result;
+  }
+
+  if (name === 'vscode_context') {
+    if (!hostContextAllowed(data, allowed, current)) replaceObject(data, emptyVscodeContext());
+    syncTextContent(result);
+    return result;
+  }
+
+  if (name === 'active_editor_context') {
+    if (!data.workspaceId || !allowed.has(String(data.workspaceId))) replaceObject(data, emptyEditorContext());
+    syncTextContent(result);
+    return result;
+  }
+
+  if (name === 'list_diagnostics') {
+    if (!data.workspaceId || !allowed.has(String(data.workspaceId))) replaceObject(data, emptyDiagnosticsContext());
+    syncTextContent(result);
+    return result;
+  }
+
+  if (['connection_diagnostics', 'devmate_status_panel'].includes(name)) {
+    const workspaceId = String(data.vscode?.workspaceId || '').trim();
+    if (!workspaceId || !allowed.has(workspaceId)) scrubConnectionVscode(data);
+    if (name === 'devmate_status_panel' && result._meta?.diagnostics) result._meta.diagnostics = data;
+    syncTextContent(result);
+  }
+  return result;
 }
 
 function syncTextContent(result) {
@@ -174,8 +301,9 @@ function sanitizeToolResult(name, result) {
   return result;
 }
 
-function filterResult(name, result, principal, authorizedWorkspaceId = null) {
+function filterResult(name, result, principal, authorizedWorkspaceId = null, current = null) {
   if (!result?.structuredContent) return sanitizeToolResult(name, result);
+  filterHostContextResult(name, result, principal, authorizedWorkspaceId, current);
   const scopedData = result.structuredContent;
   if (authorizedWorkspaceId && name === 'list_processes' && Array.isArray(scopedData.processes)) {
     scopedData.processes = scopedData.processes.filter(item => item.workspaceId === authorizedWorkspaceId);
@@ -372,7 +500,7 @@ async function authorizedToolExecution(name, config, handler, args, rest) {
       await releaseLeaseHoldSafely('post-handler');
     }
 
-    const result = filterResult(name, markGitFailure(name, rawResult), authorized.principal, authorized.workspaceId);
+    const result = filterResult(name, markGitFailure(name, rawResult), authorized.principal, authorized.workspaceId, current);
     const session = authorized.workspaceId
       ? touchWorkSession(authorized.principal.id, authorized.workspaceId, { failed: result?.isError === true })
       : null;
@@ -454,7 +582,9 @@ export const __test = {
   commandResultFailed,
   defaultConversationWorkspace,
   failedGitPhase,
+  filterHostContextResult,
   filterResult,
+  hostContextAllowed,
   inferredWorkspace,
   markGitFailure,
   persistDefaultConversationBinding,
@@ -467,6 +597,7 @@ export const __test = {
   sanitizeResultPayload,
   sanitizeToolResult,
   syncTextContent,
+  workspaceIdForContextRoot,
   workspaceIds,
   wrapAuthorizedTool
 };
