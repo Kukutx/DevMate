@@ -8,7 +8,7 @@ When `--config` is omitted, standalone bootstrap stores the instance at `~/.devm
 
 | Preset | MCP authentication | Embedded Runner | External Runner API | Workspace lease default | Connection default |
 |---|---|---:|---:|---:|---|
-| `personal` | `oauth` | on | off | off | ngrok |
+| `personal` | `none` | on | off | off | ngrok |
 | `team` | `oauth` | on | off | on | ngrok |
 | `control-plane` | `oauth` | off | on | on | external HTTPS |
 | `runner` | `none` — loopback only | off | off | off | local config |
@@ -23,7 +23,7 @@ The Personal and Runner presets default to `none`; Team and Control-plane preset
 npx devmate bootstrap --preset personal --workspace /srv/project
 ```
 
-This creates one owner instance with OAuth ready for the normal ChatGPT-facing public MCP connection. Direct loopback requests remain trusted local-owner access.
+This creates one single-owner instance with `auth.mode: "none"` for both loopback and the configured public MCP connection. Enable OAuth only when the endpoint needs team/member identity.
 
 ## Team preset
 
@@ -102,7 +102,7 @@ npx devmate bootstrap \
   --external-runner-control true
 ```
 
-This remains one instance with a different capability composition. Authentication remains independent from Runner topology and workspace-lease policy. Selecting `none` explicitly is supported only for trusted loopback use; remote MCP requests are rejected in that mode.
+This remains one instance with a different capability composition. Authentication remains independent from Runner topology and workspace-lease policy. Single-owner `none` is supported for both local and configured public MCP; use `oauth` when the endpoint needs team/member identity. The Runner-host preset remains loopback-only by deployment design.
 
 Unknown preset names fail explicitly.
 

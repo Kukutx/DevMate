@@ -4,9 +4,11 @@
 [![Release](https://img.shields.io/github/v/release/Kukutx/DevMate?display_name=tag)](https://github.com/Kukutx/DevMate/releases/latest)
 [![License](https://img.shields.io/github/license/Kukutx/DevMate)](LICENSE)
 
-**Local-first MCP development gateway for ChatGPT.**
+**Local-first agent capability and automation runtime for ChatGPT, powered by MCP.**
 
-DevMate connects ChatGPT to a real development environment. It can inspect and edit project files, run commands, test changes, use live editor context, and hand long-running work to durable jobs or remote Runners — while workspace and runtime state stay on machines you control.
+DevMate gives ChatGPT Codex-like local execution capabilities without embedding another model. It can inspect and edit project files, use Git, run commands and tests, automate a managed browser, consume live VS Code or Obsidian context, and hand long-running work to durable jobs or remote Runners — while project and runtime state stay on machines you control.
+
+ChatGPT remains the agent/model surface. In the normal ChatGPT and Companion workflow, DevMate adds the local capability layer without requiring a DevMate-managed OpenAI API key or separate model-inference bill. That can reduce dependence on separate Codex runs for routine local work; ChatGPT plan limits and any tunnel, cloud, or Runner infrastructure costs still apply.
 
 It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.
 
@@ -25,6 +27,7 @@ DevMate keeps the active project, verified MCP ingress, Gateway lifecycle contro
 ## What stands out
 
 - **Real project access** — files, commands, Git, previews, diagnostics, testing, and project-aware context through MCP.
+- **Agent automation** — structured local tools, Browser Control, repeatable `.devmate/automation.json` workflows, durable jobs, and remote Runners let an agent carry work from inspection through validation instead of stopping at code suggestions.
 - **Project isolation** — each ChatGPT conversation stays bound to its selected project across reconnects; explicit local paths remain authoritative.
 - **Local-first runtime** — the Gateway, project state, credentials, backups, and execution stay on your machine or your own Runner hosts.
 - **ChatGPT browser Companion** — use the official ChatGPT browser side chat as the agent UI, combine the current page with DevMate local capabilities, and keep model access on the user's ChatGPT plan instead of storing a DevMate model API key.

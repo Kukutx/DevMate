@@ -1,6 +1,6 @@
 # Security Policy
 
-DevMate is a local-first development gateway with filesystem, process, Git, browser, queued-job, external-Runner, and optional platform capabilities. Treat OAuth, provider, Runner, preview, and artifact-service credentials and every public endpoint as sensitive.
+DevMate is a local-first agent capability and automation runtime with filesystem, process, Git, browser, queued-job, external-Runner, and optional platform capabilities. Treat OAuth, provider, Runner, preview, and artifact-service credentials and every public endpoint as sensitive.
 
 ## Network boundary
 

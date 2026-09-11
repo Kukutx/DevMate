@@ -61,7 +61,7 @@ Running cancellation is cooperative. DevMate records the cancellation request an
 
 ## Embedded and external Runners
 
-The embedded Runner executes inside the central Gateway process and is enabled by default. External Runners connect to `/runner/v1` with dedicated scoped `dmr_` credentials.
+The embedded Runner executes inside the central Gateway process. The base instance configuration and VS Code host setting default to disabled; the Personal and Team standalone bootstrap presets enable it explicitly. External Runners connect to `/runner/v1` with dedicated scoped `dmr_` credentials.
 
 Use:
 

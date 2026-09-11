@@ -1,6 +1,6 @@
 # Team access and hardened deployments
 
-DevMate is a local-first development gateway. A single instance can combine public connection providers, OAuth member identity, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
+DevMate is a local-first agent capability and automation runtime. A single instance can combine public connection providers, OAuth member identity, workspace leases, approvals, request policy, durable jobs and external Runners. These are independent capabilities, not personal/team/production runtime modes.
 
 ## Capability composition
 

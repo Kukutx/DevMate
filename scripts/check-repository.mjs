@@ -171,6 +171,8 @@ const documentationFiles = [
   'docs/AUTHENTICATION.md',
   'docs/BOOTSTRAP.md',
   'docs/HOST_INTEGRATION.md',
+  'docs/LOCAL_CAPABILITIES.md',
+  'docs/OPERATIONS.md',
   'docs/STANDALONE.md',
   'docs/TEAM_DEPLOYMENT.md',
   'docs/TUNNELS.md',
@@ -179,7 +181,12 @@ const documentationFiles = [
 const retiredDocumentationPatterns = [
   { pattern: /(?:authenticated\s+)?MCP\s+`initialize`|MCP\s+initialize/i, label: 'retired MCP initialize guidance' },
   { pattern: /preserve the MCP session|MCP session ID\b|MCP-Session-Id|mcp-session-id/i, label: 'retired stateful MCP session guidance' },
-  { pattern: /member token is returned|member tokens are printed/i, label: 'retired static member-token guidance' }
+  { pattern: /member token is returned|member tokens are printed/i, label: 'retired static member-token guidance' },
+  { pattern: /Public MCP defaults to OAuth/i, label: 'retired OAuth-by-default public MCP guidance' },
+  { pattern: /owner instance with OAuth ready for the normal ChatGPT-facing public MCP connection/i, label: 'retired Personal preset OAuth guidance' },
+  { pattern: /Selecting `none` explicitly is supported only for trusted loopback use/i, label: 'retired loopback-only single-owner no-auth guidance' },
+  { pattern: /remote MCP requests are rejected in that mode/i, label: 'retired rejection of configured public single-owner no-auth' },
+  { pattern: /The embedded Runner executes inside the central Gateway process and is enabled by default/i, label: 'retired embedded Runner default guidance' }
 ];
 for (const file of documentationFiles) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
@@ -194,6 +201,9 @@ const documentationRequired = [
   ['SECURITY.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team\/member identity\./, 'security policy must document single-owner public no-auth'],
   ['docs/AUTHENTICATION.md', /`auth\.mode: "none"` is the default single-owner mode for both local and public MCP access\./, 'authentication policy must define single-owner public no-auth'],
   ['docs/BOOTSTRAP.md', /The Personal and Runner presets default to `none`; Team and Control-plane presets use `oauth` for member identity\./, 'bootstrap docs must encode product auth defaults'],
+  ['docs/BOOTSTRAP.md', /\| `personal` \| `none` \| on \| off \| off \| ngrok \|/, 'Personal bootstrap table must match the no-auth preset'],
+  ['docs/LOCAL_CAPABILITIES.md', /Single-owner `auth\.mode: "none"` is the default for both local and configured public MCP\./, 'local capability docs must support configured public single-owner no-auth'],
+  ['docs/OPERATIONS.md', /base instance configuration and VS Code host setting default to disabled; the Personal and Team standalone bootstrap presets enable it explicitly/i, 'operations docs must describe embedded Runner defaults accurately'],
   ['docs/STANDALONE.md', /Public HTTPS ingress supports the default single-owner `none` mode; use `oauth` for team\/member identity\./, 'standalone docs must support single-owner public no-auth'],
   ['obsidian-plugin/README.md', /Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team\/member identity\./, 'Obsidian docs must describe single-owner public no-auth'],
   ['docs/HOST_INTEGRATION.md', /MCP 2026 verification is stateless/, 'host integration must document stateless MCP 2026'],

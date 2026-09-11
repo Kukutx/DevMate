@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.8.0
+- Added DevMate Companion for the official ChatGPT browser side chat, joining client-native page/tab/selection context with DevMate local project, VS Code, Obsidian, Git, command, Job, Runner, and plugin capabilities without embedding a second model runtime.
+- Added bounded `companion_context` routing metadata and hardened it against untrusted webpage instructions, stale member scope, cross-workspace host disclosure, and browser-focus changes to Current Project or an existing conversation binding.
+- Clarified DevMate as a local-first agent capability and automation runtime: ChatGPT remains the agent/model surface while DevMate supplies Codex-like local execution and automation without requiring a DevMate-managed model API key or separate inference bill.
+- Corrected stale Personal bootstrap, public no-auth, and embedded Runner default documentation so docs match the current configuration and security contracts.
+- Expanded repository documentation checks to reject contradictory legacy authentication and Runner-default guidance before release.
+
 ## 3.7.0
 - Added model-neutral Tool Discovery with paginated `devmate_tool_catalog` and `devmate_tool_search`, exposing registered tool families, required capabilities, workspace scope, owner-only policy, Job eligibility, and MCP safety annotations without hiding or mutating the tool surface.
 - Upgraded Browser Control with combined semantic/ARIA/visual snapshots, double-click and drag actions, workspace-safe upload/download capture, isolated persistent workspace profiles, and explicit human takeover/resume while preserving the existing status/start/tabs/snapshot/act/stop flow.

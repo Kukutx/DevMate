@@ -1,6 +1,6 @@
 # DevMate architecture
 
-DevMate is a local-first development gateway. VS Code, Obsidian, standalone deployment, OAuth member access, external Runners and optional platform capabilities all use one Gateway and one current capability model.
+DevMate is a local-first agent capability and automation runtime. ChatGPT or another MCP client supplies the model/agent surface; VS Code, Obsidian, standalone deployment, OAuth member access, external Runners and optional platform capabilities all use one Gateway and one current capability model.
 
 ## Runtime topology
 

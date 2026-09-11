@@ -16,7 +16,7 @@ These features extend convenience without turning the normal file tools into unr
 - `blockDangerousOperations`, `confirmBeforePush`, and `allowDirectoryMutations` are balanced-mode preferences. They do not partially restrict `fullAccess`, so the profile remains semantically complete.
 - Persistent process execution is blocked by `readOnly` and follows the configurable dangerous-command guard in `balanced` mode.
 - Processes run as the operating-system user that launched VS Code. DevMate cannot bypass UAC, filesystem ACLs, `sudo`, containers, Remote SSH boundaries, or other OS controls.
-- Public MCP defaults to OAuth. Explicit `auth.mode: "none"` is limited to trusted loopback-only MCP and never authorizes a remote request.
+- Single-owner `auth.mode: "none"` is the default for both local and configured public MCP. Any reachable `/mcp` request receives owner authority in this mode, so the endpoint itself must remain private to that owner; use OAuth for team/member identity.
 
 `fullAccess` does not disable containment or credential protections. Workspace/reference state, protected control-plane paths, credential and secret path filtering, path traversal/symlink/reparse fencing, operating-system permissions, and remote OAuth role/scope/lease rules remain independent security boundaries.
 
