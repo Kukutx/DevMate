@@ -52,8 +52,8 @@ test('tool search ranks exact names and supports family/capability filters witho
   ];
   assert.equal(searchCatalogEntries(tools, { query: 'browser_control_snapshot' })[0].name, 'browser_control_snapshot');
   assert.deepEqual(searchCatalogEntries(tools, { query: 'browser', family: 'browser' }).map(item => item.name), [
-    'browser_control_act',
-    'browser_control_snapshot'
+    'browser_control_snapshot',
+    'browser_control_act'
   ]);
   assert.deepEqual(searchCatalogEntries(tools, { capability: 'read' }).map(item => item.name), ['read_file']);
 });
