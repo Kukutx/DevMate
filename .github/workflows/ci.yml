@@ -352,3 +352,48 @@ jobs:
           name: devmate-portable-linux-x64
           path: ${{ runner.temp }}/devmate-portable/**
           if-no-files-found: error
+
+  validation-gate:
+    name: Validation Gate
+    if: ${{ always() }}
+    needs:
+      - verify
+      - node-current
+      - godot-real
+      - portable-windows
+      - portable-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require all mandatory CI jobs to succeed
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          NODE_CURRENT_RESULT: ${{ needs['node-current'].result }}
+          GODOT_REAL_RESULT: ${{ needs['godot-real'].result }}
+          PORTABLE_WINDOWS_RESULT: ${{ needs['portable-windows'].result }}
+          PORTABLE_LINUX_RESULT: ${{ needs['portable-linux'].result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for result in \
+            "$VERIFY_RESULT" \
+            "$NODE_CURRENT_RESULT" \
+            "$GODOT_REAL_RESULT" \
+            "$PORTABLE_WINDOWS_RESULT" \
+            "$PORTABLE_LINUX_RESULT"; do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more mandatory CI jobs did not succeed." >&2
+            printf 'verify=%s\nnode-current=%s\ngodot-real=%s\nportable-windows=%s\nportable-linux=%s\n' \
+              "$VERIFY_RESULT" \
+              "$NODE_CURRENT_RESULT" \
+              "$GODOT_REAL_RESULT" \
+              "$PORTABLE_WINDOWS_RESULT" \
+              "$PORTABLE_LINUX_RESULT" >&2
+            exit 1
+          fi
