@@ -287,6 +287,8 @@ test('status panel keeps complete HTML entity escaping', async () => {
 test('server package scripts execute through explicit package-manager argv', async () => {
   const source = await fsp.readFile(new URL('../gateway/server.mjs', import.meta.url), 'utf8');
   assert.match(source, /const command = `\$\{pm\} run \$\{script\}`/);
-  assert.match(source, /execProcess\(pm,\['run',script\],\{cwd:dir,\.\.\.limits,shell:false\}\)/);
+  assert.match(source, /assertPackageScriptIdentifier\(script\)/);
+  assert.match(source, /packageManagerInvocation\(pm,\['run',script\]\)/);
+  assert.match(source, /execProcess\(invocation\.command,invocation\.args,\{cwd:dir,\.\.\.limits,shell:false\}\)/);
   assert.match(source, /const command = `\$\{pm\} run \$\{name\}`/);
 });

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.8.2
+- Fixed Windows `run_project_script` execution by using bounded `cmd.exe` invocation for npm/pnpm/yarn shims while keeping Node shell mode disabled and validating package-script identifiers before execution.
+- Made local release validation rebuild the ignored Gateway bundle before unit tests and added one `release:preflight` command covering repository checks, tests, Gateway smoke tests, and both distributable packages.
+- Added workspace-contained Playwright Core development tooling so DevMate Browser Control and Browser QA can run against a local project dependency instead of a cross-project module path.
+- Updated release documentation to match protected-branch PR flow, `Validation Gate`, Azure OIDC Marketplace publishing, provenance, and portable release assets.
+
 ## 3.8.1
 - Added automated VS Code Marketplace publishing through GitHub Actions using Azure federated credentials, with duplicate-safe publication from the exact tagged release asset.
 - Added a stable `Validation Gate` that aggregates the mandatory Windows, Node Current, real Godot, and portable CLI CI jobs before a release tag is accepted.
