@@ -1,6 +1,6 @@
 {
   "name": "devmate-agent",
-  "displayName": "DevMate",
+  "displayName": "DevMate Agent",
   "description": "Local-first agent capability and automation runtime for ChatGPT via MCP, with files, Git, commands, browser control, durable jobs, VS Code, Obsidian, and Runners.",
   "keywords": [
     "mcp",
