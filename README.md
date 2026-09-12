@@ -3,6 +3,7 @@
 [![CI](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml/badge.svg)](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Kukutx/DevMate?display_name=tag)](https://github.com/Kukutx/DevMate/releases/latest)
 [![License](https://img.shields.io/github/license/Kukutx/DevMate)](LICENSE)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14601/badge)](https://www.bestpractices.dev/projects/14601)
 
 **Local-first agent capability and automation runtime for ChatGPT, powered by MCP.**
 
