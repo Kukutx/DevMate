@@ -21,3 +21,4 @@ docs/**
 deploy/**
 AGENTS.md
 CONTRIBUTING.md
+.stripe-browser/**
