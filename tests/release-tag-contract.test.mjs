@@ -35,6 +35,14 @@ test('release workflow verifies, packages, checksums, attests, and publishes ass
   assert.match(workflow, /actions\/attest@[a-f0-9]{40}\b/i);
 });
 
+test('local release preflight rebuilds the Gateway before tests and packages every distributable', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.match(packageJson.scripts['test:unit'], /build-gateway\.mjs.*run-tests\.mjs/);
+  for (const required of ['npm run check', 'npm run test:unit', 'tests/smoke-gateway.mjs', 'npm run package:vsix', 'npm run package:obsidian']) {
+    assert.equal(packageJson.scripts['release:preflight'].includes(required), true, `release:preflight is missing ${required}`);
+  }
+});
+
 test('portable packaging installs production dependencies for the target platform', async () => {
   const { __test } = await import('../scripts/package-portable.mjs');
   assert.deepEqual(__test.productionInstallArgs('win32', 'x64'), [

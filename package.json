@@ -15,7 +15,7 @@
     "agent-automation",
     "browser-automation"
   ],
-  "version": "3.8.1",
+  "version": "3.8.2",
   "icon": "assets/icon.png",
   "publisher": "kukutx",
   "sponsor": {
@@ -383,8 +383,9 @@
     "vscode:prepublish": "npm run build",
     "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs",
     "test": "npm run test:unit",
-    "test:unit": "node scripts/run-tests.mjs",
+    "test:unit": "node scripts/build-gateway.mjs && node scripts/run-tests.mjs",
     "test:vscode-host": "node scripts/test-vscode-host.mjs",
+    "release:preflight": "npm run check && npm run test:unit && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs && npm run package:vsix && npm run package:obsidian",
     "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
     "package:vsix": "npm run build && vsce package",
     "package:obsidian": "npm run build:obsidian && node scripts/smoke-obsidian-runtime.mjs",
@@ -406,7 +407,8 @@
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
-    "js-yaml": "^5.4.1"
+    "js-yaml": "^5.4.1",
+    "playwright-core": "^1.63.0"
   },
   "license": "MIT",
   "overrides": {
