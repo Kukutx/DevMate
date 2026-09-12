@@ -41,3 +41,10 @@ test('CI, release, and Docker use Node 24 without legacy extension files', () =>
   assert.match(docker, /COPY shared \.\/shared/);
   assert.doesNotMatch(docker, /extension-entry-win32|ngrok-launch-compat|extension-config-io/);
 });
+
+test('Dependabot keeps Docker on the supported Node major while allowing routine updates', () => {
+  const dependabot = fs.readFileSync(path.join(root, '.github', 'dependabot.yml'), 'utf8');
+  assert.match(dependabot, /package-ecosystem:\s*docker[\s\S]*?directory:\s*\/deploy\/docker/);
+  assert.match(dependabot, /dependency-name:\s*node[\s\S]*?version-update:semver-major/);
+  assert.doesNotMatch(dependabot, /open-pull-requests-limit:\s*0/);
+});
