@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.8.1
+- Added automated VS Code Marketplace publishing through GitHub Actions using Azure federated credentials, with duplicate-safe publication from the exact tagged release asset.
+- Added a stable `Validation Gate` that aggregates the mandatory Windows, Node Current, real Godot, and portable CLI CI jobs before a release tag is accepted.
+- Aligned Marketplace identity and repository metadata around the `kukutx` publisher, the unique `devmate-agent` extension name, and GitHub Sponsors support.
+- Added OpenSSF Scorecard coverage and strengthened repository health, dependency maintenance, and supported Node runtime configuration for Docker builds.
+
 ## 3.8.0
 - Added DevMate Companion for the official ChatGPT browser side chat, joining client-native page/tab/selection context with DevMate local project, VS Code, Obsidian, Git, command, Job, Runner, and plugin capabilities without embedding a second model runtime.
 - Added bounded `companion_context` routing metadata and hardened it against untrusted webpage instructions, stale member scope, cross-workspace host disclosure, and browser-focus changes to Current Project or an existing conversation binding.
