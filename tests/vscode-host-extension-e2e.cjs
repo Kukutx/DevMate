@@ -19,7 +19,7 @@ function freePort() {
 }
 
 async function run() {
-  const extension = vscode.extensions.getExtension('kukutx.devmate');
+  const extension = vscode.extensions.getExtension('kukutx.devmate-agent');
   assert(extension, 'DevMate extension was not loaded in the VS Code Extension Host');
   await extension.activate();
 
