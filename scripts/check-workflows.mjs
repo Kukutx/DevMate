@@ -25,7 +25,11 @@ for (const name of files) {
   if (!document.name || !document.on || !document.jobs || typeof document.jobs !== 'object') {
     throw new Error(`${name} is missing name, on, or jobs`);
   }
-  if (!document.permissions || typeof document.permissions !== 'object' || Array.isArray(document.permissions)) {
+  const permissions = document.permissions;
+  const explicitPermissions = permissions === 'read-all' || (
+    permissions && typeof permissions === 'object' && !Array.isArray(permissions)
+  );
+  if (!explicitPermissions) {
     throw new Error(`${name} must declare explicit top-level permissions`);
   }
   for (const [jobName, job] of Object.entries(document.jobs)) {

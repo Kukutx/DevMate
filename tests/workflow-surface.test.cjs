@@ -7,11 +7,11 @@ const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
 
-test('repository keeps only continuous CI and release workflows', () => {
+test('repository keeps only continuous CI, release, and Scorecard workflows', () => {
   const files = fs.readdirSync(path.join(root, '.github', 'workflows'))
     .filter(name => /\.ya?ml$/i.test(name))
     .sort();
-  assert.deepEqual(files, ['ci.yml', 'release.yml']);
+  assert.deepEqual(files, ['ci.yml', 'release.yml', 'scorecards.yml']);
 });
 
 test('continuous CI also validates documentation-only contract changes', () => {

@@ -8,6 +8,7 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const ci = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
 const release = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+const scorecards = fs.readFileSync(path.join(root, '.github', 'workflows', 'scorecards.yml'), 'utf8');
 const manifest = require('../obsidian-plugin/manifest.json');
 const versions = require('../obsidian-plugin/versions.json');
 
@@ -40,6 +41,26 @@ test('permanent workflows pin current supported actions and use Node 24', () => 
   assert.match(ci, pinnedAction('actions/cache', 6));
   assert.match(release, pinnedAction('actions/attest', 4));
   assert.match(release, pinnedAction('actions/upload-artifact', 7));
+});
+
+test('Scorecard workflow is least-privilege, reproducible, and publishes SARIF safely', () => {
+  assert.match(scorecards, /^permissions:\s*read-all$/m);
+  assert.match(scorecards, /push:[\s\S]*?branches:[\s\S]*?- main/);
+  assert.match(scorecards, /schedule:[\s\S]*?cron:/);
+  assert.match(scorecards, /workflow_dispatch:/);
+  assert.match(scorecards, /security-events:\s*write/);
+  assert.match(scorecards, /id-token:\s*write/);
+  assert.doesNotMatch(scorecards, /contents:\s*write|actions:\s*write|pull-requests:\s*write/);
+  assert.match(scorecards, pinnedAction('actions/checkout', 7));
+  assert.match(scorecards, pinnedAction('ossf/scorecard-action', 2));
+  assert.match(scorecards, pinnedAction('actions/upload-artifact', 7));
+  assert.match(scorecards, pinnedAction('github/codeql-action/upload-sarif', 4));
+  assert.match(scorecards, /persist-credentials:\s*false/);
+  assert.match(scorecards, /results_file:\s*results\.sarif/);
+  assert.match(scorecards, /results_format:\s*sarif/);
+  assert.match(scorecards, /publish_results:\s*true/);
+  assert.match(scorecards, /retention-days:\s*5/);
+  assert.doesNotMatch(scorecards, /^env:|^defaults:/m);
 });
 
 test('release authority is limited to publishing, CI verification, and provenance', () => {
