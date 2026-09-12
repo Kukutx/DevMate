@@ -359,7 +359,7 @@ function tokenSet({ audience, issuer, scope, subject, authVersion, clientId, fam
 async function tokenEndpoint(req, res) {
   let parameters;
   try { parameters = await requestParameters(req); }
-  catch (error) { json(res, 400, { error: 'invalid_request', error_description: error.message || String(error) }); return; }
+  catch { json(res, 400, { error: 'invalid_request', error_description: 'OAuth request is invalid' }); return; }
   const audience = mcpAudience(req);
   const issuer = originFor(req);
   if (String(parameters.get('resource') || '') !== audience) {
@@ -368,7 +368,7 @@ async function tokenEndpoint(req, res) {
   }
   let clientId;
   try { clientId = cimdUrl(parameters.get('client_id')).toString(); }
-  catch (error) { json(res, 400, { error: 'invalid_client', error_description: error.message }); return; }
+  catch { json(res, 400, { error: 'invalid_client', error_description: 'client_id is invalid' }); return; }
   const secrets = readOAuthSecrets(CONFIG_PATH);
   const grant = parameters.get('grant_type');
 
@@ -427,7 +427,7 @@ async function tokenEndpoint(req, res) {
 async function revokeEndpoint(req, res) {
   let parameters;
   try { parameters = await requestParameters(req); }
-  catch (error) { json(res, 400, { error: 'invalid_request', error_description: error.message || String(error) }); return; }
+  catch { json(res, 400, { error: 'invalid_request', error_description: 'OAuth request is invalid' }); return; }
   const audience = mcpAudience(req);
   const issuer = originFor(req);
   if (String(parameters.get('resource') || '') !== audience) {
@@ -469,18 +469,18 @@ export async function handleOAuthRequest(req, res, url, config) {
     try {
       const details = await authorizeParameters(url.searchParams, req);
       html(res, 200, formPage(url.searchParams, details.client));
-    } catch (error) {
-      html(res, 400, formPage(url.searchParams, null, error.message || String(error)));
+    } catch {
+      html(res, 400, formPage(url.searchParams, null, 'OAuth authorization request is invalid.'));
     }
     return true;
   }
   if (url.pathname === '/oauth/authorize' && req.method === 'POST') {
     let parameters;
     try { parameters = await requestParameters(req); }
-    catch (error) { html(res, 400, formPage(new URLSearchParams(), null, error.message || String(error))); return true; }
+    catch { html(res, 400, formPage(new URLSearchParams(), null, 'OAuth request is invalid.')); return true; }
     let details;
     try { details = await authorizeParameters(parameters, req); }
-    catch (error) { html(res, 400, formPage(parameters, null, error.message || String(error))); return true; }
+    catch { html(res, 400, formPage(parameters, null, 'OAuth authorization request is invalid.')); return true; }
     const currentConfig = normalizeInstanceConfig(readConfig());
     const identity = authorizeCredential(parameters.get('authorization_code'), currentConfig);
     if (!identity) {
@@ -495,8 +495,8 @@ export async function handleOAuthRequest(req, res, url, config) {
         catch (error) { consumeAuthorizationCode(issued.nonce); throw error; }
       }
       touchMember(identity.subject);
-    } catch (error) {
-      html(res, 409, formPage(parameters, details.client, error.message || String(error)));
+    } catch {
+      html(res, 409, formPage(parameters, details.client, 'Authorization could not be completed.'));
       return true;
     }
     res.writeHead(302, { location: redirectWithCode(req, parameters, details, issued.code), 'cache-control': 'no-store' });

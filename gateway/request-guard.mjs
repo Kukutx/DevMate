@@ -72,7 +72,9 @@ export function authenticateGatewayRequest(req, url, config) {
   // OAuth is reserved for team/member identity.
   if (isLocalRequest(req) || config.auth?.mode === 'none') return fallbackLocalPrincipal();
   if (config.auth?.mode !== 'oauth') return null;
-  const token = String(req?.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
+  const authorization = String(req?.headers?.authorization || '');
+  const bearerPrefix = authorization.match(/^Bearer[ \t]+/i);
+  const token = bearerPrefix ? authorization.slice(bearerPrefix[0].length) : '';
   const access = oauthAccessToken(config, token, req);
   return access ? principalFromOAuthClaims(access, config) : null;
 }

@@ -115,6 +115,7 @@ test('extracts references and scene nodes', () => {
 const ICON = preload("res://ui/icon.png")`;
   assert.deepEqual(extractGodotReferences(text), ['res://scripts/player.gd', 'res://ui/icon.png']);
   assert.deepEqual(parseSceneNodes(text)[0], { name: 'Player', type: 'CharacterBody2D', parent: null, owner: null, instance: null });
+  assert.equal(parseSceneNodes('[node name="Player\\\"One" type="Node"]')[0].name, 'Player"One');
 });
 
 test('builds bounded dependency graph with missing and reverse references', async t => {

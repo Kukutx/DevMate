@@ -119,7 +119,9 @@ class ObsidianHostBridge {
       jsonResponse(response, 404, { ok: false, error: 'not_found' });
       return;
     }
-    const bearer = String(request.headers.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1] || '';
+    const authorization = String(request.headers.authorization || '');
+    const bearerPrefix = authorization.match(/^Bearer[ \t]+/i);
+    const bearer = bearerPrefix ? authorization.slice(bearerPrefix[0].length) : '';
     if (!timingSafeTokenEqual(bearer, this.token)) {
       jsonResponse(response, 401, { ok: false, error: 'unauthorized' });
       return;
@@ -141,7 +143,7 @@ class ObsidianHostBridge {
     } catch (error) {
       if (!metricToken) metricToken = this.metrics.begin('invalid_request');
       this.metrics.finish(metricToken, error);
-      jsonResponse(response, 400, { ok: false, error: error.message || String(error) });
+      jsonResponse(response, 400, { ok: false, error: 'request_failed' });
     }
   }
 

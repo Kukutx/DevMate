@@ -183,6 +183,10 @@ CI validates runtime and complete dependency trees, source syntax, workflow pinn
 
 DevMate member/team access is designed for trusted organizational collaboration, not hostile multi-tenancy. Permitted commands and jobs execute as the OS identity of the selected Gateway or Runner host. Use separate machines, VMs, containers, OS accounts, or independent DevMate instances for unrelated trust domains.
 
-## Reporting issues
+## Reporting vulnerabilities
 
-Use the repository security-advisory flow where available. Never include live tokens, private endpoint details, credentials, private filesystem paths, Runner endpoints, or artifact-service secrets in a public report.
+Report suspected security vulnerabilities privately through GitHub's [Report a vulnerability](https://github.com/Kukutx/DevMate/security/advisories/new) flow. Do not open a public issue for an undisclosed vulnerability.
+
+Include the affected DevMate version, the affected surface, reproduction steps or a proof of concept when safe, the expected impact, and any known mitigation. Never include live tokens, private endpoint details, credentials, private filesystem paths, Runner endpoints, or artifact-service secrets in any report or attachment.
+
+Maintainers triage private reports, confirm the affected versions and trust boundary, coordinate remediation and disclosure with the reporter, and publish a GitHub Security Advisory when public disclosure is warranted. Security fixes follow the normal protected-branch validation and release process unless an emergency response requires a narrower release procedure with equivalent review and verification.

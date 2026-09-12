@@ -36,7 +36,7 @@ export function extractGodotReferences(text = '') {
 
 function parseAttributes(value = '') {
   const output = {};
-  const pattern = /([a-zA-Z_][a-zA-Z0-9_]*)=("(?:\\.|[^"])*"|[^\s]+)/g;
+  const pattern = /([a-zA-Z_][a-zA-Z0-9_]*)=("(?:\\.|[^"\\])*"|[^\s]+)/g;
   for (const match of String(value || '').matchAll(pattern)) {
     const raw = match[2];
     output[match[1]] = raw.startsWith('"') ? (() => { try { return JSON.parse(raw); } catch { return raw.slice(1, -1); } })() : raw;
