@@ -1,3 +1,5 @@
+'use strict';
+
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
@@ -226,7 +228,7 @@ function syncConfig(ctx, forceCurrent=false, portOverride=null){
   const root = currentRoot();
   const hostId = vscodeHostInstanceId(root);
   data.appVersion = VERSION;
-  data.instanceId ||= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+  data.instanceId ||= `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
   data.server ||= {};
   data.server.port = Number(portOverride || data.server.port || configuredPort() || BASE_PORT);
   data.server.mcpPath = MCP_PATH;
@@ -807,7 +809,7 @@ async function addGithubReference(ctx, github){
   } else {
     if(fs.existsSync(target) && fs.readdirSync(target).length > 0) throw new Error(`GitHub reference target exists but is not a Git repository: ${target}`);
     log(`Cloning GitHub reference ${github.name} into ${target}`);
-    result = await runGit(['clone','--depth','1',github.cloneUrl,target], baseDir);
+    result = await runGit(['clone','--depth','1','--',github.cloneUrl,target], baseDir);
   }
   if(result.exitCode !== 0) throw new Error(`git ${result.timedOut ? 'timed out' : 'failed'}: ${(result.stderr || result.error || result.stdout || '').trim()}`);
   addReferenceWorkspace(ctx, target, github.name, github.idBase);

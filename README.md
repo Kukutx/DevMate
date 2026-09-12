@@ -12,6 +12,14 @@ ChatGPT remains the agent/model surface. In the normal ChatGPT and Companion wor
 
 It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.
 
+## Get, report, and contribute
+
+- **Get DevMate:** download the VSIX, Obsidian plugin ZIP, or portable CLI archives from [GitHub Releases](https://github.com/Kukutx/DevMate/releases), or clone this public repository to build from source.
+- **Report a bug:** use the [bug report form](https://github.com/Kukutx/DevMate/issues/new?template=bug_report.yml).
+- **Request a feature:** use the [feature request form](https://github.com/Kukutx/DevMate/issues/new?template=feature_request.yml).
+- **Contribute:** follow [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, testing, and pull-request requirements.
+- **Report a security vulnerability privately:** follow [SECURITY.md](SECURITY.md); do not disclose live security details in a public issue.
+
 ## VS Code experience
 
 <p align="center">

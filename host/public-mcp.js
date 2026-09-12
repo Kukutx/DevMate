@@ -212,7 +212,15 @@ function connectionErrorSummary(error) {
   const code = String(error?.code || '');
   if (code.includes('PUBLIC_MCP') || error?.response) return publicMcpErrorSummary(error);
   const message = String(error?.message || error || '').replace(/\s+/g, ' ').trim();
-  if (code === 'ENOENT' || /(?:not found|not recognized|cannot find).*(?:ngrok|cloudflared)|spawn .* ENOENT/i.test(message)) {
+  const lowerMessage = message.toLowerCase();
+  const helperMissing = ['not found', 'not recognized', 'cannot find'].some(marker => {
+    const markerIndex = lowerMessage.indexOf(marker);
+    if (markerIndex < 0) return false;
+    return lowerMessage.indexOf('ngrok', markerIndex) >= 0 || lowerMessage.indexOf('cloudflared', markerIndex) >= 0;
+  });
+  const spawnIndex = lowerMessage.indexOf('spawn ');
+  const spawnEnoent = spawnIndex >= 0 && lowerMessage.indexOf(' enoent', spawnIndex) >= 0;
+  if (code === 'ENOENT' || helperMissing || spawnEnoent) {
     return 'The selected connection helper is not installed. Open Connection Setup for the one-time install/configuration step.';
   }
   return message.length > 260 ? `${message.slice(0, 257)}...` : message || 'DevMate could not start the connection. Copy diagnostics for details.';

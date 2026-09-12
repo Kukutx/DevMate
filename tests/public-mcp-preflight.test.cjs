@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   MCP_PROTOCOL_VERSION,
+  connectionErrorSummary,
   mcpUrlFor,
   parseJsonPayload,
   preflightPublicMcp,
@@ -164,6 +165,13 @@ test('public MCP treats a pre-handshake TLS disconnect as a transient network fa
   };
   assert.equal(transientPublicMcpError(error), true);
   assert.equal(publicMcpErrorKind(error), 'temporary-network');
+});
+
+test('connection helper detection handles bounded text without backtracking patterns', () => {
+  const expected = 'The selected connection helper is not installed. Open Connection Setup for the one-time install/configuration step.';
+  assert.equal(connectionErrorSummary(new Error('not found: ngrok on PATH')), expected);
+  assert.equal(connectionErrorSummary(new Error('spawn cloudflared ENOENT')), expected);
+  assert.equal(connectionErrorSummary(new Error(`not found ${'x'.repeat(20000)} ngrok`)), expected);
 });
 
 test('Cloudflare quick endpoints bypass the Windows lookup cache without changing other providers', async () => {

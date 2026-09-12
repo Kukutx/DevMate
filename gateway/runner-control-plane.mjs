@@ -64,7 +64,8 @@ function requestUrl(req) {
 
 function bearerToken(req) {
   const authorization = String(req.headers?.authorization || '');
-  return authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || '';
+  const bearerPrefix = authorization.match(/^Bearer[ \t]+/i);
+  return bearerPrefix ? authorization.slice(bearerPrefix[0].length).trim() : '';
 }
 
 function consumeRate(id, limit) {
