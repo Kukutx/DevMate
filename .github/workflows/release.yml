@@ -19,6 +19,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: marketplace
 
     steps:
       - name: Checkout tagged source
@@ -141,6 +142,23 @@ jobs:
           name: devmate-release-${{ github.ref_name }}
           path: release/*
           if-no-files-found: error
+
+      - name: Login to Azure for Marketplace publishing
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish VS Code extension to Marketplace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          npx vsce publish \
+            --azure-credential \
+            --packagePath "release/devmate-${version}.vsix" \
+            --skip-duplicate
 
       - name: Create GitHub Release
         env:
