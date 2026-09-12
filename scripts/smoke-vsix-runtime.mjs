@@ -104,7 +104,7 @@ try {
   const extensionPath = path.join(extractRoot, 'extension');
   const packageFile = path.join(extensionPath, 'package.json');
   const manifest = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
-  assert.equal(manifest.name, 'devmate');
+  assert.equal(manifest.name, 'devmate-agent');
   assert.equal(manifest.main, './extension-entry-shared-tunnel.js');
   const configuration = manifest.contributes?.configuration?.properties || {};
   const authenticationMode = configuration['devMate.authenticationMode'];
