@@ -16,6 +16,7 @@ const {
   readJson,
   recoverStaleGatewayProcess,
   resolveStateDirectory,
+  updateConfig,
   workspaceRuntimeId
 } = require('../host/runtime-controller.js');
 
@@ -98,6 +99,173 @@ test('instance config creation preserves unrelated fields on later updates', () 
   const updated = ensureInstanceConfig({ configFile: file, workspaceRoot: root, preferredPort: 9999 });
   assert.deepEqual(updated.custom, { keep: true });
   assert.equal(updated.server.port, 9123);
+});
+
+test('explicit stopped port repair changes the shared Gateway port exactly once', async () => {
+  const root = temporaryDirectory('devmate-port-repair-root-');
+  const state = temporaryDirectory('devmate-port-repair-state-');
+  const currentPort = await freePort();
+  const targetPort = await freePort();
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-host'
+  });
+
+  assert.equal(controller.ensureConfig().server.port, currentPort);
+  const repaired = await controller.repairPort(targetPort, { timeoutMs: 3000 });
+  assert.deepEqual(repaired, { changed: true, previousPort: currentPort, port: targetPort });
+  assert.equal(readJson(controller.configFile).server.port, targetPort);
+
+  const noOp = await controller.repairPort(targetPort, { timeoutMs: 3000 });
+  assert.deepEqual(noOp, { changed: false, previousPort: targetPort, port: targetPort });
+});
+
+test('port repair refuses to change config while the same DevMate Gateway is running', async t => {
+  const root = temporaryDirectory('devmate-port-repair-running-root-');
+  const state = temporaryDirectory('devmate-port-repair-running-state-');
+  const currentPort = await freePort();
+  const targetPort = await freePort();
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-running-host'
+  });
+  t.after(async () => controller.stop().catch(() => null));
+
+  const started = await controller.start({ timeoutMs: 5000 });
+  assert.equal(started.port, currentPort);
+  await assert.rejects(
+    controller.repairPort(targetPort, { timeoutMs: 3000 }),
+    error => error?.code === 'DEVMATE_PORT_REPAIR_RUNTIME_RUNNING'
+  );
+  assert.equal(readJson(controller.configFile).server.port, currentPort);
+});
+
+test('port repair refuses a target port already occupied by another process', async t => {
+  const root = temporaryDirectory('devmate-port-repair-busy-root-');
+  const state = temporaryDirectory('devmate-port-repair-busy-state-');
+  const currentPort = await freePort();
+  const server = net.createServer(socket => socket.destroy());
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const targetPort = server.address().port;
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-busy-host'
+  });
+  assert.equal(controller.ensureConfig().server.port, currentPort);
+
+  await assert.rejects(
+    controller.repairPort(targetPort, { timeoutMs: 3000 }),
+    error => error?.code === 'DEVMATE_PORT_REPAIR_TARGET_BUSY' && error.port === targetPort
+  );
+  assert.equal(readJson(controller.configFile).server.port, currentPort);
+});
+
+test('two desktop hosts repairing the same stopped shared port converge on one target', async () => {
+  const root = temporaryDirectory('devmate-port-repair-multi-root-');
+  const state = temporaryDirectory('devmate-port-repair-multi-state-');
+  const currentPort = await freePort();
+  const targetPort = await freePort();
+  const gateway = writeTestGateway(root);
+  const first = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-vscode-host'
+  });
+  const second = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-obsidian-host'
+  });
+  first.ensureConfig();
+
+  const [left, right] = await Promise.all([
+    first.repairPort(targetPort, { timeoutMs: 5000 }),
+    second.repairPort(targetPort, { timeoutMs: 5000 })
+  ]);
+  assert.equal(readJson(first.configFile).server.port, targetPort);
+  assert.equal([left, right].filter(result => result.changed).length, 1);
+  assert.equal([left, right].filter(result => !result.changed).length, 1);
+});
+
+test('port repair refuses while shared lifecycle still requests running', async () => {
+  const root = temporaryDirectory('devmate-port-repair-lifecycle-root-');
+  const state = temporaryDirectory('devmate-port-repair-lifecycle-state-');
+  const currentPort = await freePort();
+  const targetPort = await freePort();
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-lifecycle-host'
+  });
+  controller.ensureConfig();
+  updateConfig(controller.configFile, config => {
+    config.lifecycle ||= {};
+    config.lifecycle.desiredState = 'running';
+    return config;
+  });
+
+  await assert.rejects(
+    controller.repairPort(targetPort, { timeoutMs: 3000 }),
+    error => error?.code === 'DEVMATE_PORT_REPAIR_LIFECYCLE_RUNNING'
+  );
+  assert.equal(readJson(controller.configFile).server.port, currentPort);
+});
+
+test('port repair refuses a live same-instance durable Gateway lock even without healthy Gateway response', async () => {
+  const root = temporaryDirectory('devmate-port-repair-lock-root-');
+  const state = temporaryDirectory('devmate-port-repair-lock-state-');
+  const currentPort = await freePort();
+  const targetPort = await freePort();
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: currentPort,
+    appVersion: '3.8.8',
+    hostId: 'repair-lock-host'
+  });
+  const config = controller.ensureConfig();
+  const lockDirectory = path.join(state, 'state');
+  fs.mkdirSync(lockDirectory, { recursive: true });
+  fs.writeFileSync(path.join(lockDirectory, 'gateway.lock'), `${JSON.stringify({
+    version: 2,
+    pid: process.pid,
+    runtimeOwnerId: 'still-live-owner',
+    instanceId: config.instanceId,
+    configPath: controller.configFile
+  }, null, 2)}\n`, 'utf8');
+
+  await assert.rejects(
+    controller.repairPort(targetPort, { timeoutMs: 3000 }),
+    error => error?.code === 'DEVMATE_PORT_REPAIR_RUNTIME_RUNNING' && error.pid === process.pid
+  );
+  assert.equal(readJson(controller.configFile).server.port, currentPort);
 });
 
 test('passive desktop initialization leaves runtime version unclaimed until Start owns the lease', async () => {

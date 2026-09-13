@@ -84,6 +84,7 @@ class DevMateView extends ItemView {
       };
       return button;
     };
+    moreAction('Repair Gateway port', () => this.plugin.repairGatewayPort());
     moreAction('Copy context', () => this.plugin.copyContextBundle());
     moreAction('Copy diagnostics', () => this.plugin.copyDiagnostics());
 

@@ -149,6 +149,17 @@ test('Obsidian automatic URL copy remains convenience after verified Ready', () 
   assert.match(block, /DevMate reached Ready but automatic MCP URL copy failed/);
 });
 
+test('Obsidian exposes explicit stopped-only Gateway port repair without changing Current Project', () => {
+  const main = source('obsidian-plugin/src/main.js');
+  assert.match(main, /id: 'repair-gateway-port', name: 'Repair Gateway port to configured default'/);
+  const start = main.indexOf('async repairGatewayPortInternal()');
+  const end = main.indexOf('async copyConnectionUrl()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = main.slice(start, end);
+  assert.ok(block.indexOf('stopRuntimeInternal({ quiet: true })') < block.indexOf('this.controller.repairPort(targetPort)'));
+  assert.match(block, /startRuntimeInternal\(\{ quiet: true, activateWorkspace: false \}\)/);
+});
+
 test('Obsidian Copy MCP URL verifies the active public endpoint generation before copying it', () => {
   const main = source('obsidian-plugin/src/main.js');
   const start = main.indexOf('async copyConnectionUrl()');
@@ -189,6 +200,7 @@ test('Obsidian panel distinguishes Current Project, this vault and shared lifecy
   assert.doesNotMatch(view, /moreAction\('Stop/);
   assert.match(view, /action\('Restart Shared Runtime'/);
   assert.match(view, /action\('Copy MCP URL'/);
+  assert.match(view, /moreAction\('Repair Gateway port'/);
   assert.match(view, /detail\('Current Project'\)/);
   assert.match(view, /detail\('This Vault'\)/);
   assert.match(view, /On · attach only/);

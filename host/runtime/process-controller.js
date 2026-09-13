@@ -11,6 +11,7 @@ const {
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
 const { activateInstanceWorkspace, ensureInstanceConfig, newerVersion, readJson, updateConfig } = require('../../shared/config-store.cjs');
+const { strictPort } = require('../../shared/port.cjs');
 const { boundedHostContext, clearHostContext, publishHostContext } = require('../../shared/host-registry.cjs');
 const { cleanupOwnedGatewayInstanceLock, readGatewayInstanceLock } = require('./instance-lock-cleanup.js');
 const { pidRunning, terminatePidTree } = require('./process-tree.js');
@@ -394,6 +395,98 @@ class RuntimeController {
       return { state: this.phase, phase: this.phase, port, attached: false, owned: !!this.activeOwnedChild() };
     }
     return { state: 'stopped', phase: this.phase, port, attached: false, owned: false };
+  }
+
+  repairPort(targetPort = DEFAULT_PORT, options = {}) {
+    return this.operations.run('repair-port', () => this.repairPortInternal(targetPort, options));
+  }
+
+  async repairPortInternal(targetPort = DEFAULT_PORT, { timeoutMs = DEFAULT_START_TIMEOUT_MS } = {}) {
+    if (this.disposed) throw new Error('Runtime controller is disposed');
+    const desiredPort = strictPort(targetPort, { label: 'targetPort' });
+    const totalTimeoutMs = Math.max(2000, Number(timeoutMs) || DEFAULT_START_TIMEOUT_MS);
+    const lease = new StartupLease({ stateDirectory: this.stateDirectory, hostId: `${this.hostId}-port-repair` });
+    this.startupLease = lease;
+
+    try {
+      await waitForStartupLease(lease, { timeoutMs: totalTimeoutMs });
+      lease.assertOwned();
+
+      const config = this.ensureConfig();
+      const currentPort = strictPort(config.server?.port, { label: 'server.port' });
+      if (currentPort === desiredPort) {
+        return { changed: false, previousPort: currentPort, port: desiredPort };
+      }
+
+      if (config.lifecycle?.desiredState === 'running') {
+        const error = new Error('DevMate shared lifecycle is still running; stop the shared runtime before repairing the port.');
+        error.code = 'DEVMATE_PORT_REPAIR_LIFECYCLE_RUNNING';
+        error.port = currentPort;
+        throw error;
+      }
+
+      const runtimeLock = readGatewayInstanceLock(this.stateDirectory);
+      const lockedPid = Number(runtimeLock?.pid || 0);
+      if (
+        runtimeLock &&
+        Number.isInteger(lockedPid) &&
+        lockedPid > 0 &&
+        pidRunning(lockedPid) &&
+        String(runtimeLock.instanceId || '') === String(config.instanceId || '') &&
+        samePath(runtimeLock.configPath, this.configFile)
+      ) {
+        const error = new Error(`DevMate Gateway ownership lock still belongs to live pid=${lockedPid}; stop the shared runtime before repairing the port.`);
+        error.code = 'DEVMATE_PORT_REPAIR_RUNTIME_RUNNING';
+        error.port = currentPort;
+        error.pid = lockedPid;
+        throw error;
+      }
+
+      if (this.activeOwnedChild()) {
+        const error = new Error(`DevMate Gateway is still owned by this host on port ${currentPort}; stop the shared runtime before repairing the port.`);
+        error.code = 'DEVMATE_PORT_REPAIR_RUNTIME_RUNNING';
+        error.port = currentPort;
+        throw error;
+      }
+
+      const currentHealth = await healthAt(currentPort, 800);
+      if (sameDevMateInstance(currentHealth, config)) {
+        const error = new Error(`DevMate Gateway is still running on port ${currentPort}; stop the shared runtime before repairing the port.`);
+        error.code = 'DEVMATE_PORT_REPAIR_RUNTIME_RUNNING';
+        error.port = currentPort;
+        throw error;
+      }
+
+      if (!(await isPortFree(desiredPort))) {
+        const targetHealth = await healthAt(desiredPort, 800);
+        const error = new Error(`Cannot repair DevMate Gateway port to ${desiredPort} because that port is already in use.`);
+        error.code = 'DEVMATE_PORT_REPAIR_TARGET_BUSY';
+        error.port = desiredPort;
+        error.health = targetHealth?.json || null;
+        throw error;
+      }
+
+      const expectedInstanceId = String(config.instanceId || '');
+      const updated = updateConfig(this.configFile, current => {
+        const observedPort = strictPort(current.server?.port, { label: 'server.port' });
+        if (observedPort !== currentPort || String(current.instanceId || '') !== expectedInstanceId) {
+          const error = new Error('DevMate shared runtime identity changed during port repair');
+          error.code = 'DEVMATE_PORT_REPAIR_CONFLICT';
+          error.expectedPort = currentPort;
+          error.observedPort = observedPort;
+          throw error;
+        }
+        current.server ||= {};
+        current.server.port = desiredPort;
+        return current;
+      }, { allowRuntimePortChange: true });
+
+      this.logger(`Repaired DevMate shared Gateway port from ${currentPort} to ${desiredPort}.`);
+      return { changed: true, previousPort: currentPort, port: Number(updated.server.port) };
+    } finally {
+      lease.release();
+      if (this.startupLease === lease) this.startupLease = null;
+    }
   }
 
   start(options = {}) {

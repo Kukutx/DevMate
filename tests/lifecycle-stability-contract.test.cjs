@@ -70,3 +70,29 @@ test('desktop runtime keeps one fixed Gateway port without passive host-version 
   assert.match(lifecycle, /promoteAppVersion:\s*false/);
   assert.match(obsidianSettings, /preferredPort: DEFAULT_PORT/);
 });
+
+test('explicit desktop port repair is stopped-only, lease-protected, and never changes Current Project', () => {
+  const controller = source('host/runtime/process-controller.js');
+  const store = source('shared/config-store.cjs');
+  const extension = source('extension.js');
+  const obsidian = source('obsidian-plugin/src/main.js');
+
+  assert.match(controller, /repairPort\(targetPort = DEFAULT_PORT/);
+  assert.match(controller, /waitForStartupLease\(lease/);
+  assert.match(controller, /DEVMATE_PORT_REPAIR_RUNTIME_RUNNING/);
+  assert.match(controller, /DEVMATE_PORT_REPAIR_TARGET_BUSY/);
+  assert.match(controller, /allowRuntimePortChange: true/);
+  assert.match(store, /allowRuntimePortChange = false/);
+
+  const vscodeStart = extension.indexOf('async function repairGatewayPort(ctx)');
+  const vscodeEnd = extension.indexOf('async function copyUrl()', vscodeStart);
+  const vscodeRepair = extension.slice(vscodeStart, vscodeEnd);
+  assert.ok(vscodeRepair.indexOf('stopAll()') < vscodeRepair.indexOf('controller.repairPort(targetPort)'));
+  assert.match(vscodeRepair, /quickStart\(ctx,\{quiet:true,activateWorkspace:false\}\)/);
+
+  const obsidianStart = obsidian.indexOf('async repairGatewayPortInternal()');
+  const obsidianEnd = obsidian.indexOf('async copyConnectionUrl()', obsidianStart);
+  const obsidianRepair = obsidian.slice(obsidianStart, obsidianEnd);
+  assert.ok(obsidianRepair.indexOf('stopRuntimeInternal({ quiet: true })') < obsidianRepair.indexOf('this.controller.repairPort(targetPort)'));
+  assert.match(obsidianRepair, /startRuntimeInternal\(\{ quiet: true, activateWorkspace: false \}\)/);
+});
