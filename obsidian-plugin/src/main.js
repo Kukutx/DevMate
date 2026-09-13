@@ -94,6 +94,7 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
     this.addCommand({ id: 'start', name: 'Start / activate Current Project', callback: () => this.startRuntime() });
     this.addCommand({ id: 'stop', name: 'Stop shared runtime', callback: () => this.stopRuntime() });
     this.addCommand({ id: 'restart', name: 'Restart shared runtime', callback: () => this.restartRuntime() });
+    this.addCommand({ id: 'repair-gateway-port', name: 'Repair Gateway port to configured default', callback: () => this.repairGatewayPort() });
     this.addCommand({ id: 'open', name: 'Open panel', callback: () => this.openView() });
     this.addCommand({ id: 'copy-url', name: 'Copy MCP URL', callback: () => this.copyConnectionUrl() });
     this.addCommand({ id: 'copy-oauth-approval-code', name: 'Copy OAuth approval code', callback: () => this.copyOAuthApprovalCode() });
@@ -976,6 +977,42 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       this.runtimeDiagnostics?.recordFailure(error);
       new Notice(`DevMate restart failed: ${error.message || error}`);
       return { restarted: false, reason: error.message || String(error) };
+    } finally {
+      await this.refreshStatus();
+    }
+  }
+
+  repairGatewayPort() {
+    if (this.unloading) return Promise.resolve({ repaired: false, reason: 'unloading' });
+    return this.hostOperations.run('repair-gateway-port', () => this.repairGatewayPortInternal());
+  }
+
+  async repairGatewayPortInternal() {
+    const config = this.controller.ensureConfig();
+    const currentPort = Number(config.server?.port || this.settings.preferredPort);
+    const targetPort = Number(this.settings.preferredPort);
+    if (currentPort === targetPort) {
+      new Notice(`DevMate Gateway already uses the configured default port ${targetPort}.`);
+      return { repaired: true, changed: false, port: targetPort };
+    }
+
+    const stopped = await this.stopRuntimeInternal({ quiet: true });
+    if (!stopped.stopped) {
+      new Notice('DevMate Gateway port repair was refused because the shared runtime did not stop cleanly. No port setting was changed.');
+      return { repaired: false, reason: 'shared-runtime-stop-failed', stop: stopped };
+    }
+
+    try {
+      const repaired = await this.controller.repairPort(targetPort);
+      const started = await this.startRuntimeInternal({ quiet: true, activateWorkspace: false });
+      if (!started?.ok) throw new Error(started?.error || 'DevMate did not return to Ready after port repair');
+      new Notice(`DevMate Gateway port repaired ${currentPort} → ${targetPort} and the shared runtime is Ready.`);
+      return { repaired: true, changed: repaired.changed, repair: repaired, started };
+    } catch (error) {
+      this.logRuntime(`Gateway port repair failed: ${error.stack || error.message || error}`);
+      this.runtimeDiagnostics?.recordFailure(error);
+      new Notice(`DevMate Gateway port repair failed: ${error.message || error}. The runtime remains fail-closed; inspect diagnostics before retrying.`);
+      return { repaired: false, reason: error.message || String(error), code: error.code || 'DEVMATE_PORT_REPAIR_FAILED' };
     } finally {
       await this.refreshStatus();
     }

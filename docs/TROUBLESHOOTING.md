@@ -71,6 +71,12 @@ The endpoint is stale, the selected provider is not available, or `/mcp` is not 
 
 If the hostname is unchanged but Ready does not return, check whether the Gateway/provider generation changed; old verification cannot be reused across a new complete session.
 
+## Gateway is still on 8788/8789 after upgrading
+
+Current DevMate does not auto-migrate an already-established shared port during activation, update, or reinstall, because changing a live machine-wide port implicitly would race other desktop hosts. If Doctor reports a historical shared port that differs from the configured default, run **DevMate: Repair Gateway Port to Configured Default** from VS Code or the equivalent Obsidian command.
+
+Repair is deliberately strict: it first completes shared Stop, takes the startup lease, rejects a still-running lifecycle or same-instance Gateway PID, verifies the target port is free, changes the shared port once, and then performs a normal Start/Ready verification without changing Current Project. If any precondition fails, no port change is committed.
+
 ## VS Code and Obsidian disagree about runtime state
 
 Both hosts should resolve the same machine-wide desktop state directory and may own or attach to the same Gateway/provider resources.

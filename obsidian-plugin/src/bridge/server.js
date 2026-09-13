@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const { updateConfig, workspaceForRoot } = require('../../../host/runtime-controller.js');
+const { processAlive, pruneDeadObsidianBridges } = require('../../../shared/host-bridge-registry.cjs');
 const { BridgeMetrics } = require('./bridge-metrics.js');
 const {
   BRIDGE_CAPABILITIES,
@@ -169,6 +170,7 @@ class ObsidianHostBridge {
     }
     updateConfig(this.controller.configFile, config => {
       config.hostBridges ||= {};
+      pruneDeadObsidianBridges(config);
       config.hostBridges[this.hostId] = {
         kind: 'obsidian',
         hostId: this.hostId,
@@ -208,6 +210,8 @@ module.exports = {
   ObsidianHostBridge,
   __test: {
     isLoopback,
+    processAlive,
+    pruneDeadObsidianBridges,
     requestJson,
     timingSafeTokenEqual
   }

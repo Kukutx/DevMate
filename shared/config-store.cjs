@@ -340,11 +340,16 @@ function atomicWriteJson(file, value) {
   }
 }
 
-function enforceStableRuntimeIdentity(previous, next, { allowRuntimeVersionPromotion = false } = {}) {
+function enforceStableRuntimeIdentity(previous, next, {
+  allowRuntimeVersionPromotion = false,
+  allowRuntimePortChange = false
+} = {}) {
   if (!previous || typeof previous !== 'object' || !next || typeof next !== 'object') return next;
   if (previous.server?.port != null) {
     next.server ||= {};
-    next.server.port = strictPort(previous.server.port, { label: 'server.port' });
+    next.server.port = allowRuntimePortChange
+      ? strictPort(next.server.port ?? previous.server.port, { label: 'server.port' })
+      : strictPort(previous.server.port, { label: 'server.port' });
   }
   if (previous.appVersion) {
     next.appVersion = allowRuntimeVersionPromotion
@@ -378,7 +383,11 @@ function replaceConfig(file, value) {
   });
 }
 
-function updateConfig(file, mutator, { retries = 3, allowRuntimeVersionPromotion = false } = {}) {
+function updateConfig(file, mutator, {
+  retries = 3,
+  allowRuntimeVersionPromotion = false,
+  allowRuntimePortChange = false
+} = {}) {
   if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
   const target = path.resolve(file);
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -403,7 +412,12 @@ function updateConfig(file, mutator, { retries = 3, allowRuntimeVersionPromotion
         throw configError('Config mutator must return a JSON object', 'config_invalid_write', target);
       }
       assertSupportedConfigVersion(next, target);
-      if (stableBefore) enforceStableRuntimeIdentity(stableBefore, next, { allowRuntimeVersionPromotion });
+      if (stableBefore) {
+        enforceStableRuntimeIdentity(stableBefore, next, {
+          allowRuntimeVersionPromotion,
+          allowRuntimePortChange
+        });
+      }
       const afterState = readConfigState(target);
       if (afterState.exists !== beforeState.exists || afterState.hash !== beforeState.hash) {
         if (attempt === attempts - 1) throw configConflict(target);

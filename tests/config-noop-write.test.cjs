@@ -49,6 +49,12 @@ test('does not replace config.json when a locked mutation makes no content chang
   assert.equal(mutated.appVersion, '3.8.6');
   assert.equal(mutated.runtime.marker, true);
 
+  const repairedPort = updateConfig(file, config => {
+    config.server.port = 8788;
+    return config;
+  }, { allowRuntimePortChange: true });
+  assert.equal(repairedPort.server.port, 8788);
+
   const blockedPromotion = updateConfig(file, config => {
     config.appVersion = '3.8.7';
     return config;

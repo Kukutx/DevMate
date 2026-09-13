@@ -22,6 +22,7 @@ test('desktop hosts use a stable workspace-specific instance identity instead of
 test('each Obsidian Vault registers and removes only its own authenticated bridge record', () => {
   const bridge = source('obsidian-plugin/src/bridge/server.js');
   assert.match(bridge, /this\.hostId = String\(plugin\.hostInstanceId \|\| controller\.hostId \|\| 'obsidian'\)/);
+  assert.match(bridge, /pruneDeadObsidianBridges\(config\)/);
   assert.match(bridge, /config\.hostBridges\[this\.hostId\] = \{/);
   assert.match(bridge, /config\.hostBridges\?\.\[this\.hostId\]\?\.token === token/);
   assert.doesNotMatch(bridge, /config\.hostBridges\.obsidian =/);

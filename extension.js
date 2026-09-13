@@ -699,6 +699,46 @@ async function restartAll(ctx){
   if(!stopped.ok) return stopped;
   return quickStart(ctx);
 }
+async function repairGatewayPort(ctx){
+  const data = ensureConfig(ctx,false);
+  const currentPort = Number(data.server?.port || configuredPort() || BASE_PORT);
+  const targetPort = configuredPort();
+  if(currentPort === targetPort){
+    vscode.window.showInformationMessage(`DevMate Gateway already uses the configured default port ${targetPort}.`);
+    return {ok:true,changed:false,port:targetPort};
+  }
+
+  const action = `Repair to ${targetPort} and restart`;
+  const choice = await vscode.window.showWarningMessage(
+    `Repair the shared DevMate Gateway port from ${currentPort} to ${targetPort}?`,
+    {
+      modal:true,
+      detail:'This explicitly stops the shared public connection and Gateway first. The port changes only after shutdown is confirmed and the target port is verified free.'
+    },
+    action
+  );
+  if(choice !== action) return {ok:false,cancelled:true};
+
+  const stopped = await stopAll();
+  if(!stopped.ok){
+    vscode.window.showErrorMessage('DevMate Gateway port repair was refused because the shared runtime did not stop cleanly. No port setting was changed.');
+    return {ok:false,reason:'shared-runtime-stop-failed',stop:stopped};
+  }
+
+  try{
+    const controller = await ensureGatewayController(ctx);
+    const repaired = await controller.repairPort(targetPort);
+    syncConfig(ctx,false);
+    const started = await quickStart(ctx,{quiet:true,activateWorkspace:false});
+    if(!started?.ok) throw new Error(started?.error || 'DevMate did not return to Ready after port repair');
+    vscode.window.showInformationMessage(`DevMate Gateway port repaired ${currentPort} → ${targetPort} and the shared runtime is Ready.`);
+    return {ok:true,repaired,started};
+  }catch(error){
+    log(`Gateway port repair failed: ${error.stack || error.message || error}`);
+    vscode.window.showErrorMessage(`DevMate Gateway port repair failed: ${error.message || error}. The runtime remains fail-closed; run Doctor before retrying.`);
+    return {ok:false,reason:error.message || String(error),code:error.code || 'DEVMATE_PORT_REPAIR_FAILED'};
+  }
+}
 async function copyUrl(){
   let status;
   try{
@@ -943,7 +983,12 @@ async function doctor(ctx){
   checks.push(`VS Code workspace: ${currentRoot() || 'NONE'}`);
   checks.push(`Extension path: ${ctx.extensionPath}`);
   checks.push(`Config path: ${configPath(ctx)}`);
-  checks.push(`Configured/current port: ${data.server.port}`);
+  const preferredPort = configuredPort();
+  checks.push(`Shared/current port: ${data.server.port}`);
+  checks.push(`Configured default port: ${preferredPort}`);
+  if(Number(data.server.port) !== preferredPort){
+    checks.push(`Port repair available: shared runtime is pinned to historical port ${data.server.port}; use DevMate: Repair Gateway Port to Configured Default for an explicit stopped-only repair.`);
+  }
   checks.push(`Connection provider: ${provider}`);
   try{
     const runtime=ensureGatewayNodeRuntime();
@@ -1209,6 +1254,7 @@ function activate(context){
   register(context,'devMate.open',()=>openPanel(context));
   register(context,'devMate.stop',()=>lifecycleOperations.run('stop',()=>stopAll()));
   register(context,'devMate.restart',()=>lifecycleOperations.run('restart',()=>restartAll(context)));
+  register(context,'devMate.repairGatewayPort',()=>lifecycleOperations.run('repair-gateway-port',()=>repairGatewayPort(context)));
   register(context,'devMate.copyUrl',()=>copyUrl());
   register(context,'devMate.addReference',()=>addReference(context));
   register(context,'devMate.clearReferences',()=>clearReferences(context));

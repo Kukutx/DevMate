@@ -1,10 +1,12 @@
 import http from 'node:http';
 import path from 'node:path';
 import { z } from 'zod';
+import bridgeRegistry from '../shared/host-bridge-registry.cjs';
 import { readConfig, toolText } from './local-shared.mjs';
 import { resolveWorkspace, writableWorkspaces } from './workspace-resolver.mjs';
 import { registerServerInitializer } from './server-extension-host.mjs';
 
+const { liveObsidianBridgeEntries, processAlive } = bridgeRegistry;
 const REGISTERED = Symbol.for('devmate.obsidianHostToolsRegistered');
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MIN_BRIDGE_PROTOCOL_VERSION = 1;
@@ -18,18 +20,16 @@ function workspaceFor(config, requested = '') {
   return resolveWorkspace(config, requested);
 }
 
-function bridgeEntries(config) {
-  return Object.entries(config?.hostBridges || {}).filter(([hostId, bridge]) => bridge && typeof bridge === 'object' && (
-    hostId === 'obsidian' || bridge.kind === 'obsidian' || bridge.hostKind === 'obsidian' || String(bridge.hostId || hostId).startsWith('obsidian-')
-  ));
+function bridgeEntries(config, options = {}) {
+  return liveObsidianBridgeEntries(config, options);
 }
 
-function bridgeConfig(config = readConfig(), workspaceId = '') {
+function bridgeConfig(config = readConfig(), workspaceId = '', options = {}) {
   const workspace = workspaceFor(config, workspaceId);
   const candidates = [];
   let attachedElsewhere = '';
   let rootMismatch = false;
-  for (const [hostId, bridge] of bridgeEntries(config)) {
+  for (const [hostId, bridge] of bridgeEntries(config, options)) {
   let url;
   try { url = new URL(String(bridge.url || '')); }
   catch { continue; }
@@ -283,4 +283,4 @@ export function installObsidianHostCapabilities(McpServerClass) {
   });
 }
 
-export const __test = { bridgeConfig, bridgeEntries, definitions, selectorSchema, workspaceFor };
+export const __test = { bridgeConfig, bridgeEntries, definitions, processAlive, selectorSchema, workspaceFor };

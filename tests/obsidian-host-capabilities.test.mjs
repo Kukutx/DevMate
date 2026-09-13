@@ -37,6 +37,28 @@ test('Obsidian bridge configuration accepts only authenticated matching loopback
   })), /attached to workspace other/);
 });
 
+test('ignores current-format Obsidian bridge records whose host process is gone', () => {
+  const root = path.resolve('/vault');
+  const value = config({
+    hostBridges: {
+      'obsidian-dead': {
+        kind: 'obsidian', hostId: 'obsidian-dead', url: 'http://127.0.0.1:4567', token: 'dead-token', pid: 100,
+        updatedAt: '2026-01-01T00:02:00.000Z', workspaceId: 'vault', workspaceRoot: root, protocolVersion: 3
+      },
+      'obsidian-live': {
+        kind: 'obsidian', hostId: 'obsidian-live', url: 'http://127.0.0.1:4568', token: 'live-token', pid: 200,
+        updatedAt: '2026-01-01T00:01:00.000Z', workspaceId: 'vault', workspaceRoot: root, protocolVersion: 3
+      }
+    }
+  });
+  const selected = __test.bridgeConfig(value, 'vault', { pidIsRunning: pid => pid === 200 });
+  assert.equal(selected.hostId, 'obsidian-live');
+  assert.equal(selected.url, 'http://127.0.0.1:4568');
+  assert.equal(__test.bridgeConfig(config({ hostBridges: { 'obsidian-dead': value.hostBridges['obsidian-dead'] } }), 'vault', {
+    pidIsRunning: () => false
+  }), null);
+});
+
 test('selects the bridge bound to the requested Vault and rejects an omitted target across writable Vaults', () => {
   const firstRoot = path.resolve('/vault-first');
   const secondRoot = path.resolve('/vault-second');

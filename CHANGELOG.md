@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.8.8
+- Added an explicit stopped-only **Repair Gateway Port to Configured Default** lifecycle in VS Code and Obsidian so historical `8788`/`8789` drift can be returned safely to the configured default (normally `8787`) without making updates or reinstalls mutate a live shared runtime.
+- Port repair now shares the startup lease, refuses a running shared lifecycle or live same-instance Gateway ownership lock, verifies the target port is free, performs the only authorized shared-port mutation, and restarts through the normal Ready verification path without changing Current Project.
+- Added Doctor diagnostics for historical shared-port drift and kept all ordinary config/context writers unable to change the established machine-wide Gateway port.
+- Added a shared Obsidian host-bridge registry that ignores and prunes only bridge records whose current-format PID is proven dead, preventing crashed/closed Obsidian hosts from accumulating stale selectable bridge entries while preserving live and legacy records.
+
 ## 3.8.7
 - Made the machine-wide desktop Gateway port a persistent shared-runtime invariant: VS Code and Obsidian no longer scan upward or let routine config/context writes move the established port, with `8787` remaining the default for fresh desktop state.
 - Split passive host registration from runtime-version ownership. Loading or refreshing a host now leaves a fresh runtime unclaimed; only a Start operation that owns the shared startup lease may promote the runtime version, preventing update/reinstall races between VS Code and Obsidian.

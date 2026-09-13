@@ -51,8 +51,8 @@ const SHARED_RUNTIME_MACHINE_SETTINGS = [
   'devMate.embeddedRunnerEnabled'
 ];
 
-test('VS Code manifest exposes host diagnostics and self-check commands', () => {
-  for (const command of ['devMate.copyHostDiagnostics', 'devMate.hostSelfCheck']) {
+test('VS Code manifest exposes host diagnostics, self-check, and explicit Gateway port repair commands', () => {
+  for (const command of ['devMate.copyHostDiagnostics', 'devMate.hostSelfCheck', 'devMate.repairGatewayPort']) {
     assert.equal(commandIds.has(command), true, `Missing contributed command ${command}`);
     assert.equal(activationEvents.has(`onCommand:${command}`), true, `Missing activation event for ${command}`);
   }
