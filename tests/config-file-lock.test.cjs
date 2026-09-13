@@ -158,25 +158,20 @@ test('Windows lock acquisition retries a transient EPERM from exclusive create',
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'config.json');
   await fsp.writeFile(file, '{}\n');
-  const lockPath = `${file}.lock`;
   const originalOpenSync = fs.openSync;
   let injected = false;
-  fs.openSync = function patchedOpenSync(target, flags, ...args) {
-    if (!injected && path.resolve(String(target)) === path.resolve(lockPath) && flags === 'wx') {
+  const openSyncImpl = (target, flags, ...args) => {
+    if (!injected && flags === 'wx') {
       injected = true;
       const error = new Error('simulated Windows sharing race');
       error.code = 'EPERM';
       throw error;
     }
-    return originalOpenSync.call(this, target, flags, ...args);
+    return originalOpenSync(target, flags, ...args);
   };
-  try {
-    const acquired = acquireFileLock(file, { timeoutMs: 500 });
-    assert.equal(injected, true);
-    assert.equal(releaseFileLock(acquired), true);
-  } finally {
-    fs.openSync = originalOpenSync;
-  }
+  const acquired = acquireFileLock(file, { timeoutMs: 500, openSyncImpl });
+  assert.equal(injected, true);
+  assert.equal(releaseFileLock(acquired), true);
 });
 
 test('Windows lock identity normalizes case without changing the physical canonical target', () => {

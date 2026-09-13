@@ -101,7 +101,12 @@ function removeStaleLock(lockPath, staleMs) {
   return true;
 }
 
-function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAULT_STALE_MS } = {}) {
+function acquireFileLock(file, {
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  staleMs = DEFAULT_STALE_MS,
+  openSyncImpl = fs.openSync
+} = {}) {
+  if (typeof openSyncImpl !== 'function') throw new TypeError('openSyncImpl must be a function');
   const target = canonicalLockTarget(file);
   const identity = lockIdentity(target);
   const lockPath = `${target}.lock`;
@@ -115,7 +120,7 @@ function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAU
   const payload = { token, pid: process.pid, acquiredAt: new Date().toISOString(), file: target };
   while (Date.now() <= deadline) {
     try {
-      const fd = fs.openSync(lockPath, 'wx', 0o600);
+      const fd = openSyncImpl(lockPath, 'wx', 0o600);
       try {
         fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`, 'utf8');
         try { fs.fsyncSync(fd); } catch {}
