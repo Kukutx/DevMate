@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.8.5
+- Cleared the Obsidian Community directory description blocker by removing redundant product-name wording from the plugin manifest and listing copy.
+- Replaced the workflow validator's direct `js-yaml` dependency with the maintained `yaml` package and replaced the remaining `!important` plugin style with a more specific selector so automated review no longer flags either item.
+- Added regression coverage for Community directory metadata and style scanner requirements while retaining the explicitly disclosed desktop filesystem, process, vault-index, and clipboard capabilities DevMate needs to operate.
+
 ## 3.8.4
 - Removed dependency installation from the Obsidian host so Community directory builds never install or update external executables; Cloudflare users now install `cloudflared` separately and configure or discover it through PATH.
 - Added explicit Obsidian Community directory disclosures for network use, files outside the vault, external executables, account requirements, and the absence of client-side telemetry.

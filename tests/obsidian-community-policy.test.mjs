@@ -35,3 +35,24 @@ test('release downloads retry transient network failures', () => {
   const retries = workflow.match(/--retry 5 --retry-delay 2 --retry-all-errors/g) || [];
   assert.equal(retries.length, 3);
 });
+
+test('Community metadata and styles avoid directory scanner blockers', () => {
+  const manifest = JSON.parse(source('manifest.json'));
+  const pluginManifest = JSON.parse(source('obsidian-plugin/manifest.json'));
+  const packageJson = JSON.parse(source('package.json'));
+  const styles = source('obsidian-plugin/styles.css');
+  assert.doesNotMatch(manifest.description, /\bObsidian\b/i);
+  assert.equal(pluginManifest.description, manifest.description);
+  assert.equal(packageJson.devDependencies?.['js-yaml'], undefined);
+  assert.doesNotMatch(styles, /!important/);
+});
+
+test('default build exposes standard Community assets in a scanner-visible root dist directory', () => {
+  const packageJson = JSON.parse(source('package.json'));
+  const mirror = source('scripts/community-build-output.mjs');
+  assert.match(packageJson.scripts.build, /build:vscode.*build:community/);
+  assert.match(packageJson.scripts['build:community'], /build:obsidian.*community-build-output\.mjs copy/);
+  assert.match(packageJson.scripts['build:vscode'], /community-build-output\.mjs clean.*build-gateway\.mjs/);
+  for (const file of ['main.js', 'manifest.json', 'styles.css']) assert.match(mirror, new RegExp(`'${file.replace('.', '\\.')}'`));
+  assert.match(mirror, /path\.join\(root, 'dist'\)/);
+});

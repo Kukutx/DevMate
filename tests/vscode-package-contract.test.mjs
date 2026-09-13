@@ -89,8 +89,10 @@ test('canonical request-policy limits are enforced by the shared instance schema
 
 test('Gateway build is self-contained and shared across host packages', () => {
   const buildScript = String(manifest.scripts?.build || '');
-  assert.match(buildScript, /scripts\/build-gateway\.mjs/);
-  assert.doesNotMatch(buildScript, /packages[=:]external|--packages=external/);
+  const vscodeBuildScript = String(manifest.scripts?.['build:vscode'] || '');
+  assert.match(buildScript, /build:vscode/);
+  assert.match(vscodeBuildScript, /scripts\/build-gateway\.mjs/);
+  assert.doesNotMatch(vscodeBuildScript, /packages[=:]external|--packages=external/);
 
   const builder = fs.readFileSync(path.join(root, 'scripts', 'gateway-build.mjs'), 'utf8');
   assert.match(builder, /packages:\s*['"]bundle['"]/);
