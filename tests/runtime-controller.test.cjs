@@ -13,6 +13,7 @@ const {
   ensureInstanceConfig,
   healthMatches,
   readJson,
+  recoverStaleGatewayProcess,
   resolveStateDirectory,
   workspaceRuntimeId
 } = require('../host/runtime-controller.js');
@@ -91,6 +92,59 @@ test('Gateway health rejects stale DevMate versions even when instance identity 
   const config = { appVersion: '3.3.0', instanceId: 'same-instance' };
   assert.equal(healthMatches({ ok: true, json: { name: 'devmate', version: '3.2.0', instanceId: 'same-instance' } }, config), false);
   assert.equal(healthMatches({ ok: true, json: { name: 'devmate', version: '3.3.0', instanceId: 'same-instance' } }, config), true);
+});
+
+test('stale same-instance Gateway recovery requires the durable ownership lock before terminating a PID', async () => {
+  const root = temporaryDirectory('devmate-stale-recovery-root-');
+  const state = temporaryDirectory('devmate-stale-recovery-state-');
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: path.join(root, 'missing-gateway.mjs'),
+    preferredPort: 8787,
+    appVersion: '3.8.6'
+  });
+  const config = controller.ensureConfig();
+  const health = { ok: true, json: { name: 'devmate', version: '3.8.5', instanceId: config.instanceId, port: 8787 } };
+  let terminatedPid = null;
+
+  const blocked = await recoverStaleGatewayProcess({
+    stateDirectory: state,
+    configFile: controller.configFile,
+    config,
+    health,
+    terminatePid: async pid => {
+      terminatedPid = pid;
+      return { stopped: true, exitConfirmed: true, forced: false };
+    }
+  });
+  assert.equal(blocked.recovered, false);
+  assert.equal(blocked.reason, 'ownership-not-proven');
+  assert.equal(terminatedPid, null);
+
+  const lockDirectory = path.join(state, 'state');
+  fs.mkdirSync(lockDirectory, { recursive: true });
+  fs.writeFileSync(path.join(lockDirectory, 'gateway.lock'), `${JSON.stringify({
+    version: 2,
+    pid: 4242,
+    runtimeOwnerId: 'old-owner',
+    instanceId: config.instanceId,
+    configPath: controller.configFile
+  }, null, 2)}\n`, 'utf8');
+
+  const recovered = await recoverStaleGatewayProcess({
+    stateDirectory: state,
+    configFile: controller.configFile,
+    config,
+    health,
+    terminatePid: async pid => {
+      terminatedPid = pid;
+      return { stopped: true, exitConfirmed: true, forced: false };
+    }
+  });
+  assert.equal(recovered.recovered, true);
+  assert.equal(terminatedPid, 4242);
+  assert.equal(fs.existsSync(path.join(lockDirectory, 'gateway.lock')), false);
 });
 
 test('runtime controller publishes a bounded generic host context', () => {

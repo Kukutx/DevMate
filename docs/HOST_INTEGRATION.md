@@ -100,6 +100,8 @@ If the Gateway restarts, provider restarts, ownership transfers, configuration c
 
 The provider-native tunnel controller handles shared startup leases, ownership heartbeats, process exit detection, bounded restart, ownership transfer and fail-closed cleanup.
 
+Desktop hosts also use one fixed machine-wide Gateway port from the shared config. Fresh desktop state defaults to `8787`. VS Code and Obsidian never scan upward to `8788`, `8789`, or another fallback when that port is busy. A matching DevMate instance is attached; a foreign listener fails closed with an explicit port-conflict diagnostic. During an update or host handoff, the new host uses the durable Gateway ownership lock to retire only a proven stale same-instance process, while a running Gateway self-terminates when its shared instance identity, app version, or configured port changes. This keeps the provider upstream stable across extension/plugin upgrades and reinstalls.
+
 A desktop host that has requested a connection keeps that intent until explicit Stop. If an owned Gateway disappears or the complete generation changes, recovery runs the same complete Start lifecycle and re-verifies MCP. Recovery does not require a second user action.
 
 If a dynamic provider publishes a different hostname, DevMate can notify the user that the ChatGPT connector URL must be updated. That is an external connector consequence, not a reason to split DevMate startup into manual steps.

@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { terminateProcessTree } = require('../host/runtime/process-tree.js');
+const { terminatePidTree, terminateProcessTree } = require('../host/runtime/process-tree.js');
 
 function fakeChild(pid) {
   const child = new EventEmitter();
@@ -94,4 +94,39 @@ test('process termination never reports success when process-tree exit cannot be
   assert.equal(result.stopped, false);
   assert.equal(result.exitConfirmed, false);
   assert.equal(result.reason, 'process-exit-timeout');
+});
+
+test('PID-only stale runtime recovery confirms the exact process exits before handoff', async () => {
+  let running = true;
+  const taskkill = [];
+  const killImpl = (_pid, signal) => {
+    if (signal === 0) {
+      if (!running) {
+        const error = new Error('missing');
+        error.code = 'ESRCH';
+        throw error;
+      }
+      return;
+    }
+  };
+  const spawnImpl = (command, args) => {
+    taskkill.push({ command, args: [...args] });
+    const killer = new EventEmitter();
+    queueMicrotask(() => {
+      running = false;
+      killer.emit('close', 0);
+    });
+    return killer;
+  };
+
+  const result = await terminatePidTree(7171, {
+    platform: 'win32',
+    spawnImpl,
+    killImpl,
+    gracefulWaitMs: 50,
+    forceWaitMs: 50
+  });
+  assert.equal(result.exitConfirmed, true);
+  assert.equal(result.forced, false);
+  assert.deepEqual(taskkill, [{ command: 'taskkill', args: ['/PID', '7171', '/T'] }]);
 });

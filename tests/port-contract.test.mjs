@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -73,4 +74,48 @@ test('host network layer fails closed before probing invalid ports', async () =>
     choosePort({ server: { port: 1 } }, DEFAULT_PORT),
     error => error?.code === 'DEVMATE_PORT_INVALID'
   );
+});
+
+test('desktop Gateway port stays fixed instead of hopping when the configured port is occupied', async t => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ name: 'other-service' }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+  const config = { server: { port }, appVersion: '3.8.6', instanceId: 'fixed-instance' };
+
+  await assert.rejects(
+    choosePort(config, DEFAULT_PORT),
+    error => error?.code === 'DEVMATE_GATEWAY_PORT_CONFLICT' && error.port === port
+  );
+  assert.equal(config.server.port, port);
+});
+
+test('same-instance old Gateway is marked stale on the fixed port instead of selecting the next port', async t => {
+  const server = http.createServer((request, response) => {
+    if (request.url === '/control/health') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ name: 'devmate', version: '3.8.5', instanceId: 'fixed-instance' }));
+      return;
+    }
+    response.writeHead(404); response.end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+  const config = { server: { port }, appVersion: '3.8.6', instanceId: 'fixed-instance' };
+
+  const choice = await choosePort(config, DEFAULT_PORT);
+  assert.equal(choice.port, port);
+  assert.equal(choice.attached, false);
+  assert.equal(choice.stale, true);
+  assert.equal(choice.health.version, '3.8.5');
 });

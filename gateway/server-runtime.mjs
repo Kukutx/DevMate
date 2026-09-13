@@ -56,9 +56,15 @@ beginStartupProgress('runtime_config');
 let httpBootstrap = null;
 let instanceLockAcquired = false;
 let codexCollaboration = null;
+let startupRuntimeIdentity = null;
 try {
   const startupConfig = readConfig();
-  strictPort(startupConfig.server?.port, { label: 'server.port' });
+  const startupPort = strictPort(startupConfig.server?.port, { label: 'server.port' });
+  startupRuntimeIdentity = Object.freeze({
+    instanceId: String(startupConfig.instanceId || ''),
+    appVersion: String(startupConfig.appVersion || ''),
+    port: startupPort
+  });
   validatePermissionConfig(startupConfig);
   assertConfiguredWorkspaceRootsSafe(startupConfig);
   if (DESKTOP_LIFECYCLE_FENCE && startupConfig.lifecycle?.desiredState !== 'running') {
@@ -266,7 +272,30 @@ try {
       try {
         const config = readConfig();
         lifecycleConfigFailureSince = 0;
-        if (config.lifecycle?.desiredState !== 'running') shutdownAndExit('lifecycle-stopped');
+        if (config.lifecycle?.desiredState !== 'running') {
+          shutdownAndExit('lifecycle-stopped');
+          return;
+        }
+        const currentIdentity = {
+          instanceId: String(config.instanceId || ''),
+          appVersion: String(config.appVersion || ''),
+          port: strictPort(config.server?.port, { label: 'server.port' })
+        };
+        if (
+          startupRuntimeIdentity && (
+            currentIdentity.instanceId !== startupRuntimeIdentity.instanceId ||
+            currentIdentity.appVersion !== startupRuntimeIdentity.appVersion ||
+            currentIdentity.port !== startupRuntimeIdentity.port
+          )
+        ) {
+          console.error(
+            `DevMate shared runtime identity changed while Gateway was running; ` +
+            `exiting old runtime ${startupRuntimeIdentity.appVersion || 'unknown'}:${startupRuntimeIdentity.port} ` +
+            `for ${currentIdentity.appVersion || 'unknown'}:${currentIdentity.port}.`
+          );
+          shutdownAndExit('runtime-config-changed');
+          return;
+        }
       } catch (error) {
         const now = Date.now();
         if (!lifecycleConfigFailureSince) lifecycleConfigFailureSince = now;
