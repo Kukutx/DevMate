@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.8.4
+- Removed dependency installation from the Obsidian host so Community directory builds never install or update external executables; Cloudflare users now install `cloudflared` separately and configure or discover it through PATH.
+- Added explicit Obsidian Community directory disclosures for network use, files outside the vault, external executables, account requirements, and the absence of client-side telemetry.
+- Updated release documentation to the current `community.obsidian.md` submission flow and added retry handling for transient Node.js release-download failures.
+
 ## 3.8.3
 - Made the Obsidian build compatible with Community Plugins by embedding the Gateway and supervisor runtime into the standard `main.js` artifact and materializing hash-verified runtime files into DevMate private shared state.
 - Added repository-root `manifest.json` and `versions.json` Marketplace mirrors, exact-version release tags without a `v` prefix, and standard Obsidian `main.js`, `manifest.json`, and `styles.css` GitHub Release assets.

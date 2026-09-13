@@ -15,7 +15,7 @@ It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or 
 
 ## Get, report, and contribute
 
-- **Get DevMate:** install the VS Code extension from its Marketplace listing; install the Obsidian host from Community Plugins after the one-time registry listing is accepted; GitHub Releases continue to provide the VSIX, Obsidian ZIP, standard Obsidian release assets, and portable CLI archives.
+- **Get DevMate:** install the VS Code extension from its Marketplace listing; install the Obsidian host from Community Plugins after its one-time Community directory submission is approved; GitHub Releases continue to provide the VSIX, Obsidian ZIP, standard Obsidian release assets, and portable CLI archives.
 - **Report a bug:** use the [bug report form](https://github.com/Kukutx/DevMate/issues/new?template=bug_report.yml).
 - **Request a feature:** use the [feature request form](https://github.com/Kukutx/DevMate/issues/new?template=feature_request.yml).
 - **Contribute:** follow [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, testing, and pull-request requirements.
@@ -81,7 +81,7 @@ For explicit service layouts, custom config paths, Team/Control-plane presets, a
 
 DevMate also ships a desktop-only Obsidian host. It publishes vault context and note workflows through the same shared Gateway/public connection model used by VS Code.
 
-The release is Community Plugins-compatible: each version publishes the standard `main.js`, `manifest.json`, and `styles.css` assets under an exact semantic-version GitHub tag. After DevMate's one-time registry entry is accepted, install it from **Settings → Community plugins → Browse → DevMate**.
+The release is Community Plugins-compatible: each version publishes the standard `main.js`, `manifest.json`, and `styles.css` assets under an exact semantic-version GitHub tag. After DevMate's one-time Community directory submission is approved, install it from **Settings → Community plugins → Browse → DevMate**.
 
 For local development only:
 
@@ -90,6 +90,13 @@ npm run build:obsidian
 ```
 
 Copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, then enable the plugin.
+
+#### Obsidian Community directory disclosures
+
+- **Network use:** DevMate can expose its local MCP Gateway through ngrok, Cloudflare Tunnel, or an HTTPS origin you manage so a connected MCP client such as ChatGPT can reach it. Provider selection is explicit. DevMate does not send vault data to a DevMate-hosted analytics or telemetry service.
+- **Files outside the vault:** the desktop host writes machine-wide runtime, configuration, diagnostics, and rollback metadata to the DevMate shared state directory (by default under `~/.devmate/desktop`) and materializes its bundled runtime there. It may also access explicitly registered DevMate workspaces outside the current vault when you authorize those workspaces.
+- **External executables:** the desktop host can launch a configured Node.js 24+ runtime and, when selected, `ngrok` or `cloudflared`. The Obsidian plugin does not install or update these external dependencies; install them separately using their official distribution methods.
+- **Accounts and telemetry:** no DevMate account is required. ChatGPT and tunnel-provider accounts are required only when you choose those services. The Obsidian plugin contains no client-side telemetry.
 
 See [`obsidian-plugin/README.md`](obsidian-plugin/README.md), [`docs/RELEASING.md`](docs/RELEASING.md), and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
 

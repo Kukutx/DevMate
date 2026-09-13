@@ -101,9 +101,9 @@ jobs:
           base="https://nodejs.org/dist/v${node_version}"
           win_archive="node-v${node_version}-win-x64.zip"
           linux_archive="node-v${node_version}-linux-x64.tar.xz"
-          curl -fsSLO "${base}/SHASUMS256.txt"
-          curl -fsSLO "${base}/${win_archive}"
-          curl -fsSLO "${base}/${linux_archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSLO "${base}/SHASUMS256.txt"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSLO "${base}/${win_archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSLO "${base}/${linux_archive}"
           grep -E "  (${win_archive}|${linux_archive})$" SHASUMS256.txt | sha256sum -c -
           unzip -q "$win_archive"
           tar -xf "$linux_archive"

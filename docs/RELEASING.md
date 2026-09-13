@@ -37,18 +37,14 @@ sha256sum --check SHA256SUMS
 
 The workflow is retry-safe: if a release already exists for the tag, assets are uploaded again with replacement enabled rather than creating a duplicate release.
 
-## Obsidian Community Plugins registration
+## Obsidian Community directory submission
 
-Marketplace registration is a one-time upstream action. Submit DevMate to the Obsidian community plugin registry with this entry:
+Initial publication is submitted through the current Obsidian Community directory rather than by editing the legacy plugin-list repository directly.
 
-```json
-{
-  "id": "devmate",
-  "name": "DevMate",
-  "author": "Kukutx",
-  "description": "Connect an Obsidian vault to the DevMate local-first MCP workspace gateway.",
-  "repo": "Kukutx/DevMate"
-}
-```
+1. Confirm the default branch contains the root `README.md`, `LICENSE`, `manifest.json`, and `versions.json`, and that the GitHub Release whose tag exactly matches `manifest.json.version` contains `main.js`, `manifest.json`, and optional `styles.css`.
+2. Sign in at `https://community.obsidian.md` with the maintainer's Obsidian account.
+3. Connect the maintainer's GitHub account from the Community profile so Obsidian can verify ownership of `Kukutx/DevMate`.
+4. Open **Plugins**, choose **New plugin**, enter `https://github.com/Kukutx/DevMate`, choose the owner, accept the developer policies and maintenance commitment, then submit.
+5. Review the automated scanner results in the Community directory. If a code or policy issue requires a release change, fix it on `main`, increment the plugin version, publish a matching GitHub Release, and let the directory rescan the new version.
 
-The repository root intentionally mirrors `obsidian-plugin/manifest.json` and `obsidian-plugin/versions.json` because Community Plugins discovery addresses the repository, not the internal `obsidian-plugin/` source directory. After the initial registry pull request is accepted, future Marketplace updates come from normal version-matching GitHub Releases and require no separate publishing API.
+The repository root intentionally mirrors `obsidian-plugin/manifest.json` and `obsidian-plugin/versions.json` because the Community directory reads repository-root metadata from the default branch. After the initial entry is approved and published, future plugin versions are discovered from normal version-matching GitHub Releases; they do not require a separate directory submission.

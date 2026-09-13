@@ -17,6 +17,8 @@ test('normalizes safe vault paths and blocks internal or escaping paths', () => 
   assert.equal(withinFolder('Projects/Alpha.md', 'Projects'), true);
   assert.throws(() => cleanVaultPath('../outside.md'), /inside the vault/);
   assert.throws(() => cleanVaultPath('.obsidian/workspace.json'), /internal configuration/);
+  assert.throws(() => cleanVaultPath('.config/workspace.json', { configDir: '.config' }), /internal configuration/);
+  assert.equal(cleanVaultPath('.obsidian/Notes.md', { configDir: '.config' }), '.obsidian/Notes.md');
   assert.throws(() => cleanVaultPath('A\0B.md'), /null byte/);
 });
 
