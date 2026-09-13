@@ -10,10 +10,10 @@ const {
   DEFAULT_VERSION,
   MAX_HOST_CONTEXT_CHARS
 } = require('./constants.js');
-const { activateInstanceWorkspace, ensureInstanceConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
+const { activateInstanceWorkspace, ensureInstanceConfig, newerVersion, readJson, updateConfig } = require('../../shared/config-store.cjs');
 const { boundedHostContext, clearHostContext, publishHostContext } = require('../../shared/host-registry.cjs');
 const { cleanupOwnedGatewayInstanceLock, readGatewayInstanceLock } = require('./instance-lock-cleanup.js');
-const { terminatePidTree } = require('./process-tree.js');
+const { pidRunning, terminatePidTree } = require('./process-tree.js');
 const {
   choosePort,
   healthAt,
@@ -29,6 +29,7 @@ const MAX_LAUNCH_OUTPUT_CHARS = 32768;
 const CHILD_EXIT_TIMEOUT_MS = 6500;
 const CHILD_FORCE_EXIT_TIMEOUT_MS = 2500;
 const STALE_GATEWAY_HANDOFF_MS = 5000;
+const MAX_STALE_GATEWAY_LOCK_AGE_MS = 90_000;
 
 function now() {
   return new Date().toISOString();
@@ -62,16 +63,64 @@ function samePath(left, right) {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function hostVersionNeedsPromotion(configVersion, hostVersion) {
+  const current = String(configVersion || '').trim();
+  const candidate = String(hostVersion || '').trim();
+  return !!candidate && candidate !== current && newerVersion(current, candidate) === candidate;
+}
+
+function lockActivityMs(lock) {
+  const heartbeat = Date.parse(lock?.heartbeatAt || '');
+  const acquired = Date.parse(lock?.acquiredAt || '');
+  return Math.max(
+    Number.isFinite(heartbeat) ? heartbeat : 0,
+    Number.isFinite(acquired) ? acquired : 0,
+    Number(lock?.mtimeMs) || 0
+  );
+}
+
+function gatewayLockIsFresh(lock, {
+  at = Date.now(),
+  pidIsRunning = pidRunning
+} = {}) {
+  const pid = Number(lock?.pid || 0);
+  if (!lock || !Number.isInteger(pid) || pid <= 0 || !pidIsRunning(pid)) return false;
+  const activity = lockActivityMs(lock);
+  if (!activity) return false;
+  const leaseMs = Math.max(5000, Number(lock.leaseMs) || MAX_STALE_GATEWAY_LOCK_AGE_MS);
+  return at - activity < Math.min(leaseMs, MAX_STALE_GATEWAY_LOCK_AGE_MS);
+}
+
+function healthMatchesGatewayLock(health, lock, configFile, config) {
+  if (!sameDevMateInstance(health, config)) return false;
+  if (!samePath(health?.json?.configPath, configFile)) return false;
+  const expectedPort = Number(config?.server?.port || 0);
+  if (expectedPort && Number(health?.json?.port || 0) !== expectedPort) return false;
+  const healthPid = Number(health?.json?.pid || 0);
+  if (!Number.isInteger(healthPid) || healthPid <= 0 || healthPid !== Number(lock?.pid || 0)) return false;
+  const healthOwnerId = String(health?.json?.runtimeOwnerId || '').trim();
+  if (!healthOwnerId || healthOwnerId !== String(lock?.runtimeOwnerId || '').trim()) return false;
+  return true;
+}
+
 async function recoverStaleGatewayProcess({
   stateDirectory,
   configFile,
   config,
   health,
   logger = () => {},
-  terminatePid = terminatePidTree
+  terminatePid = terminatePidTree,
+  pidIsRunning = pidRunning,
+  probeHealth = healthAt
 }) {
-  const sameInstanceHealth = sameDevMateInstance(health, config);
-  if (health?.ok && !sameInstanceHealth) return { recovered: false, reason: 'not-same-instance' };
+  if (!health?.ok || !sameDevMateInstance(health, config)) {
+    return { recovered: false, reason: 'not-same-instance' };
+  }
+  const runningVersion = String(health?.json?.version || '').trim();
+  const expectedVersion = String(config?.appVersion || '').trim();
+  if (!runningVersion || !expectedVersion || runningVersion === expectedVersion) {
+    return { recovered: false, reason: 'not-stale-version' };
+  }
   const lock = readGatewayInstanceLock(stateDirectory);
   const pid = Number(lock?.pid || 0);
   const ownerId = String(lock?.runtimeOwnerId || '').trim();
@@ -80,13 +129,27 @@ async function recoverStaleGatewayProcess({
     Number.isInteger(pid) && pid > 0 &&
     ownerId &&
     String(lock.instanceId || '') === String(config.instanceId || '') &&
-    samePath(lock.configPath, configFile)
+    samePath(lock.configPath, configFile) &&
+    gatewayLockIsFresh(lock, { pidIsRunning }) &&
+    healthMatchesGatewayLock(health, lock, configFile, config)
   );
   if (!proven) return { recovered: false, reason: 'ownership-not-proven', lock: lock || null };
 
+  const port = Number(config.server?.port || 0);
+  const verifyIdentity = async () => {
+    const currentHealth = await probeHealth(port, 600);
+    return healthMatchesGatewayLock(currentHealth, lock, configFile, config);
+  };
+  if (!(await verifyIdentity())) {
+    return { recovered: false, reason: 'runtime-changed', lock };
+  }
+
   logger(`Retiring stale same-instance DevMate Gateway pid=${pid} version=${health.json?.version || 'unknown'} before fixed-port handoff.`);
-  const stopped = await terminatePid(pid);
+  const stopped = await terminatePid(pid, { verifyIdentity });
   if (!stopped?.exitConfirmed) {
+    if (stopped?.reason === 'identity-mismatch' || stopped?.reason === 'identity-changed') {
+      return { recovered: false, reason: stopped.reason, lock, stop: stopped };
+    }
     const error = new Error(`Stale DevMate Gateway pid=${pid} could not be stopped safely during fixed-port handoff`);
     error.code = 'DEVMATE_STALE_GATEWAY_RECOVERY_FAILED';
     error.pid = pid;
@@ -218,14 +281,19 @@ class RuntimeController {
     return path.join(this.stateDirectory, 'config.json');
   }
 
-  ensureConfig() {
+  ensureConfig({ promoteAppVersion = false } = {}) {
     return ensureInstanceConfig({
       configFile: this.configFile,
       workspaceRoot: this.workspaceRoot,
       preferredPort: this.preferredPort,
       appVersion: this.appVersion,
-      defaultConnectionProvider: this.defaultConnectionProvider
+      defaultConnectionProvider: this.defaultConnectionProvider,
+      promoteAppVersion
     });
+  }
+
+  promoteConfigVersion() {
+    return this.ensureConfig({ promoteAppVersion: true });
   }
 
   activateWorkspace() {
@@ -349,6 +417,7 @@ class RuntimeController {
         timeoutMs: totalTimeoutMs,
         onWait: async () => {
           const config = this.ensureConfig();
+          if (hostVersionNeedsPromotion(config.appVersion, this.appVersion)) return null;
           const health = await healthAt(Number(config.server.port), 700);
           if (!healthMatches(health, config)) return null;
           this.owned = false;
@@ -368,7 +437,7 @@ class RuntimeController {
       if (!(leaseResult instanceof StartupLease)) return leaseResult;
       lease.assertOwned();
 
-      let config = this.ensureConfig();
+      let config = this.promoteConfigVersion();
       const configuredPort = Number(config.server.port);
       let existing = await healthAt(configuredPort);
       if (healthMatches(existing, config)) {
@@ -379,17 +448,13 @@ class RuntimeController {
         return { started: false, attached: !owned, owned, port: configuredPort, health: existing.json };
       }
 
-      if (!existing?.ok && await isPortFree(configuredPort)) {
-        const recovery = await recoverStaleGatewayProcess({
-          stateDirectory: this.stateDirectory,
-          configFile: this.configFile,
-          config,
-          health: existing,
-          logger: message => this.logger(message)
-        });
-        if (recovery.recovered) {
-          this.logger(`Retired stale same-instance Gateway pid=${recovery.pid} before returning to fixed port ${configuredPort}.`);
-        }
+      if (String(config.appVersion || '') !== String(this.appVersion || '')) {
+        const error = new Error(`This DevMate host is version ${this.appVersion}, while the shared desktop instance requires ${config.appVersion}. Open or update a current host instead of starting an older Gateway.`);
+        error.code = 'DEVMATE_HOST_VERSION_STALE';
+        error.hostVersion = this.appVersion;
+        error.requiredVersion = config.appVersion;
+        error.port = configuredPort;
+        throw error;
       }
 
       if (sameDevMateInstance(existing, config)) {

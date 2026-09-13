@@ -52,7 +52,7 @@ function successfulRequestRecorder(calls = []) {
         status: 200,
         headers: {},
         body: '',
-        json: { jsonrpc: '2.0', id: payload.id, result: { resultType: 'complete', structuredContent: { name: 'devmate', version: '4.0.0' } } }
+        json: { jsonrpc: '2.0', id: payload.id, result: { resultType: 'complete', structuredContent: { name: 'devmate', version: '4.0.0', instanceId: 'instance-4' } } }
       };
     }
     throw new Error(`Unexpected MCP request: ${options.body}`);
@@ -74,6 +74,7 @@ test('public MCP preflight authenticates server/discover, tools/list, and a real
   assert.equal(result.toolCount, 2);
   assert.equal(result.toolCallVerified, true);
   assert.equal(result.probeTool, 'gateway_status');
+  assert.equal(result.instanceId, 'instance-4');
   assert.equal(calls.length, 3);
   assert.deepEqual(calls.map(call => JSON.parse(call.options.body).method), ['server/discover', 'tools/list', 'tools/call']);
   for (const call of calls) {

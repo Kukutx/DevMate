@@ -43,17 +43,30 @@ test('default start command uses process-tree termination and ignores Output tex
   assert.match(extension, /onDidChangeTextDocument\(event=>[\s\S]*scheme !== 'output'/);
 });
 
-test('desktop runtime keeps one fixed Gateway port across host updates and handoffs', () => {
+test('desktop runtime keeps one fixed Gateway port without passive host-version churn', () => {
   const network = source('host/runtime/network.js');
   const controller = source('host/runtime/process-controller.js');
   const gateway = source('gateway/server-runtime.mjs');
+  const extension = source('extension.js');
+  const sharedTunnel = source('extension-entry-shared-tunnel.js');
+  const lifecycle = source('vscode-host/lifecycle.js');
+  const obsidianSettings = source('obsidian-plugin/src/settings.js');
 
   assert.doesNotMatch(network, /base \+ 19|port \+= 1/);
   assert.match(network, /will not move to another port automatically/);
   assert.doesNotMatch(controller, /current\.server\.port = choice\.port/);
   assert.match(controller, /automatic port fallback is disabled/);
+  assert.match(controller, /promoteConfigVersion/);
   assert.match(gateway, /startupRuntimeIdentity/);
   assert.match(gateway, /currentIdentity\.appVersion !== startupRuntimeIdentity\.appVersion/);
   assert.match(gateway, /currentIdentity\.port !== startupRuntimeIdentity\.port/);
   assert.match(gateway, /runtime-config-changed/);
+  assert.doesNotMatch(extension, /data\.appVersion\s*=\s*VERSION/);
+  assert.doesNotMatch(extension, /portOverride/);
+  assert.match(extension, /const BASE_PORT = DEFAULT_PORT/);
+  assert.match(sharedTunnel, /setting\(vscode, 'port', DEFAULT_PORT\)/);
+  assert.match(sharedTunnel, /promoteAppVersion:\s*false/);
+  assert.match(lifecycle, /setting\(this\.vscode, 'port', DEFAULT_PORT\)/);
+  assert.match(lifecycle, /promoteAppVersion:\s*false/);
+  assert.match(obsidianSettings, /preferredPort: DEFAULT_PORT/);
 });

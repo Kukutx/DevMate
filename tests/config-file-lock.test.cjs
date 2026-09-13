@@ -10,6 +10,7 @@ const {
   acquireFileLock,
   canonicalLockTarget,
   clearFileLocksForTests,
+  lockContentionError,
   lockIdentity,
   readLock,
   releaseFileLock,
@@ -137,6 +138,40 @@ test('symlinked parent aliases resolve to one reentrant lock identity', async t 
       assert.equal(nested.identity, first.identity);
     }, { timeoutMs: 100 });
   });
+});
+
+test('Windows transient lock open errors are treated as bounded contention only on Windows', () => {
+  assert.equal(lockContentionError({ code: 'EEXIST' }, 'linux'), true);
+  assert.equal(lockContentionError({ code: 'EPERM' }, 'win32'), true);
+  assert.equal(lockContentionError({ code: 'EACCES' }, 'win32'), true);
+  assert.equal(lockContentionError({ code: 'EBUSY' }, 'win32'), true);
+  assert.equal(lockContentionError({ code: 'EPERM' }, 'linux'), false);
+  assert.equal(lockContentionError({ code: 'ENOENT' }, 'win32'), false);
+});
+
+test('Windows lock acquisition retries a transient EPERM from exclusive create', async t => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-specific filesystem contention behavior');
+    return;
+  }
+  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-config-lock-eperm-'));
+  t.after(() => fsp.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  await fsp.writeFile(file, '{}\n');
+  const originalOpenSync = fs.openSync;
+  let injected = false;
+  const openSyncImpl = (target, flags, ...args) => {
+    if (!injected && flags === 'wx') {
+      injected = true;
+      const error = new Error('simulated Windows sharing race');
+      error.code = 'EPERM';
+      throw error;
+    }
+    return originalOpenSync(target, flags, ...args);
+  };
+  const acquired = acquireFileLock(file, { timeoutMs: 500, openSyncImpl });
+  assert.equal(injected, true);
+  assert.equal(releaseFileLock(acquired), true);
 });
 
 test('Windows lock identity normalizes case without changing the physical canonical target', () => {

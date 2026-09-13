@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import configStore from '../shared/config-store.cjs';
+import portConfig from '../shared/port.cjs';
 import { terminateProcessTree } from '../gateway/command-process.mjs';
 import { isLoopbackHostname } from '../gateway/http-host-policy.mjs';
 import {
@@ -18,6 +19,7 @@ import {
 } from './runner-options.mjs';
 
 const { readJson: readConfigJson } = configStore;
+const { DEFAULT_PORT } = portConfig;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RUNNER_SECRET_ENV = [
@@ -184,7 +186,7 @@ async function waitGateway(port, child, timeoutMs = 30000) {
 }
 
 function localMcpClient(config) {
-  const port = integerValue(config.server?.port, 8787, 1, 65535, 'server.port');
+  const port = integerValue(config.server?.port, DEFAULT_PORT, 1, 65535, 'server.port');
   const mcpPath = config.server?.mcpPath === undefined ? '/mcp' : config.server.mcpPath;
   if (typeof mcpPath !== 'string' || !mcpPath.startsWith('/')) throw new Error('server.mcpPath must be an absolute path');
   let client = null;
@@ -300,7 +302,7 @@ export async function runExternalRunner(options = parseRunnerArgs(process.argv.s
   const token = runnerToken(options);
   const childEnvironment = gatewayEnvironment(configPath);
   clearRunnerSecretsFromProcess();
-  const port = integerValue(config.server?.port, 8787, 1, 65535, 'server.port');
+  const port = integerValue(config.server?.port, DEFAULT_PORT, 1, 65535, 'server.port');
   const leaseSeconds = integerOption(options['lease-seconds'], 90, 15, 300, '--lease-seconds');
   const pollMs = integerOption(options['poll-ms'], 2000, 500, 30000, '--poll-ms');
   const maximum = metadata.maxConcurrent;

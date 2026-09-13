@@ -15,7 +15,7 @@
     "agent-automation",
     "browser-automation"
   ],
-  "version": "3.8.6",
+  "version": "3.8.7",
   "icon": "assets/icon.png",
   "publisher": "kukutx",
   "sponsor": {
@@ -205,7 +205,7 @@
           "minimum": 1024,
           "maximum": 65535,
           "scope": "machine",
-          "description": "Preferred internal loopback Gateway port. An existing shared Gateway port remains authoritative."
+          "description": "Initial loopback Gateway port for a fresh machine-wide DevMate state. An existing shared port remains authoritative; DevMate never scans to another port automatically."
         },
         "devMate.ngrokCommandPath": {
           "type": "string",

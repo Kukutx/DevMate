@@ -5,6 +5,7 @@ const { normalizeNgrokUrl, validateAuthtoken } = require('../../ngrok-support.js
 const { normalizePublicOrigin } = require('../../host/public-mcp.js');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { setDesktopAuthenticationMode } = require('../../shared/desktop-auth-policy.cjs');
+const { DEFAULT_PORT } = require('../../shared/port.cjs');
 const { PROVIDERS, tunnelMaxRestarts, tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
 const { encryptSecret, encryptionAvailable } = require('./secret-store.js');
 
@@ -12,7 +13,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   autoStart: true,
   sharedStateDirectory: '',
-  preferredPort: 8787,
+  preferredPort: DEFAULT_PORT,
   nodeExecutable: '',
   captureSelection: true,
   autoCopyUrl: true,
@@ -300,8 +301,8 @@ class DevMateSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('Preferred local Gateway port')
-      .setDesc('Internal loopback port. DevMate chooses another free port automatically when needed.')
+      .setName('Initial local Gateway port')
+      .setDesc('Used only when creating a fresh machine-wide DevMate state. The existing shared port remains authoritative, and DevMate never scans to another port automatically.')
       .addText(text => text
         .setValue(String(this.plugin.settings.preferredPort))
         .onChange(async value => {

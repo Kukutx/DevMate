@@ -343,6 +343,7 @@ async function preflightPublicMcpOnce({
     toolCount: tools.json.result.tools.length,
     toolCallVerified: true,
     probeTool: PREFLIGHT_PROBE_TOOL,
+    instanceId: String(probeResult?.structuredContent?.instanceId || '').trim() || null,
     server: serverInfo
   };
 }

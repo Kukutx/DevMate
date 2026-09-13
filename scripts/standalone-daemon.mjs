@@ -3,9 +3,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import network from '../host/runtime/network.js';
+import portConfig from '../shared/port.cjs';
 import { configFile, readConfig, standaloneStateSeparation } from './standalone-runtime.mjs';
 
 const { healthAt, healthMatches } = network;
+const { DEFAULT_PORT } = portConfig;
 const CLI_OWNER_PREFIX = 'cli-daemon-';
 const CLI_LAUNCH_MODE = 'standalone-cli-daemon';
 const START_TIMEOUT_MS = 30000;
@@ -158,7 +160,7 @@ async function terminateDaemonProcess(pid, timeoutMs = STOP_TIMEOUT_MS) {
 
 async function runtimeStatus(file) {
   const config = readConfig(file);
-  const port = Number(config?.server?.port || 8787);
+  const port = Number(config?.server?.port || DEFAULT_PORT);
   const health = await healthAt(port, 1000);
   const running = healthMatches(health, config);
   const lock = readLock(file);

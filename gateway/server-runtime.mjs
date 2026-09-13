@@ -290,7 +290,7 @@ try {
         ) {
           console.error(
             `DevMate shared runtime identity changed while Gateway was running; ` +
-            `exiting old runtime ${startupRuntimeIdentity.appVersion || 'unknown'}:${startupRuntimeIdentity.port} ` +
+            `exiting ${startupRuntimeIdentity.appVersion || 'unknown'}:${startupRuntimeIdentity.port} ` +
             `for ${currentIdentity.appVersion || 'unknown'}:${currentIdentity.port}.`
           );
           shutdownAndExit('runtime-config-changed');

@@ -16,7 +16,7 @@ const {
   parsePortOption,
   strictPort
 } = require('../shared/port.cjs');
-const { choosePort, healthAt, isPortFree } = require('../host/runtime/network.js');
+const { choosePort, healthAt, healthMatches, isPortFree, sameDevMateInstance } = require('../host/runtime/network.js');
 const manifest = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8'));
 
 test('shared port contract accepts only current unprivileged Gateway ports', () => {
@@ -76,6 +76,13 @@ test('host network layer fails closed before probing invalid ports', async () =>
   );
 });
 
+test('Gateway identity checks reject a health response from the wrong port', () => {
+  const config = { server: { port: 8787 }, appVersion: '3.8.6', instanceId: 'fixed-instance' };
+  const health = { ok: true, json: { name: 'devmate', version: '3.8.6', instanceId: 'fixed-instance', port: 8788 } };
+  assert.equal(healthMatches(health, config), false);
+  assert.equal(sameDevMateInstance(health, config), false);
+});
+
 test('desktop Gateway port stays fixed instead of hopping when the configured port is occupied', async t => {
   const server = http.createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -100,7 +107,7 @@ test('same-instance old Gateway is marked stale on the fixed port instead of sel
   const server = http.createServer((request, response) => {
     if (request.url === '/control/health') {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ name: 'devmate', version: '3.8.5', instanceId: 'fixed-instance' }));
+      response.end(JSON.stringify({ name: 'devmate', version: '3.8.5', instanceId: 'fixed-instance', port: server.address().port }));
       return;
     }
     response.writeHead(404); response.end();

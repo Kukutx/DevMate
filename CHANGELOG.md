@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.8.7
+- Made the machine-wide desktop Gateway port a persistent shared-runtime invariant: VS Code and Obsidian no longer scan upward or let routine config/context writes move the established port, with `8787` remaining the default for fresh desktop state.
+- Split passive host registration from runtime-version ownership. Loading or refreshing a host now leaves a fresh runtime unclaimed; only a Start operation that owns the shared startup lease may promote the runtime version, preventing update/reinstall races between VS Code and Obsidian.
+- Hardened mixed-version handoff and stale-process recovery: current hosts converge on one fixed-port Gateway, older hosts cannot downgrade or spawn an older runtime, PID-only cleanup requires fresh durable ownership plus matching loopback identity, and force escalation stops if that identity changes.
+- Bound ngrok already-online endpoint adoption to the shared DevMate instance and authoritative runtime version, so stale hosts can attach to the current Gateway without adopting another instance or an obsolete endpoint.
+- Treated transient Windows `EPERM`/`EACCES`/`EBUSY` failures during exclusive shared-config lock creation as bounded lock contention, preventing simultaneous desktop hosts from crashing during configuration races while preserving fail-closed timeout behavior for persistent permission failures.
+
 ## 3.8.6
 - Pinned the shared desktop Gateway to its configured machine-wide port, defaulting to `8787`, and removed automatic fallback to `8788`, `8789`, or later ports when a stale or foreign listener is present.
 - Added safe stale-Gateway handoff across VS Code and Obsidian updates: a new host may retire only a same-instance process proven by the durable Gateway ownership lock, while foreign listeners fail closed instead of causing port drift.

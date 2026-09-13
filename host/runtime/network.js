@@ -71,11 +71,13 @@ function healthAt(port, timeoutMs = 1500) {
 
 function healthMatches(health, config) {
   const expectedVersion = String(config?.appVersion || '').trim();
+  const expectedPort = Number(config?.server?.port || 0);
   return !!(
     health?.ok &&
     health.json?.name === 'devmate' &&
     (!config?.instanceId || health.json.instanceId === config.instanceId) &&
-    (!expectedVersion || health.json.version === expectedVersion)
+    (!expectedVersion || health.json.version === expectedVersion) &&
+    (!expectedPort || Number(health.json?.port || 0) === expectedPort)
   );
 }
 
@@ -97,10 +99,12 @@ function isPortFree(port) {
 }
 
 function sameDevMateInstance(health, config) {
+  const expectedPort = Number(config?.server?.port || 0);
   return !!(
     health?.ok &&
     health.json?.name === 'devmate' &&
-    (!config?.instanceId || health.json.instanceId === config.instanceId)
+    (!config?.instanceId || health.json.instanceId === config.instanceId) &&
+    (!expectedPort || Number(health.json?.port || 0) === expectedPort)
   );
 }
 

@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const { FileSystemAdapter, Notice, Plugin } = require('obsidian');
-const { connectionErrorSummary, redactUrl, transientPublicMcpError } = require('../../host/public-mcp.js');
+const { connectionErrorSummary, preflightPublicMcp, redactUrl, transientPublicMcpError } = require('../../host/public-mcp.js');
 const { verifySharedPublicMcp } = require('../../host/shared-public-mcp-verification.js');
 const { resolveNodeRuntime } = require('../../host/runtime/node-runtime.js');
 const { OperationCoordinator } = require('../../host/runtime/operation-coordinator.js');
@@ -214,6 +214,18 @@ module.exports = class DevMateObsidianPlugin extends Plugin {
       stateDirectory,
       settings: () => this.tunnelSettings(stateDirectory),
       getSecrets: async () => this.tunnelSecrets(),
+      verifyExistingEndpoint: async ({ publicUrl }) => {
+        const config = this.controller?.readConfig?.();
+        if (!config) return false;
+        const test = await preflightPublicMcp({
+          publicUrl,
+          token: preflightAccessToken(config, publicUrl, this.controller.configFile),
+          clientName: 'devmate-obsidian-ngrok-conflict-adoption',
+          clientVersion: this.manifest.version,
+          timeoutMs: 5000
+        });
+        return test?.server?.name === 'devmate' && test?.server?.version === config.appVersion && Number(test?.toolCount || 0) > 0 && test.instanceId === config.instanceId;
+      },
       childProcess,
       hostId: this.hostInstanceId,
       logger: message => this.logRuntime(message)

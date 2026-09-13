@@ -137,6 +137,7 @@ async function runRealPublicPreflight(mode) {
       assert.equal(result.protocolVersion, '2026-07-28');
       assert.equal(result.toolCallVerified, true);
       assert.equal(result.probeTool, 'gateway_status');
+      assert.equal(result.instanceId, config.instanceId);
       return { authorizationHeaders, token, rejected: false };
     } catch (error) {
       if (mode !== 'none') throw error;

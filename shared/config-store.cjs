@@ -14,6 +14,7 @@ const { DEFAULT_PORT, strictPort } = require('./port.cjs');
 const CONFIG_SNAPSHOT = Symbol.for('devmate.configSnapshot');
 const packageJson = require('../package.json');
 const DEFAULT_VERSION = packageJson.version;
+const UNCLAIMED_RUNTIME_VERSION = '0.0.0';
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 const SUPPORTED_CONFIG_VERSION = 12;
 
@@ -339,6 +340,20 @@ function atomicWriteJson(file, value) {
   }
 }
 
+function enforceStableRuntimeIdentity(previous, next, { allowRuntimeVersionPromotion = false } = {}) {
+  if (!previous || typeof previous !== 'object' || !next || typeof next !== 'object') return next;
+  if (previous.server?.port != null) {
+    next.server ||= {};
+    next.server.port = strictPort(previous.server.port, { label: 'server.port' });
+  }
+  if (previous.appVersion) {
+    next.appVersion = allowRuntimeVersionPromotion
+      ? newerVersion(previous.appVersion, next.appVersion)
+      : String(previous.appVersion);
+  }
+  return next;
+}
+
 function replaceConfig(file, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw configError('DevMate config replacement requires a JSON object', 'config_invalid_write', file);
@@ -354,13 +369,16 @@ function replaceConfig(file, value) {
     const current = readConfigState(target);
     if (current.exists !== source.exists || current.hash !== source.hash) throw configConflict(target);
     assertSupportedConfigVersion(value, target);
-    if (current.exists) enforcePolicyGenerations(policyGenerationBaseline(current.value), value, target);
+    if (current.exists) {
+      enforceStableRuntimeIdentity(current.value, value);
+      enforcePolicyGenerations(policyGenerationBaseline(current.value), value, target);
+    }
     atomicWriteJson(target, value);
     return readConfigSnapshot(target);
   });
 }
 
-function updateConfig(file, mutator, { retries = 3 } = {}) {
+function updateConfig(file, mutator, { retries = 3, allowRuntimeVersionPromotion = false } = {}) {
   if (typeof mutator !== 'function') throw new TypeError('Config mutator must be a function');
   const target = path.resolve(file);
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -372,6 +390,11 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
       const current = attachConfigSnapshot(beforeState.value, target, beforeState);
       const beforeJson = JSON.stringify(current);
       const policyBefore = beforeState.exists ? policyGenerationBaseline(current) : null;
+      const stableBefore = beforeState.exists ? {
+        instanceId: current.instanceId,
+        appVersion: current.appVersion,
+        server: { port: current.server?.port }
+      } : null;
       const changed = mutator(current);
       if (changed && typeof changed.then === 'function') throw new TypeError('Config mutator must be synchronous');
       if (changed === false) return current;
@@ -380,6 +403,7 @@ function updateConfig(file, mutator, { retries = 3 } = {}) {
         throw configError('Config mutator must return a JSON object', 'config_invalid_write', target);
       }
       assertSupportedConfigVersion(next, target);
+      if (stableBefore) enforceStableRuntimeIdentity(stableBefore, next, { allowRuntimeVersionPromotion });
       const afterState = readConfigState(target);
       if (afterState.exists !== beforeState.exists || afterState.hash !== beforeState.hash) {
         if (attempt === attempts - 1) throw configConflict(target);
@@ -474,7 +498,7 @@ function newInstanceConfig({ workspaceRoot, port = DEFAULT_PORT, appVersion = DE
   };
 }
 
-function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAULT_PORT, appVersion = DEFAULT_VERSION, defaultConnectionProvider = 'ngrok' }) {
+function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAULT_PORT, appVersion = DEFAULT_VERSION, defaultConnectionProvider = 'ngrok', promoteAppVersion = true }) {
   const file = path.resolve(configFile);
   const root = path.resolve(workspaceRoot);
   const rootKey = normalizedWorkspaceRoot(root);
@@ -484,9 +508,16 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
   }
   archiveUnsupportedLegacyConfig(file);
   return updateConfig(file, current => {
-    if (!Object.keys(current).length) return newInstanceConfig({ workspaceRoot: root, port: requestedPort, appVersion, defaultConnectionProvider });
+    if (!Object.keys(current).length) {
+      return newInstanceConfig({
+        workspaceRoot: root,
+        port: requestedPort,
+        appVersion: promoteAppVersion ? appVersion : UNCLAIMED_RUNTIME_VERSION,
+        defaultConnectionProvider
+      });
+    }
     const config = normalizeInstanceConfig(current);
-    config.appVersion = newerVersion(config.appVersion, appVersion);
+    if (promoteAppVersion) config.appVersion = newerVersion(config.appVersion, appVersion);
     config.instanceId ||= `host-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     config.hostRuntime ||= {};
     delete config.hostRuntime.workspaceRoot;
@@ -520,7 +551,7 @@ function ensureInstanceConfig({ configFile, workspaceRoot, preferredPort = DEFAU
       item.role = item.id === config.activeWorkspaceId ? 'active' : (item.role === 'active' ? 'workspace' : item.role || 'workspace');
     }
     return config;
-  });
+  }, { allowRuntimeVersionPromotion: promoteAppVersion });
 }
 
 function activateInstanceWorkspace({ configFile, workspaceRoot }) {
@@ -546,6 +577,7 @@ function activateInstanceWorkspace({ configFile, workspaceRoot }) {
 
 module.exports = {
   DEFAULT_VERSION,
+  UNCLAIMED_RUNTIME_VERSION,
   MAX_CONFIG_BYTES,
   SUPPORTED_CONFIG_VERSION,
   archiveUnsupportedLegacyConfig,

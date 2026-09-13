@@ -18,7 +18,7 @@ import {
   standaloneStateSeparation
 } from './standalone-runtime.mjs';
 
-const { DEFAULT_VERSION, updateConfig } = configStore;
+const { updateConfig } = configStore;
 let cliSurfacePromise = null;
 
 function cliSurface() {
@@ -160,7 +160,6 @@ function bootstrap(options = {}) {
   let runner = null;
   updateConfig(initialized.file, current => {
     config = normalizeRunnerControlConfig(normalizeInstanceConfig(current));
-    config.appVersion = DEFAULT_VERSION;
 
     if (effective['embedded-runner'] !== undefined) {
       config.jobs.embeddedRunnerEnabled = bool(effective['embedded-runner'], true);

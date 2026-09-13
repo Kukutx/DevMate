@@ -95,7 +95,8 @@ async function terminatePidTree(pid, {
   killImpl = process.kill,
   gracefulWaitMs = 2500,
   forceWaitMs = 3000,
-  taskkillTimeoutMs = 2000
+  taskkillTimeoutMs = 2000,
+  verifyIdentity = null
 } = {}) {
   const value = Number(pid || 0);
   if (!Number.isInteger(value) || value <= 0) {
@@ -103,6 +104,14 @@ async function terminatePidTree(pid, {
   }
   if (!pidRunning(value, killImpl)) {
     return { stopped: true, exitConfirmed: true, forced: false, reason: 'already-exited' };
+  }
+  const identityMatches = async () => {
+    if (typeof verifyIdentity !== 'function') return true;
+    try { return await verifyIdentity() === true; }
+    catch { return false; }
+  };
+  if (!(await identityMatches())) {
+    return { stopped: false, exitConfirmed: false, forced: false, reason: 'identity-mismatch' };
   }
 
   let forced = false;
@@ -120,6 +129,9 @@ async function terminatePidTree(pid, {
   }
   if (await waitForPidExit(value, gracefulWaitMs, { killImpl })) {
     return { stopped: true, exitConfirmed: true, forced: false, reason: '' };
+  }
+  if (!(await identityMatches())) {
+    return { stopped: false, exitConfirmed: false, forced: false, reason: 'identity-changed' };
   }
 
   forced = true;
