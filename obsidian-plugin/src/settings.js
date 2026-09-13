@@ -6,7 +6,6 @@ const { normalizePublicOrigin } = require('../../host/public-mcp.js');
 const { publicConnectionStability } = require('../../shared/connection-stability.cjs');
 const { setDesktopAuthenticationMode } = require('../../shared/desktop-auth-policy.cjs');
 const { PROVIDERS, tunnelMaxRestarts, tunnelProvider } = require('../../vscode-host/tunnel-settings.js');
-const { cloudflaredInstallCommand, installCloudflared } = require('../../vscode-host/tunnel-executable.js');
 const { encryptSecret, encryptionAvailable } = require('./secret-store.js');
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -245,28 +244,13 @@ class DevMateSettingTab extends PluginSettingTab {
             this.plugin.scheduleReconfigure();
           }));
 
-      const installer = cloudflaredInstallCommand();
-      const install = new Setting(containerEl)
-        .setName('cloudflared helper')
-        .setDesc(installer
-          ? `Install or repair cloudflared automatically with ${installer.label}.`
-          : 'Install cloudflared once, then DevMate finds it automatically.');
-      if (installer) install.addButton(button => button
-        .setButtonText('Install automatically')
-        .onClick(async () => {
-          button.setDisabled(true);
-          try {
-            const result = await installCloudflared();
-            new Notice(result.ok ? 'cloudflared is installed. DevMate will use it automatically.' : 'cloudflared installation failed. Open the install guide for details.');
-            if (result.ok) this.plugin.scheduleReconfigure();
-          } finally {
-            button.setDisabled(false);
-          }
-        }));
-      install.addExtraButton(button => button
-        .setIcon('external-link')
-        .setTooltip('Open cloudflared install guide')
-        .onClick(() => window.open('https://developers.cloudflare.com/tunnel/setup/')));
+      new Setting(containerEl)
+        .setName('cloudflared requirement')
+        .setDesc('Install cloudflared outside Obsidian using Cloudflare\'s supported installation method. DevMate does not install or update external dependencies from the Obsidian plugin.')
+        .addExtraButton(button => button
+          .setIcon('external-link')
+          .setTooltip('Open cloudflared install guide')
+          .onClick(() => window.open('https://developers.cloudflare.com/tunnel/setup/')));
     }
 
     if (provider === 'cloudflare-managed') {

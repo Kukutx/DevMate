@@ -14,7 +14,7 @@ const { normalizeSelector } = require('./vault-index-core.js');
 const { assertPlanReady, propertyPreview, serializedSelector } = require('./property-batch-core.js');
 
 async function previewPropertiesBatch(plugin, index, planStore, args = {}) {
-  const selector = normalizeSelector(args.selector || args);
+  const selector = normalizeSelector(args.selector || args, { configDir: plugin.app.vault.configDir });
   const change = normalizePropertyChange(args);
   const records = index.selectedRecords(args.selector || args);
   if (records.length > MAX_BATCH_FILES) {

@@ -176,7 +176,7 @@ class VaultIndex {
   selectedRecords(args = {}, { withLinks = false } = {}) {
     if (withLinks) this.ensureFresh();
     else this.ensureRecords();
-    const selector = normalizeSelector(args);
+    const selector = normalizeSelector(args, { configDir: this.plugin.app.vault.configDir });
     return [...this.records.values()].filter(record => recordMatchesSelector(record, selector));
   }
 
@@ -292,7 +292,7 @@ class VaultIndex {
 
   graph(args = {}) {
     this.ensureRecords();
-    const paths = uniqueStrings(args.paths, item => cleanVaultPath(item, { markdown: true }), 50);
+    const paths = uniqueStrings(args.paths, item => cleanVaultPath(item, { markdown: true, configDir: this.plugin.app.vault.configDir }), 50);
     return {
       generation: this.generation,
       refreshedAt: this.refreshedAt,
@@ -331,7 +331,7 @@ class VaultIndex {
     }
     const orphanNotes = records.filter(record => record.inboundLinks === 0).map(record => record.path);
     return {
-      folder: args.folder ? cleanFolderPath(args.folder) : null,
+      folder: args.folder ? cleanFolderPath(args.folder, { configDir: this.plugin.app.vault.configDir }) : null,
       files: records.length,
       requiredProperties,
       orphanNotes: orphanNotes.slice(0, MAX_RESPONSE_ITEMS),

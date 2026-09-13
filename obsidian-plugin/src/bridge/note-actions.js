@@ -41,8 +41,8 @@ async function fileSnapshot(vault, file, { includeContent = true } = {}) {
   };
 }
 
-function requireMarkdownFile(vault, filePath) {
-  const normalized = cleanVaultPath(filePath, { markdown: true });
+function requireMarkdownFile(vault, filePath, configDir = vault.configDir) {
+  const normalized = cleanVaultPath(filePath, { markdown: true, configDir });
   const file = vault.getAbstractFileByPath(normalized);
   if (!(file instanceof TFile) || file.extension !== 'md') throw new Error(`Markdown note not found: ${normalized}`);
   return file;
@@ -57,7 +57,7 @@ function normalizePropertyChange(args = {}) {
 }
 
 async function createNote(plugin, operationStore, args = {}, metadata = {}) {
-  const notePath = cleanVaultPath(args.path, { markdown: true });
+  const notePath = cleanVaultPath(args.path, { markdown: true, configDir: plugin.app.vault.configDir });
   if (plugin.app.vault.getAbstractFileByPath(notePath)) throw new Error(`Path already exists: ${notePath}`);
   await mkdirParents(plugin.app.vault, notePath);
   const content = String(args.content || '');
@@ -101,7 +101,7 @@ async function updateProperties(plugin, operationStore, args = {}, metadata = {}
 
 async function moveNote(plugin, operationStore, args = {}, metadata = {}) {
   const file = requireMarkdownFile(plugin.app.vault, args.path);
-  const destination = cleanVaultPath(args.destination, { markdown: true });
+  const destination = cleanVaultPath(args.destination, { markdown: true, configDir: plugin.app.vault.configDir });
   if (plugin.app.vault.getAbstractFileByPath(destination)) throw new Error(`Destination already exists: ${destination}`);
   const originalPath = file.path;
   const before = await fileSnapshot(plugin.app.vault, file, { includeContent: false });

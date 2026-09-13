@@ -13,13 +13,19 @@ function normalizeSegments(value) {
   return segments;
 }
 
-function cleanVaultPath(value, { markdown = false, allowRoot = false } = {}) {
+function isConfigPath(segments, configDir) {
+  const configSegments = normalizeSegments(configDir);
+  if (!configSegments.length || segments.length < configSegments.length) return false;
+  return configSegments.every((segment, index) => segments[index]?.toLowerCase() === segment.toLowerCase());
+}
+
+function cleanVaultPath(value, { markdown = false, allowRoot = false, configDir = '.obsidian' } = {}) {
   const segments = normalizeSegments(value);
   if (!segments.length) {
     if (allowRoot) return '';
     throw new Error('A vault-relative path is required');
   }
-  if (segments[0].toLowerCase() === '.obsidian') {
+  if (isConfigPath(segments, configDir)) {
     throw new Error('DevMate does not modify Obsidian internal configuration');
   }
   let normalized = segments.join('/');
@@ -27,12 +33,12 @@ function cleanVaultPath(value, { markdown = false, allowRoot = false } = {}) {
   return normalized;
 }
 
-function cleanFolderPath(value) {
-  return cleanVaultPath(value, { allowRoot: true });
+function cleanFolderPath(value, options = {}) {
+  return cleanVaultPath(value, { ...options, allowRoot: true });
 }
 
-function withinFolder(filePath, folder = '') {
-  const root = cleanFolderPath(folder);
+function withinFolder(filePath, folder = '', options = {}) {
+  const root = cleanFolderPath(folder, options);
   return !root || filePath === root || filePath.startsWith(`${root}/`);
 }
 
@@ -61,6 +67,7 @@ module.exports = {
   cleanFolderPath,
   cleanOperationId,
   cleanVaultPath,
+  isConfigPath,
   normalizeSegments,
   normalizeTag,
   propertyKey,

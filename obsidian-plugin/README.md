@@ -19,9 +19,16 @@ DevMate: Start
 
 ## Installation
 
-DevMate releases are compatible with Obsidian Community Plugins. After the one-time DevMate registry entry is accepted, install it from **Settings → Community plugins → Browse → DevMate**. Marketplace releases use the standard `main.js`, `manifest.json`, and `styles.css` assets; the bundled Gateway runtime is embedded in `main.js` and materialized with hash verification into DevMate private shared state.
+DevMate releases are compatible with Obsidian Community Plugins. After the one-time DevMate Community directory submission is accepted, install it from **Settings → Community plugins → Browse → DevMate**. Marketplace releases use the standard `main.js`, `manifest.json`, and `styles.css` assets; the bundled Gateway runtime is embedded in `main.js` and materialized with hash verification into DevMate private shared state.
 
 For local development, run `npm run build:obsidian`, copy `obsidian-plugin/dist` to `<Vault>/.obsidian/plugins/devmate/`, and enable the plugin manually.
+
+## Community directory disclosures
+
+- **Network use:** DevMate can expose its local MCP Gateway through ngrok, Cloudflare Tunnel, or an HTTPS origin you manage so a connected MCP client such as ChatGPT can reach it. Provider selection is explicit, and DevMate does not send vault data to a DevMate-hosted analytics or telemetry service.
+- **Files outside the vault:** DevMate writes machine-wide runtime, configuration, diagnostics, and rollback metadata to its shared state directory (by default under `~/.devmate/desktop`) and materializes its bundled runtime there. Explicitly registered DevMate workspaces outside the vault can also be accessed when you authorize them.
+- **External executables:** DevMate can launch a configured Node.js 24+ runtime and, when selected, `ngrok` or `cloudflared`. The Obsidian plugin does not install or update these dependencies; install them separately using their official distribution methods.
+- **Accounts and telemetry:** no DevMate account is required. ChatGPT and tunnel-provider accounts are required only when you choose those services. The plugin contains no client-side telemetry.
 
 ## What Start does
 

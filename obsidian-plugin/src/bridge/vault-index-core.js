@@ -5,8 +5,7 @@ const {
   cleanFolderPath,
   cleanVaultPath,
   normalizeTag,
-  propertyKey,
-  withinFolder
+  propertyKey
 } = require('./path-policy.js');
 
 function safeFrontmatter(value) {
@@ -39,13 +38,13 @@ function uniqueStrings(value, normalize = item => String(item || '').trim(), max
   return [...new Set(input.map(normalize).filter(Boolean))].slice(0, max);
 }
 
-function normalizeSelector(args = {}) {
+function normalizeSelector(args = {}, { configDir = '.obsidian' } = {}) {
   const properties = args.properties && typeof args.properties === 'object' && !Array.isArray(args.properties)
     ? Object.fromEntries(Object.entries(args.properties).map(([key, value]) => [propertyKey(key), value]))
     : {};
-  const paths = uniqueStrings(args.paths, item => cleanVaultPath(item, { markdown: true }), MAX_RESPONSE_ITEMS);
+  const paths = uniqueStrings(args.paths, item => cleanVaultPath(item, { markdown: true, configDir }), MAX_RESPONSE_ITEMS);
   return {
-    folder: cleanFolderPath(args.folder || ''),
+    folder: cleanFolderPath(args.folder || '', { configDir }),
     paths,
     pathSet: new Set(paths),
     tagsAll: uniqueStrings(args.tagsAll || args.tags, normalizeTag, 100),
@@ -66,7 +65,7 @@ function recordSearchText(record) {
 }
 
 function recordMatchesSelector(record, selector) {
-  if (selector.folder && !withinFolder(record.path, selector.folder)) return false;
+  if (selector.folder && record.path !== selector.folder && !record.path.startsWith(`${selector.folder}/`)) return false;
   if (selector.pathSet.size && !selector.pathSet.has(record.path)) return false;
   if (selector.tagsAll.length && !selector.tagsAll.every(tag => record.tags.includes(tag))) return false;
   if (selector.tagsAny.length && !selector.tagsAny.some(tag => record.tags.includes(tag))) return false;
