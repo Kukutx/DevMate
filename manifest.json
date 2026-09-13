@@ -1,7 +1,7 @@
 {
   "id": "devmate",
   "name": "DevMate",
-  "version": "3.8.5",
+  "version": "3.8.6",
   "minAppVersion": "1.12.7",
   "description": "Connect your vault to the DevMate local-first MCP workspace gateway.",
   "author": "Kukutx",

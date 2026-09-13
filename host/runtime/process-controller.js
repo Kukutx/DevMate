@@ -12,14 +12,23 @@ const {
 } = require('./constants.js');
 const { activateInstanceWorkspace, ensureInstanceConfig, readJson, updateConfig } = require('../../shared/config-store.cjs');
 const { boundedHostContext, clearHostContext, publishHostContext } = require('../../shared/host-registry.cjs');
-const { cleanupOwnedGatewayInstanceLock } = require('./instance-lock-cleanup.js');
-const { choosePort, healthAt, healthMatches } = require('./network.js');
+const { cleanupOwnedGatewayInstanceLock, readGatewayInstanceLock } = require('./instance-lock-cleanup.js');
+const { terminatePidTree } = require('./process-tree.js');
+const {
+  choosePort,
+  healthAt,
+  healthMatches,
+  isPortFree,
+  portConflict,
+  sameDevMateInstance
+} = require('./network.js');
 const { OperationCoordinator } = require('./operation-coordinator.js');
 const { StartupLease, waitForStartupLease } = require('./startup-lease.js');
 
 const MAX_LAUNCH_OUTPUT_CHARS = 32768;
 const CHILD_EXIT_TIMEOUT_MS = 6500;
 const CHILD_FORCE_EXIT_TIMEOUT_MS = 2500;
+const STALE_GATEWAY_HANDOFF_MS = 5000;
 
 function now() {
   return new Date().toISOString();
@@ -27,6 +36,65 @@ function now() {
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+async function waitForStaleGatewayHandoff(config, port, timeoutMs = STALE_GATEWAY_HANDOFF_MS) {
+  const deadline = Date.now() + Math.max(250, Number(timeoutMs) || STALE_GATEWAY_HANDOFF_MS);
+  let lastHealth = null;
+  while (Date.now() <= deadline) {
+    lastHealth = await healthAt(port, 600);
+    if (healthMatches(lastHealth, config)) {
+      return { attached: true, released: false, health: lastHealth.json };
+    }
+    if (!lastHealth.ok && await isPortFree(port)) {
+      return { attached: false, released: true, health: null };
+    }
+    if (!sameDevMateInstance(lastHealth, config)) throw portConflict(port, lastHealth, config);
+    await delay(100);
+  }
+  throw portConflict(port, lastHealth, config);
+}
+
+function samePath(left, right) {
+  if (!left || !right) return false;
+  const a = path.resolve(String(left));
+  const b = path.resolve(String(right));
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+async function recoverStaleGatewayProcess({
+  stateDirectory,
+  configFile,
+  config,
+  health,
+  logger = () => {},
+  terminatePid = terminatePidTree
+}) {
+  const sameInstanceHealth = sameDevMateInstance(health, config);
+  if (health?.ok && !sameInstanceHealth) return { recovered: false, reason: 'not-same-instance' };
+  const lock = readGatewayInstanceLock(stateDirectory);
+  const pid = Number(lock?.pid || 0);
+  const ownerId = String(lock?.runtimeOwnerId || '').trim();
+  const proven = !!(
+    lock &&
+    Number.isInteger(pid) && pid > 0 &&
+    ownerId &&
+    String(lock.instanceId || '') === String(config.instanceId || '') &&
+    samePath(lock.configPath, configFile)
+  );
+  if (!proven) return { recovered: false, reason: 'ownership-not-proven', lock: lock || null };
+
+  logger(`Retiring stale same-instance DevMate Gateway pid=${pid} version=${health.json?.version || 'unknown'} before fixed-port handoff.`);
+  const stopped = await terminatePid(pid);
+  if (!stopped?.exitConfirmed) {
+    const error = new Error(`Stale DevMate Gateway pid=${pid} could not be stopped safely during fixed-port handoff`);
+    error.code = 'DEVMATE_STALE_GATEWAY_RECOVERY_FAILED';
+    error.pid = pid;
+    error.stop = stopped || null;
+    throw error;
+  }
+  const cleanup = cleanupOwnedGatewayInstanceLock({ stateDirectory, runtimeOwnerId: ownerId, pid });
+  return { recovered: true, pid, ownerId, stop: stopped, cleanup };
 }
 
 function boundedContext(value, maxChars = MAX_HOST_CONTEXT_CHARS) {
@@ -301,28 +369,81 @@ class RuntimeController {
       lease.assertOwned();
 
       let config = this.ensureConfig();
-      let existing = await healthAt(Number(config.server.port));
+      const configuredPort = Number(config.server.port);
+      let existing = await healthAt(configuredPort);
       if (healthMatches(existing, config)) {
         const owned = !!this.activeOwnedChild();
         this.owned = owned;
         this.phase = 'running';
         this.logger(`${owned ? 'Reused owned' : 'Attached to existing'} DevMate Gateway on port ${config.server.port}.`);
-        return { started: false, attached: !owned, owned, port: Number(config.server.port), health: existing.json };
+        return { started: false, attached: !owned, owned, port: configuredPort, health: existing.json };
       }
 
-      const choice = await choosePort(config, this.preferredPort);
+      if (!existing?.ok && await isPortFree(configuredPort)) {
+        const recovery = await recoverStaleGatewayProcess({
+          stateDirectory: this.stateDirectory,
+          configFile: this.configFile,
+          config,
+          health: existing,
+          logger: message => this.logger(message)
+        });
+        if (recovery.recovered) {
+          this.logger(`Retired stale same-instance Gateway pid=${recovery.pid} before returning to fixed port ${configuredPort}.`);
+        }
+      }
+
+      if (sameDevMateInstance(existing, config)) {
+        const recovery = await recoverStaleGatewayProcess({
+          stateDirectory: this.stateDirectory,
+          configFile: this.configFile,
+          config,
+          health: existing,
+          logger: message => this.logger(message)
+        });
+        if (!recovery.recovered) {
+          this.logger(`Waiting for stale DevMate Gateway ${existing.json?.version || 'unknown'} to release fixed port ${configuredPort}; ownership was not safe to force (${recovery.reason}).`);
+        }
+        const handoff = await waitForStaleGatewayHandoff(
+          config,
+          configuredPort,
+          Math.min(STALE_GATEWAY_HANDOFF_MS, Math.max(250, deadline - Date.now()))
+        );
+        if (handoff.attached) {
+          this.owned = false;
+          this.phase = 'running';
+          this.logger(`Attached to updated DevMate Gateway on fixed port ${configuredPort}.`);
+          return { started: false, attached: true, owned: false, port: configuredPort, health: handoff.health };
+        }
+      }
+
+      let choice = await choosePort(config, this.preferredPort);
+      if (choice.stale) {
+        this.logger(`Waiting for DevMate runtime handoff on fixed port ${choice.port}; automatic port fallback is disabled.`);
+        await recoverStaleGatewayProcess({
+          stateDirectory: this.stateDirectory,
+          configFile: this.configFile,
+          config,
+          health: { ok: true, json: choice.health },
+          logger: message => this.logger(message)
+        });
+        const handoff = await waitForStaleGatewayHandoff(
+          config,
+          choice.port,
+          Math.min(STALE_GATEWAY_HANDOFF_MS, Math.max(250, deadline - Date.now()))
+        );
+        if (handoff.attached) {
+          this.owned = false;
+          this.phase = 'running';
+          return { started: false, attached: true, owned: false, port: choice.port, health: handoff.health };
+        }
+        choice = await choosePort(config, this.preferredPort);
+        if (choice.stale) throw portConflict(choice.port, { ok: true, json: choice.health }, config);
+      }
       lease.assertOwned();
       if (choice.attached) {
         this.owned = false;
         this.phase = 'running';
         return { started: false, attached: true, owned: false, port: choice.port };
-      }
-      if (choice.port !== Number(config.server.port)) {
-        config = updateConfig(this.configFile, current => {
-          current.server ||= {};
-          current.server.port = choice.port;
-          return current;
-        });
       }
 
       if (childActive(this.child)) {
@@ -558,7 +679,9 @@ module.exports = {
   delay,
   lastOutputLine,
   now,
+  recoverStaleGatewayProcess,
   startupFailureDetail,
   terminateChild,
-  waitForChildExit
+  waitForChildExit,
+  waitForStaleGatewayHandoff
 };

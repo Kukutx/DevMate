@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.8.6
+- Pinned the shared desktop Gateway to its configured machine-wide port, defaulting to `8787`, and removed automatic fallback to `8788`, `8789`, or later ports when a stale or foreign listener is present.
+- Added safe stale-Gateway handoff across VS Code and Obsidian updates: a new host may retire only a same-instance process proven by the durable Gateway ownership lock, while foreign listeners fail closed instead of causing port drift.
+- Added a desktop runtime identity fence so an old detached Gateway exits when the shared app version, instance identity, or configured port changes, keeping one Gateway and one public tunnel stable across upgrades, reinstalls, and multiple host entry points.
+
 ## 3.8.5
 - Cleared the Obsidian Community directory description blocker by removing redundant product-name wording from the plugin manifest and listing copy.
 - Replaced the workflow validator's direct `js-yaml` dependency with the maintained `yaml` package and replaced the remaining `!important` plugin style with a more specific selector so automated review no longer flags either item.

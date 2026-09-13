@@ -42,3 +42,18 @@ test('default start command uses process-tree termination and ignores Output tex
   assert.match(extension, /onDidChangeTextEditorSelection\(event=>[\s\S]*scheme !== 'output'/);
   assert.match(extension, /onDidChangeTextDocument\(event=>[\s\S]*scheme !== 'output'/);
 });
+
+test('desktop runtime keeps one fixed Gateway port across host updates and handoffs', () => {
+  const network = source('host/runtime/network.js');
+  const controller = source('host/runtime/process-controller.js');
+  const gateway = source('gateway/server-runtime.mjs');
+
+  assert.doesNotMatch(network, /base \+ 19|port \+= 1/);
+  assert.match(network, /will not move to another port automatically/);
+  assert.doesNotMatch(controller, /current\.server\.port = choice\.port/);
+  assert.match(controller, /automatic port fallback is disabled/);
+  assert.match(gateway, /startupRuntimeIdentity/);
+  assert.match(gateway, /currentIdentity\.appVersion !== startupRuntimeIdentity\.appVersion/);
+  assert.match(gateway, /currentIdentity\.port !== startupRuntimeIdentity\.port/);
+  assert.match(gateway, /runtime-config-changed/);
+});

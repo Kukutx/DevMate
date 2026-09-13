@@ -2,7 +2,7 @@
 
 const http = require('node:http');
 const net = require('node:net');
-const { DEFAULT_PORT, MAX_PORT, strictPort } = require('../../shared/port.cjs');
+const { DEFAULT_PORT, strictPort } = require('../../shared/port.cjs');
 
 const MAX_HTTP_JSON_BYTES = 64 * 1024;
 
@@ -96,15 +96,39 @@ function isPortFree(port) {
   });
 }
 
+function sameDevMateInstance(health, config) {
+  return !!(
+    health?.ok &&
+    health.json?.name === 'devmate' &&
+    (!config?.instanceId || health.json.instanceId === config.instanceId)
+  );
+}
+
+function portConflict(port, health, config) {
+  const sameInstance = sameDevMateInstance(health, config);
+  const runningVersion = String(health?.json?.version || '').trim();
+  const expectedVersion = String(config?.appVersion || '').trim();
+  const error = new Error(sameInstance
+    ? `DevMate Gateway port ${port} is still occupied by this machine's ${runningVersion || 'older'} Gateway while ${expectedVersion || 'the current host'} is starting. DevMate will wait for the shared runtime handoff instead of moving to another port.`
+    : `DevMate Gateway port ${port} is already in use. DevMate keeps the configured Gateway port stable and will not move to another port automatically.`);
+  error.code = sameInstance ? 'DEVMATE_GATEWAY_STALE_INSTANCE' : 'DEVMATE_GATEWAY_PORT_CONFLICT';
+  error.port = port;
+  error.sameInstance = sameInstance;
+  error.runningVersion = runningVersion || null;
+  error.expectedVersion = expectedVersion || null;
+  error.health = health?.json || null;
+  return error;
+}
+
 async function choosePort(config, preferredPort = DEFAULT_PORT) {
-  const base = strictPort(config?.server?.port ?? preferredPort, { label: 'Gateway port' });
-  const end = Math.min(MAX_PORT, base + 19);
-  for (let port = base; port <= end; port += 1) {
-    const health = await healthAt(port, 600);
-    if (healthMatches(health, config)) return { port, attached: true };
-    if (!health.ok && await isPortFree(port)) return { port, attached: false };
+  const port = strictPort(config?.server?.port ?? preferredPort, { label: 'Gateway port' });
+  const health = await healthAt(port, 600);
+  if (healthMatches(health, config)) return { port, attached: true };
+  if (!health.ok && await isPortFree(port)) return { port, attached: false };
+  if (sameDevMateInstance(health, config)) {
+    return { port, attached: false, stale: true, health: health.json };
   }
-  throw new Error(`No free DevMate port found from ${base} to ${end}`);
+  throw portConflict(port, health, config);
 }
 
 module.exports = {
@@ -113,5 +137,7 @@ module.exports = {
   healthAt,
   healthMatches,
   httpJson,
-  isPortFree
+  isPortFree,
+  portConflict,
+  sameDevMateInstance
 };
