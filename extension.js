@@ -23,6 +23,7 @@ const {
   verifiedForCurrentRecord
 } = require('./shared/public-ingress-verification.cjs');
 const { publicConnectionStability } = require('./shared/connection-stability.cjs');
+const { DEFAULT_PORT } = require('./shared/port.cjs');
 const { connectionProvider, publicUiState, statusLabel } = require('./vscode-host/public-ui-state.js');
 const { resolveTunnelExecutable } = require('./vscode-host/tunnel-executable.js');
 const { startTunnel, stopTunnel, tunnelStatus } = require('./vscode-host/tunnel-runtime.js');
@@ -30,7 +31,7 @@ const { classifyTunnelStop, tunnelAllowsGatewayShutdown } = require('./vscode-ho
 
 
 const { version: VERSION } = require('./package.json');
-const BASE_PORT = 8787;
+const BASE_PORT = DEFAULT_PORT;
 const MCP_PATH = '/mcp';
 let gatewayProcess = null;
 let gatewayController = null;
@@ -222,15 +223,14 @@ function ensureConfig(ctx){
   selectedPort = Number(data.server?.port || configuredPort() || BASE_PORT);
   return data;
 }
-function syncConfig(ctx, forceCurrent=false, portOverride=null){
+function syncConfig(ctx, forceCurrent=false){
   const p = configPath(ctx);
   const data = ensureConfig(ctx);
   const root = currentRoot();
   const hostId = vscodeHostInstanceId(root);
-  data.appVersion = VERSION;
   data.instanceId ||= `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
   data.server ||= {};
-  data.server.port = Number(portOverride || data.server.port || configuredPort() || BASE_PORT);
+  data.server.port = Number(data.server.port || configuredPort() || BASE_PORT);
   data.server.mcpPath = MCP_PATH;
   data.runtime ||= {};
   data.runtime.defaultCommandTimeoutMs = Number(cfg().get('defaultCommandTimeoutMs') || 180000);

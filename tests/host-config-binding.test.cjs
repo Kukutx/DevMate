@@ -66,6 +66,38 @@ test('registers multiple workspace roots in one desktop state without changing t
   assert.equal(activated.workspaces.filter(item => item.role === 'active').length, 1);
 });
 
+test('passive host registration cannot promote or downgrade the shared runtime version', () => {
+  const firstRoot = temporaryDirectory('devmate-binding-version-first-');
+  const secondRoot = temporaryDirectory('devmate-binding-version-second-');
+  const state = temporaryDirectory('devmate-binding-version-state-');
+  const configFile = path.join(state, 'config.json');
+  ensureInstanceConfig({ configFile, workspaceRoot: firstRoot, appVersion: '3.8.6' });
+
+  const passiveNewer = ensureInstanceConfig({
+    configFile,
+    workspaceRoot: secondRoot,
+    appVersion: '3.8.7',
+    promoteAppVersion: false
+  });
+  assert.equal(passiveNewer.appVersion, '3.8.6');
+
+  const promoted = ensureInstanceConfig({
+    configFile,
+    workspaceRoot: secondRoot,
+    appVersion: '3.8.7',
+    promoteAppVersion: true
+  });
+  assert.equal(promoted.appVersion, '3.8.7');
+
+  const passiveOlder = ensureInstanceConfig({
+    configFile,
+    workspaceRoot: firstRoot,
+    appVersion: '3.8.5',
+    promoteAppVersion: false
+  });
+  assert.equal(passiveOlder.appVersion, '3.8.7');
+});
+
 test('a deleted registered workspace cannot block another desktop host from activating', () => {
   const staleRoot = temporaryDirectory('devmate-binding-stale-');
   const currentRoot = temporaryDirectory('devmate-binding-current-');

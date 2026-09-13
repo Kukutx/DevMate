@@ -20,8 +20,11 @@ test('VS Code entry initializes shared instance config before the provider-nativ
   assert.match(source, /settingsFromState/);
   assert.match(source, /ensureSharedDesktopConfig/);
   assert.match(source, /ensureInstanceConfig\(\{/);
-  assert.match(source, /preferredPort: strictPort\(setting\(vscode, 'port', 8787\), \{ label: 'devMate\.port' \}\)/);
+  assert.match(source, /preferredPort: strictPort\(setting\(vscode, 'port', DEFAULT_PORT\), \{ label: 'devMate\.port' \}\)/);
   assert.match(source, /defaultConnectionProvider: 'ngrok'/);
+  assert.match(source, /promoteAppVersion: false/);
+  assert.match(source, /test\?\.server\?\.version === config\.appVersion/);
+  assert.match(source, /test\.instanceId === config\.instanceId/);
   assert.doesNotMatch(source, /normalizeBootstrapDeployment/);
   assert.match(source, /settings: \(\) => tunnelSettings\(runtimeStateDirectory\)/);
 

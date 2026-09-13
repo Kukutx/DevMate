@@ -92,9 +92,9 @@ test('merges stale host workspace snapshots without replacing shared capability 
   assert.deepEqual(merged.requestPolicy, current.requestPolicy);
 });
 
-test('host sync may advance appVersion but cannot downgrade it', () => {
+test('host sync never changes the shared runtime version', () => {
   const base = { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.7', instanceId: 'stable' };
-  assert.equal(mergeExtensionConfig(base, { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.8' }).appVersion, '3.6.8');
+  assert.equal(mergeExtensionConfig(base, { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.8' }).appVersion, '3.6.7');
   assert.equal(mergeExtensionConfig({ ...base, appVersion: '3.6.8' }, { version: SUPPORTED_CONFIG_VERSION, appVersion: '3.6.7' }).appVersion, '3.6.8');
 });
 

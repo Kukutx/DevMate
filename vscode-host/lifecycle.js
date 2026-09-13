@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { ensureInstanceConfig, readJson, updateConfig } = require('../shared/config-store.cjs');
 const { ensureDesktopAuthenticationPolicy, setDesktopAuthenticationMode } = require('../shared/desktop-auth-policy.cjs');
 const { ensureDesktopPermissionPolicy, setDesktopPermissionPolicy } = require('../shared/desktop-permission-policy.cjs');
+const { DEFAULT_PORT } = require('../shared/port.cjs');
 const { version: APP_VERSION } = require('../package.json');
 const { healthAt, healthMatches } = require('../host/runtime/network.js');
 const { connectionErrorSummary } = require('../host/public-mcp.js');
@@ -132,9 +133,10 @@ class VscodeHostLifecycle {
       ensureInstanceConfig({
         configFile,
         workspaceRoot: this.workspaceRootAtActivation,
-        preferredPort: Number(setting(this.vscode, 'port', 8787)),
+        preferredPort: Number(setting(this.vscode, 'port', DEFAULT_PORT)),
         appVersion: context.extension?.packageJSON?.version || APP_VERSION,
-        defaultConnectionProvider: 'ngrok'
+        defaultConnectionProvider: 'ngrok',
+        promoteAppVersion: false
       });
       const policy = ensureDesktopAuthenticationPolicy(configFile, { fresh });
       const localMode = setting(this.vscode, 'authenticationMode', 'none') === 'oauth' ? 'oauth' : 'none';

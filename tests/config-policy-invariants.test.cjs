@@ -152,13 +152,19 @@ test('replaceConfig applies the same invariant to snapshot-based writers', () =>
   const fx = fixture();
   try {
     const snapshot = readConfigSnapshot(fx.file);
+    const originalPort = snapshot.server.port;
+    const originalVersion = snapshot.appVersion;
     snapshot.connection.provider = 'cloudflare-quick';
     snapshot.lifecycle ||= {};
     snapshot.lifecycle.desiredState = 'running';
+    snapshot.server.port = originalPort + 1;
+    snapshot.appVersion = '0.0.1';
     const updated = replaceConfig(fx.file, snapshot);
     assert.equal(updated.connection.provider, 'cloudflare-quick');
     assert.equal(connectionPolicyGeneration(updated), 1);
     assert.equal(updated.lifecycle.generation, 1);
+    assert.equal(updated.server.port, originalPort);
+    assert.equal(updated.appVersion, originalVersion);
   } finally { fx.cleanup(); }
 });
 

@@ -51,9 +51,9 @@ class RuntimeController extends processRuntime.RuntimeController {
     });
   }
 
-  ensureConfig() {
+  ensureConfig(options = {}) {
     const fresh = !fs.existsSync(this.configFile);
-    super.ensureConfig();
+    super.ensureConfig(options);
     const auth = ensureDesktopAuthenticationPolicy(this.configFile, { fresh }).config;
     return ensureDesktopPermissionPolicy(this.configFile, {
       fresh,

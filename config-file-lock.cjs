@@ -7,11 +7,17 @@ const path = require('node:path');
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_STALE_MS = 60000;
 const MAX_LOCK_BYTES = 64 * 1024;
+const WINDOWS_LOCK_CONTENTION_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const held = new Map();
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 
 function sleepSync(ms) {
   Atomics.wait(sleeper, 0, 0, Math.max(1, Math.trunc(ms)));
+}
+
+function lockContentionError(error, platform = process.platform) {
+  const code = String(error?.code || '');
+  return code === 'EEXIST' || (platform === 'win32' && WINDOWS_LOCK_CONTENTION_CODES.has(code));
 }
 
 function processAlive(pid) {
@@ -120,8 +126,17 @@ function acquireFileLock(file, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAU
       held.set(identity, record);
       return { ...record, reentrant: false };
     } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      if (removeStaleLock(lockPath, Math.max(1000, Number(staleMs) || DEFAULT_STALE_MS))) continue;
+      if (!lockContentionError(error)) throw error;
+      let removed = false;
+      try {
+        removed = removeStaleLock(lockPath, Math.max(1000, Number(staleMs) || DEFAULT_STALE_MS));
+      } catch (stateError) {
+        if (!lockContentionError(stateError)) throw stateError;
+      }
+      if (removed) {
+        sleepSync(1);
+        continue;
+      }
       sleepSync(10);
     }
   }
@@ -172,6 +187,7 @@ module.exports = {
   acquireFileLock,
   canonicalLockTarget,
   clearFileLocksForTests,
+  lockContentionError,
   lockIdentity,
   processAlive,
   readLock,

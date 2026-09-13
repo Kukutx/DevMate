@@ -5,7 +5,6 @@ const path = require('node:path');
 const {
   SUPPORTED_CONFIG_VERSION,
   assertSupportedConfigVersion,
-  newerVersion,
   readJson,
   recoverConfigReplacement,
   updateConfig
@@ -205,9 +204,7 @@ function mergeExtensionConfig(currentValue, candidateValue) {
 
   const merged = { ...current };
   if (has(candidate, 'appVersion')) {
-    merged.appVersion = has(current, 'appVersion')
-      ? newerVersion(current.appVersion, candidate.appVersion)
-      : candidate.appVersion;
+    merged.appVersion = has(current, 'appVersion') ? current.appVersion : candidate.appVersion;
   }
   if (has(candidate, 'maintenance')) merged.maintenance = candidate.maintenance;
   if (initializing && has(candidate, 'commands')) merged.commands = candidate.commands;

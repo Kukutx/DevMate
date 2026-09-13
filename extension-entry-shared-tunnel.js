@@ -6,7 +6,7 @@ const { version: VERSION } = require('./package.json');
 const { ensureInstanceConfig, readJson } = require('./shared/config-store.cjs');
 const { OperationCoordinator } = require('./host/runtime/operation-coordinator.js');
 const { preflightPublicMcp } = require('./host/public-mcp.js');
-const { strictPort } = require('./shared/port.cjs');
+const { DEFAULT_PORT, strictPort } = require('./shared/port.cjs');
 const { publicConnectionStability } = require('./shared/connection-stability.cjs');
 const { preflightAccessToken } = require('./shared/oauth-tokens.cjs');
 const { ensureOAuthSecrets } = require('./shared/oauth-secrets.cjs');
@@ -94,9 +94,10 @@ function ensureSharedDesktopConfig(stateDirectory) {
   const config = ensureInstanceConfig({
     configFile,
     workspaceRoot,
-    preferredPort: strictPort(setting(vscode, 'port', 8787), { label: 'devMate.port' }),
+    preferredPort: strictPort(setting(vscode, 'port', DEFAULT_PORT), { label: 'devMate.port' }),
     appVersion: VERSION,
-    defaultConnectionProvider: 'ngrok'
+    defaultConnectionProvider: 'ngrok',
+    promoteAppVersion: false
   });
   if (config.auth?.mode === 'oauth') ensureOAuthSecrets(configFile);
   return configFile;
@@ -156,7 +157,7 @@ async function verifyAlreadyOnlineNgrokEndpoint({ publicUrl }) {
     clientVersion: VERSION,
     timeoutMs: 5000
   });
-  return test?.server?.name === 'devmate' && Number(test?.toolCount || 0) > 0;
+  return test?.server?.name === 'devmate' && test?.server?.version === config.appVersion && Number(test?.toolCount || 0) > 0 && test.instanceId === config.instanceId;
 }
 
 function createPublicVerifier() {

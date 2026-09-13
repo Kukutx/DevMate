@@ -10,6 +10,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   RuntimeController,
+  UNCLAIMED_RUNTIME_VERSION,
   ensureInstanceConfig,
   healthMatches,
   readJson,
@@ -33,26 +34,37 @@ async function freePort() {
   return port;
 }
 
-function writeTestGateway(root, { startupDelayMs = 0, neverListen = false } = {}) {
+function writeTestGateway(root, { startupDelayMs = 0, neverListen = false, exitOnConfigVersionChange = false } = {}) {
   const gateway = path.join(root, `test-gateway-${Date.now()}-${Math.random().toString(16).slice(2)}.mjs`);
   fs.writeFileSync(gateway, `
 import fs from 'node:fs';
 import http from 'node:http';
 const config = JSON.parse(fs.readFileSync(process.env.DEVMATE_CONFIG, 'utf8'));
+const startupVersion = config.appVersion;
 const server = http.createServer((request, response) => {
   if (request.url === '/control/health') {
     response.writeHead(200, {'content-type':'application/json'});
-    response.end(JSON.stringify({name:'devmate', version:config.appVersion, instanceId:config.instanceId}));
+    response.end(JSON.stringify({name:'devmate', version:config.appVersion, instanceId:config.instanceId, port:config.server.port}));
     return;
   }
   response.writeHead(404); response.end();
 });
 const delay = ${Number(startupDelayMs) || 0};
 const neverListen = ${neverListen ? 'true' : 'false'};
+const exitOnConfigVersionChange = ${exitOnConfigVersionChange ? 'true' : 'false'};
 if (!neverListen) setTimeout(() => server.listen(config.server.port, '127.0.0.1'), delay);
 function stop(){
   if (!server.listening) process.exit(0);
   server.close(() => process.exit(0));
+}
+if (exitOnConfigVersionChange) {
+  const watcher = setInterval(() => {
+    try {
+      const current = JSON.parse(fs.readFileSync(process.env.DEVMATE_CONFIG, 'utf8'));
+      if (current.appVersion !== startupVersion) stop();
+    } catch {}
+  }, 50);
+  watcher.unref();
 }
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
@@ -88,13 +100,212 @@ test('instance config creation preserves unrelated fields on later updates', () 
   assert.equal(updated.server.port, 9123);
 });
 
+test('passive desktop initialization leaves runtime version unclaimed until Start owns the lease', async () => {
+  const root = temporaryDirectory('devmate-passive-version-root-');
+  const state = temporaryDirectory('devmate-passive-version-state-');
+  const port = await freePort();
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: port,
+    appVersion: '3.8.7',
+    hostId: 'passive-host'
+  });
+
+  const passive = controller.ensureConfig();
+  assert.equal(passive.appVersion, UNCLAIMED_RUNTIME_VERSION);
+  assert.equal(passive.server.port, port);
+
+  const started = await controller.start({ timeoutMs: 5000 });
+  assert.equal(started.started, true);
+  assert.equal(started.port, port);
+  assert.equal(readJson(controller.configFile).appVersion, '3.8.7');
+  assert.equal((await controller.stop()).stopped, true);
+});
+
+test('newer desktop host upgrades the previous Gateway on the same fixed port only after Start owns the lease', async () => {
+  const root = temporaryDirectory('devmate-version-handoff-root-');
+  const state = temporaryDirectory('devmate-version-handoff-state-');
+  const port = await freePort();
+  const gateway = writeTestGateway(root, { exitOnConfigVersionChange: true });
+  const oldHost = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: port,
+    appVersion: '3.8.6',
+    hostId: 'old-host'
+  });
+  const first = await oldHost.start({ timeoutMs: 5000 });
+  assert.equal(first.started, true);
+  assert.equal(first.port, port);
+  assert.equal(readJson(oldHost.configFile).appVersion, '3.8.6');
+
+  const newHost = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: port + 1,
+    appVersion: '3.8.7',
+    hostId: 'new-host'
+  });
+  const passive = newHost.ensureConfig();
+  assert.equal(passive.appVersion, '3.8.6');
+  assert.equal(passive.server.port, port);
+  assert.equal((await oldHost.status()).state, 'running');
+
+  const upgraded = await newHost.start({ timeoutMs: 7000 });
+  assert.equal(upgraded.started, true);
+  assert.equal(upgraded.port, port);
+  assert.equal(readJson(newHost.configFile).appVersion, '3.8.7');
+  assert.equal(readJson(newHost.configFile).server.port, port);
+  assert.equal((await oldHost.status()).state, 'running');
+  assert.equal((await newHost.stop()).stopped, true);
+});
+
+test('mixed-version desktop hosts starting together converge on the newer Gateway and one fixed port', async t => {
+  const root = temporaryDirectory('devmate-mixed-version-root-');
+  const state = temporaryDirectory('devmate-mixed-version-state-');
+  const port = await freePort();
+  const gateway = writeTestGateway(root, { startupDelayMs: 100, exitOnConfigVersionChange: true });
+  const oldLogs = [];
+  const newLogs = [];
+  const oldHost = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: port,
+    appVersion: '3.8.6',
+    hostId: 'vscode-old',
+    logger: message => oldLogs.push(String(message))
+  });
+  const newHost = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: port,
+    appVersion: '3.8.7',
+    hostId: 'obsidian-new',
+    logger: message => newLogs.push(String(message))
+  });
+  t.after(async () => {
+    await newHost.stop().catch(() => null);
+    await oldHost.stop().catch(() => null);
+  });
+
+  const [oldSettled, newSettled] = await Promise.allSettled([
+    oldHost.start({ timeoutMs: 9000 }),
+    newHost.start({ timeoutMs: 9000 })
+  ]);
+  const finalConfig = readJson(newHost.configFile);
+  assert.equal(oldSettled.status, 'fulfilled', JSON.stringify({
+    error: oldSettled.reason?.stack || oldSettled.reason?.message || String(oldSettled.reason || 'old host failed'),
+    oldLogs,
+    newLogs,
+    finalConfig,
+    newResult: newSettled.status === 'fulfilled' ? newSettled.value : null
+  }, null, 2));
+  assert.equal(newSettled.status, 'fulfilled', JSON.stringify({
+    error: newSettled.reason?.stack || newSettled.reason?.message || String(newSettled.reason || 'new host failed'),
+    oldLogs,
+    newLogs,
+    finalConfig
+  }, null, 2));
+  const oldResult = oldSettled.value;
+  const newResult = newSettled.value;
+  assert.equal(oldResult.port, port);
+  assert.equal(newResult.port, port);
+  assert.equal(newResult.started, true);
+  const config = readJson(newHost.configFile);
+  assert.equal(config.appVersion, '3.8.7');
+  assert.equal(config.server.port, port);
+  assert.equal((await newHost.status()).state, 'running');
+  assert.equal((await oldHost.status()).state, 'running');
+});
+
+test('stale host cannot hold the startup lease while a current host is ready to start', async t => {
+  const root = temporaryDirectory('devmate-stale-lease-root-');
+  const state = temporaryDirectory('devmate-stale-lease-state-');
+  const port = await freePort();
+  const gateway = writeTestGateway(root);
+  ensureInstanceConfig({
+    configFile: path.join(state, 'config.json'),
+    workspaceRoot: root,
+    preferredPort: port,
+    appVersion: '3.8.7'
+  });
+  const oldHost = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: port,
+    appVersion: '3.8.6',
+    hostId: 'stale-host'
+  });
+  const currentHost = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: gateway,
+    preferredPort: port,
+    appVersion: '3.8.7',
+    hostId: 'current-host'
+  });
+  t.after(async () => {
+    await currentHost.stop().catch(() => null);
+    await oldHost.stop().catch(() => null);
+  });
+
+  const startedAt = Date.now();
+  const [stale, current] = await Promise.allSettled([
+    oldHost.start({ timeoutMs: 6000 }),
+    currentHost.start({ timeoutMs: 6000 })
+  ]);
+  assert.equal(current.status, 'fulfilled', current.reason?.stack || current.reason?.message);
+  assert.equal(current.value.port, port);
+  assert.ok(Date.now() - startedAt < 4000, 'stale host held the shared startup lease too long');
+  if (stale.status === 'rejected') {
+    assert.equal(stale.reason?.code, 'DEVMATE_HOST_VERSION_STALE');
+  } else {
+    assert.equal(stale.value.attached, true);
+    assert.equal(stale.value.port, port);
+  }
+});
+
+test('older desktop host cannot downgrade shared version or spawn a stale Gateway', async () => {
+  const root = temporaryDirectory('devmate-stale-host-root-');
+  const state = temporaryDirectory('devmate-stale-host-state-');
+  const port = await freePort();
+  const configFile = path.join(state, 'config.json');
+  ensureInstanceConfig({ configFile, workspaceRoot: root, preferredPort: port, appVersion: '3.8.7' });
+  let spawnCalls = 0;
+  const controller = new RuntimeController({
+    workspaceRoot: root,
+    stateDirectory: state,
+    gatewayEntry: writeTestGateway(root),
+    preferredPort: port,
+    appVersion: '3.8.6',
+    spawnImpl() {
+      spawnCalls += 1;
+      throw new Error('stale host must not spawn');
+    }
+  });
+
+  await assert.rejects(
+    controller.start({ timeoutMs: 2500 }),
+    error => error?.code === 'DEVMATE_HOST_VERSION_STALE' && error.requiredVersion === '3.8.7'
+  );
+  assert.equal(spawnCalls, 0);
+  assert.equal(readJson(configFile).appVersion, '3.8.7');
+});
+
 test('Gateway health rejects stale DevMate versions even when instance identity matches', () => {
   const config = { appVersion: '3.3.0', instanceId: 'same-instance' };
   assert.equal(healthMatches({ ok: true, json: { name: 'devmate', version: '3.2.0', instanceId: 'same-instance' } }, config), false);
   assert.equal(healthMatches({ ok: true, json: { name: 'devmate', version: '3.3.0', instanceId: 'same-instance' } }, config), true);
 });
 
-test('stale same-instance Gateway recovery requires the durable ownership lock before terminating a PID', async () => {
+test('stale same-instance Gateway recovery requires live lock and loopback identity before terminating a PID', async () => {
   const root = temporaryDirectory('devmate-stale-recovery-root-');
   const state = temporaryDirectory('devmate-stale-recovery-state-');
   const controller = new RuntimeController({
@@ -105,46 +316,121 @@ test('stale same-instance Gateway recovery requires the durable ownership lock b
     appVersion: '3.8.6'
   });
   const config = controller.ensureConfig();
-  const health = { ok: true, json: { name: 'devmate', version: '3.8.5', instanceId: config.instanceId, port: 8787 } };
+  const health = {
+    ok: true,
+    json: {
+      name: 'devmate',
+      version: '3.8.5',
+      instanceId: config.instanceId,
+      port: 8787,
+      configPath: controller.configFile,
+      pid: 4242,
+      runtimeOwnerId: 'old-owner'
+    }
+  };
   let terminatedPid = null;
+  const terminatePid = async pid => {
+    terminatedPid = pid;
+    return { stopped: true, exitConfirmed: true, forced: false };
+  };
+
+  const currentVersion = await recoverStaleGatewayProcess({
+    stateDirectory: state,
+    configFile: controller.configFile,
+    config,
+    health: { ...health, json: { ...health.json, version: config.appVersion } },
+    terminatePid,
+    pidIsRunning: () => true,
+    probeHealth: async () => health
+  });
+  assert.equal(currentVersion.recovered, false);
+  assert.equal(currentVersion.reason, 'not-stale-version');
+  assert.equal(terminatedPid, null);
 
   const blocked = await recoverStaleGatewayProcess({
     stateDirectory: state,
     configFile: controller.configFile,
     config,
     health,
-    terminatePid: async pid => {
-      terminatedPid = pid;
-      return { stopped: true, exitConfirmed: true, forced: false };
-    }
+    terminatePid,
+    pidIsRunning: () => true,
+    probeHealth: async () => health
   });
   assert.equal(blocked.recovered, false);
   assert.equal(blocked.reason, 'ownership-not-proven');
   assert.equal(terminatedPid, null);
 
   const lockDirectory = path.join(state, 'state');
+  const lockPath = path.join(lockDirectory, 'gateway.lock');
+  const old = new Date(Date.now() - 5 * 60 * 1000);
   fs.mkdirSync(lockDirectory, { recursive: true });
-  fs.writeFileSync(path.join(lockDirectory, 'gateway.lock'), `${JSON.stringify({
+  fs.writeFileSync(lockPath, `${JSON.stringify({
     version: 2,
     pid: 4242,
     runtimeOwnerId: 'old-owner',
     instanceId: config.instanceId,
-    configPath: controller.configFile
+    configPath: controller.configFile,
+    acquiredAt: old.toISOString(),
+    heartbeatAt: old.toISOString(),
+    leaseMs: 1200000
   }, null, 2)}\n`, 'utf8');
 
-  const recovered = await recoverStaleGatewayProcess({
+  const unavailable = await recoverStaleGatewayProcess({
+    stateDirectory: state,
+    configFile: controller.configFile,
+    config,
+    health: { ok: false, error: 'ECONNREFUSED' },
+    terminatePid,
+    pidIsRunning: () => true,
+    probeHealth: async () => health
+  });
+  assert.equal(unavailable.recovered, false);
+  assert.equal(terminatedPid, null);
+
+  fs.utimesSync(lockPath, old, old);
+  const staleLock = await recoverStaleGatewayProcess({
+    stateDirectory: state,
+    configFile: controller.configFile,
+    config,
+    health,
+    terminatePid,
+    pidIsRunning: () => true,
+    probeHealth: async () => health
+  });
+  assert.equal(staleLock.recovered, false);
+  assert.equal(staleLock.reason, 'ownership-not-proven');
+  assert.equal(terminatedPid, null);
+
+  const current = new Date();
+  fs.utimesSync(lockPath, current, current);
+  const identityChanged = await recoverStaleGatewayProcess({
     stateDirectory: state,
     configFile: controller.configFile,
     config,
     health,
     terminatePid: async pid => {
       terminatedPid = pid;
-      return { stopped: true, exitConfirmed: true, forced: false };
-    }
+      return { stopped: false, exitConfirmed: false, forced: false, reason: 'identity-changed' };
+    },
+    pidIsRunning: () => true,
+    probeHealth: async () => health
+  });
+  assert.equal(identityChanged.recovered, false);
+  assert.equal(identityChanged.reason, 'identity-changed');
+  assert.equal(fs.existsSync(lockPath), true);
+
+  const recovered = await recoverStaleGatewayProcess({
+    stateDirectory: state,
+    configFile: controller.configFile,
+    config,
+    health,
+    terminatePid,
+    pidIsRunning: () => true,
+    probeHealth: async () => health
   });
   assert.equal(recovered.recovered, true);
   assert.equal(terminatedPid, 4242);
-  assert.equal(fs.existsSync(path.join(lockDirectory, 'gateway.lock')), false);
+  assert.equal(fs.existsSync(lockPath), false);
 });
 
 test('runtime controller publishes a bounded generic host context', () => {

@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import portConfig from '../shared/port.cjs';
 import packageJson from '../package.json' with { type: 'json' };
 import { DEFAULT_MAINTENANCE, maintenanceOptions, stateSummary } from './maintenance.mjs';
 import { backupStoreStatus, listBackups } from './backup-store.mjs';
@@ -18,6 +19,7 @@ import { isLocalRequest } from './http-host-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
 import { handleOAuthRequest } from './oauth.mjs';
 
+const { DEFAULT_PORT } = portConfig;
 const VERSION = packageJson.version;
 const SERVER_STARTED_AT = shared.now();
 const CONFIG_PATH = process.env.DEVMATE_CONFIG;
@@ -43,7 +45,7 @@ const PROJECT_INSTRUCTION_BASENAMES = new Set(['agents.md','claude.md']);
 const ROOT_PROJECT_INSTRUCTION_FILES = ['AGENTS.md','CLAUDE.md'];
 const PROJECT_INSTRUCTION_SKIP_DIRS = new Set([...HIDDEN_DIRS, '.github', '.vscode', '.idea', 'tmp']);
 
-function loadConfig(){ const c=shared.readConfig(); c.server ||= {}; c.instanceId ||= 'missing-instance'; c.server.port ||= 8787; c.server.mcpPath = '/mcp'; c.runtime ||= {}; c.runtime.defaultCommandTimeoutMs ||= DEFAULT_TIMEOUT_MS; c.runtime.maxOutputChars ||= DEFAULT_MAX_OUTPUT; c.maintenance = maintenanceOptions(c.maintenance || DEFAULT_MAINTENANCE); c.connection ||= {}; c.workspaces ||= []; c.commands ||= []; return c; }
+function loadConfig(){ const c=shared.readConfig(); c.server ||= {}; c.instanceId ||= 'missing-instance'; c.server.port ||= DEFAULT_PORT; c.server.mcpPath = '/mcp'; c.runtime ||= {}; c.runtime.defaultCommandTimeoutMs ||= DEFAULT_TIMEOUT_MS; c.runtime.maxOutputChars ||= DEFAULT_MAX_OUTPUT; c.maintenance = maintenanceOptions(c.maintenance || DEFAULT_MAINTENANCE); c.connection ||= {}; c.workspaces ||= []; c.commands ||= []; return c; }
 function vscodeContext(cfg){
   const contexts = Object.entries(cfg.hostContexts || {}).filter(([id, context]) =>
     id === 'vscode' || context?.kind === 'editor' || String(context?.hostId || id).startsWith('vscode-')
@@ -426,7 +428,7 @@ async function connectionDiagnosticsData(){
       reachable:true,
       reason:'This MCP tool call reached the DevMate gateway.',
       mcpPath:'/mcp',
-      localPort:cfg.server?.port || 8787,
+      localPort:cfg.server?.port || DEFAULT_PORT,
       authenticationMode:cfg.auth?.mode || 'none',
       permissionProfile:permissionProfile(cfg),
       blockDangerousOperations:dangerousGuardEnabled(cfg)
@@ -611,7 +613,7 @@ function createServer(){
       }
     }]
   }));
-  server.registerTool('gateway_status',{title:'Gateway status',description:'Show gateway runtime and active workspace.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const aw=activeWorkspace(cfg); return toolText({name:'devmate',version:VERSION,mcpPath:'/mcp',permissionProfile:permissionProfile(cfg),blockDangerousOperations:dangerousGuardEnabled(cfg),activeWorkspace:aw?wsPublic(aw):null,workspaces:cfg.workspaces.map(wsPublic),startedAt:SERVER_STARTED_AT}); });
+  server.registerTool('gateway_status',{title:'Gateway status',description:'Show gateway runtime and active workspace.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const aw=activeWorkspace(cfg); return toolText({name:'devmate',version:VERSION,instanceId:cfg.instanceId||null,mcpPath:'/mcp',permissionProfile:permissionProfile(cfg),blockDangerousOperations:dangerousGuardEnabled(cfg),activeWorkspace:aw?wsPublic(aw):null,workspaces:cfg.workspaces.map(wsPublic),startedAt:SERVER_STARTED_AT}); });
   server.registerTool('gateway_self_test',{title:'Gateway self test',description:'Run basic local checks.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const aw=activeWorkspace(cfg); let git=null; if(aw) git=await runGit(aw,['--version'],2000,5000); return toolText({version:VERSION,configLoaded:true,workspaceCount:cfg.workspaces.length,activeWorkspace:aw?wsPublic(aw):null,git}); });
   server.registerTool('maintenance_status',{title:'Maintenance status',description:'Show backup/audit retention settings and current local state size.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const backups=await backupStoreStatus(); const storage=await stateSummary({backupRoot:BACKUP_ROOT,auditLog:AUDIT_LOG,backupSummary:backups}); return toolText({retention:cfg.maintenance,backupStore:backups,storage}); });
   server.registerTool('connection_diagnostics',{title:'Connection diagnostics',description:'Use this to check whether ChatGPT is currently connected to DevMate, whether VS Code context is fresh, and what may need fixing after switching models or reconnecting.',inputSchema:z.object({}),_meta:{ui:{visibility:['model','app']},'openai/widgetAccessible':true}},async()=>toolText(await connectionDiagnosticsData()));
@@ -689,7 +691,7 @@ const httpServer = http.createServer(async (req,res)=>{
     res.end(JSON.stringify({error:'OAuth request failed'}));
     return;
   }
-  if(req.method === 'GET' && url.pathname==='/control/health') { if(!isLocalRequest(req)){ res.writeHead(403,{'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify({error:'local control endpoint only'})); return; } res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify({name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp',instanceId:config.instanceId,port:config.server.port,configPath:CONFIG_PATH,stateRoot:STATE_ROOT})); return; }
+  if(req.method === 'GET' && url.pathname==='/control/health') { if(!isLocalRequest(req)){ res.writeHead(403,{'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify({error:'local control endpoint only'})); return; } res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'}); res.end(JSON.stringify({name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp',instanceId:config.instanceId,port:config.server.port,configPath:CONFIG_PATH,stateRoot:STATE_ROOT,pid:process.pid,runtimeOwnerId:String(process.env.DEVMATE_RUNTIME_OWNER_ID||''),runtimeLaunchMode:String(process.env.DEVMATE_RUNTIME_LAUNCH_MODE||'')})); return; }
   if(req.method === 'GET' && (url.pathname==='/' || url.pathname==='/health')) { res.writeHead(200,{'content-type':'application/json'}); const base={name:'devmate',version:VERSION,status:'ok',mcpPath:'/mcp'}; const full={...base,instanceId:config.instanceId,port:config.server.port}; res.end(JSON.stringify(PUBLIC_HEALTH_DETAILS?full:base)); return; }
   if(url.pathname === '/mcp'){
     if(req.method !== 'POST'){

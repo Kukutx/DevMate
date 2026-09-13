@@ -18,7 +18,7 @@ import {
 const { DEFAULT_VERSION, configureAuthentication, newInstanceConfig, readJson: readConfigJson, updateConfig } = configStore;
 const { ensureOAuthSecrets, readOAuthSecrets } = oauthSecrets;
 const { CONNECTION_PROVIDERS } = instanceConfig;
-const { parsePortOption } = portConfig;
+const { DEFAULT_PORT, parsePortOption } = portConfig;
 
 export function configFile(options = {}) {
   return path.resolve(String(
@@ -283,7 +283,7 @@ export function doctor(options = {}) {
 
 export function mcpUrl(options = {}) {
   const config = normalizeInstanceConfig(readConfig(configFile(options)));
-  const origin = normalizeOrigin(options.url || config.connection.publicUrl || `http://127.0.0.1:${config.server?.port || 8787}`);
+  const origin = normalizeOrigin(options.url || config.connection.publicUrl || `http://127.0.0.1:${config.server?.port || DEFAULT_PORT}`);
   return new URL(`${origin}${config.server?.mcpPath || '/mcp'}`).toString();
 }
 

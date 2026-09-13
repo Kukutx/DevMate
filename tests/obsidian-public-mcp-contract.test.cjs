@@ -168,6 +168,9 @@ test('Obsidian uses the desktop lifecycle wrapper over provider-native connectio
   const build = source('obsidian-plugin/esbuild.config.mjs');
   assert.match(desktopController, /class DesktopTunnelController extends TunnelController/);
   assert.match(main, /new DesktopTunnelController\(\{/);
+  assert.match(main, /verifyExistingEndpoint:[\s\S]*preflightPublicMcp/);
+  assert.match(main, /test\?\.server\?\.version === config\.appVersion/);
+  assert.match(main, /test\.instanceId === config\.instanceId/);
   assert.match(settings, /Connection provider/);
   assert.match(settings, /ngrok is the default persistent ChatGPT connection/);
   assert.match(settings, /MCP authentication/);

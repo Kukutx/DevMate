@@ -21,6 +21,7 @@ test('does not replace config.json when a locked mutation makes no content chang
   const file = path.join(directory, 'config.json');
   atomicWriteJson(file, {
     version: SUPPORTED_CONFIG_VERSION,
+    appVersion: '3.8.6',
     instanceId: 'stable-instance',
     server: { port: 8787 }
   });
@@ -35,10 +36,28 @@ test('does not replace config.json when a locked mutation makes no content chang
   assert.equal(unchanged.size, before.size);
 
   await delay(20);
-  updateConfig(file, config => {
+  const mutated = updateConfig(file, config => {
     config.server.port = 8788;
+    config.appVersion = '3.8.5';
+    config.runtime = { marker: true };
     return config;
   });
   const changed = await fsp.stat(file, { bigint: true });
   assert.ok(changed.mtimeNs > unchanged.mtimeNs);
+  assert.equal(mutated.server.port, 8787);
+  assert.equal(mutated.instanceId, 'stable-instance');
+  assert.equal(mutated.appVersion, '3.8.6');
+  assert.equal(mutated.runtime.marker, true);
+
+  const blockedPromotion = updateConfig(file, config => {
+    config.appVersion = '3.8.7';
+    return config;
+  });
+  assert.equal(blockedPromotion.appVersion, '3.8.6');
+
+  const promoted = updateConfig(file, config => {
+    config.appVersion = '3.8.7';
+    return config;
+  }, { allowRuntimeVersionPromotion: true });
+  assert.equal(promoted.appVersion, '3.8.7');
 });

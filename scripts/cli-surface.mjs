@@ -4,6 +4,7 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import configStore from '../shared/config-store.cjs';
+import portConfig from '../shared/port.cjs';
 import { normalizeInstanceConfig } from '../gateway/team-access.mjs';
 import { normalizeRunnerControlConfig } from '../gateway/runner-access.mjs';
 import { builtinPlugins } from '../gateway/plugins/builtins.mjs';
@@ -11,6 +12,7 @@ import { configFile, readConfig, standaloneStateSeparation } from './standalone-
 import { daemonStatus, restartDaemon, startDaemon, stopDaemon } from './standalone-daemon.mjs';
 
 const { activateInstanceWorkspace, ensureInstanceConfig, updateConfig } = configStore;
+const { DEFAULT_PORT } = portConfig;
 
 function json(value) {
   return JSON.stringify(value, null, 2);
@@ -109,7 +111,7 @@ function workspaceAdd(options = {}, positional = []) {
   const config = ensureInstanceConfig({
     configFile: file,
     workspaceRoot: root,
-    preferredPort: Number(current.server?.port || 8787),
+    preferredPort: Number(current.server?.port || DEFAULT_PORT),
     appVersion: current.appVersion,
     defaultConnectionProvider: current.connection.provider
   });

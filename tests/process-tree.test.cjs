@@ -130,3 +130,30 @@ test('PID-only stale runtime recovery confirms the exact process exits before ha
   assert.equal(result.forced, false);
   assert.deepEqual(taskkill, [{ command: 'taskkill', args: ['/PID', '7171', '/T'] }]);
 });
+
+test('PID-only recovery never force-kills a reused PID after Gateway identity disappears', async () => {
+  const taskkill = [];
+  let identityChecks = 0;
+  const killImpl = (_pid, signal) => {
+    if (signal === 0) return;
+  };
+  const spawnImpl = (command, args) => {
+    taskkill.push({ command, args: [...args] });
+    const killer = new EventEmitter();
+    queueMicrotask(() => killer.emit('close', 0));
+    return killer;
+  };
+
+  const result = await terminatePidTree(8181, {
+    platform: 'win32',
+    spawnImpl,
+    killImpl,
+    gracefulWaitMs: 25,
+    forceWaitMs: 25,
+    verifyIdentity: async () => ++identityChecks === 1
+  });
+  assert.equal(result.exitConfirmed, false);
+  assert.equal(result.forced, false);
+  assert.equal(result.reason, 'identity-changed');
+  assert.deepEqual(taskkill, [{ command: 'taskkill', args: ['/PID', '8181', '/T'] }]);
+});
