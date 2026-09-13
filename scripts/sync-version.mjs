@@ -15,34 +15,34 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
 
 const drift = [];
 
-function updateJson(relativePath, mutate, description) {
+function syncJson(relativePath, desired, description) {
   const file = path.join(root, relativePath);
   const current = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const before = JSON.stringify(current);
-  mutate(current);
-  if (JSON.stringify(current) === before) return;
+  if (JSON.stringify(current) === JSON.stringify(desired)) return;
   if (checkOnly) drift.push(`${relativePath}: ${description}`);
-  else fs.writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
+  else fs.writeFileSync(file, `${JSON.stringify(desired, null, 2)}\n`, 'utf8');
 }
 
-updateJson('obsidian-plugin/manifest.json', manifest => {
-  manifest.version = version;
-}, 'Obsidian manifest version');
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'obsidian-plugin', 'manifest.json'), 'utf8'));
+manifest.version = version;
+syncJson('obsidian-plugin/manifest.json', manifest, 'Obsidian manifest version');
+syncJson('manifest.json', manifest, 'Obsidian Community Plugins manifest mirror');
 
-updateJson('obsidian-plugin/package.json', pluginPackage => {
-  pluginPackage.version = version;
-}, 'Obsidian package version');
+const pluginPackage = JSON.parse(fs.readFileSync(path.join(root, 'obsidian-plugin', 'package.json'), 'utf8'));
+pluginPackage.version = version;
+syncJson('obsidian-plugin/package.json', pluginPackage, 'Obsidian package version');
 
-updateJson('obsidian-plugin/versions.json', versions => {
-  versions[version] = JSON.parse(fs.readFileSync(path.join(root, 'obsidian-plugin', 'manifest.json'), 'utf8')).minAppVersion;
-}, 'Obsidian version compatibility');
+const versions = JSON.parse(fs.readFileSync(path.join(root, 'obsidian-plugin', 'versions.json'), 'utf8'));
+versions[version] = manifest.minAppVersion;
+syncJson('obsidian-plugin/versions.json', versions, 'Obsidian version compatibility');
+syncJson('versions.json', versions, 'Obsidian Community Plugins compatibility mirror');
 
-updateJson('package-lock.json', lock => {
-  lock.version = version;
-  lock.packages ||= {};
-  lock.packages[''] ||= {};
-  lock.packages[''].version = version;
-}, 'package-lock root versions');
+const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+lock.version = version;
+lock.packages ||= {};
+lock.packages[''] ||= {};
+lock.packages[''].version = version;
+syncJson('package-lock.json', lock, 'package-lock root versions');
 
 const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
 const firstRelease = changelog.match(/^##\s+([^\s]+)\s*$/m)?.[1] || '';

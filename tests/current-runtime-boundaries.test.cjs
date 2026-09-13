@@ -19,22 +19,20 @@ test('desktop hosts use the shared child-process Gateway controller', () => {
   assert.match(obsidian, /resolveNodeRuntime/);
 });
 
-test('packaged Obsidian provider supervision is rooted in the installed plugin directory', () => {
+test('packaged Obsidian provider supervision uses hash-verified embedded runtime from private state', () => {
   const obsidian = source('obsidian-plugin/src/main.js');
-  const createStart = obsidian.indexOf('createProviderChildProcess(pluginDirectory, nodeExecutable)');
-  const createEnd = obsidian.indexOf('createTunnelController(pluginDirectory, stateDirectory)', createStart);
-  const createBlock = obsidian.slice(createStart, createEnd);
-  const tunnelStart = createEnd;
-  const tunnelEnd = obsidian.indexOf('\n  tunnelSecrets() {', tunnelStart);
-  const tunnelBlock = obsidian.slice(tunnelStart, tunnelEnd);
+  const runtimeAssets = source('obsidian-plugin/src/runtime-assets.js');
 
-  assert.ok(createStart >= 0 && createEnd > createStart);
-  assert.match(obsidian, /createSupervisedChildProcess/);
-  assert.match(createBlock, /nodeExecutable/);
-  assert.match(createBlock, /supervisorEntry: path\.join\(pluginDirectory, 'provider-supervisor\.cjs'\)/);
-  assert.match(tunnelBlock, /const nodeRuntime = this\.ensureNodeRuntime\(\)/);
-  assert.match(tunnelBlock, /const childProcess = this\.createProviderChildProcess\(pluginDirectory, nodeRuntime\.executable\)/);
-  assert.match(tunnelBlock, /new DesktopTunnelController\(\{[\s\S]*childProcess/);
+  assert.match(obsidian, /materializeEmbeddedRuntime/);
+  assert.match(obsidian, /this\.runtimeEntries = materializeEmbeddedRuntime\(\{/);
+  assert.match(obsidian, /supervisorEntry: this\.runtimeEntries\.providerSupervisorEntry/);
+  assert.match(obsidian, /gatewayEntry: this\.runtimeEntries\.gatewayEntry/);
+  assert.match(obsidian, /const childProcess = this\.createProviderChildProcess\(nodeRuntime\.executable\)/);
+  assert.match(obsidian, /new DesktopTunnelController\(\{[\s\S]*childProcess/);
+  assert.doesNotMatch(obsidian, /path\.join\(pluginDirectory, 'provider-supervisor\.cjs'\)/);
+  assert.match(runtimeAssets, /'host-runtime', 'obsidian'/);
+  assert.match(runtimeAssets, /sha256/);
+  assert.match(runtimeAssets, /fs\.writeFileSync\(temporary, data, \{ mode: 0o600 \}\)/);
 });
 
 test('Gateway uses the current DEVMATE_CONFIG instance contract', () => {

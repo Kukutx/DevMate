@@ -20,7 +20,7 @@ Do not include credentials, real `.env` files, private endpoints, tokens, keys, 
 - Do not add production dependencies unless they are necessary and explicitly justified in the pull request.
 - Preserve the documented security boundaries in `SECURITY.md`, especially workspace containment, credential handling, authentication defaults, and owner/team separation.
 - Update public documentation when a user-visible interface, configuration contract, build/release procedure, or security boundary changes.
-- Keep release/version changes consistent with the repository version and release workflow; release tags use `v<major>.<minor>.<patch>`.
+- Keep release/version changes consistent with the repository version and release workflow; release tags use the exact semantic version with no `v` prefix (for example `3.8.3`) so GitHub Releases remain compatible with Obsidian Community Plugins.
 
 ## Build and test
 

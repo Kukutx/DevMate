@@ -8,7 +8,7 @@ export function expectedReleaseTag(version) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(normalized)) {
     throw new Error(`Invalid package version: ${normalized || '(empty)'}`);
   }
-  return `v${normalized}`;
+  return normalized;
 }
 
 export function validateReleaseTag(version, tag) {

@@ -17,6 +17,12 @@ DevMate: Start
 
 `Ready` means the **current complete Gateway + public-connection runtime generation** has passed MCP 2026 verification. A local Gateway or an HTTPS URL alone is not Ready.
 
+## Installation
+
+DevMate releases are compatible with Obsidian Community Plugins. After the one-time DevMate registry entry is accepted, install it from **Settings → Community plugins → Browse → DevMate**. Marketplace releases use the standard `main.js`, `manifest.json`, and `styles.css` assets; the bundled Gateway runtime is embedded in `main.js` and materialized with hash verification into DevMate private shared state.
+
+For local development, run `npm run build:obsidian`, copy `obsidian-plugin/dist` to `<Vault>/.obsidian/plugins/devmate/`, and enable the plugin manually.
+
 ## What Start does
 
 `DevMate: Start` performs the complete lifecycle automatically:
