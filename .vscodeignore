@@ -22,3 +22,5 @@ deploy/**
 AGENTS.md
 CONTRIBUTING.md
 .stripe-browser/**
+manifest.json
+versions.json

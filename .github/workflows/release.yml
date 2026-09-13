@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - '[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
   contents: write
@@ -87,6 +87,9 @@ jobs:
           mkdir -p release "$RUNNER_TEMP/devmate-node"
           npx vsce package --out "release/devmate-${version}.vsix"
           npm run package:obsidian
+          cp obsidian-plugin/dist/main.js release/main.js
+          cp obsidian-plugin/dist/manifest.json release/manifest.json
+          cp obsidian-plugin/dist/styles.css release/styles.css
           (
             cd obsidian-plugin/dist
             zip -q -9 "$GITHUB_WORKSPACE/release/devmate-obsidian-${version}.zip" \
@@ -127,14 +130,14 @@ jobs:
             "$GITHUB_WORKSPACE/release/devmate-${version}-linux-x64.tar.gz" .
 
           cd "$GITHUB_WORKSPACE/release"
-          sha256sum *.vsix *.zip *.tar.gz > SHA256SUMS
+          sha256sum *.vsix *.zip *.tar.gz main.js manifest.json styles.css > SHA256SUMS
           ls -lh
           cat SHA256SUMS
 
       - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: 'release/devmate-*'
+          subject-path: 'release/*'
 
       - name: Upload release workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -166,7 +169,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=${GITHUB_REF_NAME#v}
+          version=$GITHUB_REF_NAME
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release/* --clobber
           else

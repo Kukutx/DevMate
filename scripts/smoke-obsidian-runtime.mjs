@@ -49,9 +49,10 @@ assert.doesNotMatch(codexSupervisorSource, /\.\/command-process\.mjs/, 'Obsidian
 assert.match(codexSupervisorSource, /terminateProcessTree/, 'Obsidian Codex supervisor bundle must retain bounded process-tree cleanup');
 assert.doesNotMatch(mainSource, /node:worker_threads|createWorkerSpawn|new Worker\s*\(/, 'Obsidian bundle must not depend on Worker threads');
 assert.match(mainSource, /child_process/, 'Obsidian bundle must contain the child-process Gateway runtime');
-assert.match(mainSource, /provider-supervisor\.cjs/, 'Obsidian bundle must resolve its packaged provider supervisor');
-assert.match(mainSource, /supervisorEntry:\s*path\.join\(pluginDirectory, "provider-supervisor\.cjs"\)/, 'Obsidian bundle must root provider supervision in the installed plugin directory');
-assert.match(mainSource, /createProviderChildProcess\(pluginDirectory, nodeRuntime\.executable\)/, 'Obsidian bundle must supervise providers with the resolved Node executable');
+assert.match(mainSource, /provider-supervisor\.cjs/, 'Obsidian bundle must contain its provider supervisor runtime');
+assert.match(mainSource, /host-runtime/, 'Obsidian bundle must materialize embedded runtime assets into private shared state');
+assert.match(mainSource, /Embedded DevMate Obsidian runtime asset is invalid/, 'Obsidian bundle must verify embedded runtime assets before execution');
+assert.match(mainSource, /providerSupervisorEntry/, 'Obsidian bundle must supervise providers from the materialized embedded runtime');
 assert.match(mainSource, /childProcess,\s*hostId:/, 'Obsidian bundle must inject the supervised child process into DesktopTunnelController');
 assert.match(mainSource, /DEVMATE_NODE_RUNTIME_UNAVAILABLE/, 'Obsidian bundle must contain Node runtime diagnostics');
 assert.match(mainSource, /SharedTunnelRecordStore/, 'Obsidian bundle must contain the shared provider ownership record store');

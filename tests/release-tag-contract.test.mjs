@@ -6,12 +6,13 @@ import { expectedReleaseTag, validateReleaseTag } from '../scripts/check-release
 
 const root = path.resolve(import.meta.dirname, '..');
 
-test('requires the release tag to exactly match package semantic version', () => {
-  assert.equal(expectedReleaseTag('3.1.0'), 'v3.1.0');
-  assert.deepEqual(validateReleaseTag('3.1.0-beta.1', 'v3.1.0-beta.1'), {
-    version: '3.1.0-beta.1', tag: 'v3.1.0-beta.1'
+test('requires the release tag to exactly match package semantic version without a v prefix', () => {
+  assert.equal(expectedReleaseTag('3.1.0'), '3.1.0');
+  assert.deepEqual(validateReleaseTag('3.1.0-beta.1', '3.1.0-beta.1'), {
+    version: '3.1.0-beta.1', tag: '3.1.0-beta.1'
   });
-  assert.throws(() => validateReleaseTag('3.1.0', 'v3.0.0'), /does not match/);
+  assert.throws(() => validateReleaseTag('3.1.0', 'v3.1.0'), /does not match/);
+  assert.throws(() => validateReleaseTag('3.1.0', '3.0.0'), /does not match/);
   assert.throws(() => expectedReleaseTag('latest'), /Invalid package version/);
 });
 
@@ -23,6 +24,9 @@ test('release workflow verifies, packages, checksums, attests, and publishes ass
     'npm run test:unit',
     'npm run smoke:gateway',
     'npm run package:obsidian',
+    'release/main.js',
+    'release/manifest.json',
+    'release/styles.css',
     'provider-supervisor.cjs',
     'gateway/server.mjs',
     'scripts/package-portable.mjs',

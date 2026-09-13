@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.8.3
+- Made the Obsidian build compatible with Community Plugins by embedding the Gateway and supervisor runtime into the standard `main.js` artifact and materializing hash-verified runtime files into DevMate private shared state.
+- Added repository-root `manifest.json` and `versions.json` Marketplace mirrors, exact-version release tags without a `v` prefix, and standard Obsidian `main.js`, `manifest.json`, and `styles.css` GitHub Release assets.
+- Added release-contract and runtime-materialization validation so Marketplace installs remain self-contained while the existing full Obsidian ZIP continues to be produced for direct distribution.
+
+
 ## 3.8.2
 - Fixed Windows `run_project_script` execution by using bounded `cmd.exe` invocation for npm/pnpm/yarn shims while keeping Node shell mode disabled and validating package-script identifiers before execution.
 - Made local release validation rebuild the ignored Gateway bundle before unit tests and added one `release:preflight` command covering repository checks, tests, Gateway smoke tests, and both distributable packages.

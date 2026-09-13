@@ -15,7 +15,7 @@ It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or 
 
 ## Get, report, and contribute
 
-- **Get DevMate:** download the VSIX, Obsidian plugin ZIP, or portable CLI archives from [GitHub Releases](https://github.com/Kukutx/DevMate/releases), or clone this public repository to build from source.
+- **Get DevMate:** install the VS Code extension from its Marketplace listing; install the Obsidian host from Community Plugins after the one-time registry listing is accepted; GitHub Releases continue to provide the VSIX, Obsidian ZIP, standard Obsidian release assets, and portable CLI archives.
 - **Report a bug:** use the [bug report form](https://github.com/Kukutx/DevMate/issues/new?template=bug_report.yml).
 - **Request a feature:** use the [feature request form](https://github.com/Kukutx/DevMate/issues/new?template=feature_request.yml).
 - **Contribute:** follow [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, testing, and pull-request requirements.
@@ -81,13 +81,17 @@ For explicit service layouts, custom config paths, Team/Control-plane presets, a
 
 DevMate also ships a desktop-only Obsidian host. It publishes vault context and note workflows through the same shared Gateway/public connection model used by VS Code.
 
+The release is Community Plugins-compatible: each version publishes the standard `main.js`, `manifest.json`, and `styles.css` assets under an exact semantic-version GitHub tag. After DevMate's one-time registry entry is accepted, install it from **Settings → Community plugins → Browse → DevMate**.
+
+For local development only:
+
 ```bash
 npm run build:obsidian
 ```
 
-Copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, then enable the plugin under Community Plugins.
+Copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, then enable the plugin.
 
-See [`obsidian-plugin/README.md`](obsidian-plugin/README.md) and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
+See [`obsidian-plugin/README.md`](obsidian-plugin/README.md), [`docs/RELEASING.md`](docs/RELEASING.md), and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
 
 ## Product surfaces
 
