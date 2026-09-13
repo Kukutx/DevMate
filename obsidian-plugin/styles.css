@@ -47,6 +47,6 @@
   color: var(--text-normal);
 }
 
-.devmate-setting-invalid {
-  border-color: var(--text-error) !important;
+.setting-item-control input.devmate-setting-invalid {
+  border-color: var(--text-error);
 }

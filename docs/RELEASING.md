@@ -28,6 +28,8 @@ Each GitHub Release contains:
 
 `main.js`, `manifest.json`, and `styles.css` are the standard Obsidian Community Plugins release assets. The Obsidian `main.js` embeds the Gateway and supervisor runtime bundles and materializes hash-verified copies into DevMate private shared state, so a Marketplace installation does not depend on non-standard release files being downloaded into `.obsidian/plugins/devmate`.
 
+The repository-level `npm run build` also mirrors those three standard plugin assets into root `dist/` after the normal Obsidian build. This mirror exists for Community directory build verification; VS Code-specific build/package commands remove it before VSIX packaging so the two distribution surfaces remain isolated.
+
 GitHub build provenance is generated for the release artifacts. Consumers can verify a downloaded asset with:
 
 ```bash

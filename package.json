@@ -15,7 +15,7 @@
     "agent-automation",
     "browser-automation"
   ],
-  "version": "3.8.4",
+  "version": "3.8.5",
   "icon": "assets/icon.png",
   "publisher": "kukutx",
   "sponsor": {
@@ -377,19 +377,21 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check",
-    "build": "npm run version:check && node scripts/build-gateway.mjs",
+    "build": "npm run build:vscode && npm run build:community",
+    "build:vscode": "npm run version:check && node scripts/community-build-output.mjs clean && node scripts/build-gateway.mjs",
     "build:obsidian": "npm run version:check && node obsidian-plugin/esbuild.config.mjs && node scripts/check-obsidian-release.mjs --dist",
-    "compile": "npm run build",
-    "vscode:prepublish": "npm run build",
+    "build:community": "npm run build:obsidian && node scripts/community-build-output.mjs copy",
+    "compile": "npm run build:vscode",
+    "vscode:prepublish": "npm run build:vscode",
     "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs",
     "test": "npm run test:unit",
     "test:unit": "node scripts/build-gateway.mjs && node scripts/run-tests.mjs",
     "test:vscode-host": "node scripts/test-vscode-host.mjs",
     "release:preflight": "npm run check && npm run test:unit && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs && npm run package:vsix && npm run package:obsidian",
-    "smoke:gateway": "npm run build && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
-    "package:vsix": "npm run build && vsce package",
+    "smoke:gateway": "npm run build:vscode && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
+    "package:vsix": "npm run build:vscode && vsce package",
     "package:obsidian": "npm run build:obsidian && node scripts/smoke-obsidian-runtime.mjs",
-    "publish:vsix": "npm run build && vsce publish",
+    "publish:vsix": "npm run build:vscode && vsce publish",
     "devmate": "node scripts/devmate-command.mjs",
     "runner": "node scripts/devmate-runner.mjs"
   },
@@ -407,8 +409,8 @@
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
-    "js-yaml": "^5.4.1",
-    "playwright-core": "^1.63.0"
+    "playwright-core": "^1.63.0",
+    "yaml": "^2.8.3"
   },
   "license": "MIT",
   "overrides": {
