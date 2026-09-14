@@ -29,6 +29,14 @@ It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or 
 
 DevMate keeps the active project, verified MCP ingress, Gateway lifecycle controls, diagnostics, permissions, and workspace state visible in one place. Project boundaries and connection state stay explicit instead of being hidden behind background processes.
 
+## Obsidian experience
+
+<p align="center">
+  <img src="docs/media/devmate-obsidian-overview.png" alt="DevMate Obsidian host showing the vault graph alongside the DevMate shared runtime, workspace, active-note, and vault-index panel" width="100%">
+</p>
+
+DevMate brings the same shared Gateway and project-aware workflow into Obsidian, exposing vault context, note workflows, runtime controls, and index state without separating the knowledge workspace from the connected ChatGPT workflow.
+
 <p align="center">
   <img src="docs/media/devmate-flow.png" alt="DevMate flow from ChatGPT through the MCP Gateway to local project surfaces and remote Runners" width="100%">
 </p>
