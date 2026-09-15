@@ -110,6 +110,40 @@ test('stale crashed hosts are pruned without removing live or current publisher 
   assert.equal(config.hostRuntime.focusedHostId, undefined);
 });
 
+test('publishing a reloaded VS Code host prunes the dead predecessor and makes the new host active', () => {
+  const config = {
+    activeHostId: 'vscode-old',
+    hostRuntime: { focusedHostId: 'vscode-old' },
+    hostContexts: {
+      'vscode-old': {
+        hostId: 'vscode-old',
+        kind: 'editor',
+        focused: true,
+        pid: 501,
+        updatedAt: '2026-09-10T11:58:00.000Z',
+        workspaceRoot: 'A'
+      }
+    }
+  };
+
+  publishHostContext(config, 'vscode-new', {
+    hostId: 'vscode-new',
+    kind: 'editor',
+    focused: true,
+    pid: 502,
+    updatedAt: '2026-09-10T12:00:00.000Z',
+    workspaceRoot: 'A'
+  }, {
+    nowMs: Date.parse('2026-09-10T12:00:00.000Z'),
+    processAliveImpl: pid => pid === 502
+  });
+
+  assert.equal(config.hostContexts['vscode-old'], undefined);
+  assert.equal(config.activeHostId, 'vscode-new');
+  assert.equal(config.hostRuntime.focusedHostId, 'vscode-new');
+  assert.equal(selectHostContext(config).hostId, 'vscode-new');
+});
+
 test('clear removes only one host and selection falls back to another registered host', () => {
   const config = { hostRuntime: {}, hostContexts: {} };
   publishHostContext(config, 'vscode-a', { focused: false, pid: 401, updatedAt: '2026-09-10T10:00:00.000Z' }, { processAliveImpl: () => true });

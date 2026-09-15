@@ -1,6 +1,9 @@
 import { z } from 'zod';
+import hostRegistry from '../shared/host-registry.cjs';
 import { readConfig, toolText } from './local-shared.mjs';
 import { registerServerInitializer } from './server-extension-host.mjs';
+
+const { processAlive: hostProcessAlive } = hostRegistry;
 
 const REGISTERED = Symbol.for('devmate.hostContextToolsRegistered');
 const MAX_CONTEXT_CHARS = 250000;
@@ -24,17 +27,24 @@ function bounded(value) {
   };
 }
 
+function hostState(context) {
+  const pid = Number(context?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return 'unknown';
+  return hostProcessAlive(pid) ? 'online' : 'offline';
+}
+
 function selectContext(config, hostId = '') {
   const entries = contextEntries(config);
   const requested = String(hostId || '').trim();
   if (requested) return entries.find(item => item.id === requested || item.hostId === requested) || null;
-  const focused = String(config?.hostRuntime?.focusedHostId || '').trim();
-  if (focused) {
-    const context = entries.find(item => item.id === focused || item.hostId === focused);
-    if (context) return context;
-  }
-  const active = String(config?.activeHostId || '').trim();
-  return entries.find(item => item.id === active || item.hostId === active) || entries[0] || null;
+  const focusedId = String(config?.hostRuntime?.focusedHostId || '').trim();
+  const activeId = String(config?.activeHostId || '').trim();
+  const focused = focusedId ? entries.find(item => item.id === focusedId || item.hostId === focusedId) || null : null;
+  const active = activeId ? entries.find(item => item.id === activeId || item.hostId === activeId) || null : null;
+  const live = entries.filter(item => hostState(item) === 'online');
+  if (focused && hostState(focused) !== 'offline') return focused;
+  if (active && hostState(active) !== 'offline') return active;
+  return live[0] || focused || active || entries[0] || null;
 }
 
 function registerTool(server, name, config, handler) {
@@ -63,6 +73,7 @@ export function registerHostContextTools(server) {
       kind: context.kind || 'unknown',
       focused: context.focused === true,
       pid: Number.isInteger(Number(context.pid)) ? Number(context.pid) : null,
+      state: hostState(context),
       updatedAt: context.updatedAt || context.capturedAt || null,
       workspaceRoot: context.workspaceRoot || null,
       activeDocument: context.activeDocument?.path || context.activeEditor?.path || null
@@ -107,5 +118,6 @@ export function installHostContextCapabilities(McpServerClass) {
 export const __test = {
   bounded,
   contextEntries,
+  hostState,
   selectContext
 };

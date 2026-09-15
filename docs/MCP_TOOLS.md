@@ -105,6 +105,8 @@ When a protected capability is configured to require approval, the tool call cre
 - `workspace_map`, `project_snapshot`, `project_instructions`
 - `list_files`, `search_text`
 
+`connection_diagnostics` separates Gateway reachability, VS Code host liveness, context snapshot state, and External Runner configuration. An online VS Code host with an older `idle` snapshot is still usable: snapshot age alone does not mean the host is stale or disconnected. `host_context_list` also reports host process state so a dead previously-active host can be distinguished from a live replacement.
+
 ## ChatGPT browser Companion
 
 - `companion_context`

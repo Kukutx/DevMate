@@ -135,6 +135,33 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
     lastToolCallVerified: false,
     lastProbeTool: ''
   };
+  const idleSnapshot = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  config.activeHostId = 'vscode-dead';
+  config.hostRuntime = { ...(config.hostRuntime || {}), focusedHostId: 'vscode-dead' };
+  config.hostContexts = {
+    'vscode-dead': {
+      hostId: 'vscode-dead',
+      kind: 'editor',
+      pid: 2147483647,
+      capturedAt: idleSnapshot,
+      updatedAt: idleSnapshot,
+      workspaceRoot: workspace,
+      activeEditor: { path: 'stale.txt', languageId: 'plaintext', lineCount: 1, isDirty: false },
+      visibleEditors: [],
+      diagnostics: []
+    },
+    'vscode-live': {
+      hostId: 'vscode-live',
+      kind: 'editor',
+      pid: process.pid,
+      capturedAt: idleSnapshot,
+      updatedAt: idleSnapshot,
+      workspaceRoot: workspace,
+      activeEditor: { path: 'MixedCase.txt', languageId: 'plaintext', lineCount: 1, isDirty: false },
+      visibleEditors: [],
+      diagnostics: []
+    }
+  };
   config.commands = [{
     key: 'secret-command',
     label: 'Secret command',
@@ -178,6 +205,15 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   assertToolSuccess(diagnostics, 'connection_diagnostics');
   assert.equal(diagnostics.data?.status, 'attention');
   assert.equal(diagnostics.data?.connection?.lastToolCallVerified, false);
+  assert.equal(diagnostics.data?.vscode?.hostId, 'vscode-live');
+  assert.equal(diagnostics.data?.vscode?.hostState, 'online');
+  assert.equal(diagnostics.data?.vscode?.pidAlive, true);
+  assert.equal(diagnostics.data?.vscode?.snapshotState, 'idle');
+  assert.equal(diagnostics.data?.vscode?.fresh, true);
+  assert.ok(Number(diagnostics.data?.vscode?.contextAgeSeconds) >= 300, diagnostics.text);
+  assert.equal(diagnostics.data?.vscode?.activeEditor?.path, 'MixedCase.txt');
+  assert.equal(diagnostics.data?.runners?.external?.state, 'disabled');
+  assert.equal(diagnostics.data?.advice?.some(value => /VS Code context looks stale/.test(value)), false, diagnostics.text);
   assert.ok(diagnostics.data?.advice?.some(value => /verified DevMate tool call/.test(value)), diagnostics.text);
 
   const configured = await rpc('tools/call', { name: 'list_configured_commands', arguments: {} });

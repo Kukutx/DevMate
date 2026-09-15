@@ -9,6 +9,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import portConfig from '../shared/port.cjs';
+import hostRegistry from '../shared/host-registry.cjs';
 import packageJson from '../package.json' with { type: 'json' };
 import { DEFAULT_MAINTENANCE, maintenanceOptions, stateSummary } from './maintenance.mjs';
 import { backupStoreStatus, listBackups } from './backup-store.mjs';
@@ -20,6 +21,7 @@ import { resolveWorkspace } from './workspace-resolver.mjs';
 import { handleOAuthRequest } from './oauth.mjs';
 
 const { DEFAULT_PORT } = portConfig;
+const { processAlive: hostProcessAlive } = hostRegistry;
 const VERSION = packageJson.version;
 const SERVER_STARTED_AT = shared.now();
 const CONFIG_PATH = process.env.DEVMATE_CONFIG;
@@ -46,14 +48,55 @@ const ROOT_PROJECT_INSTRUCTION_FILES = ['AGENTS.md','CLAUDE.md'];
 const PROJECT_INSTRUCTION_SKIP_DIRS = new Set([...HIDDEN_DIRS, '.github', '.vscode', '.idea', 'tmp']);
 
 function loadConfig(){ const c=shared.readConfig(); c.server ||= {}; c.instanceId ||= 'missing-instance'; c.server.port ||= DEFAULT_PORT; c.server.mcpPath = '/mcp'; c.runtime ||= {}; c.runtime.defaultCommandTimeoutMs ||= DEFAULT_TIMEOUT_MS; c.runtime.maxOutputChars ||= DEFAULT_MAX_OUTPUT; c.maintenance = maintenanceOptions(c.maintenance || DEFAULT_MAINTENANCE); c.connection ||= {}; c.workspaces ||= []; c.commands ||= []; return c; }
-function vscodeContext(cfg){
-  const contexts = Object.entries(cfg.hostContexts || {}).filter(([id, context]) =>
-    id === 'vscode' || context?.kind === 'editor' || String(context?.hostId || id).startsWith('vscode-')
-  );
-  const active = contexts.find(([id]) => id === cfg.activeHostId)?.[1];
-  const latest = contexts.sort(([, left], [, right]) => Date.parse(right?.updatedAt || '') - Date.parse(left?.updatedAt || ''))[0]?.[1];
-  return active || latest || cfg.vscodeContext || {activeEditor:null,visibleEditors:[],diagnostics:[]};
+function vscodeContextEntries(cfg){
+  return Object.entries(cfg.hostContexts || {})
+    .filter(([id, context]) => id === 'vscode' || context?.kind === 'editor' || String(context?.hostId || id).startsWith('vscode-'))
+    .sort(([, left], [, right]) => Date.parse(right?.updatedAt || right?.capturedAt || '') - Date.parse(left?.updatedAt || left?.capturedAt || ''));
 }
+function contextPidAlive(context){
+  const pid=Number(context?.pid);
+  if(!Number.isInteger(pid) || pid<=0) return null;
+  return hostProcessAlive(pid);
+}
+function vscodeHostState(cfg){
+  const contexts=vscodeContextEntries(cfg);
+  const focusedId=String(cfg.hostRuntime?.focusedHostId || '');
+  const activeId=String(cfg.activeHostId || '');
+  const focused=contexts.find(([id, context])=>id===focusedId || context?.hostId===focusedId) || null;
+  const active=contexts.find(([id, context])=>id===activeId || context?.hostId===activeId) || null;
+  const live=contexts.filter(([, context])=>contextPidAlive(context)===true);
+  const selected=
+    (focused && contextPidAlive(focused[1])!==false ? focused : null) ||
+    (active && contextPidAlive(active[1])!==false ? active : null) ||
+    live[0] || focused || active || contexts[0] || null;
+  const context=selected?.[1] || cfg.vscodeContext || {activeEditor:null,visibleEditors:[],diagnostics:[]};
+  const pidAlive=selected ? contextPidAlive(context) : null;
+  const contextAgeSeconds=secondsSinceIso(context.capturedAt || context.updatedAt);
+  const hostState=selected
+    ? pidAlive===true ? 'online' : pidAlive===false ? 'offline' : 'unknown'
+    : context.capturedAt || context.updatedAt ? 'unknown' : 'missing';
+  const snapshotState=!(context.capturedAt || context.updatedAt)
+    ? 'missing'
+    : hostState==='offline'
+      ? 'stale'
+      : contextAgeSeconds!=null && contextAgeSeconds<=300
+        ? 'current'
+        : hostState==='online' ? 'idle' : 'aged';
+  const usable=!!(context.capturedAt || context.updatedAt) && (
+    hostState==='online' ||
+    (hostState==='unknown' && contextAgeSeconds!=null && contextAgeSeconds<=300)
+  );
+  return {
+    id:selected?.[0] || context.hostId || null,
+    context,
+    pidAlive,
+    hostState,
+    snapshotState,
+    contextAgeSeconds,
+    usable
+  };
+}
+function vscodeContext(cfg){ return vscodeHostState(cfg).context; }
 function now(){ return shared.now(); }
 function relParts(p){ return String(p||'').split(/[\\/]+/).filter(Boolean); }
 function normalizeSlash(p){ return shared.normalizeSlash(p); }
@@ -407,15 +450,17 @@ function diagnosticSummary(items=[]){
 async function connectionDiagnosticsData(){
   const cfg=loadConfig();
   const aw=activeWorkspace(cfg);
-  const ctx=vscodeContext(cfg);
-  const contextAgeSeconds=secondsSinceIso(ctx.capturedAt);
-  const contextFresh=contextAgeSeconds != null && contextAgeSeconds <= 300;
+  const vscodeHost=vscodeHostState(cfg);
+  const ctx=vscodeHost.context;
   const connection=cfg.connection || {};
   const toolCallVerified=connection.lastToolCallVerified===true && String(connection.lastProbeTool||'')==='gateway_status';
+  const externalRunnerEnabled=cfg.runnerControl?.enabled===true;
+  const runnerCredentialCount=Array.isArray(cfg.runnerControl?.credentials) ? cfg.runnerControl.credentials.length : 0;
   const advice=[];
   if(!aw) advice.push('Open a VS Code project folder and run DevMate: Start.');
-  if(!ctx.capturedAt) advice.push('No VS Code context snapshot is available yet. Focus VS Code or restart DevMate.');
-  else if(!contextFresh) advice.push('VS Code context looks stale. Focus VS Code or run DevMate: Start again.');
+  if(vscodeHost.snapshotState==='missing') advice.push('No VS Code context snapshot is available yet. Focus VS Code or restart DevMate.');
+  else if(vscodeHost.hostState==='offline') advice.push('The selected VS Code host process is offline. Reload VS Code or run DevMate: Start to publish a new host context.');
+  else if(vscodeHost.snapshotState==='aged') advice.push('VS Code host liveness is unknown and the context snapshot is old. Focus VS Code to refresh the host context.');
   if(!connection.lastPreflightAt) advice.push('No public MCP preflight has been recorded. Run DevMate: Start and paste the verified URL into ChatGPT.');
   else if(!toolCallVerified) advice.push('The last public MCP evidence did not include a verified DevMate tool call. Run DevMate: Start again to refresh the connection.');
   if(connection.lastError) advice.push('The last DevMate preflight recorded an error. Run DevMate: Doctor in VS Code.');
@@ -434,11 +479,15 @@ async function connectionDiagnosticsData(){
       blockDangerousOperations:dangerousGuardEnabled(cfg)
     },
     vscode:{
-      contextPresent:!!ctx.capturedAt,
+      hostId:vscodeHost.id,
+      hostState:vscodeHost.hostState,
+      pidAlive:vscodeHost.pidAlive,
+      contextPresent:!!(ctx.capturedAt || ctx.updatedAt),
       workspaceId:hostContextWorkspaceId(cfg,ctx),
-      capturedAt:ctx.capturedAt || null,
-      contextAgeSeconds,
-      fresh:contextFresh,
+      capturedAt:ctx.capturedAt || ctx.updatedAt || null,
+      contextAgeSeconds:vscodeHost.contextAgeSeconds,
+      snapshotState:vscodeHost.snapshotState,
+      fresh:vscodeHost.usable,
       activeEditor:ctx.activeEditor ? {
         path:ctx.activeEditor.path,
         languageId:ctx.activeEditor.languageId,
@@ -447,6 +496,14 @@ async function connectionDiagnosticsData(){
       } : null,
       visibleEditorCount:Array.isArray(ctx.visibleEditors) ? ctx.visibleEditors.length : 0,
       diagnostics:diagnosticSummary(ctx.diagnostics || [])
+    },
+    runners:{
+      embedded:{enabled:cfg.jobs?.embeddedRunnerEnabled===true},
+      external:{
+        enabled:externalRunnerEnabled,
+        state:externalRunnerEnabled ? 'configured' : 'disabled',
+        credentialCount:runnerCredentialCount
+      }
     },
     workspace:{
       active:aw?wsPublic(aw):null,
@@ -560,10 +617,12 @@ function statusPanelHtml(){
       root.className = '';
       root.innerHTML =
         '<div class="grid">' +
-          card('Gateway', data.gateway?.reachable ? 'Reachable' : 'Unknown', 'Port ' + data.gateway?.localPort + ' ' + data.gateway?.mcpPath) +
-          card('VS Code', data.vscode?.fresh ? 'Fresh context' : 'Check context', 'Captured ' + fmtAge(data.vscode?.contextAgeSeconds)) +
+          card('Gateway', data.gateway?.reachable ? 'READY' : 'UNKNOWN', 'Port ' + data.gateway?.localPort + ' ' + data.gateway?.mcpPath) +
+          card('VS Code Host', String(data.vscode?.hostState || 'unknown').toUpperCase(), data.vscode?.hostId || 'no registered host') +
+          card('Context', String(data.vscode?.snapshotState || 'missing').toUpperCase(), data.vscode?.contextPresent ? 'Captured ' + fmtAge(data.vscode?.contextAgeSeconds) : 'No snapshot') +
+          card('External Runner', String(data.runners?.external?.state || 'disabled').toUpperCase(), data.runners?.external?.enabled ? (data.runners?.external?.credentialCount || 0) + ' credential(s)' : 'Independent of project-managed remote builders') +
           card('Workspace', data.workspace?.active?.root || 'None', (data.workspace?.count || 0) + ' workspace(s), ' + (data.workspace?.references || 0) + ' reference(s)') +
-          card('Permissions', data.gateway?.permissionProfile || 'unknown', data.gateway?.authenticationMode === 'oauth' ? 'OAuth enabled' : 'no authentication') +
+          card('Permissions', data.gateway?.permissionProfile || 'unknown', data.gateway?.authenticationMode === 'oauth' ? 'OAuth enabled' : 'personal owner mode') +
           card('Diagnostics', String(diag.total || 0), 'errors ' + (diag.bySeverity?.error || 0) + ', warnings ' + (diag.bySeverity?.warning || 0)) +
           card('Last Preflight', data.connection?.lastPreflightAt ? fmtAge(data.connection?.lastPreflightAgeSeconds) : 'Not recorded', data.connection?.lastPublicHost || 'no public host snapshot') +
         '</div>' +
@@ -607,7 +666,7 @@ function createServer(){
       text:statusPanelHtml(),
       _meta:{
         ui:{prefersBorder:true,csp:{connectDomains:[],resourceDomains:[]}},
-        'openai/widgetDescription':'Shows DevMate connection status, VS Code context freshness, diagnostics, permissions, and last public MCP preflight.',
+        'openai/widgetDescription':'Shows DevMate Gateway status, VS Code host liveness, context snapshot state, Runner configuration, diagnostics, permissions, and last public MCP preflight.',
         'openai/widgetPrefersBorder':true,
         'openai/widgetCSP':{connect_domains:[],resource_domains:[]}
       }
@@ -616,8 +675,8 @@ function createServer(){
   server.registerTool('gateway_status',{title:'Gateway status',description:'Show gateway runtime and active workspace.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const aw=activeWorkspace(cfg); return toolText({name:'devmate',version:VERSION,instanceId:cfg.instanceId||null,mcpPath:'/mcp',permissionProfile:permissionProfile(cfg),blockDangerousOperations:dangerousGuardEnabled(cfg),activeWorkspace:aw?wsPublic(aw):null,workspaces:cfg.workspaces.map(wsPublic),startedAt:SERVER_STARTED_AT}); });
   server.registerTool('gateway_self_test',{title:'Gateway self test',description:'Run basic local checks.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const aw=activeWorkspace(cfg); let git=null; if(aw) git=await runGit(aw,['--version'],2000,5000); return toolText({version:VERSION,configLoaded:true,workspaceCount:cfg.workspaces.length,activeWorkspace:aw?wsPublic(aw):null,git}); });
   server.registerTool('maintenance_status',{title:'Maintenance status',description:'Show backup/audit retention settings and current local state size.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const backups=await backupStoreStatus(); const storage=await stateSummary({backupRoot:BACKUP_ROOT,auditLog:AUDIT_LOG,backupSummary:backups}); return toolText({retention:cfg.maintenance,backupStore:backups,storage}); });
-  server.registerTool('connection_diagnostics',{title:'Connection diagnostics',description:'Use this to check whether ChatGPT is currently connected to DevMate, whether VS Code context is fresh, and what may need fixing after switching models or reconnecting.',inputSchema:z.object({}),_meta:{ui:{visibility:['model','app']},'openai/widgetAccessible':true}},async()=>toolText(await connectionDiagnosticsData()));
-  server.registerTool('devmate_status_panel',{title:'Show DevMate status panel',description:'Use this to render a ChatGPT Apps panel showing DevMate connection, VS Code context, diagnostics, permissions, and last public preflight status.',inputSchema:z.object({}),_meta:{ui:{resourceUri:STATUS_UI_URI,visibility:['model','app']},'openai/outputTemplate':STATUS_UI_URI,'openai/widgetAccessible':true,'openai/toolInvocation/invoking':'Checking DevMate','openai/toolInvocation/invoked':'DevMate status ready'}},async()=>{ const diagnostics=await connectionDiagnosticsData(); return {content:[{type:'text',text:`DevMate status: ${diagnostics.status}. VS Code context ${diagnostics.vscode.fresh ? 'fresh' : 'needs attention'}.`}],structuredContent:diagnostics,_meta:{diagnostics}}; });
+  server.registerTool('connection_diagnostics',{title:'Connection diagnostics',description:'Use this to check whether ChatGPT is connected to DevMate, whether the VS Code host is online, whether its context snapshot is usable, and what may need fixing after reconnecting.',inputSchema:z.object({}),_meta:{ui:{visibility:['model','app']},'openai/widgetAccessible':true}},async()=>toolText(await connectionDiagnosticsData()));
+  server.registerTool('devmate_status_panel',{title:'Show DevMate status panel',description:'Use this to render a ChatGPT Apps panel showing Gateway status, VS Code host/context state, Runner configuration, diagnostics, permissions, and last public preflight status.',inputSchema:z.object({}),_meta:{ui:{resourceUri:STATUS_UI_URI,visibility:['model','app']},'openai/outputTemplate':STATUS_UI_URI,'openai/widgetAccessible':true,'openai/toolInvocation/invoking':'Checking DevMate','openai/toolInvocation/invoked':'DevMate status ready'}},async()=>{ const diagnostics=await connectionDiagnosticsData(); return {content:[{type:'text',text:`DevMate status: ${diagnostics.status}. VS Code host ${diagnostics.vscode.hostState}; context ${diagnostics.vscode.snapshotState}.`}],structuredContent:diagnostics,_meta:{diagnostics}}; });
   server.registerTool('list_workspaces',{title:'List workspaces',description:'List active writable and readonly reference workspaces.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); return toolText({activeWorkspaceId:cfg.activeWorkspaceId,workspaces:cfg.workspaces.map(wsPublic)}); });
   server.registerTool('vscode_context',{title:'VS Code context',description:'Return the latest VS Code active editor, visible editors, and diagnostics snapshot.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); return toolText(vscodeContext(cfg)); });
   server.registerTool('active_editor_context',{title:'Active editor context',description:'Return the latest VS Code editor and selection snapshot.',inputSchema:z.object({})},async()=>{ const cfg=loadConfig(); const ctx=vscodeContext(cfg); return toolText({capturedAt:ctx.capturedAt,workspaceId:hostContextWorkspaceId(cfg,ctx),activeEditor:ctx.activeEditor || null}); });

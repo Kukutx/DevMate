@@ -249,9 +249,9 @@ class VscodeHostLifecycle {
     context.subscriptions.push(this.vscode.workspace.onDidChangeWorkspaceFolders(() => {
       const current = currentWorkspaceRoot(this.vscode);
       if (current === this.workspaceRootAtActivation) return;
-      this.diagnostics?.append(`Primary workspace changed from ${this.workspaceRootAtActivation || '(none)'} to ${current || '(none)'}.`, 'error');
+      this.diagnostics?.append(`Primary workspace changed from ${this.workspaceRootAtActivation || '(none)'} to ${current || '(none)'}; reload is required for a safe runtime handoff.`, 'warning');
       this.vscode.window.showWarningMessage(
-        'The primary workspace changed. Reload VS Code so DevMate can select the correct shared runtime safely.',
+        'The primary workspace changed. Reload VS Code so DevMate can hand off to the correct shared runtime safely.',
         'Reload Window'
       ).then(choice => {
         if (choice === 'Reload Window') this.vscode.commands.executeCommand('workbench.action.reloadWindow');

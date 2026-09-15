@@ -28,12 +28,14 @@ test('each Obsidian Vault registers and removes only its own authenticated bridg
   assert.doesNotMatch(bridge, /config\.hostBridges\.obsidian =/);
 });
 
-test('the Gateway resolves the current VS Code context across isolated host records and legacy config', () => {
+test('the Gateway resolves the current live VS Code context across isolated host records and legacy config', () => {
   const gateway = source('gateway/server.mjs');
-  const start = gateway.indexOf('function vscodeContext(cfg)');
+  const start = gateway.indexOf('function vscodeContextEntries(cfg)');
   const end = gateway.indexOf('function now()', start);
   const block = gateway.slice(start, end);
   assert.match(block, /context\?\.kind === 'editor'/);
   assert.match(block, /cfg\.activeHostId/);
+  assert.match(block, /hostProcessAlive/);
+  assert.match(block, /live\[0\]/);
   assert.match(block, /cfg\.vscodeContext/);
 });
