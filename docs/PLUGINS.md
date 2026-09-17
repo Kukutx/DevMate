@@ -10,6 +10,9 @@ DevMate plugins add focused capabilities while keeping one shared MCP security a
 | `devmate.browser-control` | off | Long-lived interactive Playwright sessions with semantic + visual snapshots, file transfer, persistent workspace profiles, human takeover, and bounded browser actions |
 | `devmate.browser-qa` | off | Local previews, Playwright browser automation, structured state assertions, and saved scenarios |
 | `devmate.godot` | off | Godot inspection, validation, execution, Web export, QA bridge support, and acceptance suites |
+| `devmate.reverse` | off | Owner-only binary inspection, byte/value searches, copy-only patches, optional disassembly, and explicit Windows process-memory sessions with revisioned scans and verified data writes |
+
+Reverse Engineering provides 29 tools. Binary inspection prefers installed LIEF, pefile or pyelftools and explicitly labels a limited dependency-free fallback. Code analysis uses optional Rizin/radare2 or Ghidra; decompilation uses the current PyGhidra API. Process-memory operations require Windows and 64-bit Python, and disassembly additionally requires separately installed Capstone. Process access and memory writes are separate opt-in settings. See [Reverse Engineering](REVERSE_ENGINEERING.md) for supported formats, limits, safe modification semantics, and the agent workflow.
 
 `devmate.godot` depends on `devmate.browser-qa`. Enabling Godot automatically enables Browser QA. Browser Control is independent from Browser QA because interactive browsing and deterministic acceptance testing have different lifecycle and security requirements.
 

@@ -113,8 +113,8 @@ function markPermissionPolicyInitialized(config) {
  *
  * fullAccess is intentionally a complete trusted-workspace preset: legacy or
  * dormant balanced-mode guard booleans cannot partially restrict it. This keeps
- * the profile name truthful while preserving the independent credential/path,
- * OS, workspace, authentication, role, and lease boundaries enforced elsewhere.
+ * the profile name truthful while preserving independent workspace containment,
+ * OS, authentication, role, lease, and protected control-plane boundaries.
  */
 function permissionPolicySnapshot(config = {}) {
   const source = config?.permissions;

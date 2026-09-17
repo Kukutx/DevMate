@@ -50,6 +50,23 @@ test('mutation policy treats direct secrets, hidden paths and non-text writes as
   assert.equal(safety.isTextAllowed('image.png'), false);
 });
 
+test('fullAccess bypasses DevMate path-type guards while balanced keeps them', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-full-access-paths-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = { id: 'app', name: 'App', root, mode: 'workspace-write', reference: false };
+  const fullAccess = {
+    permissions: permissionConfig.permissionPolicySnapshot({ permissions: { profile: 'fullAccess' } })
+  };
+  const balanced = {
+    permissions: permissionConfig.permissionPolicySnapshot({ permissions: { profile: 'balanced' } })
+  };
+
+  assert.doesNotThrow(() => safety.assertWritable(fullAccess, workspace, '.env', { textOnly: true }));
+  assert.doesNotThrow(() => safety.assertWritable(fullAccess, workspace, 'dist/app.bin', { textOnly: true }));
+  assert.throws(() => safety.assertWritable(balanced, workspace, '.env', { textOnly: true }), /secret\/binary\/hidden/);
+  assert.throws(() => safety.assertWritable(balanced, workspace, 'dist/app.bin', { textOnly: true }), /secret\/binary\/hidden|non-text/);
+});
+
 test('canonical fullAccess reaches the directory mutation gate without a secondary opt-in', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-full-access-directory-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

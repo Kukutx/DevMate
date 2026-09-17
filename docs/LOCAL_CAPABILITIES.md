@@ -12,13 +12,13 @@ These features extend convenience without turning the normal file tools into unr
 - The current VS Code folder remains the active writable workspace.
 - Readonly References remain readonly.
 - Adding or removing a trusted writable root requires the `fullAccess` permission profile.
-- `fullAccess` is a complete trusted-workspace development preset: DevMate does not add the balanced-mode dangerous-command, push, or directory-mutation guards on top of it.
+- `fullAccess` is a complete trusted-workspace development preset: DevMate does not add the balanced-mode dangerous-command, push, directory-mutation, credential-path, file-type, or metadata-only Git guards on top of it.
 - `blockDangerousOperations`, `confirmBeforePush`, and `allowDirectoryMutations` are balanced-mode preferences. They do not partially restrict `fullAccess`, so the profile remains semantically complete.
 - Persistent process execution is blocked by `readOnly` and follows the configurable dangerous-command guard in `balanced` mode.
 - Processes run as the operating-system user that launched VS Code. DevMate cannot bypass UAC, filesystem ACLs, `sudo`, containers, Remote SSH boundaries, or other OS controls.
 - Single-owner `auth.mode: "none"` is the default for both local and configured public MCP. Any reachable `/mcp` request receives owner authority in this mode, so the endpoint itself must remain private to that owner; use OAuth for team/member identity.
 
-`fullAccess` does not disable containment or credential protections. Workspace/reference state, protected control-plane paths, credential and secret path filtering, path traversal/symlink/reparse fencing, operating-system permissions, and remote OAuth role/scope/lease rules remain independent security boundaries.
+`fullAccess` still preserves workspace/reference containment, protected control-plane roots, path traversal/symlink/reparse fencing, operating-system permissions, and remote OAuth role/scope/lease rules. Inside a trusted writable workspace, DevMate's credential/secret path filters and Git/file/plugin convenience guards are bypassed, including automatic backup/list/restore handling for those local paths. Browser upload/download, HTTP preview, Codex snapshots, durable Job/Runner artifacts, and automation manifests keep their separate protected-path rules because those surfaces can copy, publish, or persist data outside the ordinary local file workflow.
 
 ## Trusted writable roots
 
@@ -47,16 +47,9 @@ Removal does not delete the directory. If persistent processes are still running
 
 ### Existing file protections
 
-Trusted roots do not disable the existing safe-path policy. Normal file tools continue to block:
+In `balanced`, trusted roots keep the safe-path policy for hidden/generated directories, credential paths, real `.env` files, and unsupported file types. In `fullAccess`, those DevMate path/type filters are bypassed inside the trusted writable workspace.
 
-- hidden generated directories such as `.git` and `node_modules`;
-- credential and secret directories;
-- private keys and certificates;
-- real `.env` files;
-- databases, logs, and unsupported binary files;
-- paths that escape the trusted root through `..`, symlinks, or reparse points.
-
-Arbitrary shell commands remain intentionally powerful under `fullAccess`; use that profile only for trusted development workspaces.
+Both profiles still reject paths that escape the trusted root through `..`, symlinks, or reparse points. Arbitrary shell commands remain intentionally powerful under `fullAccess`; use that profile only for trusted development workspaces.
 
 ## Persistent processes
 

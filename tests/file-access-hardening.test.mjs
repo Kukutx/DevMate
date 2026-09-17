@@ -27,6 +27,15 @@ const snapshot = await import('../gateway/agent-snapshot.mjs');
 
 const principalWorkspace = { id: 'app', name: 'Application', root: workspace, reference: false, mode: 'workspace-write', role: 'active' };
 
+class FullAccessServer {
+  constructor() { this.tools = new Map(); }
+  registerTool(name, toolConfig, handler) {
+    this.tools.set(name, { config: toolConfig, handler });
+    return { name };
+  }
+  async connect() { return true; }
+}
+
 async function write(rel, content = 'needle\n') {
   const file = path.join(workspace, ...rel.split('/'));
   await fsp.mkdir(path.dirname(file), { recursive: true });
@@ -72,6 +81,20 @@ test('credential-prone workspace paths are classified without blocking safe exam
   assert.equal(policy.isSafeWorkspaceTextPath('frontend/app/android/gradle.properties'), true);
   assert.equal(policy.isSafeWorkspaceTextPath('logs/runtime.log'), true);
   assert.equal(policy.isSafeWorkspaceTextPath('data/app.db'), false);
+});
+
+test('installed hardening becomes transparent under fullAccess', async () => {
+  hardening.installFileAccessHardening(FullAccessServer);
+  const server = new FullAccessServer();
+  const readHandler = async args => ({ structuredContent: { path: args.path, content: 'SECRET=value' }, content: [] });
+  const searchHandler = async args => ({ structuredContent: { passthrough: true, query: args.query }, content: [] });
+  server.registerTool('read_file', {}, readHandler);
+  server.registerTool('search_text', {}, searchHandler);
+
+  const read = await server.tools.get('read_file').handler({ path: '.env' });
+  const search = await server.tools.get('search_text').handler({ query: 'SECRET', subpath: '.' });
+  assert.equal(read.structuredContent.content, 'SECRET=value');
+  assert.equal(search.structuredContent.passthrough, true);
 });
 
 test('explicit read and mutation paths fail closed before reaching their handlers', () => {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.8.9
+- Relaxed fullAccess local-workspace guards so trusted development workflows can read, search, create, modify, move, back up, restore, and use Git/plugin paths involving protected local files while preserving workspace containment and external-transfer boundaries.
+- Added regression coverage for protected-path moves, backups, Git access, plugin resolution, and literal patch replacement.
+- Added the opt-in Reverse Engineering plugin with binary inspection, disassembly/decompilation backends, process-memory sessions, value scans, and copy-only patch workflows.
+
 ## 3.8.8
 - Added an explicit stopped-only **Repair Gateway Port to Configured Default** lifecycle in VS Code and Obsidian so historical `8788`/`8789` drift can be returned safely to the configured default (normally `8787`) without making updates or reinstalls mutate a live shared runtime.
 - Port repair now shares the startup lease, refuses a running shared lifecycle or live same-instance Gateway ownership lock, verifies the target port is free, performs the only authorized shared-port mutation, and restarts through the normal Ready verification path without changing Current Project.

@@ -7,6 +7,7 @@ import {
   audit,
   normalizeSlash,
   pathKey,
+  permissionProfile,
   readConfig,
   toolText
 } from './local-shared.mjs';
@@ -161,10 +162,11 @@ function assertWritable(config, workspace, rel, { textOnly = false } = {}) {
   if (normalized === '.' || normalized === '') throw new Error('Write blocked: workspace root cannot be mutated directly');
   const full = safeResolve(workspace.root, rel);
   const targetRel = realTargetRel(workspace.root, full);
-  if (isBinaryOrSecret(rel) || isBinaryOrSecret(targetRel)) {
+  const protectedPaths = permissionProfile(config) !== 'fullAccess';
+  if (protectedPaths && (isBinaryOrSecret(rel) || isBinaryOrSecret(targetRel))) {
     throw new Error(`Write blocked: secret/binary/hidden path: ${rel}`);
   }
-  if (textOnly && (!isTextAllowed(rel) || !isTextAllowed(targetRel))) {
+  if (protectedPaths && textOnly && (!isTextAllowed(rel) || !isTextAllowed(targetRel))) {
     throw new Error(`Write blocked: non-text path: ${rel}`);
   }
   return full;
@@ -177,6 +179,7 @@ async function assertDirectoryMutationAllowed(config, workspace, full, rel) {
   if (!config.permissions?.allowDirectoryMutations) {
     throw new Error('Directory mutation blocked. Enable devMate.allowDirectoryMutations to delete or move directories.');
   }
+  if (permissionProfile(config) === 'fullAccess') return stat;
   let count = 0;
   const visited = new Set([pathKey(fs.realpathSync.native(full))]);
   async function scan(directory) {
@@ -228,7 +231,8 @@ async function assertExpectedRegularFileSha(full, stat, expected, label = 'Targe
 function backupPolicy(config) {
   return {
     backupRetentionDays: config.maintenance?.backupRetentionDays,
-    maxBackupBytes: config.maintenance?.maxBackupBytes
+    maxBackupBytes: config.maintenance?.maxBackupBytes,
+    allowProtectedPaths: permissionProfile(config) === 'fullAccess'
   };
 }
 
@@ -391,7 +395,7 @@ async function applyPatchTool(args = {}) {
     if (!allOccurrences && text.indexOf(oldText) !== text.lastIndexOf(oldText)) {
       throw new Error('oldText appears multiple times; set allOccurrences=true or provide more specific oldText');
     }
-    const next = allOccurrences ? text.split(oldText).join(newText) : text.replace(oldText, newText);
+    const next = allOccurrences ? text.split(oldText).join(newText) : text.replace(oldText, () => newText);
     if (next === text) {
       return toolText({ workspace: workspacePublic(workspace), path: rel, backupId: null, oldSha256: beforeSha, newSha256: beforeSha, changed: false, noOp: true });
     }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,7 @@ process.env.DEVMATE_CONFIG = configPath;
 
 const { builtinPlugins } = await import('../gateway/plugins/builtins.mjs');
 const { registerPluginHost, shutdownPluginServices, __test } = await import('../gateway/plugins/plugin-host.mjs');
+const { createPluginRuntime } = await import('../gateway/plugins/plugin-runtime.mjs');
 
 class MockServer {
   constructor() { this.tools = new Map(); this.resources = new Map(); }
@@ -41,6 +43,24 @@ test('registers management and automation tools while optional plugins remain di
   assert.equal(server.tools.get('plugin_catalog').config._meta['openai/widgetAccessible'], true);
   assert.equal(server.tools.get('plugin_enable').config._meta['openai/widgetAccessible'], true);
   assert.equal(server.tools.get('plugin_disable').config._meta['openai/widgetAccessible'], true);
+});
+
+test('plugin workspace resolver follows fullAccess for protected local paths', async () => {
+  await fsp.writeFile(path.join(workspace, '.env'), 'SECRET=local\n', 'utf8');
+  const plugin = {
+    manifest: {
+      id: 'devmate.test-runtime',
+      name: 'Test Runtime',
+      provides: [],
+      consumes: [],
+      permissions: { executablePatterns: [] }
+    },
+    defaultSettings: {}
+  };
+  const runtime = createPluginRuntime(plugin, {});
+  assert.equal(runtime.permissionProfile(), 'fullAccess');
+  assert.equal(runtime.workspace.resolve({ root: workspace }, '.env'), path.join(fs.realpathSync.native(workspace), '.env'));
+  assert.equal(runtime.workspace.resolve({ root: workspace }, 'secrets/local.txt'), path.join(fs.realpathSync.native(workspace), 'secrets', 'local.txt'));
 });
 
 test('enabling Godot persists its Browser QA dependency closure for the next explicit server registration', async () => {

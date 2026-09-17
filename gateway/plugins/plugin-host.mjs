@@ -14,6 +14,27 @@ import {
 const REGISTERED = Symbol.for('devmate.pluginHostRegistered');
 const PLUGIN_UI_URI = 'ui://devmate/plugins.html';
 const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
+// One lifecycle record per plugin, not per request/server. Optional plugins own
+// process-wide resources even though MCP registrations are request-local.
+const pluginLifecycle = new Map();
+const pendingDeactivations = new Map();
+
+async function deactivatePluginIds(ids) {
+  const selected = new Set(ids);
+  const pending = [];
+  for (const [id, record] of [...pluginLifecycle.entries()].reverse()) {
+    if (!selected.has(id)) continue;
+    pluginLifecycle.delete(id);
+    const task = Promise.resolve().then(() => record.plugin.deactivate(record.runtime));
+    pendingDeactivations.set(id, task);
+    task.finally(() => { if (pendingDeactivations.get(id) === task) pendingDeactivations.delete(id); }).catch(() => {});
+    pending.push(task);
+  }
+  for (const id of selected) if (pendingDeactivations.has(id) && !pending.includes(pendingDeactivations.get(id))) pending.push(pendingDeactivations.get(id));
+  const results = await Promise.allSettled(pending);
+  const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (errors.length) throw new AggregateError(errors, 'DevMate plugin cleanup failed');
+}
 
 function pluginFacade(server, plugin, registeredToolNames) {
   return {
@@ -130,7 +151,12 @@ function registerManagementTools(server, plugins, states, registeredToolNames, s
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   }, async ({ id, cascade = false }) => {
     const result = disablePlugin(id, cascade, plugins);
-    if (result.disabled === 'devmate.browser-control' || result.cascaded.includes('devmate.browser-control')) await shutdownBrowserControl();
+    const disabledIds = [result.disabled, ...result.cascaded];
+    const cleanups = [deactivatePluginIds(disabledIds)];
+    if (disabledIds.includes('devmate.browser-control')) cleanups.push(shutdownBrowserControl());
+    const cleanupResults = await Promise.allSettled(cleanups);
+    const cleanupErrors = cleanupResults.filter(item => item.status === 'rejected').map(item => item.reason);
+    if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Plugin disabled but resource cleanup failed');
     await audit('plugin_disable', { pluginId: id, cascaded: result.cascaded });
     return toolText({ ...result, reconnectRecommended: true });
   });
@@ -193,9 +219,11 @@ export async function registerPluginHost(server, plugins = builtinPlugins) {
   registerManagementTools(server, plugins, states, registeredToolNames, serviceRegistry);
   for (const plugin of activationOrder(enabled, map)) {
     try {
+      if (pendingDeactivations.has(plugin.manifest.id)) await pendingDeactivations.get(plugin.manifest.id);
       const facade = pluginFacade(server, plugin, registeredToolNames);
       const runtime = createPluginRuntime(plugin, facade, serviceRegistry);
       await plugin.activate(runtime);
+      if (plugin.deactivate) pluginLifecycle.set(plugin.manifest.id, { plugin, runtime });
       const services = serviceRegistry.list().filter(item => item.pluginId === plugin.manifest.id).map(item => item.name);
       states.set(plugin.manifest.id, { active: true, error: null, services });
     } catch (error) {
@@ -210,7 +238,12 @@ export async function registerPluginHost(server, plugins = builtinPlugins) {
 }
 
 export async function shutdownPluginServices() {
-  await Promise.all([shutdownBrowserControl(), shutdownPreviews()]);
+  const results = await Promise.allSettled([
+    shutdownBrowserControl(), shutdownPreviews(),
+    deactivatePluginIds([...pluginLifecycle.keys(), ...pendingDeactivations.keys()])
+  ]);
+  const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (errors.length) throw new AggregateError(errors, 'DevMate plugin service shutdown failed');
 }
 
 export const __test = {
