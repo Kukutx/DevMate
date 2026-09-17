@@ -50,7 +50,7 @@ test('backup store rejects protected descendants inside otherwise safe directori
   );
 });
 
-test('restore is pinned to manifest workspace and protected target rules', async () => {
+test('restore is pinned to manifest workspace while fullAccess may target protected paths', async () => {
   const sourceFile = path.join(workspaceRoot, 'src', 'app.js');
   await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
   await fsp.writeFile(sourceFile, 'safe\n', 'utf8');
@@ -65,10 +65,8 @@ test('restore is pinned to manifest workspace and protected target rules', async
     restore({ workspaceId: 'other', backupId: snapshot.id, entryPath: 'src/app.js' }),
     error => error?.code === 'backup_workspace_mismatch'
   );
-  await assert.rejects(
-    restore({ workspaceId: 'app', backupId: snapshot.id, entryPath: 'src/app.js', targetPath: '.env' }),
-    /secret\/binary\/hidden path/
-  );
+  await restore({ workspaceId: 'app', backupId: snapshot.id, entryPath: 'src/app.js', targetPath: '.env' });
+  assert.equal(await fsp.readFile(path.join(workspaceRoot, '.env'), 'utf8'), 'safe\n');
 });
 
 test('work-session rollback restores a deleted directory from manifest history without audit metadata', async () => {

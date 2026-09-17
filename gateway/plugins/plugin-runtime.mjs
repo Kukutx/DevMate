@@ -26,10 +26,10 @@ function isInside(root, candidate) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
-function assertPluginWorkspacePathSafe(root, candidate, label = 'Plugin workspace path') {
+function assertPluginWorkspacePathSafe(root, candidate, label = 'Plugin workspace path', { allowProtectedPaths = false } = {}) {
   const rel = normalizeSlash(path.relative(root, candidate));
   if (!rel || rel === '.') return rel;
-  if (isSensitiveWorkspacePath(rel)) {
+  if (!allowProtectedPaths && isSensitiveWorkspacePath(rel)) {
     const error = new Error(`${label} is protected by DevMate credential policy: ${rel}`);
     error.code = 'sensitive_workspace_path';
     error.reason = sensitiveWorkspacePathReason(rel);
@@ -38,17 +38,17 @@ function assertPluginWorkspacePathSafe(root, candidate, label = 'Plugin workspac
   return rel;
 }
 
-export function resolveWorkspacePath(workspace, subpath = '.', { mustExist = false, directory = false } = {}) {
+export function resolveWorkspacePath(workspace, subpath = '.', { mustExist = false, directory = false, allowProtectedPaths = false } = {}) {
   const root = fs.realpathSync.native(workspace.root);
   const candidate = path.resolve(root, subpath || '.');
   if (!isInside(root, candidate)) throw new Error(`Path escapes workspace root: ${subpath}`);
-  assertPluginWorkspacePathSafe(root, candidate);
+  assertPluginWorkspacePathSafe(root, candidate, 'Plugin workspace path', { allowProtectedPaths });
   let existing = candidate;
   while (!fs.existsSync(existing) && existing !== path.dirname(existing)) existing = path.dirname(existing);
   const existingReal = fs.realpathSync.native(existing);
   const resolved = path.resolve(existingReal, path.relative(existing, candidate));
   if (!isInside(root, resolved)) throw new Error(`Path escapes workspace root through symlink/reparse point: ${subpath}`);
-  assertPluginWorkspacePathSafe(root, resolved);
+  assertPluginWorkspacePathSafe(root, resolved, 'Plugin workspace path', { allowProtectedPaths });
   const stat = fs.statSync(resolved, { throwIfNoEntry: false });
   if (mustExist && !stat) throw new Error(`Path does not exist: ${normalizeSlash(path.relative(root, resolved))}`);
   if (directory && stat && !stat.isDirectory()) throw new Error(`Path is not a directory: ${normalizeSlash(path.relative(root, resolved))}`);
@@ -175,10 +175,18 @@ export function createPluginRuntime(plugin, server, serviceRegistry = createPlug
     },
     workspace: {
       get: getWorkspace,
-      resolve: resolveWorkspacePath,
+      resolve(workspace, subpath = '.', options = {}) {
+        return resolveWorkspacePath(workspace, subpath, {
+          ...options,
+          allowProtectedPaths: options.allowProtectedPaths ?? permissionProfile(readConfig()) === 'fullAccess'
+        });
+      },
       resolveCwd: resolveWorkspaceCwd,
-      async ensureDirectory(workspace, subpath) {
-        const full = resolveWorkspacePath(workspace, subpath);
+      async ensureDirectory(workspace, subpath, options = {}) {
+        const full = resolveWorkspacePath(workspace, subpath, {
+          ...options,
+          allowProtectedPaths: options.allowProtectedPaths ?? permissionProfile(readConfig()) === 'fullAccess'
+        });
         await fsp.mkdir(full, { recursive: true });
         return full;
       }

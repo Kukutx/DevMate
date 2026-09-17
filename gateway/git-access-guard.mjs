@@ -1,5 +1,5 @@
 import { executeCommand } from './command-process.mjs';
-import { readConfig } from './local-shared.mjs';
+import { permissionProfile, readConfig } from './local-shared.mjs';
 import { registerToolDecorator } from './server-extension-host.mjs';
 import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from './sensitive-path-policy.mjs';
 import { resolveWorkspace } from './workspace-resolver.mjs';
@@ -206,6 +206,7 @@ export function installGitAccessGuard(McpServerClass) {
     decorate({ name, handler }) {
       return {
         handler: async (args = {}, ...rest) => {
+          if (permissionProfile(readConfig()) === 'fullAccess') return handler(args, ...rest);
           guardExplicitGitPaths(name, args);
           if (name === 'git_raw') guardRaw(args);
           await preflightDiffScale(name, args);

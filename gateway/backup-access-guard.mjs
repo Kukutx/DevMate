@@ -1,4 +1,5 @@
 import { backupEntry } from './backup-store.mjs';
+import { permissionProfile, readConfig } from './local-shared.mjs';
 import { registerToolDecorator } from './server-extension-host.mjs';
 import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from './sensitive-path-policy.mjs';
 
@@ -43,14 +44,19 @@ export function installBackupAccessGuard(McpServerClass) {
       if (name === 'restore_backup') {
         return {
           handler: async (args = {}, ...rest) => {
-            await assertBackupAccess(args.backupId, args.entryPath);
+            if (permissionProfile(readConfig()) !== 'fullAccess') {
+              await assertBackupAccess(args.backupId, args.entryPath);
+            }
             return handler(args, ...rest);
           }
         };
       }
       if (name === 'list_backups') {
         return {
-          handler: async (args = {}, ...rest) => filterBackupList(await handler(args, ...rest))
+          handler: async (args = {}, ...rest) => {
+            const result = await handler(args, ...rest);
+            return permissionProfile(readConfig()) === 'fullAccess' ? result : filterBackupList(result);
+          }
         };
       }
       return { handler };

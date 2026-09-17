@@ -158,9 +158,9 @@ function normalizedEntryPath(value) {
   return normalized;
 }
 
-function assertBackupOriginalPath(value) {
+function assertBackupOriginalPath(value, { allowProtectedPaths = false } = {}) {
   const rel = normalizedEntryPath(value);
-  if (isSensitiveWorkspacePath(rel)) {
+  if (!allowProtectedPaths && isSensitiveWorkspacePath(rel)) {
     const error = new Error(`Automatic backup blocked for protected path: ${rel}`);
     error.code = 'sensitive_workspace_path';
     error.reason = sensitiveWorkspacePathReason(rel);
@@ -219,8 +219,8 @@ function consumeTreeEntry(budget, code, message) {
   }
 }
 
-async function snapshotDescriptor(source, destination, budget, originalPath) {
-  const safeOriginalPath = assertBackupOriginalPath(originalPath);
+async function snapshotDescriptor(source, destination, budget, originalPath, { allowProtectedPaths = false } = {}) {
+  const safeOriginalPath = assertBackupOriginalPath(originalPath, { allowProtectedPaths });
   consumeTreeEntry(
     budget,
     'backup_snapshot_entry_limit',
@@ -270,7 +270,8 @@ async function snapshotDescriptor(source, destination, budget, originalPath) {
       path.join(source, entry.name),
       path.join(destination, entry.name),
       budget,
-      childOriginalPath
+      childOriginalPath,
+      { allowProtectedPaths }
     );
     bytes += child.sizeBytes;
     files += child.fileCount;
@@ -290,9 +291,10 @@ async function snapshotDescriptor(source, destination, budget, originalPath) {
 async function describePayload(
   target,
   budget = { entries: 0, maxEntries: MAX_BACKUP_TREE_ENTRIES },
-  originalPath = '__backup_payload__'
+  originalPath = '__backup_payload__',
+  { allowProtectedPaths = false } = {}
 ) {
-  const safeOriginalPath = assertBackupOriginalPath(originalPath);
+  const safeOriginalPath = assertBackupOriginalPath(originalPath, { allowProtectedPaths });
   consumeTreeEntry(
     budget,
     'backup_integrity_scan_limit',
@@ -328,7 +330,8 @@ async function describePayload(
     const child = await describePayload(
       path.join(target, entry.name),
       budget,
-      childOriginalPath
+      childOriginalPath,
+      { allowProtectedPaths }
     );
     bytes += child.sizeBytes;
     files += child.fileCount;
@@ -345,6 +348,8 @@ async function describePayload(
 
 function validManifest(value, id = '') {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== BACKUP_FORMAT_VERSION) return false;
+  if (value.allowProtectedPaths != null && typeof value.allowProtectedPaths !== 'boolean') return false;
+  const allowProtectedPaths = value.allowProtectedPaths === true;
   if (!BACKUP_ID.test(String(value.id || '')) || (id && value.id !== id)) return false;
   if (!Number.isFinite(Date.parse(value.createdAt || ''))) return false;
   if (!String(value.action || '').trim() || String(value.action).length > 100) return false;
@@ -360,7 +365,7 @@ function validManifest(value, id = '') {
   for (const entry of value.entries) {
     if (!entry || typeof entry !== 'object') return false;
     if (!String(entry.role || '').trim()) return false;
-    try { assertBackupOriginalPath(entry.originalPath); } catch { return false; }
+    try { assertBackupOriginalPath(entry.originalPath, { allowProtectedPaths }); } catch { return false; }
     if (!['absent', 'file', 'directory'].includes(entry.kind)) return false;
     if (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0) return false;
     if (!Number.isSafeInteger(entry.fileCount) || entry.fileCount < 0) return false;
@@ -799,7 +804,8 @@ async function createBackupSnapshotInternal({
   entries,
   backupRetentionDays = 30,
   maxBackupBytes = 512 * 1024 * 1024,
-  attachWorkSession = true
+  attachWorkSession = true,
+  allowProtectedPaths = false
 } = {}) {
   requiredRoot();
   if (!workspace?.id || !workspace?.root) {
@@ -834,7 +840,7 @@ async function createBackupSnapshotInternal({
     const snapshotEntries = [];
     for (let index = 0; index < requested.length; index += 1) {
       const input = requested[index] || {};
-      const originalPath = assertBackupOriginalPath(input.originalPath);
+      const originalPath = assertBackupOriginalPath(input.originalPath, { allowProtectedPaths });
       const sourcePath = input.sourcePath ? path.resolve(String(input.sourcePath)) : '';
       if (sourcePath) assertEntrySourceMapping(workspace, originalPath, sourcePath);
       if (!sourcePath || !fs.lstatSync(sourcePath, { throwIfNoEntry: false })) {
@@ -855,7 +861,8 @@ async function createBackupSnapshotInternal({
         sourcePath,
         path.join(pending, payload),
         budget,
-        originalPath
+        originalPath,
+        { allowProtectedPaths }
       );
       snapshotEntries.push({
         role: String(input.role || `entry-${index}`),
@@ -878,6 +885,7 @@ async function createBackupSnapshotInternal({
       workSessionPrincipalId: session.workSessionPrincipalId,
       workSessionPrincipalName: session.workSessionPrincipalName,
       retainUntil: session.retainUntil,
+      allowProtectedPaths: !!allowProtectedPaths,
       totalBytes: budget.bytes,
       fileCount: budget.files,
       entries: snapshotEntries
@@ -1077,7 +1085,8 @@ export async function backupEntry(backupIdValue, requestedPath = '') {
     const actual = await describePayload(
       payloadPath,
       { entries: 0, maxEntries: MAX_BACKUP_TREE_ENTRIES },
-      entry.originalPath
+      entry.originalPath,
+      { allowProtectedPaths: set.manifest.allowProtectedPaths === true }
     );
     if (
       actual.kind !== entry.kind ||

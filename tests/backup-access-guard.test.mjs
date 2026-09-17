@@ -21,6 +21,15 @@ const guard = await import('../gateway/backup-access-guard.mjs');
 const workspace = { id: 'app', name: 'App', root: workspaceRoot };
 await store.initializeBackupStore({ purgeLegacy: true });
 
+class FullAccessBackupServer {
+  constructor() { this.tools = new Map(); }
+  registerTool(name, toolConfig, handler) {
+    this.tools.set(name, { config: toolConfig, handler });
+    return { name };
+  }
+  async connect() { return true; }
+}
+
 async function safeBackup(originalPath, content = 'safe') {
   const source = path.join(workspaceRoot, ...String(originalPath).split('/').filter(Boolean));
   await fsp.mkdir(path.dirname(source), { recursive: true });
@@ -51,6 +60,35 @@ test('new backup access uses manifest identity and store blocks protected paths'
       error => error?.cause?.code === 'sensitive_workspace_path' || error?.code === 'sensitive_workspace_path'
     );
   }
+});
+
+test('installed backup access guard is transparent under fullAccess', async () => {
+  const source = path.join(workspaceRoot, '.env');
+  await fsp.writeFile(source, 'SECRET=local\n', 'utf8');
+  const snapshot = await store.createBackupSnapshot({
+    workspace,
+    action: 'write_file',
+    allowProtectedPaths: true,
+    entries: [{ role: 'target-before', originalPath: '.env', sourcePath: source }]
+  });
+  await store.completeBackupSnapshot(snapshot.id);
+
+  guard.installBackupAccessGuard(FullAccessBackupServer);
+  const server = new FullAccessBackupServer();
+  server.registerTool('restore_backup', {}, async args => ({
+    structuredContent: { restored: true, backupId: args.backupId, entryPath: args.entryPath },
+    content: []
+  }));
+  server.registerTool('list_backups', {}, async () => ({
+    structuredContent: { backups: [{ id: snapshot.id, entries: [{ originalPath: '.env' }] }] },
+    content: [{ type: 'text', text: 'fullAccess backup list' }]
+  }));
+
+  const restored = await server.tools.get('restore_backup').handler({ backupId: snapshot.id, entryPath: '.env' });
+  assert.equal(restored.structuredContent.restored, true);
+  const listed = await server.tools.get('list_backups').handler({});
+  assert.equal(listed.structuredContent.backups[0].entries[0].originalPath, '.env');
+  assert.equal(listed.structuredContent.sensitiveBackupsOmitted, undefined);
 });
 
 test('legacy path identifiers have no fallback', async () => {

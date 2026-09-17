@@ -4,6 +4,7 @@ import path from 'node:path';
 import { executeCommand } from './command-process.mjs';
 import {
   normalizeSlash,
+  permissionProfile,
   readConfig,
   redactSensitiveString,
   redactSensitiveValue,
@@ -517,18 +518,26 @@ export function installFileAccessHardening(McpServerClass) {
     id: 'devmate.file-access-hardening',
     order: 6,
     decorate({ name, handler }) {
-      if (name === 'search_text') return { handler: safeSearchText };
-      if (name === 'git_diff') return { handler: safeGitDiff };
-      if (name === 'git_status') return { handler: safeGitStatus };
-      if (name === 'git_staged_files') return { handler: safeGitStagedFiles };
-      if (name === 'show_changes') return { handler: safeShowChanges };
+      const protectedHandler = safeHandler => async (args = {}, ...rest) => {
+        if (permissionProfile(readConfig()) === 'fullAccess') return handler(args, ...rest);
+        return safeHandler(args);
+      };
+      if (name === 'search_text') return { handler: protectedHandler(safeSearchText) };
+      if (name === 'git_diff') return { handler: protectedHandler(safeGitDiff) };
+      if (name === 'git_status') return { handler: protectedHandler(safeGitStatus) };
+      if (name === 'git_staged_files') return { handler: protectedHandler(safeGitStagedFiles) };
+      if (name === 'show_changes') return { handler: protectedHandler(safeShowChanges) };
       return {
         handler: async (args = {}, ...rest) => {
-          guardExplicitPaths(name, args);
-          await guardMutationTree(name, args);
-          await guardGitStaging(name, args);
-          if (name === 'git_raw') guardGitRaw(args);
+          const protectedPaths = permissionProfile(readConfig()) !== 'fullAccess';
+          if (protectedPaths) {
+            guardExplicitPaths(name, args);
+            await guardMutationTree(name, args);
+            await guardGitStaging(name, args);
+            if (name === 'git_raw') guardGitRaw(args);
+          }
           let result = await handler(args, ...rest);
+          if (!protectedPaths) return result;
           if (name === 'git_raw') result = filterGitRawResult(args, result);
           if (RESULT_PATH_FILTER_TOOLS.has(name)) result = filterPathResults(name, result);
           return redactReadResult(name, result);

@@ -21,7 +21,14 @@ const OWNER_ONLY_TOOLS = new Set([
   'read_audit_log', 'list_backups', 'restore_backup',
   'codex_collaboration_status', 'codex_collaboration_configure',
   'browser_control_status', 'browser_control_start', 'browser_control_tabs', 'browser_control_snapshot', 'browser_control_act',
-  'browser_control_takeover', 'browser_control_resume', 'browser_control_stop'
+  'browser_control_takeover', 'browser_control_resume', 'browser_control_stop',
+  'reverse_status', 'reverse_binary_info', 'reverse_strings', 'reverse_hex_read', 'reverse_bytes_search',
+  'reverse_value_codec', 'reverse_address_map', 'reverse_binary_diff', 'reverse_patch_copy', 'reverse_disassemble',
+  'reverse_processes', 'reverse_session_open', 'reverse_sessions', 'reverse_session_close', 'reverse_modules',
+  'reverse_memory_regions', 'reverse_memory_read', 'reverse_memory_search', 'reverse_value_scan', 'reverse_value_rescan',
+  'reverse_scan_results', 'reverse_scan_close', 'reverse_pointer_chain', 'reverse_pointer_references',
+  'reverse_memory_write', 'reverse_memory_restore',
+  'reverse_toolchain', 'reverse_code_analyze', 'reverse_decompile'
 ]);
 
 const PUBLISH_TOOLS = new Set([

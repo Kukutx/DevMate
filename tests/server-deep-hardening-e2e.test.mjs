@@ -82,7 +82,7 @@ function assertToolError(result, label) {
   assert.equal(result.json?.result?.isError, true, `${label} unexpectedly succeeded: ${result.text}`);
 }
 
-test('Gateway deep hardening protects secrets, readiness evidence, stable start time, and work-session failures', async t => {
+test('Gateway fullAccess preserves control-plane hardening, stable start time, and work-session failures', async t => {
   const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-server-hardening-'));
   const workspace = path.join(temp, 'workspace');
   const outside = path.join(temp, 'outside');
@@ -223,16 +223,16 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   assert.match(exposedCommand, /redacted/);
 
   const credentialsRead = await rpc('tools/call', { name: 'read_file', arguments: { workspaceId: 'app', path: 'credentials.json' } });
-  assertToolError(credentialsRead, 'credentials.json read');
-  assert.doesNotMatch(credentialsRead.text, /must-not-leak/);
+  assertToolSuccess(credentialsRead, 'credentials.json fullAccess read');
+  assert.match(credentialsRead.data?.text || '', /must-not-leak/);
 
   if (directoryAliasCreated) {
     const aliasSearch = await rpc('tools/call', {
       name: 'search_text',
       arguments: { workspaceId: 'app', subpath: 'safe-alias', query: 'hidden-needle' }
     });
-    assertToolError(aliasSearch, 'hidden directory symlink search');
-    assert.doesNotMatch(aliasSearch.text, /hidden-needle/);
+    assertToolSuccess(aliasSearch, 'in-workspace directory symlink search');
+    assert.ok(aliasSearch.data?.results?.some(item => /secret\.txt$/.test(item.file || '')), aliasSearch.text);
   }
 
   const literalSearch = await rpc('tools/call', {
@@ -261,7 +261,8 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   const listedPaths = fileList.data?.items?.map(item => item.path) || [];
   assert.ok(listedPaths.includes('Player.gd'), fileList.text);
   assert.ok(listedPaths.includes('scene.tscn'), fileList.text);
-  assert.equal(listedPaths.some(item => item.startsWith('.godot/')), false, fileList.text);
+  assert.ok(listedPaths.includes('.godot') || listedPaths.some(item => item.startsWith('.godot/')), fileList.text);
+  assert.ok(listedPaths.includes('credentials.json'), fileList.text);
 
   const godotWrite = await rpc('tools/call', {
     name: 'apply_patch',
@@ -270,26 +271,65 @@ test('Gateway deep hardening protects secrets, readiness evidence, stable start 
   assertToolSuccess(godotWrite, 'GDScript patch');
   assert.match(await fsp.readFile(path.join(workspace, 'Player.gd'), 'utf8'), /godot-text-updated/);
 
+  // Replacement metacharacters must remain literal (including dollar-apostrophe).
+  const literalTokens = String.fromCharCode(36, 39, 32, 36, 38, 32, 36, 96, 32, 36, 36);
+  for (const allOccurrences of [false, true]) {
+    const original = allOccurrences ? 'left NEEDLE middle NEEDLE right' : 'left NEEDLE right';
+    await fsp.writeFile(path.join(workspace, 'literal-patch.txt'), original);
+    const patched = await rpc('tools/call', {
+      name: 'apply_patch',
+      arguments: { workspaceId: 'app', path: 'literal-patch.txt', oldText: 'NEEDLE', newText: literalTokens, allOccurrences }
+    });
+    assertToolSuccess(patched, 'literal replacement tokens');
+    assert.equal(await fsp.readFile(path.join(workspace, 'literal-patch.txt'), 'utf8'), original.split('NEEDLE').join(literalTokens));
+  }
+
   const binaryWrite = await rpc('tools/call', {
     name: 'write_file',
     arguments: { workspaceId: 'app', path: 'image.png', content: 'not-a-png' }
   });
-  assertToolError(binaryWrite, 'binary write protection');
-  assert.deepEqual(await fsp.readFile(path.join(workspace, 'image.png')), binaryAsset);
+  assertToolSuccess(binaryWrite, 'fullAccess binary-path write');
+  assert.equal(await fsp.readFile(path.join(workspace, 'image.png'), 'utf8'), 'not-a-png');
 
   const binaryPatch = await rpc('tools/call', {
     name: 'apply_patch',
-    arguments: { workspaceId: 'app', path: 'image.png', oldText: 'PNG', newText: 'BAD' }
+    arguments: { workspaceId: 'app', path: 'image.png', oldText: 'not-a-png', newText: 'patched-as-text' }
   });
-  assertToolError(binaryPatch, 'binary patch protection');
-  assert.deepEqual(await fsp.readFile(path.join(workspace, 'image.png')), binaryAsset);
+  assertToolSuccess(binaryPatch, 'fullAccess binary-path patch');
+  assert.equal(await fsp.readFile(path.join(workspace, 'image.png'), 'utf8'), 'patched-as-text');
 
   const binaryCreate = await rpc('tools/call', {
     name: 'create_file',
     arguments: { workspaceId: 'app', path: 'new-image.png', content: 'not-a-png' }
   });
-  assertToolError(binaryCreate, 'binary create protection');
-  assert.equal(fs.existsSync(path.join(workspace, 'new-image.png')), false);
+  assertToolSuccess(binaryCreate, 'fullAccess binary-path create');
+  assert.equal(await fsp.readFile(path.join(workspace, 'new-image.png'), 'utf8'), 'not-a-png');
+
+  await fsp.writeFile(path.join(workspace, 'move-source.txt'), 'move-secret-path\n', 'utf8');
+  const moveIntoSecrets = await rpc('tools/call', {
+    name: 'move_file',
+    arguments: { workspaceId: 'app', from: 'move-source.txt', to: 'secrets/move-source.txt' }
+  });
+  assertToolSuccess(moveIntoSecrets, 'fullAccess move into secrets');
+  assert.equal(await fsp.readFile(path.join(workspace, 'secrets', 'move-source.txt'), 'utf8'), 'move-secret-path\n');
+
+  const moveOutOfSecrets = await rpc('tools/call', {
+    name: 'move_file',
+    arguments: { workspaceId: 'app', from: 'secrets/move-source.txt', to: 'moved/move-source.txt' }
+  });
+  assertToolSuccess(moveOutOfSecrets, 'fullAccess move out of secrets');
+  assert.equal(await fsp.readFile(path.join(workspace, 'moved', 'move-source.txt'), 'utf8'), 'move-secret-path\n');
+
+  await fsp.mkdir(path.join(workspace, 'protected-tree', '.ssh'), { recursive: true });
+  await fsp.writeFile(path.join(workspace, 'protected-tree', '.env'), 'SECRET=tree\n', 'utf8');
+  await fsp.writeFile(path.join(workspace, 'protected-tree', '.ssh', 'id_ed25519'), 'test-key\n', 'utf8');
+  const moveProtectedTree = await rpc('tools/call', {
+    name: 'move_file',
+    arguments: { workspaceId: 'app', from: 'protected-tree', to: 'secrets/protected-tree' }
+  });
+  assertToolSuccess(moveProtectedTree, 'fullAccess move directory containing protected descendants');
+  assert.equal(await fsp.readFile(path.join(workspace, 'secrets', 'protected-tree', '.env'), 'utf8'), 'SECRET=tree\n');
+  assert.equal(await fsp.readFile(path.join(workspace, 'secrets', 'protected-tree', '.ssh', 'id_ed25519'), 'utf8'), 'test-key\n');
 
   if (outsideInstructionAliasCreated) {
     const instructions = await rpc('tools/call', { name: 'project_instructions', arguments: { workspaceId: 'app' } });

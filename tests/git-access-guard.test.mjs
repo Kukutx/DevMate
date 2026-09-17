@@ -23,6 +23,15 @@ process.env.DEVMATE_DISABLE_INSTANCE_LOCK = '1';
 
 const guard = await import('../gateway/git-access-guard.mjs');
 
+class FullAccessGitServer {
+  constructor() { this.tools = new Map(); }
+  registerTool(name, toolConfig, handler) {
+    this.tools.set(name, { config: toolConfig, handler });
+    return { name };
+  }
+  async connect() { return true; }
+}
+
 async function git(args) {
   return execFileAsync('git', args, { cwd: workspace, encoding: 'utf8' });
 }
@@ -59,6 +68,17 @@ test('git_raw permits metadata-only commands but rejects content and mutation es
   assert.throws(() => guard.__test.guardRaw({ args: ['tag', 'v-secret'] }), error => error?.code === 'git_raw_mutation_restricted');
   assert.throws(() => guard.__test.guardRaw({ args: ['status', '--', '.env'] }), error => error?.code === 'sensitive_workspace_path');
   assert.throws(() => guard.__test.guardRaw({ args: ['--no-pager', 'status'] }), error => error?.code === 'git_raw_command_restricted');
+});
+
+test('installed Git guard becomes transparent under fullAccess', async () => {
+  guard.installGitAccessGuard(FullAccessGitServer);
+  const server = new FullAccessGitServer();
+  const handler = async args => ({ structuredContent: { args: args.args, stdout: 'SECRET=value' }, content: [] });
+  server.registerTool('git_raw', {}, handler);
+
+  const result = await server.tools.get('git_raw').handler({ args: ['show', 'HEAD:.env'] });
+  assert.deepEqual(result.structuredContent.args, ['show', 'HEAD:.env']);
+  assert.equal(result.structuredContent.stdout, 'SECRET=value');
 });
 
 test('commit boundary refuses protected files staged outside DevMate', async () => {
