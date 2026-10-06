@@ -40,19 +40,50 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
-async function waitForStaleGatewayHandoff(config, port, timeoutMs = STALE_GATEWAY_HANDOFF_MS) {
-  const deadline = Date.now() + Math.max(250, Number(timeoutMs) || STALE_GATEWAY_HANDOFF_MS);
-  let lastHealth = null;
-  while (Date.now() <= deadline) {
-    lastHealth = await healthAt(port, 600);
-    if (healthMatches(lastHealth, config)) {
-      return { attached: true, released: false, health: lastHealth.json };
+async function waitForStaleGatewayHandoff(config, port, timeoutMs = STALE_GATEWAY_HANDOFF_MS, {
+  initialHealth = null,
+  probeHealth = healthAt,
+  probePortFree = isPortFree,
+  clock = Date.now,
+  wait = delay
+} = {}) {
+  const requestedTimeout = Number(timeoutMs);
+  const budgetMs = Number.isFinite(requestedTimeout) ? Math.max(0, requestedTimeout) : STALE_GATEWAY_HANDOFF_MS;
+  const deadline = clock() + budgetMs;
+  const timedOut = Symbol('handoff-timeout');
+  let lastHealth = initialHealth;
+  let sameInstanceSeen = sameDevMateInstance(initialHealth, config);
+  let timeout;
+  const expiration = new Promise(resolve => {
+    timeout = setTimeout(() => resolve(timedOut), budgetMs);
+  });
+  try {
+    while (clock() < deadline) {
+      const health = await Promise.race([
+        probeHealth(port, Math.min(600, deadline - clock())),
+        expiration
+      ]);
+      if (health === timedOut || clock() >= deadline) break;
+      lastHealth = health;
+      if (healthMatches(lastHealth, config)) {
+        return { attached: true, released: false, health: lastHealth.json };
+      }
+      if (!lastHealth?.ok) {
+        const released = await Promise.race([probePortFree(port), expiration]);
+        if (released === timedOut || clock() >= deadline) break;
+        if (released) return { attached: false, released: true, health: null };
+      }
+      if (sameDevMateInstance(lastHealth, config)) {
+        sameInstanceSeen = true;
+      } else if (lastHealth?.ok || !sameInstanceSeen) {
+        throw portConflict(port, lastHealth, config);
+      }
+      // A confirmed same-instance handoff may briefly lose health before the port closes.
+      const pause = await Promise.race([wait(Math.min(100, deadline - clock())), expiration]);
+      if (pause === timedOut) break;
     }
-    if (!lastHealth.ok && await isPortFree(port)) {
-      return { attached: false, released: true, health: null };
-    }
-    if (!sameDevMateInstance(lastHealth, config)) throw portConflict(port, lastHealth, config);
-    await delay(100);
+  } finally {
+    clearTimeout(timeout);
   }
   throw portConflict(port, lastHealth, config);
 }
@@ -564,7 +595,8 @@ class RuntimeController {
         const handoff = await waitForStaleGatewayHandoff(
           config,
           configuredPort,
-          Math.min(STALE_GATEWAY_HANDOFF_MS, Math.max(250, deadline - Date.now()))
+          Math.min(STALE_GATEWAY_HANDOFF_MS, Math.max(0, deadline - Date.now())),
+          { initialHealth: existing }
         );
         if (handoff.attached) {
           this.owned = false;
@@ -587,7 +619,8 @@ class RuntimeController {
         const handoff = await waitForStaleGatewayHandoff(
           config,
           choice.port,
-          Math.min(STALE_GATEWAY_HANDOFF_MS, Math.max(250, deadline - Date.now()))
+          Math.min(STALE_GATEWAY_HANDOFF_MS, Math.max(0, deadline - Date.now())),
+          { initialHealth: { ok: true, json: choice.health } }
         );
         if (handoff.attached) {
           this.owned = false;
