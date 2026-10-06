@@ -10,9 +10,9 @@ const source = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
 test('runtime depends only on current MCP v2 packages', () => {
   const pkg = JSON.parse(source('package.json'));
-  assert.equal(pkg.dependencies['@modelcontextprotocol/server'], '2.0.0');
-  assert.equal(pkg.dependencies['@modelcontextprotocol/client'], '2.0.0');
-  assert.equal(pkg.dependencies['@modelcontextprotocol/node'], '2.0.0');
+  assert.equal(pkg.dependencies['@modelcontextprotocol/server'], '2.2.0');
+  assert.equal(pkg.dependencies['@modelcontextprotocol/client'], '2.2.0');
+  assert.equal(pkg.dependencies['@modelcontextprotocol/node'], '2.1.0');
   assert.equal(pkg.dependencies['@modelcontextprotocol/sdk'], undefined);
   assert.equal(pkg.dependencies['@modelcontextprotocol/server-legacy'], undefined);
 });
