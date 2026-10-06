@@ -221,9 +221,9 @@ if (authenticationDefault !== 'none') {
   failures.push({ file: 'package.json', output: 'devMate.authenticationMode must default to none for single-owner use' });
 }
 const currentMcpPackages = {
-  '@modelcontextprotocol/client': '2.0.0',
-  '@modelcontextprotocol/node': '2.0.0',
-  '@modelcontextprotocol/server': '2.0.0'
+  '@modelcontextprotocol/client': '2.2.0',
+  '@modelcontextprotocol/node': '2.1.0',
+  '@modelcontextprotocol/server': '2.2.0'
 };
 if (packageJson.dependencies?.['@modelcontextprotocol/sdk']) {
   failures.push({ file: 'package.json', output: 'legacy monolithic @modelcontextprotocol/sdk dependency is forbidden' });
