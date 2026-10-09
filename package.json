@@ -405,9 +405,9 @@
     "devmate-runner": "./scripts/devmate-runner.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.2.0",
-    "@modelcontextprotocol/node": "2.1.0",
-    "@modelcontextprotocol/server": "2.2.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
