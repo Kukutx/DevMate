@@ -172,7 +172,7 @@ They reach your MCP server from the cloud, so they need a route from outside to 
 | --- | --- | --- |
 | `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
-| `https` | Any client | A reverse proxy you already run |
+| `https` | Any client | A reverse proxy you already run, or a tunnel program of yours that DevMate starts and keeps running |
 | `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that provides HTTPS |
 
 **Cloudflare tunnel**
@@ -200,6 +200,18 @@ devmate restart
 ```
 
 `devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it.
+
+**Your own tunnel program**
+
+Any program that gives this computer a public HTTPS address (ngrok with a reserved domain, Tailscale Funnel, frp and the like) can be run by DevMate: it is started with the connection, started again if it ends, and stopped with the runtime.
+
+```powershell
+devmate connect https --url https://<your-domain>/mcp --executable "C:\Tools\ngrok\ngrok.exe" --args "http {port} --url https://{host}"
+devmate restart
+devmate doctor
+```
+
+`{port}` is the local port to forward to and `{host}` the public host. The arguments are passed as they are, never through a shell. A credential the program reads from its environment is named under `connection.command.env` in `config.json` and stored with `devmate secret set`; the program gets nothing else of DevMate's. In VS Code, **DevMate: Configure Connection** asks for the program when you choose the existing HTTPS proxy.
 
 **Is it really connected?**
 
@@ -291,7 +303,7 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 
 - Nothing of 3.x is read: projects, connection and sign-in are set up again. Old settings in your editor are ignored; old state on disk is left alone and can be deleted.
 - ngrok, the Gateway and Runners are gone. Cloud clients now come in through a tunnel you own, see [Connecting a client](#connecting-a-client). The MCP address changes, so update the connector in ChatGPT or Claude.
-- DevMate no longer starts ngrok for you. A reserved ngrok domain still works as an existing HTTPS proxy: run `ngrok http 8789 --url https://<your-domain>` yourself (the ingress port, not 8788) and tell DevMate with `devmate connect https --url https://<your-domain>/mcp`, then `devmate restart`.
+- DevMate has no ngrok support of its own any more. A reserved ngrok domain still works as an HTTPS route, and DevMate can start and keep ngrok running for it: see "Your own tunnel program" under [Connecting a client](#connecting-a-client). It forwards to the ingress port (8789), not to 8788.
 - If a 3.x Gateway is still running it may hold port 8788, and 4.0 then reports that the port is in use. Close every editor window once, or end the old `node` process, and start again.
 - The tool names a model sees have changed; clients pick them up when the connector is refreshed.
 

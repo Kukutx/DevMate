@@ -292,7 +292,14 @@ devmate restart
 
 - 3.x 的任何东西都不会被读取：项目、连接和登录要重新设置。编辑器里的旧设置会被忽略；磁盘上的旧状态原样保留，可以删除。
 - ngrok、Gateway 和 Runner 都没有了。云端客户端现在通过你自己的隧道进来，见[连接客户端](#连接客户端)。MCP 地址变了，要在 ChatGPT 或 Claude 里更新连接器。
-- DevMate 不再替你启动 ngrok。已有的 ngrok 固定域名仍然可以当作“现成的 HTTPS 代理”使用：自己运行 `ngrok http 8789 --url https://<你的域名>`（是入口端口 8789，不是 8788），再用 `devmate connect https --url https://<你的域名>/mcp` 告诉 DevMate，然后 `devmate restart`。
+- DevMate 不再内置 ngrok 支持。已有的 ngrok 固定域名仍然可以用，并且可以交给 DevMate 启动和看护：
+
+  ```powershell
+  devmate connect https --url https://<你的域名>/mcp --executable "C:\Tools\ngrok\ngrok.exe" --args "http {port} --url https://{host}"
+  devmate restart
+  ```
+
+  `{port}` 是要转发到的本机入口端口（默认 8789，不是 8788），`{host}` 是公网域名。这个程序随连接启动，退出后自动拉起，随运行时停止。Tailscale Funnel、frp 等同理。
 - 如果 3.x 的 Gateway 还在运行，它可能占着 8788 端口，4.0 会提示端口被占用。把所有编辑器窗口关一次，或结束旧的 `node` 进程，再启动。
 - 模型看到的工具名变了；客户端刷新连接器后就会拿到新的。
 
