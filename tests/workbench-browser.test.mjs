@@ -259,9 +259,11 @@ test('finding 1: a server event refreshes the lists and never touches what the p
   await until(()=>f.count('workbench.snapshot')>snapshots,'a refresh during the burst');
   assert.equal(await draft.inputValue(),'halfX012345ten thought');
   assert.equal((await focused(page)).tag,'TEXTAREA');
-  // Events of another project are not this page's business.
-  await delay(1200);const quiet=f.count('workbench.snapshot');
-  server.push({type:'task.updated',projectId:'p-two'});await delay(900);
+  // Events of another project are not this page's business. What the burst still owes arrives first: a refresh follows
+  // its event by up to a second, and later than that on a busy machine.
+  let quiet;
+  do{quiet=f.count('workbench.snapshot');await delay(1500);}while(f.count('workbench.snapshot')!==quiet);
+  server.push({type:'task.updated',projectId:'p-two'});await delay(1500);
   assert.equal(f.count('workbench.snapshot'),quiet);
   // A structured answer in progress survives a new request arriving.
   await page.getByRole('tab',{name:'Approvals',exact:true}).click();
