@@ -403,11 +403,15 @@ export class DevMateService {
     catch (error) { return { kind: this.config.connection.kind, phase: 'unknown', error: { code: error.code || 'status_failed', message: error.message } }; }
   }
 
+  // The public MCP address right now: the configured one, or the one a quick tunnel currently holds.
+  publicUrl() { return publicMcpUrl(this.config) || this.connection?.publicUrl?.() || null; }
+
   async verifyConnection() {
-    const kind = this.config.connection.kind, url = publicMcpUrl(this.config), checkedAt = now();
+    const kind = this.config.connection.kind, url = this.publicUrl(), checkedAt = now();
     if (!url) {
       this.verification = { kind, checkedAt, verified: false, reachable: false, reason: kind === 'openai-tunnel'
-        ? 'An OpenAI tunnel has no public URL to probe. Confirm it by calling a DevMate tool from ChatGPT.' : 'No public connection is configured.' };
+        ? 'An OpenAI tunnel has no public URL to probe. Confirm it by calling a DevMate tool from ChatGPT.'
+        : kind === 'cloudflare-quick' ? 'The quick tunnel has not been given its address yet.' : 'No public connection is configured.' };
       return this.verification;
     }
     // With sign-in enabled the runtime signs itself in with a token that lives only for this check.

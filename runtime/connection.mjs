@@ -8,6 +8,7 @@ import { createSshConnection, normalizeSshConfig } from './ssh-connection.mjs';
 import { createCloudflareConnection, normalizeCloudflareConfig } from './cloudflare-connection.mjs';
 import { createConnectionRecovery } from './connection-recovery.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
+import { programExists } from './platform/tools.mjs';
 
 const { childExited, terminateProcessTree } = processTree;
 const executeFile = promisify(execFile);
@@ -31,13 +32,13 @@ export function normalizeConnectionConfig(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Connection configuration must be an object');
   const kind = value.kind || 'local';
   if (kind === 'ssh') return normalizeSshConfig(value);
-  if (kind === 'cloudflare') return normalizeCloudflareConfig(value);
+  if (kind === 'cloudflare' || kind === 'cloudflare-quick') return normalizeCloudflareConfig(value);
   const allowed = {
     local: new Set(['kind']),
     'external-https': new Set(['kind', 'url', 'command']),
     'openai-tunnel': new Set(['kind', 'tunnelId', 'executable', 'runtimeKeyEnv'])
   }[kind];
-  if (!allowed) throw new Error('Connection kind must be local, openai-tunnel, cloudflare, external-https, or ssh');
+  if (!allowed) throw new Error('Connection kind must be local, openai-tunnel, cloudflare, cloudflare-quick, external-https, or ssh');
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unsupported connection setting: ${key}`);
   if (kind === 'local') return { kind };
   if (kind === 'external-https') {
@@ -83,7 +84,7 @@ export function createConnection({
 } = {}) {
   const settings = normalizeConnectionConfig(config);
   if (settings.kind === 'ssh') return createSshConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl });
-  if (settings.kind === 'cloudflare') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
+  if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
   const localUrl = httpTarget(localMcpUrl);
   const healthFile = path.join(instanceDirectory(instanceRoot), 'tunnel-health.url');
   // Only a process this module really started is written down; a test double has none to find again.
@@ -145,7 +146,7 @@ export function createConnection({
       const program = settings.command;
       if (settings.kind === 'external-https' && !program) { phase = 'configured'; return snapshot(); }
       const executable = program ? program.executable : settings.executable;
-      if (!fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) throw new Error(program ? 'The connection program is not installed at the selected path: ' + executable : 'Official tunnel-client executable is not installed at the selected path');
+      if (!programExists(executable)) throw new Error(program ? 'The connection program is not installed at the selected path: ' + executable : 'Official tunnel-client executable is not installed at the selected path');
       const runtimeKey = program ? null : env[settings.runtimeKeyEnv];
       if (!program && (typeof runtimeKey !== 'string' || !runtimeKey.trim())) throw new Error(`Missing runtime key environment variable: ${settings.runtimeKeyEnv}`);
       const missing = program?.env.find(name => typeof env[name] !== 'string' || !env[name]);

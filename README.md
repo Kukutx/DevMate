@@ -166,14 +166,27 @@ Any other client: add an HTTP (Streamable HTTP) MCP server with this address. A 
 
 ### ChatGPT on the web and Claude.ai
 
-They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers four, none of which depends on ngrok:
+They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers five:
 
 | Route | For | Notes |
 | --- | --- | --- |
+| `quick` | Any client | A Cloudflare quick tunnel. No account, no domain, nothing to set up; the address changes whenever it starts again |
 | `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
 | `https` | Any client | A reverse proxy you already run, or a tunnel program of yours that DevMate starts and keeps running |
 | `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that provides HTTPS |
+
+**Quick tunnel: connected in a minute**
+
+With `cloudflared` installed (Windows: `winget install Cloudflare.cloudflared`; macOS: `brew install cloudflared`), three commands give you an address for ChatGPT or Claude:
+
+```powershell
+devmate connect quick
+devmate restart
+devmate mcp-url
+```
+
+Nothing is registered anywhere: Cloudflare hands out a random `trycloudflare.com` address while the tunnel runs, and DevMate checks that it reaches this runtime. The address is the only secret and there is no sign-in, so give it to your own client only. It changes whenever DevMate or the tunnel starts again; the client then gets the new one from `devmate mcp-url`. For an address that stays, use one of the routes below.
 
 **Cloudflare tunnel**
 
@@ -203,10 +216,10 @@ devmate restart
 
 **Your own tunnel program**
 
-Any program that gives this computer a public HTTPS address (ngrok with a reserved domain, Tailscale Funnel, frp and the like) can be run by DevMate: it is started with the connection, started again if it ends, and stopped with the runtime.
+Any program that gives this computer a public HTTPS address (Tailscale Funnel, frp and the like) can be run by DevMate: it is started with the connection, started again if it ends, and stopped with the runtime.
 
 ```powershell
-devmate connect https --url https://<your-domain>/mcp --executable "C:\Tools\ngrok\ngrok.exe" --args "http {port} --url https://{host}"
+devmate connect https --url https://<your-domain>/mcp --executable "C:\Tools\frp\frpc.exe" --args "http --local_port {port} --custom_domain {host}"
 devmate restart
 devmate doctor
 ```
@@ -302,8 +315,7 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 4.0 starts fresh. After the update:
 
 - Nothing of 3.x is read: projects, connection and sign-in are set up again. Old settings in your editor are ignored; old state on disk is left alone and can be deleted.
-- ngrok, the Gateway and Runners are gone. Cloud clients now come in through a tunnel you own, see [Connecting a client](#connecting-a-client). The MCP address changes, so update the connector in ChatGPT or Claude.
-- DevMate has no ngrok support of its own any more. A reserved ngrok domain still works as an HTTPS route, and DevMate can start and keep ngrok running for it: see "Your own tunnel program" under [Connecting a client](#connecting-a-client). It forwards to the ingress port (8789), not to 8788.
+- The Gateway, the Runners and the tunnel providers of 3.x are gone. Cloud clients come in through one of the routes under [Connecting a client](#connecting-a-client); `devmate connect quick` is the fastest. The MCP address is a new one, so create the connector in ChatGPT or Claude again.
 - If a 3.x Gateway is still running it may hold port 8788, and 4.0 then reports that the port is in use. Close every editor window once, or end the old `node` process, and start again.
 - The tool names a model sees have changed; clients pick them up when the connector is refreshed.
 

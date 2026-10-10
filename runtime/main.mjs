@@ -128,8 +128,15 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   // is what a tunnel or reverse proxy targets and serves only MCP and OAuth, so
   // no routing or Host-header mistake can expose the owner control interface.
   const publicUrl = publicMcpUrl(config);
-  const publicOrigin = config.auth.mode === 'oauth' ? config.auth.issuer : publicUrl ? new URL(publicUrl).origin : null;
-  const hasIngress = publicOrigin !== null || config.connection.kind === 'openai-tunnel';
+  // A quick tunnel is given its address when its connector starts, and loses it when that ends: the origin public
+  // requests must name is asked for each time, never remembered.
+  const quickTunnel = config.connection.kind === 'cloudflare-quick';
+  const currentOrigin = () => {
+    if (config.auth.mode === 'oauth') return config.auth.issuer;
+    const url = publicUrl || (quickTunnel ? connection?.publicUrl?.() : null);
+    return url ? new URL(url).origin : null;
+  };
+  const hasIngress = currentOrigin() !== null || quickTunnel || config.connection.kind === 'openai-tunnel';
   // The control port answers to this computer under any local port number: an editor that forwards it from a remote
   // machine reaches it as localhost:<another port>. Against DNS rebinding it is the name that counts, never the number.
   const localName = host => /^(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(host || '');
@@ -175,6 +182,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // An OpenAI tunnel client forwards to this loopback port itself; every other
     // route arrives through a proxy that preserves the configured public host.
     const tunnelLocal = config.connection.kind === 'openai-tunnel' && loopbackHost(ingress, req.headers.host);
+    const publicOrigin = currentOrigin();
     if (!tunnelLocal && (!publicOrigin || req.headers.host !== new URL(publicOrigin).host)) return refuse(res, 'invalid_host', 'Unexpected host.');
     const requestOrigin = tunnelLocal ? 'http://' + req.headers.host : publicOrigin;
     const url = new URL(req.url, requestOrigin);
@@ -354,7 +362,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // A public route counts as working only after a real MCP round trip through it.
     // A tunnel needs a moment to register, so look often at first, then keep watching:
     // a route that breaks later must not keep its earlier "verified".
-    if (publicUrl && connectionFactory === createConnection) {
+    if ((publicUrl || quickTunnel) && connectionFactory === createConnection) {
       let attempts = 0;
       const again = delay => { if (!stopping) { verifyTimer = setTimeout(check, delay); verifyTimer.unref(); } };
       const check = () => {

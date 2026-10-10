@@ -67,7 +67,8 @@ export const configSchema = z.object({
     z.object({ kind: z.literal('ssh'), publicUrl: z.string().url(), executable: z.string(), host: z.string(), user: z.string(),
       sshPort: z.number().int().optional(), remotePort: z.number().int().optional(), identityFile: z.string().optional() }).strict(),
     z.object({ kind: z.literal('openai-tunnel'), tunnelId: z.string(), executable: z.string(), runtimeKeyEnv: envName.optional() }).strict(),
-    z.object({ kind: z.literal('cloudflare'), publicUrl: z.string().url(), executable: z.string(), tokenEnv: envName.optional() }).strict()
+    z.object({ kind: z.literal('cloudflare'), publicUrl: z.string().url(), executable: z.string(), tokenEnv: envName.optional() }).strict(),
+    z.object({ kind: z.literal('cloudflare-quick'), executable: z.string() }).strict()
   ]).default({ kind: 'local' }),
   // Loopback port that tunnels and reverse proxies target. It serves only MCP and OAuth.
   ingressPort: z.number().int().min(1024).max(65535).optional(),
@@ -89,6 +90,9 @@ export function normalizeConfig(input = {}) {
     if (settings.command && (!path.isAbsolute(settings.command.file) || /\.(cmd|bat|ps1)$/i.test(settings.command.file))) {
       throw new DomainError('invalid_executable', 'Provider command.file must be an absolute native executable. Pass a Node entry point in args.');
     }
+  }
+  if (config.connection.kind === 'cloudflare-quick' && config.auth.mode === 'oauth') {
+    throw new DomainError('invalid_issuer', 'A quick tunnel gets a new address each time it starts, so nobody can sign in at it. Use it without sign-in, or use a tunnel with a hostname of your own.');
   }
   const publicUrl = publicMcpUrl(config);
   if (config.auth.mode === 'oauth' && publicUrl && new URL(publicUrl).origin !== config.auth.issuer) {

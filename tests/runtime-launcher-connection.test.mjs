@@ -26,7 +26,7 @@ test('local default and external HTTPS do not start a relay', async () => {
 });
 
 test('connection configuration accepts secret references, not secret values or old providers', () => {
-  assert.throws(()=>normalizeConnectionConfig({kind:'ngrok'}), /Connection kind/);
+  assert.throws(()=>normalizeConnectionConfig({kind:'some-other-provider'}), /Connection kind/);
   assert.throws(()=>normalizeConnectionConfig({kind:'external-https',url:'http://example.test/mcp'}), /HTTPS/);
   assert.throws(()=>normalizeConnectionConfig({kind:'openai-tunnel',tunnelId:'tunnel_test',executable:process.execPath,apiKey:'do-not-store'}), /Unsupported connection setting/);
   assert.throws(()=>normalizeConnectionConfig({kind:'openai-tunnel',tunnelId:'tunnel_test',executable:path.resolve('client.cmd')}), /shell script/);
@@ -141,7 +141,7 @@ test('an external HTTPS address can come with a program of the owner that DevMat
   assert.equal(JSON.stringify(await connection.status()).includes('agent-token'),false);
   await connection.stop();
   assert.equal(terminated,child); assert.equal((await connection.status()).phase,'stopped');
-  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:'ngrok',args:[]}}),/absolute path/);
+  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:'frpc',args:[]}}),/absolute path/);
   assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:path.resolve('tunnel.cmd')}}),/shell script/);
   assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:process.execPath,args:'http 80'}}),/list of at most 40 strings/);
   assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:process.execPath,env:['A=b']}}),/variable names/);
@@ -160,4 +160,17 @@ test('devmate connect https takes the program and its arguments, and a later con
   assert.deepEqual(first.saved.connection.command,{executable:process.execPath,args:['http','{port}','--url','https://{host}','--label','two words'],env:[]});
   const second = await run(['connect','https','--url','https://tunnel.example.test/mcp']);
   assert.deepEqual(second.saved.connection,{kind:'external-https',url:'https://tunnel.example.test/mcp'});
+});
+test('devmate connect quick needs nothing but cloudflared and never keeps a sign-in that has no address to live at', async t => {
+  const { main } = await import('../runtime/cli.mjs');
+  const instance = fs.mkdtempSync(path.join(os.tmpdir(),'devmate-quick-cli-'));
+  t.after(()=>fs.rmSync(instance,{recursive:true,force:true}));
+  const run = async args => { let text='',errors=''; const code = await main([...args,'--instance',instance],{stdout:{write(value){text+=value;}},stderr:{write(value){errors+=value;}}}); return {code,errors,answer:code===0?JSON.parse(text):null}; };
+  // Sign-in was on for an address that stays.
+  assert.equal((await run(['connect','https','--url','https://tunnel.example.test/mcp','--auth','oauth'])).answer.saved.auth.mode,'oauth');
+  const quick = await run(['connect','quick','--executable',process.execPath]);
+  assert.deepEqual(quick.answer.saved,{connection:{kind:'cloudflare-quick',executable:process.execPath},auth:{mode:'none'}});
+  assert.equal(quick.answer.credential,null); assert.ok(quick.answer.next.some(step=>/devmate mcp-url/.test(step)));
+  const refused = await run(['connect','quick','--executable',process.execPath,'--auth','oauth']);
+  assert.equal(refused.code,1); assert.match(refused.errors,/stays the same/);
 });

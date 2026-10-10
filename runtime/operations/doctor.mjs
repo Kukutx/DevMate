@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
-import { publicMcpUrl } from '../config.mjs';
-import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
+import { findOnPath, installHint, programExists, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { within } from './shared.mjs';
 
@@ -39,13 +38,13 @@ export async function doctor(service) {
       installed ? 'installed' + (provider.version ? ', version ' + provider.version : '') : absent ? 'not installed' : provider.error?.message || provider.status,
       installed ? null : absent ? 'Only needed to delegate tasks to ' + provider.id + '.' : 'Update or reinstall ' + provider.id + (provider.minimumVersion ? ' (version ' + provider.minimumVersion + ' or newer)' : '') + ' to delegate tasks to it.');
   }
-  const connection = service.config.connection, url = publicMcpUrl(service.config), env = service.secrets.environment();
+  const connection = service.config.connection, url = service.publicUrl(), env = service.secrets.environment();
   const status = await service.connectionState();
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'Configure an openai-tunnel or cloudflare connection to use ChatGPT or Claude.ai.');
   else {
     const program = connection.executable || connection.command?.executable;
-    if (program) check('connection.executable', fs.statSync(program, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', program, 'Install the connector and set its absolute path in the connection settings.');
+    if (program) check('connection.executable', programExists(program) ? 'ok' : 'fail', program, 'Install the connector and set its absolute path in the connection settings.');
     if (credential) check('connection.credential', env[credential] ? 'ok' : 'fail', credential + (env[credential] ? ' is set' : ' is missing'),
       'Store it with: devmate secret set ' + credential + ' (or "Configure Connection" in the editor), then restart DevMate.');
     const phase = status.phase || status.status || 'unknown', fault = status.error?.message || service.connectionFault?.message;
@@ -56,9 +55,15 @@ export async function doctor(service) {
       check('connection.public', verification.verified ? 'ok' : verification.reachable ? 'warn' : 'fail',
         url + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.' : 'Check the proxy route to the ingress port.');
-    } else check('connection.public', 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
+    } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
+    else check('connection.public', 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
+    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel: its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
+      'For an address that stays, use an OpenAI tunnel or a Cloudflare tunnel on a domain of yours: "Configure Connection" in the editor, or devmate connect.');
   }
-  if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
+  // A quick tunnel cannot ask for sign-in: its address is random, changes with every start, and is the only secret there is.
+  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel address has no sign-in: anyone who learns it can read and change your projects and run commands. It is random and changes with every start.',
+    'Give it only to your own client. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
+  else if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
   else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
