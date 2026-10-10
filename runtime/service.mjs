@@ -98,6 +98,8 @@ export class DevMateService {
     recallTools(this.instanceRoot);
     this.providerDiscovery = null;
     this.ready = Promise.resolve().then(async () => {
+      // Before any new work: what an earlier runtime of this instance left running when it died.
+      await this.processes.reapLeftovers().catch(error => this.store.recordNotificationFailure(error));
       this.auth = createAuth({ ...authOptions, store: this.store, instanceRoot: this.instanceRoot, config: this.config.auth });
       for (const operation of this.auth.operations) {
         if (['auth.member.update','auth.member.remove'].includes(operation.name)) {

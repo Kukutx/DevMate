@@ -90,5 +90,5 @@ Report suspected security vulnerabilities privately through GitHub's [Report a v
 - The runtime keeps running after the editor that started it is closed, until it is stopped (`devmate stop`, or **Stop DevMate Runtime** in the editor). A public connection stays up with it.
 - An origin added to `allowedOrigins` may call the local MCP port from a browser, and on that port a caller without credentials is the owner. Add only the origin of a client you run yourself.
 - A delegated Gemini CLI or Grok CLI session also loads the MCP servers configured in that CLI's own settings; DevMate cannot keep them out (it does for Codex and Claude Code). If DevMate itself is registered there, the delegated agent reaches it with the owner's authority.
-- On Linux and macOS a command that outlives a runtime that crashed is not tracked by its successor.
+- A command still running when the runtime dies is ended by the next runtime of that instance, if it had been running for more than a few seconds; a shorter one is not tracked and ends on its own. Processes a command left in the background after it exited itself are not tracked.
 - Command redaction, protected paths and the read-only tools reduce what a connected model can see or do by accident. They are not a sandbox: commands run as the owner's operating-system account.

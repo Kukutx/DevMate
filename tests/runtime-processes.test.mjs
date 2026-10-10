@@ -158,3 +158,29 @@ test('output in the system encoding is read as text, line by line, beside UTF-8'
   // Bytes that are text in no encoding at all still come back as something, never as an error.
   assert.equal(typeof decodeOutput(Buffer.from([0x00, 0xff, 0xfe, 0x0a, 0x80])), 'string');
 });
+
+test('a long-running command that outlives its runtime is ended by the next one, and only that very process', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-leftover-'));
+  const instanceRoot = path.join(temp, 'instance'), root = path.join(temp, 'project');
+  fs.mkdirSync(root, { recursive: true });
+  const project = { id: 'project-leftover', root, access: 'write', controlRoot: instanceRoot };
+  // The runtime that started the command: it writes long runners down almost at once here.
+  const first = createProcessManager({ instanceRoot, rememberAfterMs: 50 });
+  const running = first.run(project, { file: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], waitMs: 0 });
+  const started = await running, record = path.join(instanceRoot, 'owned-commands', started.id + '.json');
+  t.after(() => { try { process.kill(started.pid, 'SIGKILL'); } catch {} fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let waited = 0; !fs.existsSync(record) && waited < 15000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(JSON.parse(fs.readFileSync(record, 'utf8')).pid, started.pid); assert.equal(alive(started.pid), true);
+  // A record of a process id that now belongs to something else: this very test process. It must be left alone.
+  fs.writeFileSync(path.join(instanceRoot, 'owned-commands', 'process-other.json'), JSON.stringify({ pid: process.pid, identity: 'another program|long ago' }));
+  // That runtime dies without stopping anything. Its successor finds the records.
+  const second = createProcessManager({ instanceRoot });
+  assert.deepEqual(await second.reapLeftovers(), { reaped: 1, found: 2 });
+  assert.equal(alive(started.pid), false, 'the command the first runtime left behind is ended');
+  assert.deepEqual(fs.readdirSync(path.join(instanceRoot, 'owned-commands')), []);
+  // A command that ends on its own leaves no record behind.
+  const short = await second.run(project, { file: process.execPath, args: ['-e', '1'], waitMs: 10000 });
+  assert.equal(short.status, 'exited'); assert.deepEqual(fs.readdirSync(path.join(instanceRoot, 'owned-commands')).length, 0);
+  await second.close();
+});

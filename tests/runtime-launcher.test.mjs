@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createRuntimeClient, readRuntimeRecord, localControlUrl } from '../runtime/client.mjs';
 import { startRuntime, stopRuntime, runtimeStatus } from '../runtime/launcher.mjs';
@@ -205,6 +206,32 @@ test('simultaneous Start from six windows, hosts and terminals yields one verifi
   const response=await fetch('http://127.0.0.1:'+port+'/api/snapshot',{headers:{authorization:'Bearer '+token}});
   assert.equal(response.status,200,'the losing starters never overwrote the owner token');await response.text();
   await stopRuntime({instanceRoot,timeoutMs:15000});
+  assert.deepEqual(await runtimeStatus({instanceRoot}),{state:'stopped',instanceRoot,running:false});
+});
+
+test('a starter that ends up joining another runtime leaves no process of its own behind to take the instance over later',async t=>{
+  const base=temp(t,false),instanceRoot=path.join(base,'joined-runtime');
+  const entryPath=path.resolve('runtime/main.mjs'),port=await freePort();
+  t.after(async()=>{
+    await stopRuntime({instanceRoot,timeoutMs:15000}).catch(()=>{});
+    fs.rmSync(base,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+  });
+  // This starter's own process stands for one that is slow to come up: it has not asked for the instance yet
+  // when another starter's runtime is already running. Found on a slow CI machine with six simultaneous starts.
+  let slow;
+  const slowStart=startRuntime({instanceRoot,entryPath,port,timeoutMs:30000,
+    spawnImpl:(file,_args,options)=>slow=spawn(file,['-e','setInterval(()=>{},1000)'],options)});
+  for(let waited=0;!slow&&waited<10000;waited+=20)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(slow?.pid);
+  const winner=await startRuntime({instanceRoot,entryPath,port,timeoutMs:30000});
+  const joined=await slowStart;
+  assert.deepEqual([joined.started,joined.attached,joined.record.pid],[false,true,winner.record.pid]);
+  const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
+  for(let waited=0;alive(slow.pid)&&waited<5000;waited+=50)await new Promise(resolve=>setTimeout(resolve,50));
+  assert.equal(alive(slow.pid),false,'the process that lost is ended, not left to start later');
+  // A runtime that is stopped stays stopped.
+  await stopRuntime({instanceRoot,timeoutMs:15000});
+  await new Promise(resolve=>setTimeout(resolve,400));
   assert.deepEqual(await runtimeStatus({instanceRoot}),{state:'stopped',instanceRoot,running:false});
 });
 

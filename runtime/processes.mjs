@@ -8,6 +8,7 @@ import { detectShell, shellInvocation } from './shell.mjs';
 import { findOnPath } from './platform/tools.mjs';
 import { decodeOtherText, resolveProjectPath } from './workspace.mjs';
 import { redactSecrets } from './platform/redact.mjs';
+import { ownedProcess } from './platform/owned-process.mjs';
 
 const { terminateProcessTree, childExited } = processTree;
 const fail = (code, message, details) => new DomainError(code, message, details);
@@ -20,6 +21,10 @@ const MIN_PAGE_BYTES = 16;
 // After the command itself exits, how long to wait for its output pipes to close
 // before concluding that something it started in the background still holds them.
 const PIPE_GRACE_MS = 1500;
+// A command that is still running after this long is written down, so that a runtime which dies without stopping it
+// does not leave it running for ever: its successor ends exactly that process. Short commands end by themselves, and
+// asking the system who a process is costs a process of its own on Windows.
+const REMEMBER_AFTER_MS = 5000;
 const bounded = (value, fallback, min, max) => Number.isInteger(value) ? Math.min(Math.max(value, min), max) : fallback;
 
 // Output is UTF-8 wherever the program allows it. On Windows many programs still write in the system's own encoding
@@ -60,9 +65,11 @@ function decodePage(buffer, atStart) {
  * is volatile: a runtime stop terminates every owned process tree.
  */
 export function createProcessManager({ instanceRoot, store, shell = detectShell(), spawnImpl = spawn,
-  terminateImpl = terminateProcessTree, env = process.env, pipeGraceMs = PIPE_GRACE_MS } = {}) {
+  terminateImpl = terminateProcessTree, env = process.env, pipeGraceMs = PIPE_GRACE_MS, rememberAfterMs = REMEMBER_AFTER_MS } = {}) {
   if (!path.isAbsolute(instanceRoot || '')) throw new TypeError('Process manager requires an absolute instance directory.');
   const directory = path.join(instanceRoot, 'processes');
+  // Records of long-running commands, kept apart from their output so that clearing the output never loses them.
+  const ownedDirectory = path.join(instanceRoot, 'owned-commands'), tracked = spawnImpl === spawn;
   // Leftovers of an earlier run. Clearing them is housekeeping: a log another program holds open
   // (a tail, a virus scanner) does not decide whether DevMate starts or stops.
   const clear = () => { try { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch {} };
@@ -175,6 +182,17 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     entry.child = child;
     processes.set(id, entry);
+    if (tracked && child.pid) {
+      const record = ownedProcess(path.join(ownedDirectory, id + '.json'));
+      entry.forget = () => { clearTimeout(entry.rememberTimer); try { record.forget(); } catch {} };
+      entry.rememberTimer = setTimeout(() => {
+        if (entry.status !== 'running') return;
+        try { fs.mkdirSync(ownedDirectory, { recursive: true, mode: 0o700 }); } catch {}
+        // It may have ended while the system was being asked.
+        void record.remember(child.pid).then(() => { if (entry.status !== 'running') entry.forget(); }, () => {});
+      }, rememberAfterMs);
+      entry.rememberTimer.unref?.();
+    }
     // The one part of a PowerShell parse error that reads the same in every language and code page.
     const chained = command !== undefined && shell.noChaining === true && /&&|\|\|/.test(command);
     let parseError = false;
@@ -189,6 +207,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
       if (error) collect(entry, Buffer.from('\n[' + error.message + ']\n'));
       if (parseError && entry.exitCode) collect(entry, Buffer.from('\n[' + shell.label + ' has no && or ||, so nothing ran. Chain with ";" and test success with "if ($?) { ... }". PowerShell 7, once installed, is used automatically and accepts both.]\n'));
       entry.finishedAt = new Date().toISOString();
+      entry.forget?.();
       try { launch.cleanup(); } catch {}
       try { store?.event('workspace.process.finished', { id: project.id, projectId: project.id }, { processId: id, status: entry.status, exitCode: entry.exitCode }); } catch {}
       notify(entry);
@@ -342,6 +361,19 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     processes.clear();
     clear();
   }
-  return { run, read, write, stop, complete, list, closeProject, stopForCaller, close, shell,
+  // Commands an earlier runtime of this instance left running when it died. Each is ended only if the process is still
+  // the very one that was written down (same program, same start); a process id that passed to something else is left alone.
+  async function reapLeftovers() {
+    let names = [];
+    try { names = fs.readdirSync(ownedDirectory).filter(name => name.endsWith('.json')); } catch {}
+    let reaped = 0;
+    for (const name of names) {
+      const file = path.join(ownedDirectory, name);
+      // One that cannot be ended does not keep DevMate from starting; its record goes, so it is not tried for ever.
+      try { if ((await ownedProcess(file).reap()).reaped) reaped++; } catch { fs.rmSync(file, { force: true }); }
+    }
+    return { reaped, found: names.length };
+  }
+  return { run, read, write, stop, complete, list, closeProject, stopForCaller, close, shell, reapLeftovers,
     projectOf: id => owned(id).projectId, get size() { return processes.size; } };
 }

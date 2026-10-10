@@ -130,9 +130,12 @@ export async function startRuntime({
       if (launchError) throw launchError;
       current = await status();
       if (current.running) {
-        // When two starters raced, the loser's process has already left on its own: the lock refused it.
-        child.unref();
-        return { ...current, started: current.record.pid === child.pid, attached: current.record.pid !== child.pid };
+        if (current.record.pid === child.pid) { child.unref(); return { ...current, started: true, attached: false }; }
+        // Another starter's runtime won. This one's own process normally left by itself when the lock refused it. One
+        // that is still on its way must not stay behind: it would take the instance over the moment the winner is
+        // stopped, and a runtime its owner stopped would be running again.
+        if (!childExited(child)) await terminateProcessTree(child);
+        return { ...current, started: false, attached: true };
       }
       if (childExited(child) && !current.processAlive) {
         const reason = startFailure(files.directory, logStart);

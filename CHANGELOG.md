@@ -41,6 +41,8 @@
 - VS Code: a getting-started walkthrough; the DevMate view lists the runtime and the folders of the window, with its actions in the title bar and a Start button while nothing runs; in a remote window the workbench opens through the forwarded port. A new icon.
 - Obsidian: the plugin carries the runtime as plain, readable text instead of an encoding of it (the plugin file is a quarter smaller), checks the files on disk without unpacking them again, and starts after the app is ready.
 - A runtime that runs for weeks cuts its own log, and stops when its instance directory is deleted under it. A folder cannot be moved into itself. On Windows the program that ends a process tree is started by its full path.
+- A command that was still running when its runtime died is ended by the next runtime of that instance, and only that very process: a process id that has passed to another program is left alone.
+- When several entries start the runtime at the same moment, the ones that lose no longer leave a half-started process behind that could bring a stopped runtime back.
 - Sign-in (OAuth) also works for a client that publishes no description of itself: the owner registers it under `auth.clients` with its name and redirect addresses. It is a public client like any other, with PKCE.
 - Command output written in the system's own encoding (GBK, Shift_JIS, a Windows-125x page) is read as text, line by line, beside UTF-8.
 - Obsidian, found by driving the plugin in a real Obsidian: the active note and selection reach the runtime as soon as the vault is shared; a taken port names the setting to change; an earlier error no longer stays on screen; the doctor counts only what needs attention.
