@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__DEVMATE_NONCE__'; style-src 'nonce-__DEVMATE_NONCE__'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>DevMate Workbench</title>
+<style nonce="__DEVMATE_NONCE__">/* DEVMATE_STYLES */</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to workspace</a>
+<div id="app">
+<header class="topbar">
+<div class="brand"><span class="mark" aria-hidden="true">D</span><div><h1>DevMate</h1><p id="instance">Workbench</p></div></div>
+<div class="top-actions"><span id="connection" class="badge">Connecting</span><span id="updated" class="muted"></span><button id="refresh" type="button">Refresh</button><button id="display" type="button" hidden>Full screen</button><button id="operations" type="button">Operations</button><button id="theme" type="button">Dark appearance</button></div>
+</header>
+<div id="session" class="banner" hidden><p id="session-text" role="alert"></p><button id="session-reload" type="button">Reload anyway</button></div>
+<div id="notice" role="status" aria-live="polite"></div>
+<div id="alert" class="banner error" hidden><p id="alert-text" role="alert"></p><button id="alert-dismiss" type="button">Dismiss</button></div>
+<div class="selectors">
+<label>Project<select id="project"><option value="">Choose a project</option></select></label>
+<label>Workflow<select id="workflow"><option value="">Project overview</option></select></label>
+<button id="new-workflow" type="button">New workflow</button>
+<form id="project-search" class="search" role="search"><input id="project-query" aria-label="Find a project" placeholder="Find a project"><button id="project-find" type="submit">Find</button></form>
+</div>
+<div id="tabs" role="tablist" aria-label="Workspace sections"></div>
+<div class="workspace">
+<main id="main" tabindex="-1"><div id="panel" role="tabpanel" tabindex="0"><div class="empty"><h2>Connecting to DevMate</h2><p>Your projects and agent sessions will appear here.</p></div></div></main>
+<aside class="references" aria-label="References"><div class="section-title"><h2>References</h2><span id="reference-count" class="count">0</span></div><p class="muted">Choose files, tasks or artifacts for your next message.</p><div id="reference-list"></div><div class="reference-actions"><button id="add-reference" type="button">Add reference</button><button id="attach-references" type="button">Add to conversation</button><button id="copy-references" type="button">Copy</button><button id="clear-references" type="button">Clear</button></div><p id="reference-status" class="muted" aria-live="polite"></p></aside>
+</div>
+<footer><span id="scope">No project selected</span><span id="viewer"></span></footer>
+</div>
+<dialog id="dialog" aria-labelledby="dialog-title"><form novalidate><div class="section-title"><h2 id="dialog-title"></h2><button id="dialog-close" type="button" class="plain" aria-label="Close dialog">×</button></div><div id="dialog-body"></div><p id="dialog-error" class="error-text" role="alert"></p><div id="dialog-actions" class="dialog-actions"></div></form></dialog>
+<dialog id="confirm" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-text"><form novalidate><h2 id="confirm-title"></h2><p id="confirm-text"></p><div id="confirm-actions" class="dialog-actions"></div></form></dialog>
+<script nonce="__DEVMATE_NONCE__">/* DEVMATE_BRIDGE */</script>
+<script nonce="__DEVMATE_NONCE__">/* DEVMATE_APP */</script>
+</body></html>

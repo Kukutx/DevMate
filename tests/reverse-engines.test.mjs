@@ -1,3 +1,4 @@
+import { createEngineState } from '../runtime/engine-state.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -5,17 +6,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { ENGINE_PYTHON_SOURCE, analyzeWithEngine, binaryKind, codeCommand, engineEnvironment, inspectWithEngine, parseEngineJson, queryCli, reverseToolchain, stopReverseEngines, __test } from '../gateway/plugins/reverse-engines.mjs';
-import { PARSER_SOURCE } from '../gateway/plugins/reverse-parser-source.mjs';
-import { reversePlugin, reverseSettingsSchema } from '../gateway/plugins/reverse.mjs';
-import { findExecutable, resolveWorkspacePath } from '../gateway/plugins/plugin-runtime.mjs';
+import { ENGINE_PYTHON_SOURCE, analyzeWithEngine, binaryKind, codeCommand, engineEnvironment, inspectWithEngine, parseEngineJson, queryCli, reverseToolchain, stopReverseEngines, __test } from '../runtime/engines/reverse-engines.mjs';
+import { PARSER_SOURCE } from '../runtime/engines/reverse-parser-source.mjs';
+import { reversePlugin, reverseSettingsSchema } from '../runtime/engines/reverse.mjs';
+import { findExecutable, resolveWorkspacePath } from '../runtime/engines/engine-io.mjs';
 
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-engine-tests-'));
 const workspace = { id: 'engine-tests', name: 'Engine tests', root: temp };
 const python = findExecutable(['python', 'python3']);
 const context = {
+  state: createEngineState('devmate.reverse'), assertActive() {},
   settings: reverseSettingsSchema.parse({ pythonPath: python || '' }),
-  permissionProfile: () => 'fullAccess', assertCanMutate: () => {}, audit: async () => {},
+  caller: () => 'owner', assertOwner() {}, assertCanMutate: () => {}, audit: async () => {},
   workspace: { get: () => workspace, resolve: resolveWorkspacePath },
   executables: {
     find: findExecutable,
@@ -25,6 +27,7 @@ const context = {
   }
 };
 const noEngines = { ...context, executables: { find: () => null, assertAllowed: () => {} } };
+test.beforeEach(() => { context.state.engines = createEngineState('devmate.reverse').engines; });
 await fsp.writeFile(path.join(temp, 'raw.bin'), 'not an executable');
 
 test('engine settings are strict, optional and do not change process-write defaults', () => {
@@ -60,7 +63,7 @@ test('external analysis keeps workspace and credential-path guards', async () =>
   await fsp.writeFile(path.join(temp, '.env'), 'synthetic-test-only');
   await assert.rejects(analyzeWithEngine(noEngines, workspace, { path: '../outside.bin', query: 'functions' }), /escapes/);
   await assert.rejects(analyzeWithEngine(noEngines, workspace, { path: '.env', query: 'functions' }), /protected/);
-  await assert.rejects(analyzeWithEngine({ ...noEngines, permissionProfile: () => 'balanced' }, workspace, { path: 'raw.bin', query: 'functions' }), /fullAccess/);
+  await assert.rejects(analyzeWithEngine({ ...noEngines, caller: () => 'write', assertOwner(action) { throw new Error(action + ' is available only to the owner'); } }, workspace, { path: 'raw.bin', query: 'functions' }), /only to the owner/);
 });
 
 test('fixed code commands reject injection and preserve 64-bit addresses', () => {
@@ -82,6 +85,7 @@ test('external environment does not inherit credentials, workspace imports or ru
   const env = engineEnvironment('scratch', { PATH: 'tools', SystemRoot: 'Windows', JAVA_HOME: 'jdk', SECRET_TOKEN: 'test-only', PYTHONPATH: 'workspace', NODE_OPTIONS: 'injected', JAVA_TOOL_OPTIONS: 'injected', LD_PRELOAD: 'injected', HOME: 'normal-profile' });
   assert.equal(env.PATH, 'tools'); assert.equal(env.SystemRoot, 'Windows');
   assert.equal(env.HOME, 'scratch'); assert.equal(env.JAVA_HOME, 'jdk');
+  assert.equal(env.TEMP, 'scratch', 'per-user locations of the shared allow-list point at the scratch directory');
   for (const name of ['SECRET_TOKEN', 'PYTHONPATH', 'NODE_OPTIONS', 'JAVA_TOOL_OPTIONS', 'LD_PRELOAD']) assert.equal(env[name], undefined);
 });
 
@@ -94,13 +98,13 @@ test('engine registry reserves capacity before audit and fences shutdown before 
   const second = __test.engineTask(delayed, 'test', () => { ran = true; });
   const settled = Promise.allSettled([first, second]);
   await assert.rejects(__test.engineTask(delayed, 'test', () => {}), /capacity/);
-  const stopped = stopReverseEngines();
+  const stopped = stopReverseEngines(context.state.engines);
   release();
   const results = await settled;
   await stopped;
   assert.equal(ran, false);
   assert.ok(results.every(r => r.status === 'rejected' && /stopped/.test(r.reason.message)));
-  assert.equal(__test.activeCount(), 0);
+  assert.equal(__test.activeCount(context.state.engines), 0);
 });
 
 test('shared process execution is shell-free and removes temporary state on success/failure', async () => {
@@ -121,7 +125,7 @@ test('oversized backend output and timed-out helpers are rejected, not returned 
   const testContext = { ...noEngines, executables: { ...noEngines.executables, assertAllowed: () => {} } };
   await assert.rejects(__test.engineTask(testContext, 'test', task => task.run(process.execPath, ['-e', 'process.stdout.write("x".repeat(2200000))'])), /exceeded/);
   await assert.rejects(__test.engineTask(testContext, 'test', task => task.run(process.execPath, ['-e', 'setInterval(()=>{},1000)'], 100)), /timed out/);
-  assert.equal(__test.activeCount(), 0);
+  assert.equal(__test.activeCount(context.state.engines), 0);
 });
 
 test('engine helper source fits Windows command-line bounds and uses current PyGhidra APIs', () => {
@@ -179,7 +183,7 @@ for (const engine of ['lief', 'pefile', 'pyelftools']) {
   });
 }
 
-test.after(async () => { await stopReverseEngines(); await fsp.rm(temp, { recursive: true, force: true }); });
+test.after(async () => { await stopReverseEngines(context.state.engines); await fsp.rm(temp, { recursive: true, force: true }); });
 
 
 test('CLI adapter pages structured results and emits only fixed read-only commands', async () => {

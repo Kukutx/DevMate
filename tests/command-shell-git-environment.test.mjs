@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { commandEnvironment } from '../gateway/command-process.mjs';
+import { commandEnvironment } from '../runtime/platform/command-process.mjs';
 
 test('shell commands disable interactive Git prompts for nested Git subprocesses', () => {
   const env = commandEnvironment('npm run release', {

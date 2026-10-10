@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { godotPlugin } from '../gateway/plugins/godot.mjs';
+import { godotPlugin } from '../runtime/engines/godot.mjs';
 
 test('orchestrates Godot validation, Web export, preview, and Browser QA through services', async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-godot-e2e-'));
@@ -57,7 +57,7 @@ test('orchestrates Godot validation, Web export, preview, and Browser QA through
     audit: async () => {}
   };
   await godotPlugin.activate(context);
-  const result = await tools.get('godot_acceptance_test').handler({ actions: [{ type: 'expect_state', statePath: 'player.health', operator: 'eq', value: 100 }] });
+  const result = await tools.get('acceptance_test').handler({ actions: [{ type: 'expect_state', statePath: 'player.health', operator: 'eq', value: 100 }] });
   assert.equal(result.structuredContent.ok, true);
   assert.equal(result.structuredContent.checks.visibleCanvas, true);
   assert.equal(result.structuredContent.checks.qaStateAvailable, true);

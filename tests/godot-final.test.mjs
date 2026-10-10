@@ -3,10 +3,10 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { bootstrapGodotAutomation } from '../gateway/plugins/godot-bootstrap.mjs';
-import { comparePerformanceBaseline, createPerformanceBaseline, writePerformanceBaseline } from '../gateway/plugins/godot-baseline.mjs';
-import { summarizePerformance } from '../gateway/plugins/godot-performance.mjs';
-import { evaluateGodotReleaseGate } from '../gateway/plugins/godot-release-gate.mjs';
+import { bootstrapGodotAutomation } from '../runtime/engines/godot-bootstrap.mjs';
+import { comparePerformanceBaseline, createPerformanceBaseline, writePerformanceBaseline } from '../runtime/engines/godot-baseline.mjs';
+import { summarizePerformance } from '../runtime/engines/godot-performance.mjs';
+import { evaluateGodotReleaseGate } from '../runtime/engines/godot-release-gate.mjs';
 
 function contextFor(root) {
   const workspace = { id: 'game', name: 'game', root, mode: 'workspace-write', reference: false };

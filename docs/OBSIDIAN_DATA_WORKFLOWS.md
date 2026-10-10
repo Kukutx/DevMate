@@ -1,24 +1,33 @@
 # Obsidian data workflows
 
-DevMate treats Markdown notes and Obsidian Properties as the durable data model. Bases and other views remain presentation/query layers; DevMate never edits Obsidian's private cache or workspace state.
+The `obsidian.*` capabilities work on a vault through the Obsidian application itself: notes are read and changed with Obsidian's own vault, metadata and file-manager APIs, so links and caches stay consistent. They are called through `capability_call` like every other capability (see [CAPABILITIES.md](CAPABILITIES.md)):
 
-## Indexed note model
+```json
+{ "capability": "obsidian.note_query", "input": { "folder": "Projects", "tagsAll": ["#project"] } }
+```
 
-The desktop host maintains an in-memory incremental index after the Obsidian layout is ready. It is populated from the public Vault and MetadataCache APIs and updated on create, delete, rename, and metadata-change events.
+Search and the link graph are described in [OBSIDIAN_SEARCH_AND_GRAPH.md](OBSIDIAN_SEARCH_AND_GRAPH.md).
 
-Each indexed note contains bounded metadata:
+## Attaching a vault
 
-- vault-relative path, name, folder, timestamps, and size;
-- normalized Properties/frontmatter;
-- tags and headings;
-- resolved, unresolved, and inbound link counts;
-- embed count.
+A vault is served by the DevMate plugin inside Obsidian (desktop only). The plugin opens a listener on `127.0.0.1` with a random token and registers it with the runtime for the project whose root is the vault folder.
 
-The index does not copy full note bodies. File reads remain explicit MCP file operations, while metadata queries stay fast and bounded.
+- With the plugin setting **Attach this vault automatically** (on by default), the vault attaches whenever the runtime runs and the vault folder is a registered project, and attaches again after a runtime restart or after the runtime dropped the registration. The command **Attach this vault to DevMate** also registers the folder as a project when it is not one yet.
+- **Detach this vault from DevMate** holds until the next explicit attach.
+- The status bar shows the runtime and vault state. **Run DevMate doctor** and **Copy MCP URL** are available as commands.
+- With **Share the active note and selection** (on by default), the active note, the selection and the open notes are published to the runtime and answer the `editor_context` tool.
+
+`capability_list` shows the `obsidian` engine as `attached` or `detached`. When Obsidian is closed, calls fail with `host_unavailable` and the registration is dropped by itself; a new Obsidian window replaces a host that no longer answers. The owner can drop a host that is alive but stuck with the local operation `host.detach { hostId, force: true }`; `host.list` shows each host and whether it answers.
+
+`obsidian.status` returns the vault name and root, the bridge protocol version and operations, index freshness, pending work, and per-operation request counts and timings.
+
+## What is indexed
+
+The plugin keeps an in-memory index from Obsidian's metadata cache, updated on create, delete, rename and metadata changes. Per note it holds the vault-relative path, name, folder, timestamps, size, Properties (frontmatter), tags, headings, and resolved, unresolved and inbound link counts. Note bodies are not copied into the index.
 
 ## Selectors
 
-The same selector contract is used by note queries, schema audits, vault audits, and batch Property previews:
+Queries, audits and batch previews share one selector:
 
 ```json
 {
@@ -30,111 +39,69 @@ The same selector contract is used by note queries, schema audits, vault audits,
   "propertyMissing": ["archivedAt"],
   "properties": { "status": "active" },
   "search": "alpha",
-  "modifiedAfter": "2026-01-01T00:00:00Z",
-  "modifiedBefore": "2027-01-01T00:00:00Z"
+  "modifiedAfter": "2026-01-01T00:00:00Z"
 }
 ```
 
-All conditions except `tagsAny` are conjunctive. Paths are normalized as Markdown paths and all selectors remain vault-contained.
+Conditions are combined with AND; `tagsAny` matches any of its tags. Paths are vault-relative Markdown paths.
 
-## Query and schema tools
+## Reading
 
-### `obsidian_note_query`
+| Capability | Returns |
+|---|---|
+| `obsidian.note_query` | A sorted page of matching notes (`sort`: `path`, `name`, `modified`, `created`, `size`; up to 500 per page, `offset` to continue). |
+| `obsidian.schema_audit` | Per Property: presence, inferred value types, inconsistent types, examples. |
+| `obsidian.vault_audit` | Orphan notes, unresolved links, duplicate basenames, notes missing `requiredProperties`. |
+| `obsidian.operation_list` | Recent recorded changes and their rollback state, or the outcome of one operation. |
+| `obsidian.properties_batch_list` | Recent batch plans and their state. |
 
-Returns a deterministic bounded page from the incremental index. Supported sort keys are path, name, modified time, created time, and size. Stable path ordering breaks equal-key ties.
+Reads are answered at once: they never wait behind a change that is in progress.
 
-### `obsidian_schema_audit`
+## Changing notes
 
-Reports:
+| Capability | Effect |
+|---|---|
+| `obsidian.note_create` | Create a Markdown note (parent folders are created). |
+| `obsidian.properties_update` | Set or remove Properties of one note. |
+| `obsidian.note_move` | Move or rename a note; Obsidian updates links. |
+| `obsidian.note_trash` | Move a note to the trash configured in Obsidian. |
+| `obsidian.operation_rollback` | Undo one recorded change. |
 
-- Property presence and missing counts;
-- coverage ratio;
-- inferred value-type counts;
-- bounded examples;
-- Properties with inconsistent non-null types;
-- common tags and folders.
+Each change is journaled before it is applied and confirmed afterwards. The result carries an `operation` with an `id`. `obsidian.operation_rollback { operationId }` undoes it and refuses when the note changed afterwards, unless `force: true`. A change whose confirmation was never recorded needs `force: true` to restore the saved state. Notes larger than 5 MiB cannot be changed in ways that need a content backup.
 
-This supports project schemas without imposing one universal schema on every vault.
+Changes need write access to a writable project. Changes run one at a time, in order.
 
-### `obsidian_vault_audit`
+## Batch Property changes
 
-Reports bounded orphan notes, unresolved links, duplicate basenames, and notes missing required Properties.
+1. `obsidian.properties_batch_preview { selector, set, remove }` changes nothing. It stores a plan with the content hash of every affected note (at most 200) and returns the before/after values. A plan expires after 30 minutes.
+2. `obsidian.properties_batch_apply { planId }` first checks every hash. If any note changed, nothing is applied and the conflicts are returned. If a change fails midway, the changes already made are rolled back.
+3. `obsidian.properties_batch_rollback { planId }` undoes an applied plan in reverse order.
 
-## Transactional Property batches
+Apply and rollback can take up to two minutes and are flagged `longRunning`: start them with `job_start`.
 
-Batch mutation is deliberately split into separate planning and execution calls.
+## Timeouts and unknown outcomes
 
-### 1. Preview
+The runtime waits 30 seconds for an operation (two minutes for content search and batch apply/rollback). Every request carries an operation id and a start deadline.
 
-Call `obsidian_properties_batch_preview` with a selector plus `set` and/or `remove`:
+- A change that is still waiting when the runtime gives up is withdrawn and is never applied later: the error is `host_timeout` and says that nothing changed.
+- A change that had already started returns `outcome_unknown` with an `operationId`. Ask what became of it before retrying:
 
 ```json
-{
-  "selector": {
-    "folder": "Projects",
-    "properties": { "status": "active" }
-  },
-  "set": {
-    "type": "project",
-    "reviewed": true
-  },
-  "remove": ["legacyStatus"]
-}
+{ "capability": "obsidian.operation_list", "input": { "operationId": "operation-…" } }
 ```
 
-The host:
+The answer is `applied`, `in_progress`, `not_applied`, `failed`, `interrupted`, `rolled_back` or `not_recorded`, with guidance. It is read from the journal, so it also works while the vault is detached.
 
-1. resolves at most 200 notes;
-2. skips notes whose resulting Properties would not change;
-3. records each expected content hash and bounded before/after Property preview;
-4. writes a restrictive plan record under shared DevMate state;
-5. returns a `planId` without modifying the vault.
+## Where records live
 
-Plans expire after 30 minutes.
+Rollback records and batch plans are stored in the instance database of the runtime (table `host_records`), not in the vault. Per project the newest 500 operation records and 200 plans are kept, and nothing older than the instance retention (`retentionDays`, 30 by default). An update or trash record contains the previous content of the note, which is why the records stay in the private instance directory.
 
-### 2. Apply
+## Boundaries
 
-Call `obsidian_properties_batch_apply` with the `planId`.
+- The listener accepts only loopback connections that present its token and the expected `Host` and `Origin`.
+- Only the attached vault of the project is reachable; paths are vault-relative.
+- A reader may call the read capabilities; changes need write access.
 
-Before changing any note, DevMate rechecks every expected content hash. One conflict prevents the entire batch from starting. During execution, every note mutation creates its own rollback operation record.
+## Tests
 
-If a later mutation fails, DevMate attempts to roll back completed operations in reverse order and records either `rolled_back_after_failure` or `partial_failure`.
-
-Apply is safe to retry after a successful response loss: an already-applied plan returns its existing result instead of applying twice. An interrupted plan in `applying` state reports that recovery is required rather than guessing whether to continue.
-
-### 3. Rollback
-
-Call `obsidian_properties_batch_rollback` with the same `planId`.
-
-Operations are reversed in reverse order. Later conflicting note edits are rejected unless `force=true` is deliberate. Successful rollback is idempotent and can be queried through `obsidian_properties_batch_list`.
-
-## Operation evidence
-
-Single-note and batch mutations share the same operation store:
-
-```text
-<shared-state>/host-operations/obsidian/
-<shared-state>/host-plans/obsidian/
-```
-
-Records are:
-
-- restrictive (`0600` where supported);
-- atomically replaced and directory-fsynced;
-- size bounded;
-- count bounded and deterministically pruned;
-- linked to a batch plan when applicable.
-
-Only rollback-required before content is retained. Modified-after snapshots retain hashes and metadata rather than duplicating full note bodies.
-
-## Safety boundary
-
-- all paths are vault-relative;
-- `..`, null bytes, and `.obsidian` are blocked;
-- Properties are changed through `FileManager.processFrontMatter`;
-- moves use `FileManager.renameFile`;
-- deletion uses the configured Obsidian trash;
-- the Host Bridge binds only to `127.0.0.1`;
-- the bridge uses a random timing-safe Bearer credential;
-- bridge workspace ID and real root must match the requested DevMate workspace;
-- MCP authorization and workspace policy still run before the bridge call.
+`tests/runtime-hosts.test.mjs` (registry, bridge, timeouts, dead and stuck hosts, record bounds), `tests/obsidian-runtime-entry.test.cjs` (plugin attach, re-attach, status, editor context, including a run against a real runtime), `tests/obsidian-property-batch*.test.cjs`, `tests/obsidian-vault-index.test.cjs`, `tests/obsidian-path-policy.test.cjs`.

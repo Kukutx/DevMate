@@ -1,0 +1,33 @@
+name: DevMate 4 Dependency Audit
+
+# Known vulnerabilities in the runtime's dependencies are looked for every week and
+# whenever the lockfile changes. This is separate from the build so that an advisory
+# published for an unrelated package does not fail every open pull request; a release
+# still runs the same audit and cannot be published while it fails.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  push:
+    branches: [main, develop]
+    paths: ['package-lock.json', 'package.json']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate

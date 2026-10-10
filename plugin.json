@@ -1,0 +1,37 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "devmate",
+  "version": "4.0.0",
+  "description": "Real hands on your own computer for ChatGPT, Claude and any MCP client: project files, shell, Git, editor diagnostics and local coding agents.",
+  "author": {
+    "name": "Kukutx"
+  },
+  "homepage": "https://github.com/Kukutx/DevMate",
+  "repository": "https://github.com/Kukutx/DevMate",
+  "license": "MIT",
+  "keywords": [
+    "developer-tools",
+    "mcp",
+    "multi-agent"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "DevMate",
+        "shortDescription": "Work on your local projects from chat",
+        "longDescription": "Read, search and edit project files, run commands and tests, use Git, see editor errors, and hand tasks to coding agents installed on your computer. Includes a workbench for agents, tasks and approvals.",
+        "developerName": "Kukutx",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "websiteURL": "https://github.com/Kukutx/DevMate",
+        "defaultPrompt": [
+          "Give me an overview of my project and what its tests say.",
+          "Open the DevMate workbench."
+        ]
+      }
+    }
+  }
+}

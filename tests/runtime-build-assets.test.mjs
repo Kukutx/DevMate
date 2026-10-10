@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const {materializeRuntimeAssets}=require('../obsidian-plugin/src/runtime-assets.cjs');
+const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
+test('Obsidian assets are verified, immutable, and separated by build content',t=>{
+  const instance=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-embedded-'));t.after(()=>fs.rmSync(instance,{recursive:true,force:true}));
+  const bundle=content=>{const assets=[{path:'runtime/main.mjs',text:content,sha256:hash(content)}];return{id:hash(JSON.stringify(assets.map(({path,sha256})=>({path,sha256})))),assets};};
+  const first=bundle('first'),directory=materializeRuntimeAssets(instance,first);
+  assert.equal(materializeRuntimeAssets(instance,first),directory);
+  const second=materializeRuntimeAssets(instance,bundle('second'));
+  assert.notEqual(second,directory);
+  assert.equal(fs.readFileSync(path.join(directory,'runtime/main.mjs'),'utf8'),'first');
+  fs.writeFileSync(path.join(directory,'runtime/main.mjs'),'changed');
+  assert.throws(()=>materializeRuntimeAssets(instance,first),/Immutable/);
+  assert.equal(fs.readFileSync(path.join(directory,'runtime/main.mjs'),'utf8'),'changed');
+  const malformed=bundle('bad');malformed.assets[0].path='../escape.mjs';
+  assert.throws(()=>materializeRuntimeAssets(instance,malformed),/path/);
+  assert.equal(fs.existsSync(path.join(instance,'escape.mjs')),false);
+});

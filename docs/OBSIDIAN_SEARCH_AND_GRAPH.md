@@ -1,66 +1,46 @@
-# Obsidian Content Search and Note Graph
+# Obsidian content search and note graph
 
-DevMate's Obsidian host exposes two bounded, read-only knowledge workflows in addition to metadata queries.
+Two bounded, read-only capabilities of an attached vault, called through `capability_call`. Attaching a vault and everything else about `obsidian.*` is in [OBSIDIAN_DATA_WORKFLOWS.md](OBSIDIAN_DATA_WORKFLOWS.md).
 
 ## Content search
 
-`obsidian_content_search` reads Markdown notes through Obsidian's `Vault.cachedRead()` API and returns deterministic, bounded results.
-
-Supported controls:
-
-- metadata selectors: folder, path, tag, Property, and modified time
-- search modes: exact phrase, all terms, or any term
-- optional case-sensitive matching
-- candidate, result, file-size, snippet, and concurrency limits
-- result score, first matching line, occurrence count, and a compact snippet
-
-The default limits are intentionally conservative: at most 1,000 candidate notes, 50 returned matches, 1 MiB per note, and 8 concurrent reads. The bridge never stores the query text in diagnostics.
-
-Example:
+`obsidian.content_search` reads note bodies through Obsidian's cached read and returns scored matches.
 
 ```json
 {
-  "query": "forest carbon",
-  "mode": "all",
-  "folder": "Research",
-  "tagsAny": ["paper", "analysis"],
-  "limit": 25
+  "capability": "obsidian.content_search",
+  "input": { "query": "forest carbon", "mode": "all", "folder": "Research", "tagsAny": ["#paper", "#analysis"], "limit": 25 }
 }
 ```
+
+- `mode`: `phrase` (the exact phrase), `all` (every term) or `any`; `caseSensitive` is optional.
+- The selector fields of `obsidian.note_query` (folder, paths, tags, Properties, modified time) narrow which notes are read.
+- Notes are read newest first. Defaults and maxima: 1000 candidate notes (2000), 50 returned matches (200), 1 MiB per note (5 MiB), 8 concurrent reads (16), 280-character snippets (1000).
+- Each match has a score, the matched terms, the occurrence count, the first matching line and a snippet. `stats` reports how many notes were selected, read and skipped; `truncated` says whether candidates or results were cut.
+
+A search can take up to two minutes and is flagged `longRunning`: for a large vault start it with `job_start`, or narrow it with a selector. It does not block changes, and changes do not block it.
 
 ## Note graph
 
-`obsidian_note_graph` traverses Obsidian's resolved internal links without reading note bodies.
-
-Supported controls:
-
-- one to 50 root note paths
-- inbound, outbound, or bidirectional traversal
-- depth from one to three
-- explicit node and edge limits
-- optional Property inclusion
-
-The response contains deterministic nodes with their distance from the nearest root, directed edges with link counts, missing roots, and truncation flags.
-
-Example:
+`obsidian.note_graph` walks the links Obsidian has resolved, without reading note bodies.
 
 ```json
 {
-  "paths": ["Projects/DevMate.md"],
-  "direction": "both",
-  "depth": 2,
-  "maxNodes": 200,
-  "maxEdges": 500
+  "capability": "obsidian.note_graph",
+  "input": { "paths": ["Projects/DevMate.md"], "direction": "both", "depth": 2, "maxNodes": 200, "maxEdges": 500 }
 }
 ```
 
-## Local diagnostics
+- `paths`: 1 to 50 root notes.
+- `direction`: `inbound`, `outbound` or `both`; `depth` 1 to 3.
+- `maxNodes` up to 500, `maxEdges` up to 2000; `includeProperties` adds each note's Properties.
 
-`obsidian_status` now reports:
+The result lists nodes with their distance from the nearest root, directed edges with link counts, roots that were not found, and truncation flags.
 
-- index generation and refresh timestamps
-- the most recent link-metric rebuild
-- aggregate statistics from the most recent content search, without its query
-- in-memory request counts, failures, and action latency summaries
+## Diagnostics
 
-These diagnostics remain inside the local Obsidian process and are not sent to an analytics service.
+`obsidian.status` reports the index generation and refresh time, the last link-metric rebuild, statistics of the most recent content search (not its query), pending work, and per-operation request counts, error counts and durations. These numbers stay in the local Obsidian process and the runtime.
+
+## Tests
+
+`tests/obsidian-content-search.test.cjs`, `tests/obsidian-vault-graph.test.cjs`, `tests/obsidian-vault-index.test.cjs`, `tests/runtime-hosts.test.mjs`.

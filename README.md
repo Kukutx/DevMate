@@ -1,295 +1,340 @@
 # DevMate
 
-[![CI](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml/badge.svg)](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Kukutx/DevMate?display_name=tag)](https://github.com/Kukutx/DevMate/releases/latest)
-[![License](https://img.shields.io/github/license/Kukutx/DevMate)](LICENSE)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14601/badge)](https://www.bestpractices.dev/projects/14601)
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-**Local-first agent capability and automation runtime for ChatGPT, powered by MCP.**
+[![CI](https://img.shields.io/github/actions/workflow/status/Kukutx/DevMate/ci.yml?branch=main&label=CI)](https://github.com/Kukutx/DevMate/actions/workflows/ci.yml) [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/kukutx.devmate-agent?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=kukutx.devmate-agent) [![Release](https://img.shields.io/github/v/release/Kukutx/DevMate?label=release)](https://github.com/Kukutx/DevMate/releases) [![License: MIT](https://img.shields.io/github/license/Kukutx/DevMate)](LICENSE)
 
-DevMate gives ChatGPT Codex-like local execution capabilities without embedding another model. It can inspect and edit project files, use Git, run commands and tests, automate a managed browser, consume live VS Code or Obsidian context, and hand long-running work to durable jobs or remote Runners — while project and runtime state stay on machines you control.
+DevMate lets the model in your chat window work directly on your own computer: read, search and edit project files, run commands and tests, use Git, see the errors your editor already reports, and hand whole tasks to the coding agents installed on your machine. It is a local runtime that offers these capabilities through the [Model Context Protocol](https://modelcontextprotocol.io) (MCP).
 
-ChatGPT remains the agent/model surface. In the normal ChatGPT and Companion workflow, DevMate adds the local capability layer without requiring a DevMate-managed OpenAI API key or separate model-inference bill. That can reduce dependence on separate Codex runs for routine local work; ChatGPT plan limits and any tunnel, cloud, or Runner infrastructure costs still apply.
+The main use is connecting the ChatGPT website to your machine and developing with the chat subscription you already pay for. It is not tied to ChatGPT: Claude and every other MCP client connect to the same runtime.
 
-It works as a VS Code extension, an Obsidian desktop host, a standalone CLI, or a service-backed Gateway.
+- **Your machine, your route.** Nothing is relayed through a service of ours. Cloud clients reach you through a tunnel you own (Cloudflare, OpenAI's official tunnel, your reverse proxy, or SSH), and DevMate proves the route end to end.
+- **You decide what is shared, at your computer.** Which folders, read only or read and write, credential files protected. A connected client can narrow these and never widen them.
+- **One runtime for every entry.** Any number of VS Code windows, Obsidian and the command line share one runtime per machine, guaranteed by the operating system.
+- **It knows what your editor knows.** Compiler, type and lint errors come straight from VS Code, without running a build.
 
-## Get, report, and contribute
-
-- **Get DevMate:** install the VS Code extension from its Marketplace listing; install the Obsidian host from Community Plugins after its one-time Community directory submission is approved; GitHub Releases continue to provide the VSIX, Obsidian ZIP, standard Obsidian release assets, and portable CLI archives.
-- **Report a bug:** use the [bug report form](https://github.com/Kukutx/DevMate/issues/new?template=bug_report.yml).
-- **Request a feature:** use the [feature request form](https://github.com/Kukutx/DevMate/issues/new?template=feature_request.yml).
-- **Contribute:** follow [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, testing, and pull-request requirements.
-- **Report a security vulnerability privately:** follow [SECURITY.md](SECURITY.md); do not disclose live security details in a public issue.
-
-## VS Code experience
-
-<p align="center">
-  <img src="docs/media/devmate-vscode-overview.png" alt="DevMate VS Code control panel showing project binding, verified MCP connection, diagnostics, permissions, and workspace state" width="100%">
-</p>
-
-DevMate keeps the active project, verified MCP ingress, Gateway lifecycle controls, diagnostics, permissions, and workspace state visible in one place. Project boundaries and connection state stay explicit instead of being hidden behind background processes.
-
-## Obsidian experience
-
-<p align="center">
-  <img src="docs/media/devmate-obsidian-overview.png" alt="DevMate Obsidian host showing the vault graph alongside the DevMate shared runtime, workspace, active-note, and vault-index panel" width="100%">
-</p>
-
-DevMate brings the same shared Gateway and project-aware workflow into Obsidian, exposing vault context, note workflows, runtime controls, and index state without separating the knowledge workspace from the connected ChatGPT workflow.
-
-<p align="center">
-  <img src="docs/media/devmate-flow.png" alt="DevMate flow from ChatGPT through the MCP Gateway to local project surfaces and remote Runners" width="100%">
-</p>
-
-## What stands out
-
-- **Real project access** — files, commands, Git, previews, diagnostics, testing, and project-aware context through MCP.
-- **Agent automation** — structured local tools, Browser Control, repeatable `.devmate/automation.json` workflows, durable jobs, and remote Runners let an agent carry work from inspection through validation instead of stopping at code suggestions.
-- **Project isolation** — each ChatGPT conversation stays bound to its selected project across reconnects; explicit local paths remain authoritative.
-- **Local-first runtime** — the Gateway, project state, credentials, backups, and execution stay on your machine or your own Runner hosts.
-- **ChatGPT browser Companion** — use the official ChatGPT browser side chat as the agent UI, combine the current page with DevMate local capabilities, and keep model access on the user's ChatGPT plan instead of storing a DevMate model API key.
-- **One desktop runtime** — VS Code and Obsidian share one machine-wide Gateway and public connection instead of competing for separate processes.
-- **Durable work** — reviewed jobs survive MCP request boundaries and Gateway restarts.
-- **Remote execution when needed** — scoped external Runners can handle platform-specific or long-running work without owning central policy state.
-- **Current MCP only** — protocol `2026-07-28`, `server/discover` negotiation, stateless HTTP transport, and legacy transport rejection.
-- **Built-in safety boundaries** — workspace containment, protected-path filtering, bounded command output, optional approvals/leases, audit metadata, and ownership-aware process cleanup.
-
-Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is for team/member identity.
-
-## Quick start
-
-### VS Code
-
-1. Open a project.
-2. Run **DevMate: Start** — or keep the default auto-start enabled.
-3. DevMate starts or attaches to the shared Gateway and configured public connection.
-4. Before reporting Ready, DevMate verifies MCP with `server/discover` against protocol `2026-07-28`, then runs `tools/list` and a real read-only `gateway_status` call.
-5. Add the verified HTTPS `/mcp` URL to ChatGPT.
-
-Fresh desktop instances use **ngrok** by default. Cloudflare Quick, Cloudflare managed tunnels, and existing external HTTPS ingress are also supported.
-
-The default single-owner `auth.mode: "none"` works for both loopback and configured public MCP. Enable OAuth when the endpoint is shared with team/member identities.
-
-### Standalone CLI
-
-```bash
-# Personal instance: single-owner no-auth + embedded execution
-npx devmate bootstrap --preset personal --workspace /srv/project
-
-# Start the Gateway owned by the CLI
-npx devmate start
-
-# Inspect current state without exposing credentials
-npx devmate status
+```
+ ChatGPT web · Claude.ai                    Claude Code · Codex · any local MCP client
+          │  HTTPS through your own tunnel                 │  http://127.0.0.1:8788/mcp
+          ▼                                                ▼          or `devmate mcp` (stdio)
+   ingress port 8789 ───────────────┐      ┌─────────────── control port 8788
+   MCP and OAuth only               ▼      ▼                owner only: CLI, editors, workbench
+                              ┌──────────────────┐
+                              │  DevMate runtime │  one per instance directory
+                              │  every call is   │  files · search · Git · shell
+                              │  authorised here │  editor diagnostics · agents
+                              └──────────────────┘
+                                 ▲      ▲      ▲
+                         VS Code windows · Obsidian · `devmate` command line
 ```
 
-For explicit service layouts, custom config paths, Team/Control-plane presets, and portable Windows/Linux packages, see [`docs/STANDALONE.md`](docs/STANDALONE.md) and [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md).
+![The DevMate workbench showing the uncommitted changes of a project](docs/media/workbench.png)
 
-### Obsidian
+DevMate 4 is a new architecture. It does not read, migrate or stay compatible with any 3.x state, configuration or interface. [Coming from 3.x?](#upgrading-from-3x)
 
-DevMate also ships a desktop-only Obsidian host. It publishes vault context and note workflows through the same shared Gateway/public connection model used by VS Code.
+## Install
 
-The release is Community Plugins-compatible: each version publishes the standard `main.js`, `manifest.json`, and `styles.css` assets under an exact semantic-version GitHub tag. After DevMate's one-time Community directory submission is approved, install it from **Settings → Community plugins → Browse → DevMate**.
+**Requirements:** Node.js 24 or newer, and Git 2.41 or newer (the Git that ships with the macOS developer tools is older: `brew install git`). The command line and Obsidian also need `rg` ([ripgrep](https://github.com/BurntSushi/ripgrep)); the VS Code extension brings its own.
 
-For local development only:
-
-```bash
-npm run build:obsidian
-```
-
-Copy `obsidian-plugin/dist` into `<Vault>/.obsidian/plugins/devmate/`, then enable the plugin.
-
-#### Obsidian Community directory disclosures
-
-- **Network use:** DevMate can expose its local MCP Gateway through ngrok, Cloudflare Tunnel, or an HTTPS origin you manage so a connected MCP client such as ChatGPT can reach it. Provider selection is explicit. DevMate does not send vault data to a DevMate-hosted analytics or telemetry service.
-- **Files outside the vault:** the desktop host writes machine-wide runtime, configuration, diagnostics, and rollback metadata to the DevMate shared state directory (by default under `~/.devmate/desktop`) and materializes its bundled runtime there. It may also access explicitly registered DevMate workspaces outside the current vault when you authorize those workspaces.
-- **External executables:** the desktop host can launch a configured Node.js 24+ runtime and, when selected, `ngrok` or `cloudflared`. The Obsidian plugin does not install or update these external dependencies; install them separately using their official distribution methods.
-- **Accounts and telemetry:** no DevMate account is required. ChatGPT and tunnel-provider accounts are required only when you choose those services. The Obsidian plugin contains no client-side telemetry.
-
-See [`obsidian-plugin/README.md`](obsidian-plugin/README.md), [`docs/RELEASING.md`](docs/RELEASING.md), and [`docs/OBSIDIAN_DATA_WORKFLOWS.md`](docs/OBSIDIAN_DATA_WORKFLOWS.md).
-
-## Product surfaces
-
-| Surface | Purpose |
+| Entry | Install |
 | --- | --- |
-| VS Code | Project context, desktop lifecycle, commands, diagnostics, shared public MCP |
-| ChatGPT browser Companion | Current-page assistance through the official ChatGPT browser side chat, combined with DevMate local context and tools |
-| Obsidian | Vault context, note/Property workflows, shared desktop lifecycle |
-| Standalone CLI | Editor-independent setup, lifecycle, workspace, plugin, job, and Runner administration |
-| DevMate Gateway | MCP server, policy, workspaces, jobs, audit, previews, and plugin capabilities |
-| External Runner | Scoped execution on another machine or platform without duplicating central state |
+| VS Code extension | Search for **DevMate** in the Extensions view, or run `ext install kukutx.devmate-agent`. Offline: download `devmate-<version>.vsix` from [Releases](https://github.com/Kukutx/DevMate/releases) and run `code --install-extension devmate-<version>.vsix` |
+| Obsidian plugin | **Settings → Community plugins → Browse → DevMate**. Manually: unpack `devmate-obsidian-<version>.zip` from Releases into `<vault>/.obsidian/plugins/devmate/` and enable it. Desktop only |
+| Command line | Download `devmate-cli-<version>.tgz` from Releases and run `npm install -g ./devmate-cli-<version>.tgz`. It has no dependencies and installs offline. Remove it with `npm uninstall -g devmate-agent` |
 
-## Authentication presets
+`devmate doctor` (or **DevMate: Doctor** in an editor) checks everything this installation needs and prints the exact command to fix each item for your system.
 
-| Preset | MCP identity | Execution | Best for |
-| --- | --- | --- | --- |
-| Personal | `none` by default | Embedded Runner | One developer |
-| Team | OAuth members | Embedded Runner, optional external Runners | Trusted shared development |
-| Control-plane | OAuth members | External Runners by default | Long-lived managed deployment |
-| Runner host | No-auth loopback MCP + scoped `dmr_` credential | Local toolchain | Platform-specific execution |
+## The first five minutes
 
-Presets are setup defaults, not runtime modes. Connection provider, authentication, request policy, workspace coordination, and Runner topology remain independent capabilities.
+With VS Code:
 
-## Architecture
+1. Open a project folder and run **DevMate: Start DevMate Runtime** from the Command Palette. The folder is shared, read and write, and the window tells you so once.
+2. Run **DevMate: Copy MCP URL**. For a client on the same computer that is all: `claude mcp add --transport http devmate http://127.0.0.1:8788/mcp`.
+3. For ChatGPT on the web or Claude.ai, run **DevMate: Configure Connection** once (see [Connecting a client](#connecting-a-client)), then add the copied address as a custom MCP connector.
+4. Ask the model for "an overview of my project". It calls `project_overview` and you are working.
 
-```text
-VS Code / Obsidian / CLI
-          │
-          │ local host control + project context
-          ▼
-    DevMate Gateway
-    ├─ MCP 2026 transport
-    ├─ workspace + tool policy
-    ├─ files / commands / Git / previews
-    ├─ leases / approvals / audit
-    ├─ durable job queue
-    └─ optional platform plugins
-          │
-          │ HTTPS /mcp
-          ▼
-       ChatGPT
+With the command line only:
 
-    DevMate Gateway
-          │ /runner/v1 + scoped dmr_ credential
-          ▼
-    External Runner hosts
-          └─ local toolchains and workspaces
+```powershell
+devmate start                          # start the background runtime, or join the one that runs
+devmate project add C:\Projects\Example
+devmate doctor
+devmate mcp-url                        # the address to give a client
+devmate ui --open                      # the workbench in your browser
 ```
 
-The central Gateway remains authoritative for workspace scope, identity, approvals, leases, job ownership, retries, and cancellation. External Runners distribute execution only.
+## Three entries, one runtime
 
-VS Code and Obsidian coordinate one machine-wide desktop state directory and one provider-native public connection. Ready evidence is generation-bound: a Gateway restart, provider restart, ownership transfer, or endpoint-generation change invalidates stale verification even if the public hostname stays the same.
+| Entry | For | Adds |
+| --- | --- | --- |
+| `devmate` command line | Working without an editor | Everything: start, share folders, configure the connection, open the workbench, call any operation. `devmate mcp` serves MCP on standard input and output for clients that start their servers as a program |
+| VS Code extension | Everyday development | The editor's diagnostics, active file and selection; a status bar item |
+| Obsidian plugin | A knowledge base | Note search, properties, graph and vault operations |
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full runtime model.
+One instance directory (default `~/.devmate/runtime`) has exactly one runtime process at a time.
 
-## Project and workspace model
+- Several VS Code windows, Obsidian and the command line can run together. Pressing Start in all of them starts one runtime; the others join it.
+- Each editor window works on its own folders. Closing a window affects neither the runtime nor the other windows.
+- **The runtime keeps running after you close the editor**, with its public connection if you configured one, until you stop it: `devmate stop`, or **Stop DevMate Runtime** in an editor. Stopping affects every entry, so the editors ask first.
+- After a crash the next start simply works. VS Code with `devMate.autoStart` brings a crashed runtime back; one you stopped stays stopped.
 
-DevMate treats project selection as a real boundary, not UI state:
+## Command line
 
-- explicit absolute local paths take precedence over editor/vault defaults;
-- new ChatGPT conversations can adopt the current VS Code/Obsidian project when no path is supplied;
-- reconnects do not silently drift a conversation to another project;
-- sessions, leases, previews, and jobs remain project-scoped;
-- same-project conversations can still continue shared work records where policy allows it;
-- writable and readonly/reference workspaces remain distinct.
+| Command | Purpose |
+| --- | --- |
+| `devmate start` / `stop` / `restart` / `status` | The background runtime |
+| `devmate serve` | Run in the foreground until Ctrl+C |
+| `devmate doctor` | Check the installation. Works when nothing is running and says what to do next |
+| `devmate logs [--lines N]` | Recent runtime log |
+| `devmate project add [directory] [--name N] [--read-only]` / `list` / `remove` | What is shared. Without a directory, the current one |
+| `devmate mcp-url` | The address for a client |
+| `devmate mcp` | MCP over standard input and output; starts the runtime when needed |
+| `devmate connect local \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in |
+| `devmate secret set <NAME>` / `list` / `remove <NAME>` | Connection credentials. The value is read from standard input and never appears in shell history |
+| `devmate login-code` | A one-time sign-in code (when sign-in is on) |
+| `devmate ui [--open]` | A single-use link to the workbench |
+| `devmate operations` / `help <operation>` | Every operation, and one with its exact input |
+| `devmate <operation> --json '{…}'` | Call any operation; also `--file` or `--stdin` |
 
-This keeps normal project switching lightweight without mixing work between unrelated repositories.
+Every command accepts `--instance <directory>` to use another instance. The command line can do everything the workbench and the extensions can.
 
-## Durable jobs and Runners
+Commands run in PowerShell on Windows: PowerShell 7 when it is installed, otherwise the built-in 5.1. Version 5.1 has no `&&` and `||`, which models use by habit, so installing PowerShell 7 is recommended (`winget install Microsoft.PowerShell`). On macOS and Linux commands run in bash, or `sh` when there is no bash.
 
-Long-running work can continue beyond one MCP request:
+## VS Code extension
 
-```text
-job_target_catalog
-job_submit
-job_list
-job_status
-job_artifacts
-job_cancel
-job_retry
-runner_status
+Commands (all under **DevMate:** in the Command Palette):
+
+| Command | Does |
+| --- | --- |
+| Start / Stop / Restart DevMate Runtime | The shared runtime |
+| Change Folder Sharing | Read and write, read only, or not shared, per folder |
+| Select This Window Workspace | Which shared folder this window works in, when it shares several |
+| Configure Connection | The guided setup for cloud clients, and whether they must sign in |
+| Copy MCP URL · Copy One-Time Sign-In Code | What a client needs |
+| Open Workbench · Doctor · Show Menu · Show Runtime Status | Seeing what is going on |
+| Discover Operations · Call Operation | Looking into a problem |
+
+Settings (user settings only: a repository's `.vscode/settings.json` cannot change them):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `devMate.shareFolders` | `readWrite` | What connected clients may do in a trusted folder you open: `readWrite`, `readOnly`, `ask`, `never`. Folders of an untrusted workspace are never shared |
+| `devMate.shareEditorContext` | `true` | Whether clients see the active file, selection, open files and diagnostics |
+| `devMate.autoStart` | `false` | Start the runtime with the editor, and again after a crash |
+| `devMate.runtimePort` | `8788` | The local port when this editor starts the runtime |
+| `devMate.nodeCommandPath` | empty | A Node.js 24+ executable, when it is not found on its own |
+| `devMate.runtimeInstanceDirectory` | empty | Another instance directory than `~/.devmate/runtime` |
+
+- An opened folder is shared read and write by default, and the window says so once with a **Change…** button. A folder you take out stays out until you share it again.
+- No separate ripgrep is needed: when PATH has no `rg`, the runtime uses the copy VS Code ships and remembers it for use without the editor.
+- Editors with built-in MCP support discover the local endpoint on their own.
+- The extension needs VS Code 1.101 or newer and is tested in a real editor on 1.101 and 1.133.
+- **Remote windows (SSH, WSL, Dev Containers):** the extension runs on the remote side, so DevMate, Node.js and the shared folders are those of the remote computer, and "local" addresses are local to it. This setup is not tested yet.
+
+## Obsidian plugin
+
+- **DevMate: Start runtime** starts the runtime; the status bar shows its state and opens the sidebar.
+- **DevMate: Attach this vault** shares the vault and offers the note tools (search, properties, graph, move, trash). The first time it asks: read and write, read only, or not now. The whole vault folder is shared, so connected clients also reach it with the file tools.
+- **DevMate: Change how this vault is shared** changes that at any time. **Detach** only stops the note tools; sharing is unchanged.
+- **DevMate: Stop shared runtime** and **Restart shared runtime** ask first, because they affect every entry.
+- When an agent waits for your approval or an answer, Obsidian tells you; **DevMate: Open workbench** is where you answer.
+
+**Disclosures.** The plugin is desktop only and needs Node.js 24 installed separately (set its path in the plugin settings when it is not found; ripgrep must be installed too). It starts the DevMate runtime as a background process that keeps running after Obsidian closes, until you run **Stop shared runtime**. The runtime listens on `127.0.0.1` only (ports 8788 and 8789, and one more loopback port for vault operations). Its state, credentials and its own program files are kept in `~/.devmate/runtime`, outside the vault. The plugin carries those program files inside `main.js` as plain, readable text (nothing is encoded), writes them there and checks each against its hash on every start. It makes no network connection unless you configure a public connection (Cloudflare Tunnel, OpenAI Secure MCP Tunnel, SSH or your own HTTPS proxy). No telemetry, no account, no payment.
+
+The 4.0 plugin has been loaded and driven in a real Obsidian 1.12.7 on Windows: loading, starting the runtime, sharing the vault read only and read and write, the note tools, stopping and disabling. Obsidian on macOS and Linux, and an update over an installed 3.x plugin, have not been tried. Please report what you find.
+
+## Connecting a client
+
+### On the same computer
+
+No tunnel and no sign-in:
+
+```
+http://127.0.0.1:8788/mcp
 ```
 
-The queue accepts reviewed targets such as smart checks, configured scripts, Browser QA, Godot audits/tests, performance checks, capture, exports, release reports, snapshots, and non-pushing `git_save`. Arbitrary queued shell commands, direct push, force operations, and credential-bearing arguments are rejected.
+| Client | Setup |
+| --- | --- |
+| Claude Code | `claude mcp add --transport http devmate http://127.0.0.1:8788/mcp` |
+| Codex CLI | `codex mcp add devmate --url http://127.0.0.1:8788/mcp` |
+| VS Code's own MCP support | Found automatically once the extension is installed |
+| A client that only starts programs | Command `devmate`, argument `mcp`, for example `{ "command": "devmate", "args": ["mcp"] }` |
 
-External Runners use dedicated `dmr_` credentials accepted only by `/runner/v1`. Runner-reported capabilities and workspace IDs are intersected with credential scope; they cannot widen their own authorization.
+Any other client: add an HTTP (Streamable HTTP) MCP server with this address. A browser-based client on another origin is refused until you add its origin to `allowedOrigins` in the DevMate configuration; add only clients you run yourself.
 
-See [`docs/JOBS.md`](docs/JOBS.md) and [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md).
+### ChatGPT on the web and Claude.ai
 
-## Optional capabilities
+They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers four, none of which depends on ngrok:
 
-Optional plugins stay disabled until enabled.
+| Route | For | Notes |
+| --- | --- | --- |
+| `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
+| `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
+| `https` | Any client | A reverse proxy you already run |
+| `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that provides HTTPS |
 
-- **Browser QA** — local previews, Playwright scenarios, screenshots, reports, and structured app-state assertions.
-- **Godot** — project/runtime audit, dependency graphs, native and Web acceptance, performance budgets/regressions, deterministic Movie Maker capture, GUT/GdUnit4 workflows, quality reports, release gates, and multi-platform exports.
-- **Codex Collaboration** — proposal-snapshot collaboration with network-off supervised execution and explicit reviewed apply boundaries.
+**Cloudflare tunnel**
 
-Repeatable project automation can be committed in `.devmate/automation.json`.
+1. In Cloudflare Zero Trust create a tunnel with a public hostname such as `devmate.example.com`, and set its service to `http://127.0.0.1:8789`.
+2. Configure it and store the token:
 
-See [`docs/PLUGINS.md`](docs/PLUGINS.md), [`docs/AUTOMATION_MANIFEST.md`](docs/AUTOMATION_MANIFEST.md), and the Godot documentation linked below.
+```powershell
+devmate connect cloudflare --url https://devmate.example.com/mcp --executable "C:\Program Files (x86)\cloudflared\cloudflared.exe"
+devmate secret set CLOUDFLARE_TUNNEL_TOKEN      # paste the token and press Enter, or pipe it in
+devmate restart
+devmate doctor
+```
 
-## Security model
+3. Give the address printed by `devmate mcp-url` to ChatGPT or Claude as a custom MCP connector.
 
-`auth.mode: "none"` is the intentional single-owner trust model. It grants owner access to requests that can reach the configured MCP ingress, so use it only when that endpoint is private to the owner. OAuth is opt-in for team/member identity and shared access.
+**OpenAI tunnel**
 
-Other important boundaries:
+Create a tunnel in the organisation settings of the OpenAI Platform and download the official `tunnel-client`:
 
-- the Gateway binds to loopback by default;
-- credentials are never accepted in MCP URLs;
-- real `.env` files, keys, databases, logs, and credential-shaped paths are blocked from normal file tools;
-- workspace operations enforce lexical and realpath containment;
-- commands run as the DevMate OS identity and are not a hostile-code sandbox;
-- Runner credentials, OAuth identities, provider credentials, preview shares, and MCP access are separate trust domains;
-- configuration and durable coordination state use cross-process locking and crash-safe atomic replacement;
-- unsupported future config/state versions fail closed rather than being silently downgraded.
+```powershell
+devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx --executable C:\Tools\OpenAI\tunnel-client.exe
+devmate secret set CONTROL_PLANE_API_KEY
+devmate restart
+```
 
-For shared or organizational deployments, use OAuth, scoped members, optional workspace leases, approvals, bounded request policy, and separate OS/VM/container trust domains where appropriate.
+`devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it.
 
-See [`SECURITY.md`](SECURITY.md) and [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
+**Is it really connected?**
 
-## Verification and engineering quality
+A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to probe: confirm it by calling a tool from ChatGPT.
 
-The repository runs more than source-level tests. CI covers the actual packaged/runtime boundaries used by the product:
+A connector that cannot start does not take local work down and is never hidden: `doctor` and `connection.status` give the reason. After storing a new credential, restart only the connector: `devmate connection.restart`.
 
-- Windows + Node 24 + real VS Code Extension Host E2E;
-- Node Current compatibility;
-- Linux runtime, Docker network smoke, and real Godot validation;
-- packaged VSIX runtime and shared-tunnel smoke tests;
-- Obsidian bundle/runtime smoke tests;
-- portable Windows and Linux CLI packages;
-- dependency audits, architecture contracts, unit/policy tests, and Gateway smoke tests.
+## Who may do what
 
-Each tagged release publishes the VSIX, the complete Obsidian plugin ZIP, portable Windows and Linux CLI archives, and `SHA256SUMS`. The portable CLI assets are named `devmate-<version>-windows-x64.zip` and `devmate-<version>-linux-x64.tar.gz`.
+- **Two ports, two levels of trust.** The control port (default `127.0.0.1:8788`) is yours alone: workbench, command line, editors, MCP clients on this computer. The ingress port (default `8789`) serves only MCP and OAuth and is the only thing a tunnel or proxy points at; the control port refuses anything that arrived through a proxy.
+- **What is shared is decided at your computer.** Folders are shared from an editor, with `devmate project add`, or in the local workbench. A connected client cannot share a folder, widen read-only access, lift the protection of credential files or bring back a folder you took out; it can only narrow.
+- **Write access is full access.** In a writable project a client can run commands, and commands run as your operating-system account. With at least one writable project the limits on other folders keep a well-behaved model in place; they are not a wall against a hostile one. For a client you do not fully trust, share read only: then there are no commands and the limits hold. DevMate is not a sandbox.
+- **`auth.mode` is `none` by default.** Whoever reaches the MCP address is you. Treat a public address like a password, or require sign-in.
+- **Optional sign-in (OAuth).** `devmate connect … --auth oauth` makes clients of the public address sign in: on first connection they are sent to DevMate's authorisation page, where you enter a one-time code from `devmate login-code`. With `auth.member.create` you can issue read-only or read-write identities limited to named projects. A client that publishes no description of itself (a client metadata document) is registered by you under `auth.clients` in the configuration, with its name and redirect addresses. Clients on your own computer never need to sign in.
+- **Approvals and questions are answered by you, at your computer.** When an agent asks for permission, you answer in the editor or the local workbench. No connected client can answer, including the model that started the agent.
+- **Credential files are protected by default.** `.env`, key files, `.npmrc` and the like are not read or listed by the file tools; Git status names them, marked "do not commit". You can switch that off for one project, at your computer.
+- **Secrets in command lines are not shown.** Process lists and activity records replace inline tokens and passwords with `[redacted]`; the command that runs is unchanged. This recognises common forms and is no guarantee.
+- **The workbench session stays in its browser tab.** It is entered through a single-use link, and its session is never a cookie that other local services would receive.
+- File contents, command output and web pages the model reads are data, never instructions to it.
 
-Local verification:
+[SECURITY.md](SECURITY.md) has the full policy and the known limits.
 
-```bash
+## Tools the model gets
+
+| Area | Tools | Notes |
+| --- | --- | --- |
+| Orientation | `project_overview` `project_list` | Git branch and changes, the project's own agent instructions (`AGENTS.md` and similar), runnable scripts, top-level layout and the editor's error count, in one call |
+| Editor | `editor_diagnostics` `editor_context` | The compiler, type and lint errors VS Code already computed; your active file, selection and open files |
+| Finding code | `workspace_files` `workspace_find` `workspace_search` | Directory listing, glob find, ripgrep content search. Honours `.gitignore`; fast on large repositories |
+| Reading | `workspace_read` | With line numbers, paged for large files (up to 32 MiB). UTF-16 and local legacy encodings can be read, not rewritten |
+| Changing | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | Exact text replacement, several edits applied atomically. Overwriting needs the hash that was read, so nothing is written blind |
+| Undo | `workspace_history` `workspace_restore` | Every file changed, overwritten or deleted through DevMate can be restored, kept 30 days by default |
+| Running | `shell_run` `process_read` `process_write` `process_stop` `process_list` | Real shell semantics (`npm test`, `git commit`). Output is paged by cursor; long commands keep running and can be read, fed input and stopped as a whole process tree |
+| Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | Read only, and never run a program the repository configures. Writes go through `shell_run` |
+| Delegation | `agents_delegate` `agents_result` `providers_list` | Hand a whole task to a coding agent on this machine |
+| Domain capabilities | `capability_list` `capability_call` | Browser control and QA, Godot, reverse engineering, Obsidian, and external MCP servers you configure |
+| Everything else | `operations_list` `operations_call` `connection_status` | Workflows, tasks, messages between agents, jobs, artifacts and references, called by name |
+
+- `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
+- There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
+- The model carries about three dozen tool definitions; the rest costs no context.
+- Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
+- A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
+- The server speaks MCP 2026-07-28 and the 2025 revisions.
+- The reverse-engineering engine includes tools that read, and can write, the memory of another process on Windows. Both are off until you switch them on at your computer (`allowProcessAccess`, `allowMemoryWrite`); a connected client cannot. See [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for all engines.
+
+## Delegating to coding agents on this machine
+
+One call hands a task to Codex, Claude Code, Gemini CLI or Grok CLI installed here:
+
+```json
+{ "projectId": "Example", "provider": "claude", "prompt": "Fix the failing case in tests/login.test.ts and say why it failed" }
+```
+
+- A task that finishes within the wait returns its result and the list of changed files; otherwise it returns an `agentId` to follow with `agents_result`.
+- Passing the same `agentId` again continues that session with its context.
+- The agent works in the project folder with its own account, quota and tools. What it asks you (approvals, questions) appears in the workbench and as a notification in VS Code and Obsidian, and you answer it at your computer.
+- Collaboration inside one vendor (Claude Code sessions messaging each other, Codex sub-agents) is done natively by them. DevMate covers the part between clients, for example handing a task from ChatGPT on the web to Claude Code on your machine.
+
+For several agents exchanging messages and tasks in one workflow, use the finer `workflow.*`, `agents.*`, `message.*` and `task.*` operations, or the workbench.
+
+## Workbench
+
+`devmate ui --open` opens the workbench in your browser: projects, files, changes, commands, editor problems, agents and their activity, messages, tasks, approvals, artifacts and references. `open_devmate_workbench` opens the same interface inside clients that support MCP Apps (ChatGPT, Claude and others); there it shows everything, while sharing a folder and answering an agent stay at your computer.
+
+## Troubleshooting
+
+Run `devmate doctor` first. It names the item that is wrong and how to fix it.
+
+| What you see | Cause and remedy |
+| --- | --- |
+| `DevMate runtime is not running` | `devmate start`, or start it in an editor |
+| `Port 8788 … is already used by another program` | Another port: `devmate start --port 8790`, or the setting `devMate.runtimePort` |
+| `DevMate needs Node.js 24 or newer` | Install Node.js 24+, or set the path of its executable in the DevMate settings of the editor |
+| `Git … is too old` | Update to Git 2.41 or newer, then restart DevMate |
+| A note that PowerShell 5.1 has no `&&` | Have the model use `;` and `if ($?) { … }`, or install PowerShell 7 and restart DevMate |
+| The model says folders are "shared by the owner on their own computer" | Share the folder yourself: open it in an editor with DevMate, or `devmate project add <folder>` |
+| The model says a project is read only, or a folder was taken out of sharing | That was your decision at this computer. Change it there: **Change Folder Sharing** in the editor, `devmate project add`, or the local workbench |
+| "Answer this on your computer" in an embedded workbench | Approvals are answered locally: `devmate ui --open`, or the notification in your editor |
+| `rg was not found on PATH` | Install ripgrep as the message says, then `devmate restart`; or open DevMate once in VS Code, whose copy is then used |
+| `The origin … is not allowed` | A browser-based client: add its origin to `allowedOrigins` in the configuration if you run that client yourself |
+| A cloud client cannot connect | The `connection.*` items of `doctor`; `devmate logs` shows the connector's output |
+| Start fails | The message has the reason; the full log is `runtime.log` in the instance directory |
+
+## Upgrading from 3.x
+
+4.0 starts fresh. After the update:
+
+- Nothing of 3.x is read: projects, connection and sign-in are set up again. Old settings in your editor are ignored; old state on disk is left alone and can be deleted.
+- ngrok, the Gateway and Runners are gone. Cloud clients now come in through a tunnel you own, see [Connecting a client](#connecting-a-client). The MCP address changes, so update the connector in ChatGPT or Claude.
+- If a 3.x Gateway is still running it may hold port 8788, and 4.0 then reports that the port is in use. Close every editor window once, or end the old `node` process, and start again.
+- The tool names a model sees have changed; clients pick them up when the connector is refreshed.
+
+## Uninstalling
+
+Removing the extension or the plugin does not stop the runtime, because other entries may be using it. Stop it first (**Stop DevMate Runtime**, or `devmate stop`), then uninstall. Everything DevMate keeps is in the instance directory (`~/.devmate/runtime` by default): delete it to remove the state, the credentials and the restorable file versions. Your project files are never touched by this.
+
+## Data and retention
+
+State lives in one SQLite database in the instance directory. The event journal, operation receipts, finished jobs and approvals, and restorable file versions are pruned after `retentionDays` (default 30). Projects, workflows, messages and tasks are not pruned.
+
+## Compatibility
+
+Within 4.x these are treated as public: the names and parameters of the tools above, operation names, configuration keys, command-line commands and the workbench resource `ui://devmate/workbench/v1`. A change to any of them is listed in the changelog, and a rename keeps the old name working for one minor release. A test pins the tool names and parameters, so none changes by accident. The stored state carries a format number: a release never touches state written by a newer one and says which versions are involved. 4.x does not read 3.x state.
+
+## Development
+
+```powershell
 npm ci
-npm run check
-npm run test:unit
-npm run smoke:gateway
-npm run package:vsix
-npm run package:obsidian
+npm run lint               # mistakes only: undefined names, unreachable code and the like
+npm run check              # manifest, versions, pinned workflow actions, syntax
+npm run test:unit          # the whole test suite
+npm run test:vscode-host   # the extension in a real VS Code: two editors and a third window on one runtime
+npm run candidate          # build once, smoke-test that build as packaged, write what a release publishes to dist/release/
 ```
 
-## Godot support
+Pushing a tag `X.Y.Z` that matches the package version (no `v`) verifies that commit and publishes the GitHub release and the VS Code Marketplace version. [CONTRIBUTING.md](CONTRIBUTING.md) describes the release steps.
 
-The optional Godot capability is deliberately broader than a command wrapper. It can verify the editor/toolchain, audit project structure, build dependency graphs, install the QA bridge, run native/Web acceptance, sample performance monitors, compare reviewed baselines, capture deterministic AVI evidence, run GUT/GdUnit4 tests, produce quality reports, and route exports to matching Runners.
+| Directory | Contents |
+| --- | --- |
+| `runtime/` | The runtime: the one entry and authorisation of every call (`service.mjs`), all operations (`operations/`), SQLite state (`store.mjs`), the MCP layer (`mcp.mjs`), HTTP (`main.mjs`), the instance lock, commands and processes, files and Git, connections, agent adapters (`agents/`) |
+| `runtime/engines/` | Browser, Godot, reverse engineering and other domain capabilities |
+| `runtime/platform/` | Process trees, paths, tools and other low-level helpers |
+| `workbench/` | The workbench, shared by the MCP App and the local page |
+| `vscode-host/` `obsidian-plugin/` | The two hosts |
+| `tests/` `scripts/` | Tests; build, check, smoke and packaging scripts |
 
-The repository's Linux CI uses a real Godot 4.7.1 editor under Xvfb for native QA, performance sampling, and deterministic Movie Maker capture.
-
-See:
-
-- [`docs/GODOT_AUTOMATION.md`](docs/GODOT_AUTOMATION.md)
-- [`docs/GODOT_RUNTIME_QUALITY.md`](docs/GODOT_RUNTIME_QUALITY.md)
-- [`docs/GODOT_TEST_PERFORMANCE.md`](docs/GODOT_TEST_PERFORMANCE.md)
-- [`docs/GODOT_RELEASE_MATURITY.md`](docs/GODOT_RELEASE_MATURITY.md)
-
-## Operations
-
-Prometheus-compatible metrics are loopback-only:
-
-```text
-http://127.0.0.1:8787/control/metrics
-```
-
-Deployment examples are included for systemd, Docker, external Runner hosts, and Caddy reverse proxying under `deploy/`.
+Every operation is defined once in `runtime/operations/` and authorised by the registry in `runtime/service.mjs`. MCP, the command line and the workbench all get it from there.
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — runtime topology and current architecture
-- [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — single-owner and OAuth identity model
-- [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) — setup presets
-- [`docs/STANDALONE.md`](docs/STANDALONE.md) — CLI, service, and portable usage
-- [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md) — VS Code/Obsidian lifecycle
-- [`docs/JOBS.md`](docs/JOBS.md) — durable jobs
-- [`docs/EXTERNAL_RUNNERS.md`](docs/EXTERNAL_RUNNERS.md) — Runner protocol and deployment
-- [`docs/TEAM_DEPLOYMENT.md`](docs/TEAM_DEPLOYMENT.md) — shared access and hardened deployments
-- [`docs/TUNNELS.md`](docs/TUNNELS.md) — public connection providers
-- [`docs/PLUGINS.md`](docs/PLUGINS.md) — optional capability plugins
-- [`docs/MCP_TOOLS.md`](docs/MCP_TOOLS.md) — tool catalog
-- [`SECURITY.md`](SECURITY.md) — trust boundaries and security policy
+- [Capabilities](docs/CAPABILITIES.md): browser, Godot, reverse engineering, Obsidian
+- [Security policy](SECURITY.md) and its known limits
+- [Changelog](CHANGELOG.md)
+- [Contributing and releasing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Code of conduct](CODE_OF_CONDUCT.md)
+- [Audit of 4.0](docs/AUDIT-4.0.md) (in Chinese): what three review rounds found, what was fixed and what could not be verified
 
 ## License
 
-MIT
+[MIT](LICENSE)

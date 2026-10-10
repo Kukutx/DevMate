@@ -1,0 +1,76 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
+import { fixture, until } from './runtime-integration-fixtures.mjs';
+import { createRuntimeClient } from '../runtime/client.mjs';
+import { startRuntime } from '../runtime/main.mjs';
+import { Store } from '../runtime/store.mjs';
+const require=createRequire(import.meta.url);
+const {createHostClient}=require('../runtime/host-client.cjs');
+
+test('new SSE listeners receive only new events and can replay history with a cursor', async t => {
+  const f=await fixture(t);
+  const client=createRuntimeClient({instanceRoot:f.instanceRoot});
+  const old=f.runtime.service.store.event('fixture.old',{id:'old'}, {marker:'old'});
+  const controller=new AbortController();
+  let connected;
+  const ready=new Promise(resolve=>{connected=resolve;});
+  const iterator=client.events({signal:controller.signal,onConnect:connected});
+  const first=iterator.next();
+  const handshake=await ready;
+  assert.equal(handshake.cursor,f.runtime.service.store.revision);
+  assert.ok(handshake.cursor>=old.sequence);
+  const recent=f.runtime.service.store.event('fixture.new',{id:'new'}, {marker:'new'});
+  assert.equal((await first).value.id,String(recent.sequence));
+  controller.abort();await iterator.return().catch(()=>{});
+  const replay=new AbortController();
+  const recovered=client.events({after:old.sequence,signal:replay.signal});
+  assert.equal((await recovered.next()).value.id,String(recent.sequence));
+  replay.abort();await recovered.return().catch(()=>{});
+});
+
+test('window-scoped SSE filters other projects and accepts explicit event cursors',async t=>{
+  const f=await fixture(t), roots=['A','B'].map(name=>{const root=path.join(f.temp,'sse-'+name);fs.mkdirSync(root);return{root,name};});
+  const windowId=randomUUID(),client=createRuntimeClient({instanceRoot:f.instanceRoot,windowId});
+  const a=await client.call('window.attach',{windowId,roots:[{...roots[0],register:'write'}]});
+  const b=await f.call('project.create',{name:'B',root:roots[1].root});
+  const foreign=f.runtime.service.store.event('other',{id:'foreign',projectId:b.id},{marker:'not-visible'});
+  const own=f.runtime.service.store.event('own',{id:'own',projectId:a.selectedProjectId},{marker:'visible'});
+  const abort=new AbortController();
+  const iter=client.events({after:0,signal:abort.signal});
+  const event=(await iter.next()).value;
+  assert.equal(event.id,String(own.sequence));
+  assert.equal(event.data.marker,'visible');
+  assert.ok(Number(event.id)>foreign.sequence);
+  abort.abort();await iter.return().catch(()=>{});
+});
+
+test('host event listener reconnects across instance restart and replays missed stored events',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-sse-reconnect-'));
+  const connectionFactory=()=>({async start(){},async stop(){},status(){return{kind:'local',phase:'local'};}});
+  let runtime, host;
+  t.after(async()=>{host?.dispose();await runtime?.stop().catch(()=>{});fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  runtime=await startRuntime({instanceRoot:root,port:0,connectionFactory});
+  host=createHostClient({instanceRoot:root});
+  const seen=[],connections=[],errors=[];
+  const listener=host.subscribe(event=>seen.push(event),error=>errors.push(error),info=>connections.push(info));
+  t.after(()=>listener.dispose());
+  await until(()=>connections.length>=1,'first SSE connection',7000);
+  const first=runtime.service.store.event('fixture.first',{id:'first'},{marker:'first'});
+  await until(()=>seen.some(item=>item.id===String(first.sequence)),'first delivered',6000);
+  await runtime.stop();
+  const store=new Store(root);
+  const between=store.event('fixture.during.restart',{id:'offline'},{marker:'offline'});
+  store.close();
+  runtime=await startRuntime({instanceRoot:root,port:0,connectionFactory});
+  await until(()=>seen.some(item=>item.id===String(between.sequence)),'offline event delivered',12000);
+  assert.equal(seen.filter(item=>item.id===String(between.sequence)).length,1);
+  assert.ok(connections.length>=2);
+  assert.deepEqual(errors,[]);
+  listener.dispose();
+  await listener.done;
+});

@@ -4,7 +4,6 @@ node_modules/
 .tmp_*
 tmp/
 obsidian-plugin/dist/
-gateway/server.bundle.mjs
 *.vsix
 *.tgz
 *.log
@@ -14,3 +13,4 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .vscode-test/
+dist/

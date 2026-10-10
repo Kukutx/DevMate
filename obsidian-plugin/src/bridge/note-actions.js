@@ -5,7 +5,7 @@ const path = require('node:path');
 const { TFile } = require('obsidian');
 const { MAX_BACKUP_BYTES } = require('./constants.js');
 const { cleanVaultPath, propertyKey } = require('./path-policy.js');
-const { publicOperation } = require('./operation-store.js');
+const { publicOperation } = require('./record-projections.cjs');
 
 function now() {
   return new Date().toISOString();
@@ -59,19 +59,23 @@ function normalizePropertyChange(args = {}) {
 async function createNote(plugin, operationStore, args = {}, metadata = {}) {
   const notePath = cleanVaultPath(args.path, { markdown: true, configDir: plugin.app.vault.configDir });
   if (plugin.app.vault.getAbstractFileByPath(notePath)) throw new Error(`Path already exists: ${notePath}`);
-  await mkdirParents(plugin.app.vault, notePath);
   const content = String(args.content || '');
-  const file = await plugin.app.vault.create(notePath, content);
+  if (Buffer.byteLength(content, 'utf8') > MAX_BACKUP_BYTES) throw new Error('Note exceeds the rollback size limit');
   const record = {
-    id: operationStore.createId(),
+    id: metadata.operationId || operationStore.createId(),
+    status: 'prepared',
     action: 'create_note',
     path: notePath,
     batchPlanId: metadata.batchPlanId || null,
     createdAt: now(),
     before: { existed: false },
-    after: { hash: hash(content), mtime: file.stat.mtime }
+    after: { hash: hash(content) }
   };
-  operationStore.write(record);
+  await operationStore.write(record);
+  await mkdirParents(plugin.app.vault, notePath);
+  const file = await plugin.app.vault.create(notePath, content);
+  record.after.mtime = file.stat.mtime; record.status = 'applied';
+  await operationStore.write(record);
   return { created: true, path: file.path, operation: publicOperation(record) };
 }
 
@@ -79,23 +83,20 @@ async function updateProperties(plugin, operationStore, args = {}, metadata = {}
   const file = requireMarkdownFile(plugin.app.vault, args.path);
   const before = await fileSnapshot(plugin.app.vault, file);
   const { set, remove } = normalizePropertyChange(args);
+  const record = {
+    id: metadata.operationId || operationStore.createId(), status: 'prepared',
+    action: 'update_properties', path: file.path, batchPlanId: metadata.batchPlanId || null,
+    createdAt: now(), before, after: {}, change: { set, remove }
+  };
+  await operationStore.write(record);
   await plugin.app.fileManager.processFrontMatter(file, frontmatter => {
     for (const [key, value] of Object.entries(set)) frontmatter[key] = value;
     for (const key of remove) delete frontmatter[key];
   });
   const current = requireMarkdownFile(plugin.app.vault, file.path);
-  const after = await fileSnapshot(plugin.app.vault, current, { includeContent: false });
-  const record = {
-    id: operationStore.createId(),
-    action: 'update_properties',
-    path: file.path,
-    batchPlanId: metadata.batchPlanId || null,
-    createdAt: now(),
-    before,
-    after,
-    change: { set, remove }
-  };
-  operationStore.write(record);
+  record.after = await fileSnapshot(plugin.app.vault, current, { includeContent: false });
+  record.status = 'applied';
+  await operationStore.write(record);
   return { updated: true, path: file.path, set: Object.keys(set), removed: remove, operation: publicOperation(record) };
 }
 
@@ -105,21 +106,18 @@ async function moveNote(plugin, operationStore, args = {}, metadata = {}) {
   if (plugin.app.vault.getAbstractFileByPath(destination)) throw new Error(`Destination already exists: ${destination}`);
   const originalPath = file.path;
   const before = await fileSnapshot(plugin.app.vault, file, { includeContent: false });
+  const record = {
+    id: metadata.operationId || operationStore.createId(), status: 'prepared',
+    action: 'move_note', path: originalPath, destination, batchPlanId: metadata.batchPlanId || null,
+    createdAt: now(), before, after: { hash: before.hash }
+  };
+  await operationStore.write(record);
   await mkdirParents(plugin.app.vault, destination);
   await plugin.app.fileManager.renameFile(file, destination);
   const moved = requireMarkdownFile(plugin.app.vault, destination);
-  const after = await fileSnapshot(plugin.app.vault, moved, { includeContent: false });
-  const record = {
-    id: operationStore.createId(),
-    action: 'move_note',
-    path: originalPath,
-    destination,
-    batchPlanId: metadata.batchPlanId || null,
-    createdAt: now(),
-    before,
-    after
-  };
-  operationStore.write(record);
+  record.after = await fileSnapshot(plugin.app.vault, moved, { includeContent: false });
+  record.status = 'applied';
+  await operationStore.write(record);
   return { moved: true, from: originalPath, to: destination, operation: publicOperation(record) };
 }
 
@@ -127,9 +125,9 @@ async function trashNote(plugin, operationStore, args = {}, metadata = {}) {
   const file = requireMarkdownFile(plugin.app.vault, args.path);
   const before = await fileSnapshot(plugin.app.vault, file);
   const originalPath = file.path;
-  await plugin.app.fileManager.trashFile(file);
   const record = {
-    id: operationStore.createId(),
+    id: metadata.operationId || operationStore.createId(),
+    status: 'prepared',
     action: 'trash_note',
     path: originalPath,
     batchPlanId: metadata.batchPlanId || null,
@@ -137,17 +135,35 @@ async function trashNote(plugin, operationStore, args = {}, metadata = {}) {
     before,
     after: { existed: false }
   };
-  operationStore.write(record);
+  await operationStore.write(record);
+  await plugin.app.fileManager.trashFile(file);
+  record.status = 'applied';
+  await operationStore.write(record);
   return { trashed: true, path: originalPath, operation: publicOperation(record) };
 }
 
 async function rollbackOperation(plugin, operationStore, args = {}) {
-  const record = operationStore.read(args.operationId);
+  const record = await operationStore.read(args.operationId);
   if (record.rolledBackAt) {
     return { rolledBack: false, alreadyRolledBack: true, operation: publicOperation(record) };
   }
   const force = args.force === true;
   const vault = plugin.app.vault;
+  if (record.status === 'prepared') {
+    const original = vault.getAbstractFileByPath(record.path);
+    const unchanged = original instanceof TFile && record.before.hash &&
+      (await fileSnapshot(vault, original, { includeContent: false })).hash === record.before.hash;
+    const notApplied = record.action === 'create_note' ? !original :
+      record.action === 'move_note' ? unchanged && !vault.getAbstractFileByPath(record.destination) : unchanged;
+    if (notApplied) {
+      record.rolledBackAt = now(); record.status = 'rolled_back';
+      await operationStore.write(record);
+      return { rolledBack: true, notApplied: true, operation: publicOperation(record) };
+    }
+    if (record.action === 'update_properties' && !force) {
+      throw new Error('The previous mutation did not finish recording its result; inspect the note and pass force=true to restore its saved backup');
+    }
+  }
 
   if (record.action === 'create_note') {
     const file = requireMarkdownFile(vault, record.path);
@@ -178,7 +194,8 @@ async function rollbackOperation(plugin, operationStore, args = {}) {
   }
 
   record.rolledBackAt = now();
-  operationStore.write(record);
+  record.status = 'rolled_back';
+  await operationStore.write(record);
   return { rolledBack: true, operation: publicOperation(record) };
 }
 

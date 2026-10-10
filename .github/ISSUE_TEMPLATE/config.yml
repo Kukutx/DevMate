@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/Kukutx/DevMate/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue for it.
+  - name: Troubleshooting
+    url: https://github.com/Kukutx/DevMate#troubleshooting
+    about: The errors people meet most often, and what to do about them.

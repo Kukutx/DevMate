@@ -1,423 +1,363 @@
 {
   "name": "devmate-agent",
-  "displayName": "DevMate Agent",
-  "description": "Local-first agent capability and automation runtime for ChatGPT via MCP, with files, Git, commands, browser control, durable jobs, VS Code, Obsidian, and Runners.",
-  "keywords": [
-    "mcp",
-    "chatgpt",
-    "developer-tools",
-    "vscode",
-    "obsidian",
-    "local-first",
-    "automation",
-    "devtools",
-    "ai-agent",
-    "agent-automation",
-    "browser-automation"
-  ],
-  "version": "3.8.9",
-  "icon": "assets/icon.png",
+  "displayName": "DevMate",
+  "description": "Give ChatGPT, Claude and any MCP client real hands on your own computer: files, shell, Git, editor diagnostics and local coding agents, without a paid tunnel.",
+  "version": "4.0.0",
+  "license": "MIT",
   "publisher": "kukutx",
-  "sponsor": {
-    "url": "https://github.com/sponsors/Kukutx"
-  },
+  "icon": "assets/icon.png",
   "homepage": "https://github.com/Kukutx/DevMate#readme",
-  "bugs": {
-    "url": "https://github.com/Kukutx/DevMate/issues"
-  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Kukutx/DevMate.git"
   },
+  "bugs": {
+    "url": "https://github.com/Kukutx/DevMate/issues"
+  },
+  "sponsor": {
+    "url": "https://github.com/sponsors/Kukutx"
+  },
+  "keywords": [
+    "mcp",
+    "model context protocol",
+    "chatgpt",
+    "claude",
+    "codex",
+    "ai agent",
+    "multi-agent",
+    "developer-tools",
+    "obsidian",
+    "local-first"
+  ],
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
   "engines": {
-    "vscode": "^1.133.0",
+    "vscode": "^1.101.0",
     "node": ">=24"
   },
   "categories": [
     "Machine Learning",
     "Other"
   ],
-  "activationEvents": [
-    "onStartupFinished",
-    "onCommand:devMate.start",
-    "onCommand:devMate.open",
-    "onCommand:devMate.stop",
-    "onCommand:devMate.restart",
-    "onCommand:devMate.repairGatewayPort",
-    "onCommand:devMate.copyUrl",
-    "onCommand:devMate.manageWorkspaces",
-    "onCommand:devMate.addWorkspace",
-    "onCommand:devMate.addReference",
-    "onCommand:devMate.clearReferences",
-    "onCommand:devMate.doctor",
-    "onCommand:devMate.logs",
-    "onCommand:devMate.exportSource",
-    "onCommand:devMate.copyPrompt",
-    "onCommand:devMate.copyContextBundle",
-    "onCommand:devMate.copyOAuthApprovalCode",
-    "onCommand:devMate.openSettings",
-    "onCommand:devMate.ngrokSetup",
-    "onCommand:devMate.ngrokSwitchAccount",
-    "onCommand:devMate.ngrokClearAccount",
-    "onCommand:devMate.openNgrokDashboard",
-    "onCommand:devMate.connectionSetup",
-    "onCommand:devMate.connectionDoctor",
-    "onCommand:devMate.cloudflareSetToken",
-    "onCommand:devMate.cloudflareClearToken",
-    "onCommand:devMate.openConnectionDocs",
-    "onCommand:devMate.copyHostDiagnostics",
-    "onCommand:devMate.hostSelfCheck"
+  "main": "./vscode-host/runtime-entry.cjs",
+  "bin": {
+    "devmate": "./runtime/cli.mjs"
+  },
+  "extensionKind": [
+    "workspace"
   ],
-  "main": "./extension-entry-shared-tunnel.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "%capability.untrusted%"
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "%capability.virtual%"
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
-        "command": "devMate.start",
-        "title": "DevMate: Start / Activate Current Project"
+        "command": "devMate.runtime.start",
+        "title": "%command.start%",
+        "category": "DevMate",
+        "icon": "$(play)"
       },
       {
-        "command": "devMate.open",
-        "title": "DevMate: Open"
+        "command": "devMate.runtime.stop",
+        "title": "%command.stop%",
+        "category": "DevMate",
+        "icon": "$(debug-stop)"
       },
       {
-        "command": "devMate.stop",
-        "title": "DevMate: Stop Shared Runtime"
+        "command": "devMate.runtime.restart",
+        "title": "%command.restart%",
+        "category": "DevMate",
+        "icon": "$(debug-restart)"
       },
       {
-        "command": "devMate.restart",
-        "title": "DevMate: Restart Shared Runtime"
+        "command": "devMate.runtime.registerFolder",
+        "title": "%command.registerFolder%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.repairGatewayPort",
-        "title": "DevMate: Repair Gateway Port to Configured Default"
+        "command": "devMate.runtime.menu",
+        "title": "%command.menu%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.copyUrl",
-        "title": "DevMate: Copy MCP URL"
+        "command": "devMate.runtime.status",
+        "title": "%command.status%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.manageWorkspaces",
-        "title": "DevMate: Manage Workspaces"
+        "command": "devMate.runtime.open",
+        "title": "%command.open%",
+        "category": "DevMate",
+        "icon": "$(preview)"
       },
       {
-        "command": "devMate.addWorkspace",
-        "title": "DevMate: Add Workspace"
+        "command": "devMate.runtime.operations",
+        "title": "%command.operations%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.connectionSetup",
-        "title": "DevMate: Connection Setup"
+        "command": "devMate.runtime.call",
+        "title": "%command.call%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.connectionDoctor",
-        "title": "DevMate: Connection Doctor"
+        "command": "devMate.runtime.selectWorkspace",
+        "title": "%command.selectWorkspace%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.addReference",
-        "title": "DevMate: Add Reference"
+        "command": "devMate.runtime.doctor",
+        "title": "%command.doctor%",
+        "category": "DevMate",
+        "icon": "$(pulse)"
       },
       {
-        "command": "devMate.clearReferences",
-        "title": "DevMate: Clear References"
+        "command": "devMate.runtime.copyMcpUrl",
+        "title": "%command.copyMcpUrl%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.doctor",
-        "title": "DevMate: Doctor"
+        "command": "devMate.runtime.loginCode",
+        "title": "%command.loginCode%",
+        "category": "DevMate"
       },
       {
-        "command": "devMate.logs",
-        "title": "DevMate: Logs"
-      },
+        "command": "devMate.runtime.configureConnection",
+        "title": "%command.configureConnection%",
+        "category": "DevMate"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "devMate.runtime",
+          "name": "DevMate"
+        }
+      ]
+    },
+    "mcpServerDefinitionProviders": [
       {
-        "command": "devMate.exportSource",
-        "title": "DevMate: Export Source"
-      },
-      {
-        "command": "devMate.copyPrompt",
-        "title": "DevMate: Copy Prompt"
-      },
-      {
-        "command": "devMate.copyContextBundle",
-        "title": "DevMate: Copy Context Bundle"
-      },
-      {
-        "command": "devMate.copyOAuthApprovalCode",
-        "title": "DevMate: Copy OAuth Approval Code"
-      },
-      {
-        "command": "devMate.openSettings",
-        "title": "DevMate: Open Settings"
-      },
-      {
-        "command": "devMate.ngrokSetup",
-        "title": "DevMate: Configure ngrok"
-      },
-      {
-        "command": "devMate.ngrokSwitchAccount",
-        "title": "DevMate: Switch ngrok Account"
-      },
-      {
-        "command": "devMate.ngrokClearAccount",
-        "title": "DevMate: Clear Managed ngrok Account"
-      },
-      {
-        "command": "devMate.openNgrokDashboard",
-        "title": "DevMate: Open ngrok Dashboard"
-      },
-      {
-        "command": "devMate.cloudflareSetToken",
-        "title": "DevMate: Set Cloudflare Tunnel Token"
-      },
-      {
-        "command": "devMate.cloudflareClearToken",
-        "title": "DevMate: Clear Cloudflare Tunnel Token"
-      },
-      {
-        "command": "devMate.openConnectionDocs",
-        "title": "DevMate: Open Connection Documentation"
-      },
-      {
-        "command": "devMate.copyHostDiagnostics",
-        "title": "DevMate: Copy Host Diagnostics"
-      },
-      {
-        "command": "devMate.hostSelfCheck",
-        "title": "DevMate: Host Self-Check"
+        "id": "devMate.runtime",
+        "label": "DevMate"
       }
     ],
     "configuration": {
       "title": "DevMate",
       "type": "object",
       "properties": {
-        "devMate.autoStart": {
-          "type": "boolean",
-          "default": true,
-          "description": "Bring the shared DevMate connection to Ready automatically after VS Code opens a workspace. By default this attaches without changing the machine Current Project."
-        },
-        "devMate.activateWorkspaceOnAutoStart": {
-          "type": "boolean",
-          "default": false,
-          "description": "Also make this VS Code workspace the machine-wide Current Project during automatic startup. Leave disabled for deterministic multi-window behavior; manual DevMate Start always activates the current project."
-        },
-        "devMate.sharedStateDirectory": {
+        "devMate.runtimeInstanceDirectory": {
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional shared DevMate state directory override. Leave empty to use the machine-wide ~/.devmate/desktop instance shared by VS Code and Obsidian."
+          "description": "%config.runtimeInstanceDirectory%"
         },
-        "devMate.port": {
-          "type": "number",
-          "default": 8787,
+        "devMate.nodeCommandPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%config.nodeCommandPath%"
+        },
+        "devMate.runtimePort": {
+          "type": "integer",
+          "default": 8788,
           "minimum": 1024,
           "maximum": 65535,
           "scope": "machine",
-          "description": "Initial loopback Gateway port for a fresh machine-wide DevMate state. An existing shared port remains authoritative; DevMate never scans to another port automatically."
+          "description": "%config.runtimePort%"
         },
-        "devMate.ngrokCommandPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional ngrok executable path."
-        },
-        "devMate.ngrokUseManagedAccount": {
+        "devMate.autoStart": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
-          "description": "Use the ngrok account saved in VS Code Secret Storage. Fresh installs use the machine's normal ngrok configuration until this is enabled by setup."
+          "description": "%config.autoStart%"
         },
-        "devMate.ngrokUrl": {
+        "devMate.shareFolders": {
+          "scope": "machine",
           "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional machine-local stable ngrok URL candidate used by Connection Setup. The active runtime URL is shared by the machine-wide desktop instance."
-        },
-        "devMate.ngrokPoolingEnabled": {
-          "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "description": "Allow ngrok endpoint pooling only when intentionally serving the same trusted DevMate instance from multiple agents."
-        },
-        "devMate.ngrokTrafficPolicyFile": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional ngrok Traffic Policy file."
-        },
-        "devMate.cloudflareCommandPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional cloudflared executable path."
-        },
-        "devMate.publicUrl": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Optional machine-local stable HTTPS URL candidate for managed Cloudflare or external ingress. The active runtime URL is shared by the machine-wide desktop instance."
-        },
-        "devMate.tunnelAutoRestart": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "description": "Restart an owned public connection process after unexpected exit."
-        },
-        "devMate.tunnelMaxRestarts": {
-          "type": "number",
-          "default": 10,
-          "minimum": 0,
-          "maximum": 100,
-          "scope": "machine",
-          "description": "Maximum automatic public connection restarts after unexpected exit."
-        },
-        "devMate.autoCopyUrl": {
-          "type": "boolean",
-          "default": true,
-          "description": "Copy the public MCP URL only after DevMate reaches verified Ready state."
-        },
-        "devMate.autoUseCurrentWorkspace": {
-          "type": "boolean",
-          "default": true,
-          "description": "Register the current VS Code folder as a writable DevMate workspace during host refresh. This does not change the machine Current Project."
-        },
-        "devMate.authenticationMode": {
-          "type": "string",
-          "default": "none",
-          "scope": "machine",
           "enum": [
-            "none",
-            "oauth"
-          ],
-          "description": "MCP authentication mode. none is the default single-owner mode for local and public MCP access; oauth is for team/shared member identity."
-        },
-        "devMate.permissionProfile": {
-          "type": "string",
-          "default": "fullAccess",
-          "scope": "machine",
-          "enum": [
+            "readWrite",
             "readOnly",
-            "balanced",
-            "fullAccess"
+            "ask",
+            "never"
           ],
-          "description": "Permission preset. readOnly blocks mutation; balanced uses configurable safety guards; fullAccess grants unrestricted DevMate development operations inside trusted writable workspaces while credential/path, OS, and remote identity boundaries remain enforced."
+          "enumDescriptions": [
+            "%config.shareFolders.readWrite%",
+            "%config.shareFolders.readOnly%",
+            "%config.shareFolders.ask%",
+            "%config.shareFolders.never%"
+          ],
+          "default": "readWrite",
+          "description": "%config.shareFolders%"
         },
-        "devMate.blockDangerousOperations": {
+        "devMate.shareEditorContext": {
+          "scope": "machine",
           "type": "boolean",
           "default": true,
-          "scope": "machine",
-          "description": "Balanced mode only: block recognized destructive shell and Git patterns. fullAccess intentionally bypasses this extra guard."
-        },
-        "devMate.confirmBeforePush": {
-          "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "description": "Balanced mode only: block Git push while this guard is enabled. fullAccess never applies this extra guard."
-        },
-        "devMate.allowDirectoryMutations": {
-          "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "description": "Balanced mode only: allow directory move/delete operations after normal workspace and sensitive-path checks. fullAccess always allows them."
-        },
-        "devMate.defaultCommandTimeoutMs": {
-          "type": "number",
-          "default": 180000,
-          "minimum": 1000,
-          "maximum": 1800000,
-          "scope": "machine",
-          "description": "Default command timeout for the shared Gateway."
-        },
-        "devMate.maxOutputChars": {
-          "type": "number",
-          "default": 120000,
-          "minimum": 1000,
-          "maximum": 500000,
-          "scope": "machine",
-          "description": "Maximum returned command output for the shared Gateway."
-        },
-        "devMate.backupRetentionDays": {
-          "type": "number",
-          "default": 30,
-          "minimum": 1,
-          "maximum": 3650,
-          "scope": "machine",
-          "description": "Backup retention period for shared DevMate state."
-        },
-        "devMate.auditRetentionDays": {
-          "type": "number",
-          "default": 30,
-          "minimum": 1,
-          "maximum": 3650,
-          "scope": "machine",
-          "description": "Audit retention period for shared DevMate state."
-        },
-        "devMate.maxBackupBytes": {
-          "type": "number",
-          "default": 536870912,
-          "minimum": 1048576,
-          "maximum": 10737418240,
-          "scope": "machine",
-          "description": "Maximum retained backup bytes in shared DevMate state."
-        },
-        "devMate.maxAuditBytes": {
-          "type": "number",
-          "default": 5242880,
-          "minimum": 262144,
-          "maximum": 104857600,
-          "scope": "machine",
-          "description": "Maximum audit log bytes in shared DevMate state."
-        },
-        "devMate.defaultStartCommand": {
-          "type": "string",
-          "default": "",
-          "description": "Optional project command started after the local Gateway is ready."
-        },
-        "devMate.embeddedRunnerEnabled": {
-          "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "description": "Enable the in-process durable Job runner for the machine-wide shared Gateway on its next Shared Runtime start. Disabled by default; external Runners remain available."
+          "description": "%config.shareEditorContext%"
         }
       }
-    }
+    },
+    "viewsWelcome": [
+      {
+        "view": "devMate.runtime",
+        "contents": "%view.welcome%",
+        "when": "!devMate.running"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "devMate.runtime.start",
+          "when": "view == devMate.runtime && !devMate.running",
+          "group": "navigation@1"
+        },
+        {
+          "command": "devMate.runtime.open",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "navigation@1"
+        },
+        {
+          "command": "devMate.runtime.stop",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "navigation@2"
+        },
+        {
+          "command": "devMate.runtime.copyMcpUrl",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "1_connect@1"
+        },
+        {
+          "command": "devMate.runtime.configureConnection",
+          "when": "view == devMate.runtime",
+          "group": "1_connect@2"
+        },
+        {
+          "command": "devMate.runtime.loginCode",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "1_connect@3"
+        },
+        {
+          "command": "devMate.runtime.registerFolder",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "2_share@1"
+        },
+        {
+          "command": "devMate.runtime.doctor",
+          "when": "view == devMate.runtime",
+          "group": "3_runtime@1"
+        },
+        {
+          "command": "devMate.runtime.restart",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "3_runtime@2"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "devMate.gettingStarted",
+        "title": "%walkthrough.title%",
+        "description": "%walkthrough.description%",
+        "steps": [
+          {
+            "id": "start",
+            "title": "%walkthrough.start.title%",
+            "description": "%walkthrough.start.description%",
+            "media": {
+              "markdown": "vscode-host/walkthrough/start.md"
+            },
+            "completionEvents": [
+              "onCommand:devMate.runtime.start",
+              "onContext:devMate.running"
+            ]
+          },
+          {
+            "id": "share",
+            "title": "%walkthrough.share.title%",
+            "description": "%walkthrough.share.description%",
+            "media": {
+              "markdown": "vscode-host/walkthrough/share.md"
+            },
+            "completionEvents": [
+              "onCommand:devMate.runtime.registerFolder"
+            ]
+          },
+          {
+            "id": "connect",
+            "title": "%walkthrough.connect.title%",
+            "description": "%walkthrough.connect.description%",
+            "media": {
+              "markdown": "vscode-host/walkthrough/connect.md"
+            },
+            "completionEvents": [
+              "onCommand:devMate.runtime.copyMcpUrl",
+              "onCommand:devMate.runtime.configureConnection"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
-    "version:sync": "node scripts/sync-version.mjs",
-    "version:check": "node scripts/sync-version.mjs --check",
-    "build": "npm run build:vscode && npm run build:community",
-    "build:vscode": "npm run version:check && node scripts/community-build-output.mjs clean && node scripts/build-gateway.mjs",
-    "build:obsidian": "npm run version:check && node obsidian-plugin/esbuild.config.mjs && node scripts/check-obsidian-release.mjs --dist",
-    "build:community": "npm run build:obsidian && node scripts/community-build-output.mjs copy",
-    "compile": "npm run build:vscode",
-    "vscode:prepublish": "npm run build:vscode",
-    "check": "npm run version:check && node scripts/check-repository.mjs && node scripts/check-workflows.mjs && node scripts/check-obsidian-release.mjs",
+    "build": "node scripts/build-runtime-candidate.mjs",
+    "build:workbench": "node workbench/build.mjs",
+    "check": "node scripts/check-runtime.mjs",
     "test": "npm run test:unit",
-    "test:unit": "node scripts/build-gateway.mjs && node scripts/run-tests.mjs",
+    "test:unit": "node scripts/run-tests.mjs",
     "test:vscode-host": "node scripts/test-vscode-host.mjs",
-    "release:preflight": "npm run check && npm run test:unit && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs && npm run package:vsix && npm run package:obsidian",
-    "smoke:gateway": "npm run build:vscode && node tests/smoke-gateway.mjs && node tests/smoke-local-capabilities.mjs",
-    "package:vsix": "npm run build:vscode && vsce package",
-    "package:obsidian": "npm run build:obsidian && node scripts/smoke-obsidian-runtime.mjs",
-    "publish:vsix": "npm run build:vscode && vsce publish",
-    "devmate": "node scripts/devmate-command.mjs",
-    "runner": "node scripts/devmate-runner.mjs"
+    "test:integration": "node --test tests/runtime-integration-auth-resources.test.mjs tests/runtime-integration-jobs-tasks.test.mjs tests/runtime-integration-external.test.mjs",
+    "smoke:runtime": "node scripts/smoke-runtime.mjs",
+    "package:vsix": "node scripts/package-runtime.mjs vscode",
+    "package:obsidian": "node scripts/package-runtime.mjs obsidian",
+    "package:cli": "node scripts/package-runtime.mjs cli",
+    "candidate": "node scripts/release-candidate.mjs",
+    "version:set": "node scripts/set-version.mjs",
+    "release:preflight": "npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate",
+    "devmate": "node runtime/cli.mjs",
+    "lint": "eslint ."
   },
-  "bin": {
-    "devmate": "./scripts/devmate-command.mjs",
-    "devmate-runner": "./scripts/devmate-runner.mjs"
-  },
+  "files": [
+    "runtime/**",
+    "vscode-host/runtime-entry.cjs",
+    "vscode-host/walkthrough/**",
+    "workbench/**",
+    "assets/icon.png",
+    "plugin.json",
+    "package.nls.json",
+    "package.nls.zh-cn.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.txt"
+  ],
   "dependencies": {
-    "@modelcontextprotocol/client": "2.2.0",
-    "@modelcontextprotocol/node": "2.1.0",
-    "@modelcontextprotocol/server": "2.2.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/ext-apps": "2.0.3",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
-    "playwright-core": "^1.63.0",
-    "yaml": "^2.9.1"
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "playwright-core": "^1.63.0"
   },
-  "license": "MIT",
   "overrides": {
     "@hono/node-server": "2.0.10"
   }

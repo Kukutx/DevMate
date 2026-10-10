@@ -4,9 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { runMovieCapture } from '../gateway/plugins/godot-performance.mjs';
-import { installQaBridge } from '../gateway/plugins/godot-qa-bridge.mjs';
-import { runExecutable } from '../gateway/plugins/plugin-runtime.mjs';
+import { runMovieCapture } from '../runtime/engines/godot-performance.mjs';
+import { installQaBridge } from '../runtime/engines/godot-qa-bridge.mjs';
+import { engineEnvironment } from '../runtime/engines/engine-io.mjs';
+import { executeCommand } from '../runtime/platform/command-process.mjs';
 
 const godotExecutable = String(process.env.GODOT_REAL_BIN || '').trim();
 const fixtureRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'godot-real');
@@ -27,7 +28,8 @@ function contextFor(root) {
     executables: {
       find(candidates = []) { return candidates.some(value => String(value || '') === godotExecutable) ? godotExecutable : null; },
       assertAllowed(value) { return value; },
-      run(executable, args, options) { return runExecutable(executable, args, options); }
+      run(executable, args, options = {}) { return executeCommand(executable, args, { ...options, shell: false, environment: engineEnvironment(options.environment) }); },
+      version(executable, { timeoutMs = 15000 } = {}) { return executeCommand(executable, ['--version'], { cwd: os.tmpdir(), timeoutMs, shell: false, environment: engineEnvironment() }); }
     }
   };
 }

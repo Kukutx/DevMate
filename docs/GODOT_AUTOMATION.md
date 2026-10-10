@@ -1,443 +1,139 @@
-# Godot production workflows with DevMate
+# Godot workflows
 
-The optional Godot capability gives ChatGPT a controlled development loop for Godot 4 projects: inspect and audit the project, install deterministic QA instrumentation, run scenes, validate imports and scripts, execute native or browser acceptance scenarios, and export one or many platform presets.
+The `godot` engine inspects, validates, runs, tests and exports a Godot 4 project that is registered as a DevMate project. Every capability is called through `capability_call`:
 
-No Godot engine fork is required. DevMate invokes the normal Godot executable and keeps all project, report, and export paths inside the selected workspace.
+```json
+{ "capability": "godot.status", "input": {} }
+```
+
+Naming, listing filters, flags, settings and the manifest format are described in [CAPABILITIES.md](CAPABILITIES.md). This page covers the project lifecycle; see also [GODOT_RUNTIME_QUALITY.md](GODOT_RUNTIME_QUALITY.md), [GODOT_TEST_PERFORMANCE.md](GODOT_TEST_PERFORMANCE.md) and [GODOT_RELEASE_MATURITY.md](GODOT_RELEASE_MATURITY.md).
 
 ## Requirements
 
-Core workflows require:
+- A project directory with `project.godot`, at the project root or in a subfolder passed as `projectSubpath`.
+- A Godot 4 executable. DevMate looks for the `executablePath` setting, then `godot4` and `godot` on `PATH`. The file name must look like a Godot binary (`godot…`); script shims (`.cmd`, `.bat`, `.ps1`) are refused.
+- For exports: export presets in `export_presets.cfg` and matching export templates.
+- For Web acceptance: Playwright (`playwright` or `playwright-core`) installed in the project, used by the `browser-qa` engine.
 
-- a Godot 4 project containing `project.godot`;
-- a standard Godot editor executable;
-- matching export templates for any platform that will be exported;
-- configured presets in `export_presets.cfg` for export workflows.
+DevMate installs nothing.
 
-Web acceptance additionally requires:
+## Setup
 
-- a Web export preset;
-- a Web-compatible renderer and project configuration;
-- `playwright` or `playwright-core` plus Chromium in the project workspace.
-
-Example:
-
-```bash
-npm install --save-dev playwright
-npx playwright install chromium
-```
-
-Playwright and Godot export templates are deliberately not bundled because they are large and platform-specific.
-
-## Enable the capability
-
-In ChatGPT:
-
-```text
-Use DevMate to enable devmate.godot and run godot_doctor.
-```
-
-Equivalent MCP flow:
-
-1. `plugin_enable({"id":"devmate.godot"})`
-2. Reconnect the DevMate App if the tool list is cached.
-3. Run `godot_doctor`.
-4. Use `plugin_configure` when Godot is not on `PATH`.
+The owner sets the executable once for the instance:
 
 ```json
-{
-  "id": "devmate.godot",
-  "settings": {
-    "executablePath": "/absolute/path/to/Godot",
-    "defaultProjectSubpath": ".",
-    "defaultWebPreset": "Web",
-    "defaultWebOutput": "build/web/index.html",
-    "defaultExportRoot": "build/exports"
-  }
-}
+{ "engine": "godot", "settings": { "executablePath": "C:\\Tools\\Godot\\godot.exe" } }
 ```
 
-On Windows the executable may be `Godot_v4.x-stable_win64.exe`. On macOS it may point to `Godot.app/Contents/MacOS/Godot`.
-
-## Recommended workflow
-
-A mature project loop is:
-
-```text
-godot_project_audit
-→ godot_doctor
-→ godot_qa_bridge_install
-→ godot_validate
-→ godot_native_test and/or godot_acceptance_test
-→ godot_export_matrix
-```
-
-All execution, bridge mutation, acceptance, and export operations are audited by DevMate.
-
-## Project inspection and audit
-
-### `godot_status`
-
-Reads without launching Godot:
-
-- project name, icon, main scene, renderer, viewport, and feature metadata;
-- Autoload singletons;
-- InputMap action names;
-- export presets;
-- bounded scene, script, resource, shader, asset, and addon statistics;
-- QA Bridge version/status;
-- configured Godot executable.
-
-### `godot_project_audit`
-
-Runs a deeper bounded static audit:
-
-- verifies that the configured main scene exists;
-- verifies `res://` Autoload and icon paths;
-- scans scene/resource/script files for missing `res://` references;
-- reports InputMap actions and Autoloads;
-- checks export preset names, platforms, and paths;
-- warns about likely Web renderer incompatibility;
-- checks C# project metadata when C# scripts are detected;
-- reports addon plugin files and project composition;
-- reports Web and native QA readiness.
-
-Example:
+(`capability.configure`, or `engineSettings.godot` in `config.json`.) `godot.quick_setup` stores values for one project and can install the QA Bridge in the same step:
 
 ```json
-{
-  "workspaceId": "game",
-  "projectSubpath": ".",
-  "maxFiles": 5000
-}
+{ "capability": "godot.quick_setup", "input": { "defaultWebPreset": "Web", "installBridge": true } }
 ```
 
-The audit is intentionally bounded. Reaching the scan limit is reported rather than silently treated as complete.
+## Recommended order
 
-## Godot doctor and validation
+1. `godot.status`: project metadata, presets, input actions, Autoloads, QA Bridge state. Starts nothing.
+2. `godot.doctor`: runs `godot --version` and combines audit, export and QA readiness into one verdict.
+3. `godot.project_audit`: static findings.
+4. `godot.validate`: a headless editor import/parse pass with structured errors.
+5. `godot.qa_bridge_install`, then `godot.native_test` or `godot.acceptance_test`.
+6. `godot.automation_bootstrap` to save what works as scenarios, then the `*_run_saved` and `*_suite` capabilities.
+7. `godot.export` / `godot.export_matrix`.
 
-### `godot_doctor`
+## Capabilities
 
-Combines:
+| Capability | Purpose | Flags |
+|---|---|---|
+| `godot.status` | Project, presets, input actions, Autoloads, QA Bridge, executable | read-only |
+| `godot.project_audit` | Static audit: main scene, references, Autoloads, input actions, C#, renderer, presets, addons | read-only |
+| `godot.doctor` | `--version` plus audit and readiness verdicts | read-only |
+| `godot.diagnose` | Engine diagnostics: executable, project, audit, Browser QA, runtime | read-only |
+| `godot.validate` | Headless import/parse pass | long-running |
+| `godot.run` | Start the game, one scene or the editor as a project process | |
+| `godot.qa_bridge_status` / `_template` | Bridge state / the reviewed GDScript | read-only |
+| `godot.qa_bridge_install` / `_remove` | Install, upgrade or remove the bridge with backups | |
+| `godot.native_test` | Native or headless acceptance with input replay and state assertions | long-running |
+| `godot.acceptance_test` | Validate, export Web, preview, run browser actions | long-running |
+| `godot.export`, `godot.export_web`, `godot.export_matrix` | Exports | long-running |
+| `godot.automation_manifest` | Read and validate saved exports and scenarios | read-only |
+| `godot.acceptance_run_saved`, `godot.acceptance_suite` | Run saved scenarios | long-running |
 
-- `Godot --version`;
-- project audit findings;
-- export readiness;
-- QA Bridge status;
-- Browser QA/Chromium availability;
-- native and Web acceptance readiness.
+Long-running capabilities should be started with `job_start`; see [CAPABILITIES.md](CAPABILITIES.md).
 
-### `godot_validate`
+## Running the project
 
-Runs:
-
-```text
-Godot --headless --editor --path <project> --quit
+```json
+{ "capability": "godot.run", "input": { "scene": "res://levels/arena.tscn", "headless": true } }
 ```
 
-Godot output is converted into structured GDScript/C# errors and warnings.
+`godot.run` returns `process.id`. It is an ordinary project process: read its output with `process_read` (paged by cursor), end it with `process_stop`, see it in `process_list`. It stops by itself after `autoStopAfterMs` (default one hour). `editor: true` opens the editor.
 
-## Running the project or one scene
+## QA Bridge
 
-`godot_run` starts a supervised persistent process. It supports:
-
-- project game execution;
-- one `.tscn` or `.scn` scene;
-- editor mode;
-- headless mode;
-- automatic stop timeout.
-
-Use normal DevMate process tools to inspect or stop it:
-
-```text
-read_process_output
-process_status
-stop_process
-```
-
-Scene paths must be `res://...` or project-relative scene files and cannot escape the project.
-
-## QA Bridge v2
-
-The QA Bridge is a reviewed Autoload at:
-
-```text
-addons/devmate_qa/devmate_qa.gd
-```
-
-### Installation
-
-Use:
-
-```text
-godot_qa_bridge_status
-godot_qa_bridge_install
-godot_qa_bridge_remove
-```
-
-`godot_qa_bridge_install` atomically:
-
-1. writes or upgrades the bridge script;
-2. adds or repairs the `[autoload]` entry;
-3. stores project-local backups under `.godot/devmate-backups/`.
-
-Repeated installation is idempotent when the installed bridge is current.
-
-### Publishing game state
-
-Game code can publish deterministic state:
+The bridge is one reviewed GDScript Autoload, `DevMateQA`, at `addons/devmate_qa/devmate_qa.gd` (version 3). `godot.qa_bridge_install` writes it and the Autoload line atomically and keeps backups under `.godot/devmate-backups/`. The game publishes state through it:
 
 ```gdscript
 DevMateQA.set_value("player.health", health)
-DevMateQA.set_value("boss.phase", phase)
 DevMateQA.checkpoint("boss_phase_changed", {"phase": phase})
+DevMateQA.finish(true, "scenario_complete")
+DevMateQA.fail("player_died")
 ```
 
-A scenario can terminate explicitly:
+- In a native run, the bridge writes a JSON report only when DevMate passes it a report plan through `DEVMATE_QA_*` environment variables.
+- In a Web export, state is published to the page only for debug builds, unless the project setting `devmate_qa/allow_release` is enabled.
 
-```gdscript
-DevMateQA.finish(true, "arena_complete")
-DevMateQA.fail("player_died", {"health": health})
-```
-
-### Browser state
-
-Debug Web exports publish a JSON snapshot at:
-
-```text
-globalThis.__DEVMATE_QA_STATE__
-```
-
-Release Web builds do not publish it unless `devmate_qa/allow_release` is explicitly enabled.
-
-### Native state
-
-When launched by `godot_native_test`, the same bridge:
-
-- writes a native JSON report;
-- replays bounded Godot InputMap actions;
-- records checkpoints and elapsed time;
-- exits on `finish`, `fail`, an expected checkpoint, or the configured auto-finish timeout;
-- returns exit code 0 for success and 1 for failure.
-
-Native reporting activates only when DevMate injects an absolute report path for that run.
-
-## Native/headless acceptance
-
-`godot_native_test` tests the real Godot runtime without Web export or Playwright.
-
-Example:
+## Native acceptance
 
 ```json
 {
-  "workspaceId": "game",
-  "scene": "res://levels/arena.tscn",
-  "headless": true,
-  "runForMs": 10000,
-  "quitOnCheckpoint": "arena_complete",
-  "inputActions": [
-    {"atMs":500,"type":"tap","action":"attack","durationMs":80},
-    {"atMs":1000,"type":"press","action":"move_right"},
-    {"atMs":2500,"type":"release","action":"move_right"}
-  ],
-  "assertions": [
-    {"statePath":"runtime.bridge_ready","operator":"truthy"},
-    {"statePath":"player.health","operator":"gt","value":0},
-    {"statePath":"boss.phase","operator":"gte","value":2}
-  ],
-  "requiredCheckpoints": ["boss_spawned", "arena_complete"],
-  "reportPath": "artifacts/godot-qa/arena-native.json"
+  "capability": "godot.native_test",
+  "input": {
+    "scene": "res://main.tscn",
+    "runForMs": 3000,
+    "inputActions": [{ "atMs": 500, "type": "tap", "action": "jump" }],
+    "assertions": [{ "statePath": "player.jumps", "operator": "gte", "value": 1 }],
+    "requiredCheckpoints": ["level_loaded"]
+  }
 }
 ```
 
-Input actions must exist in the project's `[input]` section. DevMate rejects undeclared action names before starting Godot.
-
-Supported assertion operators:
-
-```text
-eq neq gt gte lt lte includes truthy falsy
-```
-
-A native test passes only when:
-
-- the JSON report exists and is valid;
-- the expected Bridge version ran;
-- the runtime completed successfully;
-- all state assertions pass;
-- required checkpoints are present;
-- Godot produced no structured error diagnostics;
-- the process exited successfully and did not time out.
+Input actions must exist in `project.godot`. `quitOnCheckpoint` ends the run early. The result is `ok` only when the process succeeded, the report exists and is valid, the bridge version matches, and every assertion and required checkpoint passed. The report is written to `artifacts/godot-qa/native-latest.json` unless `reportPath` is given.
 
 ## Web acceptance
 
-`godot_acceptance_test` performs:
-
-1. headless validation;
-2. Web export;
-3. local preview startup;
-4. Browser QA/Playwright launch;
-5. bounded keyboard, mouse, DOM, screenshot, and structured-state actions;
-6. screenshot and JSON report creation;
-7. Canvas, navigation, console, page, network, action, and QA-state checks.
-
-Example actions:
-
-```json
-[
-  {"type":"wait","ms":1500},
-  {"type":"press","key":"Space"},
-  {"type":"expect_state","statePath":"boss.phase","operator":"gte","value":2,"timeoutMs":10000},
-  {"type":"capture_state","statePath":"player.health"}
-]
-```
-
-## Export one preset
-
-`godot_export` exports any configured preset, not only Web:
+`godot.acceptance_test` validates the project, exports the Web preset, serves the export from a loopback preview and runs browser actions (`wait`, `press`, `key_down`, `key_up`, `click`, `move`, `type`, `focus`, `expect_visible`, `expect_text`, `capture_state`, `expect_state`, `screenshot`):
 
 ```json
 {
-  "workspaceId": "game",
-  "preset": "Windows Desktop",
-  "mode": "release"
+  "capability": "godot.acceptance_test",
+  "input": { "preset": "Web", "actions": [
+    { "type": "expect_visible", "selector": "canvas" },
+    { "type": "expect_state", "statePath": "player.health", "operator": "eq", "value": 100 }
+  ] }
 }
 ```
 
-When the preset has no `export_path`, DevMate generates a safe path under `build/exports` based on platform:
+It needs a visible canvas and no page, console or request errors. Screenshot and report default to `artifacts/godot-qa/latest.png` and `latest.json`. If the `browser-qa` engine is switched off, Web acceptance and export previews report that instead of running.
 
-- Web: `index.html`
-- Windows: `.exe`
-- Linux: `.x86_64`
-- macOS: `.zip`
-- Android: `.apk`
-- iOS: `.zip`
-
-The configured Godot export preset remains the source of truth. DevMate does not manufacture signing credentials, SDKs, templates, or platform permissions.
-
-The result includes:
-
-- selected preset and platform;
-- actual command result and diagnostics;
-- workspace-relative output path;
-- output file/directory type;
-- total bytes and bounded file count.
-
-## Export matrix
-
-`godot_export_matrix` exports selected or all presets sequentially:
+## Exports
 
 ```json
-{
-  "workspaceId": "game",
-  "mode": "release",
-  "targets": [
-    {"preset":"Web","outputPath":"build/web/index.html"},
-    {"preset":"Windows Desktop"},
-    {"preset":"Linux/X11"}
-  ],
-  "stopOnFailure": true,
-  "reportPath": "artifacts/godot-export/matrix.json"
-}
+{ "capability": "godot.export", "input": { "preset": "Windows Desktop", "mode": "release" } }
 ```
 
-The matrix supports at most 20 targets. It returns requested/completed/passed/failed counts and per-target artifact metadata.
+Without `outputPath`, the preset's own path or `build/exports/<preset>/<name>.<ext>` is used. `godot.export_web` requires an `.html` output and can start a preview. `godot.export_matrix` exports `targets`, the saved `exports` of a manifest (`manifestPath`), or every preset, stops at the first failure unless `stopOnFailure` is `false`, and can write a JSON report (`reportPath`) that the release gate accepts as `exports` evidence.
 
-Platform-specific builds should be routed to matching external Runners. For example:
+## Saved scenarios
 
-```json
-{
-  "tool": "godot_export_matrix",
-  "requiredCapabilities": ["external", "godot", "windows-x64"],
-  "arguments": {
-    "workspaceId": "game",
-    "targets": [{"preset":"Windows Desktop"}]
-  }
-}
-```
+`godot.automation_bootstrap` writes `.devmate/automation.json` from the project: a `native-smoke` scenario for the main scene, a `web-smoke` scenario when a Web preset exists, and the export targets. `godot.automation_manifest` validates it, `godot.acceptance_run_saved` runs one scenario by `scenarioId`, `godot.acceptance_suite` runs selected or all scenarios. The format is in [CAPABILITIES.md](CAPABILITIES.md#the-automation-manifest).
 
-## Version-controlled workflows
+## Boundaries
 
-Commit `.devmate/automation.json` and use:
+- Paths are project-relative. Credential-like paths and everything under `.devmate` except the manifest and Godot baselines are refused as inputs and outputs.
+- Godot runs without a shell, with the allow-listed child environment, and is stopped when a call or job is cancelled or the project closes.
+- Capabilities that write or start Godot need write access to a writable project. `godot.quick_setup` is owner-only.
 
-```text
-godot_automation_manifest
-godot_acceptance_run_saved
-godot_acceptance_suite
-godot_export_matrix
-```
+## Tests
 
-Example:
-
-```json
-{
-  "schemaVersion": 1,
-  "plugins": {
-    "devmate.godot": {
-      "projectSubpath": ".",
-      "preset": "Web",
-      "outputPath": "build/web/index.html",
-      "mode": "debug",
-      "exportMode": "release",
-      "exportOutputRoot": "build/exports",
-      "exports": [
-        {"preset":"Web","outputPath":"build/web/index.html"},
-        {"preset":"Windows Desktop"}
-      ],
-      "scenarios": [
-        {
-          "id": "combat-web",
-          "kind": "web",
-          "actions": [
-            {"type":"expect_state","statePath":"player.health","operator":"gt","value":0}
-          ]
-        },
-        {
-          "id": "combat-native",
-          "kind": "native",
-          "scene": "res://levels/combat.tscn",
-          "runForMs": 10000,
-          "quitOnCheckpoint": "combat_complete",
-          "inputActions": [
-            {"atMs":500,"type":"tap","action":"attack"}
-          ],
-          "assertions": [
-            {"statePath":"enemy.remaining","operator":"eq","value":0}
-          ],
-          "requiredCheckpoints": ["combat_complete"]
-        }
-      ]
-    }
-  }
-}
-```
-
-One saved acceptance suite can mix Web and native scenarios.
-
-## Durable and remote execution
-
-The following Godot tools are approved durable Job targets:
-
-```text
-godot_project_audit
-godot_validate
-godot_export
-godot_export_matrix
-godot_export_web
-godot_native_test
-godot_acceptance_test
-godot_acceptance_run_saved
-godot_acceptance_suite
-```
-
-All require a Runner with `core` and `godot` capabilities. Web acceptance also requires the Browser QA runtime on that Runner.
-
-## Security and operational boundaries
-
-- Godot tools remain unavailable until the plugin is enabled.
-- Executable names are restricted to Godot-shaped binaries.
-- Project, scene, output, report, manifest, and preview paths cannot escape the selected workspace.
-- QA Bridge mutations create backups before changing project files.
-- Native Input actions must be declared in the project InputMap.
-- Browser QA defaults to localhost and blocks non-local subresources.
-- Structured state paths reject prototype traversal components.
-- Export templates, platform SDKs, signing identities, store credentials, and provisioning profiles are never embedded in DevMate.
-- A successful mocked CI test verifies orchestration, path safety, reports, and result handling. Real platform exports still require the matching Godot executable, templates, SDK, and signing configuration on the selected Runner.
+`tests/godot-*.test.mjs` cover the engine modules; `tests/capability-manifest-cycle.test.mjs` runs bootstrap, saved scenarios and baselines through a real service. `tests/godot-real-runtime.test.mjs` and `tests/godot-real-capture.test.mjs` run against a real Godot when `GODOT_REAL_BIN` is set and are skipped otherwise.

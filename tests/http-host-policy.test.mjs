@@ -7,7 +7,7 @@ import {
   isLoopbackHostname,
   loopbackHost,
   loopbackSocket
-} from '../gateway/http-host-policy.mjs';
+} from '../runtime/platform/http-host-policy.mjs';
 
 function request(host, remoteAddress) {
   return { headers: { host }, socket: { remoteAddress } };

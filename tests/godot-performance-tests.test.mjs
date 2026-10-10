@@ -3,15 +3,16 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { advancedScenarioSchema, loadAdvancedAutomation, runAdvancedSuite } from '../gateway/plugins/godot-advanced-automation.mjs';
-import { evaluatePerformanceBudgets, percentile, runMovieCapture, runPerformanceTest, summarizePerformance } from '../gateway/plugins/godot-performance.mjs';
-import { inspectGodotTests, parseJunitXml, runGodotTests, __test as testAdapterTest } from '../gateway/plugins/godot-tests.mjs';
-import { installQaBridge, inspectQaBridge, __test as bridgeTest } from '../gateway/plugins/godot-qa-bridge.mjs';
+import { advancedScenarioSchema, loadAdvancedAutomation, runAdvancedSuite } from '../runtime/engines/godot-advanced-automation.mjs';
+import { evaluatePerformanceBudgets, percentile, runMovieCapture, runPerformanceTest, summarizePerformance } from '../runtime/engines/godot-performance.mjs';
+import { inspectGodotTests, parseJunitXml, runGodotTests, __test as testAdapterTest } from '../runtime/engines/godot-tests.mjs';
+import { installQaBridge, inspectQaBridge, __test as bridgeTest } from '../runtime/engines/godot-qa-bridge.mjs';
 
 function contextFor(root, run) {
   const workspace = { id: 'game', name: 'game', root, mode: 'workspace-write', reference: false };
   return {
     settings: { executablePath: '', defaultProjectSubpath: '.', validationTimeoutMs: 10000, exportTimeoutMs: 10000 },
+    assertActive() {},
     workspace: {
       get() { return workspace; },
       resolve(_workspace, subpath) {

@@ -1,9 +1,10 @@
+import { createEngineState } from '../runtime/engine-state.mjs';
 import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runBrowserScenario } from '../gateway/plugins/browser-runner.mjs';
+import { runBrowserScenario } from '../runtime/engines/browser-runner.mjs';
 
 test('runs a complete browser scenario against a fake Playwright adapter', async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-browser-e2e-'));
@@ -38,7 +39,7 @@ export const chromium = { launch: async()=>({
 }) };
 `, 'utf8');
 
-  const result = await runBrowserScenario({
+  const result = await runBrowserScenario(createEngineState('devmate.browser-qa'), {
     workspaceRoot: root,
     url: 'http://127.0.0.1:4173/',
     settings: { playwrightModulePath: 'fake-playwright.mjs' },

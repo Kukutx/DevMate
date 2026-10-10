@@ -6,22 +6,25 @@ import path from 'node:path';
 import test from 'node:test';
 import { getEventListeners } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { patchCopy, sha256 } from '../gateway/plugins/reverse-files.mjs';
-import { PYTHON_SOURCE, pythonExecutable, runNative, stopNativeHelpers } from '../gateway/plugins/reverse-native.mjs';
-import { reversePlugin, reverseSettingsSchema } from '../gateway/plugins/reverse.mjs';
-import { findExecutable, resolveWorkspacePath } from '../gateway/plugins/plugin-runtime.mjs';
-import { runWithRequestSignal } from '../gateway/request-context.mjs';
+import { patchCopy, sha256 } from '../runtime/engines/reverse-files.mjs';
+import { PYTHON_SOURCE, pythonExecutable, runNative, stopNativeHelpers } from '../runtime/engines/reverse-native.mjs';
+import { reversePlugin, reverseSettingsSchema } from '../runtime/engines/reverse.mjs';
+import { findExecutable, resolveWorkspacePath } from '../runtime/engines/engine-io.mjs';
+import { createEngineState } from '../runtime/engine-state.mjs';
+const contexts = [];
 
 const python = findExecutable(['python', 'python3']);
 function contextFor(workspace) {
   let profile = 'fullAccess', enabled = true;
-  return {
+  const context = {
+    state: createEngineState('devmate.reverse'),
     settings: reverseSettingsSchema.parse({ pythonPath: python || '' }),
-    permissionProfile: () => profile,
+    caller: () => 'owner',
+    assertOwner(action) { if (this.caller() !== 'owner') throw new Error(action + ' is available only to the owner'); },
     assertCanMutate() { if (profile === 'readOnly') throw new Error('Read-only profile'); },
     revoke() { profile = 'readOnly'; },
     disable() { enabled = false; },
-    readConfig: () => ({ plugins: { enabled: enabled ? ['devmate.reverse'] : [] } }),
+    assertActive() { if (!enabled) throw new Error('Reverse engine is disabled'); },
     audit: async () => {},
     workspace: {
       get(id, { writable = false } = {}) {
@@ -38,6 +41,8 @@ function contextFor(workspace) {
       }
     }
   };
+  contexts.push(context);
+  return context;
 }
 
 test('Python role cannot be satisfied by another executable in the plugin allowlist', () => {
@@ -66,6 +71,7 @@ for (const change of ['permission', 'disable', 'cancel', 'workspace']) {
     const source = Buffer.from('original');
     await fsp.writeFile(path.join(root, 'source.bin'), source);
     const controller = new AbortController();
+    context.signal = controller.signal;
     context.audit = async action => {
       if (action !== 'patch_copy_intent') return;
       if (change === 'permission') context.revoke();
@@ -74,7 +80,7 @@ for (const change of ['permission', 'disable', 'cancel', 'workspace']) {
       if (change === 'workspace') context.workspace.get = () => { throw new Error('Workspace access revoked'); };
     };
     const args = { path: 'source.bin', outputPath: 'output.bin', expectedSha256: sha256(source), patches: [{ offset: 0, expectedHex: '6f', replacementHex: '4f' }], dryRun: false, confirm: true };
-    await assert.rejects(runWithRequestSignal(controller.signal, () => patchCopy(context, workspace, args)), /Read-only|disabled|cancelled|revoked/i);
+    await assert.rejects(patchCopy(context, workspace, args), /Read-only|disabled|cancelled|revoked/i);
     assert.equal(fs.existsSync(path.join(root, 'output.bin')), false);
     assert.deepEqual(await fsp.readFile(path.join(root, 'source.bin')), source);
   });
@@ -84,21 +90,23 @@ for (const change of ['cancel', 'disable']) {
   test(`native helper revalidates ${change} after its asynchronous intent audit`, { skip: !python }, async () => {
     const context = contextFor({ id: 'audit', root: os.tmpdir() });
     const controller = new AbortController();
+    context.signal = controller.signal;
     context.audit = async action => {
       if (action !== 'native_intent') return;
       if (change === 'cancel') controller.abort(new Error('Fixture request cancelled'));
       else context.disable();
     };
-    await assert.rejects(runWithRequestSignal(controller.signal, () => runNative(context, 'status')), /cancelled|disabled/i);
+    await assert.rejects(runNative(context, 'status'), /cancelled|disabled/i);
   });
 }
 
-test.after(() => stopNativeHelpers());
+test.after(() => Promise.all(contexts.map(context => stopNativeHelpers(context.state.native))));
 
 
 test('native cancellation after spawn rejects and removes its abort listener', { skip: !python }, async t => {
   const context = contextFor({ id: 'audit', root: os.tmpdir() });
   const controller = new AbortController();
+    context.signal = controller.signal;
   const originalAdd = controller.signal.addEventListener.bind(controller.signal);
   let subscribed = false;
   t.mock.method(controller.signal, 'addEventListener', (name, listener, options) => {
@@ -108,7 +116,7 @@ test('native cancellation after spawn rejects and removes its abort listener', {
       queueMicrotask(() => controller.abort(new Error('Fixture cancellation after spawn')));
     }
   });
-  await assert.rejects(runWithRequestSignal(controller.signal, () => runNative(context, 'status')), /cancelled/i);
+  await assert.rejects(runNative(context, 'status'), /cancelled/i);
   assert.equal(subscribed, true, 'Exercise cancellation of a real spawned helper, not only preflight rejection');
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
 });
@@ -116,12 +124,13 @@ test('native cancellation after spawn rejects and removes its abort listener', {
 test('native successful calls remove listeners and leave an already-cancelled request untouched', { skip: !python }, async () => {
   const context = contextFor({ id: 'audit', root: os.tmpdir() });
   const controller = new AbortController();
-  await runWithRequestSignal(controller.signal, () => runNative(context, 'status'));
+    context.signal = controller.signal;
+  await runNative(context, 'status');
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
   controller.abort(new Error('Fixture preflight cancellation'));
   let audited = false;
   context.audit = async () => { audited = true; };
-  await assert.rejects(runWithRequestSignal(controller.signal, () => runNative(context, 'status')), /preflight cancellation/);
+  await assert.rejects(runNative(context, 'status'), /preflight cancellation/);
   assert.equal(audited, false);
 });
 

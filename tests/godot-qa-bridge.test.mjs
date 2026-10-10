@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { inspectQaBridge, qaBridgeTemplate, QA_BRIDGE_SCRIPT_PATH } from '../gateway/plugins/godot-qa-bridge.mjs';
+import { inspectQaBridge, qaBridgeTemplate, QA_BRIDGE_SCRIPT_PATH } from '../runtime/engines/godot-qa-bridge.mjs';
 
 test('reports and templates the optional Godot QA bridge', async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-godot-bridge-'));

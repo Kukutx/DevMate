@@ -1,19 +1,20 @@
+import { createEngineState } from '../runtime/engine-state.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import os from 'node:os';
 import test from 'node:test';
-import { findExecutable } from '../gateway/plugins/plugin-runtime.mjs';
-import { PYTHON_SOURCE, runNative, stopNativeHelpers } from '../gateway/plugins/reverse-native.mjs';
-import { reversePlugin, reverseSettingsSchema } from '../gateway/plugins/reverse.mjs';
-import { reverseSessions } from '../gateway/plugins/reverse-sessions.mjs';
+import { findExecutable } from '../runtime/engines/engine-io.mjs';
+import { PYTHON_SOURCE, runNative, stopNativeHelpers } from '../runtime/engines/reverse-native.mjs';
+import { reversePlugin, reverseSettingsSchema } from '../runtime/engines/reverse.mjs';
 
 const python = findExecutable(['python', 'python3']);
 const ws = { id: 'native-test', root: os.tmpdir() };
 const tools = new Map(), audits = [];
 const context = {
+  state: createEngineState('devmate.reverse'), assertActive() {},
   settings: reverseSettingsSchema.parse({ pythonPath: python || '', allowProcessAccess: true, allowMemoryWrite: true }),
-  permissionProfile: () => 'fullAccess', assertCanMutate: () => {},
+  caller: () => 'owner', assertOwner() {}, assertCanMutate: () => {},
   audit: async (action, payload) => { audits.push({ action, payload }); },
   executables: { find: () => python, assertAllowed: () => {} },
   workspace: { get: () => ws },
@@ -23,26 +24,29 @@ const context = {
 reversePlugin.activate(context);
 const call = (name, args = {}) => tools.get(name).handler(args);
 
+test.beforeEach(() => { context.state.native = createEngineState('devmate.reverse').native; });
+
 test('native capacity and plugin shutdown fence operations still awaiting audit', { skip: !python }, async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const gated = { ...context, audit: () => gate };
   const first = runNative(gated, 'status'), second = runNative(gated, 'status');
   await assert.rejects(runNative(context, 'status'), /capacity/);
-  await stopNativeHelpers();
+  const stopped = stopNativeHelpers(context.state.native);
   release();
+  await stopped;
   const results = await Promise.allSettled([first, second]);
   assert.ok(results.every(result => result.status === 'rejected' && /stopped/.test(result.reason.message)));
 });
 
 test('native execution rechecks permission after asynchronous audit', { skip: !python }, async () => {
-  let release, profile = 'fullAccess';
+  let release, role = 'owner';
   const gate = new Promise(resolve => { release = resolve; });
-  const gated = { ...context, audit: () => gate, permissionProfile: () => profile };
+  const gated = { ...context, audit: () => gate, caller: () => role, assertOwner(action) { if (this.caller() !== 'owner') throw new Error(action + ' is available only to the owner'); } };
   const pending = runNative(gated, 'status');
-  profile = 'readOnly';
+  role = 'write';
   release();
-  await assert.rejects(pending, /fullAccess/);
+  await assert.rejects(pending, /only to the owner/);
 });
 
 test('fixed helper source remains small enough for a Windows command line', () => {
@@ -134,7 +138,7 @@ test('Windows integration: only the test-owned process is inspected and changed'
   t.after(async () => {
     output.close();
     if (fixture.exitCode === null && fixture.signalCode === null) await new Promise(resolve => { fixture.once('close', resolve); fixture.kill('SIGKILL'); });
-    await reversePlugin.deactivate();
+    await reversePlugin.deactivate(context);
   });
   const next = async () => {
     const line = await lines.next();
@@ -144,76 +148,76 @@ test('Windows integration: only the test-owned process is inspected and changed'
   const command = async data => { fixture.stdin.write(JSON.stringify(data) + '\n'); return next(); };
   const target = await next();
   const address = offset => `0x${(BigInt(target.address) + BigInt(offset)).toString(16)}`;
-  const opened = await call('reverse_session_open', { pid: target.pid });
+  const opened = await call('session_open', { pid: target.pid });
   const bound = { sessionId: opened.sessionId };
   assert.equal(opened.identity.pid, target.pid);
 
   await t.test('identity, process enumeration, modules, regions and read', async () => {
-    const processes = await call('reverse_processes', { name: 'python', limit: 500 });
+    const processes = await call('processes', { name: 'python', limit: 500 });
     assert.ok(processes.entries.some(item => item.pid === target.pid));
-    const modules = await call('reverse_modules', bound);
+    const modules = await call('modules', bound);
     assert.ok(modules.entries.some(item => /python/i.test(item.name)));
-    const regions = await call('reverse_memory_regions', { ...bound, address: target.address, limit: 1 });
+    const regions = await call('memory_regions', { ...bound, address: target.address, limit: 1 });
     assert.equal(regions.entries[0].readable, true);
-    assert.equal((await call('reverse_memory_read', { ...bound, address: address(16), length: 4 })).hex, '64000000');
+    assert.equal((await call('memory_read', { ...bound, address: address(16), length: 4 })).hex, '64000000');
     await assert.rejects(runNative(context, 'read', { pid: target.pid, identity: { ...opened.identity, creationTime: '0' }, address: address(16), length: 4 }), /identity changed/);
-    await assert.rejects(call('reverse_memory_write', { ...bound, address: modules.entries[0].base, expectedHex: '4d', replacementHex: '4d' }), /private.*non-executable/);
+    await assert.rejects(call('memory_write', { ...bound, address: modules.entries[0].base, expectedHex: '4d', replacementHex: '4d' }), /private.*non-executable/);
   });
 
   let scan;
   await t.test('exact/unknown scans, float64 precision and cross-chunk wildcard search', async () => {
-    scan = await call('reverse_value_scan', { ...bound, address: target.address, length: target.size, dataType: 'int32', value: 100 });
+    scan = await call('value_scan', { ...bound, address: target.address, length: target.size, dataType: 'int32', value: 100 });
     assert.equal(scan.total, 2); assert.equal(scan.metadata.complete, true);
-    const unknown = await call('reverse_value_scan', { ...bound, address: target.address, length: 64, dataType: 'int32', comparison: 'unknown', maxCandidates: 2 });
+    const unknown = await call('value_scan', { ...bound, address: target.address, length: 64, dataType: 'int32', comparison: 'unknown', maxCandidates: 2 });
     assert.equal(unknown.total, 2); assert.equal(unknown.metadata.stopReason, 'candidate_limit');
-    const wide = await call('reverse_value_scan', { ...bound, address: address(32), length: 8, dataType: 'uint64', value: '17375808098319191535' });
+    const wide = await call('value_scan', { ...bound, address: address(32), length: 8, dataType: 'uint64', value: '17375808098319191535' });
     assert.equal(wide.total, 1); assert.equal(wide.entries[0].value, '17375808098319191535');
-    const floats = await call('reverse_value_scan', { ...bound, address: address(24), length: 4, dataType: 'float32', value: 1.5 });
+    const floats = await call('value_scan', { ...bound, address: address(24), length: 4, dataType: 'float32', value: 1.5 });
     assert.equal(floats.total, 1);
-    const bytes = await call('reverse_memory_search', { ...bound, address: target.address, length: target.size, pattern: '41 42 ?? F? 5A' });
+    const bytes = await call('memory_search', { ...bound, address: target.address, length: target.size, pattern: '41 42 ?? F? 5A' });
     assert.equal(bytes.complete, true); assert.equal(bytes.candidates[0].address, address(262142));
-    await assert.rejects(call('reverse_value_scan', { ...bound, address: target.address, length: 4, value: 100 }), /Maximum 4/);
-    await call('reverse_scan_close', { ...bound, scanId: unknown.scanId });
+    await assert.rejects(call('value_scan', { ...bound, address: target.address, length: 4, value: 100 }), /Maximum 4/);
+    await call('scan_close', { ...bound, scanId: unknown.scanId });
   });
 
   await t.test('revisioned rescans use previous values and reject stale revisions', async () => {
     await command({ op: 'set', offset: 16, value: 150 });
-    const result = await call('reverse_value_rescan', { ...bound, scanId: scan.scanId, expectedRevision: 1, comparison: 'increased_by', value: 50 });
+    const result = await call('value_rescan', { ...bound, scanId: scan.scanId, expectedRevision: 1, comparison: 'increased_by', value: 50 });
     assert.equal(result.total, 1); assert.equal(result.entries[0].value, 150); assert.equal(result.revision, 2);
-    await assert.rejects(call('reverse_value_rescan', { ...bound, scanId: scan.scanId, expectedRevision: 1, comparison: 'changed' }), /revision mismatch/);
-    const stored = await call('reverse_scan_results', { ...bound, scanId: scan.scanId });
+    await assert.rejects(call('value_rescan', { ...bound, scanId: scan.scanId, expectedRevision: 1, comparison: 'changed' }), /revision mismatch/);
+    const stored = await call('scan_results', { ...bound, scanId: scan.scanId });
     assert.equal(stored.entries[0].value, 150);
-    const baseline = reverseSessions.get(ws, bound.sessionId).scans.get(scan.scanId);
+    const baseline = context.state.sessions.get(ws, bound.sessionId).scans.get(scan.scanId);
     baseline.metadata.complete = false; // Model an earlier unreadable-candidate loss.
-    const subsequent = await call('reverse_value_rescan', { ...bound, scanId: scan.scanId, expectedRevision: 2, comparison: 'unchanged' });
+    const subsequent = await call('value_rescan', { ...bound, scanId: scan.scanId, expectedRevision: 2, comparison: 'unchanged' });
     assert.equal(subsequent.metadata.complete, false, 'later reads cannot erase an earlier coverage gap');
   });
 
   await t.test('known pointer chains and one-level references resolve without mutation', async () => {
-    const chain = await call('reverse_pointer_chain', { ...bound, address: target.pointerAddress, offsets: [16] });
+    const chain = await call('pointer_chain', { ...bound, address: target.pointerAddress, offsets: [16] });
     assert.equal(chain.finalAddress, address(16));
-    const references = await call('reverse_pointer_references', { ...bound, address: target.pointerAddress, length: 8, targetAddress: address(16), maxOffset: 16 });
+    const references = await call('pointer_references', { ...bound, address: target.pointerAddress, length: 8, targetAddress: address(16), maxOffset: 16 });
     assert.equal(references.references[0].offset, '16');
   });
 
   await t.test('write plans, verified writes, restoration and conflict refusal', async () => {
     const args = { ...bound, address: address(16), expectedHex: '96000000', replacementHex: 'c8000000' };
-    assert.equal((await call('reverse_memory_write', args)).dryRun, true);
+    assert.equal((await call('memory_write', args)).dryRun, true);
     assert.equal((await command({ op: 'peek', offset: 16 })).value, 150);
-    const written = await call('reverse_memory_write', { ...args, dryRun: false, confirm: true });
+    const written = await call('memory_write', { ...args, dryRun: false, confirm: true });
     assert.equal(written.verified, true); assert.equal(written.atomic, false); assert.ok(written.writeId);
     assert.equal((await command({ op: 'peek', offset: 16 })).value, 200);
-    const restored = await call('reverse_memory_restore', { ...bound, writeId: written.writeId, dryRun: false, confirm: true });
+    const restored = await call('memory_restore', { ...bound, writeId: written.writeId, dryRun: false, confirm: true });
     assert.equal(restored.verified, true); assert.equal((await command({ op: 'peek', offset: 16 })).value, 150);
-    const again = await call('reverse_memory_write', { ...args, dryRun: false, confirm: true });
+    const again = await call('memory_write', { ...args, dryRun: false, confirm: true });
     await command({ op: 'set', offset: 16, value: 300 });
-    await assert.rejects(call('reverse_memory_restore', { ...bound, writeId: again.writeId, dryRun: false, confirm: true }), /Expected bytes mismatch/);
+    await assert.rejects(call('memory_restore', { ...bound, writeId: again.writeId, dryRun: false, confirm: true }), /Expected bytes mismatch/);
     assert.equal((await command({ op: 'peek', offset: 16 })).value, 300);
     assert.ok(audits.every(item => !JSON.stringify(item).includes('replacementHex')));
   });
 
-  assert.equal((await call('reverse_session_close', bound)).closed, true);
-  assert.equal(reverseSessions.entries.size, 0);
+  assert.equal((await call('session_close', bound)).closed, true);
+  assert.equal(context.state.sessions.entries.size, 0);
 });
 
-test.after(async () => { await stopNativeHelpers(); reverseSessions.clear(); });
+test.after(async () => { await stopNativeHelpers(context.state.native); context.state.sessions.clear(); });
