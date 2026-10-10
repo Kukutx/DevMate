@@ -1,10 +1,10 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import processTree from './platform/process-tree.js';
 import { DomainError } from './store.mjs';
 import { createConnectionRecovery } from './connection-recovery.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
-import { programExists } from './platform/tools.mjs';
 
 const fault = (code, message) => new DomainError(code, message);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -64,7 +64,7 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   function start() {
     return serial(async () => {
       if (child && !processTree.childExited(child)) { recovery.enable(); return status(); }
-      if (!programExists(settings.executable)) throw fault('cloudflared_not_installed', 'cloudflared was not found at the configured executable path.');
+      if (!fs.statSync(settings.executable, { throwIfNoEntry: false })?.isFile()) throw fault('cloudflared_not_installed', 'cloudflared was not found at the configured executable path.');
       const token = quick ? '' : env[settings.tokenEnv];
       if (!quick && (typeof token !== 'string' || !token.trim())) throw fault('missing_credential', 'Missing tunnel token environment variable: ' + settings.tokenEnv);
       await owned?.reap();

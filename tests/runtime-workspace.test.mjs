@@ -125,9 +125,9 @@ test('binary and invalid UTF-8 are not editable text, and a file with a second n
   assert.throws(()=>service.edit(project,{path:'alias.txt',edits:[{oldText:'original',newText:'changed'}]}),{code:'unsafe_file'});
   assert.equal(fs.readFileSync(path.join(root,'original.txt'),'utf8'),'original');
   // Text in another encoding is still text: it can be read, and it is not rewritten as UTF-8 behind the user's back.
-  const legacy=service.read(project,{path:'invalid.txt'});
-  assert.equal(legacy.text.length,1);assert.ok(legacy.encoding);assert.match(legacy.note,/not UTF-8/);
-  assert.throws(()=>service.edit(project,{path:'invalid.txt',edits:[{oldText:legacy.text,newText:'x'}]}),error=>error.code==='binary_file'&&/other than UTF-8/.test(error.message));
+  const foreign=service.read(project,{path:'invalid.txt'});
+  assert.equal(foreign.text.length,1);assert.ok(foreign.encoding);assert.match(foreign.note,/not UTF-8/);
+  assert.throws(()=>service.edit(project,{path:'invalid.txt',edits:[{oldText:foreign.text,newText:'x'}]}),error=>error.code==='binary_file'&&/other than UTF-8/.test(error.message));
   assert.deepEqual([...fs.readFileSync(path.join(root,'invalid.txt'))],[0xff]);
   fs.writeFileSync(path.join(root,'wide.txt'),Buffer.concat([Buffer.from([0xff,0xfe]),Buffer.from('héllo\r\n世界','utf16le')]));
   assert.deepEqual([service.read(project,{path:'wide.txt'}).text,service.read(project,{path:'wide.txt'}).encoding],['héllo\r\n世界','utf-16le']);

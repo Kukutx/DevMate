@@ -86,7 +86,7 @@ test('registration uses the same callbacks as the direct contract and keeps the 
   assert.deepEqual(failed.structuredContent.error,{code:'too_large_to_keep',message:'Too large to keep.'});
   assert.equal(failed.content[0].text,'Too large to keep.');
 });
-test('HTML is standalone and uses only the bundled official SDK without a legacy bridge',async()=>{
+test('HTML is standalone and uses only the bundled official SDK',async()=>{
   const resource=await readWorkbenchResource(),content=resource.contents[0];
   assert.equal(content.mimeType,WORKBENCH_MIME);
   assert.deepEqual(content._meta.ui.csp,{connectDomains:[],resourceDomains:[]});

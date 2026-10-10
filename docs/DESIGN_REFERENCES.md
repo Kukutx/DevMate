@@ -1,6 +1,6 @@
 # DevMate design references
 
-Reviewed on 2026-10-06, 2026-10-07 and 2026-10-09. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What was audited, fixed and left unverified is recorded in [AUDIT-4.0.md](AUDIT-4.0.md).
+Reviewed on 2026-10-06, 2026-10-07 and 2026-10-09. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
 
 ## Official protocols and UI
 

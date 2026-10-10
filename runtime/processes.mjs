@@ -32,12 +32,12 @@ const bounded = (value, fallback, min, max) => Number.isInteger(value) ? Math.mi
 // A line that is not valid UTF-8 is read in that encoding, line by line, so that one such program does not turn the
 // UTF-8 around it into question marks, nor the other way round.
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-export function decodeOutput(bytes, legacy) {
+export function decodeOutput(bytes, local) {
   try { return utf8.decode(bytes); } catch {}
   let text = '';
   for (let from = 0; from < bytes.length;) {
     const at = bytes.indexOf(0x0a, from), line = bytes.subarray(from, at < 0 ? bytes.length : at + 1);
-    try { text += utf8.decode(line); } catch { text += (legacy ? decodeOtherText(line, legacy) : decodeOtherText(line))?.text ?? line.toString('utf8'); }
+    try { text += utf8.decode(line); } catch { text += (local ? decodeOtherText(line, local) : decodeOtherText(line))?.text ?? line.toString('utf8'); }
     from += line.length;
   }
   return text;

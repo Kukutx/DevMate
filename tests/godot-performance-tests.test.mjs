@@ -69,7 +69,7 @@ test('summarizes performance percentiles and evaluates only current budgets', ()
     /Unknown Godot performance budget: minFpsP95/
   );
   assert.throws(
-    () => advancedScenarioSchema.parse({ id: 'legacy-budget', kind: 'performance', budgets: { minFpsP95: 60 } }),
+    () => advancedScenarioSchema.parse({ id: 'unknown-budget', kind: 'performance', budgets: { minFpsP95: 60 } }),
     /minFpsP95|Unrecognized key/
   );
 });

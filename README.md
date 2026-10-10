@@ -30,8 +30,6 @@ The main use is connecting the ChatGPT website to your machine and developing wi
 
 ![The DevMate workbench showing the uncommitted changes of a project](docs/media/workbench.png)
 
-DevMate 4 is a new architecture. It does not read, migrate or stay compatible with any 3.x state, configuration or interface. [Coming from 3.x?](#upgrading-from-3x)
-
 ## Install
 
 **Requirements:** Node.js 24 or newer, and Git 2.41 or newer (the Git that ships with the macOS developer tools is older: `brew install git`). The command line and Obsidian also need `rg` ([ripgrep](https://github.com/BurntSushi/ripgrep)); the VS Code extension brings its own.
@@ -91,7 +89,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate access [guarded \| full]` | The permission profile: what a connected client may decide (see [Who may do what](#who-may-do-what)) |
 | `devmate mcp-url` | The address for a client |
 | `devmate mcp` | MCP over standard input and output; starts the runtime when needed |
-| `devmate connect local \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in |
 | `devmate secret set <NAME>` / `list` / `remove <NAME>` | Connection credentials. The value is read from standard input and never appears in shell history |
 | `devmate login-code` | A one-time sign-in code (when sign-in is on) |
 | `devmate ui [--open]` | A single-use link to the workbench |
@@ -143,7 +141,7 @@ Settings (user settings only: a repository's `.vscode/settings.json` cannot chan
 
 **Disclosures.** The plugin is desktop only and needs Node.js 24 installed separately (set its path in the plugin settings when it is not found; ripgrep must be installed too). It starts the DevMate runtime as a background process that keeps running after Obsidian closes, until you run **Stop shared runtime**. The runtime listens on `127.0.0.1` only (ports 8788 and 8789, and one more loopback port for vault operations). Its state, credentials and its own program files are kept in `~/.devmate/runtime`, outside the vault. The plugin carries those program files inside `main.js` as plain, readable text (nothing is encoded), writes them there and checks each against its hash on every start. It makes no network connection unless you configure a public connection (Cloudflare Tunnel, OpenAI Secure MCP Tunnel, SSH or your own HTTPS proxy). No telemetry, no account, no payment.
 
-The 4.0 plugin has been loaded and driven in a real Obsidian 1.12.7 on Windows: loading, starting the runtime, sharing the vault read only and read and write, the note tools, stopping and disabling. Obsidian on macOS and Linux, and an update over an installed 3.x plugin, have not been tried. Please report what you find.
+The plugin has been loaded and driven in a real Obsidian 1.12.7 on Windows: loading, starting the runtime, sharing the vault read only and read and write, the note tools, stopping and disabling. Obsidian on macOS and Linux has not been tried. Please report what you find.
 
 ## Connecting a client
 
@@ -243,7 +241,7 @@ A connector that cannot start does not take local work down and is never hidden:
 | Orientation | `project_overview` `project_list` | Git branch and changes, the project's own agent instructions (`AGENTS.md` and similar), runnable scripts, top-level layout and the editor's error count, in one call |
 | Editor | `editor_diagnostics` `editor_context` | The compiler, type and lint errors VS Code already computed; your active file, selection and open files |
 | Finding code | `workspace_files` `workspace_find` `workspace_search` | Directory listing, glob find, ripgrep content search. Honours `.gitignore`; fast on large repositories |
-| Reading | `workspace_read` | With line numbers, paged for large files (up to 32 MiB). UTF-16 and local legacy encodings can be read, not rewritten |
+| Reading | `workspace_read` | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
 | Changing | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | Exact text replacement, several edits applied atomically. Overwriting needs the hash that was read, so nothing is written blind |
 | Undo | `workspace_history` `workspace_restore` | Every file changed, overwritten or deleted through DevMate can be restored, kept 30 days by default |
 | Running | `shell_run` `process_read` `process_write` `process_stop` `process_list` | Real shell semantics (`npm test`, `git commit`). Output is paged by cursor; long commands keep running and can be read, fed input and stopped as a whole process tree |
@@ -254,7 +252,7 @@ A connector that cannot start does not take local work down and is never hidden:
 
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
-- The model carries about three dozen tool definitions; the rest costs no context.
+- The model carries 38 tool definitions; the rest costs no context.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.
@@ -298,15 +296,6 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 | A cloud client cannot connect | The `connection.*` items of `doctor`; `devmate logs` shows the connector's output |
 | Start fails | The message has the reason; the full log is `runtime.log` in the instance directory |
 
-## Upgrading from 3.x
-
-4.0 starts fresh. After the update:
-
-- Nothing of 3.x is read: projects, connection and sign-in are set up again. Old settings in your editor are ignored; old state on disk is left alone and can be deleted.
-- The Gateway, the Runners and the tunnel providers of 3.x are gone. Cloud clients come in through one of the routes under [Connecting a client](#connecting-a-client); `devmate connect quick` is the fastest. The MCP address is a new one, so create the connector in ChatGPT or Claude again.
-- If a 3.x Gateway is still running it may hold port 8788, and 4.0 then reports that the port is in use. Close every editor window once, or end the old `node` process, and start again.
-- The tool names a model sees have changed; clients pick them up when the connector is refreshed.
-
 ## Uninstalling
 
 Removing the extension or the plugin does not stop the runtime, because other entries may be using it. Stop it first (**Stop DevMate Runtime**, or `devmate stop`), then uninstall. Everything DevMate keeps is in the instance directory (`~/.devmate/runtime` by default): delete it to remove the state, the credentials and the restorable file versions. Your project files are never touched by this.
@@ -317,7 +306,7 @@ State lives in one SQLite database in the instance directory. The event journal,
 
 ## Compatibility
 
-Within 4.x these are treated as public: the names and parameters of the tools above, operation names, configuration keys, command-line commands and the workbench resource `ui://devmate/workbench/v1`. A change to any of them is listed in the changelog, and a rename keeps the old name working for one minor release. A test pins the tool names and parameters, so none changes by accident. The stored state carries a format number: a release never touches state written by a newer one and says which versions are involved. 4.x does not read 3.x state.
+These are treated as public: the names and parameters of the tools above, operation names, configuration keys, command-line commands and the workbench resource `ui://devmate/workbench/v1`. A change to any of them is listed in the changelog. A test pins the tool names and parameters, so none changes by accident. The stored state carries a format number: a release never touches state written by a newer one and says which versions are involved.
 
 ## Development
 
@@ -349,7 +338,7 @@ Every operation is defined once in `runtime/operations/` and authorised by the r
 - [Security policy](SECURITY.md) and its known limits
 - [Changelog](CHANGELOG.md)
 - [Contributing and releasing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Code of conduct](CODE_OF_CONDUCT.md)
-- [Audit of 4.0](docs/AUDIT-4.0.md) (in Chinese): what three review rounds found, what was fixed and what could not be verified
+- [Status](docs/STATUS.md) (in Chinese): what is not done yet, what could not be verified, and measured performance
 
 ## License
 

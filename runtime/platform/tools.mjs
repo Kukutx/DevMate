@@ -13,24 +13,11 @@ export function hardenExecutableSearch(env = process.env) {
   return env;
 }
 
-/**
- * Whether a program is there to be started. A Microsoft Store install is reached through an app execution alias
- * (…\WindowsApps\name.exe), which Windows lets a process start but not examine: asking for its details is refused
- * although it exists and runs.
- */
-export function programExists(file) {
-  try { return fs.statSync(file).isFile(); }
-  catch (error) {
-    if (process.platform !== 'win32' || !['EACCES', 'EPERM'].includes(error.code)) return false;
-    try { return fs.readdirSync(path.dirname(file)).some(name => name.toLowerCase() === path.basename(file).toLowerCase()); } catch { return false; }
-  }
-}
-
 /** cloudflared where its installers put it, or on PATH. Null when it is not on this computer. */
 export function findCloudflared(env = process.env) {
   const usual = process.platform === 'win32' ? ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']
     : ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared'];
-  return findOnPath('cloudflared', env) || usual.find(programExists) || null;
+  return findOnPath('cloudflared', env) || usual.find(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile()) || null;
 }
 
 /** Find an executable on PATH only (never the working directory) and return its absolute path. */

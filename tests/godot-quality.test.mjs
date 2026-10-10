@@ -149,7 +149,7 @@ test('plans exports and mixed automation with bridge blockers and ready capabili
   assert.equal(desktop.call.input.preset, 'Windows Desktop');
   assert.deepEqual(desktop.job, { kind: 'capability', input: desktop.call });
   assert.equal(plan.items.find(item => item.kind === 'native').capability, 'godot.native_test');
-  assert.doesNotMatch(JSON.stringify(plan), /godot_[a-z]|requiredCapabilities|"tool"/, 'no 3.x tool names or Runner labels');
+  assert.doesNotMatch(JSON.stringify(plan), /godot_[a-z]|requiredCapabilities|"tool"/, 'a plan names capabilities, not tools or runners');
 });
 
 test('automation planning fails closed for protected output destinations', async t => {

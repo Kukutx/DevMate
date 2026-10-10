@@ -25,7 +25,7 @@ test('local default and external HTTPS do not start a relay', async () => {
   assert.equal(spawns, 0);
 });
 
-test('connection configuration accepts secret references, not secret values or old providers', () => {
+test('connection configuration accepts secret references, not secret values or unknown kinds', () => {
   assert.throws(()=>normalizeConnectionConfig({kind:'some-other-provider'}), /Connection kind/);
   assert.throws(()=>normalizeConnectionConfig({kind:'external-https',url:'http://example.test/mcp'}), /HTTPS/);
   assert.throws(()=>normalizeConnectionConfig({kind:'openai-tunnel',tunnelId:'tunnel_test',executable:process.execPath,apiKey:'do-not-store'}), /Unsupported connection setting/);
