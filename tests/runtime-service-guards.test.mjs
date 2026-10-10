@@ -257,6 +257,18 @@ test('with several editor windows the project in front of the user is the one in
   await new Promise(resolve => setTimeout(resolve, 5));
   await publish(second, two, true);
   assert.equal(service.windows.focusedProject([one.id, two.id]), two.id);
+  // A call that names no project is answered from that project, and the answer says which one it was.
+  const connected = { id: 'owner', role: 'owner' };
+  const shown = async (name, input) => presentResult(service.operations.get(name), await service.call(name, input, connected));
+  const read = (await shown('workspace.read', { path: 'file.txt' })).content[0].text;
+  assert.match(read, new RegExp('\\[No projectId was given: this is from ' + two.id + ' = focus-two, the project of the editor window used last\\. Pass projectId for another\\.\\]\\n\\{"sha256"'));
+  const listed = await shown('workspace.files', {});
+  assert.deepEqual([listed.structuredContent.answeredFrom.projectId, listed.structuredContent.answeredFrom.name], [two.id, 'focus-two']); assert.ok(listed.structuredContent.items.length);
+  // Through the read-only dispatcher as well; and a call that says which project it means is told nothing.
+  assert.equal((await shown('operations.query', { operation: 'workspace.files', input: {} })).structuredContent.answeredFrom.projectId, two.id);
+  const named = await shown('workspace.read', { projectId: one.id, path: 'file.txt' });
+  assert.doesNotMatch(named.content[0].text, /No projectId was given/);
+  assert.equal((await shown('workspace.files', { projectId: one.id })).structuredContent.answeredFrom, undefined);
 });
 
 test('a call that names a workflow has named its project, however many projects there are', async t => {

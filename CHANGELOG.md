@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.5
+- **A delegated agent can work in a copy of the project.** `agents_delegate` with `isolate:true` starts the agent in a Git worktree of the last commit. The project does not change until its work is read (`agents.proposal`) and applied (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or discarded (`agents.discard`). Applied work is in the history, so it can be taken back like any other change. The copy is kept beside DevMate's instance directory, never inside it.
+- **One call takes back a stretch of work.** `workspace_restore` with `since` (the number of a `workspace_history` entry, shown there as `#N`) takes back every change DevMate's file tools made after that entry, newest first. A file something else changed in the meantime is left alone and listed, and taking back can itself be taken back.
+- `runtime.metrics` says for every operation how often it was called, by whom, how long half of the calls and nineteen in twenty took, and which errors it returned, and lists the newest failures.
+- `devmate doctor --report` prints one text for a bug report: the checks, how the operations went, the newest failures and the last log lines, with credentials, private paths, account names and addresses taken out.
+- A call that names no project while several are shared says in its answer which project it was answered from.
+- What a connected client is told about the connection (`connection_status` with full access) no longer repeats the key a quick tunnel address ends in.
+- A long-running capability is started with `operations_call {operation:"job.start", …}`: the hints and the documents no longer name a tool that does not exist.
+- What every tool tells a client about itself (read-only, destructive, reaching outside) is part of the recorded public surface, so such a hint cannot change by accident.
+
 ## 4.0.4
 - **The address of a quick tunnel ends in a key**, new with every start: `https://<name>.trycloudflare.com/mcp/<key>`. Only the whole address opens anything; the host name alone, which anyone watching DNS can see, answers "not found". `devmate doctor` prints the address without the key. After updating, give your client the new address from `devmate mcp-url`.
 - Through a quick tunnel DevMate answers in plain JSON, for clients of both protocol generations and without progress messages: Cloudflare does not carry event streams through quick tunnels. `npm run smoke:quick-tunnel` checks this against a real tunnel.

@@ -30,7 +30,7 @@ const ROLES = ['owner','write','read'];
 const HOST_ENGINE = 'obsidian';
 const MAX_ENGINE_PROCESSES = 8;
 const LIST_HINT = 'Flags are shown only when true. capability_list {name} returns the input schema of one capability and {engine} the schemas of one engine. ' +
-  'Invoke a readOnly capability with capability_query {capability, input} and every other one with capability_call. A longRunning capability can exceed a minute: start it with job.start {kind:"capability", input:{capability, input}} and follow it with job.read. ' +
+  'Invoke a readOnly capability with capability_query {capability, input} and every other one with capability_call. A longRunning capability can exceed a minute: start it with operations_call {operation:"job.start", input:{kind:"capability", input:{capability, input}}} and follow it with operations_query {operation:"job.read", input:{id}}. ' +
   'ownerOnly capabilities are refused for other callers. dryRun capabilities need write access only when their dryRun input is off.';
 const issues = error => error.issues.slice(0, 8).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ');
 function oneLine(text) {
@@ -394,7 +394,7 @@ export async function createCapabilities({
         if(!tool)throw unknownCapability(state,name,all);
         if(!visible(tool,callerRole))throw fail('forbidden',tool.ownerOnly&&callerRole!=='owner'?name+' is available only to the owner of this DevMate runtime.':name+' requires write access.');
         return{capability:{engine:tool.engine,...view(tool,true)},hint:'Invoke with '+(tool.readOnly?'capability_query':'capability_call')+' {capability:"'+name+'", input}.'+
-          (tool.longRunning?' It can exceed a minute: start it with job.start {kind:"capability", input:{capability:"'+name+'", input}} and follow it with job.read.':'')};
+          (tool.longRunning?' It can exceed a minute: start it with operations_call {operation:"job.start", input:{kind:"capability", input:{capability:"'+name+'", input}}} and follow it with operations_query {operation:"job.read", input:{id}}.':'')};
       }
       if(engine!==undefined && !engineIds().includes(engine))throw fail('unknown_engine','Unknown engine: '+engine+'. Engines are: '+engineIds().join(', ')+'.');
       const full=engine!==undefined && summary!==true;

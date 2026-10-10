@@ -77,7 +77,7 @@ Changes need write access to a writable project. Changes run one at a time, in o
 2. `obsidian.properties_batch_apply { planId }` first checks every hash. If any note changed, nothing is applied and the conflicts are returned. If a change fails midway, the changes already made are rolled back.
 3. `obsidian.properties_batch_rollback { planId }` undoes an applied plan in reverse order.
 
-Apply and rollback can take up to two minutes and are flagged `longRunning`: start them with `job_start`.
+Apply and rollback can take up to two minutes and are flagged `longRunning`: start them with `job.start` (an operation: `operations_call {operation:"job.start", …}`).
 
 ## Timeouts and unknown outcomes
 

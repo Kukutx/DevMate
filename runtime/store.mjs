@@ -390,6 +390,11 @@ export class Store extends EventEmitter {
       .all(projectId, ...types, ...(filePath === null ? [] : [filePath]), Math.min(Math.max(Number(limit) || 20, 1), 200))
       .map(row => ({ ...JSON.parse(row.data), sequence: row.sequence, type: row.type, createdAt: row.created_at }));
   }
+  // Every recorded file change of a project after one journal entry, oldest first.
+  fileEventsAfter(projectId, types, sequence, limit) {
+    return this.db.prepare('SELECT * FROM events WHERE project_id=? AND sequence>? AND type IN (' + types.map(() => '?').join(',') + ') ORDER BY sequence ASC LIMIT ?')
+      .all(projectId, sequence, ...types, limit).map(row => ({ ...JSON.parse(row.data), sequence: row.sequence, type: row.type, createdAt: row.created_at }));
+  }
   hasFileVersion(projectId, types, sha256) {
     return !!this.db.prepare('SELECT 1 FROM events WHERE project_id=? AND type IN (' + types.map(() => '?').join(',') + ") " +
       "AND (json_extract(data,'$.sha256')=? OR json_extract(data,'$.previousSha256')=?) LIMIT 1").get(projectId, ...types, sha256, sha256);

@@ -1,5 +1,6 @@
 import { McpServer, ResourceNotFoundError, ResourceTemplate } from '@modelcontextprotocol/server';
 import { registerWorkbench } from './workbench.mjs';
+import { FOLLOWED_PROJECT } from './operations/shared.mjs';
 import { VERSION } from './version.mjs';
 
 // The tools a model gets for ordinary project work, each with the title a
@@ -95,7 +96,8 @@ export function serverInstructions(service, context) {
   return [lead, known, rest].join('\n');
 }
 
-function annotations(operation) {
+// What a client is told about a tool before it decides whether to ask the person first.
+export function toolAnnotations(operation) {
   return operation.readOnly
     ? { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
     : { readOnlyHint: false, destructiveHint: operation.destructive === true, idempotentHint: operation.idempotent === true, openWorldHint: operation.openWorld === true };
@@ -139,14 +141,18 @@ const tooLarge = size => ({ isError: true, content: [{ type: 'text', text: JSON.
 // prefer structuredContent would otherwise hand the model the leftover fields
 // and never the text. Every other operation is data, in both forms.
 export function presentResult(operation, result) {
+  // The caller named no project and several are shared: the answer says which one it is about.
+  const followed = result?.[FOLLOWED_PROJECT];
+  const which = followed ? 'No projectId was given: this is from ' + followed.id + ' = ' + followed.name + ', the project of the editor window used last. Pass projectId for another.' : null;
   if (!operation.present) {
-    const structured = result && typeof result === 'object' && !Array.isArray(result) ? result : { result };
+    const structured = { ...(result && typeof result === 'object' && !Array.isArray(result) ? result : { result }), ...(which ? { answeredFrom: { projectId: followed.id, name: followed.name, note: which } } : {}) };
     const fitted = boundedData(structured);
     return fitted ? { structuredContent: fitted.structured, content: [{ type: 'text', text: fitted.json }] } : tooLarge(JSON.stringify(structured).length);
   }
   const fields = (operation.meta || []).filter(key => result[key] !== undefined && result[key] !== null).map(key => [key, result[key]]);
   const tail = fields.length ? '\n' + JSON.stringify(Object.fromEntries(fields)) : '';
-  return { content: [{ type: 'text', text: boundedText(operation.present(result), RESULT_CHAR_LIMIT - tail.length) + tail }] };
+  const note = which ? '\n[' + which + ']' : '';
+  return { content: [{ type: 'text', text: boundedText(operation.present(result), RESULT_CHAR_LIMIT - tail.length - note.length) + note + tail }] };
 }
 // What a capability hands back in MCP's own form (an external server's tool, an engine's content) is held to the same size.
 function boundedNative(result) {
@@ -188,7 +194,7 @@ export function createMcpServer(service, context) {
       title: labels[0], description: toolSpelling(operation.description),
       // operationId is the idempotency key of scripted callers. A model reusing one would be handed an old result.
       inputSchema: operation.schema.shape.operationId ? operation.schema.omit({ operationId: true }) : operation.schema,
-      annotations: annotations(operation),
+      annotations: toolAnnotations(operation),
       _meta: { 'openai/toolInvocation/invoking': labels[1], 'openai/toolInvocation/invoked': labels[2] }
     }, async (input, extra) => {
       const request = extra?.mcpReq;

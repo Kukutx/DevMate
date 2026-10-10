@@ -31,6 +31,8 @@ const DELETE_SNAPSHOT_FILES = 2000;
 const DELETE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const HISTORY_EVENTS = ['workspace.file.written', 'workspace.file.removed', 'workspace.file.moved'];
+// How many changes one call takes back.
+const TAKE_BACK_EVENTS = 5000;
 // Dependency and build output that find/search skip unless includeIgnored is set.
 const skippedDirectories = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.venv', 'coverage']);
 const unlistable = new Set(['unsafe_path', 'unsafe_file', 'outside_project', 'invalid_path', 'protected_workspace_path', 'protected_instance_path', 'not_found']);
@@ -235,11 +237,11 @@ export function createWorkspaceService({ store } = {}) {
   // no hooks, fsmonitor, pager, signature program, external diff, and attributes
   // read from the empty tree so no filter or textconv driver applies. The
   // owner's own system and global configuration (autocrlf, excludes, safe.directory) stays in effect.
-  const git = (project, args, input) => invoke('git', [
+  const git = (project, args, input, extra) => invoke('git', [
     '--no-pager', '--attr-source=' + EMPTY_TREE, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull,
     '-c', 'core.quotePath=false', '-c', 'color.ui=false', '-c', 'log.showSignature=false', ...args
   ], projectRoot(project), input, { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0',
-    GIT_PAGER: 'cat', PAGER: 'cat', GIT_LITERAL_PATHSPECS: '1' });
+    GIT_PAGER: 'cat', PAGER: 'cat', GIT_LITERAL_PATHSPECS: '1', ...extra });
   // Only a commit may be named: `HEAD:.env` style object paths would bypass the path policy.
   async function commitOf(project, ref, input) {
     const result = await git(project, ['rev-parse', '--verify', '--quiet', '--end-of-options', gitRevision(ref) + '^{commit}'], input);
@@ -618,6 +620,8 @@ export function createWorkspaceService({ store } = {}) {
 
   function restore(project, input = {}) {
     writable(project);
+    if (input.since !== undefined) return takeBack(project, input);
+    if (input.path === undefined) throw error('invalid_input', 'Give path and sha256 of one version from workspace_history, or since to take back every change after one history entry.');
     if (typeof input.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(input.sha256)) throw error('invalid_input', 'sha256 must identify a version from workspace_history.');
     const stored = snapshotPath(project, input.sha256);
     // The store is shared by content hash; a version is restorable only where this project recorded it.
@@ -629,6 +633,47 @@ export function createWorkspaceService({ store } = {}) {
     if (fs.existsSync(full) && fs.lstatSync(full).size > MAX_FILE_BYTES) throw error('file_too_large', 'A file larger than ' + Math.round(MAX_FILE_BYTES / 1048576) + ' MiB is in the way at this path. Move or delete it first; deleting keeps it restorable too.');
     const current = fs.existsSync(full) ? hash(readBytes(full)) : null;
     return { ...publish(project, rel, bytes, current), restoredFrom: input.sha256 };
+  }
+
+  // Every change these tools made after one history entry, taken back newest first. Each step is checked against what
+  // is on disk now, after the steps before it: a file that something else changed in the meantime is left alone and
+  // listed. What a step replaces is kept like any other change, so taking back can itself be taken back.
+  function takeBack(project, input) {
+    if (input.path !== undefined || input.sha256 !== undefined) throw error('invalid_input', 'Use either path with sha256 (one version of one file), or since (every change after one history entry).');
+    if (!Number.isSafeInteger(input.since) || input.since < 0) throw error('invalid_input', 'since is the number of an entry in workspace_history.');
+    const events = store?.fileEventsAfter?.(project.id, HISTORY_EVENTS, input.since, TAKE_BACK_EVENTS + 1) || [];
+    if (events.length > TAKE_BACK_EVENTS) throw error('too_many_changes', 'More than ' + TAKE_BACK_EVENTS + ' changes were made after that entry. Choose a later one, or restore the files you need one by one.');
+    const restored = [], left = [];
+    const leave = reason => Object.assign(new Error(reason), { left: true });
+    const at = rel => resolveProjectPath(project, rel, { mustExist: false });
+    const present = rel => fs.lstatSync(at(rel), { throwIfNoEntry: false }) || null;
+    for (const item of events.reverse()) {
+      const step = { entry: item.sequence, path: item.path };
+      try {
+        if (hidden(project, item.path) || (item.from && hidden(project, item.from))) throw leave('this project protects it');
+        if (item.type === 'workspace.file.moved') {
+          if (!present(item.path)) throw leave('it is no longer at ' + item.path);
+          // A rename that only changed the case of the name is the same entry under both names.
+          if (present(item.from) && at(item.from) !== at(item.path)) throw leave('something is at ' + item.from + ' now');
+          move(project, { from: item.path, to: item.from });
+          if (item.previousSha256) restore(project, { path: item.path, sha256: item.previousSha256 });
+          restored.push({ ...step, action: 'moved back', to: item.from });
+        } else if (item.type === 'workspace.file.removed') {
+          // The files of a deleted folder are entries of their own; bringing them back brings the folders back.
+          if (item.entry === 'directory') continue;
+          if (present(item.path)) throw leave('something is at this path now');
+          if (!item.previousSha256) throw leave('no copy was kept when it was deleted');
+          restore(project, { path: item.path, sha256: item.previousSha256 });
+          restored.push({ ...step, action: 'brought back' });
+        } else {
+          const stat = present(item.path);
+          if ((stat?.isFile() && stat.size <= MAX_FILE_BYTES ? hash(readBytes(at(item.path))) : null) !== item.sha256) throw leave('it was changed again by something else');
+          if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }); restored.push({ ...step, action: 'restored' }); }
+          else { remove(project, { path: item.path }); restored.push({ ...step, action: 'removed again (this change created it)' }); }
+        }
+      } catch (failure) { left.push({ ...step, reason: failure.left ? failure.message : (failure.code ? failure.code + ': ' : '') + failure.message }); }
+    }
+    return { since: input.since, restored, left };
   }
 
   // ripgrep does the walking and all glob matching: it is fast on very large
@@ -752,6 +797,122 @@ export function createWorkspaceService({ store } = {}) {
     return patch(checkedCommand(await git(project, [...base, '--', ...shown], { ...input, maxOutputChars: 2000000 })), omitted);
   }
 
+  // An agent can be given a copy of the project to work in: a Git worktree on a branch of its own, kept beside the
+  // instance directory and not inside it: a program that runs whatever it is asked to has no business two folders
+  // away from the owner token and the stored credentials. The project sees nothing of what happens in a copy until
+  // that work is applied, all of it or none.
+  // Git that changes something runs here with the repository's hooks off and its attributes on: the copy has to look
+  // like the owner's own checkout.
+  const gitChange = (cwd, args, input = {}, extra = {}) => invoke('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull, '-c', 'core.quotePath=false',
+    '-c', 'color.ui=false', '-c', 'commit.gpgsign=false', ...(WINDOWS ? ['-c', 'core.longpaths=true'] : []), ...args], cwd, { timeoutMs: 120000, ...input },
+  { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_PAGER: 'cat', PAGER: 'cat', ...extra });
+  // The copy as a project of its own for reading: the same rules about what may be shown, another folder.
+  const inCopy = (project, copy) => ({ ...project, root: copy.root, controlRoot: null });
+  const copyExists = copy => { if (!copy?.root || !fs.existsSync(copy.root)) throw error('not_found', 'This agent has no working copy of its own (any more).'); };
+
+  async function isolate(project, name) {
+    writable(project);
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(name) || !project.controlRoot) throw error('invalid_input', 'A working copy needs a plain name.');
+    const head = await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']), base = head.stdout.trim();
+    if (head.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(base)) throw error('not_a_repository', 'A copy of its own needs a Git repository with at least one commit: what the agent proposes is what differs from that commit.');
+    const root = path.join(path.dirname(project.controlRoot), path.basename(project.controlRoot) + '-copies', name), branch = 'devmate/' + name;
+    fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
+    checkedCommand(await gitChange(projectRoot(project), ['worktree', 'add', '--quiet', '-b', branch, root, base]));
+    // What is not committed is not in the copy; whoever delegates is told how much that is.
+    return { root, branch, base, uncommitted: (await gitStatus(project)).items.length };
+  }
+
+  // What the copy holds that the commit it started from does not, files the agent created included.
+  async function proposal(project, copy, input = {}) {
+    copyExists(copy);
+    const view = inCopy(project, copy), base = ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', copy.base];
+    // The copy's index is the agent's, and the agent may be running Git this very moment: what it proposes is worked
+    // out in an index of its own, started from the copy's so that only what changed is read again.
+    const scratch = copy.root + '.index-' + randomUUID(), own = { GIT_INDEX_FILE: scratch };
+    try {
+      const index = (await git(view, ['rev-parse', '--git-path', 'index'])).stdout.trim();
+      try { if (index) fs.copyFileSync(path.resolve(copy.root, index), scratch); } catch { /* an empty index compares everything, which is slower and as right */ }
+      checkedCommand(await gitChange(copy.root, ['add', '--all', '.'], {}, own));
+      const listed = checkedCommand(await git(view, [...base, '--name-status', '-z'], { ...input, maxOutputChars: 2000000 }, own));
+      if (listed.stdoutTruncated) throw error('output_limit', 'The list of changed files exceeds the output bound.');
+      const records = listed.stdout.split('\0'), all = [];
+      for (let index = 0; index + 1 < records.length; index += 2) all.push({ status: records[index].slice(0, 1), path: slash(records[index + 1]) });
+      const files = all.filter(file => !hidden(project, file.path)), omitted = all.length - files.length;
+      if (input.namesOnly) return { branch: copy.branch, base: copy.base, files, omittedProtected: omitted };
+      const wanted = (input.paths || []).map(relativeInput), shown = (wanted.length ? files.filter(file => wanted.includes(file.path)) : files).map(file => file.path);
+      const tooMany = shown.reduce((size, file) => size + file.length + 3, 0) > 20000;
+      const diff = !shown.length || tooMany ? emptyCommand() : checkedCommand(await git(view, [...base, '--', ...shown], { ...input, maxOutputChars: 2000000 }, own));
+      const text = patch(diff, omitted);
+      return { branch: copy.branch, base: copy.base, files, ...text, ...(tooMany ? { stdout: '[' + shown.length + ' files changed, too many for one diff: name some of them with paths]' + text.stdout } : {}) };
+    } finally { for (const file of [scratch, scratch + '.lock']) fs.rmSync(file, { force: true }); }
+  }
+
+  async function removeCopy(project, copy) {
+    const root = projectRoot(project);
+    if (fs.existsSync(copy.root)) {
+      const removed = await gitChange(root, ['worktree', 'remove', '--force', copy.root]);
+      // Whatever Git would not remove (a file held open by a program that is still running) must not be reported as gone.
+      if (removed.exitCode !== 0 && fs.existsSync(copy.root)) {
+        try { fs.rmSync(copy.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+        catch { throw error('copy_in_use', 'The working copy is still in use and could not be removed. Stop the agent (agents.stop) and try again.'); }
+      }
+    }
+    await gitChange(root, ['worktree', 'prune']);
+    await gitChange(root, ['branch', '-D', copy.branch]);
+  }
+
+  // The agent's work arrives in the project as changes in the working tree, not as a commit: the person reviews and
+  // commits it like their own. All of it or none of it; on success the copy has done its job and is removed.
+  async function applyProposal(project, copy) {
+    writable(project); copyExists(copy);
+    const view = inCopy(project, copy);
+    checkedCommand(await gitChange(copy.root, ['add', '--all', '.']));
+    const names = checkedCommand(await git(view, ['diff', '--cached', '--no-renames', '--name-only', '-z', copy.base], { maxOutputChars: 2000000 }));
+    const files = names.stdout.split('\0').filter(Boolean).map(slash);
+    if (!files.length) { await removeCopy(project, copy); return { applied: false, files: [], note: 'The agent changed nothing. Its copy was removed.' }; }
+    const guarded = files.filter(file => hidden(project, file));
+    if (guarded.length) throw error('protected_content', 'The agent changed files this project protects (' + guarded.slice(0, 5).join(', ') + '). Nothing was applied; its work stays in its copy.');
+    // What is about to change is kept first, as with every change these tools make: taking back everything after a
+    // point in the history then takes the agent's work back with it.
+    const before = new Map(files.map(file => {
+      try {
+        const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
+        if (!stat) return [file, { existed: false, sha256: null }];
+        // A file with a second name shares its bytes with a path that may lie outside the project: never copied into history.
+        return [file, { existed: true, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
+      } catch { return [file, { existed: false, sha256: null }]; }
+    }));
+    const patchFile = copy.root + '.patch';
+    try {
+      checkedCommand(await gitChange(copy.root, ['diff', '--cached', '--binary', '--no-ext-diff', '--no-textconv', '--no-renames', '--output=' + patchFile, copy.base]));
+      const root = projectRoot(project), fits = await gitChange(root, ['apply', '--check', '--whitespace=nowarn', patchFile]);
+      if (fits.exitCode !== 0) {
+        // Kept as a commit on the copy's branch, so the work can still be merged by hand.
+        await gitChange(copy.root, ['-c', 'user.name=DevMate', '-c', 'user.email=devmate@localhost', 'commit', '--quiet', '--no-verify', '-m', 'Work of a delegated agent']);
+        throw error('conflict', 'The project changed in the same places since the agent started, so its work does not apply cleanly. Nothing was applied. It is kept on the branch ' + copy.branch +
+          ' (merge it with Git, or discard it with agents.discard). Git says: ' + String(fits.stderr || '').trim().split(/\r?\n/).slice(0, 3).join(' | ').slice(0, 400));
+      }
+      checkedCommand(await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]));
+    } finally { fs.rmSync(patchFile, { force: true }); }
+    let warning = null;
+    const record = () => {
+      for (const file of files) {
+        const was = before.get(file);
+        let stat = null, full = null;
+        try { full = resolveProjectPath(project, file, { mustExist: false }); stat = fs.lstatSync(full, { throwIfNoEntry: false }); } catch { continue; }
+        if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: stat.size <= MAX_FILE_BYTES ? hash(readBytes(full)) : null, written: true, previousSha256: was.sha256, proposal: copy.branch });
+        else if (!stat && was.existed) warning ||= event(project, 'workspace.file.removed', { path: file, entry: 'file', previousSha256: was.sha256, proposal: copy.branch });
+      }
+    };
+    if (store?.transaction) store.transaction(record); else record();
+    await removeCopy(project, copy);
+    return { applied: true, files, ...(warning ? { warning } : {}) };
+  }
+  async function discardProposal(project, copy) {
+    await removeCopy(project, copy);
+    return { discarded: true, branch: copy.branch };
+  }
+
   async function gitLog(project, input = {}) {
     const scopes = (input.paths || []).map(p => { const rel = relativeInput(p); resolveProjectPath(project, rel, { mustExist: false }); return rel; });
     // One more than asked for, to be able to say that there are more.
@@ -803,5 +964,5 @@ export function createWorkspaceService({ store } = {}) {
   }
   const isRepository = project => fs.existsSync(path.join(projectRoot(project), '.git'));
   return { files, read, readBytes: readBytePage, write, edit, mkdir, move, remove, find, history, restore, search,
-    gitStatus, gitDiff, gitLog, gitShow, gitBlame, gitBranches, isRepository };
+    gitStatus, gitDiff, gitLog, gitShow, gitBlame, gitBranches, isRepository, isolate, proposal, applyProposal, discardProposal };
 }

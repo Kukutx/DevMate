@@ -2,7 +2,7 @@
   "name": "devmate-agent",
   "displayName": "DevMate Agent",
   "description": "Give ChatGPT, Claude and any MCP client real hands on your own computer: files, shell, Git, editor diagnostics and local coding agents, without a paid tunnel.",
-  "version": "4.0.4",
+  "version": "4.0.5",
   "license": "MIT",
   "publisher": "kukutx",
   "icon": "assets/icon.png",

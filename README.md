@@ -259,7 +259,7 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 | Finding code | `workspace_files` `workspace_find` `workspace_search` | Directory listing, glob find, ripgrep content search. Honours `.gitignore`; fast on large repositories |
 | Reading | `workspace_read` | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
 | Changing | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | Exact text replacement, several edits applied atomically. Overwriting needs the hash that was read, so nothing is written blind |
-| Undo | `workspace_history` `workspace_restore` | Every file changed, overwritten or deleted through DevMate can be restored, kept 30 days by default |
+| Undo | `workspace_history` `workspace_restore` | Every file changed, overwritten or deleted through DevMate can be restored, kept 30 days by default. One call takes back everything changed after a point (`since`), the applied work of an isolated agent included; what commands and agents working directly in the project changed is not in this history, use Git for that |
 | Running | `shell_run` `process_read` `process_write` `process_stop` `process_list` | Real shell semantics (`npm test`, `git commit`). Output is paged by cursor; long commands keep running and can be read, fed input and stopped as a whole process tree |
 | Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | Read only, and never run a program the repository configures. Writes go through `shell_run` |
 | Delegation | `agents_delegate` `agents_result` `providers_list` | Hand a whole task to a coding agent on this machine |
@@ -268,7 +268,7 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
-- The model carries 38 tool definitions; the rest costs no context.
+- The tool list has 38 entries: 36 operations, one that opens the workbench and one that only the workbench itself calls. Everything else is reached through `operations_call` and costs no context.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.
@@ -284,6 +284,7 @@ One call hands a task to Codex, Claude Code, Gemini CLI or Grok CLI installed he
 
 - A task that finishes within the wait returns its result and the list of changed files; otherwise it returns an `agentId` to follow with `agents_result`.
 - Passing the same `agentId` again continues that session with its context.
+- With `"isolate": true` the agent works in a copy of the project instead (a Git worktree of the last commit, kept in DevMate's own directory). The project does not change until you have read what it proposes (`agents.proposal`) and brought it in (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or dropped it (`agents.discard`). The copy holds what is committed: uncommitted changes and ignored files such as installed dependencies are not in it.
 - The agent works in the project folder with its own account, quota and tools. What it asks you (approvals, questions) appears in the workbench and as a notification in VS Code and Obsidian, and you answer it at your computer.
 - Collaboration inside one vendor (Claude Code sessions messaging each other, Codex sub-agents) is done natively by them. DevMate covers the part between clients, for example handing a task from ChatGPT on the web to Claude Code on your machine.
 

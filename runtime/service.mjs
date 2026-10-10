@@ -16,11 +16,12 @@ import { createProcessManager } from './processes.mjs';
 import { verifyPublicMcp } from './connection-verify.mjs';
 import { createSecretStore } from './secrets.mjs';
 import { CLIENT_COMMAND_ENV } from './client.mjs';
+import { createUsage } from './usage.mjs';
 import { defineOperations } from './operations/index.mjs';
 import { projectOverview } from './operations/projects.mjs';
 import { doctor } from './operations/doctor.mjs';
 import { snapshot } from './operations/snapshot.mjs';
-import { hash, now, projectScope } from './operations/shared.mjs';
+import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.mjs';
 
 // The service is the one registry every caller goes through: MCP, the CLI, the editor
 // hosts and the workbench. It owns identity and project authorization, idempotency and
@@ -81,6 +82,7 @@ export class DevMateService {
     this.config = normalizeConfig(config);
     this.execution = new AbortController();
     this.activeCalls = new Set();
+    this.usage = createUsage();
     this.projectTransitions = new Set();
     this.closing = false;
     this.workspace = createWorkspaceService({ store: this.store });
@@ -247,7 +249,7 @@ export class DevMateService {
 
   // The project a call means when it names none: the window's own, the caller's only one,
   // or the one whose editor window was used most recently.
-  defaultProject(context, operation) {
+  defaultProject(context, operation, chosen = {}) {
     if (context.projectId) return context.projectId;
     // An editor window never borrows the project of another window.
     if (context.windowId) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
@@ -256,7 +258,7 @@ export class DevMateService {
     // Reading may follow the editor: "what is this file" means the project in front of the user. A change may not:
     // the same call would land in another project the moment the user clicks into a different window.
     const focused = operation?.readOnly ? this.windows.focusedProject(available.map(project => project.id)) : null;
-    if (focused) return focused;
+    if (focused) { chosen.followed = available.find(project => project.id === focused); return focused; }
     throw new DomainError('project_required', available.length
       ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name).join('; ')
       : 'No folder is shared yet. ' + this.howToShare(context));
@@ -331,7 +333,14 @@ export class DevMateService {
     try { return await work; } finally { this.activeCalls.delete(work); }
   }
 
+  // Every call is counted here, also one that is refused before it runs: a model using a tool wrongly is mostly that.
   async call(name, input = {}, context) {
+    const done = this.usage.begin(this.operations.has(name) ? name : '(unknown)', context);
+    try { const result = await this.perform(name, input, context); done(); return result; }
+    catch (error) { done(error); throw error; }
+  }
+
+  async perform(name, input = {}, context) {
     if (!context?.id || !['owner','write','read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
     await this.ready;
     if (this.closing && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(name)) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
@@ -339,10 +348,11 @@ export class DevMateService {
     if (!operation) throw new DomainError('unknown_operation', 'Unknown DevMate operation: ' + name);
     if (context.role === 'read' && !operation.readOnly && !dispatching.has(name)) throw new DomainError('forbidden', 'This caller has read-only access.');
     let args;
+    const chosen = {};
     try { args = operation.schema.parse(input); }
     catch (error) { throw error.name === 'ZodError' ? new DomainError('invalid_input', 'Invalid input for ' + name + ': ' + readable(error)) : error; }
     if (args.projectId !== undefined) args.projectId = this.resolveProjectReference(args.projectId, context);
-    else if (operation.needsProject) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation);
+    else if (operation.needsProject) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation, chosen);
     if (!['owner', 'write', 'read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
     if (operation.localOnly && !this.reachesLocal(operation, context)) throw new DomainError('forbidden', 'This operation is available only through the local control interface: the owner does it at their own computer.');
     // A decision that is the person's own (answering what an agent asks) is taken at this computer. Anywhere else
@@ -360,7 +370,12 @@ export class DevMateService {
     if (!operation.readOnly && name !== 'host.record.put' && executionProject && this.projectTransitions.has(executionProject)) throw new DomainError('project_busy', 'Project execution resources are closing.');
     if (context.projectId && executionProject && executionProject !== context.projectId) throw new DomainError('scope_mismatch', 'Project is outside this caller scope.');
     if (context.windowId && !context.projectId && executionProject && !name.startsWith('window.')) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
-    if (operation.readOnly || !args.operationId) return this.invoke(operation, args, context);
+    if (operation.readOnly || !args.operationId) {
+      const result = await this.invoke(operation, args, context);
+      // Which project that was is part of the answer when the caller did not say and there were several.
+      if (chosen.followed && result && typeof result === 'object' && Object.isExtensible(result)) Object.defineProperty(result, FOLLOWED_PROJECT, { value: { id: chosen.followed.id, name: chosen.followed.name } });
+      return result;
+    }
     const operationKey = (context.id || 'owner') + ':' + args.operationId;
     const fingerprint = hash(JSON.stringify({ name, args }));
     const existing = this.store.operation(operationKey);
