@@ -275,6 +275,35 @@ test('an answer to an agent\'s question is understood however a client writes it
   assert.equal(AdapterBase.answersFor(one, '  '), null);
 });
 
+test('how the coding agents are run is changed while DevMate runs, by the owner or with full access by their client', async t => {
+  const { service, folder, factory, restart } = await fixture(t);
+  const project = await service.call('project.create', { root: folder('project') }, local);
+  await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 1 } }, connected), { code: 'forbidden', message: /full access profile/ });
+  assert.equal(offered(service, connected).includes('providers.configure'), false);
+  const set = await service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 1, inheritMcpServers: true } }, local);
+  assert.equal(set.settings.maxSessions, 1); assert.equal(set.settings.inheritMcpServers, true); assert.deepEqual(set.changed, { maxSessions: 1, inheritMcpServers: true });
+  // It applies at once: the second session of that agent is refused, and the refusal says how to allow more.
+  factory.asks = [];
+  await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'one', waitMs: 5000 }, local);
+  await assert.rejects(service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'two', waitMs: 5000 }, local), { code: 'agent_limit', message: /providers\.configure/ });
+  assert.equal((await service.call('agents.delegate', { projectId: project.id, provider: 'claude', prompt: 'another agent is not affected', waitMs: 5000 }, local)).settled, true);
+  // What does not fit is refused whole and changes nothing.
+  await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 0 } }, local), { code: 'invalid_input' });
+  await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { noSuchSetting: true } }, local), { code: 'invalid_input' });
+  await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { command: { file: 'codex.cmd' } } }, local), { code: 'invalid_executable' });
+  const shown = (await service.call('providers.settings', { provider: 'codex' }, local)).items[0];
+  assert.equal(shown.settings.maxSessions, 1); assert.equal(shown.settings.turnTimeoutMs, 3600000, 'what was never set shows its default');
+  // With full access the owner's client does it; a member never does.
+  await service.call('access.update', { profile: 'full' }, local);
+  assert.equal((await service.call('operations.call', { operation: 'providers.configure', input: { provider: 'codex', settings: { maxSessions: 4 } } }, connected)).settings.maxSessions, 4);
+  await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 9 } }, { id: 'member-1', role: 'write', projectIds: [project.id] }), { code: 'forbidden' });
+  // It is kept across a restart, and null takes a change back.
+  const again = await restart();
+  assert.equal(again.agents.limits('codex').maxSessions, 4); assert.equal(again.agents.providerSettings.codex.inheritMcpServers, true);
+  const reset = await again.call('providers.configure', { provider: 'codex', settings: { maxSessions: null, inheritMcpServers: null } }, local);
+  assert.deepEqual(reset.changed, {}); assert.equal(again.agents.limits('codex').maxSessions, 8); assert.equal(reset.settings.inheritMcpServers, false);
+});
+
 test('the doctor and the workbench say which profile is on', async t => {
   const { service } = await fixture(t);
   const access = async () => (await service.call('runtime.doctor', {}, local)).checks.find(item => item.id === 'access');

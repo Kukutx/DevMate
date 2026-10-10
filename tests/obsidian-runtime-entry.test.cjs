@@ -50,7 +50,8 @@ function fixture(t, { registered = true, running = true, settings = {}, answers 
         case 'window.context': state.contexts.push(input); return { accepted: true };
         case 'window.detach': return { detached: state.windows.delete(input.windowId) };
         case 'connection.status': return state.connection;
-        case 'settings.read': return { active: { auth: state.auth || { mode: 'none' } } };
+        case 'settings.read': return { active: { auth: state.auth || { mode: 'none' } }, saved: state.saved || { retentionDays: 30 } };
+        case 'settings.replace': state.saved = input.config; return { saved: input.config, restartRequired: true };
         case 'auth.code.create': return { code: 'dml_one-time' };
         case 'runtime.doctor': return { version: '4.0.0', status: 'attention', checks: [{ id: 'node', status: 'ok', detail: 'Node 24' }, { id: 'security', status: 'warn', detail: 'No sign-in', fix: 'Require sign-in' }, { id: 'connection', status: 'info', detail: 'Local only', fix: 'Configure a connection' }] };
         default: throw new Error('unexpected operation ' + name);
@@ -80,7 +81,7 @@ function fixture(t, { registered = true, running = true, settings = {}, answers 
       dispose() { bridge.disposed = true; bridge.state = 'released'; } };
     state.bridges.push(bridge); return bridge;
   };
-  const entry = createObsidianRuntimeEntry(plugin, { client, bridgeFactory, syncIntervalMs: 3600000,
+  const entry = createObsidianRuntimeEntry(plugin, { client, bridgeFactory, syncIntervalMs: 3600000, cloudflared: () => state.cloudflared,
     obsidian: { ItemView: class {}, Notice: class { constructor(message) { state.notices.push(message); } } },
     clipboard: { writeText: async value => { state.copied.push(value); } },
     // The person answers with the next prepared answer, or with the first choice.
@@ -381,4 +382,23 @@ test('the sign-in code is copied when sign-in is on, and the command says where 
   f.state.auth = { mode: 'oauth', issuer: 'https://devmate.example.test' };
   await f.run('login-code');
   assert.deepEqual(f.state.copied, ['dml_one-time']); assert.match(f.state.notices.at(-1), /Copied a one-time sign-in code/);
+});
+test('the connection is set up in Obsidian: a quick tunnel needs no account, and other settings are kept', async t => {
+  const f = fixture(t, { answers: ['cloudflare-quick'] });
+  await f.entry.activate();
+  // cloudflared is not on this computer: nothing is saved, and the message says how to get it.
+  await f.run('configure-connection');
+  assert.equal(f.state.saved, undefined); assert.match(f.state.notices.at(-1), /winget install Cloudflare\.cloudflared/);
+  f.state.cloudflared = path.join(os.tmpdir(), 'cloudflared.exe'); f.answers.push('cloudflare-quick');
+  const stops = f.state.calls.filter(name => name === 'host.detach').length;
+  await f.run('configure-connection');
+  assert.deepEqual(f.state.saved, { retentionDays: 30, connection: { kind: 'cloudflare-quick', executable: f.state.cloudflared }, auth: { mode: 'none' } });
+  assert.match(f.state.notices.at(-1), /quick tunnel is starting/); assert.equal(f.state.running, true, 'the shared runtime was restarted to apply it');
+  assert.ok(f.state.calls.filter(name => name === 'host.detach').length > stops);
+  // Choosing what is already set changes nothing; going back to this computer only removes the tunnel.
+  f.answers.push('cloudflare-quick');
+  assert.equal(await f.run('configure-connection'), null);
+  f.answers.push('local');
+  await f.run('configure-connection');
+  assert.deepEqual(f.state.saved.connection, { kind: 'local' });
 });

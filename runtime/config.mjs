@@ -36,6 +36,14 @@ const claudeProvider = provider.extend({
   // Claude Code settings files a delegated session loads (--setting-sources).
   settingSources: z.array(z.enum(['user', 'project', 'local'])).min(1).max(3).default(['user'])
 }).strict();
+/** The settings of one coding agent, checked as the configuration file checks them. */
+export function checkProviderSettings(name, settings) {
+  const checked = (name === 'claude' ? claudeProvider : provider).parse(settings);
+  if (checked.command && (!path.isAbsolute(checked.command.file) || /\.(cmd|bat|ps1)$/i.test(checked.command.file))) {
+    throw new DomainError('invalid_executable', 'Provider command.file must be an absolute native executable. Pass a Node entry point in args.');
+  }
+  return checked;
+}
 const origin = z.string().url().refine(value => {
   const url = new URL(value);
   return ['http:', 'https:'].includes(url.protocol) && url.origin === value && !url.username && !url.password;
@@ -86,11 +94,7 @@ export function normalizeConfig(input = {}) {
   const config = configSchema.parse(input);
   config.connection = normalizeConnectionConfig(config.connection);
   config.externalServers = normalizeExternalServers(config.externalServers);
-  for (const settings of Object.values(config.providers)) {
-    if (settings.command && (!path.isAbsolute(settings.command.file) || /\.(cmd|bat|ps1)$/i.test(settings.command.file))) {
-      throw new DomainError('invalid_executable', 'Provider command.file must be an absolute native executable. Pass a Node entry point in args.');
-    }
-  }
+  for (const [name, settings] of Object.entries(config.providers)) checkProviderSettings(name, settings);
   if (config.connection.kind === 'cloudflare-quick' && config.auth.mode === 'oauth') {
     throw new DomainError('invalid_issuer', 'A quick tunnel gets a new address each time it starts, so nobody can sign in at it. Use it without sign-in, or use a tunnel with a hostname of your own.');
   }

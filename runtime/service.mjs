@@ -11,7 +11,7 @@ import { InputRequests } from './requests.mjs';
 import { createJobRunner } from './jobs.mjs';
 import { createWindowRegistry } from './windows.mjs';
 import { recallTools } from './platform/tools.mjs';
-import { normalizeConfig, publicMcpUrl } from './config.mjs';
+import { checkProviderSettings, normalizeConfig, publicMcpUrl } from './config.mjs';
 import { createProcessManager } from './processes.mjs';
 import { verifyPublicMcp } from './connection-verify.mjs';
 import { createSecretStore } from './secrets.mjs';
@@ -94,6 +94,10 @@ export class DevMateService {
       // Full access is the owner's: what an agent asks is granted without a person only when the owner started the
       // agent and the task it is working on is the owner's too.
       grantsApprovals: (agent, principal) => this.fullAccess() && agent.caller === 'owner' && principal === 'owner' });
+    // What the owner changed about the coding agents while the runtime ran lies on top of the configuration.
+    if (!providerSettings) for (const name of Object.keys(this.store.setting('providers.live') || {})) {
+      try { this.applyProviderSettings(name); } catch (error) { this.store.recordNotificationFailure(error); }
+    }
     this.inputs = new InputRequests(this.store);
     this.connection = connection;
     this.onStop = onStop;
@@ -401,6 +405,25 @@ export class DevMateService {
     if (!this.connection) return { kind: 'local', status: 'ready' };
     try { return await this.connection.status(); }
     catch (error) { return { kind: this.config.connection.kind, phase: 'unknown', error: { code: error.code || 'status_failed', message: error.message } }; }
+  }
+
+  // How one coding agent is run: its configuration, then what was changed while the runtime ran.
+  applyProviderSettings(name, live = (this.store.setting('providers.live') || {})[name] || {}) {
+    let checked;
+    try { checked = checkProviderSettings(name, { ...(this.config.providers[name] || {}), ...live }); }
+    catch (error) { throw error.name === 'ZodError' ? new DomainError('invalid_input', 'Invalid settings for ' + name + ': ' + readable(error)) : error; }
+    this.agents.providerSettings = { ...this.agents.providerSettings, [name]: checked };
+    return checked;
+  }
+  // A null value takes a change back. Sessions that are already connected keep what they were started with.
+  configureProvider(name, patch) {
+    const all = { ...(this.store.setting('providers.live') || {}) }, live = { ...(all[name] || {}) };
+    for (const [key, value] of Object.entries(patch)) { if (value === null) delete live[key]; else live[key] = value; }
+    const settings = this.applyProviderSettings(name, live);
+    if (Object.keys(live).length) all[name] = live; else delete all[name];
+    this.store.setting('providers.live', all);
+    this.providerDiscovery = null;
+    return { provider: name, settings, changed: live };
   }
 
   // The public MCP address right now: the configured one, or the one a quick tunnel currently holds.

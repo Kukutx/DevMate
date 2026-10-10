@@ -7,7 +7,16 @@ const { randomUUID } = require('node:crypto');
 const RUNTIME_VIEW_TYPE = 'devmate-runtime';
 const SYNC_INTERVAL_MS = 15000;
 
-function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, bridgeFactory, clipboard, ask: suppliedAsk, syncIntervalMs = SYNC_INTERVAL_MS } = {}) {
+// cloudflared on PATH, or where its installers put it. Null when it is not on this computer.
+function locateCloudflared(env = process.env) {
+  const name = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const usual = process.platform === 'win32' ? ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']
+    : ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared'];
+  const onPath = String(env.PATH || env.Path || '').split(path.delimiter).filter(directory => directory && path.isAbsolute(directory)).map(directory => path.join(directory, name));
+  return [...onPath, ...usual].find(file => { try { return fs.statSync(file).isFile(); } catch { return false; } }) || null;
+}
+
+function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, bridgeFactory, clipboard, ask: suppliedAsk, cloudflared = locateCloudflared, syncIntervalMs = SYNC_INTERVAL_MS } = {}) {
   const api = obsidian || require('obsidian');
   const client = suppliedClient || require('../../runtime/host-client.cjs').createHostClient({
     instanceRoot: plugin.settings?.runtimeInstanceDirectory || '',
@@ -292,6 +301,28 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
       : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' : 'Copied the local MCP URL. Cloud clients need a public connection.');
     return value;
   }
+  // How clients in the cloud reach this DevMate. The quick tunnel needs no account and nothing typed in, so it is
+  // offered here; a route whose address stays is set up with the command line or in VS Code.
+  async function configureConnection() {
+    const saved = (await client.call('settings.read', {})).saved || {}, current = saved.connection?.kind || 'local';
+    const choice = await ask('How should ChatGPT, Claude.ai and other cloud clients reach DevMate?',
+      (current === 'local' ? 'Right now only apps on this computer can connect.' : 'Right now the connection is: ' + current + '.') +
+      ' A quick tunnel needs no account and no domain: DevMate starts cloudflared and gets an address, which changes whenever it starts again. For an address that stays (an OpenAI tunnel, a domain of your own) use "devmate connect" or VS Code.',
+      [{ label: 'Quick tunnel', value: 'cloudflare-quick', primary: current !== 'cloudflare-quick' }, { label: 'This computer only', value: 'local' }]);
+    if (!choice || choice === current) return null;
+    let connection = { kind: 'local' };
+    if (choice === 'cloudflare-quick') {
+      const executable = cloudflared();
+      if (!executable) throw new Error('cloudflared is not on this computer. Install it (Windows: winget install Cloudflare.cloudflared; macOS: brew install cloudflared), then choose the quick tunnel again.');
+      connection = { kind: 'cloudflare-quick', executable };
+    }
+    // Sign-in belongs to an address that stays: neither of these two has one.
+    await client.call('settings.replace', { config: { ...saved, connection, auth: { mode: 'none' } } });
+    const restarted = await restartRuntime();
+    new api.Notice(restarted === null ? 'The connection is saved. It applies when the shared runtime is restarted.'
+      : choice === 'cloudflare-quick' ? 'The quick tunnel is starting. "Copy MCP URL" gives the address for your client in a few seconds.' : 'DevMate is reachable from this computer only.');
+    return connection;
+  }
   // The one-time code a client asks for on the authorization page, when sign-in is on.
   async function loginCode() {
     const configured = await client.call('settings.read', {});
@@ -350,6 +381,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
       button('Copy MCP URL', copyMcpUrl, { when: running });
       button('Doctor', doctor, { when: running });
       button('Permissions…', accessProfile, { when: running });
+      button('Connection…', async () => { await configureConnection(); await this.refresh(); }, { when: running });
       // Calling an operation by name is for looking into a problem, not for everyday use.
       const advanced = this.contentEl.createEl('details');
       advanced.createEl('summary', { text: 'Advanced: run an operation' });
@@ -418,6 +450,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     command('workbench', 'Open workbench', async () => window.open(await client.workbenchUrl(), '_blank', 'noopener'));
     command('copy-mcp-url', 'Copy MCP URL', copyMcpUrl);
     command('login-code', 'Copy one-time sign-in code', loginCode);
+    command('configure-connection', 'Configure connection (quick tunnel for ChatGPT and Claude.ai)', configureConnection);
     command('doctor', 'Doctor', doctor);
     command('access-profile', 'Change permission profile (guarded or full access)', accessProfile);
     const workspace = plugin.app?.workspace;
@@ -465,7 +498,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     views.clear();
   }
 
-  return { activate, deactivate, open, attachVault, detachVault, changeSharing, accessProfile, stopRuntime, restartRuntime, sync, status, copyMcpUrl, loginCode, doctor, editorContext, RuntimeView, windowId };
+  return { activate, deactivate, open, attachVault, detachVault, changeSharing, accessProfile, stopRuntime, restartRuntime, sync, status, copyMcpUrl, loginCode, configureConnection, doctor, editorContext, RuntimeView, windowId };
 }
 
 module.exports = { createObsidianRuntimeEntry, RUNTIME_VIEW_TYPE };

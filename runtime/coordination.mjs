@@ -133,7 +133,7 @@ export class AgentCoordinator {
     let connected = 0;
     for (const session of this.sessions.values()) if (!session.stopped && session.provider === provider) connected++;
     if (connected >= limit) throw new DomainError('agent_limit', limit + ' ' + provider + ' sessions are already connected. Stop one with agents.stop, wait for an idle one to be disconnected, ' +
-      'or raise providers.' + provider + '.maxSessions.');
+      'or allow more: providers.configure {provider:"' + provider + '", settings:{maxSessions:<more>}}.');
   }
 
   budget(workflow, turns) {

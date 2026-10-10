@@ -9,6 +9,18 @@ export function defineAgentOperations(service, add) {
   const model = z.string().max(200).optional();
   add('providers.list', {}, true, 'List the coding agents installed on this computer that agents_delegate can hand a task to (Codex, Claude Code, Gemini CLI, Grok CLI), with their versions. Nothing is started.', () => service.discoverProviders());
 
+  // How an agent is run names programs and credentials on this computer and decides how much may run at once: the
+  // owner sets it there, or their client does when they chose full access. It needs no restart.
+  const OWNER_SETS_AGENTS = 'Coding agents are set up by the owner on their own computer (devmate providers.configure --json \'{"provider":"codex","settings":{…}}\'), or by their connected client when they chose the full access profile.';
+  add('providers.settings', { provider: z.enum(AGENT_PROVIDERS).optional() }, true,
+    'Read how each coding agent is run: the sessions allowed at once (maxSessions), the time limits of a turn (turnTimeoutMs, turnIdleTimeoutMs, sessionIdleMs), whether it gets the owner\'s MCP servers and API keys (inheritMcpServers, inheritApiKeys), and what was changed while DevMate runs.',
+    args => ({ items: AGENT_PROVIDERS.filter(name => !args.provider || name === args.provider).map(name => ({ provider: name,
+      settings: { ...service.agents.limits(name), ...(service.agents.providerSettings[name] || {}) }, changed: (service.store.setting('providers.live') || {})[name] || {} })) }),
+    { ownerDecision: OWNER_SETS_AGENTS });
+  add('providers.configure', { provider: z.enum(AGENT_PROVIDERS), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
+    'Owner only. Change how one coding agent is run, without a restart: maxSessions, turnTimeoutMs, turnIdleTimeoutMs, sessionIdleMs, inheritMcpServers, inheritApiKeys and the other provider settings (providers.settings shows them). A null value takes a change back. Sessions started afterwards use it.',
+    args => service.configureProvider(args.provider, args.settings), { ownerDecision: OWNER_SETS_AGENTS, idempotent: true });
+
   const waiting = result => [result.approvals.length ? result.approvals.length + ' approval(s)' : null, result.inputs.length ? result.inputs.length + ' question(s)' : null].filter(Boolean).join(' and ');
   const turnText = result => (result.output || (result.error ? '[' + result.error.message + ']' : result.settled ? '[the agent produced no text]' : '[no result yet]')) +
     (result.outputTruncated ? '\n[earlier output omitted; job.read id:' + result.jobId + ' has all of it]' : '') +

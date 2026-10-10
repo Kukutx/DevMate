@@ -4,7 +4,9 @@
 - **Connected in a minute, with no account:** `devmate connect quick`, or the first choice in **DevMate: Configure Connection**, starts a Cloudflare quick tunnel. Nothing is registered anywhere; DevMate runs `cloudflared`, takes the address it is given, checks that it reaches this runtime, and `devmate mcp-url` prints it. The address changes whenever the tunnel starts again and has no sign-in; the doctor says so.
 - The check of a quick tunnel waits until public DNS knows the new address, and a computer whose own DNS has not caught up yet is told apart from a route that does not work.
 - A connection program installed from the Microsoft Store is found and started. 4.0.1 took such a program for missing.
-- Obsidian: **Copy one-time sign-in code**, for clients that sign in (OAuth mode).
+- Obsidian: **Configure connection** sets up the quick tunnel, and **Copy one-time sign-in code** serves clients that sign in.
+- How the coding agents are run (sessions at once, time limits, whether they get the owner's MCP servers and API keys) is changed while DevMate runs: `providers.configure`, by the owner or, with full access, by their client. The refusals that name a limit say how to raise it.
+- The file tools read and list through links that stay inside the project, and read files that have a second name: a `node_modules` built from links is readable. Nothing is changed through a link.
 - The changelog describes DevMate 4 only.
 
 ## 4.0.1

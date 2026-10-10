@@ -7,7 +7,7 @@ import { VERSION } from '../version.mjs';
 const DECISIONS = [['accept', 'Allow once'], ['acceptForSession', 'Allow for this session'], ['decline', 'Deny'], ['cancel', 'Deny and stop the turn']]
   .map(([optionId, name]) => ({ optionId, name }));
 const MCP_NAME = /^[A-Za-z0-9_-]+$/;
-const INHERIT_HINT = 'Set providers.codex.inheritMcpServers to true to let delegated Codex sessions use the owner\'s MCP servers.';
+const INHERIT_HINT = 'To let delegated Codex sessions use the owner\'s MCP servers: providers.configure {provider:"codex", settings:{inheritMcpServers:true}}.';
 const MAX_TRACKED_ITEMS = 200;
 
 export class CodexAdapter extends AdapterBase {

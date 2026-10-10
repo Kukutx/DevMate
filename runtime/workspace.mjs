@@ -74,7 +74,10 @@ function relativeInput(value = '.') {
 // `verified` lets one listing check each folder once instead of once per file in it: a find over two thousand
 // files would otherwise ask the file system the same questions about the same few folders thousands of times.
 // It is a Map that lives for a single call.
-export function resolveProjectPath(project, value = '.', { mustExist = true, policy = true, verified = null } = {}) {
+// links: reading may go through a link or junction whose target is still inside the project (a package manager's
+// node_modules is made of them). The canonical target is what is judged, so a link is never a way out of the project
+// or around the credential protection. Everything that changes a file leaves links alone, as before.
+export function resolveProjectPath(project, value = '.', { mustExist = true, policy = true, verified = null, links = false } = {}) {
   const root = projectRoot(project);
   const rel = relativeInput(value);
   let controlRoot = verified?.get('\0control');
@@ -103,8 +106,10 @@ export function resolveProjectPath(project, value = '.', { mustExist = true, pol
       if (mustExist) throw error('not_found', 'Project path does not exist: ' + rel);
       continue;
     }
-    if (stat.isSymbolicLink()) throw error('unsafe_path', 'Symbolic links and directory junctions are not exposed: ' + rel);
-    const canonical = fs.realpathSync.native(current);
+    if (stat.isSymbolicLink() && !links) throw error('unsafe_path', 'Symbolic links and directory junctions are not changed through: ' + rel);
+    let canonical;
+    try { canonical = fs.realpathSync.native(current); }
+    catch (failure) { if (failure.code === 'ENOENT') throw error('not_found', 'This link points at nothing: ' + rel); throw failure; }
     if (!inside(root, canonical)) throw error('outside_project', 'Canonical path escapes the project.');
     excludeControl(canonical);
     current = canonical;
@@ -123,11 +128,12 @@ export function resolveProjectPath(project, value = '.', { mustExist = true, pol
 }
 
 // Open, then verify what was opened: the bytes read are the bytes that were checked.
-function readRegular(full, { limit = MAX_FILE_BYTES } = {}) {
+// linked: a file with several names (a hard link, as package managers make them) may be read, never changed.
+function readRegular(full, { limit = MAX_FILE_BYTES, linked = false } = {}) {
   const fd = fs.openSync(full, 'r');
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.nlink > 1) throw error('unsafe_file', 'Only regular, unlinked files are supported.');
+    if (!stat.isFile() || (stat.nlink > 1 && !linked)) throw error('unsafe_file', 'Only regular, unlinked files are supported.');
     if (stat.size > limit) throw error('file_too_large', 'This file is ' + Math.round(stat.size / 1048576) + ' MiB, more than the ' + Math.round(limit / 1048576) +
       ' MiB that can be handled here. Look at a part of it with a command (for example its last lines), or page its bytes with operations_call workspace.read_bytes.');
     const bytes = Buffer.allocUnsafe(stat.size);
@@ -242,7 +248,7 @@ export function createWorkspaceService({ store } = {}) {
   };
 
   function files(project, input = {}) {
-    const full = resolveProjectPath(project, input.path || '.');
+    const full = resolveProjectPath(project, input.path || '.', { links: true });
     if (!fs.statSync(full).isDirectory()) throw error('not_directory', 'Listing requires a directory.');
     const rel = relativeInput(input.path || '.');
     const scope = hash(project.id + '\0' + full);
@@ -260,16 +266,16 @@ export function createWorkspaceService({ store } = {}) {
       if (entry.name <= after || entry.name.startsWith('.devmate-write-') || entry.name === '.git') continue;
       const childRel = path.posix.join(rel, entry.name);
       // What cannot be read is not listed either, but it is counted: an entry that silently is not there sends a model looking for it.
-      if (hidden(project, childRel) || !listable(project, childRel)) { withheld++; continue; }
-      const stat = fs.lstatSync(path.join(full, entry.name));
-      if ((!stat.isFile() && !stat.isDirectory()) || (stat.isFile() && stat.nlink > 1)) { withheld++; continue; }
+      if (hidden(project, childRel) || !listable(project, childRel, { links: true })) { withheld++; continue; }
+      const stat = fs.statSync(path.join(full, entry.name), { throwIfNoEntry: false });
+      if (!stat || (!stat.isFile() && !stat.isDirectory())) { withheld++; continue; }
       items.push({ name: entry.name, path: slash(childRel), type: stat.isDirectory() ? 'directory' : 'file', size: stat.size });
       if (items.length > limit) break;
     }
     const more = items.length > limit;
     if (more) items.pop();
     return { items, ...(more ? { nextCursor: Buffer.from(JSON.stringify({ scope, after: items.at(-1).name })).toString('base64url') } : {}),
-      ...(withheld ? { withheld, note: withheld + ' entr' + (withheld === 1 ? 'y is' : 'ies are') + ' not shown: links, or paths the project\'s credential-file protection keeps back.' } : {}) };
+      ...(withheld ? { withheld, note: withheld + ' entr' + (withheld === 1 ? 'y is' : 'ies are') + ' not shown: links that lead out of the project, or paths the project\'s credential-file protection keeps back.' } : {}) };
   }
 
   // Prior content is kept content-addressed in the private instance directory,
@@ -324,9 +330,9 @@ export function createWorkspaceService({ store } = {}) {
   }
 
   function read(project, input = {}) {
-    const full = resolveProjectPath(project, input.path);
+    const full = resolveProjectPath(project, input.path, { links: true });
     // Reading is paged, so it takes larger files than editing does: a long log is read a part at a time.
-    const bytes = readBytes(full, { limit: READ_FILE_BYTES });
+    const bytes = readBytes(full, { limit: READ_FILE_BYTES, linked: true });
     let text, encoding = null;
     try { text = textBytes(bytes); }
     catch (failure) {
@@ -363,10 +369,10 @@ export function createWorkspaceService({ store } = {}) {
   }
 
   function readBytePage(project, input = {}) {
-    const full = resolveProjectPath(project, input.path);
+    const full = resolveProjectPath(project, input.path, { links: true });
     const before = fs.lstatSync(full, { bigint: true });
-    if (!before.isFile() || before.isSymbolicLink() || before.nlink > 1n)
-      throw error('unsafe_file', 'Only regular, unlinked project files are readable.');
+    if (!before.isFile() || before.isSymbolicLink())
+      throw error('unsafe_file', 'Only regular project files are readable.');
     const offset = input.offset ?? 0;
     const length = input.length ?? 65536;
     if (!Number.isSafeInteger(offset) || offset < 0 ||
@@ -375,7 +381,7 @@ export function createWorkspaceService({ store } = {}) {
     const fd = fs.openSync(full, 'r');
     try {
       const stat = fs.fstatSync(fd, { bigint: true });
-      if (!stat.isFile() || stat.nlink > 1n ||
+      if (!stat.isFile() ||
         stat.dev !== before.dev || stat.ino !== before.ino)
         throw error('unsafe_file', 'File changed while opening it.');
       if (stat.size > BigInt(Number.MAX_SAFE_INTEGER))
@@ -638,7 +644,7 @@ export function createWorkspaceService({ store } = {}) {
     if (!cache.has(file)) {
       let seen = null;
       if (!hidden(project, file) && !path.posix.basename(file).startsWith('.devmate-write-')) {
-        try { const stat = fs.statSync(resolveProjectPath(project, file, { verified: cache.folders ||= new Map() })); if (stat.nlink === 1) seen = { size: stat.size }; }
+        try { const stat = fs.statSync(resolveProjectPath(project, file, { verified: cache.folders ||= new Map(), links: true })); if (stat.isFile()) seen = { size: stat.size }; }
         catch (failure) { if (!unlistable.has(failure.code) && failure.code !== 'ENOENT') throw failure; }
       }
       cache.set(file, seen);
