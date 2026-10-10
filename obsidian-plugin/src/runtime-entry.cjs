@@ -293,12 +293,16 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
 
   async function copyMcpUrl() {
     const connection = await client.call('connection.status', {});
+    // A quick tunnel without an address has nothing a client in the cloud could use, and the local address is not it.
+    if (connection.kind === 'cloudflare-quick' && !connection.publicUrl) throw new Error('The quick tunnel has not been given its address yet. Try again in a few seconds.');
     const value = connection.publicUrl || connection.url || connection.tunnelId || await client.mcpUrl();
     const target = clipboard || globalThis.navigator?.clipboard;
     if (!target) throw new Error('The clipboard is not available here. The address is: ' + value);
     await target.writeText(value);
     new api.Notice(connection.tunnelId ? 'Copied the tunnel ID. In ChatGPT choose the Tunnel connection type.'
-      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' : 'Copied the local MCP URL. Cloud clients need a public connection.');
+      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in the key of this start: give it to your own client only.' : '') +
+          (connection.remoteMcpVerified === false ? ' It has not been checked end to end yet.' : '')
+        : 'Copied the local MCP URL. Cloud clients need a public connection.');
     return value;
   }
   // How clients in the cloud reach this DevMate. The quick tunnel needs no account and nothing typed in, so it is

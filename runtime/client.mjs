@@ -9,7 +9,7 @@ export const DEFAULT_RUNTIME_PORT = 8788;
 // authority of the owner at the keyboard. A caller that removes the variable is no longer well-behaved; what
 // stands against that is read-only sharing, as SECURITY.md says.
 export const CLIENT_COMMAND_ENV = 'DEVMATE_CLIENT_COMMAND';
-// The longest an operation waits on the server is 110 seconds (shell.run, agents.delegate).
+// A call that waits (shell.run, agents.delegate) answers within 50 seconds; a capability may take longer.
 const CALL_TIMEOUT_MS = 130000;
 const EVENT_BYTES = 4 * 1024 * 1024;
 

@@ -15,7 +15,10 @@ export const projectPath = z.string().min(1).max(4096);
 export const directory = z.string().min(1).max(32768);
 export const sha = z.string().regex(/^[a-f0-9]{64}$/);
 export const line = z.number().int().min(1);
-export const waitMs = z.number().int().min(0).max(110000).optional();
+// How long one call may wait. Clients cut a tool call off (ChatGPT after about a minute, Claude after four) and a
+// Cloudflare route gives an answer 100 seconds to begin. What is still running then keeps running and is asked
+// about again with process_read or agents_result.
+export const waitMs = z.number().int().min(0).max(50000).optional();
 // Optional in the schema, always present for the handler: call() fills in the caller's only project.
 /** How a caller names a project: its id, its unique name, or its root directory. */
 export const projectReference = z.string().min(1).max(32768);

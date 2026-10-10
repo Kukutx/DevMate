@@ -63,21 +63,44 @@ export function validateWorkflows(directory){
   }
   return actions;
 }
+// What this repository does not say. DevMate 4 is the only architecture: no tracked file names an earlier version of
+// itself, calls anything by the word for "kept from before", or mentions the tunnel product and the options that were
+// taken out. A rule that exists only as a sentence is broken again by the next change; here it fails the check.
+// The words are put together from pieces so that this file passes. AGENTS.md states the rule and may name them;
+// the lock file and the bundle hold other people's text. The MCP SDK calls the 2025 protocol revision by that word
+// in one function and one option DevMate has to use: those two names are the SDK's, not DevMate's past.
+const RETIRED=new RegExp([String.fromCharCode(110,103,114,111,107),'(?<!is)leg'+'acy(?!Request|: \'reject\')','(?<![\\d.])3\\.'+'[x8](?!\\d)','tunnel'+' program','program'+'Exists'].join('|'),'i');
+const UNCHECKED=new Set(['AGENTS.md','package-lock.json','workbench/bridge.bundle.js']);
+export function validateWording(directory){
+  // A copy without its repository (an unpacked archive) has no list of tracked files to read.
+  if(!fs.existsSync(path.join(directory,'.git')))return 0;
+  // Tracked files and new ones that are not ignored: a file is checked before its first commit, not after.
+  const listed=spawnSync('git',['ls-files','-z','--cached','--others','--exclude-standard'],{cwd:directory,encoding:'utf8',shell:false,windowsHide:true,maxBuffer:64*1024*1024});
+  assert.equal(listed.status,0,'The tracked files could not be listed: '+String(listed.stderr||listed.error||''));
+  const files=listed.stdout.split('\0').filter(file=>file&&!UNCHECKED.has(file)),found=[];
+  for(const file of files){
+    let text;try{text=fs.readFileSync(path.join(directory,file),'utf8');}catch(error){if(error.code==='ENOENT')continue;throw error;}
+    if(text.slice(0,8000).includes('\0'))continue;
+    text.split('\n').forEach((line,index)=>{if(RETIRED.test(line))found.push(file+':'+(index+1));});
+  }
+  assert.deepEqual(found.slice(0,30),[],'These lines name an earlier version of DevMate or something it no longer has. Say what DevMate is now, or delete the line.');
+  return files.length;
+}
 export async function checkRuntime({manifestPath=path.join(root,'package.json')}={}){
   const manifest=JSON.parse(fs.readFileSync(path.resolve(manifestPath),'utf8'));
   const host=validateExtensionManifest(root,manifest);
-  validateVersions(root);const pinnedActions=validateWorkflows(root);
+  validateVersions(root);const pinnedActions=validateWorkflows(root),wordingFiles=validateWording(root);
   assert.equal(normalizeConfig({}).connection.kind,'local');
   assert.equal(normalizeConfig({}).auth.mode,'none');
   const entries=['runtime/main.mjs','runtime/cli.mjs','runtime/agent-channel.mjs','runtime/agents/claude-permission-server.mjs','runtime/host-client.cjs','vscode-host/runtime-entry.cjs','obsidian-plugin/src/runtime-plugin.cjs'];
   const compiled=await build({absWorkingDir:root,entryPoints:entries,outdir:'check-only-output',write:false,bundle:true,platform:'node',format:'esm',target:'node24',external:['obsidian','vscode'],metafile:true,logLevel:'silent'});
   const inputs=Object.keys(compiled.metafile.inputs).filter(file=>!file.includes('node_modules')&&!file.startsWith('<')).map(file=>file.replaceAll('\\','/'));
-  const syntaxFiles=[...new Set([...inputs,'workbench/app.js','workbench/bridge.js','workbench/build.mjs','scripts/runtime-build.mjs','scripts/build-runtime-candidate.mjs','scripts/check-runtime.mjs','scripts/smoke-runtime.mjs','scripts/package-runtime.mjs','scripts/release-candidate.mjs','scripts/set-version.mjs','scripts/test-vscode-host.mjs','tests/vscode-host-real-suite.cjs'])];
+  const syntaxFiles=[...new Set([...inputs,'workbench/app.js','workbench/bridge.js','workbench/build.mjs','scripts/runtime-build.mjs','scripts/build-runtime-candidate.mjs','scripts/check-runtime.mjs','scripts/smoke-runtime.mjs','scripts/smoke-quick-tunnel.mjs','scripts/package-runtime.mjs','scripts/release-candidate.mjs','scripts/set-version.mjs','scripts/test-vscode-host.mjs','tests/vscode-host-real-suite.cjs'])];
   for(const file of syntaxFiles){
     const result=spawnSync(process.execPath,['--check',path.join(root,file)],{encoding:'utf8',shell:false,windowsHide:true,timeout:10000});
     assert.equal(result.status,0,'Syntax check failed: '+file+'\n'+String(result.stderr||result.error||''));
   }
-  return{ok:true,version:VERSION,manifest:path.relative(root,path.resolve(manifestPath)),sourceFiles:syntaxFiles.length,pinnedActions,...host};
+  return{ok:true,version:VERSION,manifest:path.relative(root,path.resolve(manifestPath)),sourceFiles:syntaxFiles.length,pinnedActions,wordingFiles,...host};
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
   const args=process.argv.slice(2);

@@ -41,7 +41,7 @@ export function defineAgentOperations(service, add) {
   add('agents.delegate', { ...projectScope, provider: z.enum(AGENT_PROVIDERS).optional(), prompt: text.min(1), agentId: id.optional(),
     workflowId: id.optional(), model, waitMs, ...mutation }, false,
     'Hand a whole task to a coding agent installed on this computer (' + AGENT_PROVIDERS.join(', ') + '; providers_list says which are installed) in one call. Use it when the user asks for delegation or for work in parallel; otherwise do the work yourself. The agent works in the project with its own account and tools. ' +
-    'Without agentId a new agent session is started; with agentId the task continues that session and its context. Returns the result when it finishes within waitMs (default 30s), otherwise follow with agents_result.',
+    'Without agentId a new agent session is started; with agentId the task continues that session and its context. Returns the result when it finishes within waitMs (default 30s, at most 50s), otherwise follow with agents_result.',
     async (args, context) => {
       service.project(args.projectId, { write: true });
       const { waitMs: wait = 30000, operationId, ...task } = args;

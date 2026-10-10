@@ -334,9 +334,15 @@ export async function main(argv = process.argv.slice(2), {
       const connection = await client.call('connection.status', {}, callOptions);
       const local = client.origin() + '/mcp';
       const remote = connection.tunnelId || connection.publicUrl || connection.url;
+      // A quick tunnel without an address has nothing a client in the cloud could use, and the local address is not it.
+      if (connection.kind === 'cloudflare-quick' && !remote) {
+        stderr.write('The quick tunnel has not been given its address yet. Try again in a few seconds; devmate doctor shows what the tunnel says. Clients on this computer use ' + local + '\n');
+        return 1;
+      }
       stdout.write((remote || local) + '\n');
       stderr.write(connection.tunnelId ? 'In ChatGPT choose the Tunnel connection type and enter this tunnel ID. Clients on this computer use ' + local + '\n'
-        : remote ? 'Clients on this computer can also use ' + local + '\n'
+        : remote ? (connection.temporaryAddress ? 'This address ends in the key of this start: give it to your own client only. ' : '') +
+            (connection.remoteMcpVerified === false ? 'It has not been checked end to end yet (devmate doctor). ' : '') + 'Clients on this computer can also use ' + local + '\n'
         : 'This address works only on this computer. Cloud clients such as ChatGPT need: devmate connect\n');
       return 0;
     }

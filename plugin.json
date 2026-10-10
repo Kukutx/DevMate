@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "devmate",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "description": "Real hands on your own computer for ChatGPT, Claude and any MCP client: project files, shell, Git, editor diagnostics and local coding agents.",
   "author": {
     "name": "Kukutx"

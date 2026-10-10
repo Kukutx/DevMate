@@ -6,7 +6,7 @@
 
 DevMate 让聊天里的模型直接在你自己的电脑上干活：读写和搜索项目文件、运行命令和测试、使用 Git、看到编辑器已经报出的错误，并把整件任务交给本机安装的编码 Agent。它是一个本地运行时，通过 [MCP](https://modelcontextprotocol.io) 对外提供这些能力。
 
-主要用法是把 ChatGPT 网页版接到本机，用已经在付的聊天订阅继续开发。它不绑定 ChatGPT：Claude 和任何支持 MCP 的客户端都连接同一个运行时。
+主要用法是把你平时用的聊天窗口（ChatGPT 网页版、Claude）接到本机，在那里继续开发。它不绑定其中任何一个：所有支持 MCP 的客户端都连接同一个运行时。ChatGPT 和 Claude 的哪些套餐能通过连接器改文件、跑命令，哪些只能读，见[你的套餐允许什么](#你的套餐允许什么)。
 
 - **你的电脑，你的通路。** 不经过我们的任何服务中转。云端客户端通过你自己的隧道到达本机（Cloudflare、OpenAI 官方隧道、你的反向代理或 SSH），DevMate 会端到端验证这条通路。
 - **共享什么，由你在自己的电脑上决定。** 共享哪些文件夹、只读还是读写、凭据文件是否受保护。连接进来的客户端只能收紧，不能放宽。
@@ -169,7 +169,7 @@ http://127.0.0.1:8788/mcp
 
 | 通路 | 适用 | 特点 |
 | --- | --- | --- |
-| `quick` | 任何客户端 | Cloudflare 快速隧道。不需要账号和域名，什么都不用配；每次重新启动地址会变 |
+| `quick` | 任何客户端 | Cloudflare 快速隧道，用来试用 DevMate。不需要账号和域名，什么都不用配；每次重新启动地址会变 |
 | `openai-tunnel` | ChatGPT、Codex | OpenAI 官方隧道。只有出站连接，没有公网地址，也不需要域名 |
 | `cloudflare` | ChatGPT、Claude 及任何客户端 | 你自己域名上的 Cloudflare 命名隧道，DevMate 负责运行 `cloudflared`。免费 |
 | `https` | 任何客户端 | 你已经在维护的反向代理 |
@@ -185,7 +185,9 @@ devmate restart
 devmate mcp-url
 ```
 
-不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 地址，DevMate 会验证它确实能到达本机运行时。这个地址就是唯一的秘密，没有登录，所以只给你自己的客户端。DevMate 或隧道重新启动后地址会变，用 `devmate mcp-url` 取新地址。要固定地址，用下面的通路。
+不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 主机名，DevMate 会验证它确实能到达本机运行时。这条通路没有登录。地址的末尾是 DevMate 每次启动新生成的一段密钥（`https://<名字>.trycloudflare.com/mcp/<密钥>`），只有完整地址才打得开：光有主机名（任何能看到 DNS 的人都看得到）得到的是“未找到”。拿到完整地址的人能做你能做的一切，所以只把它给你自己的客户端，不要贴到别处；`devmate doctor` 显示的地址不带密钥。DevMate 或隧道重新启动后地址会变，用 `devmate mcp-url` 取新地址。
+
+快速隧道是 Cloudflare [提供给测试和开发用的](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)：不保证可用性，最多同时 200 个请求，不支持事件流。所以 DevMate 经它只回普通 JSON，调用进行中不发进度消息。日常使用请换成地址固定的通路，见下面几种。
 
 **Cloudflare 隧道**
 
@@ -218,6 +220,20 @@ devmate restart
 隧道进程活着不等于通路可用。DevMate 会作为真正的 MCP 客户端从公网地址连回来，列出工具并调用一次，而且应答必须来自当前这个运行时；之后定期复查，断了就如实显示。`devmate doctor` 里 `connection.public` 一项为 `ok` 才算通。OpenAI 隧道没有公网地址可探测，需要从 ChatGPT 里实际调用一次工具来确认。
 
 连接器启动失败不会拖垮本地使用，也不会被隐藏：`doctor` 和 `connection.status` 会给出原因。保存了新凭据后可以只重启连接器：`devmate connection.restart`。
+
+### 你的套餐允许什么
+
+聊天产品是否允许你自己添加的连接器做修改，由那个产品和你的套餐决定，不由 DevMate 决定。按它们各自文档的说法：
+
+| 产品 | 自定义 MCP 连接器 |
+| --- | --- |
+| ChatGPT Business、Enterprise、Edu | 可读可写，在网页版的开发者模式里（测试阶段）。由管理员或所有者打开开发者模式 |
+| ChatGPT Pro | 只读，在开发者模式里。DevMate 把读取类工具标记为只读（文件、搜索、Git、诊断、`operations_query`、`capability_query`）；编辑、运行命令和委派需要允许写入的套餐。没有用 Pro 账号试过 |
+| ChatGPT Plus、Go、Free | OpenAI 关于自定义 MCP 连接器的文档里没有提到 |
+| Claude（claude.ai、桌面端、移动端） | 可以按地址添加自定义连接器；一次工具调用最长 240 秒，结果约 150,000 个字符 |
+| Claude Code、Codex 等本机客户端 | 没有这类套餐限制：它们在本机连接 |
+
+来源：[Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)、[Build an MCP server for Claude](https://claude.com/docs/connectors/building)。两者都会变，请以它们对你套餐的说明为准。DevMate 自己的工具按其中较紧的限制设计：一条命令或一次委派，每次调用最多等 50 秒（它会继续运行，之后再问结果）；文本结果不超过 140,000 个字符。本身就要跑更久的能力（浏览器导航、游戏引擎运行）更适合用 `job.start` 作为作业启动，之后再读结果。
 
 ## 谁能做什么
 

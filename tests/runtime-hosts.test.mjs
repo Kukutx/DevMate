@@ -297,11 +297,14 @@ test('reads answer while a mutation is in progress',async t=>{
 });
 
 test('a mutation the runtime stopped waiting for is withdrawn, never applied later',async t=>{
-  const f=await fixture(t,{requestTimeoutMs:()=>400});
+  // Only what is meant to run out of time gets a short deadline: on a busy machine an ordinary call needs longer than that.
+  let limit=15000;
+  const f=await fixture(t,{requestTimeoutMs:()=>limit});
   await f.call('note_create',{path:'A.md',content:'x'});
   let release,entered;const gate=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{entered=resolve;});
   const mutate=f.plugin.app.fileManager.processFrontMatter;
   f.plugin.app.fileManager.processFrontMatter=async(...args)=>{entered();await gate;return mutate(...args);};
+  limit=400;
   const slow=f.call('properties_update',{path:'A.md',set:{slow:true}});
   const slowOutcome=assert.rejects(slow,error=>{
     // It had started: the outcome is unknown, named, and can be asked for.
@@ -318,6 +321,7 @@ test('a mutation the runtime stopped waiting for is withdrawn, never applied lat
     queuedId=error.details.operationId;return true;
   });
   await slowOutcome;
+  limit=15000;
   assert.equal((await f.call('operation_list',{operationId:slow.operationId})).outcome,'in_progress');
   assert.deepEqual([(await f.call('operation_list',{operationId:queuedId})).outcome,f.files.has('Late.md')],['not_applied',false]);
 
@@ -335,7 +339,8 @@ test('a mutation the runtime stopped waiting for is withdrawn, never applied lat
 });
 
 test('the host drops queued work whose deadline passed and a slow read times out by name',async t=>{
-  const f=await fixture(t,{requestTimeoutMs:()=>300}),binding=f.bindings[0];
+  let limit=15000;
+  const f=await fixture(t,{requestTimeoutMs:()=>limit}),binding=f.bindings[0];
   const post=body=>fetch(binding.url+'/api/call',{method:'POST',headers:{Authorization:'Bearer '+binding.token,'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async response=>({status:response.status,...await response.json()}));
   const expired=await post({operation:'create_note',input:{path:'Expired.md'},operationId:'operation-expired',deadline:Date.now()-1});
   assert.deepEqual([expired.status,expired.ok,expired.error.code],[400,false,'deadline_exceeded']);
@@ -347,7 +352,10 @@ test('the host drops queued work whose deadline passed and a slow read times out
 
   await f.call('note_create',{path:'A.md',content:'needle'});
   f.plugin.app.vault.cachedRead=()=>new Promise(()=>{});
+  // The deadline is short for the read that never answers, and for nothing else.
+  limit=300;
   await assert.rejects(f.call('content_search',{query:'needle'}),error=>error.code==='host_timeout'&&/within 0\.3 s/.test(error.message)&&error.details===undefined);
+  limit=15000;
   assert.equal((await f.call('note_query')).total,1,'the host is still attached and answering');
 });
 

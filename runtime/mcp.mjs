@@ -101,6 +101,38 @@ function annotations(operation) {
     : { readOnlyHint: false, destructiveHint: operation.destructive === true, idempotentHint: operation.idempotent === true, openWorldHint: operation.openWorld === true };
 }
 
+// What one tool result may hold. Clients refuse a larger one (Claude: about 150,000 characters). The tools that page
+// keep their pages well below this; here is where anything else is held to it, and says so in the result itself.
+export const RESULT_CHAR_LIMIT = 140000;
+const LESS = 'Ask for less at a time: a line range, fewer paths, a smaller limit, a narrower query, or summary:true.';
+function boundedText(text, limit = RESULT_CHAR_LIMIT) {
+  if (text.length <= limit) return text;
+  const kept = text.slice(0, limit), line = kept.lastIndexOf('\n'), shown = line > limit / 2 ? kept.slice(0, line) : kept;
+  return shown + '\n[cut here: ' + (text.length - shown.length) + ' more characters do not fit in one result. ' + LESS + ']';
+}
+// Data that is too large gives way where it is longest: a long text keeps how it begins and ends.
+function boundedData(structured) {
+  let json = JSON.stringify(structured);
+  if (json.length <= RESULT_CHAR_LIMIT) return { structured, json };
+  const copy = JSON.parse(json), texts = [];
+  (function walk(node) {
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === 'string') { if (value.length > 4000) texts.push({ node, key, length: value.length }); }
+      else if (value && typeof value === 'object') walk(value);
+    }
+  })(copy);
+  for (const text of texts.sort((a, b) => b.length - a.length)) {
+    const excess = JSON.stringify(copy).length - RESULT_CHAR_LIMIT;
+    if (excess <= 0) break;
+    const value = text.node[text.key], keep = Math.max(2000, value.length - excess - 200), head = Math.ceil(keep / 2);
+    text.node[text.key] = value.slice(0, head) + '\n[… ' + (value.length - keep) + ' characters left out here: they do not fit in one result …]\n' + value.slice(value.length - (keep - head));
+  }
+  json = JSON.stringify(copy);
+  return json.length <= RESULT_CHAR_LIMIT ? { structured: copy, json } : null;
+}
+const tooLarge = size => ({ isError: true, content: [{ type: 'text', text: JSON.stringify({ code: 'result_too_large',
+  message: 'This result is ' + size + ' characters, more than a client accepts in one answer. ' + LESS }) }] });
+
 // A result has exactly one representation. An operation with a presenter is
 // text for the model: the file, the command output, the search hits, followed
 // by the few fields needed to continue (ids, cursors, hashes). Clients that
@@ -109,10 +141,25 @@ function annotations(operation) {
 export function presentResult(operation, result) {
   if (!operation.present) {
     const structured = result && typeof result === 'object' && !Array.isArray(result) ? result : { result };
-    return { structuredContent: structured, content: [{ type: 'text', text: JSON.stringify(structured) }] };
+    const fitted = boundedData(structured);
+    return fitted ? { structuredContent: fitted.structured, content: [{ type: 'text', text: fitted.json }] } : tooLarge(JSON.stringify(structured).length);
   }
   const fields = (operation.meta || []).filter(key => result[key] !== undefined && result[key] !== null).map(key => [key, result[key]]);
-  return { content: [{ type: 'text', text: operation.present(result) + (fields.length ? '\n' + JSON.stringify(Object.fromEntries(fields)) : '') }] };
+  const tail = fields.length ? '\n' + JSON.stringify(Object.fromEntries(fields)) : '';
+  return { content: [{ type: 'text', text: boundedText(operation.present(result), RESULT_CHAR_LIMIT - tail.length) + tail }] };
+}
+// What a capability hands back in MCP's own form (an external server's tool, an engine's content) is held to the same size.
+function boundedNative(result) {
+  let room = RESULT_CHAR_LIMIT;
+  const content = result.content.map(item => {
+    if (item?.type !== 'text' || typeof item.text !== 'string') return item;
+    const text = boundedText(item.text, Math.max(room, 2000));
+    room -= text.length;
+    return text === item.text ? item : { ...item, text };
+  });
+  const fitted = result.structuredContent !== undefined && result.structuredContent !== null && typeof result.structuredContent === 'object' ? boundedData(result.structuredContent) : null;
+  return { content, ...(fitted ? { structuredContent: fitted.structured } : {}),
+    ...(result.isError !== undefined ? { isError: result.isError } : {}), ...(result._meta ? { _meta: result._meta } : {}) };
 }
 
 // While a call waits (a build, an agent), a client that asked for progress hears that it is still alive.
@@ -150,10 +197,7 @@ export function createMcpServer(service, context) {
         // A cancelled request stops waiting. What it started (a command, an agent turn) continues and stays reachable.
         const result = await service.call(operation.name, input, request?.signal ? { ...context, signal: request.signal } : context);
         const nativeTool = ['capability.call', 'capability.query'].includes(operation.name) && (!input.capability.startsWith('mcp.') || input.capability.endsWith('.tools.call'));
-        if (nativeTool && Array.isArray(result?.content)) {
-          return { content: result.content, ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
-            ...(result.isError !== undefined ? { isError: result.isError } : {}), ...(result._meta ? { _meta: result._meta } : {}) };
-        }
+        if (nativeTool && Array.isArray(result?.content)) return boundedNative(result);
         return presentResult(operation, result);
       } catch (error) {
         return { isError: true, content: [{ type: 'text', text: JSON.stringify({

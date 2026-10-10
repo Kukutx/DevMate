@@ -119,6 +119,12 @@ test('the commands people copy from print just the value: MCP address, sign-in c
   assert.equal((await run(['mcp-url'],{kind:'cloudflare',publicUrl:'https://devmate.example.com/mcp'})).stdout,'https://devmate.example.com/mcp\n');
   const tunnel=await run(['mcp-url'],{kind:'openai-tunnel',tunnelId:'tunnel_abc'});
   assert.equal(tunnel.stdout,'tunnel_abc\n');assert.match(tunnel.stderr,/Tunnel connection type/);
+  // A quick tunnel that has no address yet prints none: the local address is not what a client in the cloud needs.
+  const early=await run(['mcp-url'],{kind:'cloudflare-quick',phase:'connecting',temporaryAddress:true,remoteMcpVerified:false});
+  assert.deepEqual([early.code,early.stdout],[1,'']);assert.match(early.stderr,/has not been given its address yet/);
+  const quick=await run(['mcp-url'],{kind:'cloudflare-quick',phase:'connected',temporaryAddress:true,remoteMcpVerified:false,publicUrl:'https://fixture.trycloudflare.com/mcp/key-of-this-start'});
+  assert.deepEqual([quick.code,quick.stdout],[0,'https://fixture.trycloudflare.com/mcp/key-of-this-start\n']);
+  assert.match(quick.stderr,/ends in the key of this start/);assert.match(quick.stderr,/not been checked end to end yet/);
   assert.equal((await run(['login-code'],{})).stdout,'dml_once\n');
   const link=await run(['ui'],{});
   assert.equal(link.stdout,'http://127.0.0.1:8788/?code=once\n');assert.deepEqual(link.opened,[]);

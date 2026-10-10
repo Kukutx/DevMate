@@ -85,7 +85,7 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
         if (child !== proc || phase === 'stopping') return;
         const announced = diagnostic.match(/Starting metrics server on (127\.0\.0\.1:\d{1,5})\/metrics/);
         if (announced) metrics = 'http://' + announced[1];
-        if (quick && !assigned) { const given = diagnostic.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/); if (given) assigned = given[0] + '/mcp'; }
+        if (quick && !assigned) { const given = diagnostic.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/); if (given) assigned = given[0] + target.pathname; }
         const registered = text.match(/Registered tunnel connection/g)?.length || 0, lost = text.match(/Unregistered tunnel connection/g)?.length || 0;
         connections = Math.max(0, connections + registered - lost);
         if (registered || lost) phase = connections > 0 ? 'connected' : 'connecting';

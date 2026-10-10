@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { startRuntime } from '../runtime/main.mjs';
 import { verifyPublicMcp } from '../runtime/connection-verify.mjs';
 import { createConnection, normalizeConnectionConfig } from '../runtime/connection.mjs';
@@ -174,18 +175,19 @@ test('a quick tunnel needs no credential, takes the address it is given and lose
     return child;
   };
   const terminateImpl = async child => { child.exitCode = 0; child.emit('exit', 0, null); return { exitConfirmed: true }; };
-  const connection = createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp', instanceRoot: temp, env: { PATH: 'x', GITHUB_TOKEN: 'unrelated' }, spawnImpl, terminateImpl,
+  const connection = createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x', GITHUB_TOKEN: 'unrelated' }, spawnImpl, terminateImpl,
     fetchImpl: async () => { throw new Error('unreachable'); } });
   const started = await connection.start();
   assert.equal(started.phase, 'connecting'); assert.equal(started.publicUrl, undefined); assert.equal(started.temporaryAddress, true); assert.equal(connection.publicUrl(), null);
-  // It is told where to forward to, and carries no token and nothing else of the runtime's.
+  // It is told where to forward to, and carries no token and nothing else of the runtime's: the key is never on its command line.
   assert.deepEqual(spawned[0].args, ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:0', '--url', 'http://127.0.0.1:8789']);
   assert.equal(spawned[0].options.env.TUNNEL_TOKEN, undefined); assert.equal(spawned[0].options.env.GITHUB_TOKEN, undefined); assert.equal(spawned[0].options.shell, false);
   spawned[0].child.stderr.emit('data', 'INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |\nINF |  https://calm-river-quick-fixture.trycloudflare.com  |\n');
   spawned[0].child.stderr.emit('data', 'INF Registered tunnel connection connIndex=0\n');
   const live = await connection.status();
-  assert.equal(live.phase, 'connected'); assert.equal(live.publicUrl, 'https://calm-river-quick-fixture.trycloudflare.com/mcp');
-  assert.equal(connection.publicUrl(), 'https://calm-river-quick-fixture.trycloudflare.com/mcp');
+  // The address a client is given is the host the tunnel was handed plus the path this runtime answers under.
+  assert.equal(live.phase, 'connected'); assert.equal(live.publicUrl, 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
+  assert.equal(connection.publicUrl(), 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
   await connection.stop();
   assert.equal(connection.publicUrl(), null, 'a stopped tunnel has no address');
   assert.equal((await connection.status()).publicUrl, undefined);
@@ -195,25 +197,69 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-ingress-'));
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);
   fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
-  let address = null;
-  const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: () => ({ async start() {}, async stop() {}, publicUrl: () => address,
-    status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address } : {}), remoteMcpVerified: false }; } }) });
+  let address = null, keyPath = null;
+  const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { keyPath = new URL(localMcpUrl).pathname; return { async start() {}, async stop() {}, publicUrl: () => address,
+    status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address } : {}), remoteMcpVerified: false }; } }; } });
   t.after(async () => { await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true }); });
   assert.ok(runtime.ingressPort, 'the ingress listens before the address is known');
-  const ask = host => request(runtime.ingressPort, '/mcp', { method: 'OPTIONS', headers: { host } });
+  // The host name of a quick tunnel is visible to anyone who watches DNS. What opens the endpoint is the rest of the address.
+  assert.match(keyPath, /^\/mcp\/[A-Za-z0-9_-]{32}$/);
+  const ask = (host, pathname = keyPath) => request(runtime.ingressPort, pathname, { method: 'OPTIONS', headers: { host } });
   assert.equal((await ask('first-fixture.trycloudflare.com')).status, 421, 'no address yet: nothing is served');
-  address = 'https://first-fixture.trycloudflare.com/mcp';
+  address = 'https://first-fixture.trycloudflare.com' + keyPath;
   assert.equal((await ask('first-fixture.trycloudflare.com')).status, 204);
   assert.equal((await ask('someone-else.trycloudflare.com')).status, 421);
+  for (const guess of ['/mcp', '/mcp/', '/mcp/' + 'A'.repeat(32), keyPath.slice(0, -1), keyPath + '/', '/']) {
+    assert.equal((await ask('first-fixture.trycloudflare.com', guess)).status, 404, guess + ' is not the address');
+  }
   // The tunnel started again: the old address is refused at once, the new one is served.
-  address = 'https://second-fixture.trycloudflare.com/mcp';
+  address = 'https://second-fixture.trycloudflare.com' + keyPath;
   assert.equal((await ask('first-fixture.trycloudflare.com')).status, 421);
   assert.equal((await ask('second-fixture.trycloudflare.com')).status, 204);
   assert.equal(runtime.service.publicUrl(), address);
   const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', role: 'owner', surface: 'local' });
   const named = id => doctor.checks.find(item => item.id === id);
-  assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /changes whenever/);
-  assert.match(named('security').detail, /quick tunnel address has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);
+  assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /changes whenever/); assert.match(named('connection.address').detail, /no event streams/);
+  assert.match(named('security').detail, /quick tunnel has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);
+  // What the doctor prints is pasted into bug reports: it names the host and never the key.
+  assert.ok(!JSON.stringify(doctor).includes(keyPath.split('/')[2]));
+});
+
+test('through a quick tunnel every answer is one JSON body, also for a call that reports progress while it runs', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-json-'));
+  const instanceRoot = path.join(temp, 'instance'), projectRoot = path.join(temp, 'project'); fs.mkdirSync(instanceRoot); fs.mkdirSync(projectRoot);
+  fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
+  const host = 'json-fixture.trycloudflare.com';
+  let address = null;
+  const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { address = 'https://' + host + new URL(localMcpUrl).pathname;
+    return { async start() {}, async stop() {}, publicUrl: () => address, status() { return { kind: 'cloudflare-quick', phase: 'connected', publicUrl: address, remoteMcpVerified: false }; } }; } });
+  t.after(async () => { await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true }); });
+  await runtime.service.call('project.create', { root: projectRoot }, { id: 'owner', role: 'owner', surface: 'local' });
+  // Cloudflare does not carry event streams through a quick tunnel, so none may be answered there.
+  const listening = await request(runtime.ingressPort, new URL(address).pathname, { headers: { host, accept: 'text/event-stream' } });
+  assert.equal(listening.status, 405); assert.match(listening.headers['content-type'], /^application\/json/);
+  // A client that speaks the 2025 protocol (what a client does unless told otherwise), and one that negotiates the current one.
+  for (const [mode, negotiation] of [['2025 protocol', {}], ['current protocol', { versionNegotiation: { mode: 'auto' } }]]) {
+    const seen = [];
+    // The client believes it talks to the tunnel; what it sends arrives at the ingress the way cloudflared delivers it.
+    const fetchImpl = async (input, init = {}) => {
+      const answer = await request(runtime.ingressPort, new URL(String(input)).pathname, { method: init.method || 'GET', headers: { ...Object.fromEntries(new Headers(init.headers)), host }, body: init.body });
+      seen.push((init.method || 'GET') + ' ' + answer.status + ' ' + String(answer.headers['content-type'] || '-').split(';')[0]);
+      return new Response(answer.text || null, { status: answer.status, headers: answer.headers['content-type'] ? { 'content-type': answer.headers['content-type'] } : {} });
+    };
+    const client = new Client({ name: 'quick-tunnel-test', version: '1' }, negotiation);
+    await client.connect(new StreamableHTTPClientTransport(new URL(address), { fetch: fetchImpl }), { timeout: 20000 });
+    assert.ok((await client.listTools({}, { timeout: 20000 })).tools.some(tool => tool.name === 'shell_run'));
+    let progress = 0;
+    // Longer than the five seconds after which a call says that it is still alive.
+    const result = await client.callTool({ name: 'shell_run', arguments: { file: process.execPath, args: ['-e', 'setTimeout(() => console.log("slept through it"), 5600)'], waitMs: 20000 } },
+      { timeout: 40000, onprogress: () => { progress++; } });
+    await client.close();
+    assert.match(result.content[0].text, /slept through it/, mode + ': the result arrives');
+    assert.equal(progress, 0, mode + ': nothing is streamed');
+    assert.ok(seen.length >= 3 && seen.every(entry => !entry.includes('event-stream')), mode + ': ' + seen.join(', '));
+    assert.ok(seen.some(entry => entry === 'POST 200 application/json'), mode + ': ' + seen.join(', '));
+  }
 });
 test('a new address is not asked for before the world knows it, and a stale local answer is not called a broken route', async () => {
   const url = 'https://fresh-fixture.trycloudflare.com/mcp';

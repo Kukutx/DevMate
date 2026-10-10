@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createMcpHandler } from '@modelcontextprotocol/server';
+import { createMcpHandler, isLegacyRequest, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.mjs';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { DevMateService } from './service.mjs';
@@ -60,6 +60,25 @@ async function body(req) {
 function equalSecret(a, b) {
   return typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
+// Cloudflare does not carry event streams through a quick tunnel. Through one, every answer is a single JSON body,
+// for clients of either protocol era: what a call reports while it runs is dropped, and long work is followed by
+// asking again, as it is everywhere else. The SDK serves 2025 clients as streams only, so that leg is wired here.
+function plainJsonHandler(factory, { maxRequestBodySize }) {
+  // No subscription streams either: a stream that never ends would never arrive.
+  const modern = createMcpHandler(factory, { legacy: 'reject', responseMode: 'json', maxSubscriptions: 0, maxRequestBodySize });
+  return { close: modern.close, async fetch(request, extra = {}) {
+    if (!await isLegacyRequest(request, extra.parsedBody, { maxRequestBodySize })) return modern.fetch(request, extra);
+    if (request.method !== 'POST') return Response.json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null }, { status: 405 });
+    const server = await factory({ authInfo: extra.authInfo, requestInfo: request });
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize });
+    await server.connect(transport);
+    // A client that gave up stops the waiting; what the call started keeps running, as everywhere.
+    const done = () => { transport.close().catch(() => {}); server.close().catch(() => {}); };
+    request.signal?.addEventListener('abort', done, { once: true });
+    try { return await transport.handleRequest(request, extra); }
+    finally { done(); }
+  } };
+}
 
 // Read or create the identity of an instance. Only the holder of the instance lock calls this, so there is
 // no other writer. A file that is not an identity was cut short by a full disk or a kill, and is replaced.
@@ -109,7 +128,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     config = readConfig(instanceRoot);
     publish(tokenFile, token);
   } catch (error) { await lock.close(); throw error; }
-  let stopping = false, stopPromise, connection, service, mcp, mcpHandler, streams, verifyTimer, upkeepTimer;
+  let stopping = false, stopPromise, connection, service, mcp, mcpHandler, plainMcp, plainHandler, streams, verifyTimer, upkeepTimer;
   // A browser tab gets a session of its own, bought with a single-use code that only
   // the holder of the owner token can mint. The owner token never leaves the
   // instance directory and is never handed to a browser. The session is no cookie:
@@ -131,6 +150,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   // A quick tunnel is given its address when its connector starts, and loses it when that ends: the origin public
   // requests must name is asked for each time, never remembered.
   const quickTunnel = config.connection.kind === 'cloudflare-quick';
+  // A quick tunnel cannot ask for sign-in, and its host name is no secret: a name travels through DNS in the clear.
+  // What keeps the endpoint the owner's is a path nobody can guess, new with every start, that travels only inside TLS.
+  const mcpPath = quickTunnel ? '/mcp/' + randomBytes(24).toString('base64url') : '/mcp';
   const currentOrigin = () => {
     if (config.auth.mode === 'oauth') return config.auth.issuer;
     const url = publicUrl || (quickTunnel ? connection?.publicUrl?.() : null);
@@ -176,7 +198,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     }
     // The official Node adapter passes this verified identity to its per-request factory.
     req.auth = { clientId: principal.id, scopes: ['devmate'], extra: { devmatePrincipal: principal } };
-    return await mcp(req, res);
+    return await (plainMcp && !local ? plainMcp : mcp)(req, res);
   }
   const ingress = http.createServer(guarded(async (req, res) => {
     // An OpenAI tunnel client forwards to this loopback port itself; every other
@@ -188,7 +210,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     const url = new URL(req.url, requestOrigin);
     if (service?.auth && await service.auth.handle(req, res, url)) return;
     if (req.headers.origin && !new Set([requestOrigin, ...(config.allowedOrigins || [])]).has(req.headers.origin)) return refuse(res, 'invalid_origin', 'The origin ' + req.headers.origin + ' is not allowed. A browser-based client you run yourself is allowed by adding its origin to "allowedOrigins" in the DevMate configuration; on the local port such an origin acts as the owner.');
-    if (url.pathname === '/mcp') return serveMcp(req, res, false);
+    if (equalSecret(url.pathname, mcpPath)) return serveMcp(req, res, false);
     return refuse(res, 'not_found', 'Only MCP and OAuth routes are exposed through the public ingress.');
   }));
   function windowProject(req) {
@@ -294,7 +316,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     stopPromise = new Promise(resolve => setTimeout(resolve, 20)).then(async () => {
       clearTimeout(verifyTimer); clearInterval(upkeepTimer);
       streams?.close();
-      const results = await Promise.allSettled([service?.close(), connection?.stop(), mcpHandler?.close()]);
+      const results = await Promise.allSettled([service?.close(), connection?.stop(), mcpHandler?.close(), plainHandler?.close()]);
       const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
       if (errors.length) throw new AggregateError(errors, 'Owned processes have not all confirmed shutdown; runtime ownership is retained.');
       const closing = [server, ingress].map(listener => {
@@ -335,18 +357,23 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     service.agents.endpoint = 'http://127.0.0.1:' + port + '/api/agent';
     service.identity = { instanceId, generation };
     connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, env: service.secrets.environment(),
-      localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + '/mcp' });
+      localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
     service.connection = connection;
-    mcpHandler = createMcpHandler(({ authInfo }) => {
+    const serverFor = ({ authInfo }) => {
       const principal = authInfo?.extra?.devmatePrincipal;
       if (!principal) throw new DomainError('unauthorized', 'A verified MCP identity is required.');
       return createMcpServer(service, principal);
+    };
     // The SDK default also serves MCP clients that still speak a 2025 protocol
     // revision, statelessly. Which clients may connect is not DevMate's own history.
     // The largest text the file tools accept must fit in one request; the SDK's own bound is 4 MiB.
-    }, { maxRequestBodySize: BODY_LIMIT });
+    mcpHandler = createMcpHandler(serverFor, { maxRequestBodySize: BODY_LIMIT });
     // The Node adapter reads the body first and has a bound of its own.
     mcp = toNodeHandler(mcpHandler, { maxRequestBodySize: BODY_LIMIT });
+    if (quickTunnel) {
+      plainHandler = plainJsonHandler(serverFor, { maxRequestBodySize: BODY_LIMIT });
+      plainMcp = toNodeHandler(plainHandler, { maxRequestBodySize: BODY_LIMIT });
+    }
     // A connector that cannot start does not take local work down with it, but it is never silent:
     // health says so, and connection.status and the doctor carry the reason.
     try { await connection.start(); }

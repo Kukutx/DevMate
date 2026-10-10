@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DevMateService } from '../runtime/service.mjs';
-import { serverInstructions, MODEL_VISIBLE_OPERATIONS, presentResult } from '../runtime/mcp.mjs';
+import { serverInstructions, MODEL_VISIBLE_OPERATIONS, presentResult, RESULT_CHAR_LIMIT } from '../runtime/mcp.mjs';
 
 const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
 const node = process.execPath;
@@ -129,6 +129,45 @@ test('what the model is told first fits every client and matches who is asking',
   assert.deepEqual(Object.keys(shown), ['content']); assert.match(shown.content[0].text, /^\s+1\tline\n\{"sha256":"[a-f0-9]{64}","totalLines":1/);
   const listed = presentResult(service.operations.get('project.list'), await service.call('project.list', { limit: 2 }, owner));
   assert.equal(listed.structuredContent.items.length, 2); assert.equal(JSON.parse(listed.content[0].text).items.length, 2);
+});
+
+test('one tool result fits what clients accept, and one call waits no longer than they do', async t => {
+  const { service, project } = await fixture(t);
+  const a = await project('sizes');
+  // A model's client, connected as the owner; the owner at this computer is the workbench, which is no such client.
+  const connected = { id: 'owner', role: 'owner' };
+  const shown = async (name, input) => presentResult(service.operations.get(name), await service.call(name, input, connected)).content[0].text;
+  // A page of a file is counted as it is shown: thirty thousand short lines are mostly line numbers.
+  fs.writeFileSync(path.join(a.root, 'short-lines.txt'), 'x\n'.repeat(30000));
+  const page = await service.call('workspace.read', { projectId: a.id, path: 'short-lines.txt' }, connected);
+  assert.equal(page.truncated, true); assert.ok(page.nextStartLine > 1000 && page.nextStartLine < 30000, 'a page, with where the next one starts');
+  // The owner's own workbench shows the file as it is, and so can edit a file a model reads in pages.
+  fs.writeFileSync(path.join(a.root, 'source.txt'), ('a line of ordinary source text, some sixty characters long\n').repeat(3500));
+  assert.equal((await service.call('workspace.read', { projectId: a.id, path: 'source.txt' }, connected)).truncated, true);
+  assert.equal((await service.call('workspace.read', { projectId: a.id, path: 'source.txt' }, owner)).truncated, false);
+  const text = await shown('workspace.read', { projectId: a.id, path: 'short-lines.txt' });
+  assert.ok(text.length <= RESULT_CHAR_LIMIT, 'the page is ' + text.length + ' characters as shown'); assert.doesNotMatch(text, /cut here/);
+  const asked = await shown('workspace.read', { projectId: a.id, path: 'short-lines.txt', lineCount: 20000 });
+  assert.ok(asked.length <= RESULT_CHAR_LIMIT, 'asking for more lines does not get past it: ' + asked.length);
+  // Whatever has no pages of its own is cut where a line ends, and says so; the fields needed to continue stay.
+  const long = presentResult({ present: result => result.text, meta: ['cursor'] }, { text: 'a line of output\n'.repeat(20000), cursor: 77 }).content[0].text;
+  assert.ok(long.length <= RESULT_CHAR_LIMIT + 300); assert.match(long, /a line of output\n\[cut here: \d+ more characters do not fit in one result\. Ask for less/); assert.match(long, /\{"cursor":77\}$/);
+  // Data gives way where it is longest and keeps how that text begins and ends.
+  const data = presentResult({}, { id: 'job-1', status: 'completed', result: { stdout: 'begin ' + 'y'.repeat(400000) + ' end' }, output: 'the last lines' });
+  assert.ok(data.content[0].text.length <= RESULT_CHAR_LIMIT); assert.equal(data.structuredContent.output, 'the last lines'); assert.equal(data.structuredContent.id, 'job-1');
+  assert.match(data.structuredContent.result.stdout, /^begin y+\n\[… \d+ characters left out here: they do not fit in one result …\]\ny+ end$/);
+  assert.deepEqual(JSON.parse(data.content[0].text), data.structuredContent);
+  // Many small things cannot be shortened: the caller is told to ask for less, and nothing is cut blindly.
+  const many = presentResult({}, { items: Array.from({ length: 4000 }, (_, index) => ({ id: index, description: 'd'.repeat(60) })) });
+  assert.equal(many.isError, true); assert.equal(JSON.parse(many.content[0].text).code, 'result_too_large'); assert.equal(many.structuredContent, undefined);
+  // ChatGPT gives a tool call about a minute, Claude four. No tool offers a longer wait than fits both.
+  for (const [name, input] of [['shell.run', { projectId: a.id, command: 'echo x', waitMs: 60000 }], ['process.read', { id: 'none', waitMs: 60000 }],
+    ['agents.result', { agentId: 'none', waitMs: 60000 }], ['agents.delegate', { projectId: a.id, provider: 'codex', prompt: 'x', waitMs: 60000 }]]) {
+    await assert.rejects(service.call(name, input, owner), { code: 'invalid_input', message: /waitMs/ }, name);
+  }
+  assert.match(service.operations.get('shell.run').description, /at most 50s/);
+  await assert.rejects(service.call('workspace.read_bytes', { projectId: a.id, path: 'short-lines.txt', length: 131072 }, owner), { code: 'invalid_input' });
+  await assert.rejects(service.call('process.read', { id: 'none', maxBytes: 262144 }, owner), { code: 'invalid_input' });
 });
 
 test('the journal records what changed without copying large fields, and its own fields cannot be overwritten by a payload', async t => {

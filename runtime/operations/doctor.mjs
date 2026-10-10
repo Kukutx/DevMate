@@ -51,18 +51,21 @@ export async function doctor(service) {
       connection.kind + ': ' + phase + (fault ? ' — ' + fault : ''), status.diagnostic ? String(status.diagnostic).slice(-400) : fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
     if (url) {
       const verification = service.verification?.url === url ? service.verification : await service.verifyConnection();
+      // What the doctor prints gets pasted into bug reports. The last part of a quick tunnel address is its key.
+      const shown = connection.kind === 'cloudflare-quick' ? new URL(url).origin + '/mcp/<key>' : url;
       // A name this computer's own DNS has not caught up with is not a broken route.
       check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
-        url + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
+        shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.' : 'Check the proxy route to the ingress port.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
     else check('connection.public', 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
-    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel: its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
-      'For an address that stays, use an OpenAI tunnel or a Cloudflare tunnel on a domain of yours: "Configure Connection" in the editor, or devmate connect.');
+    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
+      'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');
   }
-  // A quick tunnel cannot ask for sign-in: its address is random, changes with every start, and is the only secret there is.
-  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel address has no sign-in: anyone who learns it can read and change your projects and run commands. It is random and changes with every start.',
-    'Give it only to your own client. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
+  // A quick tunnel cannot ask for sign-in. Its address ends in a key that is new with every start, and that key is what
+  // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.
+  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key, new with every start, and whoever has the whole address can read and change your projects and run commands.',
+    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
   else if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
   else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');

@@ -19,15 +19,15 @@ export function defineCommandOperations(service, add) {
   };
   add('shell.run', { ...projectScope, ...commandShape, waitMs, interactive: z.boolean().optional(), ...mutation }, false,
     'Run a command in the project: tests, builds, package managers, Git writes, dev servers. command is ' + service.processes.shell.label +
-    (service.processes.shell.noChaining ? ' text (no && or ||: chain with ";" and "if ($?) { ... }")' : ' text') + '; file+args launches one executable with exact arguments and no shell quoting (useful for a commit message). Returns when the command exits or after waitMs (default 30s); a still-running command, such as a dev server, keeps running until it exits or you stop it and is followed with process_read. timeoutMs ends it automatically. Output is paged by cursor; the newest 64 MiB are kept.',
+    (service.processes.shell.noChaining ? ' text (no && or ||: chain with ";" and "if ($?) { ... }")' : ' text') + '; file+args launches one executable with exact arguments and no shell quoting (useful for a commit message). Returns when the command exits or after waitMs (default 30s, at most 50s); a still-running command, such as a dev server, keeps running until it exits or you stop it and is followed with process_read. timeoutMs ends it automatically. Output is paged by cursor; the newest 64 MiB are kept.',
     (args, context) => observed(service.processes.run(service.project(args.projectId, { write: true }), { ...oneCommand(args), caller: context.id }, { signal: service.waitSignal(context) })),
     { destructive: true, openWorld: true, present: processOutput, meta: processMeta });
   add('process.list', { ...projectScope }, true, 'List commands started in this project during the current runtime session.', args => {
     service.project(args.projectId);
     return service.processes.list(args.projectId);
   });
-  add('process.read', { id, cursor: z.number().int().nonnegative().optional(), waitMs: z.number().int().min(0).max(60000).optional(),
-    maxBytes: z.number().int().min(16).max(262144).optional() }, true,
+  add('process.read', { id, cursor: z.number().int().nonnegative().optional(), waitMs,
+    maxBytes: z.number().int().min(16).max(131072).optional() }, true,
     'Read output of a command. Without cursor returns the latest output; with cursor returns from that byte offset. waitMs waits for new output or exit.',
     (args, context) => observed(service.processes.read(args, { signal: service.waitSignal(context) })), { present: processOutput, meta: processMeta, projectOf });
   add('process.write', { id, input: z.string().max(100000), end: z.boolean().optional(), ...mutation }, false,

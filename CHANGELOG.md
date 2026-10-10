@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.0.4
+- **The address of a quick tunnel ends in a key**, new with every start: `https://<name>.trycloudflare.com/mcp/<key>`. Only the whole address opens anything; the host name alone, which anyone watching DNS can see, answers "not found". `devmate doctor` prints the address without the key. After updating, give your client the new address from `devmate mcp-url`.
+- Through a quick tunnel DevMate answers in plain JSON, for clients of both protocol generations and without progress messages: Cloudflare does not carry event streams through quick tunnels. `npm run smoke:quick-tunnel` checks this against a real tunnel.
+- One call waits at most 50 seconds (`shell_run`, `process_read`, `agents_delegate`, `agents_result`) and one text result stays under 140,000 characters, which fits the limits of ChatGPT and Claude. Longer work keeps running and is asked about again; a result that would be larger says where it was cut and how to ask for less. A page of `workspace_read` or of a diff holds 120,000 characters, a page of command output 128 KiB, a page of bytes 96 KiB.
+- VS Code says when a route from the cloud was checked end to end under a new address, with the address one click away, and when a route stays broken; the status bar tells connecting, reconnecting and a failed check apart. Copying the address of a quick tunnel that has none yet no longer hands out the local one (also `devmate mcp-url` and Obsidian).
+- The README says which ChatGPT and Claude plans let a connector you add change things and which only read, with the sources.
+- `npm run check` fails when a file names an earlier version of DevMate or an option that was taken out.
+
 ## 4.0.3
 - The documents, this changelog and the list of plugin versions describe the product as it is now. What is not done yet and what could not be verified is in `docs/STATUS.md`.
 - A connector program is looked for as an ordinary file at its path.

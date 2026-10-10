@@ -27,7 +27,8 @@ export function defineFileOperations(service, add) {
       { present: result => numbered(result.text, result.startLine || 1), meta: ['sha256', 'totalLines', 'endLine', 'truncated', 'nextStartLine', 'note'] }],
     ['workspace.read_bytes', 'readBytes', { path: projectPath,
       offset: z.number().int().nonnegative().default(0),
-      length: z.number().int().min(1).max(262144).default(65536),
+      // As base64 a page is a third longer than its bytes, and has to fit in one tool result.
+      length: z.number().int().min(1).max(98304).default(65536),
       expectedVersion: sha.optional() }, true,
       'Read any-size project files safely as bounded base64 byte pages with a change-detection token.'],
     ['workspace.edit', 'edit', { path: projectPath, edits: z.array(z.object({ oldText: z.string().min(1).max(100000), newText: z.string().max(100000),
@@ -57,6 +58,7 @@ export function defineFileOperations(service, add) {
     ['git.blame', 'gitBlame', { path: projectPath, startLine: line.optional(), endLine: line.optional(), ref }, true, 'Show who last changed each line of a file.', { present: stdout }],
     ['git.branches', 'gitBranches', {}, true, 'List local and remote branches and the current branch.']
   ]) {
-    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly, caller: context }), args), options);
+    // A page of a file is sized for a model's client, except for the owner at this computer.
+    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly, caller: context }), args, { local: context.surface === 'local' }), options);
   }
 }

@@ -249,6 +249,13 @@ test('Copy MCP URL and Run doctor use the runtime operations', async t => {
   f.state.connection = { publicUrl: 'https://devmate.example.com/mcp' };
   await f.run('copy-mcp-url');
   assert.equal(f.state.copied.at(-1), 'https://devmate.example.com/mcp');
+  // A quick tunnel that has no address yet copies nothing: the local address is not what a client in the cloud needs.
+  f.state.connection = { kind: 'cloudflare-quick', phase: 'connecting' };
+  await f.run('copy-mcp-url');
+  assert.equal(f.state.copied.length, 2); assert.match(f.state.notices.at(-1), /has not been given its address yet/);
+  f.state.connection = { kind: 'cloudflare-quick', phase: 'connected', temporaryAddress: true, remoteMcpVerified: true, publicUrl: 'https://fixture.trycloudflare.com/mcp/key-of-this-start' };
+  await f.run('copy-mcp-url');
+  assert.equal(f.state.copied.at(-1), 'https://fixture.trycloudflare.com/mcp/key-of-this-start'); assert.match(f.state.notices.at(-1), /ends in the key of this start/);
   const result = await f.entry.doctor();
   assert.equal(result.text, 'DevMate 4.0.0 — attention\n[ok] node: Node 24\n[warn] security: No sign-in\n    -> Require sign-in\n[info] connection: Local only\n    -> Configure a connection');
   // What is merely worth knowing is listed, and not counted as needing attention.
