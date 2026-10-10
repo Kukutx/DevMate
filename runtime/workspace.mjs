@@ -16,12 +16,17 @@ const gitNull = WINDOWS ? 'NUL' : '/dev/null';
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 20000;
-const READ_CHAR_LIMIT = 256000;
+// One page of text for a model. Clients refuse a tool result much larger than this (Claude: about 150,000 characters).
+// A page of a file is counted as it is shown, each line with its number.
+const READ_CHAR_LIMIT = 120000;
+const LINE_NUMBER_CHARS = 8;
+// The owner's own workbench on this computer is not a model's client: it shows a file as it is, and edits larger ones.
+const LOCAL_READ_CHAR_LIMIT = 256000;
 // Text files up to this size are read (a page at a time) and searched; editing has the smaller limit of MAX_FILE_BYTES.
 const READ_FILE_BYTES = 32 * 1024 * 1024;
 const BLAME_CHAR_LIMIT = 120000;
 const READ_LINE_LIMIT = 2000;
-const DIFF_CHAR_LIMIT = 200000;
+const DIFF_CHAR_LIMIT = 120000;
 const DELETE_SNAPSHOT_FILES = 2000;
 const DELETE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
@@ -329,7 +334,8 @@ export function createWorkspaceService({ store } = {}) {
     }
   }
 
-  function read(project, input = {}) {
+  function read(project, input = {}, { local = false } = {}) {
+    const pageChars = local ? LOCAL_READ_CHAR_LIMIT : READ_CHAR_LIMIT, numberChars = local ? 1 : LINE_NUMBER_CHARS;
     const full = resolveProjectPath(project, input.path, { links: true });
     // Reading is paged, so it takes larger files than editing does: a long log is read a part at a time.
     const bytes = readBytes(full, { limit: READ_FILE_BYTES, linked: true });
@@ -346,7 +352,7 @@ export function createWorkspaceService({ store } = {}) {
     // A final newline ends the last line; it does not start another one.
     if (lines.length > 1 && lines.at(-1) === '') lines.pop();
     const totalLines = lines.length;
-    if (input.startLine === undefined && input.lineCount === undefined && text.length <= READ_CHAR_LIMIT) {
+    if (input.startLine === undefined && input.lineCount === undefined && text.length + (local ? 0 : totalLines * numberChars) <= pageChars) {
       return { path: rel, text, sha256, totalLines, startLine: 1, endLine: totalLines, truncated: false, partial: false, ...(foreign ? { encoding, note: foreign } : {}) };
     }
     if (input.startLine !== undefined && input.startLine > totalLines) throw error('invalid_range', 'startLine exceeds the ' + totalLines + ' lines of this file.');
@@ -355,17 +361,17 @@ export function createWorkspaceService({ store } = {}) {
     const selected = [];
     let size = 0, longLine = null;
     for (let index = startLine - 1; index < totalLines && selected.length < wanted; index++) {
-      if (selected.length && size + lines[index].length > READ_CHAR_LIMIT) break;
-      if (lines[index].length > READ_CHAR_LIMIT) longLine ??= index + 1;
-      selected.push(lines[index].length > READ_CHAR_LIMIT ? lines[index].slice(0, READ_CHAR_LIMIT) : lines[index]);
-      size += lines[index].length + 1;
+      if (selected.length && size + lines[index].length + numberChars > pageChars) break;
+      if (lines[index].length > pageChars) longLine ??= index + 1;
+      selected.push(lines[index].length > pageChars ? lines[index].slice(0, pageChars) : lines[index]);
+      size += lines[index].length + numberChars;
     }
     const endLine = startLine + selected.length - 1;
     // sha256 always identifies the whole file, so a page can still guard an edit.
     return { path: rel, text: selected.join('\n'), sha256, totalLines, startLine, endLine,
       truncated: longLine !== null || endLine < totalLines, partial: startLine > 1 || endLine < totalLines, ...(endLine < totalLines ? { nextStartLine: endLine + 1 } : {}),
       ...(foreign ? { encoding } : {}),
-      ...(longLine !== null || foreign ? { ...(longLine !== null ? { cutLine: longLine } : {}), note: [foreign, longLine !== null ? 'Line ' + longLine + ' is longer than ' + READ_CHAR_LIMIT + ' characters and was cut; its bytes can be paged with operations_call workspace.read_bytes.' : null].filter(Boolean).join(' ') } : {}) };
+      ...(longLine !== null || foreign ? { ...(longLine !== null ? { cutLine: longLine } : {}), note: [foreign, longLine !== null ? 'Line ' + longLine + ' is longer than ' + pageChars + ' characters and was cut; its bytes can be paged with operations_call workspace.read_bytes.' : null].filter(Boolean).join(' ') } : {}) };
   }
 
   function readBytePage(project, input = {}) {
@@ -376,8 +382,8 @@ export function createWorkspaceService({ store } = {}) {
     const offset = input.offset ?? 0;
     const length = input.length ?? 65536;
     if (!Number.isSafeInteger(offset) || offset < 0 ||
-        !Number.isSafeInteger(length) || length < 1 || length > 256 * 1024)
-      throw error('invalid_range', 'Use a nonnegative safe offset and a page of at most 256 KiB.');
+        !Number.isSafeInteger(length) || length < 1 || length > 96 * 1024)
+      throw error('invalid_range', 'Use a nonnegative safe offset and a page of at most 96 KiB.');
     const fd = fs.openSync(full, 'r');
     try {
       const stat = fs.fstatSync(fd, { bigint: true });

@@ -215,11 +215,12 @@ test('large local files remain readable through bounded byte pages without loadi
   const parts=[];let offset=0,version;
   do {
     const page=service.readBytes({...project,access:'read'},{
-      path:filename,offset,length:131072,...(version?{expectedVersion:version}:{})
+      path:filename,offset,length:98304,...(version?{expectedVersion:version}:{})
     });
     version=page.version;
     assert.equal(page.encoding,'base64');
-    assert.ok(page.bytes<=131072);
+    // The largest page there is: as base64 it still fits in one tool result.
+    assert.ok(page.bytes<=98304&&page.base64.length<=140000);
     parts.push(Buffer.from(page.base64,'base64'));
     offset=page.nextOffset;
   }while(offset!==null);

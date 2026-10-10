@@ -267,14 +267,14 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
 
   async function run(project, input = {}, { signal } = {}) {
     const entry = start(project, input);
-    await wait(entry, { waitMs: bounded(input.waitMs, 30000, 0, 110000), signal });
+    await wait(entry, { waitMs: bounded(input.waitMs, 30000, 0, 50000), signal });
     // A wait cut short because the runtime is stopping is not "still running": the command is being ended with it.
     if (closing) throw fail('runtime_stopping', 'The runtime is stopping and this command is being ended with it. Its outcome was not observed.');
     return { ...view(entry), ...page(entry) };
   }
   async function read({ id, cursor, waitMs, maxBytes }, { signal } = {}) {
     const entry = owned(id);
-    const deadline = Date.now() + bounded(waitMs, 0, 0, 60000);
+    const deadline = Date.now() + bounded(waitMs, 0, 0, 50000);
     let result;
     for (;;) {
       await wait(entry, { cursor: cursor ?? entry.base + entry.bytes, waitMs: deadline - Date.now(), signal });
