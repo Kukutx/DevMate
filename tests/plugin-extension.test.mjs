@@ -1,21 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { definePlugin, extendPlugin } from '../gateway/plugins/plugin-sdk.mjs';
+import { definePlugin, extendPlugin } from '../runtime/engines/plugin-sdk.mjs';
 
-function basePlugin(events) {
+function baseEngine(events) {
   return definePlugin({
     manifest: {
       id: 'devmate.example',
       name: 'Example',
       version: '1.0.0',
-      apiVersion: '1',
-      description: 'Base plugin.',
-      defaultEnabled: false,
-      dependencies: [],
-      toolPrefixes: ['example_'],
-      capabilities: ['base'],
-      provides: [],
-      consumes: [],
+      description: 'Base engine.',
+      ownerOnly: true,
       permissions: { executablePatterns: ['^example$'] }
     },
     defaultSettings: { base: true },
@@ -28,14 +22,14 @@ function basePlugin(events) {
   });
 }
 
-test('composes plugin lifecycle and manifest without duplicating base activation', async () => {
+test('composes engine lifecycle without duplicating base activation', async () => {
   const events = [];
-  const base = basePlugin(events);
+  const base = baseEngine(events);
   const extended = extendPlugin(base, {
     version: '1.1.0',
-    description: 'Extended plugin.',
-    capabilities: ['extra', 'base'],
+    description: 'Extended engine.',
     defaultSettings: { extra: true },
+    executablePatterns: ['^helper$'],
     async activate() { events.push('extension:activate'); },
     async diagnose(_context, baseResult) {
       events.push('extension:diagnose');
@@ -53,20 +47,19 @@ test('composes plugin lifecycle and manifest without duplicating base activation
     'base:diagnose', 'extension:diagnose',
     'extension:deactivate', 'base:deactivate'
   ]);
-  assert.equal(extended.manifest.id, base.manifest.id);
-  assert.equal(extended.manifest.version, '1.1.0');
-  assert.deepEqual(extended.manifest.capabilities, ['base', 'extra']);
   assert.deepEqual(extended.defaultSettings, { base: true, extra: true });
 });
 
-test('rejects plugin extensions that change identity or API version', () => {
-  const base = basePlugin([]);
-  assert.throws(() => extendPlugin(base, {
-    version: '1.1.0',
-    manifest: { id: 'devmate.other' }
-  }), /cannot change id/);
-  assert.throws(() => extendPlugin(base, {
-    version: '1.1.0',
-    manifest: { apiVersion: '2' }
-  }), /cannot change API version/);
+test('an extension keeps the identity and owner-only declaration of its base', () => {
+  const base = baseEngine([]);
+  const extended = extendPlugin(base, { version: '1.1.0', executablePatterns: ['^helper$'] });
+  assert.equal(extended.manifest.id, base.manifest.id);
+  assert.equal(extended.manifest.name, base.manifest.name);
+  assert.equal(extended.manifest.version, '1.1.0');
+  assert.equal(extended.manifest.description, 'Base engine.');
+  assert.equal(extended.manifest.ownerOnly, true);
+  assert.deepEqual(extended.manifest.permissions.executablePatterns, ['^example$', '^helper$']);
+  assert.throws(() => extendPlugin(base, {}), /requires version/);
+  assert.throws(() => extendPlugin(base, { version: '1.1.0', activate: 'now' }), /activate must be a function/);
+  assert.throws(() => extendPlugin({}, { version: '1.1.0' }), /valid base engine/);
 });

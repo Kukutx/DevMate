@@ -1,7 +1,7 @@
 'use strict';
 
 const { MAX_BATCH_FILES, PLAN_TTL_MS } = require('./constants.js');
-const { publicPlan } = require('./plan-store.js');
+const { publicPlan } = require('./record-projections.cjs');
 const {
   fileSnapshot,
   normalizePropertyChange,
@@ -59,7 +59,7 @@ async function previewPropertiesBatch(plugin, index, planStore, args = {}) {
     items,
     operationIds: []
   };
-  planStore.write(plan);
+  await planStore.write(plan);
   return {
     planned: true,
     plan: publicPlan(plan),
@@ -100,7 +100,7 @@ async function rollbackOperationIds(plugin, operationStore, operationIds, force 
 }
 
 async function applyPropertiesBatch(plugin, operationStore, planStore, args = {}) {
-  const plan = planStore.read(args.planId);
+  const plan = await planStore.read(args.planId);
   if (plan.status === 'applied') {
     return { applied: true, alreadyApplied: true, status: 'applied', files: plan.operationIds?.length || 0, plan: publicPlan(plan) };
   }
@@ -119,25 +119,26 @@ async function applyPropertiesBatch(plugin, operationStore, planStore, args = {}
     plan.status = 'conflict';
     plan.lastConflictAt = now();
     plan.conflicts = conflicts;
-    planStore.write(plan);
+    await planStore.write(plan);
     return { applied: false, status: 'conflict', plan: publicPlan(plan), conflicts };
   }
 
   plan.status = 'applying';
   plan.applyStartedAt = now();
   plan.conflicts = [];
-  planStore.write(plan);
+  await planStore.write(plan);
   const operationIds = [];
   try {
     for (const item of plan.items || []) {
-      const result = await updateProperties(plugin, operationStore, {
+      const operationId = operationStore.createId();
+      operationIds.push(operationId);
+      plan.operationIds = [...operationIds];
+      await planStore.write(plan);
+      await updateProperties(plugin, operationStore, {
         path: item.path,
         set: plan.change.set,
         remove: plan.change.remove
-      }, { batchPlanId: plan.id });
-      operationIds.push(result.operation.id);
-      plan.operationIds = [...operationIds];
-      planStore.write(plan);
+      }, { batchPlanId: plan.id, operationId });
     }
   } catch (error) {
     const rollback = await rollbackOperationIds(plugin, operationStore, operationIds, false);
@@ -146,7 +147,7 @@ async function applyPropertiesBatch(plugin, operationStore, planStore, args = {}
     plan.error = error.message || String(error);
     plan.rollback = rollback;
     plan.failedAt = now();
-    planStore.write(plan);
+    await planStore.write(plan);
     return {
       applied: false,
       status: plan.status,
@@ -160,7 +161,7 @@ async function applyPropertiesBatch(plugin, operationStore, planStore, args = {}
   plan.operationIds = operationIds;
   plan.appliedAt = now();
   plan.error = null;
-  planStore.write(plan);
+  await planStore.write(plan);
   return {
     applied: true,
     status: 'applied',
@@ -170,7 +171,7 @@ async function applyPropertiesBatch(plugin, operationStore, planStore, args = {}
 }
 
 async function rollbackPropertiesBatch(plugin, operationStore, planStore, args = {}) {
-  const plan = planStore.read(args.planId);
+  const plan = await planStore.read(args.planId);
   if (plan.kind !== 'properties_batch') throw new Error(`Unsupported plan kind: ${plan.kind}`);
   if (!Array.isArray(plan.operationIds) || !plan.operationIds.length) throw new Error('Plan has no applied operations to roll back');
   if (plan.rolledBackAt) {
@@ -180,7 +181,7 @@ async function rollbackPropertiesBatch(plugin, operationStore, planStore, args =
   plan.status = rollback.failures.length ? 'rollback_partial' : 'rolled_back';
   plan.rolledBackAt = rollback.failures.length ? null : now();
   plan.rollback = rollback;
-  planStore.write(plan);
+  await planStore.write(plan);
   return {
     rolledBack: rollback.failures.length === 0,
     status: plan.status,

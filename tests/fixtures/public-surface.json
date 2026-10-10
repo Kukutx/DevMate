@@ -1,0 +1,497 @@
+{
+  "tools": {
+    "agents_delegate": {
+      "parameters": [
+        "agentId",
+        "model",
+        "projectId",
+        "prompt",
+        "provider",
+        "waitMs",
+        "workflowId"
+      ],
+      "required": [
+        "prompt"
+      ],
+      "readOnly": false
+    },
+    "agents_result": {
+      "parameters": [
+        "agentId",
+        "deliveryId",
+        "id",
+        "jobId",
+        "waitMs"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "capability_call": {
+      "parameters": [
+        "capability",
+        "input",
+        "projectId"
+      ],
+      "required": [
+        "capability",
+        "input"
+      ],
+      "readOnly": false
+    },
+    "capability_list": {
+      "parameters": [
+        "cursor",
+        "engine",
+        "name",
+        "projectId",
+        "serverId",
+        "summary"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "capability_query": {
+      "parameters": [
+        "capability",
+        "input",
+        "projectId"
+      ],
+      "required": [
+        "capability",
+        "input"
+      ],
+      "readOnly": true
+    },
+    "connection_status": {
+      "parameters": [],
+      "required": [],
+      "readOnly": true
+    },
+    "editor_context": {
+      "parameters": [
+        "projectId"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "editor_diagnostics": {
+      "parameters": [
+        "limit",
+        "path",
+        "projectId",
+        "severity"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "git_blame": {
+      "parameters": [
+        "endLine",
+        "path",
+        "projectId",
+        "ref",
+        "startLine"
+      ],
+      "required": [
+        "path"
+      ],
+      "readOnly": true
+    },
+    "git_branches": {
+      "parameters": [
+        "projectId"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "git_diff": {
+      "parameters": [
+        "paths",
+        "projectId",
+        "staged"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "git_log": {
+      "parameters": [
+        "limit",
+        "paths",
+        "projectId",
+        "ref"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "git_show": {
+      "parameters": [
+        "projectId",
+        "ref",
+        "stat"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "git_status": {
+      "parameters": [
+        "projectId"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "operations_call": {
+      "parameters": [
+        "input",
+        "operation"
+      ],
+      "required": [
+        "operation"
+      ],
+      "readOnly": false
+    },
+    "operations_list": {
+      "parameters": [
+        "name",
+        "summary"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "operations_query": {
+      "parameters": [
+        "input",
+        "operation"
+      ],
+      "required": [
+        "operation"
+      ],
+      "readOnly": true
+    },
+    "process_list": {
+      "parameters": [
+        "projectId"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "process_read": {
+      "parameters": [
+        "cursor",
+        "id",
+        "maxBytes",
+        "waitMs"
+      ],
+      "required": [
+        "id"
+      ],
+      "readOnly": true
+    },
+    "process_stop": {
+      "parameters": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ],
+      "readOnly": false
+    },
+    "process_write": {
+      "parameters": [
+        "end",
+        "id",
+        "input"
+      ],
+      "required": [
+        "id",
+        "input"
+      ],
+      "readOnly": false
+    },
+    "project_list": {
+      "parameters": [
+        "cursor",
+        "limit",
+        "query"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "project_overview": {
+      "parameters": [
+        "projectId"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "providers_list": {
+      "parameters": [],
+      "required": [],
+      "readOnly": true
+    },
+    "shell_run": {
+      "parameters": [
+        "args",
+        "command",
+        "cwd",
+        "file",
+        "interactive",
+        "projectId",
+        "timeoutMs",
+        "waitMs"
+      ],
+      "required": [],
+      "readOnly": false
+    },
+    "workspace_delete": {
+      "parameters": [
+        "force",
+        "path",
+        "projectId",
+        "recursive"
+      ],
+      "required": [
+        "path"
+      ],
+      "readOnly": false
+    },
+    "workspace_edit": {
+      "parameters": [
+        "edits",
+        "expectedSha256",
+        "path",
+        "projectId"
+      ],
+      "required": [
+        "edits",
+        "path"
+      ],
+      "readOnly": false
+    },
+    "workspace_files": {
+      "parameters": [
+        "cursor",
+        "limit",
+        "path",
+        "projectId"
+      ],
+      "required": [
+        "path"
+      ],
+      "readOnly": true
+    },
+    "workspace_find": {
+      "parameters": [
+        "includeIgnored",
+        "limit",
+        "path",
+        "pattern",
+        "projectId"
+      ],
+      "required": [
+        "path",
+        "pattern"
+      ],
+      "readOnly": true
+    },
+    "workspace_history": {
+      "parameters": [
+        "limit",
+        "path",
+        "projectId"
+      ],
+      "required": [],
+      "readOnly": true
+    },
+    "workspace_mkdir": {
+      "parameters": [
+        "path",
+        "projectId"
+      ],
+      "required": [
+        "path"
+      ],
+      "readOnly": false
+    },
+    "workspace_move": {
+      "parameters": [
+        "from",
+        "overwrite",
+        "projectId",
+        "to"
+      ],
+      "required": [
+        "from",
+        "to"
+      ],
+      "readOnly": false
+    },
+    "workspace_read": {
+      "parameters": [
+        "lineCount",
+        "path",
+        "projectId",
+        "startLine"
+      ],
+      "required": [
+        "path"
+      ],
+      "readOnly": true
+    },
+    "workspace_restore": {
+      "parameters": [
+        "path",
+        "projectId",
+        "sha256"
+      ],
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "readOnly": false
+    },
+    "workspace_search": {
+      "parameters": [
+        "glob",
+        "ignoreCase",
+        "includeIgnored",
+        "limit",
+        "path",
+        "projectId",
+        "query",
+        "regex"
+      ],
+      "required": [
+        "path",
+        "query"
+      ],
+      "readOnly": true
+    },
+    "workspace_write": {
+      "parameters": [
+        "expectedSha256",
+        "path",
+        "projectId",
+        "text"
+      ],
+      "required": [
+        "path",
+        "text"
+      ],
+      "readOnly": false
+    }
+  },
+  "operations": [
+    "access.read",
+    "access.update",
+    "agents.cancel",
+    "agents.delegate",
+    "agents.list",
+    "agents.result",
+    "agents.resume",
+    "agents.send",
+    "agents.start",
+    "agents.steer",
+    "agents.stop",
+    "approval.cancel",
+    "approval.list",
+    "approval.resolve",
+    "artifact.create",
+    "artifact.list",
+    "artifact.read",
+    "auth.code.create",
+    "auth.grant.list",
+    "auth.grant.revoke",
+    "auth.member.create",
+    "auth.member.list",
+    "auth.member.remove",
+    "auth.member.update",
+    "auth.status",
+    "capability.call",
+    "capability.configure",
+    "capability.list",
+    "capability.query",
+    "capability.settings",
+    "connection.restart",
+    "connection.start",
+    "connection.status",
+    "connection.stop",
+    "connection.verify",
+    "delivery.list",
+    "editor.context",
+    "editor.diagnostics",
+    "event.list",
+    "git.blame",
+    "git.branches",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "host.attach",
+    "host.detach",
+    "host.list",
+    "host.record.get",
+    "host.record.list",
+    "host.record.put",
+    "input.list",
+    "input.respond",
+    "job.cancel",
+    "job.list",
+    "job.read",
+    "job.retry",
+    "job.start",
+    "message.list",
+    "message.send",
+    "operations.call",
+    "operations.list",
+    "operations.query",
+    "operations.read",
+    "process.list",
+    "process.read",
+    "process.stop",
+    "process.write",
+    "project.create",
+    "project.list",
+    "project.overview",
+    "project.remove",
+    "project.update",
+    "providers.list",
+    "reference.add",
+    "reference.list",
+    "reference.remove",
+    "runtime.doctor",
+    "runtime.metrics",
+    "runtime.stop",
+    "secret.list",
+    "secret.remove",
+    "secret.set",
+    "settings.read",
+    "settings.replace",
+    "shell.run",
+    "task.create",
+    "task.list",
+    "task.read",
+    "task.update",
+    "window.attach",
+    "window.context",
+    "window.detach",
+    "window.heartbeat",
+    "window.list",
+    "window.select",
+    "workbench.snapshot",
+    "workflow.create",
+    "workflow.list",
+    "workflow.update",
+    "workspace.delete",
+    "workspace.edit",
+    "workspace.files",
+    "workspace.find",
+    "workspace.history",
+    "workspace.mkdir",
+    "workspace.move",
+    "workspace.read",
+    "workspace.read_bytes",
+    "workspace.restore",
+    "workspace.search",
+    "workspace.write"
+  ]
+}

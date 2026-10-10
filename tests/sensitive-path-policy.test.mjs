@@ -9,7 +9,7 @@ import {
   isSensitiveWorkspacePath,
   sensitiveWorkspacePathReason,
   sensitiveWorkspaceRootReason
-} from '../gateway/sensitive-path-policy.mjs';
+} from '../runtime/platform/sensitive-path-policy.mjs';
 
 test('project automation metadata is allowed only outside protected parent directories', () => {
   assert.equal(isSafeProjectMetadataPath('.devmate/automation.json'), true);
@@ -109,8 +109,9 @@ test('credential-shaped and standalone control-plane files remain protected whil
     'keys/signing.jks',
     '.devmate-server/config.json',
     '.devmate-server/state/durable-state.json',
-    '.devmate-server/state/oauth-secrets.json',
-    'copied/oauth-secrets.json'
+    'custom-instance/oauth-signing-key',
+    'custom-instance/owner-token',
+    'custom-instance/secrets.json'
   ]) {
     assert.equal(isSensitiveWorkspacePath(value), true, value);
     assert.equal(isSafeWorkspaceTextPath(value), false, value);

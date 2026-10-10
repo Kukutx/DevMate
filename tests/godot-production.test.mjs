@@ -3,10 +3,10 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { auditGodotProject } from '../gateway/plugins/godot-audit.mjs';
-import { installQaBridge, inspectQaBridge, removeQaBridge } from '../gateway/plugins/godot-qa-bridge.mjs';
-import { runNativeQa } from '../gateway/plugins/godot-native-qa.mjs';
-import { defaultExportOutput, exportMatrix, exportProject } from '../gateway/plugins/godot-project.mjs';
+import { auditGodotProject } from '../runtime/engines/godot-audit.mjs';
+import { installQaBridge, inspectQaBridge, removeQaBridge } from '../runtime/engines/godot-qa-bridge.mjs';
+import { runNativeQa } from '../runtime/engines/godot-native-qa.mjs';
+import { defaultExportOutput, exportMatrix, exportProject } from '../runtime/engines/godot-project.mjs';
 
 async function fixture(name) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), `devmate-godot-production-${name}-`));
@@ -29,6 +29,7 @@ async function fixture(name) {
       validationTimeoutMs: 300000,
       exportTimeoutMs: 600000
     },
+    assertActive() {},
     workspace: {
       get() { return workspace; },
       resolve(_workspace, subpath = '.') {

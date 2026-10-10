@@ -1,192 +1,111 @@
 # Security Policy
 
-DevMate is a local-first agent capability and automation runtime with filesystem, process, Git, browser, queued-job, external-Runner, and optional platform capabilities. Treat OAuth, provider, Runner, preview, and artifact-service credentials and every public endpoint as sensitive.
+DevMate 4 is a personal and internal-team local runtime with filesystem, Git, native agent, command, browser, Godot, reverse-engineering and Obsidian capabilities. Code execution is performed under the operating-system account that runs the selected provider or host.
 
-## Network boundary
+## Connections and identity
 
-- The Gateway binds to loopback by default. Container/service deployments may use an explicit internal bind host while the operator controls external exposure separately.
-- A provider-native connection, reverse proxy, VPN, or other HTTPS ingress exposes the intended public MCP endpoint.
-- `/control/health` and `/control/metrics` remain local-control surfaces and must not be exposed as public MCP endpoints.
-- MCP clients use `/mcp`; external Runner Agents use the distinct `/runner/v1` protocol.
-- `auth.mode: "none"` is the explicit single-owner trust model for local and configured public MCP ingress. Any request that can reach `/mcp` in this mode receives owner authority, so the endpoint itself must remain private to that owner.
-- Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity.
-- `requestPolicy` explicitly controls optional Host allowlisting, request-size limits, request timeouts, authentication-attempt throttling, per-principal rate limits, and global/per-principal concurrency limits.
-- Runner control requests have their own bounded body, rate and protocol-version requirements.
+The runtime binds to `127.0.0.1` on two ports. The control port is the owner's local surface: CLI, editor hosts, the localhost workbench and MCP clients on the same computer. The ingress port serves only MCP and OAuth and is the only port a tunnel or reverse proxy targets; the control port refuses any request that arrived through a proxy.
 
-## MCP protocol boundary
+Local control uses the private instance owner token, which is never given to a browser. The localhost workbench is entered through a link that only the holder of that token can create (`devmate ui`, or the editor command): it works once and expires within a minute. The page of that link exchanges the code for a session that belongs to its browser tab. The session is not a cookie: a browser sends a cookie to every port of `127.0.0.1`, so every other local web service would receive it. The tab keeps the session to itself and presents it in a request header. Opening the control port in a browser without such a link shows a page that holds nothing and says how to get in.
 
-DevMate accepts the current MCP transport contract only:
+One instance directory has exactly one runtime. Ownership is an operating-system endpoint (a named pipe on Windows, a Unix socket elsewhere) that exists only while the owning process lives, so concurrent starts from several editor windows, another editor and the CLI cannot produce two runtimes, and a record left by a crash is never mistaken for a running one.
 
-- protocol `2026-07-28`;
-- `server/discover` version negotiation;
-- explicit current request metadata;
-- stateless HTTP transport;
-- legacy transport rejection;
-- no MCP session identifier;
-- public preflight requires discovery, `tools/list`, and a real read-only `gateway_status` tool call.
+Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity. Public `auth.mode: none` does not prove caller identity, so that endpoint must remain private to the owner. On the control port a caller that presents no credentials is the local owner in either mode, so clients on the owner's own computer keep working when sign-in is enabled for the public address; a caller that presents a token is exactly who the token says, or is refused.
 
-The Gateway, desktop preflight, packaged VSIX/Obsidian smoke tests, and external Runner local client all enforce the same current protocol generation. Repository contracts reject reintroduction of MCP 2025 transport terms or v1 server transport classes.
+Every service, capability, host and MCP call requires an explicit verified role; omitting identity never grants owner authority. The default `auth.mode: none` is the explicit single-owner trust model. Every request reaching `/mcp` receives owner authority. Keep such an endpoint private to the owner, including when a configured tunnel or HTTPS ingress is used.
 
-## OAuth credentials and identities
+Optional OAuth provides team/member identity. It uses the configured HTTPS issuer, resource-bound tokens, S256 PKCE, client metadata documents, one-use login and authorization codes, refresh rotation and grant revocation. Member authorization changes invalidate old grants. Dynamic client registration and copied static member tokens are not supported.
 
-- Desktop single-owner MCP defaults to `none` for both local and configured public ingress. OAuth is opt-in for shared team/member identity.
-- When OAuth is enabled, non-loopback MCP requests require OAuth access tokens; copied static owner/member credentials remain unsupported.
-- Loopback owner recovery remains available even when OAuth is configured.
-- OAuth signing material and the rotating owner approval code live under private DevMate state with restrictive permissions, not in `config.json`.
-- OAuth client identity uses Client ID Metadata Documents (CIMD). The retired dynamic client-registration endpoint is not exposed.
-- CIMD metadata must use a clean HTTPS client ID, safe redirects, bounded metadata, and public-network destinations; private/loopback/link-local metadata targets are rejected.
-- OAuth access and refresh tokens are bound to the intended issuer, MCP resource audience, client identity and scope.
-- Refresh tokens are single-use rotating families. Replay or binding mismatch revokes the family persistently.
+A configured public Host exposes the MCP and OAuth routes only. Local control, owner recovery, settings, host binding and the localhost UI remain private local surfaces. A local owner token does not authorize a public OAuth request. Tunnel process readiness is not proof of a working remote connection.
 
-## Member identity
+## Project access and trusted execution
 
-Members are OAuth identities, not static Bearer tokens.
+What an editor window shares is the owner's setting (`devMate.shareFolders`). By default a trusted local folder opened in VS Code is shared with connected clients, read and write, and the window says so once with a way to change it; the owner can make any folder read only or take it out at any time, and a folder taken out stays out. The setting can instead ask first, share read only, or share nothing. Folders of an untrusted workspace are never shared. Each editor window acts only on its own selected project.
 
-- Member creation returns a one-time `dmc_` OAuth login code.
-- Only a salted login verifier is persisted.
-- Each member has a monotonic `authVersion`.
-- OAuth member access resolves current member state for authorization; role and workspace scope are not trusted solely from stale token claims.
-- Rotating a member login code increments `authVersion` and invalidates previously issued member OAuth credentials.
-- Disabling, revoking, expiring, changing role/scope, or rotating a member takes effect for direct requests and durable jobs through current-state checks.
-- Member login codes are authorization-page credentials only; they are never accepted directly by `/mcp` as Bearer tokens.
+Because the default shares what is opened, a public address without sign-in gives whoever has it write access to every folder open in an editor that runs the extension. Use sign-in, or `ask`/`never`, when that is not intended.
 
-Roles are `observer`, `reviewer`, `developer`, `maintainer`, and `owner`.
+What is shared, and how far, is decided by the owner at their computer: in an editor, on the command line (`devmate project add`), or in the local workbench. A client reaching DevMate through MCP, whether a model, a script or a workbench embedded in a chat app, cannot share a folder, cannot make a read-only project writable, cannot lift the credential-file protection and cannot change how a capability engine is set up. It can narrow all of these: make a project read only, take a folder out, switch an engine off. A folder taken out stays out, also for the folder above it and the folders inside it, until its owner shares it again. The two sharing settings of the VS Code extension are machine-scoped, so a repository's workspace settings cannot change them.
 
-## Runner credentials
+How far this holds depends on one thing. **A client with write access to any project can run commands, and commands run as the owner's operating-system account.** From there it can read any file the owner can read, including the owner token of this DevMate. So with at least one writable project, the limits on the *other* folders (read only, protected files, taken out) keep a well-behaved model from wandering; they are not a wall against a hostile one. With only read-only projects shared there are no commands and no agents, and the limits above are a boundary: that is the setting to use for a client you do not fully trust.
 
-- External Runner tokens use the separate `dmr_` credential family and are returned once; only salted verifiers are persisted.
-- `dmr_` credentials are accepted only by `/runner/v1`; they cannot call MCP tools.
-- Runner credentials require explicit workspace scope and support capability limits, concurrency, expiry, rotation, disable, and revocation.
-- Runner capabilities are scheduling metadata, not an operating-system sandbox.
-- DevMate-managed ngrok and Cloudflare credentials remain in host-local secure storage or provider process environments, not project files or shared `config.json`.
+Decisions an agent waits for (approvals, questions) are the person's, and they are answered at the computer: in the editor, or in the local workbench. No client connected through MCP can answer them, whatever it declares about itself, because the caller may be the very model that started the agent. An embedded workbench shows what is waiting and says where to answer it.
 
-Never place OAuth, member login codes, Runner, provider, preview, or artifact-service credentials in URLs, issues, screenshots, shared logs, shell history, process arguments, or CI artifacts.
+### The full access profile
 
-## Authorization and coordination
+The two paragraphs above describe the default profile, *guarded*. The owner can replace it with *full access* (`devmate access full`, or the editor command). `access.update` is a local operation: no MCP path reaches it in either profile. The choice is stored with the instance, applies at once, and is reported by `devmate doctor`.
 
-- Workspace scopes are checked for tools, processes, previews, leases, approvals, work sessions, jobs, and Runner credentials. OAuth-member host/editor/diagnostic results are also filtered after execution so a globally focused desktop host cannot expose metadata from another workspace.
-- An instance may require exclusive workspace leases for scoped remote mutations through `team.requireWorkspaceLeaseForWrites`.
-- Dual-control approval is an explicit optional policy and is disabled by default.
-- Approval policy applies to current `oauth-member` principals. Approval records store a canonical argument digest and redacted summary rather than raw secrets.
-- An approval is bound to requester, tool, workspace and exact argument set and is consumed according to current policy.
-- Member identities are denied recognized direct force/destructive Git and shell patterns by policy. Execute access still runs as the DevMate OS identity and is a trusted execution boundary, not a hostile-code sandbox.
-- Global administration, identity lifecycle, request/Runner policy and other elevated control-plane operations require the capability declared by central tool policy.
+With full access, a caller that is the owner on any surface may do what otherwise needs the local one: share a folder (`project.create`), widen a project, lift the credential-file protection, configure capability engines, answer approvals and questions, and read what says why something does not work (`runtime.doctor`, `runtime.metrics`, the names of stored credentials, the full connection status). Credential-like files are no longer withheld from the owner in the file tools and the project overview, whatever a project's own setting says. What a delegated agent asks permission for is granted by the runtime at once, preferring the option that grants it one time, when the owner started the agent and the task it is working on is the owner's; every such grant is kept as an approval record marked automatic. A question an agent asks, and a permission request that offers no granting option, still wait for an answer.
 
-## ChatGPT browser Companion boundary
+What full access does not change:
 
-- ChatGPT browser page, tab, selection, screenshot, and website text are untrusted client context. Page content cannot grant DevMate authority or request local context on its own.
-- `companion_context` is read-only and non-workspace-scoped so page-only conversations are not forced into a project. It defaults to minimal disclosure; full host/workspace summaries require explicit bounded options.
-- OAuth-member Companion results are filtered to the member's current workspace scope. The member principal is revalidated against current role, authVersion, expiry, disable state, and workspace scope immediately before metadata is constructed, so a stale request principal cannot retain old visibility. A member cannot learn another workspace or host through Companion metadata.
-- The tool reports an existing conversation project separately from machine Current Project and never creates or changes a binding. Browser focus cannot reroute project work.
-- `companion_context` does not ingest webpage contents, cookies, browser storage, passwords, or browser credentials. Browser-context access remains governed by the ChatGPT client and its own permission prompts.
+- Members. An OAuth member keeps exactly its role and project grants: credential files stay withheld from it, it shares and answers nothing, and work it delegated waits for a person as before.
+- The editor context. It is one state for every reader, so an open credential file stays out of it.
+- Changing the installation: settings, stored credentials, starting or stopping the connection or the runtime, and the profile itself stay local, because a remote caller could cut its own route.
+- Switching on the tools that read or write the memory of other processes (`allowProcessAccess`, `allowMemoryWrite`).
 
-## Optional Codex Collaboration boundary
+The `devmate` command line is the owner's interface, and a command a client runs is the owner's process. So every command and agent the runtime starts carries a marker in its environment, and a `devmate` that finds it tells the runtime so: it is then answered as a connected client, and it refuses to stop or reconfigure DevMate. A model that is told "folders are shared by the owner" and helpfully runs `devmate project add` through its shell tool is refused like its MCP call was. This stops the well-behaved case only. A client that removes the marker, or reads the owner token and calls the control port itself, is covered by the paragraph on write access above: the guarded profile is a boundary only where every shared project is read only.
 
-Codex Collaboration is disabled by default. Enabling it delegates work to a supervised Codex app-server against a DevMate-managed proposal snapshot rather than giving Codex a direct write path to the real workspace.
+With full access the last distance between "can reach `/mcp` as the owner" and "is the owner at the keyboard" is gone. With `auth.mode: none` on a public address that is everyone who learns the address; `devmate doctor` reports this combination as a warning.
 
-- The snapshot is stored outside the real workspace and contains only allowlisted source/text paths. Credential-prone directories and dotfiles, real environment files, keys, databases, logs, binary artifacts, dependency caches and build outputs are omitted.
-- New protected or non-text files produced inside the proposal snapshot are reported as blocked changes and are not automatically applied.
-- The Codex runtime receives an allowlisted environment, runs with `networkAccess: false`, and is parent-supervised with bounded shutdown. These controls reduce exposure; they do not create an operating-system security boundary.
-- `strongOsReadIsolation` is false. Snapshot separation is a data-minimization and write-isolation boundary, **not** a VM/container sandbox for hostile code. Use a separate OS account, VM, container, or host when delegated code is untrusted.
-- `codex_proposal_status` returns the exact proposal digest. `codex_proposal_apply` requires that reviewed value as `expectedProposalDigest`; any proposal change invalidates the old review.
-- Applying a proposal uses normal DevMate workspace authorization, lease, conflict checks and crash-safe file mutations. Codex does not write directly from its runtime into the real workspace.
-- Apply state and snapshot recovery evidence are durable. Startup reconciles stale/orphan snapshot storage before file/apply recovery and fails closed rather than deleting required apply evidence when durable snapshot state is inconsistent or cleanup cannot be confirmed.
+Command lines are shown to others (process lists, a project's activity, jobs seen by another member) without the credentials written inline in them; the command that runs is unchanged. This recognises well-known forms only and is not a guarantee.
 
-## Desktop public-generation boundary
+Credential-like files (`.env`, key files, `.npmrc` and similar) are withheld from the file tools by default and can be enabled per project by the owner. Git status names them, marked as protected, so they are not committed by accident; their content is never returned. The read-only Git tools accept only commits as revisions and never run a program the repository configures (filters, textconv, external diff). Executables DevMate starts itself are resolved to absolute paths on `PATH`, never in the project directory.
 
-VS Code and Obsidian can each own or attach to the same machine-wide Gateway and provider-native public connection.
+Members receive explicit project grants and read or write roles. Built-in file/resource APIs, collaboration records and MCP workbench snapshots enforce those grants. File operations check canonical project paths, reject symlink traversal and exclude the runtime control directory. File writes can require the hash observed when the file was read.
 
-`Ready` is valid only for the **current complete Gateway + provider generation** after MCP `server/discover`, `tools/list`, and `gateway_status` succeed using the configured authentication mode. A Gateway restart, provider restart, ownership transfer, or endpoint generation change invalidates old Ready evidence even when the public hostname is unchanged.
+Write access is trusted local execution authority. Commands, native agents and domain engines may run with the host account's filesystem and network privileges. A project working directory or an API path check is not an operating-system sandbox. Give write access only to trusted participants; use an independently configured isolation boundary when that is required.
 
-Desktop Stop is ownership-aware:
+Configured external MCP servers may have independent machine-wide credentials and resources. Their discovery and calls are owner-only; members cannot reuse owner-configured MCP clients through an allowed project ID. Third-party annotations do not establish an authorization boundary.
 
-- a host terminates only processes it owns;
-- an attached host cannot kill another host's compatible resource;
-- a host does not intentionally leave its own Gateway child alive merely because another host owns the provider;
-- if provider shutdown cannot be confirmed, cleanup fails closed rather than tearing down the Gateway under uncertain ownership.
+## Native sessions and decisions
 
-## External Runner boundary
+DevMate uses documented native provider interfaces and owns the processes it starts. It does not guess private desktop IPC, scrape web sessions, manufacture vendor account tokens or silently attach arbitrary existing sessions.
 
-- The central Gateway remains authoritative for requester identity, RBAC, workspace scope, lease, approval, job ownership, retries, and cancellation state.
-- A Runner receives a job only after central execution preflight re-checks current policy.
-- Runner heartbeat capabilities and workspace IDs are intersected with credential scope; a Runner cannot widen its own authorization.
-- Runner credentials with an empty workspace scope are invalid.
-- Each Runner host uses its own current DevMate config/state and a loopback local Gateway for local tool execution. The local Gateway is never a public MCP endpoint.
-- The Runner local MCP client pins protocol `2026-07-28`; it does not negotiate down to a legacy era.
-- Before spawning the local Gateway, the Agent removes central Runner-control secrets from the child environment and disables its embedded queue so project commands cannot inherit the central Runner credential.
-- The Agent accepts the Runner credential through a protected environment variable or token file, not a command-line token argument.
-- Revoking or rotating a Runner credential blocks new authenticated Runner requests. Owned jobs recover according to lease/retry state.
-- External Runner execution is at-least-once. Side-effecting targets must be idempotent or protected by their own transaction/deduplication boundary.
-- External Runner artifacts are metadata records only. Artifact bytes are not uploaded through `/runner/v1`; use a separately authenticated artifact service when binary distribution is required.
+A session's communication token is restricted to its project/workflow and communication operations. It cannot choose another sender identity or resolve a user approval. Model-origin messages do not become user authorization.
 
-## Durable jobs
+Approvals retain the native options and return the selected option to the waiting request. Form answers are validated against the original request schema and returned to that request. Answer content is not persisted as an input response record. Requested form schemas and surrounding model/provider messages can still contain sensitive context; treat the private runtime database and logs accordingly.
 
-- The queue accepts only reviewed targets. Arbitrary shell commands, direct push, force operations, credential rotation, and team administration are not queue targets.
-- Persisted OAuth-member requester identity contains `authVersion`; before execution DevMate re-evaluates current member status, role, workspace scope, lease, approval, plugin state and Runner requirements.
-- Job submission/claim is not an authorization bypass.
-- Persistent job arguments reject credential-shaped keys/values and are bounded in size and nesting depth.
-- Durable `git_save` cannot push.
-- Result summaries are bounded and redacted before persistence.
-- Artifact indexing remains inside the authorized Runner-local workspace; protected paths and escaping links/reparse points are rejected.
-- Runner claims use renewable leases. An abandoned job can be retried, but DevMate cannot automatically undo external side effects produced before a crash.
-- Running cancellation is cooperative.
+Server-Sent Events are delivered from the journal by cursor: a slow reader pauses its own stream and nothing is buffered for it, so it can neither lose events nor grow the runtime's memory. A reader that stays blocked is released and resumes from its cursor when it reconnects.
 
-## Configuration and durable runtime state
+Member OAuth principals carry their current authorization version. A queued command or capability job revalidates the member's enabled state, role, version and project grant immediately before the native effect; member updates/removal also cancel outstanding jobs. Explicit retries are attributed to the current authenticated caller. Cancellation cannot undo side effects that were already produced.
 
-- `shared/config-store.cjs` is the current configuration persistence boundary: supported-version validation, current instance-shape validation, cross-process locking, atomic replacement, recovery, size bounds and restrictive permissions.
-- Unsupported historical instance fields and unsupported config versions fail closed; hosts do not silently translate them into current capabilities.
-- OAuth private secrets are a separate restrictive state file and never part of the public authentication config schema.
-- Authorization codes and refresh-token families are durable state so one-shot consumption and replay revocation survive process restarts.
-- Workspace leases, work sessions, approval requests, jobs, Runner records and drain state are persisted under the central config directory using atomic replacement.
-- The central Gateway uses an owner-aware renewable instance lock. Recovery considers the current ownership/lease contract rather than trusting a stale PID alone.
-- A second live central Gateway for the same state directory is rejected.
-- External Runner hosts have independent local configs/state and never mount or share the central durable state file.
-- Do not share one central state directory across independent hosts/filesystems as a horizontal-replication mechanism.
+## Jobs and process ownership
 
-## Drain and maintenance
+Queued, running, completed, failed, cancelled and unknown outcomes are distinct. Interrupted execution is not silently replayed. Explicit retry creates a new execution record.
 
-- Drain state rejects policy-defined new OAuth-member mutations and job submissions and stops Runners from receiving new queued work.
-- Existing in-flight work may settle; visible jobs remain administrable according to policy.
-- Local owner recovery remains available.
-- Use drain before central upgrades, then verify runtime state, Runner registration, metrics, public MCP Ready state and a small validation job before resuming.
+Cancellation is only reported as confirmed when the relevant native protocol or owned process provides the evidence. Failed cleanup retains owned resources for an explicit retry. CLI stop validates instance, generation, process and build identity; a PID read from a record is not sufficient authority to kill a process.
 
-## Files and processes
+A runtime or project close drains owned jobs, capability clients, browsers and vault operations before disposing of their records. Host record writes needed by an already-running vault operation may finish during that drain through the locally authenticated, bound host interface.
 
-- Hidden credentials, private keys, databases, logs, and real `.env` files are blocked from normal file tools.
-- Recursive scans and mutations use realpath containment and reject symlink/reparse-point escapes.
-- Reference workspaces are readonly. Trusted writable roots are explicit and reject filesystem roots.
-- Directory deletion/move remains disabled unless explicitly enabled.
-- Processes run as the DevMate OS identity and cannot bypass OS/container/VM security boundaries.
-- Process count/output are bounded and locally owned process trees are stopped on shutdown.
+## State and credentials
 
-## Preview publishing
+Each DevMate 4 instance uses its own SQLite database and private runtime records. Old instance state is not imported. Owner tokens, OAuth signing material, native session communication tokens, third-party MCP credentials and tunnel runtime keys belong to the local owner.
 
-- Local previews bind to loopback.
-- Public review shares use separate scoped tokens; only hashes are stored.
-- The initial share token is exchanged for an `HttpOnly`, `SameSite=Strict` browser session scoped to the preview path.
-- Shares are bounded, expire, can limit sessions, and can be revoked.
-- Review previews are not a general-purpose application hosting service.
+Connection credentials are stored in the private instance directory (`devmate secret set`, read from standard input) and handed only to the connector process that needs them; they are not placed in the environment project commands inherit and no operation returns them. A connector the runtime started is recorded so that a runtime which died without stopping it does not leave it running; only that exact process is ended, identified by program and start time. Do not publish runtime state, private project content, bearer tokens, login codes, raw provider logs or credentials in source, issues, screenshots or test fixtures. Third-party tool results and provider messages remain untrusted input.
 
-## Audit, metrics, and retention
+## Obsidian and domain tools
 
-- Mutations, commands, Git operations, member/Runner identity changes, leases, work sessions, approvals, jobs, Runner API requests, preview publication and tool calls produce bounded audit metadata.
-- Request IDs and job IDs correlate ingress, queue, Runner and tool-call events.
-- Common passwords, tokens, authorization headers and API-key patterns are redacted.
-- `/control/metrics` is for loopback/local collectors and should not be proxied publicly.
-- Backups and audit logs are pruned by configured age/size policy. Protect the complete config/state directory as development-sensitive data.
+Vault operations use the public Obsidian APIs through an explicitly attached desktop host. Batch previews, saved operation records and rollback apply to the documented vault operations; they do not undo arbitrary external commands. Disconnecting an HTTP request does not undo a native Vault operation already executing.
 
-## Supply-chain and repository contracts
+Browser and reverse-engineering tools require explicit project and local tool configuration. Their execution authority and optional native dependencies must be assessed as part of granting write access. Tests that skip an absent native backend do not prove that backend works on the deployment machine.
 
-CI validates runtime and complete dependency trees, source syntax, workflow pinning, packaging, current MCP/OAuth architecture contracts and security tests. Repository checks reject known retired protocol/identity surfaces rather than carrying compatibility shims forward.
+## Dependencies and verification
 
-## Multi-tenant limitation
+Review production dependency additions according to `AGENTS.md`. Use the official MCP and MCP Apps SDKs and package the third-party notices generated from the actual bundle. Keep native protocol versions and account readiness separate from package build success.
 
-DevMate member/team access is designed for trusted organizational collaboration, not hostile multi-tenancy. Permitted commands and jobs execute as the OS identity of the selected Gateway or Runner host. Use separate machines, VMs, containers, OS accounts, or independent DevMate instances for unrelated trust domains.
+Protocol, per-request identity, project grants, file writes, job outcomes, process cleanup, host drains and UI wiring are exercised by the current runtime test suites. See [AUDIT-4.0.md](docs/AUDIT-4.0.md) for what was found, what was fixed and what could not be verified without real accounts and deployments.
 
 ## Reporting vulnerabilities
 
+Only the latest 4.x release receives security fixes; 3.x is not maintained.
+
 Report suspected security vulnerabilities privately through GitHub's [Report a vulnerability](https://github.com/Kukutx/DevMate/security/advisories/new) flow. Do not open a public issue for an undisclosed vulnerability.
 
-Include the affected DevMate version, the affected surface, reproduction steps or a proof of concept when safe, the expected impact, and any known mitigation. Never include live tokens, private endpoint details, credentials, private filesystem paths, Runner endpoints, or artifact-service secrets in any report or attachment.
+## Known limits
 
-Maintainers triage private reports, confirm the affected versions and trust boundary, coordinate remediation and disclosure with the reporter, and publish a GitHub Security Advisory when public disclosure is warranted. Security fixes follow the normal protected-branch validation and release process unless an emergency response requires a narrower release procedure with equivalent review and verification.
+- **Write access is full access.** See "Project access and trusted execution": a client with one writable project can act as the owner's operating-system account. DevMate has no sandbox.
+- The runtime keeps running after the editor that started it is closed, until it is stopped (`devmate stop`, or **Stop DevMate Runtime** in the editor). A public connection stays up with it.
+- An origin added to `allowedOrigins` may call the local MCP port from a browser, and on that port a caller without credentials is the owner. Add only the origin of a client you run yourself.
+- A delegated Gemini CLI or Grok CLI session also loads the MCP servers configured in that CLI's own settings; DevMate cannot keep them out (it does for Codex and Claude Code). If DevMate itself is registered there, the delegated agent reaches it with the owner's authority.
+- A command still running when the runtime dies is ended by the next runtime of that instance, if it had been running for more than a few seconds; a shorter one is not tracked and ends on its own. Processes a command left in the background after it exited itself are not tracked.
+- Command redaction, protected paths and the read-only tools reduce what a connected model can see or do by accident. They are not a sandbox: commands run as the owner's operating-system account.

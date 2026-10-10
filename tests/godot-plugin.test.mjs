@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { __test as godotTest, parseExportPresets, parseGodotConfig, parseGodotDiagnostics } from '../gateway/plugins/godot.mjs';
-import { resolveProjectChild } from '../gateway/plugins/godot-project.mjs';
+import { __test as godotTest, parseExportPresets, parseGodotConfig, parseGodotDiagnostics } from '../runtime/engines/godot.mjs';
+import { resolveProjectChild } from '../runtime/engines/godot-project.mjs';
 
 test('parses Godot project configuration sections', () => {
   const parsed = parseGodotConfig(`

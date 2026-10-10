@@ -3,14 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { safeGodotBaselinePath, safeGodotRelativePath } from '../gateway/plugins/godot-path-policy.mjs';
-import { __test as baselineTest } from '../gateway/plugins/godot-baseline.mjs';
-import { __test as bootstrapTest } from '../gateway/plugins/godot-bootstrap.mjs';
-import { __test as nativeQaTest } from '../gateway/plugins/godot-native-qa.mjs';
-import { __test as projectTest } from '../gateway/plugins/godot-project.mjs';
-import { resolveWorkspacePath } from '../gateway/plugins/plugin-runtime.mjs';
-import { __test as releaseGateTest } from '../gateway/plugins/godot-release-gate.mjs';
-import { __test as testsTest } from '../gateway/plugins/godot-tests.mjs';
+import { safeGodotBaselinePath, safeGodotRelativePath } from '../runtime/engines/godot-path-policy.mjs';
+import { __test as baselineTest } from '../runtime/engines/godot-baseline.mjs';
+import { __test as bootstrapTest } from '../runtime/engines/godot-bootstrap.mjs';
+import { __test as nativeQaTest } from '../runtime/engines/godot-native-qa.mjs';
+import { __test as projectTest } from '../runtime/engines/godot-project.mjs';
+import { resolveWorkspacePath } from '../runtime/engines/engine-io.mjs';
+import { __test as releaseGateTest } from '../runtime/engines/godot-release-gate.mjs';
+import { __test as testsTest } from '../runtime/engines/godot-tests.mjs';
 
 test('Godot relative artifact paths reject traversal and protected workspace data', () => {
   assert.equal(safeGodotRelativePath('artifacts/godot/report.json'), 'artifacts/godot/report.json');

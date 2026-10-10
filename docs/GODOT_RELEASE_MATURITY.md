@@ -1,204 +1,90 @@
-# Godot maturity and release evidence
+# Godot baselines and release evidence
 
-DevMate's current Godot integration covers the project-local loop from initial automation setup to an explicit release decision. The tools in this guide do not publish a build, modify signing credentials, or approve their own evidence.
+Bootstrapping saved automation, performance baselines and regressions, and a release gate that judges evidence files. Capabilities are called through `capability_call`; see [CAPABILITIES.md](CAPABILITIES.md).
 
-## Complete workflow
+## Workflow
 
-```text
-godot_quick_setup
-→ godot_automation_bootstrap
-→ godot_project_audit / godot_quality_report
-→ godot_test_run
-→ godot_performance_test
-→ godot_performance_baseline_update      # deliberate and reviewed
-→ godot_performance_regression           # fresh run versus baseline
-→ godot_export_matrix
-→ godot_movie_capture                    # optional evidence
-→ godot_release_gate
-```
+1. `godot.automation_bootstrap`: create or merge `.devmate/automation.json`.
+2. `godot.quality_report`: quality evidence.
+3. `godot.test_run`: test evidence.
+4. `godot.performance_test`, then `godot.performance_baseline_update` once the numbers are accepted.
+5. `godot.performance_regression` on later changes: performance evidence.
+6. `godot.export_matrix` with `reportPath`: export evidence.
+7. `godot.release_gate`.
 
-The final gate consumes existing JSON evidence. It never runs tests, exports, signs, uploads, or publishes implicitly.
+Steps that run Godot are `longRunning`: start them with `job_start`.
 
-## Safe automation bootstrap
-
-Use `godot_automation_bootstrap` to create or merge `.devmate/automation.json` from the current project.
-
-It detects:
-
-- the main scene;
-- Web and runnable export presets;
-- the current QA Bridge;
-- project-local GUT or GdUnit4;
-- suitable native, Web, performance, and framework-test starter scenarios.
-
-Example:
+## Automation bootstrap
 
 ```json
-{
-  "workspaceId": "game",
-  "includeAdvanced": true,
-  "merge": true
-}
+{ "capability": "godot.automation_bootstrap", "input": { "dryRun": true } }
 ```
 
-Existing scenario IDs win. DevMate adds missing starter IDs but does not replace user-owned scenarios. Existing manifests are backed up before a changed file is written. Use `dryRun:true` to inspect the proposed manifest without creating a file.
+Generates export targets, a `native-smoke` and (with a Web preset) a `web-smoke` scenario, and with `includeAdvanced` (default) a performance scenario and a test scenario for the installed framework.
+
+- `dryRun: true` returns the manifest and writes nothing; it needs no write access.
+- An existing manifest is merged: existing scenario ids and export targets are kept. `merge: false` refuses to touch an existing manifest.
+- The result is validated with the schemas of `godot.automation_manifest` and `godot.advanced_manifest` before it is written. If the existing file contains a key those readers reject, bootstrap fails with `invalid_manifest`, names the key and leaves the file as it was.
+- A changed manifest is written atomically; the previous version is kept beside it as `automation.json.<timestamp>.bak`.
 
 ## Performance baselines
 
-A baseline is a reviewed JSON snapshot stored by default at:
-
-```text
-.devmate/baselines/godot/<baseline-id>.json
-```
-
-Create a performance report first:
-
 ```json
-{
-  "tool": "godot_performance_test",
-  "arguments": {
-    "workspaceId": "game",
-    "scene": "res://main.tscn",
-    "runForMs": 10000,
-    "warmupMs": 2000,
-    "reportPath": "artifacts/godot-performance/main.json"
-  }
-}
+{ "capability": "godot.performance_baseline_update", "input": { "baselineId": "release-1" } }
 ```
 
-Then deliberately create the baseline:
+Reads a performance report (default `artifacts/godot-performance/latest.json`) and stores its stable metric points as `.devmate/baselines/godot/<baselineId>.json` (default id `default`): `fps_p05`, `fps_p50`, `process_ms_p95`, `physics_ms_p95`, `memory_static_bytes_max`, `node_count_max`, `orphan_node_count_max`, `draw_calls_p95`, `physics_2d_pairs_max`, `physics_3d_pairs_max`, with scene, engine version and sample count.
 
-```json
-{
-  "workspaceId": "game",
-  "baselineId": "main-linux-x64",
-  "reportPath": "artifacts/godot-performance/main.json",
-  "warmupMs": 2000
-}
-```
-
-Replacing an existing baseline requires `force:true` and creates a backup. Baseline updates are write operations and should be reviewed like source changes.
-
-Canonical comparison points include:
-
-- FPS p05 and p50;
-- process and physics frame-time p95;
-- maximum static memory;
-- maximum node and orphan-node counts;
-- draw-call p95;
-- maximum 2D and 3D collision-pair counts.
+An existing baseline is replaced only with `force: true`; the previous file is kept as a `.bak` copy. Under `.devmate`, a baseline path must be a single JSON file directly in `.devmate/baselines/godot/`. Baselines are meant to be committed.
 
 ## Performance regression
 
-`godot_performance_regression` runs a fresh scene test and compares it with a baseline.
-
 ```json
-{
-  "workspaceId": "game",
-  "scene": "res://main.tscn",
-  "baselineId": "main-linux-x64",
-  "runForMs": 10000,
-  "warmupMs": 2000,
-  "maxRegressionPercent": 10,
-  "minSamplesRatio": 0.75
-}
+{ "capability": "godot.performance_regression", "input": { "baselineId": "release-1", "maxRegressionPercent": 10 } }
 ```
 
-For minimum metrics such as FPS, a decrease is a regression. For maximum metrics such as frame time, memory, nodes, and draw calls, an increase is a regression.
+Loads the baseline, runs a fresh performance test with the inputs of `godot.performance_test`, and compares each metric point. Lower FPS and higher cost count as regression. `metricThresholds` sets a percentage per point, `minSamplesRatio` (default 0.75) the share of the baseline's sample count the new run must reach. The combined result is written to `artifacts/godot-performance/regression.json`.
 
-Per-metric tolerances can override the global percentage:
+## Release gate
 
 ```json
 {
-  "metricThresholds": {
-    "fps_p05": 5,
-    "process_ms_p95": 12,
-    "memory_static_bytes_max": 8
+  "capability": "godot.release_gate",
+  "input": {
+    "evidence": [
+      { "type": "quality", "path": "artifacts/godot-quality/report.json" },
+      { "type": "tests", "path": "artifacts/godot-tests/report.json" },
+      { "type": "performance", "path": "artifacts/godot-performance/regression.json" },
+      { "type": "exports", "path": "artifacts/godot-exports/matrix.json" }
+    ],
+    "policy": { "maxAgeHours": 24 }
   }
 }
 ```
 
-The tool writes a compact regression evidence file at:
+The gate runs nothing. It reads up to 50 JSON evidence files (16 MiB each) and applies a policy:
 
-```text
-artifacts/godot-performance/regression.json
-```
+| Evidence | Passes when |
+|---|---|
+| `quality` | the report is `ok` and audit errors, missing dependencies and blocked automation are within `maxAuditErrors`, `maxMissingDependencies`, `maxBlockedAutomation` (default 0) |
+| `tests` | valid, non-empty JUnit results without failures or errors |
+| `performance` | samples exist, budgets are met, and a regression comparison, if present, passed |
+| `exports` | at least one completed target and none failed |
+| `capture` | the capture file exists and is not empty |
 
-Performance results are hardware-sensitive. Keep separate baselines for materially different Runner classes, graphics backends, debug/release modes, and platform architectures.
+`requiredTypes` defaults to `quality`, `tests`, `performance`, `exports`; a missing required type is a blocker. Evidence older than `maxAgeHours` (default 168; `0` disables the check) is a blocker. The decision is written to `artifacts/godot-release/gate.json` (`reportPath`).
 
-## Release evidence gate
+Where evidence comes from:
 
-`godot_release_gate` accepts evidence entries with these types:
+- `quality`: written by `godot.quality_report`.
+- `performance`: `artifacts/godot-performance/regression.json`, written by `godot.performance_regression`.
+- `exports`: the `reportPath` of `godot.export_matrix`.
+- `tests` and `capture`: the JSON result returned by `godot.test_run` or `godot.movie_capture` (or their saved scenarios), saved to a project file by the caller. Those capabilities write the JUnit XML and the movie themselves, not their result JSON.
 
-- `quality`: a `godot_quality_report` JSON file;
-- `tests`: compact JSON output containing valid, non-empty JUnit totals;
-- `performance`: performance budget or baseline-regression evidence;
-- `exports`: `godot_export_matrix` JSON evidence;
-- `capture`: optional deterministic movie-capture evidence.
+## Boundaries
 
-Example:
+Evidence and report paths are project-relative and may not be credential-like or protected paths. The gate judges files: it cannot tell whether evidence was produced from the current source tree, so regenerate evidence before a release decision.
 
-```json
-{
-  "workspaceId": "game",
-  "evidence": [
-    {"type":"quality","path":"artifacts/godot-quality/report.json"},
-    {"type":"tests","path":"artifacts/godot-tests/summary.json"},
-    {"type":"performance","path":"artifacts/godot-performance/regression.json"},
-    {"type":"exports","path":"artifacts/godot-export/matrix.json"}
-  ],
-  "policy": {
-    "maxAgeHours": 24,
-    "maxAuditErrors": 0,
-    "maxAuditWarnings": 20,
-    "maxMissingDependencies": 0,
-    "maxBlockedAutomation": 0,
-    "requiredTypes": ["quality","tests","performance","exports"]
-  },
-  "reportPath": "artifacts/godot-release/gate.json"
-}
-```
+## Tests
 
-The default evidence freshness window is seven days. The gate fails when required evidence is missing, stale, invalid, empty, or unsuccessful.
-
-The output is a decision artifact with:
-
-- the normalized policy;
-- evidence paths and ages;
-- per-evidence summaries;
-- blocking findings;
-- advisory warnings;
-- a final `ok` value.
-
-A successful gate is evidence that the configured policy passed. It is not a code-signing approval and it does not publish anything.
-
-## Durable execution
-
-These final workflows can run as durable jobs:
-
-```text
-godot_performance_regression
-godot_release_gate
-```
-
-They retain the existing RBAC, workspace scope, lease, approval, Runner capability, retry, audit, and artifact-indexing behavior.
-
-Baseline updates and automation bootstrap are intentionally not durable jobs because they modify reviewed project configuration and should remain explicit interactive mutations.
-
-## Security and trust boundary
-
-- Paths are workspace-contained and reject traversal.
-- Baselines and manifests are written atomically.
-- Existing baselines/manifests are backed up before deliberate replacement.
-- Release evidence is bounded in file size and age.
-- Test evidence requires valid non-empty JUnit results.
-- Performance evidence requires real evaluated samples.
-- Export evidence requires completed successful targets.
-- Capture evidence requires a real non-empty artifact.
-- The release gate does not execute or publish hidden work.
-
-## Recommended stopping point
-
-The current Godot integration covers setup, project audit, dependency analysis, native/Web QA, deterministic input, performance budgets, baselines and regression, framework tests, capture, export matrices, durable Runner execution, quality reporting, and evidence-based release decisions.
-
-Further additions should be driven by a real project requirement rather than generic feature growth. Examples that belong in future, separate work are platform signing integrations, distributed control-plane high availability, engine-editor UI embedding, and organization-specific release systems.
+`tests/godot-final.test.mjs`, `tests/godot-path-policy.test.mjs`, `tests/capability-manifest-cycle.test.mjs`.

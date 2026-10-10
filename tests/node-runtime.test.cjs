@@ -9,7 +9,7 @@ const {
   nodeMajor,
   probeNodeRuntime,
   resolveNodeRuntime
-} = require('../host/runtime/node-runtime.js');
+} = require('../runtime/platform/node-runtime.js');
 
 function fakeSpawn(results) {
   const calls = [];

@@ -1,205 +1,61 @@
 # Godot runtime and quality workflows
 
-DevMate provides a runtime-aware quality layer on top of the Godot audit, native/Web acceptance, and export tools. It answers four separate questions before a long build or test begins:
-
-1. Is the selected Godot runtime usable on this host?
-2. Which scenes, resources, scripts, and assets does the project depend on?
-3. Are saved export and acceptance definitions executable, and which Runner capabilities do they need?
-4. Can the complete project status be delivered as a durable HTML/JSON report?
-
-## Quick setup
-
-After enabling `devmate.godot`, configure the active project in one call:
-
-```json
-{
-  "workspaceId": "game",
-  "projectSubpath": ".",
-  "executablePath": "/opt/godot/Godot_v4.7.1-stable_linux.x86_64",
-  "defaultWebPreset": "Web",
-  "defaultWebOutput": "build/web/index.html",
-  "defaultExportRoot": "build/exports",
-  "installBridge": true
-}
-```
-
-Use this payload with:
-
-```text
-godot_quick_setup
-```
-
-The operation:
-
-- verifies the configured executable through the Godot executable allowlist;
-- saves project-local Godot defaults;
-- optionally installs or upgrades the current QA Bridge v3;
-- remains workspace-scoped and requires write permission plus a lease in team mode.
+Read-only inspection of the Godot installation and the project, a preflight plan for saved automation, and a consolidated quality report. Capabilities are called through `capability_call`; see [CAPABILITIES.md](CAPABILITIES.md).
 
 ## Runtime status
 
-Run:
-
-```text
-godot_runtime_status
+```json
+{ "capability": "godot.runtime_status", "input": {} }
 ```
 
-The result includes:
+Runs `godot --version` and reports:
 
-- parsed Godot version and release channel;
-- Standard versus Mono build detection;
-- current platform and architecture;
-- suggested host capability labels such as `linux-x64`, `windows-x64`, or `macos-arm64`;
-- C# project detection;
-- `dotnet` and Mono readiness for C# projects;
-- matching export-template directory candidates;
-- validation, native-QA, and export readiness.
+- `version`: major, minor, patch, channel, Mono build, official build;
+- `csharp`: whether the project has a `.csproj`/`.sln`, whether the build is Mono and `dotnet` is on `PATH`;
+- `exportTemplates`: the template directories checked for this version and whether one exists (`GODOT_EXPORT_TEMPLATES_DIR` is honoured);
+- `readiness`: `validate`, `nativeQa`, `export`.
 
-Export-template lookup follows the standard per-user Godot locations and also honors:
+It is read-only: the version probe needs no write access and works on a read-only project.
 
-```text
-GODOT_EXPORT_TEMPLATES_DIR
-```
-
-DevMate reports checked directories instead of claiming templates are available based only on a configured export preset.
-
-## Scene and resource dependency graph
-
-Run:
-
-```text
-godot_dependency_graph
-```
-
-Example:
+## Dependency graph
 
 ```json
-{
-  "workspaceId": "game",
-  "entryPaths": ["res://main.tscn"],
-  "reverseTarget": "res://player/player.gd",
-  "maxNodes": 1000,
-  "maxDepth": 20
-}
+{ "capability": "godot.dependency_graph", "input": { "entryPaths": ["res://main.tscn"], "reverseTarget": "res://levels/child.tscn" } }
 ```
 
-The graph follows bounded `res://` references from text resources and scripts. It reports:
+A bounded graph of scenes, resources and scripts starting at the main scene or `entryPaths` (`includeAllScenes` starts from every scene): nodes, edges, missing references, cycles, scene node summaries, and for `reverseTarget` what references it. `maxNodes` (up to 5000) and `maxDepth` bound it.
 
-- scene, resource, GDScript, C#, Shader, texture, audio, and model nodes;
-- directed dependency edges;
-- missing resources;
-- bounded dependency cycles;
-- reverse references for one requested resource;
-- scene node count, root node, dominant node types, and a bounded node sample;
-- explicit truncation when the node or depth limit is reached.
-
-The graph is intentionally static. Runtime-generated paths, UID-only references, external DLC, and custom asset loaders may need separate application-specific checks.
-
-## Automation execution planning
-
-Run:
-
-```text
-godot_automation_plan
-```
-
-The planner reads `.devmate/automation.json` without running Godot, exporting a build, or launching a browser. It returns one plan item per selected export or scenario.
-
-Each item contains:
-
-- target tool;
-- normalized arguments;
-- a ready-to-use `job_submit` payload;
-- required Runner capabilities;
-- blockers;
-- warnings.
-
-Examples of blockers:
-
-- unknown export preset;
-- non-Web preset used for Web acceptance;
-- missing current QA Bridge for native acceptance;
-- undeclared InputMap action.
-
-Examples of suggested capabilities:
-
-| Target | Capabilities |
-|---|---|
-| Native Godot | `core`, `godot` |
-| Web acceptance | `core`, `godot`, `browser-qa` |
-| Windows export | `core`, `godot`, `windows-x64` |
-| Linux export | `core`, `godot`, `linux-x64` |
-| macOS export | `core`, `godot`, `macos-arm64` |
-| Android export | `core`, `godot`, `android-sdk` |
-| iOS export | `core`, `godot`, `macos-arm64`, `xcode` |
-| C# project | adds `dotnet` |
-
-Capability labels are routing constraints, not proof that an SDK, certificate, or export template is valid. Runtime status and the actual export result remain the source of truth.
-
-## Consolidated quality report
-
-Run:
-
-```text
-godot_quality_report
-```
-
-Default outputs:
-
-```text
-artifacts/godot-quality/report.html
-artifacts/godot-quality/report.json
-```
-
-The report combines:
-
-- real Godot runtime status;
-- project audit findings;
-- dependency graph summary and problems;
-- automation execution plan;
-- final ready/attention state.
-
-The MCP result remains compact and returns summary counts plus artifact paths. Complete graph and diagnostic details stay in the generated files so large projects do not flood the model context.
-
-The report is an approved durable Job target:
+## Automation plan
 
 ```json
-{
-  "tool": "godot_quality_report",
-  "arguments": {
-    "workspaceId": "game",
-    "includeAllScenes": true,
-    "maxGraphNodes": 2000
-  },
-  "artifactPaths": ["artifacts/godot-quality"]
-}
+{ "capability": "godot.automation_plan", "input": {} }
 ```
 
-Because the report writes artifacts, it requires workspace write permission and a lease where configured.
+Preflights the saved exports and scenarios of `.devmate/automation.json` without executing anything. Each item has:
 
-## Real Godot CI
+- `capability`: `godot.export`, `godot.native_test` or `godot.acceptance_test`;
+- `call`: the ready `{ capability, input }` for `capability_call`;
+- `job`: the ready `{ kind: "capability", input }` for `job_start`;
+- `blockers` and `warnings`: unknown presets or input actions, a missing or outdated QA Bridge, unsafe output paths, scenarios without assertions.
 
-The repository CI includes a separate Linux job pinned to Godot `4.7.1-stable`. The job:
+`scenarioIds` and `exportPresets` narrow the plan. `ok` is `false` while any blocker remains.
 
-1. queries the official `godotengine/godot-builds` GitHub release;
-2. downloads the Linux editor archive and official `SHA512-SUMS.txt`;
-3. verifies the archive with SHA-512;
-4. installs the generated DevMate QA Bridge into a fixture project;
-5. runs a real headless editor validation;
-6. runs real native QA and validates the generated JSON report.
+## Quality report
 
-This job proves that the generated GDScript and native orchestration work in an actual Godot editor. It does not download export templates or platform SDKs, so desktop/mobile export matrices remain validated by controlled orchestration tests and by the target Runner's own runtime.
-
-## Recommended order
-
-```text
-godot_quick_setup
-→ godot_runtime_status
-→ godot_project_audit
-→ godot_dependency_graph
-→ godot_automation_plan
-→ godot_quality_report
-→ execute ready jobs
+```json
+{ "capability": "godot.quality_report", "input": {} }
 ```
 
-Use the planner before sending matrix exports or large acceptance suites to remote Runners. Use the quality report for reviews, release gates, and team handoff.
+Combines runtime status, project audit, dependency graph and automation plan into `artifacts/godot-quality/report.json` and `report.html` (`jsonPath`, `htmlPath` change the location). The JSON report is the `quality` evidence of [the release gate](GODOT_RELEASE_MATURITY.md). It writes files, so it needs write access.
+
+## Diagnostics
+
+`godot.diagnose` returns the resolved executable, project inspection, audit, Browser QA availability and runtime status in one read-only call, with the effective settings for the owner. `godot.doctor` reduces the same checks to readiness verdicts.
+
+## Order
+
+`godot.runtime_status` → `godot.project_audit` → `godot.dependency_graph` → `godot.automation_plan` → `godot.quality_report`.
+
+## Tests
+
+`tests/godot-quality.test.mjs`, `tests/godot-production.test.mjs`, and `tests/capability-catalog.test.mjs` for running the version probe without write access.

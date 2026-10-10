@@ -1,0 +1,7 @@
+.workspace-leaf-content[data-type="devmate-runtime"] button { margin: 0 6px 6px 0; }
+.workspace-leaf-content[data-type="devmate-runtime"] select,
+.workspace-leaf-content[data-type="devmate-runtime"] textarea { width: 100%; margin-block: 8px; }
+.workspace-leaf-content[data-type="devmate-runtime"] textarea { min-height: 100px; }
+.workspace-leaf-content[data-type="devmate-runtime"] pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.devmate-setup-error { color: var(--text-error); overflow-wrap: anywhere; }
+.devmate-invalid{border-color:var(--text-error)!important}

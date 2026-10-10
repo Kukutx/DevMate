@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   __test,
+  createBrowserControlState,
   actBrowserControl,
   browserControlSessions,
   browserControlStatus,
@@ -13,10 +14,11 @@ import {
   snapshotBrowserControl,
   startBrowserControl,
   stopBrowserControl
-} from '../gateway/plugins/browser-control-runtime.mjs';
-import { __test as pluginTest, browserControlActionSchema, browserControlPlugin } from '../gateway/plugins/browser-control.mjs';
-import { builtinPlugins } from '../gateway/plugins/builtins.mjs';
-import { ownerOnlyTool, requiredCapabilityForTool, validateToolRegistration } from '../gateway/tool-policy.mjs';
+} from '../runtime/engines/browser-control-runtime.mjs';
+import { __test as pluginTest, browserControlActionSchema, browserControlPlugin } from '../runtime/engines/browser-control.mjs';
+import { createCapabilities } from '../runtime/capabilities.mjs';
+
+const state = createBrowserControlState();
 
 test('Browser Control defaults to loopback-only URLs and bounded action schemas', () => {
   assert.equal(__test.assertAllowedUrl('http://127.0.0.1:4173/', false).hostname, '127.0.0.1');
@@ -33,39 +35,53 @@ test('Browser Control defaults to loopback-only URLs and bounded action schemas'
   assert.equal(pluginTest.runtimeAction(drag).targetSelector, '#target');
   assert.throws(() => browserControlActionSchema.parse({ type: 'evaluate', script: 'alert(1)' }));
   assert.throws(() => browserControlActionSchema.parse({ type: 'click', unexpected: true }));
-  for (const name of [
-    'browser_control_status', 'browser_control_start', 'browser_control_tabs',
-    'browser_control_snapshot', 'browser_control_act', 'browser_control_takeover',
-    'browser_control_resume', 'browser_control_stop'
-  ]) {
-    assert.equal(ownerOnlyTool(name), true, name);
-    assert.equal(requiredCapabilityForTool(name, { readOnlyHint: name.includes('status') || name.includes('tabs') || name.includes('snapshot') }), 'admin', name);
-  }
+
 });
 
-test('registers Browser Control as an optional owner-only plugin with valid tool policy', () => {
-  assert.equal(browserControlPlugin.manifest.defaultEnabled, false);
-  assert.equal(builtinPlugins.some(plugin => plugin.manifest.id === 'devmate.browser-control'), true);
-  assert.deepEqual(browserControlPlugin.manifest.toolPrefixes, ['browser_control_']);
-  const tools = new Map();
-  browserControlPlugin.activate({ server: { registerTool(name, config, handler) { tools.set(name, { config, handler }); } } });
-  assert.deepEqual([...tools.keys()], [
-    'browser_control_status', 'browser_control_start', 'browser_control_tabs',
-    'browser_control_snapshot', 'browser_control_act', 'browser_control_takeover',
-    'browser_control_resume', 'browser_control_stop'
+test('registers Browser Control with scoped schemas, for the owner only', async t => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-browser-catalog-'));
+  const project = { id: 'browser-fixture', root, access: 'write' };
+  const settings = new Map();
+  const service = {
+    project(id) { assert.equal(id, project.id); return project; },
+    store: { event() {}, setting(key, value) { if (value !== undefined) settings.set(key, value); return settings.get(key); } }
+  };
+  const capabilities = await createCapabilities({ service, instanceRoot: path.join(root, 'private'), engines: [browserControlPlugin] });
+  t.after(async () => { await capabilities.close(); await fsp.rm(root, { recursive: true, force: true }); });
+  const [engine] = (await capabilities.list({ projectId: project.id, engine: 'browser-control' }, { callerRole: 'owner' })).engines;
+  assert.equal(engine.ownerOnly, true);
+  const tools = engine.capabilities;
+  assert.deepEqual(tools.map(tool => tool.name), [
+    'browser-control.status', 'browser-control.start', 'browser-control.tabs',
+    'browser-control.snapshot', 'browser-control.act', 'browser-control.takeover',
+    'browser-control.resume', 'browser-control.stop', 'browser-control.diagnose'
   ]);
-  for (const [name, entry] of tools) {
-    const policy = validateToolRegistration(name, entry.config);
-    assert.equal(policy.ok, true, `${name}: ${policy.errors.join('; ')}`);
-    assert.equal(policy.ownerOnly, true, name);
-    assert.equal(policy.capability, 'admin', name);
+  for (const tool of tools) {
+    assert.equal(tool.inputSchema.properties.workspaceId, undefined);
+    assert.equal(tool.inputSchema.additionalProperties, false);
+    assert.equal(typeof tool.annotations.readOnlyHint, 'boolean', tool.name);
+    assert.equal(tool.ownerOnly, true, tool.name);
   }
+  const status = await capabilities.call({ projectId: project.id, capability: 'browser-control.status' }, { callerRole: 'owner' });
+  assert.equal(status.structuredContent.workspace.id, project.id);
+  // A session is a browser on the owner's desktop, possibly with a signed-in persistent profile:
+  // neither a write member nor a reader may start, drive or even read one.
+  for (const callerRole of ['write', 'read']) {
+    for (const [capability, input] of [['browser-control.start', { profileMode: 'workspace' }], ['browser-control.snapshot', { sessionId: 'any' }], ['browser-control.status', {}]]) {
+      await assert.rejects(capabilities.call({ projectId: project.id, capability, input }, { callerRole }),
+        error => error.code === 'forbidden' && /owner/.test(error.message), callerRole + ' ' + capability);
+    }
+    const listed = (await capabilities.list({ projectId: project.id, engine: 'browser-control' }, { callerRole })).engines[0];
+    assert.deepEqual(listed.capabilities, [], 'owner-only capabilities are not offered to ' + callerRole);
+    await assert.rejects(capabilities.list({ projectId: project.id, name: 'browser-control.start' }, { callerRole }), error => error.code === 'forbidden');
+  }
+  await assert.rejects(capabilities.call({ projectId: project.id, capability: 'browser-control.status', input: { workspaceId: 'other' } }, { callerRole: 'owner' }));
 });
 
 test('keeps managed browser sessions workspace-bound and rejects stale element refs', async t => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'devmate-browser-control-'));
   t.after(async () => {
-    await shutdownBrowserControl();
+    await shutdownBrowserControl(state);
     await fsp.rm(root, { recursive: true, force: true });
   });
   await fsp.writeFile(path.join(root, 'package.json'), '{"type":"module"}', 'utf8');
@@ -124,38 +140,38 @@ export const chromium = { launch:async()=>new FakeBrowser() };
 `, 'utf8');
 
   const settings = { playwrightModulePath: 'fake-playwright.mjs', allowRemoteUrls: false, defaultHeadless: true };
-  const status = browserControlStatus(root, settings);
+  const status = browserControlStatus(state, root, settings);
   assert.equal(status.available, true);
   assert.equal(status.defaultHeadless, true);
-  await assert.rejects(() => startBrowserControl({ workspaceId: 'workspace-a', workspaceRoot: root, settings, url: 'https://example.com/' }), /Remote browser URLs are disabled/);
+  await assert.rejects(() => startBrowserControl(state, { workspaceId: 'workspace-a', workspaceRoot: root, settings, url: 'https://example.com/' }), /Remote browser URLs are disabled/);
 
-  const started = await startBrowserControl({ workspaceId: 'workspace-a', workspaceRoot: root, settings, url: 'http://127.0.0.1:4173/' });
+  const started = await startBrowserControl(state, { workspaceId: 'workspace-a', workspaceRoot: root, settings, url: 'http://127.0.0.1:4173/' });
   const sessionId = started.session.id;
   assert.equal(started.session.workspaceId, 'workspace-a');
   assert.equal(started.session.profileMode, 'ephemeral');
   assert.equal(started.session.controlMode, 'agent');
   assert.equal(started.session.tabCount, 1);
 
-  const listed = await listBrowserTabs({ workspaceId: 'workspace-a', sessionId });
+  const listed = await listBrowserTabs(state, { workspaceId: 'workspace-a', sessionId });
   assert.equal(listed.tabs[0].url, 'http://127.0.0.1:4173/');
-  await assert.rejects(() => listBrowserTabs({ workspaceId: 'workspace-b', sessionId }), /belongs to workspace/);
+  await assert.rejects(() => listBrowserTabs(state, { workspaceId: 'workspace-b', sessionId }), /belongs to workspace/);
 
-  const snapshot = await snapshotBrowserControl({ workspaceId: 'workspace-a', sessionId });
+  const snapshot = await snapshotBrowserControl(state, { workspaceId: 'workspace-a', sessionId });
   assert.equal(snapshot.elements[0].ref, 'e1');
   assert.match(snapshot.snapshotId, /^tab-1-snapshot-1$/);
-  await assert.rejects(() => actBrowserControl({ workspaceId: 'workspace-a', sessionId, action: { type: 'click', ref: 'e1' } }), /stale or missing snapshotId/);
+  await assert.rejects(() => actBrowserControl(state, { workspaceId: 'workspace-a', sessionId, action: { type: 'click', ref: 'e1' } }), /stale or missing snapshotId/);
 
-  const acted = await actBrowserControl({ workspaceId: 'workspace-a', sessionId, action: { type: 'click', ref: 'e1', snapshotId: snapshot.snapshotId } });
+  const acted = await actBrowserControl(state, { workspaceId: 'workspace-a', sessionId, action: { type: 'click', ref: 'e1', snapshotId: snapshot.snapshotId } });
   assert.equal(acted.result.type, 'click');
   assert.equal(acted.snapshotInvalidated, true);
-  await assert.rejects(() => actBrowserControl({ workspaceId: 'workspace-a', sessionId, action: { type: 'click', ref: 'e1', snapshotId: snapshot.snapshotId } }), /stale or missing snapshotId/);
+  await assert.rejects(() => actBrowserControl(state, { workspaceId: 'workspace-a', sessionId, action: { type: 'click', ref: 'e1', snapshotId: snapshot.snapshotId } }), /stale or missing snapshotId/);
 
-  const screenshot = await actBrowserControl({ workspaceId: 'workspace-a', sessionId, action: { type: 'screenshot', path: 'artifacts/browser-control/test.png' } });
+  const screenshot = await actBrowserControl(state, { workspaceId: 'workspace-a', sessionId, action: { type: 'screenshot', path: 'artifacts/browser-control/test.png' } });
   assert.equal(screenshot.result.path, 'artifacts/browser-control/test.png');
   assert.equal((await fsp.stat(path.join(root, 'artifacts/browser-control/test.png'))).isFile(), true);
-  assert.equal((await browserControlSessions('workspace-a')).length, 1);
+  assert.equal((await browserControlSessions(state, 'workspace-a')).length, 1);
 
-  const stopped = await stopBrowserControl({ workspaceId: 'workspace-a', sessionId });
+  const stopped = await stopBrowserControl(state, { workspaceId: 'workspace-a', sessionId });
   assert.equal(stopped.stopped, true);
-  assert.equal((await browserControlSessions('workspace-a')).length, 0);
+  assert.equal((await browserControlSessions(state, 'workspace-a')).length, 0);
 });

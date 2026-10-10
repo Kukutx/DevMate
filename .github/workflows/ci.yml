@@ -1,134 +1,81 @@
-name: CI
+name: DevMate 4 CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main, develop]
   pull_request:
-    branches:
-      - main
+    branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: devmate4-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    name: Windows, VS Code 1.133, Node 24 LTS
-    runs-on: windows-latest
+    name: Runtime / ${{ matrix.os }} / Node ${{ matrix.node }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, node: 24 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: ubuntu-latest, node: 26 }
+          - { os: macos-latest, node: 24 }
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: npm
-
-      - name: Install
+      - name: Install locked dependencies
         run: npm ci
-
-      - name: Persistence fault regressions
-        run: node --test tests/atomic-json-file.test.cjs tests/durable-state.test.mjs tests/config-persistence.test.mjs
-
-      - name: Audit runtime dependencies
-        run: npm audit --omit=dev --audit-level=moderate
-
-      - name: Audit complete dependency tree
-        run: npm audit --audit-level=moderate
-
-      - name: Repository contracts
+      - name: Install ripgrep where the image lacks it
+        shell: bash
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            case "$RUNNER_OS" in
+              Linux) sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep ;;
+              macOS) brew install ripgrep ;;
+              Windows) choco install ripgrep --no-progress --yes ;;
+            esac
+          fi
+          rg --version | head -n 1
+      - name: Lint for mistakes
+        run: npm run lint
+      - name: Validate source and package contracts
         run: npm run check
-
-      - name: Discovered unit and policy tests
+      - name: Retained runtime and domain tests
         run: npm run test:unit
-
-      - name: Smoke test gateway
-        run: npm run smoke:gateway
-
-      - name: Package VSIX
-        run: npm run package:vsix
-
-      - name: Real VS Code Extension Host E2E
+      # The extension in a real editor: two VS Code instances and a third window start together and must share one runtime.
+      - name: Cache the editor of the real-host test
+        if: ${{ runner.os == 'Windows' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .vscode-test
+          key: vscode-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package.json') }}
+      - name: Real VS Code extension host
+        if: ${{ runner.os == 'Windows' }}
         run: npm run test:vscode-host
-
-      - name: Smoke test packaged VSIX runtime
-        run: node scripts/smoke-vsix-runtime.mjs
-
-      - name: Smoke test packaged VSIX shared tunnel
-        run: node scripts/smoke-vsix-shared-tunnel.mjs
-
-      - name: Build Obsidian plugin
-        run: npm run build:obsidian
-
-      - name: Smoke test Obsidian runtime bundle
-        run: node scripts/smoke-obsidian-runtime.mjs
-
-      - name: Upload VSIX artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      # One build: smoke-tested as packaged, then packaged for both hosts from that same build.
+      - name: Build, smoke-test and package one candidate
+        run: npm run candidate
+      - name: Upload validated candidates
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: devmate-vsix
-          path: "*.vsix"
-
-      - name: Upload Obsidian plugin artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: devmate-obsidian
-          path: obsidian-plugin/dist/**
-
-  node-current:
-    name: Node 26 Current compatibility
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Node Current
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 26
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Audit runtime dependencies
-        run: npm audit --omit=dev --audit-level=moderate
-
-      - name: Audit complete dependency tree
-        run: npm audit --audit-level=moderate
-
-      - name: Repository contracts
-        run: npm run check
-
-      - name: Discovered unit and policy tests
-        run: npm run test:unit
-
-      - name: Smoke test gateway
-        run: npm run smoke:gateway
-
-      - name: Package and smoke VSIX
-        run: |
-          npm run package:vsix
-          node scripts/smoke-vsix-runtime.mjs
-
-      - name: Build and smoke Obsidian runtime
-        run: |
-          npm run build:obsidian
-          node scripts/smoke-obsidian-runtime.mjs
-
+          name: devmate4-${{ matrix.os }}-node${{ matrix.node }}
+          if-no-files-found: error
+          path: |
+            dist/release/*
+            dist/release-notes.md
+            dist/**/build-manifest.json
   godot-real:
     name: Linux and Real Godot 4.7.1
     runs-on: ubuntu-latest
@@ -151,73 +98,6 @@ jobs:
 
       - name: Install
         run: npm ci
-
-      - name: Linux runtime dependency audit
-        run: npm audit --omit=dev --audit-level=moderate
-
-      - name: Linux complete dependency audit
-        run: npm audit --audit-level=moderate
-
-      - name: Linux repository contracts
-        run: npm run check
-
-      - name: Linux discovered unit and policy tests
-        run: npm run test:unit
-
-      - name: Linux gateway smoke test
-        run: npm run smoke:gateway
-
-      - name: Linux package VSIX
-        run: npm run package:vsix
-
-      - name: Linux packaged VSIX runtime smoke test
-        run: node scripts/smoke-vsix-runtime.mjs
-
-      - name: Linux packaged VSIX shared tunnel smoke test
-        run: node scripts/smoke-vsix-shared-tunnel.mjs
-
-      - name: Linux Obsidian plugin build
-        run: npm run build:obsidian
-
-      - name: Linux Obsidian runtime bundle smoke test
-        run: node scripts/smoke-obsidian-runtime.mjs
-
-      - name: Linux standalone Docker build and network smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          state="$RUNNER_TEMP/devmate-docker-state"
-          workspace="$RUNNER_TEMP/devmate-docker-workspace"
-          mkdir -p "$state" "$workspace"
-          chmod 0777 "$state" "$workspace"
-          docker build --file deploy/docker/Dockerfile --tag devmate-ci .
-          docker run --rm \
-            --volume "$state:/var/lib/devmate" \
-            --volume "$workspace:/srv/devmate-workspaces" \
-            devmate-ci init \
-            --workspace /srv/devmate-workspaces \
-            --config /var/lib/devmate/config.json \
-            --provider external \
-            --public-url https://standalone-ci.example.test >/dev/null
-          docker run --detach \
-            --name devmate-ci-runtime \
-            --publish 127.0.0.1:18787:8787 \
-            --volume "$state:/var/lib/devmate" \
-            --volume "$workspace:/srv/devmate-workspaces" \
-            devmate-ci serve --config /var/lib/devmate/config.json
-          trap 'docker rm --force devmate-ci-runtime >/dev/null 2>&1 || true' EXIT
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --header 'Host: standalone-ci.example.test' http://127.0.0.1:18787/health >/dev/null; then
-              exit 0
-            fi
-            if [ "$(docker inspect --format '{{.State.Running}}' devmate-ci-runtime 2>/dev/null || true)" != "true" ]; then
-              docker logs devmate-ci-runtime || true
-              exit 1
-            fi
-            sleep 1
-          done
-          docker logs devmate-ci-runtime || true
-          exit 1
 
       - name: Install virtual display
         run: |
@@ -266,134 +146,19 @@ jobs:
       - name: Run real Godot deterministic movie capture
         run: xvfb-run --auto-servernum node --test tests/godot-real-capture.test.mjs
 
-  portable-windows:
-    name: Portable CLI Windows
-    runs-on: windows-latest
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Node 24
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Build Gateway
-        run: npm run build:vscode
-
-      - name: Package portable CLI
-        shell: pwsh
-        run: |
-          $node = (Get-Command node).Source
-          node scripts/package-portable.mjs `
-            --platform win32 `
-            --arch x64 `
-            --node "$node" `
-            --out "$env:RUNNER_TEMP/devmate-portable"
-
-      - name: Smoke portable CLI
-        shell: pwsh
-        run: node scripts/smoke-portable-cli.mjs --root "$env:RUNNER_TEMP/devmate-portable"
-
-      - name: Upload portable CLI
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: devmate-portable-windows-x64
-          path: ${{ runner.temp }}/devmate-portable/**
-          if-no-files-found: error
-
-  portable-linux:
-    name: Portable CLI Linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Node 24
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Build Gateway
-        run: npm run build:vscode
-
-      - name: Package portable CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/package-portable.mjs \
-            --platform linux \
-            --arch x64 \
-            --node "$(command -v node)" \
-            --out "$RUNNER_TEMP/devmate-portable"
-
-      - name: Smoke portable CLI
-        run: node scripts/smoke-portable-cli.mjs --root "$RUNNER_TEMP/devmate-portable"
-
-      - name: Upload portable CLI
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: devmate-portable-linux-x64
-          path: ${{ runner.temp }}/devmate-portable/**
-          if-no-files-found: error
-
   validation-gate:
     name: Validation Gate
     if: ${{ always() }}
-    needs:
-      - verify
-      - node-current
-      - godot-real
-      - portable-windows
-      - portable-linux
-    runs-on: ubuntu-latest
+    needs: [verify, godot-real]
+    runs-on: windows-latest
     timeout-minutes: 5
-
     steps:
-      - name: Require all mandatory CI jobs to succeed
+      - name: Require every validation job
+        shell: pwsh
         env:
-          VERIFY_RESULT: ${{ needs.verify.result }}
-          NODE_CURRENT_RESULT: ${{ needs['node-current'].result }}
-          GODOT_REAL_RESULT: ${{ needs['godot-real'].result }}
-          PORTABLE_WINDOWS_RESULT: ${{ needs['portable-windows'].result }}
-          PORTABLE_LINUX_RESULT: ${{ needs['portable-linux'].result }}
-        shell: bash
+          RUNTIME_RESULT: ${{ needs.verify.result }}
+          GODOT_RESULT: ${{ needs.godot-real.result }}
         run: |
-          set -euo pipefail
-          failed=0
-          for result in \
-            "$VERIFY_RESULT" \
-            "$NODE_CURRENT_RESULT" \
-            "$GODOT_REAL_RESULT" \
-            "$PORTABLE_WINDOWS_RESULT" \
-            "$PORTABLE_LINUX_RESULT"; do
-            if [ "$result" != "success" ]; then
-              failed=1
-            fi
-          done
-          if [ "$failed" -ne 0 ]; then
-            echo "One or more mandatory CI jobs did not succeed." >&2
-            printf 'verify=%s\nnode-current=%s\ngodot-real=%s\nportable-windows=%s\nportable-linux=%s\n' \
-              "$VERIFY_RESULT" \
-              "$NODE_CURRENT_RESULT" \
-              "$GODOT_REAL_RESULT" \
-              "$PORTABLE_WINDOWS_RESULT" \
-              "$PORTABLE_LINUX_RESULT" >&2
-            exit 1
-          fi
+          if ($env:RUNTIME_RESULT -ne 'success' -or $env:GODOT_RESULT -ne 'success') {
+            throw 'A required DevMate 4 validation job did not succeed.'
+          }

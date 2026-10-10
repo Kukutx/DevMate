@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { __test } from '../gateway/plugins/browser-runner.mjs';
-import { __test as browserQaTest } from '../gateway/plugins/browser-qa.mjs';
+import { __test } from '../runtime/engines/browser-runner.mjs';
+import { __test as browserQaTest } from '../runtime/engines/browser-qa.mjs';
 
 test('Browser QA accepts only browser-shaped executable names', () => {
   assert.equal(__test.browserExecutableAllowed('/Applications/Google Chrome'), true);
@@ -92,8 +92,8 @@ test('Browser QA plugin service accepts only uniquely configured workspace roots
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-browser-service-outside-'));
   try {
     const context = {
-      readConfig: () => ({ workspaces: [{ id: 'main', root: workspace }] }),
       workspace: {
+        list: () => [{ id: 'main', root: workspace }],
         get(id, options) {
           assert.equal(id, 'main');
           return { id, root: workspace, writable: !!options?.writable };
@@ -105,16 +105,16 @@ test('Browser QA plugin service accepts only uniquely configured workspace roots
     assert.equal(resolved.writable, true);
     assert.throws(
       () => browserQaTest.serviceWorkspaceFromRoot(context, outside),
-      error => error?.code === 'browser_qa_workspace_boundary'
+      error => error?.code === 'browser_qa_project_boundary'
     );
 
     const duplicateContext = {
       ...context,
-      readConfig: () => ({ workspaces: [{ id: 'a', root: workspace }, { id: 'b', root: workspace }] })
+      workspace: { ...context.workspace, list: () => [{ id: 'a', root: workspace }, { id: 'b', root: workspace }] }
     };
     assert.throws(
       () => browserQaTest.serviceWorkspaceFromRoot(duplicateContext, workspace),
-      error => error?.code === 'browser_qa_workspace_boundary'
+      error => error?.code === 'browser_qa_project_boundary'
     );
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });

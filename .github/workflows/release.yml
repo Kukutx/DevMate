@@ -1,180 +1,200 @@
-name: Release
+name: DevMate 4 Release
 
+# Pushing a tag X.Y.Z that matches the package version and lies on main verifies that commit, builds
+# one candidate and publishes exactly that build:
+#   1. a GitHub release with the VS Code extension, the Obsidian plugin (as an archive and as the three
+#      loose files Obsidian itself downloads), the command line package, checksums and build provenance;
+#   2. the VS Code Marketplace;
+#   3. Open VSX and npm, where the repository has switched them on (see CONTRIBUTING.md).
+# The tag carries no "v": Obsidian finds the release of a community plugin by the bare version.
+# A manual run on a branch does the same verification and keeps the result as a workflow artifact without
+# publishing. Every publishing job can be run again after a failure: it completes what is missing.
 on:
   push:
-    tags:
-      - '[0-9]*.[0-9]*.[0-9]*'
+    tags: ['[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  checks: read
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: devmate4-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: marketplace
-
+  # Installs and runs third-party code, so it holds no permission to write to the repository.
+  candidate:
+    name: Verify and build one candidate
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - name: Checkout tagged source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Verify tagged commit is merged to main
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || {
-            echo "Tagged commit $GITHUB_SHA is not contained in main" >&2
-            exit 1
-          }
-
-      - name: Verify required CI checks passed for tagged commit
+      - name: The tag names the version being released and lies on main
+        if: ${{ github.ref_type == 'tag' }}
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+          TAG: ${{ github.ref_name }}
         run: |
-          set -euo pipefail
-          checks=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
-          required="Validation Gate"
-          conclusion=$(printf '%s' "$checks" | jq -r --arg name "$required" '[.check_runs[] | select(.name == $name and .status == "completed")] | sort_by(.completed_at) | last | .conclusion // ""')
-          if [ "$conclusion" != "success" ]; then
-            echo "Required CI check '$required' is not successful for $GITHUB_SHA: ${conclusion:-missing}" >&2
-            exit 1
-          fi
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:TAG -ne $version) { throw "Tag $($env:TAG) does not match package version $version." }
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor $env:GITHUB_SHA refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Tagged commit $($env:GITHUB_SHA) is not contained in main." }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
           cache: npm
-
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: npm ci
-
-      - name: Verify tag and repository contracts
-        run: |
-          node scripts/check-release-tag.mjs
-          npm run check
-
-      - name: Audit runtime dependencies
-        run: npm audit --omit=dev --audit-level=moderate
-
-      - name: Audit complete dependency tree
-        run: npm audit --audit-level=moderate
-
-      - name: Run discovered unit and policy tests
-        run: npm run test:unit
-
-      - name: Run Gateway smoke tests
-        run: npm run smoke:gateway
-
-      - name: Build release assets
+      - name: Install ripgrep where the image lacks it
         shell: bash
         run: |
-          set -euo pipefail
-          version=$(node -p "require('./package.json').version")
-          node_version=$(node -p "process.versions.node")
-          mkdir -p release "$RUNNER_TEMP/devmate-node"
-          npx vsce package --out "release/devmate-${version}.vsix"
-          npm run package:obsidian
-          cp obsidian-plugin/dist/main.js release/main.js
-          cp obsidian-plugin/dist/manifest.json release/manifest.json
-          cp obsidian-plugin/dist/styles.css release/styles.css
-          (
-            cd obsidian-plugin/dist
-            zip -q -9 "$GITHUB_WORKSPACE/release/devmate-obsidian-${version}.zip" \
-              main.js manifest.json versions.json styles.css provider-supervisor.cjs \
-              gateway/server.mjs gateway/agent-codex-supervisor.mjs
-          )
-
-          cd "$RUNNER_TEMP/devmate-node"
-          base="https://nodejs.org/dist/v${node_version}"
-          win_archive="node-v${node_version}-win-x64.zip"
-          linux_archive="node-v${node_version}-linux-x64.tar.xz"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSLO "${base}/SHASUMS256.txt"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSLO "${base}/${win_archive}"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSLO "${base}/${linux_archive}"
-          grep -E "  (${win_archive}|${linux_archive})$" SHASUMS256.txt | sha256sum -c -
-          unzip -q "$win_archive"
-          tar -xf "$linux_archive"
-
-          cd "$GITHUB_WORKSPACE"
-          node scripts/package-portable.mjs \
-            --platform win32 \
-            --arch x64 \
-            --node "$RUNNER_TEMP/devmate-node/node-v${node_version}-win-x64/node.exe" \
-            --out "$RUNNER_TEMP/devmate-portable-win"
-          node scripts/package-portable.mjs \
-            --platform linux \
-            --arch x64 \
-            --node "$RUNNER_TEMP/devmate-node/node-v${node_version}-linux-x64/bin/node" \
-            --out "$RUNNER_TEMP/devmate-portable-linux"
-          node scripts/smoke-portable-cli.mjs \
-            --root "$RUNNER_TEMP/devmate-portable-linux"
-
-          (
-            cd "$RUNNER_TEMP/devmate-portable-win"
-            zip -q -9 -r "$GITHUB_WORKSPACE/release/devmate-${version}-windows-x64.zip" .
-          )
-          tar -C "$RUNNER_TEMP/devmate-portable-linux" -czf \
-            "$GITHUB_WORKSPACE/release/devmate-${version}-linux-x64.tar.gz" .
-
-          cd "$GITHUB_WORKSPACE/release"
-          sha256sum *.vsix *.zip *.tar.gz main.js manifest.json styles.css > SHA256SUMS
-          ls -lh
-          cat SHA256SUMS
-
-      - name: Attest release artifacts
+          if ! command -v rg >/dev/null 2>&1; then
+            case "$RUNNER_OS" in
+              Linux) sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep ;;
+              macOS) brew install ripgrep ;;
+              Windows) choco install ripgrep --no-progress --yes ;;
+            esac
+          fi
+          rg --version | head -n 1
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run lint
+      - run: npm run check
+      - run: npm run test:unit
+      - name: Real VS Code extension host
+        run: npm run test:vscode-host
+      - name: Build, smoke-test and package one candidate
+        run: npm run candidate
+      - name: Attest where these files were built
+        if: ${{ github.ref_type == 'tag' }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: 'release/*'
-
-      - name: Upload release workflow artifact
+          subject-path: 'dist/release/*'
+      - name: Keep the verified artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: devmate-release-${{ github.ref_name }}
-          path: release/*
+          name: devmate4-release-${{ github.run_id }}
           if-no-files-found: error
+          path: |
+            dist/release/*
+            dist/release-notes.md
+            dist/**/build-manifest.json
 
-      - name: Login to Azure for Marketplace publishing
+  github-release:
+    name: Publish the GitHub release
+    needs: candidate
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devmate4-release-${{ github.run_id }}
+          path: candidate
+      # Running this job again after a failure completes the release instead of refusing it.
+      - name: Create the release, or complete one that an earlier attempt left behind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" candidate/release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" candidate/release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "DevMate $TAG" --notes-file candidate/release-notes.md --generate-notes
+          fi
+
+  # A published Marketplace version cannot be replaced, so this runs last of the required steps.
+  marketplace:
+    name: Publish to the VS Code Marketplace
+    needs: github-release
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install the locked publishing tool
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devmate4-release-${{ github.run_id }}
+          path: candidate
+      - name: Sign in to Azure without a stored secret
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Publish VS Code extension to Marketplace
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./package.json').version")
-          npx vsce publish \
-            --azure-credential \
-            --packagePath "release/devmate-${version}.vsix" \
-            --skip-duplicate
-
-      - name: Create GitHub Release
+      - name: Publish the verified extension file
         env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$GITHUB_REF_NAME
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" release/* \
-              --verify-tag \
-              --title "DevMate ${version}" \
-              --generate-notes
-          fi
+          TAG: ${{ github.ref_name }}
+        run: npx vsce publish --azure-credential --packagePath "candidate/release/devmate-${TAG}.vsix" --skip-duplicate
+
+  # Editors built on VS Code that are not Microsoft's (VSCodium, Cursor, Windsurf and others) install from Open VSX.
+  # Off until the repository variable OPEN_VSX_PUBLISH is "true" and the secret OVSX_PAT holds a token.
+  open-vsx:
+    name: Publish to Open VSX
+    needs: github-release
+    if: ${{ github.ref_type == 'tag' && vars.OPEN_VSX_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devmate4-release-${{ github.run_id }}
+          path: candidate
+      - name: Publish the verified extension file
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          TAG: ${{ github.ref_name }}
+        run: npx --yes ovsx@1.2.0 publish "candidate/release/devmate-${TAG}.vsix" --skip-duplicate
+
+  # `npx devmate-agent mcp` for any client that starts its MCP servers as a program.
+  # Off until the repository variable NPM_PUBLISH is "true" and npmjs.com trusts this workflow as a publisher.
+  npm:
+    name: Publish the command line to npm
+    needs: github-release
+    if: ${{ github.ref_type == 'tag' && vars.NPM_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devmate4-release-${{ github.run_id }}
+          path: candidate
+      - name: Publish the verified package file
+        env:
+          TAG: ${{ github.ref_name }}
+        run: npm publish "candidate/release/devmate-cli-${TAG}.tgz" --access public --provenance

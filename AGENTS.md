@@ -18,19 +18,21 @@
 
 - After code changes, run the smallest relevant check first.
 - For this VS Code extension, prefer:
+  - `npm run lint`
   - `npm run check`
   - `npm run test:unit`
-  - `npm run smoke:gateway`
+  - `npm run test:vscode-host` (opens real VS Code windows; when the VS Code host changed)
+  - `npm run candidate`
+  - `npm run smoke:runtime`
   - `npm run package:vsix`
 
-## Work Sessions
+## Working in this repository
 
-- Work sessions are optional. Do not start one automatically for a simple change.
-- Use `work_session_start` only when rollback/session tracking materially helps a multi-step mutation or the user asks for it.
-- Use `work_session_status` only when an active session needs inspection.
-- Use `show_changes` before finishing substantive code changes.
-- Finish an intentionally started session with `work_session_finish` after review.
-- Use `work_session_rollback` only for safe file rollback; it does not reverse commands or Git history.
+- DevMate 4 is the only architecture. Never add fallback, migration or compatibility code for 3.x state, configuration or APIs.
+- Runtime source lives in `runtime/` (engines in `runtime/engines/`, process and policy helpers in `runtime/platform/`); hosts in `vscode-host/` and `obsidian-plugin/`; the MCP App UI in `workbench/`.
+- Every operation is defined once, in `runtime/operations/`, and registered with the registry in `runtime/service.mjs`, which authorizes every call. MCP, the CLI and the workbench reach it from there. Add a tool there, not in a host.
+- Prefer official SDKs and protocols over hand-written equivalents.
+- Review your diff before finishing substantive code changes.
 - Stay on the current branch. Do not create branches or pull requests unless the user asks.
 
 ## Safety
@@ -38,3 +40,4 @@
 - Never touch secrets, env files, or unrelated config unless requested.
 - Preserve single-owner `auth.mode: none` as the default for local and configured public MCP; OAuth remains optional for team/shared identity. In `none` mode, keep the endpoint private to the owner because any caller that can reach `/mcp` receives owner authority.
 - Do not reintroduce retired personal task tools or team-specific work-session APIs.
+- What is shared and how far (project access, credential-file protection, a folder taken out of sharing) is decided by the owner at their computer. Keep it so: a caller on the MCP surface may narrow these, never widen them, and may never answer an agent's approval or question. The only exception is the full access profile (`access.update`), which the owner alone switches on, at their computer; never make it the default or reachable through MCP. Full access is the owner's only: members keep their grants, credential protection and approvals. A `devmate` command that a connected client or a delegated agent starts (the `DEVMATE_CLIENT_COMMAND` marker) is that client, not the owner at the computer.

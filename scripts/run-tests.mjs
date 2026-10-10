@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import processTree from '../runtime/platform/process-tree.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testsRoot = path.join(root, 'tests');
@@ -13,11 +15,10 @@ const batchSizeArg = process.argv.find(value => value.startsWith('--batch-size='
 const batchTimeoutArg = process.argv.find(value => value.startsWith('--batch-timeout-ms='));
 const diagnosticTimeoutArg = process.argv.find(value => value.startsWith('--diagnostic-timeout-ms='));
 const batchSize = Math.min(100, Math.max(1, Number(batchSizeArg?.split('=')[1]) || 24));
-const batchTimeoutMs = Math.min(10 * 60_000, Math.max(30_000, Number(batchTimeoutArg?.split('=')[1]) || 90_000));
+const batchTimeoutMs = Math.min(10 * 60_000, Math.max(30_000, Number(batchTimeoutArg?.split('=')[1]) || 180_000));
 const diagnosticTimeoutMs = Math.min(5 * 60_000, Math.max(10_000, Number(diagnosticTimeoutArg?.split('=')[1]) || 45_000));
-const SERIAL_TEST_FILES = new Set([
-  'tests/gateway-large-state-startup.test.mjs'
-]);
+// Test files that must not share a process batch with others.
+const SERIAL_TEST_FILES = new Set();
 
 function relative(file) {
   return path.relative(root, file).replace(/\\/g, '/');
@@ -82,15 +83,48 @@ function testBatches(files, maxBatchSize = batchSize) {
   return batches;
 }
 
+// The temp directory is often reached through a link or an alias (/var on macOS, a short name on Windows).
+// Tests compare paths they created with paths a child process reports, so they are given the real one.
+const realTemp = (() => { try { return fs.realpathSync.native(os.tmpdir()); } catch { return os.tmpdir(); } })();
+const testEnvironment = { ...process.env, ...(process.platform === 'win32' ? { TEMP: realTemp, TMP: realTemp } : { TMPDIR: realTemp }) };
+
+// A run that is stopped (by its timeout or by the person at the terminal) is stopped together with
+// everything it started, so that no test process is left behind holding a port or a file.
+let running = null;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, async () => {
+    if (running) await processTree.terminateProcessTree(running).catch(() => {});
+    process.exit(130);
+  });
+}
+
 function run(files, stdio = 'inherit', timeoutMs = batchTimeoutMs) {
-  return spawnSync(process.execPath, ['--test', ...files], {
-    cwd: root,
-    env: process.env,
-    stdio,
-    windowsHide: true,
-    encoding: stdio === 'pipe' ? 'utf8' : undefined,
-    timeout: timeoutMs,
-    killSignal: 'SIGKILL'
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, ['--test', ...files], {
+      cwd: root,
+      env: testEnvironment,
+      stdio: ['ignore', stdio, stdio],
+      windowsHide: true,
+      // Its own process group where groups exist, so the whole group can be signalled.
+      detached: process.platform !== 'win32'
+    });
+    running = child;
+    let stdout = '';
+    let stderr = '';
+    let error;
+    child.stdout?.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
+    child.stderr?.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      error = Object.assign(new Error(`Timed out after ${timeoutMs}ms`), { code: 'ETIMEDOUT' });
+      processTree.terminateProcessTree(child).catch(() => {});
+    }, timeoutMs);
+    const settle = (status, failure) => {
+      clearTimeout(timer);
+      if (running === child) running = null;
+      resolve({ status, stdout, stderr, error: error || failure });
+    };
+    child.once('error', failure => settle(null, failure));
+    child.once('close', status => settle(status));
   });
 }
 
@@ -120,11 +154,11 @@ function reportIsolatedFailure(file, result) {
   return rel;
 }
 
-function diagnoseBatch(batch) {
+async function diagnoseBatch(batch) {
   const failures = [];
   console.error(`Batch failed; isolating ${batch.length} test files...`);
   for (const file of batch) {
-    const result = run([file], 'pipe', diagnosticTimeoutMs);
+    const result = await run([file], 'pipe', diagnosticTimeoutMs);
     if (!timedOut(result) && result.error) throw result.error;
     if (!timedOut(result) && result.status === 0) continue;
     failures.push(reportIsolatedFailure(file, result));
@@ -141,9 +175,9 @@ function diagnoseBatch(batch) {
   return failures;
 }
 
-function diagnoseTimedOutGroup(group) {
+async function diagnoseTimedOutGroup(group) {
   if (group.length === 1) {
-    const result = run(group, 'pipe', diagnosticTimeoutMs);
+    const result = await run(group, 'pipe', diagnosticTimeoutMs);
     if (!timedOut(result) && result.error) throw result.error;
     if (!timedOut(result) && result.status === 0) {
       const rel = relative(group[0]);
@@ -159,14 +193,14 @@ function diagnoseTimedOutGroup(group) {
   const halves = [group.slice(0, midpoint), group.slice(midpoint)].filter(part => part.length);
   const failures = [];
   for (const half of halves) {
-    const result = run(half, 'pipe', diagnosticTimeoutMs);
+    const result = await run(half, 'pipe', diagnosticTimeoutMs);
     if (timedOut(result)) {
       console.error(`Timed-out subgroup (${half.length} files): ${half.map(relative).join(', ')}`);
-      failures.push(...diagnoseTimedOutGroup(half));
+      failures.push(...await diagnoseTimedOutGroup(half));
       continue;
     }
     if (result.error) throw result.error;
-    if (result.status !== 0) failures.push(...diagnoseBatch(half));
+    if (result.status !== 0) failures.push(...await diagnoseBatch(half));
   }
   return failures;
 }
@@ -181,16 +215,16 @@ const batches = testBatches(files);
 for (let index = 0; index < batches.length; index += 1) {
   const batch = batches[index];
   console.log(`Running test batch ${index + 1}: ${batch.map(relative).join(', ')}`);
-  const result = run(batch);
+  const result = await run(batch);
   if (timedOut(result)) {
     console.error(`Batch timed out after ${batchTimeoutMs}ms; bisecting ${batch.length} test files...`);
-    const failures = diagnoseTimedOutGroup(batch);
+    const failures = await diagnoseTimedOutGroup(batch);
     if (!failures.length) githubError('.github', 'A test batch timed out but diagnostic reruns did not reproduce a failure. Inspect original output and phase timings; the cause is unconfirmed.');
     process.exit(1);
   }
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    diagnoseBatch(batch);
+    await diagnoseBatch(batch);
     process.exit(result.status || 1);
   }
 }

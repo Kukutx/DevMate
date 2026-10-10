@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decodeValue, encodeValue, extractStrings, hexAddress, hexBytes, searchBytes } from '../gateway/plugins/reverse-values.mjs';
-import { entropy, inspectFormat, mapPEAddress } from '../gateway/plugins/reverse-formats.mjs';
-import { diffBinaries, planPatches, sha256 } from '../gateway/plugins/reverse-files.mjs';
-import { addScan, ReverseSessionStore, scanPage } from '../gateway/plugins/reverse-sessions.mjs';
+import { decodeValue, encodeValue, extractStrings, hexAddress, hexBytes, searchBytes } from '../runtime/engines/reverse-values.mjs';
+import { entropy, inspectFormat, mapPEAddress } from '../runtime/engines/reverse-formats.mjs';
+import { diffBinaries, planPatches, sha256 } from '../runtime/engines/reverse-files.mjs';
+import { addScan, ReverseSessionStore, scanPage } from '../runtime/engines/reverse-sessions.mjs';
 
 function peFixture() {
   const data = Buffer.alloc(0x800);

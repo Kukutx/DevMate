@@ -3,11 +3,11 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildGodotDependencyGraph, extractGodotReferences, parseSceneNodes } from '../gateway/plugins/godot-graph.mjs';
-import { planGodotAutomation, suggestedCapabilitiesForPreset } from '../gateway/plugins/godot-plan.mjs';
-import { __test as reportTest } from '../gateway/plugins/godot-report.mjs';
-import { exportTemplateRoots, parseGodotVersion, runtimeHostCapabilities } from '../gateway/plugins/godot-runtime.mjs';
-import { installQaBridge } from '../gateway/plugins/godot-qa-bridge.mjs';
+import { buildGodotDependencyGraph, extractGodotReferences, parseSceneNodes } from '../runtime/engines/godot-graph.mjs';
+import { planGodotAutomation } from '../runtime/engines/godot-plan.mjs';
+import { __test as reportTest } from '../runtime/engines/godot-report.mjs';
+import { exportTemplateRoots, parseGodotVersion } from '../runtime/engines/godot-runtime.mjs';
+import { installQaBridge } from '../runtime/engines/godot-qa-bridge.mjs';
 
 function workspaceContext(root) {
   const workspace = { id: 'game', name: 'game', root, mode: 'workspace-write', reference: false };
@@ -95,7 +95,7 @@ platform="Windows Desktop"
   return root;
 }
 
-test('parses Godot runtime versions and host capabilities', () => {
+test('parses Godot runtime versions and export template roots', () => {
   const parsed = parseGodotVersion('4.7.1.stable.official.abcdef');
   assert.equal(parsed.valid, true);
   assert.equal(parsed.major, 4);
@@ -103,7 +103,6 @@ test('parses Godot runtime versions and host capabilities', () => {
   assert.equal(parsed.patch, 1);
   assert.equal(parsed.channel, 'stable');
   assert.equal(parsed.official, true);
-  assert.deepEqual(runtimeHostCapabilities('linux', 'x64'), ['core', 'godot', 'linux-x64']);
   const roots = exportTemplateRoots({ platform: 'linux', env: { XDG_DATA_HOME: '/tmp/data' }, home: '/home/test' });
   assert.equal(roots.length, 1);
   assert.equal(roots[0].endsWith(path.join('tmp', 'data', 'godot', 'export_templates')), true);
@@ -132,7 +131,7 @@ test('builds bounded dependency graph with missing and reverse references', asyn
   assert.equal(main.scene.nodeCount, 2);
 });
 
-test('plans exports and mixed automation with bridge and capability requirements', async t => {
+test('plans exports and mixed automation with bridge blockers and ready capability calls', async t => {
   const root = await createProject();
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
   const context = workspaceContext(root);
@@ -142,9 +141,15 @@ test('plans exports and mixed automation with bridge and capability requirements
   await installQaBridge(context, {});
   plan = await planGodotAutomation(context, {});
   assert.equal(plan.ok, true);
-  assert.equal(plan.items.find(item => item.id === 'scenario:web-smoke').requiredCapabilities.includes('browser-qa'), true);
-  assert.equal(plan.items.find(item => item.id === 'export:Windows Desktop').requiredCapabilities.includes('windows-x64'), true);
-  assert.deepEqual(suggestedCapabilitiesForPreset({ platform: 'iOS' }), ['core', 'godot', 'macos-arm64', 'xcode']);
+  // Every item names the 4.0 capability and carries the ready capability.call input and job.start payload.
+  const web = plan.items.find(item => item.id === 'scenario:web-smoke'), desktop = plan.items.find(item => item.id === 'export:Windows Desktop');
+  assert.equal(web.capability, 'godot.acceptance_test');
+  assert.equal(desktop.capability, 'godot.export');
+  assert.deepEqual(desktop.call, { capability: 'godot.export', input: desktop.call.input });
+  assert.equal(desktop.call.input.preset, 'Windows Desktop');
+  assert.deepEqual(desktop.job, { kind: 'capability', input: desktop.call });
+  assert.equal(plan.items.find(item => item.kind === 'native').capability, 'godot.native_test');
+  assert.doesNotMatch(JSON.stringify(plan), /godot_[a-z]|requiredCapabilities|"tool"/, 'no 3.x tool names or Runner labels');
 });
 
 test('automation planning fails closed for protected output destinations', async t => {
@@ -181,11 +186,12 @@ test('escapes report HTML and renders actionable status', () => {
   const html = reportTest.renderReport({
     generatedAt: '2026-01-01T00:00:00.000Z',
     ok: false,
-    runtime: { version: { raw: '4.7.1' }, executableName: 'godot', readiness: { validate: true }, csharp: { ready: true }, exportTemplates: { available: false }, host: { capabilities: ['core', 'godot'] } },
+    runtime: { version: { raw: '4.7.1' }, executableName: 'godot', readiness: { validate: true }, csharp: { ready: true }, exportTemplates: { available: false }, host: { platform: 'linux', arch: 'x64' } },
     audit: { metadata: { name: '<Game>' }, summary: { errors: 1, warnings: 0 }, findings: [{ severity: 'error', code: 'broken', message: '<bad>' }] },
     graph: { summary: { nodes: 1, edges: 0, missing: 0 }, entries: ['res://main.tscn'], missing: [], cycles: [] },
-    plan: { summary: { ready: 0, items: 1 }, items: [{ id: 'scenario:test', tool: 'godot_native_test', blockers: [{ level: 'error', code: 'blocked', message: 'No' }], warnings: [], requiredCapabilities: ['godot'] }] }
+    plan: { summary: { ready: 0, items: 1 }, items: [{ id: 'scenario:test', capability: 'godot.native_test', blockers: [{ level: 'error', code: 'blocked', message: 'No' }], warnings: [] }] }
   });
+  assert.match(html, /godot\.native_test/);
   assert.match(html, /&lt;Game&gt;/);
   assert.match(html, /ATTENTION/);
 });

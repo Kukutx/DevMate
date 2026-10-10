@@ -1,9 +1,9 @@
 {
   "id": "devmate",
   "name": "DevMate",
-  "version": "3.8.9",
+  "version": "4.0.0",
   "minAppVersion": "1.12.7",
-  "description": "Connect your vault to the DevMate local-first MCP workspace gateway.",
+  "description": "Share this vault with ChatGPT, Claude and other MCP clients through a local DevMate runtime, so they can search, read and edit your notes. Requires Node.js 24.",
   "author": "Kukutx",
   "isDesktopOnly": true
 }

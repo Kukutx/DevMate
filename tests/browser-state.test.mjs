@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { __test } from '../gateway/plugins/browser-runner.mjs';
+import { __test } from '../runtime/engines/browser-runner.mjs';
 
 test('reads nested QA state and evaluates bounded operators', () => {
   const state = { player: { health: 82, inventory: ['key', 'potion'] }, boss: { phase: 2 } };
