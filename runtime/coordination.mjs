@@ -138,7 +138,7 @@ export class AgentCoordinator {
 
   budget(workflow, turns) {
     if ((workflow.usedTurns || 0) + turns > workflow.turnBudget)
-      throw new DomainError('workflow_budget', 'Workflow turn budget reached. Increase the visible budget to continue.');
+      throw new DomainError('workflow_budget', 'Workflow turn budget reached (' + workflow.turnBudget + ' turns). Raise it to continue: workflow.update {id:"' + workflow.id + '", turnBudget:<more>}.');
   }
 
   start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, caller }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
@@ -477,7 +477,7 @@ export class AgentCoordinator {
         if (delivery.taskId) this.store.update('task', delivery.taskId, { status: 'running' });
         return job;
       });
-      const turn = session.turn = { job, delivery, startedAt: Date.now(), waitedMs: 0, waitingSince: null, expired: null };
+      const turn = session.turn = { job, delivery, sender: message.sender, startedAt: Date.now(), waitedMs: 0, waitingSince: null, expired: null };
       session.current = job;
       session.output = '';
       session.outputTruncated = false;
@@ -622,7 +622,7 @@ export class AgentCoordinator {
       summary: typeof nativeRequest.summary === 'string' && nativeRequest.summary.trim() ? nativeRequest.summary.slice(0, 500) : nativeRequest.kind,
       options: nativeRequest.options || [], details, ...(session.record ? { native: nativeRequest.native } : {}) };
     // Full access is the owner's standing answer: the permission is granted at once, and what was granted stays on record.
-    const granted = kind === 'approval' && this.grantsApprovals() ? grantOnce(record.options) : undefined;
+    const granted = kind === 'approval' && this.grantsApprovals(agent, this.turnPrincipal(session)) ? grantOnce(record.options) : undefined;
     if (granted) {
       const answer = { optionId: granted };
       this.store.create(kind, { ...record, status: 'resolved', answer, automatic: true });
@@ -665,10 +665,16 @@ export class AgentCoordinator {
     });
   }
 
+  // Whose task the running turn is: the account that sent it, or the one that started the agent that sent it.
+  turnPrincipal(session) {
+    const sender = session?.turn?.sender;
+    return (sender?.kind === 'agent' ? this.find('agent', sender.id)?.caller : sender?.id) || null;
+  }
+
   // Permissions that were already waiting when the owner chose full access.
   grantWaiting() {
     for (const [id, pending] of [...this.decisions]) {
-      if (pending.kind !== 'approval') continue;
+      if (pending.kind !== 'approval' || !this.grantsApprovals(this.store.get('agent', pending.agentId), this.turnPrincipal(this.sessions.get(pending.agentId)))) continue;
       const optionId = grantOnce(pending.nativeRequest.options || []);
       try { if (optionId) this.resolve('approval', { id, optionId, automatic: true }); }
       catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }

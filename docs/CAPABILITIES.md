@@ -1,6 +1,6 @@
 # Capabilities
 
-DevMate's domain tools are called capabilities. They are reached through two operations, exposed to MCP clients as the tools `capability_list` and `capability_call`:
+DevMate's domain tools are called capabilities. They are reached through three operations, exposed to MCP clients as the tools `capability_list`, `capability_call` and `capability_query`. `capability_query` takes the same input and runs only what is read-only (`readOnly`, or a `dryRun` capability with its dry run on), so a client that asks its user before every change has nothing to ask:
 
 ```json
 { "capability": "godot.status", "input": {} }
@@ -101,6 +101,7 @@ Every engine has `enabled` (default `true`). Switching an engine off closes what
 
 `capability.configure` and `capability.settings` are provided by the capability registry (`runtime/capabilities.mjs`):
 
+- A capability that stores a setting itself (`godot.quick_setup`) follows the same rule as `configure`.
 - `configure({ engine, settings, projectId? })`: owner only, and at the owner's computer (the local workbench, or `devmate capability.configure --json '{…}'`). Merges `settings` into the stored values; a `null` value restores the default. Invalid input changes nothing. Through MCP it accepts exactly one change, `{ "enabled": false }`: a connected client can switch an engine off and nothing else, because the other settings name programs and folders on this computer. With the owner's full access profile (`devmate access full`) a client connected as the owner may change all of them.
 - `settings({ engine?, projectId? })`: the effective values, the stored layers and the JSON schema for the owner; other callers get the setting names only, because values name local programs and folders.
 

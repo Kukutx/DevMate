@@ -50,6 +50,18 @@
       "required": [],
       "readOnly": true
     },
+    "capability_query": {
+      "parameters": [
+        "capability",
+        "input",
+        "projectId"
+      ],
+      "required": [
+        "capability",
+        "input"
+      ],
+      "readOnly": true
+    },
     "connection_status": {
       "parameters": [],
       "required": [],
@@ -143,6 +155,16 @@
         "summary"
       ],
       "required": [],
+      "readOnly": true
+    },
+    "operations_query": {
+      "parameters": [
+        "input",
+        "operation"
+      ],
+      "required": [
+        "operation"
+      ],
       "readOnly": true
     },
     "process_list": {
@@ -387,6 +409,7 @@
     "capability.call",
     "capability.configure",
     "capability.list",
+    "capability.query",
     "capability.settings",
     "connection.restart",
     "connection.start",
@@ -420,6 +443,7 @@
     "message.send",
     "operations.call",
     "operations.list",
+    "operations.query",
     "operations.read",
     "process.list",
     "process.read",

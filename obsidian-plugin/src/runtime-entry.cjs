@@ -19,7 +19,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   const views = new Set();
   let subscription, vaultBridge, attaching, syncing, active = false, timer, contextTimer, statusItem;
   // Attach by itself while the setting allows it; an explicit Detach holds until the next explicit Attach.
-  let wanted = plugin.settings?.autoAttach !== false;
+  let wanted = plugin.settings?.autoAttach !== false, startConsidered = false;
+  const recoveries = [];
   let runtime = { state: 'stopped', running: false }, vault = 'detached', vaultAccess = null, lastError = null, windowBound = false, boundProject = null, publishedContext = '';
   // Projects are stored under their real path. Only the vault's own path is resolved here: another project whose
   // folder has been deleted or is on an unplugged drive must not keep this vault from attaching.
@@ -227,9 +228,27 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     contextTimer.unref?.();
   }
 
+  // Starting with Obsidian is the owner's setting. It happens once, when the app comes up. After that only a runtime
+  // that vanished without a clean stop is started again, a few times at most: one its user stopped stays stopped.
+  async function startsItself(state) {
+    if (plugin.settings?.autoStart !== true) return false;
+    if (startConsidered) {
+      if (!state.crashed) return false;
+      const moment = Date.now();
+      while (recoveries.length && moment - recoveries[0] > 600_000) recoveries.shift();
+      if (recoveries.length >= 3) return false;
+      recoveries.push(moment);
+    }
+    startConsidered = true;
+    try { await client.start(); return true; }
+    catch (error) { lastError = error.message || String(error); return false; }
+  }
+
   // Bring this window in line with the runtime: attach again after a restart, detach state after a stop.
   async function syncOnce() {
     runtime = await client.status();
+    if (runtime.running) startConsidered = true;
+    else if (await startsItself(runtime)) runtime = await client.status();
     if (!runtime.running) {
       // Nothing can confirm a detach now; a later start gets a fresh listener.
       if (vaultBridge) { vaultBridge.dispose(); vaultBridge = null; }

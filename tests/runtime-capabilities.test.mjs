@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { McpServer, inputRequired } from '@modelcontextprotocol/server';
 import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { createCapabilities, normalizeExternalServers } from '../runtime/capabilities.mjs';
-const testOwnerRole = Object.freeze({ callerRole: 'owner' });
+// The owner at their computer, who may also set an engine up.
+const testOwnerRole = Object.freeze({ callerRole: 'owner', ownerDecides: true });
 
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-capability-'));
@@ -193,11 +194,17 @@ test('concurrent engine calls keep caller role isolated and only owners may upda
   assert.equal((await cap.call({projectId:'one',capability:'fixture.read'},{callerRole:'read'})).structuredContent.ok,true);
   await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'read'}},{callerRole:'read'}),error=>error.code==='forbidden');
   const results=await Promise.allSettled([
-    cap.call({projectId:'one',capability:'fixture.configure',input:{value:'owner'}},{callerRole:'owner'}),
+    cap.call({projectId:'one',capability:'fixture.configure',input:{value:'owner'}},testOwnerRole),
     cap.call({projectId:'one',capability:'fixture.configure',input:{value:'writer'}},{callerRole:'write'})
   ]);
   assert.equal(results[0].status,'fulfilled');assert.equal(results[1].status,'rejected');
   assert.equal(results[1].reason.code,'forbidden');
+  assert.deepEqual(f.settings.get('capability.one.fixture'),{value:'owner'});
+  // The owner reached through a connected client sets an engine up only with the full access profile (ownerDecides).
+  await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'remote'}},{callerRole:'owner'}),error=>error.code==='forbidden'&&/set up by the owner/.test(error.message));
+  // The read-only call never reaches something that changes.
+  await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'query'}},{...testOwnerRole,readOnly:true}),error=>error.code==='forbidden'&&/capability_call/.test(error.message));
+  assert.equal((await cap.call({projectId:'one',capability:'fixture.read'},{callerRole:'owner',readOnly:true})).structuredContent.ok,true);
   assert.deepEqual(f.settings.get('capability.one.fixture'),{value:'owner'});
 });
 

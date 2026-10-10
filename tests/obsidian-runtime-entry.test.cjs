@@ -347,3 +347,26 @@ test('a vault shared after its window was bound is bound again, so the active no
   await f.entry.sync();
   assert.equal(bound(), 2);
 });
+
+test('with "Start the runtime with Obsidian" on, it is started once when the app comes up, and again only after a crash', async t => {
+  const f = fixture(t, { running: false, settings: { autoStart: true } });
+  let starts = 0; const start = f.client.start;
+  f.client.start = async () => { starts++; return start(); };
+  await f.entry.activate();
+  assert.equal(starts, 1); assert.equal(f.entry.status().running, true);
+  // A runtime its user stopped stays stopped.
+  await f.client.stop(); await f.entry.sync();
+  assert.equal(starts, 1); assert.equal(f.entry.status().running, false);
+  // One that vanished without a clean stop is brought back, a few times at most.
+  f.state.crashed = true;
+  for (let round = 0; round < 5; round++) { await f.entry.sync(); f.state.running = false; }
+  assert.equal(starts, 4);
+});
+
+test('without that setting the plugin never starts the runtime by itself', async t => {
+  const f = fixture(t, { running: false });
+  let starts = 0; f.client.start = async () => { starts++; };
+  f.state.crashed = true;
+  await f.entry.activate(); await f.entry.sync();
+  assert.equal(starts, 0); assert.equal(f.entry.status().running, false);
+});

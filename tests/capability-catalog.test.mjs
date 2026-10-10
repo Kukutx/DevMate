@@ -8,7 +8,7 @@ import { createCapabilities } from '../runtime/capabilities.mjs';
 import { godotAutomationConfigSchema } from '../runtime/engines/godot.mjs';
 import { advancedAutomationConfigSchema } from '../runtime/engines/godot-advanced-automation.mjs';
 
-const owner = Object.freeze({ callerRole: 'owner' }), writer = Object.freeze({ callerRole: 'write' }), reader = Object.freeze({ callerRole: 'read' });
+const owner = Object.freeze({ callerRole: 'owner', ownerDecides: true }), writer = Object.freeze({ callerRole: 'write' }), reader = Object.freeze({ callerRole: 'read' });
 const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-capability-catalog-'));
 // A real native executable that answers --version and matches the Godot executable pattern.
 const godot = path.join(shared, process.platform === 'win32' ? 'godot.exe' : 'godot');

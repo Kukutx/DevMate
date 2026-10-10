@@ -85,6 +85,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate start` / `stop` / `restart` / `status` | The background runtime |
 | `devmate serve` | Run in the foreground until Ctrl+C |
 | `devmate doctor` | Check the installation. Works when nothing is running and says what to do next |
+| Start at sign-in, without an editor | Have your system run `devmate start` when you sign in: a Task Scheduler task on Windows, a systemd user unit on Linux, a launchd agent on macOS |
 | `devmate logs [--lines N]` | Recent runtime log |
 | `devmate project add [directory] [--name N] [--read-only]` / `list` / `remove` | What is shared. Without a directory, the current one |
 | `devmate access [guarded \| full]` | The permission profile: what a connected client may decide (see [Who may do what](#who-may-do-what)) |
@@ -121,7 +122,7 @@ Settings (user settings only: a repository's `.vscode/settings.json` cannot chan
 | --- | --- | --- |
 | `devMate.shareFolders` | `readWrite` | What connected clients may do in a trusted folder you open: `readWrite`, `readOnly`, `ask`, `never`. Folders of an untrusted workspace are never shared |
 | `devMate.shareEditorContext` | `true` | Whether clients see the active file, selection, open files and diagnostics |
-| `devMate.autoStart` | `false` | Start the runtime with the editor, and again after a crash |
+| `devMate.autoStart` | `true` | Start the runtime with the editor, and again after a crash. One you stopped stays stopped |
 | `devMate.runtimePort` | `8788` | The local port when this editor starts the runtime |
 | `devMate.nodeCommandPath` | empty | A Node.js 24+ executable, when it is not found on its own |
 | `devMate.runtimeInstanceDirectory` | empty | Another instance directory than `~/.devmate/runtime` |
@@ -214,7 +215,7 @@ A connector that cannot start does not take local work down and is never hidden:
 - **`auth.mode` is `none` by default.** Whoever reaches the MCP address is you. Treat a public address like a password, or require sign-in.
 - **Optional sign-in (OAuth).** `devmate connect … --auth oauth` makes clients of the public address sign in: on first connection they are sent to DevMate's authorisation page, where you enter a one-time code from `devmate login-code`. With `auth.member.create` you can issue read-only or read-write identities limited to named projects. A client that publishes no description of itself (a client metadata document) is registered by you under `auth.clients` in the configuration, with its name and redirect addresses. Clients on your own computer never need to sign in.
 - **Approvals and questions are answered by you, at your computer.** When an agent asks for permission, you answer in the editor or the local workbench. No connected client can answer, including the model that started the agent.
-- **Full access, when you want none of that in your way.** The default profile is *guarded*: everything above. If you drive your work from a chat client and do not want to walk to the computer, switch on *full access* there: `devmate access full`, **DevMate: Change Permission Profile** in VS Code, or **Permissions…** in Obsidian. A client connected as you can then share folders, widen access, read credential files, set up capability engines and answer what an agent asks, and what a delegated agent asks permission for is granted automatically (each grant stays on record). It takes effect at once and only you, at your computer, can switch it on; `devmate access guarded` takes it back. With full access, whoever reaches your MCP address acts as you without asking: keep the address private or require sign-in. Signed-in members keep exactly their grants.
+- **Full access, when you want none of that in your way.** The default profile is *guarded*: everything above. If you drive your work from a chat client and do not want to walk to the computer, switch on *full access* there: `devmate access full`, **DevMate: Change Permission Profile** in VS Code, or **Permissions…** in Obsidian. A client connected as you can then share folders, widen access, read credential files, set up capability engines, answer what an agent asks and run the doctor, and what an agent you delegated to asks permission for is granted automatically (each grant stays on record). It takes effect at once and only you, at your computer, can switch it on; `devmate access guarded` takes it back. With full access, whoever reaches your MCP address acts as you without asking: keep the address private or require sign-in. Signed-in members keep exactly their grants.
 - **Credential files are protected by default.** `.env`, key files, `.npmrc` and the like are not read or listed by the file tools; Git status names them, marked "do not commit". You can switch that off for one project, at your computer.
 - **Secrets in command lines are not shown.** Process lists and activity records replace inline tokens and passwords with `[redacted]`; the command that runs is unchanged. This recognises common forms and is no guarantee.
 - **The workbench session stays in its browser tab.** It is entered through a single-use link, and its session is never a cookie that other local services would receive.
@@ -290,6 +291,7 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 
 - Nothing of 3.x is read: projects, connection and sign-in are set up again. Old settings in your editor are ignored; old state on disk is left alone and can be deleted.
 - ngrok, the Gateway and Runners are gone. Cloud clients now come in through a tunnel you own, see [Connecting a client](#connecting-a-client). The MCP address changes, so update the connector in ChatGPT or Claude.
+- DevMate no longer starts ngrok for you. A reserved ngrok domain still works as an existing HTTPS proxy: run `ngrok http 8789 --url https://<your-domain>` yourself (the ingress port, not 8788) and tell DevMate with `devmate connect https --url https://<your-domain>/mcp`, then `devmate restart`.
 - If a 3.x Gateway is still running it may hold port 8788, and 4.0 then reports that the port is in use. Close every editor window once, or end the old `node` process, and start again.
 - The tool names a model sees have changed; clients pick them up when the connector is refreshed.
 

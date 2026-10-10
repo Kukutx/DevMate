@@ -3,6 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const DEFAULT_RUNTIME_PORT = 8788;
+// Set in the environment of every command and agent the runtime starts for a caller. The devmate command line
+// that finds it says so with each request (viaClient), and the runtime then treats it as a connected client:
+// a model that runs "devmate project add" through its shell tool gets what it would get through MCP, not the
+// authority of the owner at the keyboard. A caller that removes the variable is no longer well-behaved; what
+// stands against that is read-only sharing, as SECURITY.md says.
+export const CLIENT_COMMAND_ENV = 'DEVMATE_CLIENT_COMMAND';
 // The longest an operation waits on the server is 110 seconds (shell.run, agents.delegate).
 const CALL_TIMEOUT_MS = 130000;
 const EVENT_BYTES = 4 * 1024 * 1024;
@@ -75,7 +81,7 @@ function stopped(detail) {
 }
 
 export function createRuntimeClient({
-  instanceRoot, baseUrl, ownerToken, windowId, fetchImpl = globalThis.fetch, timeoutMs = CALL_TIMEOUT_MS
+  instanceRoot, baseUrl, ownerToken, windowId, viaClient = false, fetchImpl = globalThis.fetch, timeoutMs = CALL_TIMEOUT_MS
 } = {}) {
   const directory = instanceDirectory(instanceRoot);
   const explicitUrl = baseUrl ? localControlUrl(baseUrl) : null;
@@ -112,6 +118,7 @@ export function createRuntimeClient({
         // An editor window normally acts within its own project. scoped:false is its owner deciding something about a folder.
         ...(windowId && authenticated && scoped ? { 'X-DevMate-Window-ID': windowId } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(viaClient ? { 'X-DevMate-Via': 'client' } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json', Origin: origin } : {})
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),

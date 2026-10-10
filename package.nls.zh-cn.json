@@ -19,7 +19,7 @@
   "config.runtimeInstanceDirectory": "DevMate 运行时的状态目录。留空则使用 ~/.devmate/runtime。使用同一目录的所有编辑器窗口、其他编辑器和命令行共用一个运行时。",
   "config.nodeCommandPath": "本机已安装的 Node.js 24 或更高版本的可执行文件绝对路径。留空则在 PATH 和常见安装位置里查找。",
   "config.runtimePort": "由此编辑器启动运行时时使用的本机回环 HTTP 端口。已经在运行的运行时保持它自己的端口。",
-  "config.autoStart": "打开含有受信任本地文件夹的窗口时，启动共享的 DevMate 运行时及其已配置的连接；运行时意外退出后再次启动它。默认关闭：否则只在你明确要求时启动。",
+  "config.autoStart": "打开含有受信任本地文件夹的窗口时，启动共享的 DevMate 运行时及其已配置的连接；运行时意外退出后再次启动它。你主动停止的不会被拉起。关闭此项后只在你明确要求时启动。",
   "config.shareFolders": "对你打开的受信任本地文件夹，已连接的 AI 客户端默认可以做什么；之后可用“DevMate: 更改文件夹共享”对单个文件夹另行决定。不受信任的工作区里的文件夹不会被共享。",
   "config.shareFolders.readWrite": "把每个受信任的文件夹以读写方式共享给已连接的 AI 客户端。窗口会提示一次，之后任何文件夹都可以更改。",
   "config.shareFolders.readOnly": "把每个受信任的文件夹以只读方式共享。",

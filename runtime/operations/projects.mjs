@@ -9,8 +9,8 @@ const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copil
 const OWNER_ONLY_PROTECTION = 'Credential-file protection is lifted by the owner on their own computer: in the local workbench (devmate ui), or with devmate project.update. With the full access profile (devmate access full) a connected client may do it.';
 
 /** Everything a model needs to orient itself in a project, gathered in one call. */
-export async function projectOverview(service, projectId) {
-  const project = service.project(projectId), root = project.root;
+export async function projectOverview(service, projectId, caller) {
+  const project = service.project(projectId, { caller }), root = project.root;
   const readText = (file, limit) => {
     try { const result = service.workspace.read(project, { path: file }); return { path: file, text: result.text.slice(0, limit), truncated: result.truncated || result.text.length > limit }; }
     catch (error) { if (['not_found', 'binary_file', 'file_too_large', 'unsafe_path', 'unsafe_file'].includes(error.code)) return null; throw error; }
@@ -73,7 +73,7 @@ export function defineProjectOperations(service, add) {
   }, { ownerDecision: 'Folders are shared by the owner on their own computer: by opening the folder in an editor that has DevMate, or with the command: devmate project add <folder>. To let a connected client share folders, the owner switches on full access there: devmate access full' });
   add('project.overview', { ...projectScope }, true,
     'Orient yourself in a project in one call: Git branch and pending changes, the project\'s agent instructions (AGENTS.md and similar), its run/test scripts, top-level layout and editor diagnostics count. Call this first when starting work on a project.',
-    args => projectOverview(service, args.projectId), { present: result => [
+    (args, context) => projectOverview(service, args.projectId, context), { present: result => [
       result.name + ' — ' + result.root + ' (' + result.access + ')',
       result.git ? 'Git: branch ' + (result.git.branch || '(detached)') + ', ' + result.git.changedFiles + ' changed file(s)' +
         (result.changes.length ? '\n' + result.changes.map(item => '  ' + item.status + ' ' + item.path + (item.protected ? '  [protected: do not commit]' : '')).join('\n') : '')

@@ -170,6 +170,23 @@ test('a model sees a short tool list with readable titles and no idempotency key
   const decision = await rpc('tools/call', { name: 'operations_call', arguments: { operation: 'approval.resolve', input: { id: 'approval-x', optionId: 'allow' } } });
   assert.match(JSON.stringify(decision.body.result), /made by the user in the DevMate workbench/);
 });
+test('the command line a connected client starts is answered as that client, and real commands carry the marker that makes it say so', async t => {
+  const { call, base, token, projectRoot, rpc } = await fixture(t);
+  const via = { 'x-devmate-via': 'client' };
+  // What the owner does at the computer is refused to it: sharing a folder, choosing the profile, opening the workbench.
+  const share = await call('project.create', { root: projectRoot }, via);
+  assert.equal(share.status, 403); assert.match(share.body.error.message, /shared by the owner on their own computer/);
+  assert.equal((await call('access.update', { profile: 'full' }, via)).body.error.code, 'forbidden');
+  const link = await fetch(base + '/api/session', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json', ...via }, body: '{}' });
+  assert.equal(link.status, 403); await link.text();
+  assert.equal((await call('project.list', {}, via)).status, 200, 'what any connected client may do still works');
+  // The owner themselves, without the marker.
+  assert.equal((await call('project.create', { root: projectRoot })).status, 200);
+  // A command run through the shell tool finds the marker in its environment.
+  const variable = process.platform === 'win32' ? '$env:DEVMATE_CLIENT_COMMAND' : '"$DEVMATE_CLIENT_COMMAND"';
+  const ran = await rpc('tools/call', { name: 'shell_run', arguments: { command: 'echo marker=' + variable } });
+  assert.match(ran.body.result.content[0].text, /marker=1/);
+});
 test('MCP refuses browser cross-origin access despite auth:none, and answers preflight for the headers clients send', async t => {
   const { rpc, runtime } = await fixture(t);
   const denied = await rpc('tools/list', {}, { origin: 'https://untrusted.example' });

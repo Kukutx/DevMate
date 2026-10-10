@@ -184,7 +184,7 @@
         },
         "devMate.autoStart": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "scope": "machine",
           "description": "%config.autoStart%"
         },

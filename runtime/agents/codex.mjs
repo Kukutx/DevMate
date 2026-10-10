@@ -303,7 +303,9 @@ export class CodexAdapter extends AdapterBase {
         const action = ['accept', 'decline', 'cancel'].includes(response?.action) ? response.action : 'cancel';
         return this.transport.respond(id, { action, content: action === 'accept' ? response.content : null });
       }
-      return this.transport.respond(id, { answers: response?.answers && typeof response.answers === 'object' ? response.answers : {} });
+      // Codex takes the answers keyed by question id, each a list.
+      const questions = Array.isArray(params.questions) ? params.questions : [], picked = AdapterBase.answersFor(questions, response);
+      return this.transport.respond(id, { answers: picked ? Object.fromEntries(questions.map((question, index) => [question.id, { answers: picked[index] }]).filter(([, answer]) => answer.answers.length)) : {} });
     }
     this.transport.respondError(id, -32601, 'Unsupported Codex server request: ' + method);
   }

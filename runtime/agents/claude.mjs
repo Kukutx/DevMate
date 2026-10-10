@@ -71,8 +71,10 @@ export class ClaudeAdapter extends AdapterBase {
         let decision;
         if (input.tool_name === 'AskUserQuestion' && this.options.onInput) {
           const response = await this.ask(request, { signal: gone.signal });
-          decision = response?.answers && typeof response.answers === 'object'
-            ? { behavior: 'allow', updatedInput: { ...input.input, answers: response.answers } }
+          // Claude Code takes the answers keyed by the text of each question, one string per question.
+          const questions = Array.isArray(input.input.questions) ? input.input.questions : [], picked = AdapterBase.answersFor(questions, response);
+          decision = picked?.every(answer => answer.length)
+            ? { behavior: 'allow', updatedInput: { ...input.input, answers: Object.fromEntries(questions.map((question, index) => [question.question, picked[index].join(', ')])) } }
             : { behavior: 'deny', message: 'User input cancelled' };
         } else {
           const choice = await this.decide({ ...request, options: [{ optionId: 'allow', name: 'Allow once' }, { optionId: 'deny', name: 'Deny' }] }, { signal: gone.signal });

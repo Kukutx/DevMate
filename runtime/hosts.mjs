@@ -159,13 +159,14 @@ export function createHostRegistry({service,instanceRoot,fetchImpl=globalThis.fe
       : ['not_recorded','No note change is journaled under this id, so no single-note change was applied. For a batch, read obsidian.properties_batch_list.'];
     return{operationId,outcome,guidance,operation:journal,request};
   }
-  async function call({projectId,capability,input={}},{callerRole,signal}={}) {
+  async function call({projectId,capability,input={}},{callerRole,readOnly=false,signal}={}) {
     ensure();
     const definition=obsidianCapabilities.find(item=>item.name===capability);
     if(!definition)throw unstarted('unknown_capability','Unknown Obsidian capability: '+capability+'. capability.list {engine:"obsidian"} shows them.');
     const write=!definition.annotations.readOnlyHint;
     if(!['owner','write','read'].includes(callerRole))throw unstarted('forbidden','A verified caller role is required.');
     if(callerRole==='read'&&write)throw unstarted('forbidden','This Obsidian operation requires write access.');
+    if(readOnly&&write)throw unstarted('forbidden',capability+' changes something: call it with capability_call.');
     const project=service.project(projectId,{write});
     let args;
     try{args=definition.schema.parse(input);}

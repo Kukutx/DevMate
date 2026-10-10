@@ -224,9 +224,13 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     }
     const authenticated = owner(req);
     if (!authenticated) return refuse(res, 'unauthorized', 'Local owner authentication required.');
+    // The command line, started by a connected client through its shell tool or by a delegated agent: it speaks
+    // for that client, not for the owner at this computer.
+    const viaClient = req.headers['x-devmate-via'] !== undefined;
+    const local = viaClient ? {} : { surface: 'local' };
     if (url.pathname === '/api/session' && req.method === 'POST') {
       // Only the owner token mints browser sessions; a browser session cannot multiply itself.
-      if (authenticated !== 'token') return refuse(res, 'forbidden', 'A workbench sign-in link is created with the owner token.');
+      if (authenticated !== 'token' || viaClient) return refuse(res, 'forbidden', 'A workbench sign-in link is created by the owner at this computer.');
       for (const [code, expiresAt] of signInCodes) if (expiresAt < Date.now()) signInCodes.delete(code);
       const code = randomBytes(32).toString('base64url');
       signInCodes.set(code, Date.now() + SIGN_IN_CODE_MS);
@@ -239,14 +243,14 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       if (scope && requestProject && requestProject !== scope.projectId) throw new DomainError('scope_mismatch', 'Project is outside this editor window.');
       return send(res, 200, { ok: true, result: await service.snapshot({
         projectId: scope?.projectId || requestProject, workflowId: url.searchParams.get('workflowId') || undefined
-      }, { id: 'owner', role: 'owner', surface: 'local', ...(scope || {}) }) });
+      }, { id: 'owner', role: 'owner', ...local, ...(scope || {}) }) });
     }
     if (url.pathname === '/api/call' && req.method === 'POST') {
       const input = await body(req);
       if (typeof input.operation !== 'string' || !input.operation) throw new DomainError('invalid_input', 'operation must name a DevMate operation.');
       if (input.input !== undefined && (!input.input || typeof input.input !== 'object' || Array.isArray(input.input))) throw new DomainError('invalid_input', 'input must be a JSON object.');
       if (stopping && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(input.operation)) return refuse(res, 'runtime_stopping', 'Runtime is stopping.');
-      const context = { id: 'owner', role: 'owner', surface: 'local' };
+      const context = { id: 'owner', role: 'owner', ...local };
       const windowId = req.headers['x-devmate-window-id'];
       if (windowId) {
         context.windowId = windowId;

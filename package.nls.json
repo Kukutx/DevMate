@@ -19,7 +19,7 @@
   "config.runtimeInstanceDirectory": "DevMate runtime state directory. Leave empty for ~/.devmate/runtime. Every editor window, other editors and the CLI that use the same directory share one runtime.",
   "config.nodeCommandPath": "Absolute path of a Node.js 24+ executable installed on this computer. Leave empty to find one on PATH and in the usual install locations.",
   "config.runtimePort": "Loopback HTTP port used when this editor starts the runtime. A runtime that is already running keeps its own port.",
-  "config.autoStart": "Start the shared DevMate runtime, and its configured connection, when a window with a trusted local folder opens, and start it again if it ends unexpectedly. Off by default: starting is otherwise explicit.",
+  "config.autoStart": "Start the shared DevMate runtime, and its configured connection, when a window with a trusted local folder opens, and start it again if it ends unexpectedly. A runtime you stopped stays stopped. Switch this off to start only when you ask.",
   "config.shareFolders": "What connected AI clients may do in a trusted local folder you open, until you decide otherwise for that folder with DevMate: Change Folder Sharing. Folders of an untrusted workspace are never shared.",
   "config.shareFolders.readWrite": "Share each trusted folder with connected AI clients, read and write. The window says so once and you can change any folder later.",
   "config.shareFolders.readOnly": "Share each trusted folder read only.",

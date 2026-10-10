@@ -594,7 +594,9 @@ test('an agent process inherits an allow-list, never the runtime\'s whole enviro
     GEMINI_API_KEY:'gm',XAI_API_KEY:'xai',TUNNEL_TOKEN:'t',CONTROL_PLANE_API_KEY:'c',DEVMATE_AGENT_TOKEN:'d',VSCODE_PID:'1',ELECTRON_RUN_AS_NODE:'1',GITHUB_TOKEN:'gh',
     NPM_TOKEN:'npm',AWS_SECRET_ACCESS_KEY:'aws',DATABASE_URL:'postgres://secret'};
   const codex=agentEnvironment('codex',{env:{EXTRA:'mapped'}},source);
-  assert.deepEqual(Object.keys(codex).sort(),['APPDATA','CODEX_HOME','EXTRA','JAVA_HOME','LC_ALL','NODE_EXTRA_CA_CERTS','Path','TEMP','USERPROFILE','https_proxy'].sort());
+  // The marker tells the devmate command line, run in the agent's own shell, that it speaks for a connected client.
+  assert.deepEqual(Object.keys(codex).sort(),['APPDATA','CODEX_HOME','DEVMATE_CLIENT_COMMAND','EXTRA','JAVA_HOME','LC_ALL','NODE_EXTRA_CA_CERTS','Path','TEMP','USERPROFILE','https_proxy'].sort());
+  assert.equal(codex.DEVMATE_CLIENT_COMMAND,'1');
   assert.equal(agentEnvironment('codex',{inheritApiKeys:true},source).OPENAI_API_KEY,'sk-openai');
   assert.equal(agentEnvironment('codex',{inheritApiKeys:true},source).ANTHROPIC_API_KEY,undefined,'only the provider\'s own account variables pass through');
   const claude=agentEnvironment('claude',{inheritApiKeys:true},source);

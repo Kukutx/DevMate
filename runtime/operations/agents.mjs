@@ -15,7 +15,7 @@ export function defineAgentOperations(service, add) {
     (result.changedFiles?.length ? '\nWorking tree after this task (git status):\n' + result.changedFiles.map(entry => '  ' + entry).join('\n') : '') +
     '\n[agent ' + result.status + (result.settled ? '' : '; call agents_result agentId:' + result.agentId + (result.jobId ? ' jobId:' + result.jobId : result.deliveryId ? ' deliveryId:' + result.deliveryId : '') + ' to wait for this task') +
     (waiting(result) ? '; ' + waiting(result) + (service.fullAccess()
-      ? ' await an answer: from the user in the DevMate workbench, or from the owner\'s client after asking them, with operations_call (approval.resolve {id, optionId} or input.respond {id, response}; input.list shows the question)'
+      ? ' await an answer: from the user in the DevMate workbench, or from the owner\'s client after asking them, with operations_call (approval.resolve {id, optionId}; input.respond {id, response:"<the answer>"}); operations_query input.list shows the question'
       : ' await the user in the DevMate workbench') : '') + ']';
   const turnMeta = ['agentId', 'workflowId', 'status', 'settled', 'deliveryId', 'jobId', 'approvals', 'inputs', 'error'];
   // What the agent left behind in the project, for the model that asked for the work.

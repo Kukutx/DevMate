@@ -431,6 +431,8 @@ function approvalCard(approval) {
     options.length ? null : caption('The agent did not offer any choices for this request.'),
     can('approval.resolve') ? null : caption(ANSWER_LOCALLY));
 }
+// A question is known by its id where the agent gives one (Codex), otherwise by its own text (Claude Code).
+const qid = question => str(question.id) || str(question.question) || str(question.header);
 function inputRequest(v, request) {
   const details = request.details || {}, draft = v.answers[request.id] ||= {}, questions = Array.isArray(details.questions) ? details.questions : null;
   const schema = details.requestedSchema?.type === 'object' ? details.requestedSchema : null, properties = Object.entries(schema?.properties || {});
@@ -443,21 +445,21 @@ function inputRequest(v, request) {
     request.agentId ? caption(agentName(request.agentId)) : null);
   if (questions) {
     for (const question of questions) {
-      const options = Array.isArray(question.options) ? question.options : [], title = str(question.question) || str(question.header) || question.id;
+      const options = Array.isArray(question.options) ? question.options : [], title = str(question.question) || str(question.header) || qid(question);
       if (question.multiSelect && options.length) node.append(el('fieldset', {class: 'check-list'}, el('legend', {text: title}),
-        options.map(option => el('label', {class: 'check'}, checkbox(draft, question.id + ':' + option.label), option.label + (option.description ? ' — ' + option.description : '')))));
+        options.map(option => el('label', {class: 'check'}, checkbox(draft, qid(question) + ':' + option.label), option.label + (option.description ? ' — ' + option.description : '')))));
       else node.append(label(title, options.length
-        ? select(draft, question.id, options.map(option => ({id: option.label, name: option.label + (option.description ? ' — ' + option.description : '')})), 'Choose an answer')
-        : input(draft, question.id, {type: question.isSecret ? 'password' : 'text'})));
-      if (options.length && question.isOther !== false) node.append(label('Or your own answer', input(draft, question.id + ':other')));
+        ? select(draft, qid(question), options.map(option => ({id: option.label, name: option.label + (option.description ? ' — ' + option.description : '')})), 'Choose an answer')
+        : input(draft, qid(question), {type: question.isSecret ? 'password' : 'text'})));
+      if (options.length && question.isOther !== false) node.append(label('Or your own answer', input(draft, qid(question) + ':other')));
     }
     node.append(el('div', {class: 'actions'}, opButton('Respond', 'input.respond', () => {
       const answers = {};
       for (const question of questions) {
-        const options = Array.isArray(question.options) ? question.options : [], own = str(draft[question.id + ':other']).trim();
-        const chosen = own ? [own] : question.multiSelect && options.length ? options.filter(option => draft[question.id + ':' + option.label]).map(option => option.label) : [str(draft[question.id])].filter(Boolean);
+        const options = Array.isArray(question.options) ? question.options : [], own = str(draft[qid(question) + ':other']).trim();
+        const chosen = own ? [own] : question.multiSelect && options.length ? options.filter(option => draft[qid(question) + ':' + option.label]).map(option => option.label) : [str(draft[qid(question)])].filter(Boolean);
         if (!chosen.length) throw new Error('Answer each question before responding.');
-        answers[question.id] = {answers: chosen};
+        answers[qid(question)] = {answers: chosen};
       }
       return respond({answers});
     }, {class: 'primary'})));

@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import processTree from '../platform/process-tree.js';
+import { CLIENT_COMMAND_ENV } from '../client.mjs';
 
 export class AgentAdapterError extends Error {
   constructor(code, message, details) { super(message); this.name = 'AgentAdapterError'; this.code = code; if (details !== undefined) this.details = details; }
@@ -68,7 +69,8 @@ export function agentEnvironment(provider, { env = {}, inheritApiKeys = false } 
     const upper = name.toUpperCase();
     if (typeof value === 'string' && (allowed.has(upper) || upper.startsWith('LC_'))) inherited[name] = value;
   }
-  return { ...inherited, ...env };
+  // An agent's own shell is a connected client's shell: the devmate command line run there says so.
+  return { ...inherited, ...env, [CLIENT_COMMAND_ENV]: '1' };
 }
 // A helper DevMate starts with its own Node binary. Under an Electron host that
 // binary is the editor, which runs scripts only when told to behave as Node.
@@ -283,6 +285,19 @@ export class AdapterBase {
     return request.options.find(x => x.optionId === choice?.optionId) || null;
   }
   ask(request, { signal } = {}) { return this.consult('input', this.options.onInput, request, signal); }
+  // What was answered, per question in order, or null when nothing was. An answer comes as plain text (one question),
+  // or as `answers` keyed by the question's id, its text or its header, each a string, a list or {answers:[…]}.
+  static answersFor(questions, response) {
+    const list = Array.isArray(questions) ? questions : [];
+    if (typeof response === 'string') return list.length === 1 && response.trim() ? [[response]] : null;
+    const given = response?.answers;
+    if (!given || typeof given !== 'object' || Array.isArray(given)) return null;
+    return list.map(question => {
+      const value = [question.id, question.question, question.header].filter(key => typeof key === 'string' && key).map(key => given[key]).find(item => item !== undefined && item !== null);
+      const picked = Array.isArray(value?.answers) ? value.answers : Array.isArray(value) ? value : value === undefined ? [] : [value];
+      return picked.filter(item => ['string', 'number', 'boolean'].includes(typeof item)).map(String);
+    });
+  }
   abortApprovals() { for (const item of this.approvals) item.abort(); }
   async steer() { throw fail('unsupported_capability', this.provider + ' does not expose steering through this adapter'); }
   async close() { this.closed = true; this.abortApprovals(); await this.transport?.close(); this.setState('closed'); }

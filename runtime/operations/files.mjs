@@ -57,6 +57,6 @@ export function defineFileOperations(service, add) {
     ['git.blame', 'gitBlame', { path: projectPath, startLine: line.optional(), endLine: line.optional(), ref }, true, 'Show who last changed each line of a file.', { present: stdout }],
     ['git.branches', 'gitBranches', {}, true, 'List local and remote branches and the current branch.']
   ]) {
-    add(name, { ...projectScope, ...shape }, readOnly, description, args => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args), options);
+    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly, caller: context }), args), options);
   }
 }

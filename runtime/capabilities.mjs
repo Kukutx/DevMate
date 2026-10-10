@@ -30,7 +30,7 @@ const ROLES = ['owner','write','read'];
 const HOST_ENGINE = 'obsidian';
 const MAX_ENGINE_PROCESSES = 8;
 const LIST_HINT = 'Flags are shown only when true. capability_list {name} returns the input schema of one capability and {engine} the schemas of one engine. ' +
-  'Invoke with capability_call {capability, input}. A longRunning capability can exceed a minute: start it with job.start {kind:"capability", input:{capability, input}} and follow it with job.read. ' +
+  'Invoke a readOnly capability with capability_query {capability, input} and every other one with capability_call. A longRunning capability can exceed a minute: start it with job.start {kind:"capability", input:{capability, input}} and follow it with job.read. ' +
   'ownerOnly capabilities are refused for other callers. dryRun capabilities need write access only when their dryRun input is off.';
 const issues = error => error.issues.slice(0, 8).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ');
 function oneLine(text) {
@@ -113,7 +113,7 @@ export async function createCapabilities({
     assertOpen(); callContext.getStore()?.signal?.throwIfAborted();
     if(write && !['owner','write'].includes(role()))throw fail('forbidden','Verified write access is required.');
     if(closingProjects.has(id))throw fail('project_closing','Project capability resources are closing.');
-    const project=service.project(id,{write});
+    const project=service.project(id,{write,caller:{role:role()}});
     if(!projectControllers.has(id))projectControllers.set(id,new AbortController());
     return project;
   };
@@ -210,6 +210,8 @@ export async function createCapabilities({
       // Project-specific values an engine sets on the owner's behalf (for example godot.quick_setup).
       updateSettings(patch) {
         if(role()!=='owner')throw fail('forbidden','Owner access is required to configure capabilities.');
+        // The same rule as capability.configure: an engine is set up at the owner's computer, or by the owner's client with full access.
+        if(!callContext.getStore()?.ownerDecides)throw fail('forbidden','Capability engines are set up by the owner on their own computer (local workbench or the devmate command), or by their connected client when they chose the full access profile.');
         project(true);
         const next = { ...(service.store.setting(projectKey(projectId, id)) || {}), ...patch };
         checkLayer(id, { ...layers(id).config, ...layers(id).instance, ...next }, 'project settings');
@@ -391,7 +393,7 @@ export async function createCapabilities({
         const tool=all.find(item=>item.name===name);
         if(!tool)throw unknownCapability(state,name,all);
         if(!visible(tool,callerRole))throw fail('forbidden',tool.ownerOnly&&callerRole!=='owner'?name+' is available only to the owner of this DevMate runtime.':name+' requires write access.');
-        return{capability:{engine:tool.engine,...view(tool,true)},hint:'Invoke with capability_call {capability:"'+name+'", input}.'+
+        return{capability:{engine:tool.engine,...view(tool,true)},hint:'Invoke with '+(tool.readOnly?'capability_query':'capability_call')+' {capability:"'+name+'", input}.'+
           (tool.longRunning?' It can exceed a minute: start it with job.start {kind:"capability", input:{capability:"'+name+'", input}} and follow it with job.read.':'')};
       }
       if(engine!==undefined && !engineIds().includes(engine))throw fail('unknown_engine','Unknown engine: '+engine+'. Engines are: '+engineIds().join(', ')+'.');
@@ -430,20 +432,24 @@ export async function createCapabilities({
     return error;
   }
 
-  async function call({projectId,capability,input={}}={}, {signal,callerRole,callerId}={}) {
+  // readOnly: the caller asked for something that only reads (capability.query); anything that would change is refused.
+  // ownerDecides: the caller may set an engine up, as with capability.configure.
+  async function call({projectId,capability,input={}}={}, {signal,callerRole,callerId,ownerDecides=false,readOnly=false}={}) {
     assertRole(callerRole);
-    return callContext.run({signal,callerRole,callerId},()=>tracked(projectId,async()=>{
+    const changes=name=>fail('forbidden',name+' changes something: call it with capability_call.');
+    return callContext.run({signal,callerRole,callerId,ownerDecides},()=>tracked(projectId,async()=>{
       checkedProject(projectId);
       if(typeof capability!=='string' || !capability)throw fail('invalid_input','capability must name a capability from capability_list.');
       if(!object(input))throw fail('invalid_input','Capability input must be an object.');
       if(capability.startsWith(HOST_ENGINE+'.')){
         if(!hostRegistry)throw fail('host_unavailable','No native vault host is attached.');
         if(!enabledFor(HOST_ENGINE,projectId))throw disabled(HOST_ENGINE);
-        return hostRegistry.call({projectId,capability,input},{callerRole,signal:requestSignal(projectId)});
+        return hostRegistry.call({projectId,capability,input},{callerRole,readOnly,signal:requestSignal(projectId)});
       }
       if(capability.startsWith('mcp.')){
         // A configured server's credentials and resource scope belong to the owner.
         if(callerRole!=='owner')throw fail('forbidden','External MCP servers are available only to the owner.');
+        if(readOnly)throw changes(capability);
         const [,serverId,...parts]=capability.split('.');
         const method=parts.join('.'), target=methods[method];
         if(!target)throw fail('unknown_capability','Unknown external MCP operation: '+capability+'. Operations are '+Object.keys(methods).map(key=>'mcp.'+serverId+'.'+key).join(', ')+'.');
@@ -462,6 +468,7 @@ export async function createCapabilities({
         if(!operation)throw unknownCapability(state,capability,[...state.tools.values(),...hosted(projectId).items]);
         if(operation.ownerOnly && callerRole!=='owner')throw fail('forbidden',capability+' is available only to the owner of this DevMate runtime.');
         const requireWrite=()=>{
+          if(readOnly)throw changes(capability);
           if(callerRole==='read')throw fail('forbidden',capability+' requires write access'+(operation.readOnlyWhen?' unless it is a dry run.':'.'));
           checkedProject(projectId,true);
         };

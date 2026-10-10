@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { createRuntimeClient, instanceDirectory } from './client.mjs';
+import { CLIENT_COMMAND_ENV, createRuntimeClient, instanceDirectory } from './client.mjs';
 import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './launcher.mjs';
 import { inspectTunnelClient, TUNNEL_CLIENT_SETUP } from './connection.mjs';
 import { findOnPath, installHint, recallTools, resolveTool } from './platform/tools.mjs';
@@ -205,15 +205,21 @@ export async function main(argv = process.argv.slice(2), {
   stdout = process.stdout, stderr = process.stderr, stdin = process.stdin,
   clientFactory = createRuntimeClient,
   launch = startRuntime, stop = stopRuntime, status = runtimeStatus,
-  inspect = inspectTunnelClient, open = openInBrowser
+  inspect = inspectTunnelClient, open = openInBrowser, env = process.env
 } = {}) {
   const print = value => stdout.write(`${JSON.stringify(publicOutput(value), null, 2)}\n`);
   try {
     const { command, positional, options } = parseCli(argv);
+    // Started by a connected client (its shell tool, or an agent it delegated to): the runtime then answers as it
+    // would answer that client, and what only the owner at this computer does is not done from here.
+    const viaClient = env[CLIENT_COMMAND_ENV] === '1';
+    if (viaClient && ['stop', 'restart', 'connect', 'secret', 'serve'].includes(command))
+      throw new Error('devmate ' + command + ' is run by the owner in their own terminal, not through a connected client');
     const runtimeOptions = {
       ...(options.instance ? { instanceRoot: path.resolve(options.instance) } : {}),
       ...(options.port ? { port: Number(options.port) } : {}),
-      ...(options.timeout ? { timeoutMs: Number(options.timeout) } : {})
+      ...(options.timeout ? { timeoutMs: Number(options.timeout) } : {}),
+      ...(viaClient ? { viaClient } : {})
     };
     const instanceRoot = instanceDirectory(runtimeOptions.instanceRoot);
     const callOptions = options.timeout ? { timeoutMs: Number(options.timeout) } : {};

@@ -9,15 +9,18 @@ import { snapshot } from './snapshot.mjs';
 // snapshot, settings, credentials, the connection and the doctor. Everything marked
 // local is for the owner on this computer and is not reachable through MCP.
 // Operations the generic call never dispatches to.
-const UNCALLABLE = ['operations.call', 'runtime.stop', 'workbench.snapshot'];
+const UNCALLABLE = ['operations.call', 'operations.query', 'runtime.stop', 'workbench.snapshot'];
 
 export function defineRuntimeOperations(service, add) {
   const local = { localOnly: true };
+  // Local, and with full access also readable by the owner's connected client: what tells it why something does not work.
+  const diagnostic = { localOnly: true, fullAccessRead: true };
   add('connection.status', {}, true, 'Say how clients reach this DevMate: local only or through a public route, and whether that route was verified end to end. Useful when the user asks why a cloud client cannot connect; not needed for ordinary work.', async (_args, context) => {
     const status = await service.connectionState();
     const verified = service.verification?.verified === true;
-    // Connector output, process ids and host names describe the owner's machine and network: local owner only.
-    if (context.surface !== 'local' || context.role !== 'owner') {
+    // Connector output, process ids and host names describe the owner's machine and network: for the owner at this
+    // computer, and for the owner's connected client when the owner chose full access.
+    if (!service.ownerDecides(context)) {
       return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified };
     }
     return { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}),
@@ -34,12 +37,21 @@ export function defineRuntimeOperations(service, add) {
     'Invoke any operation from operations_list by name: workflows, tasks and messages between several agents, jobs, artifacts, references. The everyday file, shell, Git and delegation tools are available directly and do not need this.',
     (args, context) => {
       const target = service.operations.get(args.operation);
-      if (!target || target.localOnly || UNCALLABLE.includes(args.operation)) throw new DomainError('unknown_operation', 'Unknown DevMate operation: ' + args.operation);
+      if (!target || (target.localOnly && !service.reachesLocal(target, context)) || UNCALLABLE.includes(args.operation)) throw new DomainError('unknown_operation', 'Unknown DevMate operation: ' + args.operation);
       // Decisions an agent is waiting on belong to the person, in the workbench; the model that delegated the work may not answer
       // for them, unless the owner chose full access.
       if (target.humanOnly && !service.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is made by the user in the DevMate workbench.');
       return service.call(args.operation, args.input || {}, context);
     }, { destructive: true, openWorld: true });
+  // The same call for what only reads. A client that asks its user before every change has nothing to ask here.
+  add('operations.query', { operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }, true,
+    'Invoke a read-only operation from operations_list by name (readOnly:true there): lists and reads of workflows, tasks, jobs, approvals, questions, artifacts, references, events. It never changes anything; everything else goes through operations_call.',
+    (args, context) => {
+      const target = service.operations.get(args.operation);
+      if (!target || (target.localOnly && !service.reachesLocal(target, context)) || UNCALLABLE.includes(args.operation)) throw new DomainError('unknown_operation', 'Unknown DevMate operation: ' + args.operation);
+      if (!target.readOnly) throw new DomainError('forbidden', args.operation + ' changes something: call it with operations_call.');
+      return service.call(args.operation, args.input || {}, context);
+    });
   add('operations.read', { operationId: id }, true, 'Inspect the recorded result of a submitted operation without repeating it.', (args, context) => {
     const key = (context.id || 'owner') + ':' + args.operationId;
     const record = service.store.operation(key);
@@ -76,7 +88,7 @@ export function defineRuntimeOperations(service, add) {
     'Store a connection credential (a tunnel token or runtime key) in the private instance directory. It takes effect when the connection is restarted (connection.restart).',
     args => service.secrets.set(args.name, args.value), { ...local, idempotent: true });
   add('secret.remove', { name: z.string().min(1).max(100) }, false, 'Remove a stored connection credential.', args => service.secrets.remove(args.name), { ...local, idempotent: true });
-  add('secret.list', {}, true, 'List the names of stored connection credentials. Values are never returned.', () => ({ names: service.secrets.names() }), local);
+  add('secret.list', {}, true, 'List the names of stored connection credentials. Values are never returned.', () => ({ names: service.secrets.names() }), diagnostic);
 
   add('connection.verify', {}, false, 'Connect to the configured public MCP URL as a real client and confirm it reaches this runtime.', () => service.verifyConnection(), { ...local, idempotent: true });
   for (const action of ['start', 'stop', 'restart']) {
@@ -96,7 +108,7 @@ export function defineRuntimeOperations(service, add) {
     }, local);
   }
 
-  add('runtime.doctor', {}, true, 'Check everything this installation needs and say exactly what to fix.', () => doctor(service), local);
+  add('runtime.doctor', {}, true, 'Check everything this installation needs and say exactly what to fix: tools, shell, projects, editor windows, installed agents, the connection and its public route, the permission profile, storage.', () => doctor(service), diagnostic);
   add('runtime.metrics', {}, true, 'Inspect local runtime, SQLite growth and event notification health.', () => {
     const database = service.store.metrics();
     const memory = process.memoryUsage();
@@ -110,7 +122,7 @@ export function defineRuntimeOperations(service, add) {
         heapUsedBytes: memory.heapUsed, nativeSessions: service.agents.sessions.size,
         connectedWindows: service.windows.list().length }
     };
-  }, local);
+  }, diagnostic);
   add('runtime.stop', { expectedGeneration: z.string().max(100).optional(), ...mutation }, false, 'Stop this runtime and its owned child processes.', args => {
     service.onStop(args);
     return { stopping: true };

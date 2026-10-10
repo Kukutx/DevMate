@@ -123,7 +123,7 @@ VS Code 的显示语言为简体中文时，命令和设置的说明以中文显
 | --- | --- | --- |
 | `devMate.shareFolders` | `readWrite` | 你打开的受信任文件夹默认怎样共享：`readWrite`、`readOnly`、`ask`、`never`。未受信任的工作区永远不共享 |
 | `devMate.shareEditorContext` | `true` | 客户端能否看到当前文件、选区、打开的文件和诊断 |
-| `devMate.autoStart` | `false` | 随编辑器启动运行时，意外退出后再拉起 |
+| `devMate.autoStart` | `true` | 随编辑器启动运行时，意外退出后再拉起 |
 | `devMate.runtimePort` | `8788` | 由此编辑器启动运行时时使用的本机端口 |
 | `devMate.nodeCommandPath` | 空 | Node.js 24+ 的可执行文件，自动找不到时填写 |
 | `devMate.runtimeInstanceDirectory` | 空 | 使用 `~/.devmate/runtime` 以外的实例目录 |
@@ -216,7 +216,7 @@ devmate restart
 - **默认 `auth.mode` 是 `none`。** 能到达 MCP 地址的就是你。公网地址要像密码一样保密，或者启用登录。
 - **可选的登录（OAuth）。** `devmate connect … --auth oauth` 要求公网地址的客户端登录：第一次连接时跳到 DevMate 的授权页，输入 `devmate login-code` 生成的一次性代码。还可以用 `auth.member.create` 创建只读或可写、限定到具体项目的身份。不公开自身说明（客户端元数据文档）的客户端，由你在配置的 `auth.clients` 里登记它的名字和回调地址。本机上的客户端始终不需要登录。
 - **审批和提问由你在自己的电脑上回答。** Agent 请求批准时，你在编辑器或本机工作台里回答。任何连接进来的客户端都不能回答，包括派发这个任务的模型。
-- **嫌这些碍事时：完全访问。** 默认的权限档是“受保护”（guarded），也就是上面这些规则。如果你主要在聊天客户端里干活、不想每次都回到电脑前，可以在自己的电脑上打开“完全访问”（full）：`devmate access full`，VS Code 里的 **DevMate: Change Permission Profile**，或 Obsidian 里的 **Permissions…**。之后，以你的身份连接进来的客户端可以共享文件夹、放宽权限、读取凭据文件、设置能力引擎、回答 Agent 的提问；被派发的 Agent 请求的权限自动批准（每一次都留有记录）。它立即生效，只有你在自己的电脑上才能打开；`devmate access guarded` 随时收回。打开之后，能访问你 MCP 地址的人不经询问就能以你的身份做一切：请保管好地址，或者要求登录。登录的成员身份不受影响，仍然只有授予它的权限。
+- **嫌这些碍事时：完全访问。** 默认的权限档是“受保护”（guarded），也就是上面这些规则。如果你主要在聊天客户端里干活、不想每次都回到电脑前，可以在自己的电脑上打开“完全访问”（full）：`devmate access full`，VS Code 里的 **DevMate: Change Permission Profile**，或 Obsidian 里的 **Permissions…**。之后，以你的身份连接进来的客户端可以共享文件夹、放宽权限、读取凭据文件、设置能力引擎、回答 Agent 的提问、运行体检；你派发的 Agent 请求的权限自动批准（每一次都留有记录）。它立即生效，只有你在自己的电脑上才能打开；`devmate access guarded` 随时收回。打开之后，能访问你 MCP 地址的人不经询问就能以你的身份做一切：请保管好地址，或者要求登录。登录的成员身份不受影响，仍然只有授予它的权限。
 - **凭据类文件默认受保护。** `.env`、密钥文件、`.npmrc` 等不会被文件工具读取或列出内容；Git 状态里会列出它们的名字并标记“不要提交”。你可以在自己的电脑上对某个项目关闭这项保护。
 - **命令行里的凭据不外显。** 进程列表和活动记录里，命令行中内联的令牌、密码会被替换成 `[redacted]`；实际执行的命令不变。这只识别常见写法，不是保证。
 - **工作台的会话只留在它自己的浏览器标签页里。** 工作台通过一次性链接进入，会话从不以 cookie 形式存在，其他本机服务拿不到。
@@ -292,6 +292,7 @@ devmate restart
 
 - 3.x 的任何东西都不会被读取：项目、连接和登录要重新设置。编辑器里的旧设置会被忽略；磁盘上的旧状态原样保留，可以删除。
 - ngrok、Gateway 和 Runner 都没有了。云端客户端现在通过你自己的隧道进来，见[连接客户端](#连接客户端)。MCP 地址变了，要在 ChatGPT 或 Claude 里更新连接器。
+- DevMate 不再替你启动 ngrok。已有的 ngrok 固定域名仍然可以当作“现成的 HTTPS 代理”使用：自己运行 `ngrok http 8789 --url https://<你的域名>`（是入口端口 8789，不是 8788），再用 `devmate connect https --url https://<你的域名>/mcp` 告诉 DevMate，然后 `devmate restart`。
 - 如果 3.x 的 Gateway 还在运行，它可能占着 8788 端口，4.0 会提示端口被占用。把所有编辑器窗口关一次，或结束旧的 `node` 进程，再启动。
 - 模型看到的工具名变了；客户端刷新连接器后就会拿到新的。
 

@@ -15,6 +15,7 @@ import { normalizeConfig, publicMcpUrl } from './config.mjs';
 import { createProcessManager } from './processes.mjs';
 import { verifyPublicMcp } from './connection-verify.mjs';
 import { createSecretStore } from './secrets.mjs';
+import { CLIENT_COMMAND_ENV } from './client.mjs';
 import { defineOperations } from './operations/index.mjs';
 import { projectOverview } from './operations/projects.mjs';
 import { doctor } from './operations/doctor.mjs';
@@ -38,10 +39,12 @@ const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root
 function commandEnvironment(config, env = process.env) {
   const withheld = new Set(['TUNNEL_TOKEN', 'CONTROL_PLANE_API_KEY', 'CLOUDFLARE_TUNNEL_TOKEN', 'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE',
     config.connection?.tokenEnv, config.connection?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
-  return Object.fromEntries(Object.entries(env).filter(([name]) => {
+  // The marker tells the devmate command line that a connected client started it: it then acts with that
+  // client's authority, not as the owner at this computer (CLIENT_COMMAND_ENV in runtime/client.mjs).
+  return { ...Object.fromEntries(Object.entries(env).filter(([name]) => {
     const upper = name.toUpperCase();
     return !withheld.has(upper) && !upper.startsWith('VSCODE_') && !upper.startsWith('DEVMATE_AGENT_');
-  }));
+  })), [CLIENT_COMMAND_ENV]: '1' };
 }
 function readable(error) {
   return error.issues.slice(0, 6).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ');
@@ -88,14 +91,16 @@ export class DevMateService {
     this.maintenanceTimer.unref();
     this.accessProfile = this.store.setting('access.profile') === 'full' ? 'full' : 'guarded';
     this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers,
-      grantsApprovals: () => this.fullAccess() });
+      // Full access is the owner's: what an agent asks is granted without a person only when the owner started the
+      // agent and the task it is working on is the owner's too.
+      grantsApprovals: (agent, principal) => this.fullAccess() && agent.caller === 'owner' && principal === 'owner' });
     this.inputs = new InputRequests(this.store);
     this.connection = connection;
     this.onStop = onStop;
     this.operations = new Map();
     this.inflight = new Map();
     this.registerOperations();
-    this.windows = createWindowRegistry({store:this.store,isDeclined:root => this.isDeclined(root),unprotected:() => this.fullAccess(),registerProject:(root,name,access) =>
+    this.windows = createWindowRegistry({store:this.store,isDeclined:root => this.isDeclined(root),registerProject:(root,name,access) =>
       this.operations.get('project.create').run({root,name,access},LOCAL_OWNER)});
     recallTools(this.instanceRoot);
     this.providerDiscovery = null;
@@ -177,12 +182,13 @@ export class DevMateService {
     if (path.isAbsolute(value)) {
       // Only the owner at this computer has a path looked up on disk. For anyone else it is compared, as written,
       // with the roots of the projects: a path a caller supplies must never make this process open a network share.
-      let root = value;
+      // Spelled the way a root is stored (separators, no trailing one): that needs no look at the disk.
+      let root = path.resolve(value);
       if (context.surface === 'local' && context.role === 'owner') { try { root = fs.realpathSync.native(value); } catch {} }
       const project = this.store.projectForRoot(root);
       if (project && granted(project)) return project.id;
       if (context.role !== 'owner') return value;
-      throw new DomainError('project_not_registered', 'This directory is not a shared project. Folders are shared by the owner on their own computer: in an editor that has DevMate, or with: devmate project add <folder>');
+      throw new DomainError('project_not_registered', 'This directory is not a shared project. ' + this.howToShare(context));
     }
     const matches = this.store.list('project', { limit: 10000 }).filter(project => project.name === value && granted(project));
     if (matches.length > 1) throw new DomainError('ambiguous_project', 'Several projects share this name; use the project id.');
@@ -209,6 +215,12 @@ export class DevMateService {
   // decisions to whoever connects as the owner, for people who drive everything from a chat client.
   ownerDecides(context) { return context?.role === 'owner' && (context.surface === 'local' || this.fullAccess()); }
   fullAccess() { return this.accessProfile === 'full'; }
+  // The local control interface. With full access the owner's connected client may also read what tells it why
+  // something does not work (fullAccessRead: the doctor, metrics, credential names). Changing anything there stays
+  // at this computer in either profile: a remote caller could cut its own route.
+  reachesLocal(operation, context) {
+    return context.role === 'owner' && (context.surface === 'local' || (operation.fullAccessRead === true && this.fullAccess()));
+  }
   setAccessProfile(profile) {
     this.store.setting('access.profile', profile);
     this.accessProfile = profile;
@@ -243,7 +255,13 @@ export class DevMateService {
     if (focused) return focused;
     throw new DomainError('project_required', available.length
       ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name).join('; ')
-      : 'No folder is shared yet. The owner shares one on their own computer: by opening it in an editor that has DevMate, or with: devmate project add <folder>');
+      : 'No folder is shared yet. ' + this.howToShare(context));
+  }
+  // What to do about a folder that is not shared, said to the caller who can do it.
+  howToShare(context) {
+    return context.surface !== 'local' && this.ownerDecides(context)
+      ? 'Share it with operations_call {operation:"project.create", input:{root:"<absolute folder>"}}.'
+      : 'Folders are shared by the owner on their own computer: in an editor that has DevMate, or with: devmate project add <folder>';
   }
 
   // What ends a wait: the runtime stopping, or the caller giving up on its request.
@@ -264,12 +282,13 @@ export class DevMateService {
     finally { this.projectTransitions.delete(projectId); }
   }
 
-  project(projectId, { write = false } = {}) {
+  // caller: who the project is being opened for. With full access nothing is withheld from the owner, whatever the
+  // project's own setting says; every other account keeps the protection.
+  project(projectId, { write = false, caller } = {}) {
     const project = this.store.get('project', projectId);
     if (write && this.projectTransitions.has(projectId)) throw new DomainError('project_busy', 'Project execution resources are closing.');
     if (write && project.access !== 'write') throw new DomainError('read_only', 'Project is read-only.');
-    // With full access nothing is withheld from the file tools, whatever the project's own setting says.
-    return { ...project, ...(this.fullAccess() ? { protectSecrets: false } : {}), controlRoot: this.instanceRoot };
+    return { ...project, ...(this.fullAccess() && caller?.role === 'owner' ? { protectSecrets: false } : {}), controlRoot: this.instanceRoot };
   }
 
   list(kind, input, context) {
@@ -296,7 +315,7 @@ export class DevMateService {
   visibleOperations(context) {
     if (!context?.id || !['owner','write','read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
     return [...this.operations.values()].filter(operation =>
-      (!operation.localOnly || (context.surface === 'local' && context.role === 'owner')) &&
+      (!operation.localOnly || this.reachesLocal(operation, context)) &&
       (!(operation.humanOnly || operation.ownerDecision) || context.surface === 'local' || this.ownerDecides(context)) &&
       (context.role === 'owner' || !ownerOperations.has(operation.name)) &&
       (context.role !== 'read' || operation.readOnly || dispatching.has(operation.name)));
@@ -321,7 +340,7 @@ export class DevMateService {
     if (args.projectId !== undefined) args.projectId = this.resolveProjectReference(args.projectId, context);
     else if (operation.needsProject) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation);
     if (!['owner', 'write', 'read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
-    if (operation.localOnly && (context.surface !== 'local' || context.role !== 'owner')) throw new DomainError('forbidden', 'This operation is available only through the local control interface.');
+    if (operation.localOnly && !this.reachesLocal(operation, context)) throw new DomainError('forbidden', 'This operation is available only through the local control interface: the owner does it at their own computer.');
     // A decision that is the person's own (answering what an agent asks) is taken at this computer. Anywhere else
     // the caller may be the very model that started the agent, and nothing a client says about itself proves otherwise.
     if (operation.humanOnly && context.surface !== 'local' && !this.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is the user\'s own. They answer it on their computer: in the DevMate workbench (devmate ui) or in their editor. (With the full access profile, devmate access full, permissions are granted automatically and the owner\'s client may answer.)');

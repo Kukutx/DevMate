@@ -91,10 +91,10 @@ export function defineCollaborationOperations(service, add) {
   // the model that delegated the work may not answer for the person.
   add('approval.list', listOptions, true, 'List native approval requests.', (args, context) => service.list('approval', args, context));
   add('approval.resolve', { id, ...revision, ...mutation, optionId: z.string().min(1).max(200) }, false,
-    'Return the user decision to the exact waiting native request.', args => service.agents.resolve('approval', args), { destructive: true, openWorld: true, humanOnly: true });
+    'Return the user\'s decision to the exact waiting permission request: optionId is one of the options approval.list shows for it.', args => service.agents.resolve('approval', args), { destructive: true, openWorld: true, humanOnly: true });
   add('input.list', listOptions, true, 'List native input requests.', (args, context) => service.list('input', args, context));
   add('input.respond', { id, ...revision, ...mutation, response: z.unknown() }, false,
-    'Return the user decision to the exact waiting native request.',
+    'Return the user\'s answer to the exact waiting request (input.list shows it under details). For an agent\'s question: the answer as plain text when there is one question, otherwise {answers:{"<question id or text>":"<answer>"}}. For a form (details.requestedSchema): {action:"accept", content:{…}}, {action:"decline"} or {action:"cancel"}.',
     args => service.store.get('input', args.id).source === 'mcp' ? service.inputs.respond(args) : service.agents.resolve('input', args), { humanOnly: true });
   add('approval.cancel', { id, ...mutation }, false, 'Cancel the native turn that is awaiting this approval.', args => service.agents.cancel(service.store.get('approval', args.id).agentId));
 
