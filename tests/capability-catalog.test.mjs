@@ -49,7 +49,7 @@ test('the unfiltered listing is a compact summary grouped by engine, never a dum
   assert.ok(names(listing).length > 80);
   assert.ok(listing.engines.flatMap(engine => engine.capabilities).every(item => item.description.length <= 160 && !item.description.includes('\n')));
   assert.match(listing.hint, /capability_list \{name\}/);
-  assert.match(listing.hint, /job\.start \{kind:"capability"/);
+  assert.match(listing.hint, /operations_call \{operation:"job\.start", input:\{kind:"capability"/);
   // Flags appear only when true.
   assert.deepEqual(Object.keys(find(listing, 'godot.status')), ['name', 'description', 'readOnly']);
   assert.equal(find(listing, 'godot.export').longRunning, true);
@@ -76,7 +76,7 @@ test('engine, name and summary filters select how much is returned', async t => 
   assert.deepEqual([one.capability.readOnly, one.capability.ownerOnly, one.capability.longRunning], [false, false, true]);
   assert.ok(one.capability.inputSchema.properties.preset);
   assert.equal(one.capability.inputSchema.properties.workspaceId, undefined);
-  assert.match(one.hint, /job\.start \{kind:"capability", input:\{capability:"godot\.export"/);
+  assert.match(one.hint, /operations_call \{operation:"job\.start", input:\{kind:"capability", input:\{capability:"godot\.export", input\}\}\} and follow it with operations_query \{operation:"job\.read"/);
   assert.equal(one.engines, undefined);
 
   await assert.rejects(cap.list({ projectId: 'one', engine: 'devmate.godot' }, owner), error => error.code === 'unknown_engine' && /godot, reverse/.test(error.message));

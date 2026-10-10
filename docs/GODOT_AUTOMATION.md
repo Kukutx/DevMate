@@ -59,7 +59,7 @@ The owner sets the executable once for the instance:
 | `godot.automation_manifest` | Read and validate saved exports and scenarios | read-only |
 | `godot.acceptance_run_saved`, `godot.acceptance_suite` | Run saved scenarios | long-running |
 
-Long-running capabilities should be started with `job_start`; see [CAPABILITIES.md](CAPABILITIES.md).
+Long-running capabilities should be started with `job.start` (an operation: `operations_call {operation:"job.start", …}`); see [CAPABILITIES.md](CAPABILITIES.md).
 
 ## Running the project
 

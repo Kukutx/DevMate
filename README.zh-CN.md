@@ -260,7 +260,7 @@ devmate restart
 | 找代码 | `workspace_files` `workspace_find` `workspace_search` | 目录列表、glob 查找、ripgrep 内容搜索。遵守 `.gitignore`，大仓库也快 |
 | 读 | `workspace_read` | 带行号，大文件按行分页（32 MiB 以内）。UTF-16 和本机传统编码（如 GBK）可以读取，不能在这里改写 |
 | 改 | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | 精确文本替换，多处修改原子生效。覆盖已有文件必须带上读到的哈希，不会盲写 |
-| 撤销 | `workspace_history` `workspace_restore` | 经 DevMate 改动、覆盖或删除的文件都能恢复，默认保留 30 天 |
+| 撤销 | `workspace_history` `workspace_restore` | 经 DevMate 改动、覆盖或删除的文件都能恢复，默认保留 30 天。一次调用可以收回某个时间点之后的全部改动（`since`）；命令和委派的 Agent 改的文件不在这份历史里，那部分用 Git |
 | 运行 | `shell_run` `process_read` `process_write` `process_stop` `process_list` | 真实的 shell 语义（`npm test`、`git commit`）。输出按游标分页；长时间运行的命令在后台继续，可读输出、写标准输入、整棵进程树停止 |
 | Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | 只读，不会执行仓库里配置的任何程序。写操作用 `shell_run` |
 | 派发 | `agents_delegate` `agents_result` `providers_list` | 把整件任务交给本机的编码 Agent |
@@ -269,7 +269,7 @@ devmate restart
 
 - `projectId` 可以是项目 ID、项目根目录或唯一的项目名；只共享了一个项目时可以省略。有多个项目时，只读工具跟随你正在使用的编辑器窗口，写操作必须写明项目。
 - 没有“共享文件夹”这个工具。那是你自己的事；模型会被告知请你去做。
-- 模型只带着三十多个工具的定义，其余操作不占用对话上下文。
+- 工具清单共 38 项：36 个操作，1 个打开工作台，1 个只供工作台自己调用。其余操作都经 `operations_call` 调用，不占用对话上下文。
 - 工具带有准确的提示（只读、写入、破坏性、对外），客户端只在真正需要时请求确认。
 - 调用被取消或超时，只是不再等待：已经启动的命令或 Agent 任务继续运行，随后仍可读取或停止。
 - 服务同时支持 2026-07-28 和 2025 年的 MCP 协议版本。
@@ -285,6 +285,7 @@ devmate restart
 
 - 任务在等待时间内完成就直接返回结果和改动的文件列表，否则返回 `agentId`，用 `agents_result` 继续等待。
 - 再次传入同一个 `agentId` 会在原会话里继续，保留上下文。
+- 加上 `"isolate": true`，Agent 就改在项目的一份副本里工作（最后一次提交的 Git worktree，放在 DevMate 自己的目录里）。在你看过它提出的改动（`agents.proposal`）并应用（`agents.apply`：全部作为未提交的改动进入项目；如果这期间项目在同样的位置改过，就一点也不应用）或丢弃（`agents.discard`）之前，项目不会变。副本里只有已提交的内容：未提交的改动和被忽略的文件（比如装好的依赖）不在里面。
 - Agent 用它自己的账户、额度和工具在项目目录里工作。它向你提出的审批和提问出现在工作台，VS Code 和 Obsidian 会提醒你，由你在自己的电脑上回答。
 - 同一家厂商内部的协作（Claude Code 会话之间互发消息、Codex 的子 Agent）由它们原生完成。DevMate 负责客户端之间这一段，例如从 ChatGPT 网页把任务交给本机的 Claude Code。
 

@@ -12,7 +12,7 @@ Bootstrapping saved automation, performance baselines and regressions, and a rel
 6. `godot.export_matrix` with `reportPath`: export evidence.
 7. `godot.release_gate`.
 
-Steps that run Godot are `longRunning`: start them with `job_start`.
+Steps that run Godot are `longRunning`: start them with `job.start` (an operation: `operations_call {operation:"job.start", …}`).
 
 ## Automation bootstrap
 

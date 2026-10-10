@@ -52,13 +52,13 @@ A caller is shown only what it may call: members do not see owner-only capabilit
 
 ## Long-running capabilities as jobs
 
-A connected client usually gives up on a tool call after one or two minutes. Start a `longRunning` capability with `job_start` and poll it with `job_read`:
+A connected client gives up on a tool call after one to four minutes. Start a `longRunning` capability as a job and ask for its result later. Jobs are operations, reached through the `operations_call` and `operations_query` tools:
 
 ```json
-{ "kind": "capability", "input": { "capability": "godot.export", "input": { "preset": "Web" } } }
+{ "operation": "job.start", "input": { "kind": "capability", "input": { "capability": "godot.export", "input": { "preset": "Web" } } } }
 ```
 
-`job_cancel` cancels it; the engines stop their child processes when a call is cancelled. `godot.automation_plan` returns a ready `call` and `job` payload for each saved export and scenario.
+`operations_query {operation:"job.read", input:{id}}` returns its state and output, and `operations_call {operation:"job.cancel", input:{id}}` cancels it; the engines stop their child processes when a call is cancelled. `godot.automation_plan` returns a ready `call` and `job` payload for each saved export and scenario.
 
 Persistent processes started by an engine (`godot.run`) are ordinary project processes: the returned process id works with `process_list`, `process_read` (paged by cursor) and `process_stop`. A project runs at most 8 engine processes at a time.
 

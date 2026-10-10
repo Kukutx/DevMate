@@ -46,7 +46,7 @@ The owner sets paths with `capability.configure` (or `engineSettings.reverse` in
 3. `reverse.code_analyze` with `query: "functions"`. Queries: `functions`, `xrefs`, `symbols`, `imports`, `exports`, `sections`, `disassembly`. `xrefs` and `disassembly` need a hexadecimal `address`.
 4. `reverse.decompile` with a function address.
 
-`code_analyze` and `decompile` are flagged `longRunning`: start them with `job_start` (see [CAPABILITIES.md](CAPABILITIES.md)).
+`code_analyze` and `decompile` are flagged `longRunning`: start them with the `job.start` operation (see [CAPABILITIES.md](CAPABILITIES.md)).
 
 Table queries page with `offset` and `limit` and return `nextOffset`. Disassembly pages by `nextAddress`. Integers beyond JavaScript's safe range arrive as decimal strings. There is no project cache: each call analyzes again, so narrow queries are faster. Decompiled C is an approximation, not the original source.
 

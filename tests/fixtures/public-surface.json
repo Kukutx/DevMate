@@ -3,6 +3,7 @@
     "agents_delegate": {
       "parameters": [
         "agentId",
+        "isolate",
         "model",
         "projectId",
         "prompt",
@@ -13,7 +14,10 @@
       "required": [
         "prompt"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "agents_result": {
       "parameters": [
@@ -24,7 +28,10 @@
         "waitMs"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "capability_call": {
       "parameters": [
@@ -36,7 +43,10 @@
         "capability",
         "input"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "capability_list": {
       "parameters": [
@@ -48,7 +58,10 @@
         "summary"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "capability_query": {
       "parameters": [
@@ -60,19 +73,28 @@
         "capability",
         "input"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "connection_status": {
       "parameters": [],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "editor_context": {
       "parameters": [
         "projectId"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "editor_diagnostics": {
       "parameters": [
@@ -82,7 +104,10 @@
         "severity"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "git_blame": {
       "parameters": [
@@ -95,14 +120,20 @@
       "required": [
         "path"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "git_branches": {
       "parameters": [
         "projectId"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "git_diff": {
       "parameters": [
@@ -111,7 +142,10 @@
         "staged"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "git_log": {
       "parameters": [
@@ -121,7 +155,10 @@
         "ref"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "git_show": {
       "parameters": [
@@ -130,14 +167,20 @@
         "stat"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "git_status": {
       "parameters": [
         "projectId"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "operations_call": {
       "parameters": [
@@ -147,7 +190,10 @@
       "required": [
         "operation"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "operations_list": {
       "parameters": [
@@ -155,7 +201,10 @@
         "summary"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "operations_query": {
       "parameters": [
@@ -165,14 +214,20 @@
       "required": [
         "operation"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "process_list": {
       "parameters": [
         "projectId"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "process_read": {
       "parameters": [
@@ -184,7 +239,10 @@
       "required": [
         "id"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "process_stop": {
       "parameters": [
@@ -193,7 +251,10 @@
       "required": [
         "id"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "process_write": {
       "parameters": [
@@ -205,7 +266,10 @@
         "id",
         "input"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "project_list": {
       "parameters": [
@@ -214,19 +278,28 @@
         "query"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "project_overview": {
       "parameters": [
         "projectId"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "providers_list": {
       "parameters": [],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "shell_run": {
       "parameters": [
@@ -240,7 +313,10 @@
         "waitMs"
       ],
       "required": [],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "workspace_delete": {
       "parameters": [
@@ -252,7 +328,10 @@
       "required": [
         "path"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "workspace_edit": {
       "parameters": [
@@ -265,7 +344,10 @@
         "edits",
         "path"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "workspace_files": {
       "parameters": [
@@ -277,7 +359,10 @@
       "required": [
         "path"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "workspace_find": {
       "parameters": [
@@ -291,7 +376,10 @@
         "path",
         "pattern"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "workspace_history": {
       "parameters": [
@@ -300,7 +388,10 @@
         "projectId"
       ],
       "required": [],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "workspace_mkdir": {
       "parameters": [
@@ -310,7 +401,10 @@
       "required": [
         "path"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "workspace_move": {
       "parameters": [
@@ -323,7 +417,10 @@
         "from",
         "to"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "workspace_read": {
       "parameters": [
@@ -335,19 +432,23 @@
       "required": [
         "path"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "workspace_restore": {
       "parameters": [
         "path",
         "projectId",
-        "sha256"
+        "sha256",
+        "since"
       ],
-      "required": [
-        "path",
-        "sha256"
-      ],
-      "readOnly": false
+      "required": [],
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "workspace_search": {
       "parameters": [
@@ -364,7 +465,10 @@
         "path",
         "query"
       ],
-      "readOnly": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "workspace_write": {
       "parameters": [
@@ -377,15 +481,21 @@
         "path",
         "text"
       ],
-      "readOnly": false
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
     }
   },
   "operations": [
     "access.read",
     "access.update",
+    "agents.apply",
     "agents.cancel",
     "agents.delegate",
+    "agents.discard",
     "agents.list",
+    "agents.proposal",
     "agents.result",
     "agents.resume",
     "agents.send",
@@ -462,6 +572,7 @@
     "reference.remove",
     "runtime.doctor",
     "runtime.metrics",
+    "runtime.report",
     "runtime.stop",
     "secret.list",
     "secret.remove",

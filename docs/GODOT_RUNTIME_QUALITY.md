@@ -35,7 +35,7 @@ Preflights the saved exports and scenarios of `.devmate/automation.json` without
 
 - `capability`: `godot.export`, `godot.native_test` or `godot.acceptance_test`;
 - `call`: the ready `{ capability, input }` for `capability_call`;
-- `job`: the ready `{ kind: "capability", input }` for `job_start`;
+- `job`: the ready `{ kind: "capability", input }` for the `job.start` operation;
 - `blockers` and `warnings`: unknown presets or input actions, a missing or outdated QA Bridge, unsafe output paths, scenarios without assertions.
 
 `scenarioIds` and `exportPresets` narrow the plan. `ok` is `false` while any blocker remains.
