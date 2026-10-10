@@ -6,7 +6,7 @@
 
 DevMate lets the model in your chat window work directly on your own computer: read, search and edit project files, run commands and tests, use Git, see the errors your editor already reports, and hand whole tasks to the coding agents installed on your machine. It is a local runtime that offers these capabilities through the [Model Context Protocol](https://modelcontextprotocol.io) (MCP).
 
-The main use is connecting the ChatGPT website to your machine and developing with the chat subscription you already pay for. It is not tied to ChatGPT: Claude and every other MCP client connect to the same runtime.
+The main use is connecting the chat window you already use (ChatGPT on the web, Claude) to your machine and developing from there. It is not tied to one of them: every MCP client connects to the same runtime. [What your plan allows](#what-your-plan-allows) says which ChatGPT and Claude plans can change files and run commands through a connector, and which can only read.
 
 - **Your machine, your route.** Nothing is relayed through a service of ours. Cloud clients reach you through a tunnel you own (Cloudflare, OpenAI's official tunnel, your reverse proxy, or SSH), and DevMate proves the route end to end.
 - **You decide what is shared, at your computer.** Which folders, read only or read and write, credential files protected. A connected client can narrow these and never widen them.
@@ -168,7 +168,7 @@ They reach your MCP server from the cloud, so they need a route from outside to 
 
 | Route | For | Notes |
 | --- | --- | --- |
-| `quick` | Any client | A Cloudflare quick tunnel. No account, no domain, nothing to set up; the address changes whenever it starts again |
+| `quick` | Any client | A Cloudflare quick tunnel, for trying DevMate out. No account, no domain, nothing to set up; the address changes whenever it starts again |
 | `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
 | `https` | Any client | A reverse proxy you already run |
@@ -184,7 +184,9 @@ devmate restart
 devmate mcp-url
 ```
 
-Nothing is registered anywhere: Cloudflare hands out a random `trycloudflare.com` address while the tunnel runs, and DevMate checks that it reaches this runtime. The address is the only secret and there is no sign-in, so give it to your own client only. It changes whenever DevMate or the tunnel starts again; the client then gets the new one from `devmate mcp-url`. For an address that stays, use one of the routes below.
+Nothing is registered anywhere: Cloudflare hands out a random `trycloudflare.com` host name while the tunnel runs, and DevMate checks that it reaches this runtime. There is no sign-in. The address ends in a key that DevMate makes anew at every start (`https://<name>.trycloudflare.com/mcp/<key>`), and only the whole address opens anything: the host name alone, which anyone watching DNS can see, answers "not found". Whoever has the whole address can do what you can, so give it to your own client only and do not paste it anywhere else; `devmate doctor` prints it without the key. It changes whenever DevMate or the tunnel starts again; the client then gets the new one from `devmate mcp-url`.
+
+A quick tunnel is what Cloudflare [offers for testing and development](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/): no uptime guarantee, at most 200 requests at once, and no event streams. DevMate therefore answers through it in plain JSON, without progress messages while a call runs. For daily use take an address that stays, with one of the routes below.
 
 **Cloudflare tunnel**
 
@@ -217,6 +219,20 @@ devmate restart
 A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to probe: confirm it by calling a tool from ChatGPT.
 
 A connector that cannot start does not take local work down and is never hidden: `doctor` and `connection.status` give the reason. After storing a new credential, restart only the connector: `devmate connection.restart`.
+
+### What your plan allows
+
+Whether a chat product lets a connector you add yourself change things is decided by that product and your plan, not by DevMate. As their own documentation states it:
+
+| Product | Custom MCP connectors |
+| --- | --- |
+| ChatGPT Business, Enterprise, Edu | Read and write, in developer mode on the web (a beta). An admin or owner switches developer mode on |
+| ChatGPT Pro | Read only, in developer mode. DevMate marks its reading tools as read-only (files, search, Git, diagnostics, `operations_query`, `capability_query`); editing, commands and delegation need a plan that allows writing. Not tried with a Pro account |
+| ChatGPT Plus, Go, Free | Not named in OpenAI's documentation for custom MCP connectors |
+| Claude (claude.ai, desktop, mobile) | Custom connectors by URL; a tool call may take 240 seconds and return about 150,000 characters |
+| Claude Code, Codex and other local clients | No plan limits of this kind: they connect on this computer |
+
+Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt), [Build an MCP server for Claude](https://claude.com/docs/connectors/building). Both change; check them for your plan. DevMate's own tools stay inside the tighter of these limits: a command or a delegated task is waited for at most 50 seconds per call (it keeps running and is asked about again), and a text result stays under 140,000 characters. A capability that runs longer by nature (a browser navigation, a game-engine run) is better started as a job with `job.start` and read later.
 
 ## Who may do what
 
