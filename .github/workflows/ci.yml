@@ -41,11 +41,18 @@ jobs:
         shell: bash
         run: |
           if ! command -v rg >/dev/null 2>&1; then
-            case "$RUNNER_OS" in
-              Linux) sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep ;;
-              macOS) brew install ripgrep ;;
-              Windows) choco install ripgrep --no-progress --yes ;;
-            esac
+            # Package feeds have outages, and Chocolatey reports success when its feed timed out:
+            # what counts is that rg is there afterwards. One failed request must not fail a release.
+            for attempt in 1 2 3 4; do
+              case "$RUNNER_OS" in
+                Linux) sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep || true ;;
+                macOS) brew install ripgrep || true ;;
+                Windows) choco install ripgrep --no-progress --yes || true ;;
+              esac
+              if command -v rg >/dev/null 2>&1; then break; fi
+              echo "ripgrep is not installed yet (attempt $attempt of 4)"
+              sleep 30
+            done
           fi
           rg --version | head -n 1
       - name: Lint for mistakes

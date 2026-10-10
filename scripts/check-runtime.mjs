@@ -11,6 +11,10 @@ const root=path.resolve(import.meta.dirname,'..');
 function contained(root,file){const target=path.resolve(root,file),rel=path.relative(root,target);assert.ok(rel&&!rel.startsWith('..')&&!path.isAbsolute(rel),'Manifest path must stay in the package: '+file);return target;}
 export function validateExtensionManifest(directory,manifest){
   assert.equal(manifest.version,VERSION,'Runtime and package versions must agree.');
+  // The identity of the listing on the VS Code Marketplace. Display names are unique there and "DevMate" belongs to
+  // another extension: the 4.0.0 upload was refused for it after everything else had been published.
+  assert.equal(manifest.publisher+'.'+manifest.name,'kukutx.devmate-agent');
+  assert.equal(manifest.displayName,'DevMate Agent','The Marketplace listing is named "DevMate Agent"; another display name is refused at publication.');
   assert.equal(manifest.main,'./vscode-host/runtime-entry.cjs');
   assert.equal(manifest.bin?.devmate,'./runtime/cli.mjs');
   assert.match(manifest.engines?.node||'',/24/);
