@@ -52,7 +52,8 @@ export async function doctor(service) {
       connection.kind + ': ' + phase + (fault ? ' — ' + fault : ''), status.diagnostic ? String(status.diagnostic).slice(-400) : fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
     if (url) {
       const verification = service.verification?.url === url ? service.verification : await service.verifyConnection();
-      check('connection.public', verification.verified ? 'ok' : verification.reachable ? 'warn' : 'fail',
+      // A name this computer's own DNS has not caught up with is not a broken route.
+      check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
         url + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.' : 'Check the proxy route to the ingress port.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');

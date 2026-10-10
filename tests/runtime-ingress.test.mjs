@@ -215,3 +215,24 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /changes whenever/);
   assert.match(named('security').detail, /quick tunnel address has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);
 });
+test('a new address is not asked for before the world knows it, and a stale local answer is not called a broken route', async () => {
+  const url = 'https://fresh-fixture.trycloudflare.com/mcp';
+  let connected = 0;
+  const failing = () => ({ async connect() { connected++; throw Object.assign(new Error('negotiation failed'), { code: 'ERA_NEGOTIATION_FAILED' }); }, async close() {} });
+  const transportFactory = () => ({});
+  // Public DNS does not know it yet: nothing is asked of this computer's resolver, so it cannot remember "no such name".
+  const early = await verifyPublicMcp({ url, newAddress: true, knownPublicly: async () => false, clientFactory: failing, transportFactory,
+    lookup: async () => { throw new Error('the local resolver must not be asked'); } });
+  assert.deepEqual([early.verified, early.reachable, early.pending], [false, false, 'dns']); assert.equal(connected, 0);
+  // Public DNS knows it, this computer still remembers its earlier answer: said as it is.
+  const stale = await verifyPublicMcp({ url, newAddress: true, knownPublicly: async () => true, clientFactory: failing, transportFactory,
+    lookup: async () => { throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }); } });
+  assert.deepEqual([stale.verified, stale.reachable, stale.pending], [false, false, 'local-dns']); assert.match(stale.reason, /clients in the cloud can already connect/);
+  // It resolves here and the round trip still fails: that is a route that does not work.
+  const broken = await verifyPublicMcp({ url, newAddress: true, knownPublicly: async () => true, clientFactory: failing, transportFactory, lookup: async () => ({ address: '203.0.113.9', family: 4 }) });
+  assert.deepEqual([broken.verified, broken.reachable, broken.pending], [false, false, undefined]); assert.equal(broken.reason, 'ERA_NEGOTIATION_FAILED');
+  // An address that has always been there is checked as before, whatever public DNS says about it.
+  const fixed = await verifyPublicMcp({ url: 'https://devmate.example.com/mcp', knownPublicly: async () => { throw new Error('not asked first'); }, clientFactory: failing, transportFactory,
+    lookup: async () => ({ address: '203.0.113.9', family: 4 }) });
+  assert.equal(fixed.reason, 'ERA_NEGOTIATION_FAILED');
+});

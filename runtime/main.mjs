@@ -372,7 +372,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
           again(result.verified || ++attempts >= 6 ? REVERIFY_MS : 5000);
         }, () => again(REVERIFY_MS));
       };
-      again(2000);
+      // A quick tunnel's name is new to the world: asked about too early, resolvers remember that it does not exist.
+      again(quickTunnel ? 8000 : 2000);
     }
     // Housekeeping of a process that runs for weeks. Its log is cut while it runs (the previous part is kept once); and
     // a runtime whose instance directory was deleted under it has nothing left to serve and nobody who could stop it.

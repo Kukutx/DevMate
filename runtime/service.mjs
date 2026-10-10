@@ -419,7 +419,8 @@ export class DevMateService {
     if (this.config.auth.mode === 'oauth') {
       try { accessToken = this.auth.issueVerificationToken({ ttlSeconds: 60 }).accessToken; } catch {}
     }
-    const result = await this.verifier({ url, authMode: this.config.auth.mode, expectedGeneration: this.identity?.generation, ...(accessToken ? { accessToken } : {}) });
+    const result = await this.verifier({ url, authMode: this.config.auth.mode, expectedGeneration: this.identity?.generation, ...(accessToken ? { accessToken } : {}),
+      ...(kind === 'cloudflare-quick' ? { newAddress: true } : {}) });
     const changed = this.verification?.verified !== result.verified || this.verification?.reachable !== result.reachable;
     this.verification = { kind, url, checkedAt, ...result };
     // The route is checked again and again; only a change is news.
