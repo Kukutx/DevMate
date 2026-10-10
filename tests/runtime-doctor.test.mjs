@@ -105,6 +105,47 @@ test('the doctor names what works, what is missing and the exact next step', asy
   assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => healthy }) }), 0);
 });
 
+test('the report for a bug says what happened and not who or where: no credentials, paths, account names or addresses', async t => {
+  const { anonymize } = await import('../runtime/report.mjs');
+  const home = process.platform === 'win32' ? 'C:\\Users\\Maria Example' : '/home/maria';
+  const sample = [
+    'instance at ' + path.join(home, '.devmate', 'runtime') + ' and as JSON ' + JSON.stringify(path.join(home, 'work', 'shop')),
+    'a second account: ' + (process.platform === 'win32' ? 'C:\\Users\\other\\file.txt' : '/home/other/file.txt') + ' and /Users/third/x',
+    'reached at https://calm-river.trycloudflare.com/mcp/abcdefghijklmnopqrstuvwxyz012345 and https://devmate.example.com/mcp from 203.0.113.9, locally at 127.0.0.1:8788',
+    'git push https://maria:hunter2@github.com/x/y with --token s3cr3t-value and GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 by maria@example.com'
+  ].join('\n');
+  const clean = anonymize(sample, { home, places: [[path.join(home, 'work', 'shop'), '<folder-1>']], hosts: ['devmate.example.com'] });
+  for (const kept of ['Maria', 'maria', 'other', 'third', 'calm-river', 'abcdefghijklmnopqrstuvwxyz012345', 'devmate.example.com', '203.0.113.9', 'hunter2', 's3cr3t-value', 'ghp_', 'shop']) assert.ok(!clean.includes(kept), kept + ' is still in: ' + clean);
+  assert.match(clean, /instance at ~[\\/]\.devmate[\\/]runtime and as JSON "<folder-1>"/); assert.match(clean, /https:\/\/<assigned>\.trycloudflare\.com\/mcp\/<key>/);
+  assert.match(clean, /https:\/\/<public-host>\/mcp from <address>, locally at 127\.0\.0\.1:8788/); assert.match(clean, /by <email>/);
+
+  // The whole report, from a runtime that shares a folder and has seen a failure.
+  const { service: runtime, temp } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } });
+  const root = path.join(temp, 'A Private Folder Name'); fs.mkdirSync(root); fs.writeFileSync(path.join(root, 'a.txt'), 'x');
+  const project = await runtime.call('project.create', { root }, owner);
+  await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, { id: 'owner', role: 'owner' });
+  await assert.rejects(runtime.call('workspace.read', { projectId: project.id, path: 'missing-file.txt' }, { id: 'owner', role: 'owner' }));
+  fs.writeFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-11T10:00:00.000Z connection: could not reach devmate.example.com from ' + root + '\n');
+  const { text } = await runtime.call('runtime.report', {}, owner);
+  assert.match(text, /^DevMate report\. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it\./);
+  assert.match(text, /Connection: cloudflare · sign-in: none · profile: guarded/); assert.match(text, /Shared folders: 1 \(1 read and write, 0 read only\)/);
+  assert.match(text, /\n\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing/); assert.match(text, /\nworkspace\.read {2}2 \(2\) {2}1 {2}\d+ {2}\d+ {2}\w+×1\n/);
+  assert.match(text, /\n#\d+ \S+ workspace\.read \w+ \(connected, \d+ ms\): /); assert.match(text, /connection: could not reach <public-host> from <folder-1>/);
+  for (const kept of ['A Private Folder Name', 'devmate.example.com', temp, path.basename(os.homedir()) + path.sep]) assert.ok(!text.includes(kept), kept + ' is still in the report');
+  // It is the owner's to make at this computer; with full access their client may read it as well.
+  await assert.rejects(runtime.call('runtime.report', {}, { id: 'owner', role: 'owner' }), { code: 'forbidden' });
+  // The command prints exactly that, and without a runtime what can be seen from outside.
+  const printed = [];
+  assert.equal(await cli(['doctor', '--report'], { stdout: { write: value => printed.push(value) }, stderr: { write() {} }, clientFactory: () => ({ call: async name => { assert.equal(name, 'runtime.report'); return { text }; } }) }), 0);
+  assert.equal(printed.join(''), text + '\n');
+  const offline = [];
+  assert.equal(await cli(['doctor', '--report', '--instance', path.join(temp, 'instance')], { stdout: { write: value => offline.push(value) }, stderr: { write() {} },
+    clientFactory: () => ({ call: async () => { throw Object.assign(new Error('stopped'), { code: 'RUNTIME_STOPPED' }); } }) }), 0);
+  // The folders an instance shares are read from its state, so that a log line does not give their names away.
+  assert.match(offline.join(''), /the runtime is not running/); assert.match(offline.join(''), /could not reach \S+ from <folder-1>/);
+  assert.ok(!offline.join('').includes(temp) && !offline.join('').includes('A Private Folder Name'), 'neither the instance directory nor a shared folder is spelled out');
+});
+
 test('the VS Code connection wizard stores the token privately, saves a signed-in Cloudflare route and offers the URL and sign-in code', async () => {
   const calls = [], copied = [], messages = [], confirmations = [];
   let running = true, rejectSettings = false, saved = { auth: { mode: 'none' }, connection: { kind: 'local' }, retentionDays: 30 };

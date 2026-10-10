@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { report } from '../report.mjs';
 import { DomainError } from '../store.mjs';
 import { readConfig, saveConfig } from '../config.mjs';
 import { id, mutation, now } from './shared.mjs';
@@ -23,8 +24,13 @@ export function defineRuntimeOperations(service, add) {
     if (!service.ownerDecides(context)) {
       return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified };
     }
-    return { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}),
+    const answer = { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}),
       ...(service.connectionFault ? { startError: service.connectionFault } : {}) };
+    if (context.surface === 'local') return answer;
+    // What a connected client is told ends up in a conversation, and conversations get shared. The address of a quick
+    // tunnel ends in its key; the client already has the address it came through and is not told the key again.
+    const keyless = value => typeof value === 'string' ? value.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : value;
+    return { ...answer, ...(answer.publicUrl ? { publicUrl: keyless(answer.publicUrl) } : {}), ...(answer.verification?.url ? { verification: { ...answer.verification, url: keyless(answer.verification.url) } } : {}) };
   });
   add('operations.list', { name: z.string().max(100).optional(), summary: z.boolean().optional() }, true,
     'Discover every available operation: names and descriptions. name returns one operation with its exact input schema; summary:false returns every schema at once (large).', (args, context) => {
@@ -109,7 +115,9 @@ export function defineRuntimeOperations(service, add) {
   }
 
   add('runtime.doctor', {}, true, 'Check everything this installation needs and say exactly what to fix: tools, shell, projects, editor windows, installed agents, the connection and its public route, the permission profile, storage.', () => doctor(service), diagnostic);
-  add('runtime.metrics', {}, true, 'Inspect local runtime, SQLite growth and event notification health.', () => {
+  add('runtime.report', {}, true, 'One text for a bug report: the doctor\'s findings, how every operation went since the start, the newest failures and the last lines of the runtime log, with credentials, private paths, account names and addresses taken out.',
+    () => report(service), { ...diagnostic, present: result => result.text });
+  add('runtime.metrics', {}, true, 'Inspect the local runtime: SQLite growth, event notification health, and for every operation since the start how often it was called, how long it took and which errors it returned (usage).', () => {
     const database = service.store.metrics();
     const memory = process.memoryUsage();
     return {
@@ -120,7 +128,9 @@ export function defineRuntimeOperations(service, add) {
         entities: database.entities, notificationFailures: database.notificationFailures },
       runtime: { uptimeSeconds: Math.round(process.uptime()), residentBytes: memory.rss,
         heapUsedBytes: memory.heapUsed, nativeSessions: service.agents.sessions.size,
-        connectedWindows: service.windows.list().length }
+        connectedWindows: service.windows.list().length },
+      // Since this runtime started: how often each operation was called, how long it took and what it failed with.
+      usage: service.usage.snapshot()
     };
   }, diagnostic);
   add('runtime.stop', { expectedGeneration: z.string().max(100).optional(), ...mutation }, false, 'Stop this runtime and its owned child processes.', args => {

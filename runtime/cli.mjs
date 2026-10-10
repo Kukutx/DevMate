@@ -19,6 +19,8 @@ Runtime
   devmate status                    whether it runs, its ports and process
   devmate serve [--port <port>]     run in the foreground until Ctrl+C
   devmate doctor                    check everything DevMate needs and say what to fix
+  devmate doctor --report           the same with usage and the last log lines, private paths, addresses
+                                    and credentials taken out: for a bug report
   devmate logs [--lines <n>]        newest runtime log lines
 
 Projects
@@ -58,7 +60,7 @@ Options: --instance <directory> selects another runtime instance, --timeout <ms>
 
 const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'auth', 'lines',
   'host', 'user', 'member']);
-const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version']);
+const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version', 'report']);
 
 export function parseCli(argv) {
   const positional = [];
@@ -287,6 +289,16 @@ export async function main(argv = process.argv.slice(2), {
       throw new Error('Use secret set <NAME>, secret list or secret remove <NAME>');
     }
     const client = clientFactory(runtimeOptions);
+    if (command === 'doctor' && options.report) {
+      let text;
+      try { text = (await client.call('runtime.report', {}, { timeoutMs: 60000 })).text; }
+      catch (error) {
+        if (error.code !== 'RUNTIME_STOPPED') throw error;
+        text = (await import('./report.mjs')).offlineReport(instanceRoot, await offlineDoctor(instanceRoot));
+      }
+      stdout.write(text + '\n');
+      return 0;
+    }
     if (command === 'doctor') {
       let report;
       try { report = await client.call('runtime.doctor', {}, { timeoutMs: 60000 }); }

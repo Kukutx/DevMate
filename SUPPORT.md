@@ -4,7 +4,7 @@ DevMate is maintained by one person in their spare time. There is no paid suppor
 
 ## Where to ask
 
-- **Something does not work**: open a [bug report](https://github.com/Kukutx/DevMate/issues/new?template=bug_report.yml). Run `devmate doctor` (or **DevMate: Doctor** in VS Code) first and include its output with private paths and addresses removed.
+- **Something does not work**: open a [bug report](https://github.com/Kukutx/DevMate/issues/new?template=bug_report.yml). Run `devmate doctor --report` and include what it prints: the doctor's findings, how the operations went and the last log lines, with credentials, private paths, account names and addresses taken out. Read it before you post it; what it cannot recognise it cannot remove.
 - **An idea or a missing capability**: open a [feature request](https://github.com/Kukutx/DevMate/issues/new?template=feature_request.yml).
 - **A security problem**: do not open a public issue. Follow [SECURITY.md](SECURITY.md).
 

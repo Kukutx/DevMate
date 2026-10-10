@@ -121,6 +121,15 @@ test('full access hands the owner\'s decisions to the owner\'s connected client,
   // What says why something does not work is readable from the client; changing the installation stays at the computer.
   assert.ok((await service.call('operations.query', { operation: 'runtime.doctor' }, connected)).checks.some(item => item.id === 'access'));
   assert.equal(typeof (await service.call('runtime.metrics', {}, connected)).runtime.uptimeSeconds, 'number');
+  // The whole connection state, but never the key a quick tunnel address ends in: what a client is told lands in a conversation.
+  const address = 'https://fixture.trycloudflare.com/mcp/key-of-this-start-0123456789abcdef', before = [service.connection, service.verification];
+  service.connection = { status: async () => ({ kind: 'cloudflare-quick', phase: 'connected', publicUrl: address, temporaryAddress: true }) };
+  service.verification = { kind: 'cloudflare-quick', url: address, verified: true, reachable: true };
+  const state = await service.call('connection.status', {}, connected);
+  assert.deepEqual([state.publicUrl, state.verification.url, state.verification.verified], ['https://fixture.trycloudflare.com/mcp/<key>', 'https://fixture.trycloudflare.com/mcp/<key>', true]);
+  assert.ok(!JSON.stringify(state).includes('key-of-this-start'));
+  assert.equal((await service.call('connection.status', {}, local)).publicUrl, address, 'the owner at this computer gets the address to hand to a client');
+  [service.connection, service.verification] = before;
   assert.deepEqual(await service.call('secret.list', {}, connected), { names: [] });
   assert.equal((await service.call('connection.status', {}, connected)).instance?.generation, service.identity?.generation);
   for (const [operation, input] of [['settings.read', {}], ['settings.replace', { config: {} }], ['secret.set', { name: 'X', value: 'y' }], ['connection.restart', {}], ['runtime.stop', {}], ['access.update', { profile: 'guarded' }]])
