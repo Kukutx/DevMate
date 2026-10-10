@@ -70,8 +70,7 @@ export const configSchema = z.object({
   ]).default({ mode: 'none' }),
   connection: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('local') }).strict(),
-    z.object({ kind: z.literal('external-https'), url: z.string().url(),
-      command: z.object({ executable: z.string().min(1).max(1000), args: z.array(z.string().max(2000)).max(40).optional(), env: z.array(z.string().max(100)).max(20).optional() }).strict().optional() }).strict(),
+    z.object({ kind: z.literal('external-https'), url: z.string().url() }).strict(),
     z.object({ kind: z.literal('ssh'), publicUrl: z.string().url(), executable: z.string(), host: z.string(), user: z.string(),
       sshPort: z.number().int().optional(), remotePort: z.number().int().optional(), identityFile: z.string().optional() }).strict(),
     z.object({ kind: z.literal('openai-tunnel'), tunnelId: z.string(), executable: z.string(), runtimeKeyEnv: envName.optional() }).strict(),

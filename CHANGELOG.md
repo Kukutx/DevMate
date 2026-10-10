@@ -7,10 +7,11 @@
 - Obsidian: **Configure connection** sets up the quick tunnel, and **Copy one-time sign-in code** serves clients that sign in.
 - How the coding agents are run (sessions at once, time limits, whether they get the owner's MCP servers and API keys) is changed while DevMate runs: `providers.configure`, by the owner or, with full access, by their client. The refusals that name a limit say how to raise it.
 - The file tools read and list through links that stay inside the project, and read files that have a second name: a `node_modules` built from links is readable. Nothing is changed through a link.
+- Removed: the option of 4.0.1 to hand DevMate a tunnel program of your own. The quick tunnel is the route that needs nothing; the others are OpenAI's tunnel, a Cloudflare tunnel on your domain, your HTTPS proxy and SSH.
 - The changelog describes DevMate 4 only.
 
 ## 4.0.1
-- A tunnel program of your own (Tailscale Funnel, frp and the like) can be handed to DevMate: `devmate connect https --url https://<host>/mcp --executable <program> --args "<its arguments>"`, or the same questions in **DevMate: Configure Connection**. It is started with the connection, started again if it ends and stopped with the runtime; `{port}` and `{host}` in the arguments are the local port to forward to and the public host. It receives only the environment variables named for it.
+- An external HTTPS connection could name a program for DevMate to start and keep running. Removed again in 4.0.2.
 - The VS Code extension is listed as "DevMate Agent" again. 4.0.0 renamed it to "DevMate", a display name another extension holds, so the Marketplace refused that upload: 4.0.1 is the first 4.x version there. The GitHub release and the Obsidian plugin of 4.0.0 were published.
 - The build no longer fails when a package feed has an outage while installing ripgrep: the step tries again and checks that the tool is there.
 

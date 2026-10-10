@@ -519,17 +519,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       const entered = await ask('Public HTTPS URL of the MCP endpoint', { value: was('external-https', 'url'), placeHolder: 'https://devmate.example.com/mcp', validateInput: httpsAddress });
       if (!entered) return;
       publicUrl = entered.trim();
-      // Optional: the tunnel program behind that address, for DevMate to start and keep running.
-      const before = current.kind === 'external-https' ? current.command : null;
-      const program = await ask('Optional: absolute path of a tunnel program DevMate should start and keep running for this address. Leave empty if the proxy runs on its own', { value: before?.executable || '' });
-      if (program === undefined) return;
-      let command = null;
-      if (program.trim()) {
-        const written = await ask('Its arguments. {port} is the local port to forward to, {host} the public host name', { value: (before?.args || []).map(word => /\s/.test(word) ? '"' + word + '"' : word).join(' '), placeHolder: 'http --local_port {port} --custom_domain {host}' });
-        if (written === undefined) return;
-        command = { executable: program.trim(), args: written.match(/"[^"]*"|\S+/g)?.map(word => word.replace(/^"|"$/g, '')) || [], ...(before?.env?.length ? { env: before.env } : {}) };
-      }
-      config.connection = { kind: 'external-https', url: publicUrl, ...(command ? { command } : {}) };
+      config.connection = { kind: 'external-https', url: publicUrl };
     }
     if (!publicUrl) config.auth = { mode: 'none' };
     else {
@@ -551,7 +541,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const answer = await vscode.window.showWarningMessage('Connection saved. Restart the shared DevMate runtime to apply it?',
       { modal: true, detail: 'Other windows and connected clients reconnect after the restart.' +
         (choice.kind === 'cloudflare' ? ' In the Cloudflare dashboard, route the hostname to http://127.0.0.1:' + ingress + '.'
-          : choice.kind === 'external-https' && !config.connection.command ? ' Point your proxy at http://127.0.0.1:' + ingress + '.' : '') }, 'Restart now');
+          : choice.kind === 'external-https' ? ' Point your proxy at http://127.0.0.1:' + ingress + '.' : '') }, 'Restart now');
     if (answer === 'Restart now') { await restart(); await doctor(); }
     // Saved is not active until the restart: the status says so for as long as this runtime keeps running.
     else { pendingConnection = state.record?.generation || ''; render(); }

@@ -39,8 +39,6 @@ Connecting an AI client
   devmate connect cloudflare --url https://<host>/mcp --executable <cloudflared> [--auth oauth]
   devmate connect openai-tunnel --tunnel-id <tunnel_…> --executable <tunnel-client>
   devmate connect https --url https://<host>/mcp [--auth oauth]
-                        [--executable <program> --args "<its arguments>"]   a tunnel program of yours that DevMate
-                        starts and keeps running; {port} is the local port to forward to, {host} the public host
   devmate connect ssh --url https://<host>/mcp --host <server> --user <name> --executable <ssh>
   devmate secret set <NAME>         store a connection credential, read from standard input
   devmate secret list | remove <NAME>
@@ -58,7 +56,7 @@ Everything the runtime can do
 Options: --instance <directory> selects another runtime instance, --timeout <ms>.
 `;
 
-const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'args', 'name', 'url', 'tunnel-id', 'auth', 'lines',
+const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'auth', 'lines',
   'host', 'user', 'member']);
 const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version']);
 
@@ -171,8 +169,7 @@ async function offlineDoctor(instanceRoot) {
     const { readConfig, publicMcpUrl } = await import('./config.mjs');
     const config = readConfig(instanceRoot), url = publicMcpUrl(config);
     check('settings', 'ok', 'connection: ' + config.connection.kind + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url : ''));
-    const program = config.connection.executable || config.connection.command?.executable;
-    if (program) check('connection.executable', programExists(program) ? 'ok' : 'fail',
+    if (config.connection.executable) check('connection.executable', programExists(config.connection.executable) ? 'ok' : 'fail',
       config.connection.executable, 'Install the connector and set its absolute path with devmate connect.');
   } catch (error) { check('settings', 'fail', 'config.json is not valid: ' + error.message, 'Fix or delete ' + path.join(instanceRoot, 'config.json') + '.'); }
   check('runtime', 'warn', 'The runtime is not running, so projects, the connection and agents were not checked.', 'Start it with: devmate start');
@@ -193,9 +190,7 @@ async function configureConnection(kind, options, instanceRoot) {
     : kind === 'quick' ? { kind: 'cloudflare-quick', executable: cloudflared() }
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
     : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), executable: executable() }
-    // --executable makes DevMate start that program with the connection and keep it running: a tunnel agent of your own.
-    : kind === 'https' ? { kind: 'external-https', url: need('url'), ...(options.executable ? { command: { executable: executable(),
-      args: (options.args || '').match(/"[^"]*"|\S+/g)?.map(word => word.replace(/^"|"$/g, '')) || [] } } : {}) }
+    : kind === 'https' ? { kind: 'external-https', url: need('url') }
     : kind === 'ssh' ? { kind, publicUrl: need('url'), executable: executable(), host: need('host'), user: need('user') }
     : null;
   if (!connection) throw new Error('Choose one of: connect local, quick, cloudflare, openai-tunnel, https, ssh');

@@ -173,7 +173,7 @@ They reach your MCP server from the cloud, so they need a route from outside to 
 | `quick` | Any client | A Cloudflare quick tunnel. No account, no domain, nothing to set up; the address changes whenever it starts again |
 | `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
-| `https` | Any client | A reverse proxy you already run, or a tunnel program of yours that DevMate starts and keeps running |
+| `https` | Any client | A reverse proxy you already run |
 | `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that provides HTTPS |
 
 **Quick tunnel: connected in a minute**
@@ -213,18 +213,6 @@ devmate restart
 ```
 
 `devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it.
-
-**Your own tunnel program**
-
-Any program that gives this computer a public HTTPS address (Tailscale Funnel, frp and the like) can be run by DevMate: it is started with the connection, started again if it ends, and stopped with the runtime.
-
-```powershell
-devmate connect https --url https://<your-domain>/mcp --executable "C:\Tools\frp\frpc.exe" --args "http --local_port {port} --custom_domain {host}"
-devmate restart
-devmate doctor
-```
-
-`{port}` is the local port to forward to and `{host}` the public host. The arguments are passed as they are, never through a shell. A credential the program reads from its environment is named under `connection.command.env` in `config.json` and stored with `devmate secret set`; the program gets nothing else of DevMate's. In VS Code, **DevMate: Configure Connection** asks for the program when you choose the existing HTTPS proxy.
 
 **Is it really connected?**
 
