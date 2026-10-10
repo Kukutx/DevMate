@@ -26,8 +26,8 @@ export function defineRuntimeOperations(service, add) {
   add('operations.list', { name: z.string().max(100).optional(), summary: z.boolean().optional() }, true,
     'Discover every available operation: names and descriptions. name returns one operation with its exact input schema; summary:false returns every schema at once (large).', (args, context) => {
       // Without a name the answer is the short list. Through MCP it holds only what operations.call accepts.
-      const summary = args.summary ?? !args.name, local = context.surface === 'local';
-      return { items: service.visibleOperations(context).filter(op => (!args.name || op.name === args.name) && (local || !(op.humanOnly || UNCALLABLE.includes(op.name))))
+      const summary = args.summary ?? !args.name, local = context.surface === 'local', answers = service.ownerDecides(context);
+      return { items: service.visibleOperations(context).filter(op => (!args.name || op.name === args.name) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
         .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) })) };
     });
   add('operations.call', { operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }, false,
@@ -35,8 +35,9 @@ export function defineRuntimeOperations(service, add) {
     (args, context) => {
       const target = service.operations.get(args.operation);
       if (!target || target.localOnly || UNCALLABLE.includes(args.operation)) throw new DomainError('unknown_operation', 'Unknown DevMate operation: ' + args.operation);
-      // Decisions an agent is waiting on belong to the person, in the workbench; the model that delegated the work may not answer for them.
-      if (target.humanOnly) throw new DomainError('forbidden', 'This decision is made by the user in the DevMate workbench.');
+      // Decisions an agent is waiting on belong to the person, in the workbench; the model that delegated the work may not answer
+      // for them, unless the owner chose full access.
+      if (target.humanOnly && !service.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is made by the user in the DevMate workbench.');
       return service.call(args.operation, args.input || {}, context);
     }, { destructive: true, openWorld: true });
   add('operations.read', { operationId: id }, true, 'Inspect the recorded result of a submitted operation without repeating it.', (args, context) => {
@@ -50,6 +51,15 @@ export function defineRuntimeOperations(service, add) {
     return record.result.error ? { status: 'failed', error: record.result.error } : { status: 'completed', result: record.result.value };
   });
   add('workbench.snapshot', { projectId: id.optional(), workflowId: id.optional() }, true, 'Read the workbench state.', (args, context) => snapshot(service, args, context));
+
+  // How much a client connected as the owner may decide. Guarded is the default. Full access is for an owner who drives
+  // everything from a chat client; like every widening it is chosen at this computer, and it applies at once.
+  add('access.read', {}, true, 'Say which permission profile the owner chose. guarded: sharing a folder, lifting credential-file protection, setting up capability engines and answering a delegated agent are done by the owner at their computer. ' +
+    'full: a client connected as the owner may do all of these (operations_call), credential-like files are not withheld, and what a delegated agent asks permission for is granted automatically.',
+    () => ({ profile: service.accessProfile }));
+  add('access.update', { profile: z.enum(['guarded', 'full']) }, false,
+    'Choose the permission profile: guarded or full. The owner does this at their own computer (devmate access full, or "Change Permission Profile" in the editor); it takes effect immediately.',
+    args => service.setAccessProfile(args.profile), { ...local, idempotent: true });
 
   // Which release saved the file is not a setting: it alone never calls for a restart.
   const differs = (saved, active) => JSON.stringify({ ...saved, writtenBy: undefined }) !== JSON.stringify({ ...active, writtenBy: undefined });

@@ -86,14 +86,16 @@ export class DevMateService {
     try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); }
     this.maintenanceTimer = setInterval(() => { try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); } }, MAINTENANCE_INTERVAL_MS);
     this.maintenanceTimer.unref();
-    this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers });
+    this.accessProfile = this.store.setting('access.profile') === 'full' ? 'full' : 'guarded';
+    this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers,
+      grantsApprovals: () => this.fullAccess() });
     this.inputs = new InputRequests(this.store);
     this.connection = connection;
     this.onStop = onStop;
     this.operations = new Map();
     this.inflight = new Map();
     this.registerOperations();
-    this.windows = createWindowRegistry({store:this.store,isDeclined:root => this.isDeclined(root),registerProject:(root,name,access) =>
+    this.windows = createWindowRegistry({store:this.store,isDeclined:root => this.isDeclined(root),unprotected:() => this.fullAccess(),registerProject:(root,name,access) =>
       this.operations.get('project.create').run({root,name,access},LOCAL_OWNER)});
     recallTools(this.instanceRoot);
     this.providerDiscovery = null;
@@ -203,7 +205,17 @@ export class DevMateService {
   // What is shared, and how far, is the owner's decision, and it is made at this computer: in an editor, on the
   // command line, in the local workbench. A connected client can narrow what is shared; it cannot widen it. That
   // includes a workbench embedded in a chat app: what such a client is, only the client itself says.
-  ownerDecides(context) { return context?.role === 'owner' && context.surface === 'local'; }
+  // The one exception is the owner's own, and is also made at this computer: the full access profile hands these
+  // decisions to whoever connects as the owner, for people who drive everything from a chat client.
+  ownerDecides(context) { return context?.role === 'owner' && (context.surface === 'local' || this.fullAccess()); }
+  fullAccess() { return this.accessProfile === 'full'; }
+  setAccessProfile(profile) {
+    this.store.setting('access.profile', profile);
+    this.accessProfile = profile;
+    // Whatever already waits for a permission is covered by the new choice as well.
+    if (profile === 'full') this.agents.grantWaiting();
+    return { profile };
+  }
   // Folders the owner took out of sharing. They come back only by the owner's own choice, and not through a
   // folder above or below them either: an editor's default never shares what would bring one back.
   isDeclined(root) {
@@ -256,7 +268,8 @@ export class DevMateService {
     const project = this.store.get('project', projectId);
     if (write && this.projectTransitions.has(projectId)) throw new DomainError('project_busy', 'Project execution resources are closing.');
     if (write && project.access !== 'write') throw new DomainError('read_only', 'Project is read-only.');
-    return { ...project, controlRoot: this.instanceRoot };
+    // With full access nothing is withheld from the file tools, whatever the project's own setting says.
+    return { ...project, ...(this.fullAccess() ? { protectSecrets: false } : {}), controlRoot: this.instanceRoot };
   }
 
   list(kind, input, context) {
@@ -284,7 +297,7 @@ export class DevMateService {
     if (!context?.id || !['owner','write','read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
     return [...this.operations.values()].filter(operation =>
       (!operation.localOnly || (context.surface === 'local' && context.role === 'owner')) &&
-      (!(operation.humanOnly || operation.ownerDecision) || context.surface === 'local') &&
+      (!(operation.humanOnly || operation.ownerDecision) || context.surface === 'local' || this.ownerDecides(context)) &&
       (context.role === 'owner' || !ownerOperations.has(operation.name)) &&
       (context.role !== 'read' || operation.readOnly || dispatching.has(operation.name)));
   }
@@ -311,7 +324,7 @@ export class DevMateService {
     if (operation.localOnly && (context.surface !== 'local' || context.role !== 'owner')) throw new DomainError('forbidden', 'This operation is available only through the local control interface.');
     // A decision that is the person's own (answering what an agent asks) is taken at this computer. Anywhere else
     // the caller may be the very model that started the agent, and nothing a client says about itself proves otherwise.
-    if (operation.humanOnly && context.surface !== 'local') throw new DomainError('forbidden', 'This decision is the user\'s own. They answer it on their computer: in the DevMate workbench (devmate ui) or in their editor.');
+    if (operation.humanOnly && context.surface !== 'local' && !this.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is the user\'s own. They answer it on their computer: in the DevMate workbench (devmate ui) or in their editor. (With the full access profile, devmate access full, permissions are granted automatically and the owner\'s client may answer.)');
     if (operation.ownerDecision && !this.ownerDecides(context)) throw new DomainError('forbidden', operation.ownerDecision);
     if (context.role !== 'owner') {
       if (!Array.isArray(context.projectIds)) throw new DomainError('forbidden', 'No project grants are assigned.');

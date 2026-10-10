@@ -87,6 +87,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate doctor` | 体检。运行时没启动也能用，会告诉你下一步 |
 | `devmate logs [--lines N]` | 最近的运行日志 |
 | `devmate project add [目录] [--name 名称] [--read-only]` / `list` / `remove` | 共享什么。不写目录就是当前目录 |
+| `devmate access [guarded \| full]` | 权限档：连接进来的客户端可以决定什么（见下文“谁可以做什么”） |
 | `devmate mcp-url` | 给客户端填的地址 |
 | `devmate mcp` | 以标准输入输出提供 MCP；运行时没启动会自动拉起 |
 | `devmate connect local \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录 |
@@ -215,6 +216,7 @@ devmate restart
 - **默认 `auth.mode` 是 `none`。** 能到达 MCP 地址的就是你。公网地址要像密码一样保密，或者启用登录。
 - **可选的登录（OAuth）。** `devmate connect … --auth oauth` 要求公网地址的客户端登录：第一次连接时跳到 DevMate 的授权页，输入 `devmate login-code` 生成的一次性代码。还可以用 `auth.member.create` 创建只读或可写、限定到具体项目的身份。不公开自身说明（客户端元数据文档）的客户端，由你在配置的 `auth.clients` 里登记它的名字和回调地址。本机上的客户端始终不需要登录。
 - **审批和提问由你在自己的电脑上回答。** Agent 请求批准时，你在编辑器或本机工作台里回答。任何连接进来的客户端都不能回答，包括派发这个任务的模型。
+- **嫌这些碍事时：完全访问。** 默认的权限档是“受保护”（guarded），也就是上面这些规则。如果你主要在聊天客户端里干活、不想每次都回到电脑前，可以在自己的电脑上打开“完全访问”（full）：`devmate access full`，VS Code 里的 **DevMate: Change Permission Profile**，或 Obsidian 里的 **Permissions…**。之后，以你的身份连接进来的客户端可以共享文件夹、放宽权限、读取凭据文件、设置能力引擎、回答 Agent 的提问；被派发的 Agent 请求的权限自动批准（每一次都留有记录）。它立即生效，只有你在自己的电脑上才能打开；`devmate access guarded` 随时收回。打开之后，能访问你 MCP 地址的人不经询问就能以你的身份做一切：请保管好地址，或者要求登录。登录的成员身份不受影响，仍然只有授予它的权限。
 - **凭据类文件默认受保护。** `.env`、密钥文件、`.npmrc` 等不会被文件工具读取或列出内容；Git 状态里会列出它们的名字并标记“不要提交”。你可以在自己的电脑上对某个项目关闭这项保护。
 - **命令行里的凭据不外显。** 进程列表和活动记录里，命令行中内联的令牌、密码会被替换成 `[redacted]`；实际执行的命令不变。这只识别常见写法，不是保证。
 - **工作台的会话只留在它自己的浏览器标签页里。** 工作台通过一次性链接进入，会话从不以 cookie 形式存在，其他本机服务拿不到。
@@ -276,9 +278,9 @@ devmate restart
 | `DevMate needs Node.js 24 or newer` | 安装 Node.js 24+，或在编辑器的 DevMate 设置里填它的可执行文件路径 |
 | `Git … is too old` | 更新到 Git 2.41 或更高版本，然后重启 DevMate |
 | 提示 PowerShell 5.1 没有 `&&` | 让模型改用 `;` 和 `if ($?) { … }`，或安装 PowerShell 7 后重启 DevMate |
-| 模型说文件夹“由所有者在自己的电脑上共享” | 你自己来共享：在装有 DevMate 的编辑器里打开它，或运行 `devmate project add <文件夹>` |
+| 模型说文件夹“由所有者在自己的电脑上共享” | 你自己来共享：在装有 DevMate 的编辑器里打开它，或运行 `devmate project add <文件夹>`。想让客户端自己能做这些事：`devmate access full` |
 | 模型说某个项目只读，或某个文件夹被取消了共享 | 这是你在本机做过的决定。要改就在本机改：编辑器里的 **Change Folder Sharing**、`devmate project add`，或本机工作台 |
-| 内嵌工作台里提示“Answer this on your computer” | 审批在本机回答：`devmate ui --open`，或编辑器里的提醒 |
+| 内嵌工作台里提示“Answer this on your computer”，或 Agent 一直在等批准 | 审批在本机回答：`devmate ui --open`，或编辑器里的提醒。打开 `devmate access full` 后会自动批准 |
 | `rg was not found on PATH` | 按提示安装 ripgrep，然后 `devmate restart`；或者在 VS Code 里打开一次 DevMate，之后就用编辑器自带的那一份 |
 | `The origin … is not allowed` | 这是一个浏览器端客户端：如果它是你自己运行的，把它的来源加进配置的 `allowedOrigins` |
 | 云端客户端连不上 | 看 `doctor` 的 `connection.*` 几项；`devmate logs` 查看连接器输出 |

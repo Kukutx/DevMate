@@ -359,6 +359,8 @@
     }
   },
   "operations": [
+    "access.read",
+    "access.update",
     "agents.cancel",
     "agents.delegate",
     "agents.list",

@@ -160,6 +160,19 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     return updated;
   }
 
+  // How much a client connected as the owner may decide: guarded (the default) or full access.
+  async function accessProfile() {
+    const current = (await client.call('access.read', {}, { scoped: false })).profile;
+    const choice = await ask('What may your connected AI client decide?', current === 'full'
+      ? 'Full access is on: your client can share folders, read credential files, set up engines and answer agents, and what a delegated agent asks permission for is granted automatically.'
+      : 'Guarded (the default): you share folders, lift credential-file protection and answer agents at this computer. Full access hands all of that to your connected client and grants agent permission requests automatically.',
+    [{ label: 'Guarded', value: 'guarded', primary: current === 'full' }, { label: 'Full access', value: 'full', warning: current !== 'full' }]);
+    if (!choice || choice === current) return current;
+    await client.call('access.update', { profile: choice }, { scoped: false });
+    new api.Notice(choice === 'full' ? 'DevMate: full access is on. Whoever can reach your MCP address acts as you without asking.' : 'DevMate: back to the guarded profile.');
+    return choice;
+  }
+
   // What the user has in front of them: the active note, the selection and the open notes.
   function editorContext() {
     const root = vaultRoot(), workspace = plugin.app?.workspace;
@@ -303,6 +316,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
       button('Open workbench', async () => { window.open(await client.workbenchUrl(), '_blank', 'noopener'); }, { when: running });
       button('Copy MCP URL', copyMcpUrl, { when: running });
       button('Doctor', doctor, { when: running });
+      button('Permissions…', accessProfile, { when: running });
       // Calling an operation by name is for looking into a problem, not for everyday use.
       const advanced = this.contentEl.createEl('details');
       advanced.createEl('summary', { text: 'Advanced: run an operation' });
@@ -371,6 +385,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     command('workbench', 'Open workbench', async () => window.open(await client.workbenchUrl(), '_blank', 'noopener'));
     command('copy-mcp-url', 'Copy MCP URL', copyMcpUrl);
     command('doctor', 'Doctor', doctor);
+    command('access-profile', 'Change permission profile (guarded or full access)', accessProfile);
     const workspace = plugin.app?.workspace;
     if (workspace?.on && plugin.registerEvent) {
       for (const [event, delay] of [['active-leaf-change', 150], ['file-open', 150], ['editor-change', 600]]) plugin.registerEvent(workspace.on(event, () => scheduleContext(delay)));
@@ -416,7 +431,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     views.clear();
   }
 
-  return { activate, deactivate, open, attachVault, detachVault, changeSharing, stopRuntime, restartRuntime, sync, status, copyMcpUrl, doctor, editorContext, RuntimeView, windowId };
+  return { activate, deactivate, open, attachVault, detachVault, changeSharing, accessProfile, stopRuntime, restartRuntime, sync, status, copyMcpUrl, doctor, editorContext, RuntimeView, windowId };
 }
 
 module.exports = { createObsidianRuntimeEntry, RUNTIME_VIEW_TYPE };

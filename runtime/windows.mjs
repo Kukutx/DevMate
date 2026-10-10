@@ -14,7 +14,7 @@ const key = value => process.platform === 'win32' ? value.toLowerCase() : value;
  * Window attachments are ephemeral local-host observations, not durable projects.
  * Each extension-host window owns one identity; no active-project global exists.
  */
-export function createWindowRegistry({ store, registerProject, isDeclined = () => false, now = Date.now } = {}) {
+export function createWindowRegistry({ store, registerProject, isDeclined = () => false, unprotected = () => false, now = Date.now } = {}) {
   if (!store || typeof registerProject !== 'function') throw new TypeError('Window registry needs the current store and project registration.');
   const windows = new Map();
   const access = projectId => { try { return store.get('project', projectId).access; } catch { return null; } };
@@ -140,10 +140,10 @@ export function createWindowRegistry({ store, registerProject, isDeclined = () =
     prune();
     const entry = windows.get(windowId);
     if (!entry) throw fault('window_missing','This editor window is not attached.');
-    // Whether credential-like paths are withheld is the project's own setting, read when the state arrives.
+    // Whether credential-like paths are withheld is the project's own setting (and the owner's access profile), read when the state arrives.
     for (const root of entry.roots) {
       if (!root.projectId) continue;
-      try { root.protect = store.get('project', root.projectId).protectSecrets !== false; } catch { root.protect = true; }
+      try { root.protect = !unprotected() && store.get('project', root.projectId).protectSecrets !== false; } catch { root.protect = true; }
     }
     const editor = {capturedAt: new Date(now()).toISOString(), active: null, open: [], diagnostics: [], diagnosticsTruncated: false};
     const active = input.active && locate(entry, input.active.file);

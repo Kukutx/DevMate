@@ -23,20 +23,20 @@ test('one fullscreen resource advertises actual global/thread entrypoints and ac
   assert.deepEqual(calls[0].input,{});
   await assert.rejects(callWorkbenchTool(open.name,{token:'secret'},service,context),{code:'invalid_input'});
 });
-test('app tools forward only allowlisted operations to the same service, and never the decisions that are the owner\'s own',async()=>{
+test('app tools forward only allowlisted operations to the same service, which is the one that authorizes them',async()=>{
   const records=[],service={call:async(...args)=>{records.push(args);return{id:'approval-1',status:'cancelled'};}};
   const context={authInfo:{clientId:'owner'}};
   const input={id:'approval-1',operationId:'operation-1'};
   const result=await callWorkbenchTool('workbench_call',{operation:'approval.cancel',input},service,context);
   assert.equal(records[0][0],'approval.cancel');assert.equal(records[0][1],input);assert.equal(records[0][2],context);
   assert.equal(result.structuredContent.status,'cancelled');
-  // Answering an agent and sharing a folder are done at the owner's computer: the embedded workbench has no such operation.
-  for(const operation of ['approval.resolve','input.respond','project.create'])await assert.rejects(callWorkbenchTool('workbench_call',{operation,input:{}},service,context),{code:'invalid_input'});
+  // Answering an agent and sharing a folder reach the service like everything else. It refuses them from an embedded
+  // workbench unless the owner chose full access (tests/runtime-access-profile.test.mjs).
   await assert.rejects(callWorkbenchTool('workbench_call',{operation:'eval',input:{}},service),{code:'invalid_input'});
   await assert.rejects(callWorkbenchTool('workbench_call',{operation:'project.list',input:[]},service),{code:'invalid_input'});
   await assert.rejects(callWorkbenchTool('workbench_call',{operation:'project.list',context:{admin:true}},service),{code:'invalid_input'});
   // Local-only operations are refused before the service is asked.
-  for(const operation of ['runtime.doctor','settings.read','settings.replace','secret.set','secret.list','connection.verify','auth.status','runtime.stop','operations.call'])
+  for(const operation of ['runtime.doctor','settings.read','settings.replace','secret.set','secret.list','connection.verify','auth.status','runtime.stop','operations.call','access.update'])
     await assert.rejects(callWorkbenchTool('workbench_call',{operation,input:{}},service),{code:'invalid_input'});
   assert.equal(records.length,1);
 });
@@ -56,11 +56,15 @@ test('the allow-list is exactly what the app calls, exists in the service and ne
   const localOnly=named.filter(name=>service.operations.get(name).localOnly);
   assert.deepEqual(localOnly,['runtime.doctor']);
   assert.match(app,/!bridge\.embedded && can\('runtime\.doctor'\)/);
-  // The owner's own decisions are offered by the local page only; everything else the app names is allow-listed.
+  // Everything else the app names is allow-listed, the owner's own decisions included: the service offers those to an
+  // embedded workbench only when the owner chose full access, and the app shows a button only for what is offered.
   const ownDecision=name=>{const operation=service.operations.get(name);return operation.humanOnly===true||!!operation.ownerDecision;};
   assert.deepEqual(named.filter(ownDecision).sort(),['approval.resolve','input.respond','project.create']);
-  assert.deepEqual(named.filter(name=>!service.operations.get(name).localOnly&&!ownDecision(name)).sort(),[...WORKBENCH_OPERATIONS].sort());
-  for(const name of ['approval.resolve','input.respond','project.create'])assert.equal(WORKBENCH_OPERATIONS.includes(name),false,name);
+  assert.deepEqual(named.filter(name=>!service.operations.get(name).localOnly).sort(),[...WORKBENCH_OPERATIONS].sort());
+  const embedded=()=>service.visibleOperations({id:'owner',role:'owner',projectIds:null}).map(operation=>operation.name);
+  for(const name of ['approval.resolve','input.respond','project.create'])assert.equal(embedded().includes(name),false,name);
+  service.setAccessProfile('full');
+  for(const name of ['approval.resolve','input.respond','project.create'])assert.equal(embedded().includes(name),true,name);
 });
 test('registration uses the same callbacks as the direct contract and keeps the error code of a failed call',async()=>{
   const tools=new Map(),resources=new Map();

@@ -120,8 +120,11 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
       if (name === 'connection.status') return { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp' };
       if (name === 'auth.code.create') return { code: 'dml_one-time' };
       if (name === 'runtime.doctor') return { version: '4.0.0', status: 'ok', checks: [{ id: 'node', status: 'ok', detail: 'Node.js' }] };
+      if (name === 'access.update') profile = input.profile;
+      if (name.startsWith('access.')) return { profile };
       return {};
     } };
+  let profile = 'guarded';
   const commands = new Map();
   const vscode = {
     TreeItem: class { constructor(label) { this.label = label; } }, TreeItemCollapsibleState: { None: 0 },
@@ -164,6 +167,13 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   answers.picks = ['Local only'];
   const local = await commands.get('devMate.runtime.configureConnection')();
   assert.deepEqual(local.connection, { kind: 'local' }); assert.deepEqual(local.auth, { mode: 'none' });
+  // The permission profile: full access is confirmed in a modal dialog that says what it hands over; going back is not asked twice.
+  answers.picks = ['Full access']; confirmations.length = 0;
+  assert.equal(await commands.get('devMate.runtime.accessProfile')(), 'full');
+  assert.equal(confirmations[0].modal, true); assert.match(confirmations[0].detail, /credential files/); assert.match(confirmations[0].detail, /granted automatically/);
+  answers.picks = ['Guarded'];
+  assert.equal(await commands.get('devMate.runtime.accessProfile')(), 'guarded');
+  assert.deepEqual(named('access.update'), [{ profile: 'full' }, { profile: 'guarded' }]); assert.equal(confirmations.length, 1);
   await entry.deactivate();
 });
 

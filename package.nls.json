@@ -3,6 +3,7 @@
   "command.stop": "Stop DevMate Runtime",
   "command.restart": "Restart DevMate Runtime",
   "command.registerFolder": "Change Folder Sharing",
+  "command.accessProfile": "Change Permission Profile",
   "command.menu": "Show Menu",
   "command.status": "Show Runtime Status",
   "command.open": "Open Workbench",

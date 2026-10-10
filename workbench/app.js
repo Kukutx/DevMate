@@ -341,6 +341,7 @@ function projectSettings(v, project) {
     el('p', {class: 'hint', text: 'While protection is on, files that usually hold passwords and keys (for example .env files, private key files and .npmrc) do not appear in the file list or in search, ' +
       'cannot be opened, changed or deleted here or by connected assistants, and are left out of Git diffs. Git status still names them, marked as protected, so they are not committed by accident. ' +
       'Commands that are run in the project are not restricted by this setting.'}),
+    state.snapshot.access?.profile === 'full' ? el('p', {class: 'hint', text: 'Full access is switched on, so this protection is not applied to any project right now. It applies again with the guarded profile (devmate access guarded).'}) : null,
     el('div', {class: 'actions'}, opButton('Save settings', 'project.update', save, {class: 'primary'}), opButton('Remove project', 'project.remove', remove, {class: 'danger'})));
 }
 function connectionPanel(v) {
@@ -423,7 +424,7 @@ function approvalCard(approval) {
   // Once the decision is accepted the request leaves the waiting list at once, not with the next refresh.
   const decide = async optionId => { await mutate('approval.resolve', {id: approval.id, optionId, expectedRevision: approval.revision}, 'Decision sent.'); approval.status = 'resolved'; renderMain(); };
   return el('div', {class: 'item waiting', 'data-key': approval.id}, el('div', {class: 'row-head'}, el('h3', {text: str(approval.summary) || str(approval.title) || 'Approval request'}), badge(approval.status)),
-    caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt)].filter(Boolean).join(' · ')),
+    caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
     approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
     el('div', {class: 'actions'}, options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))),
       opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
@@ -1093,7 +1094,7 @@ function renderSelectors() {
   setOptions($('workflow'), (state.snapshot.workflows || []).filter(item => item.projectId === state.projectId), state.workflowId, 'Project overview');
   $('workflow').disabled = !state.projectId;
   $('new-workflow').disabled = !state.projectId || !can('workflow.create');
-  $('instance').textContent = 'Workbench' + (state.snapshot.instance?.version ? ' · ' + state.snapshot.instance.version : '');
+  $('instance').textContent = 'Workbench' + (state.snapshot.instance?.version ? ' · ' + state.snapshot.instance.version : '') + (state.snapshot.access?.profile === 'full' ? ' · Full access' : '');
   const viewer = state.snapshot.viewer;
   $('viewer').textContent = viewer ? [viewer.displayName || viewer.id, viewer.role].filter(Boolean).join(' · ') : '';
   $('scope').textContent = state.projectId ? [name(selectedProject()) || state.projectId, name(selectedWorkflow())].filter(Boolean).join(' / ') : 'No project selected';

@@ -19,11 +19,14 @@ export function defineCapabilityOperations(service, add) {
     'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
     (args, context) => service.capabilities.settings(args, { callerRole: context.role }));
   add('capability.configure', { projectId: id.optional(), engine: engine.min(1), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
-    'Owner only. Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer.',
+    'Owner only. Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile.',
     (args, context) => {
       // An engine's settings name programs and folders on this computer. Like what is shared, they are the owner's to widen.
       if (!service.ownerDecides(context) && (Object.keys(args.settings).length !== 1 || args.settings.enabled !== false))
         throw new DomainError('forbidden', 'Capability engines are set up by the owner on their own computer (local workbench or the devmate command). A connected client can only switch one off.');
+      // Reading and writing the memory of other processes is switched on at this computer and nowhere else, in either profile.
+      if (context.surface !== 'local' && (args.settings.allowProcessAccess || args.settings.allowMemoryWrite))
+        throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: devmate capability.configure --json \'{"engine":"reverse","settings":{"allowProcessAccess":true}}\'');
       return service.capabilities.configure(args, { callerRole: context.role });
     });
 }

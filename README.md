@@ -87,6 +87,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate doctor` | Check the installation. Works when nothing is running and says what to do next |
 | `devmate logs [--lines N]` | Recent runtime log |
 | `devmate project add [directory] [--name N] [--read-only]` / `list` / `remove` | What is shared. Without a directory, the current one |
+| `devmate access [guarded \| full]` | The permission profile: what a connected client may decide (see [Who may do what](#who-may-do-what)) |
 | `devmate mcp-url` | The address for a client |
 | `devmate mcp` | MCP over standard input and output; starts the runtime when needed |
 | `devmate connect local \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in |
@@ -213,6 +214,7 @@ A connector that cannot start does not take local work down and is never hidden:
 - **`auth.mode` is `none` by default.** Whoever reaches the MCP address is you. Treat a public address like a password, or require sign-in.
 - **Optional sign-in (OAuth).** `devmate connect … --auth oauth` makes clients of the public address sign in: on first connection they are sent to DevMate's authorisation page, where you enter a one-time code from `devmate login-code`. With `auth.member.create` you can issue read-only or read-write identities limited to named projects. A client that publishes no description of itself (a client metadata document) is registered by you under `auth.clients` in the configuration, with its name and redirect addresses. Clients on your own computer never need to sign in.
 - **Approvals and questions are answered by you, at your computer.** When an agent asks for permission, you answer in the editor or the local workbench. No connected client can answer, including the model that started the agent.
+- **Full access, when you want none of that in your way.** The default profile is *guarded*: everything above. If you drive your work from a chat client and do not want to walk to the computer, switch on *full access* there: `devmate access full`, **DevMate: Change Permission Profile** in VS Code, or **Permissions…** in Obsidian. A client connected as you can then share folders, widen access, read credential files, set up capability engines and answer what an agent asks, and what a delegated agent asks permission for is granted automatically (each grant stays on record). It takes effect at once and only you, at your computer, can switch it on; `devmate access guarded` takes it back. With full access, whoever reaches your MCP address acts as you without asking: keep the address private or require sign-in. Signed-in members keep exactly their grants.
 - **Credential files are protected by default.** `.env`, key files, `.npmrc` and the like are not read or listed by the file tools; Git status names them, marked "do not commit". You can switch that off for one project, at your computer.
 - **Secrets in command lines are not shown.** Process lists and activity records replace inline tokens and passwords with `[redacted]`; the command that runs is unchanged. This recognises common forms and is no guarantee.
 - **The workbench session stays in its browser tab.** It is entered through a single-use link, and its session is never a cookie that other local services would receive.
@@ -274,9 +276,9 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 | `DevMate needs Node.js 24 or newer` | Install Node.js 24+, or set the path of its executable in the DevMate settings of the editor |
 | `Git … is too old` | Update to Git 2.41 or newer, then restart DevMate |
 | A note that PowerShell 5.1 has no `&&` | Have the model use `;` and `if ($?) { … }`, or install PowerShell 7 and restart DevMate |
-| The model says folders are "shared by the owner on their own computer" | Share the folder yourself: open it in an editor with DevMate, or `devmate project add <folder>` |
+| The model says folders are "shared by the owner on their own computer" | Share the folder yourself: open it in an editor with DevMate, or `devmate project add <folder>`. To let your client do such things itself: `devmate access full` |
 | The model says a project is read only, or a folder was taken out of sharing | That was your decision at this computer. Change it there: **Change Folder Sharing** in the editor, `devmate project add`, or the local workbench |
-| "Answer this on your computer" in an embedded workbench | Approvals are answered locally: `devmate ui --open`, or the notification in your editor |
+| "Answer this on your computer" in an embedded workbench, or an agent that keeps waiting for approval | Approvals are answered locally: `devmate ui --open`, or the notification in your editor. With `devmate access full` they are granted automatically |
 | `rg was not found on PATH` | Install ripgrep as the message says, then `devmate restart`; or open DevMate once in VS Code, whose copy is then used |
 | `The origin … is not allowed` | A browser-based client: add its origin to `allowedOrigins` in the configuration if you run that client yourself |
 | A cloud client cannot connect | The `connection.*` items of `doctor`; `devmate logs` shows the connector's output |

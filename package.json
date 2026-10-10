@@ -87,6 +87,11 @@
         "category": "DevMate"
       },
       {
+        "command": "devMate.runtime.accessProfile",
+        "title": "%command.accessProfile%",
+        "category": "DevMate"
+      },
+      {
         "command": "devMate.runtime.menu",
         "title": "%command.menu%",
         "category": "DevMate"
@@ -252,6 +257,11 @@
           "command": "devMate.runtime.registerFolder",
           "when": "view == devMate.runtime && devMate.running",
           "group": "2_share@1"
+        },
+        {
+          "command": "devMate.runtime.accessProfile",
+          "when": "view == devMate.runtime && devMate.running",
+          "group": "2_share@2"
         },
         {
           "command": "devMate.runtime.doctor",

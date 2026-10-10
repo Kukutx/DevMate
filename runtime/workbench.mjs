@@ -4,12 +4,13 @@ import { z } from 'zod';
 
 export const WORKBENCH_RESOURCE_URI = 'ui://devmate/workbench/v1';
 export const WORKBENCH_MIME = 'text/html;profile=mcp-app';
-// Exactly what workbench/app.js calls when it runs inside a host. Operations that are
-// only for the local owner interface, or that are the owner's own decisions (sharing a folder, answering an
-// agent), never belong here: an embedded workbench shows them and the owner acts at their computer.
+// Exactly what workbench/app.js calls when it runs inside a host. Operations that are only for the local owner
+// interface never belong here. The owner's own decisions (sharing a folder, answering an agent) are listed, and the
+// service refuses them from an embedded workbench unless the owner chose full access: until then it shows them
+// and the owner acts at their computer.
 export const WORKBENCH_OPERATIONS = Object.freeze([
   'workbench.snapshot', 'operations.list', 'connection.status',
-  'project.list', 'project.update', 'project.remove', 'project.overview',
+  'project.list', 'project.create', 'project.update', 'project.remove', 'project.overview',
   'workflow.create', 'workflow.update',
   'workspace.files', 'workspace.find', 'workspace.search', 'workspace.read', 'workspace.write',
   'workspace.mkdir', 'workspace.move', 'workspace.delete', 'workspace.history', 'workspace.restore',
@@ -19,7 +20,7 @@ export const WORKBENCH_OPERATIONS = Object.freeze([
   'agents.cancel', 'agents.delegate', 'agents.result',
   'event.list', 'job.list', 'job.read', 'message.list', 'message.send',
   'task.list', 'task.create', 'task.update',
-  'approval.list', 'approval.cancel', 'input.list',
+  'approval.list', 'approval.resolve', 'approval.cancel', 'input.list', 'input.respond',
   'artifact.list', 'artifact.read', 'artifact.create',
   'reference.list', 'reference.add', 'reference.remove'
 ]);

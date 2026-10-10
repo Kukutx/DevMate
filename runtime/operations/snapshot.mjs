@@ -33,7 +33,7 @@ export async function snapshot(service, { projectId, workflowId } = {}, context)
   const providers = await service.call('providers.list', {}, context);
   return {
     instance: { name: 'DevMate', version: VERSION }, viewer: { id: context.id, displayName: context.role === 'owner' ? 'Owner' : context.id, role: context.role },
-    capabilities: { operations: service.visibleOperations(context).map(op => op.name) }, counts,
+    capabilities: { operations: service.visibleOperations(context).map(op => op.name) }, access: { profile: service.accessProfile }, counts,
     projects: service.store.list('project', { ...(context.projectId ? { projectIds: [context.projectId] } :
       context.role !== 'owner' ? { projectIds: context.projectIds } : {}) }),
     // What an editor has open but does not share is the owner's business at this computer only.

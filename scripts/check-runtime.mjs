@@ -15,7 +15,7 @@ export function validateExtensionManifest(directory,manifest){
   assert.equal(manifest.bin?.devmate,'./runtime/cli.mjs');
   assert.match(manifest.engines?.node||'',/24/);
   const commands=new Set((manifest.contributes?.commands||[]).map(item=>item.command));
-  const required=['start','stop','restart','status','open','operations','call','selectWorkspace','registerFolder','menu','doctor','copyMcpUrl','loginCode','configureConnection'].map(name=>'devMate.runtime.'+name);
+  const required=['start','stop','restart','status','open','operations','call','selectWorkspace','registerFolder','accessProfile','menu','doctor','copyMcpUrl','loginCode','configureConnection'].map(name=>'devMate.runtime.'+name);
   assert.deepEqual([...commands].sort(),required.sort(),'Command contributions must select the new host handlers.');
   // Every contributed command must have a handler in the host, and the other way round.
   const host=fs.readFileSync(contained(directory,manifest.main),'utf8');

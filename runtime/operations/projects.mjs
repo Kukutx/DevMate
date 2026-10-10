@@ -6,7 +6,7 @@ import { assertSafeWorkspaceRoot } from '../platform/sensitive-path-policy.mjs';
 import { id, directory, projectScope, mutation, revision, within } from './shared.mjs';
 
 const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md'];
-const OWNER_ONLY_PROTECTION = 'Credential-file protection is lifted by the owner on their own computer: in the local workbench (devmate ui), or with devmate project.update.';
+const OWNER_ONLY_PROTECTION = 'Credential-file protection is lifted by the owner on their own computer: in the local workbench (devmate ui), or with devmate project.update. With the full access profile (devmate access full) a connected client may do it.';
 
 /** Everything a model needs to orient itself in a project, gathered in one call. */
 export async function projectOverview(service, projectId) {
@@ -53,12 +53,13 @@ export async function projectOverview(service, projectId) {
 
 export function defineProjectOperations(service, add) {
   // With a writable project a client can run commands, and with those reach whatever the owner can reach. So which
-  // folders are shared at all is never a client's call: project.create is the owner's own act (ownerDecision).
+  // folders are shared at all is not a client's call: project.create is the owner's own act (ownerDecision), unless
+  // the owner chose the full access profile.
   add('project.list', { query: z.string().max(200).optional(), cursor: id.optional(), limit: z.number().int().min(1).max(1000).optional() }, true,
     'List registered projects.', (args, context) => service.list('project', args, context));
   add('project.create', { root: directory, name: z.string().min(1).max(200).optional(),
     access: z.enum(['read', 'write']).default('write'), protectSecrets: z.boolean().optional(), ...mutation }, false,
-    'Share a local directory as a project. This is the owner\'s decision and is made on their own computer (editor, command line, local workbench); a connected client cannot do it. Credential-like files such as .env, key files and .npmrc stay out of the file tools unless the owner lifts that for the project.', args => {
+    'Share a local directory as a project. This is the owner\'s decision and is made on their own computer (editor, command line, local workbench); a connected client can do it only when the owner chose the full access profile. Credential-like files such as .env, key files and .npmrc stay out of the file tools unless the owner lifts that for the project.', args => {
     if (!path.isAbsolute(args.root)) throw new DomainError('invalid_path', 'Project root must be absolute.');
     const root = fs.realpathSync.native(args.root);
     if (!fs.statSync(root).isDirectory() || root === path.parse(root).root) throw new DomainError('invalid_path', 'Choose a project directory.');
@@ -69,7 +70,7 @@ export function defineProjectOperations(service, add) {
     const project = service.store.create('project', { name: args.name || path.basename(root), root, access: args.access, protectSecrets: args.protectSecrets !== false, status: 'ready' });
     service.setDeclined(root, false);
     return project;
-  }, { ownerDecision: 'Folders are shared by the owner on their own computer: by opening the folder in an editor that has DevMate, or with the command: devmate project add <folder>' });
+  }, { ownerDecision: 'Folders are shared by the owner on their own computer: by opening the folder in an editor that has DevMate, or with the command: devmate project add <folder>. To let a connected client share folders, the owner switches on full access there: devmate access full' });
   add('project.overview', { ...projectScope }, true,
     'Orient yourself in a project in one call: Git branch and pending changes, the project\'s agent instructions (AGENTS.md and similar), its run/test scripts, top-level layout and editor diagnostics count. Call this first when starting work on a project.',
     args => projectOverview(service, args.projectId), { present: result => [
@@ -97,7 +98,7 @@ export function defineProjectOperations(service, add) {
   };
   add('project.update', { id, name: z.string().min(1).max(200).optional(), access: z.enum(['read', 'write']).optional(),
     protectSecrets: z.boolean().optional(), ...revision, ...mutation }, false,
-    'Update project name, access or credential-file protection. Reducing access first closes the running work of the project. Widening access or lifting the protection is done by the owner on their own computer.', async (args, context) => {
+    'Update project name, access or credential-file protection. Reducing access first closes the running work of the project. Widening access or lifting the protection is done by the owner on their own computer, or by a connected client when the owner chose the full access profile.', async (args, context) => {
       if (service.projectTransitions.has(args.id)) throw new DomainError('project_busy', 'Project resources are closing.');
       const current = service.store.get('project', args.id);
       if (args.expectedRevision !== undefined && current.revision !== args.expectedRevision) throw new DomainError('conflict', 'The project changed; refresh before editing.');

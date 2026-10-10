@@ -30,6 +30,14 @@ How far this holds depends on one thing. **A client with write access to any pro
 
 Decisions an agent waits for (approvals, questions) are the person's, and they are answered at the computer: in the editor, or in the local workbench. No client connected through MCP can answer them, whatever it declares about itself, because the caller may be the very model that started the agent. An embedded workbench shows what is waiting and says where to answer it.
 
+### The full access profile
+
+The two paragraphs above describe the default profile, *guarded*. The owner can replace it with *full access* (`devmate access full`, or the editor command). That choice is itself made only at the owner's computer: `access.update` is a local operation, unreachable through MCP in either profile. It is stored with the instance, applies at once, and is reported by `devmate doctor`.
+
+With full access, a caller that is the owner on any surface may do what otherwise needs the local one: share a folder (`project.create`), widen a project, lift or ignore the credential-file protection, configure capability engines, and answer approvals and questions. Credential-like files are no longer withheld from the file tools and the editor context, whatever a project's own setting says. What a delegated agent asks permission for is granted by the runtime at once, preferring the option that grants it one time; every such grant is kept as an approval record marked automatic. A question an agent asks, and a permission request that offers no granting option, still wait for an answer. One thing stays at the computer in either profile: switching on the tools that read or write the memory of other processes (`allowProcessAccess`, `allowMemoryWrite`).
+
+Full access removes nothing for members: an OAuth member keeps exactly its role and project grants. It does remove the last distance between "can reach `/mcp` as the owner" and "is the owner at the keyboard". With `auth.mode: none` on a public address that is everyone who learns the address; `devmate doctor` reports this combination as a warning.
+
 Command lines are shown to others (process lists, a project's activity, jobs seen by another member) without the credentials written inline in them; the command that runs is unchanged. This recognises well-known forms only and is not a guarantee.
 
 Credential-like files (`.env`, key files, `.npmrc` and similar) are withheld from the file tools by default and can be enabled per project by the owner. Git status names them, marked as protected, so they are not committed by accident; their content is never returned. The read-only Git tools accept only commits as revisions and never run a program the repository configures (filters, textconv, external diff). Executables DevMate starts itself are resolved to absolute paths on `PATH`, never in the project directory.

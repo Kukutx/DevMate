@@ -25,6 +25,9 @@ Projects
   devmate project add [<directory>] [--name <name>] [--read-only]
   devmate project list
   devmate project remove <id | directory | name>
+  devmate access [guarded | full]   what a connected client may decide: guarded (default) keeps sharing,
+                                    credential files and agent approvals with you at this computer;
+                                    full hands them to your client and approves agents automatically
 
 Connecting an AI client
   devmate mcp-url                   the address to enter in ChatGPT, Claude or another MCP client
@@ -300,6 +303,16 @@ export async function main(argv = process.argv.slice(2), {
         return 0;
       }
       throw new Error('Use project add [<directory>], project list or project remove <id | directory | name>');
+    }
+    if (command === 'access') {
+      const [profile] = positional;
+      if (profile !== undefined && !['guarded', 'full'].includes(profile)) throw new Error('Use access, access guarded or access full');
+      const chosen = profile ? await client.call('access.update', { profile }, callOptions) : await client.call('access.read', {}, callOptions);
+      stdout.write(chosen.profile + '\n');
+      stderr.write(chosen.profile === 'full'
+        ? 'Full access: a client connected as the owner can share folders, read credential files, set up engines and answer agents; what a delegated agent asks permission for is granted automatically. Back to the default: devmate access guarded\n'
+        : 'Guarded: you share folders, lift credential-file protection and answer agents at this computer. To hand all of that to your connected client: devmate access full\n');
+      return 0;
     }
     if (command === 'mcp-url') {
       const connection = await client.call('connection.status', {}, callOptions);

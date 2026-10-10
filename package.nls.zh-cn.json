@@ -3,6 +3,7 @@
   "command.stop": "停止 DevMate 运行时",
   "command.restart": "重启 DevMate 运行时",
   "command.registerFolder": "更改文件夹共享",
+  "command.accessProfile": "更改权限档（受保护 / 完全访问）",
   "command.menu": "显示菜单",
   "command.status": "显示运行时状态",
   "command.open": "打开工作台",

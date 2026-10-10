@@ -60,6 +60,12 @@ export async function doctor(service) {
   if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
   else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');
+  // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
+  if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
+    'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +
+      (url && service.config.auth.mode === 'none' ? ' The public URL has no sign-in, so that is anyone who learns it.' : ''),
+    'Back to the default with: devmate access guarded (or "Change Permission Profile" in the editor).');
+  else check('access', 'ok', 'Guarded: sharing folders, credential files and agent approvals stay with you at this computer.');
   const database = service.store.metrics();
   check('storage', database.databaseBytes > 1024 ** 3 ? 'warn' : 'ok', Math.round(database.databaseBytes / 1048576) + ' MiB state, ' + database.events + ' journal events, ' + service.config.retentionDays + '-day retention',
     database.databaseBytes > 1024 ** 3 ? 'Lower retentionDays in the settings.' : null);

@@ -310,6 +310,25 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     boundKey = '';
     await refresh();
   }
+  // How much a client connected as the owner may decide: guarded (the default) or full access.
+  async function accessProfile() {
+    const current = (await client.call('access.read', {}, { scoped: false })).profile;
+    const choice = await vscode.window.showQuickPick([
+      { label: 'Guarded', description: 'You share folders, lift credential-file protection and answer agents at this computer', profile: 'guarded' },
+      { label: 'Full access', description: 'Your connected AI client does all of that; agent permission requests are granted automatically', profile: 'full' }
+    ].map(item => item.profile === current ? { ...item, description: item.description + ' — current' } : item),
+    { placeHolder: 'What may an AI client connected as you decide?' });
+    if (!choice || choice.profile === current) return current;
+    if (choice.profile === 'full') {
+      const confirmed = await vscode.window.showWarningMessage('Give connected AI clients full access?',
+        { modal: true, detail: 'A client connected as you can then share any folder of this computer, read credential files such as .env, set up capability engines and answer what a delegated agent asks. ' +
+          'What a delegated agent asks permission for is granted automatically. Keep your MCP address private, or require sign-in. You can switch back at any time.' }, 'Switch on full access');
+      if (confirmed !== 'Switch on full access') return current;
+    }
+    await client.call('access.update', { profile: choice.profile }, { scoped: false });
+    vscode.window.setStatusBarMessage?.('DevMate: ' + (choice.profile === 'full' ? 'full access is on' : 'guarded profile'), 5000);
+    return choice.profile;
+  }
   // A runtime that vanished without a clean stop is started again when this
   // editor is set to keep it up. An explicit stop is respected: it leaves no trace to recover from.
   async function recover() {
@@ -524,7 +543,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const picked = await vscode.window.showQuickPick([
       ...(state.outdated ? [{ label: 'Restart to update the runtime', description: 'running ' + (state.record?.version || 'an older version') + ', this extension ships ' + state.host?.version, command: 'restart' }] : []),
       { label: 'Open workbench', command: 'open' }, { label: 'Copy MCP URL', command: 'copyMcpUrl' },
-      { label: 'Folder sharing…', command: 'registerFolder' }, { label: 'Configure connection', command: 'configureConnection' },
+      { label: 'Folder sharing…', command: 'registerFolder' }, { label: 'Permission profile…', command: 'accessProfile' }, { label: 'Configure connection', command: 'configureConnection' },
       { label: 'Doctor', command: 'doctor' }, { label: 'Restart shared runtime', command: 'restart' }, { label: 'Stop shared runtime', command: 'stop' }
     ], { placeHolder: 'DevMate — ' + state.state });
     if (picked) await vscode.commands.executeCommand?.('devMate.runtime.' + picked.command);
@@ -577,7 +596,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       open: async () => vscode.env.openExternal(vscode.Uri.parse(await client.workbenchUrl())),
       operations: () => showOperations(false),
       call: () => showOperations(true),
-      selectWorkspace, registerFolder: changeSharing, doctor, copyMcpUrl, loginCode, configureConnection, menu
+      selectWorkspace, registerFolder: changeSharing, accessProfile, doctor, copyMcpUrl, loginCode, configureConnection, menu
     };
     for (const [name,handler] of Object.entries(handlers)) {
       context.subscriptions.push(vscode.commands.registerCommand('devMate.runtime.'+name,async (...args) => {

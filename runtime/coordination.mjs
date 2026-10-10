@@ -22,10 +22,14 @@ const JOURNAL_FIELDS = ['type', 'provider', 'sessionId', 'turnId', 'nativeMethod
   'nativeSubagent', 'nativeThreadId', 'nativeParentThreadId'];
 const publicError = error => ({ code: String(error.code || 'agent_error').slice(0, 160), message: String(error.message || 'Agent failed.').slice(0, 2000) });
 const minutes = ms => ms >= 60000 ? Math.round(ms / 60000) + ' min' : Math.round(ms / 1000) + ' s';
+// The choice that grants what was asked, this once. ACP agents say which of their options that is; Codex and Claude name it.
+const grantOnce = options => (options.find(option => option.kind === 'allow_once') ||
+  options.find(option => ['allow', 'accept'].includes(option.optionId)) || options.find(option => option.kind === 'allow_always'))?.optionId;
 
 export class AgentCoordinator {
-  constructor({ store, adapterFactory = createAgentAdapter, endpoint, providerSettings = {}, instanceRoot = path.dirname(store.filePath), cancelGraceMs = 15000 }) {
-    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs });
+  constructor({ store, adapterFactory = createAgentAdapter, endpoint, providerSettings = {}, instanceRoot = path.dirname(store.filePath), cancelGraceMs = 15000,
+    grantsApprovals = () => false }) {
+    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals });
     this.sessions = new Map();
     this.decisions = new Map();
     this.tokens = new Map();
@@ -613,6 +617,17 @@ export class AgentCoordinator {
     const serialized = nativeRequest.details === undefined ? '' : JSON.stringify(nativeRequest.details);
     const details = serialized.length > MAX_REQUEST_DETAIL_BYTES
       ? { truncated: true, bytes: serialized.length, preview: serialized.slice(0, 16384) } : nativeRequest.details;
+    const record = { projectId: agent.projectId, workflowId: agent.workflowId, agentId,
+      jobId: session.current?.id || null, nativeRequestId: nativeRequest.id, kind: nativeRequest.kind,
+      summary: typeof nativeRequest.summary === 'string' && nativeRequest.summary.trim() ? nativeRequest.summary.slice(0, 500) : nativeRequest.kind,
+      options: nativeRequest.options || [], details, ...(session.record ? { native: nativeRequest.native } : {}) };
+    // Full access is the owner's standing answer: the permission is granted at once, and what was granted stays on record.
+    const granted = kind === 'approval' && this.grantsApprovals() ? grantOnce(record.options) : undefined;
+    if (granted) {
+      const answer = { optionId: granted };
+      this.store.create(kind, { ...record, status: 'resolved', answer, automatic: true });
+      return Promise.resolve(answer);
+    }
     return new Promise((resolve, reject) => {
       let item;
       const abort = () => {
@@ -636,12 +651,7 @@ export class AgentCoordinator {
       // One commit: whoever is told about the request finds it answerable and the agent waiting.
       try {
         this.store.transaction(() => {
-          item = this.store.create(kind, {
-            projectId: agent.projectId, workflowId: agent.workflowId, agentId,
-            jobId: session.current?.id || null, nativeRequestId: nativeRequest.id, kind: nativeRequest.kind,
-            summary: typeof nativeRequest.summary === 'string' && nativeRequest.summary.trim() ? nativeRequest.summary.slice(0, 500) : nativeRequest.kind,
-            status: 'pending', options: nativeRequest.options || [], details, ...(session.record ? { native: nativeRequest.native } : {})
-          });
+          item = this.store.create(kind, { ...record, status: 'pending' });
           this.store.update('agent', agentId, { status: 'waiting' });
           this.decisions.set(item.id, { kind, agentId, signal, resolve, reject, abort, nativeRequest });
         });
@@ -655,7 +665,17 @@ export class AgentCoordinator {
     });
   }
 
-  resolve(kind, { id, optionId, response, expectedRevision }) {
+  // Permissions that were already waiting when the owner chose full access.
+  grantWaiting() {
+    for (const [id, pending] of [...this.decisions]) {
+      if (pending.kind !== 'approval') continue;
+      const optionId = grantOnce(pending.nativeRequest.options || []);
+      try { if (optionId) this.resolve('approval', { id, optionId, automatic: true }); }
+      catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }
+    }
+  }
+
+  resolve(kind, { id, optionId, response, expectedRevision, automatic }) {
     const item = this.store.get(kind, id);
     const pending = this.decisions.get(id);
     if (item.status !== 'pending' || !pending || pending.signal?.aborted) throw new DomainError('request_expired', 'This native request is no longer awaiting a decision.');
@@ -666,7 +686,7 @@ export class AgentCoordinator {
     if (answer === undefined) throw new DomainError('invalid_input', 'A response is required.');
     const nextStatus = this.decisionStatusAfter(pending.agentId, id);
     const resolved = this.store.transaction(() => {
-      const updated = this.store.update(kind, id, { status: 'resolved', ...(kind === 'approval' ? { answer } : {}) }, expectedRevision);
+      const updated = this.store.update(kind, id, { status: 'resolved', ...(kind === 'approval' ? { answer } : {}), ...(automatic ? { automatic: true } : {}) }, expectedRevision);
       if (nextStatus) this.store.update('agent', pending.agentId, { status: nextStatus });
       return updated;
     });
