@@ -177,6 +177,62 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   await entry.deactivate();
 });
 
+test('the editor says when a new address can be reached from the cloud, once, and when a route stopped working', async () => {
+  const quick = { kind: 'cloudflare-quick', temporaryAddress: true, remoteMcpVerified: false };
+  const first = 'https://first-fixture.trycloudflare.com/mcp/key-of-the-first-start', second = 'https://second-fixture.trycloudflare.com/mcp/key-of-the-second-start';
+  let route = { ...quick, phase: 'connecting' }, now = 1_000_000;
+  const said = [], warned = [], copied = [], stored = new Map();
+  const client = { status: async () => ({ running: true, state: 'ready', record: { generation: 'g', port: 8788 } }), dispose() {}, subscribe: () => ({ dispose() {} }),
+    call: async (name, input) => name === 'window.attach' ? { windowId: input.windowId, roots: [], selectedProjectId: null } : name === 'connection.status' ? route : {} };
+  const window = () => {
+    const bar = { show() {}, dispose() {} }, commands = new Map();
+    const vscode = {
+      TreeItem: class { constructor(label) { this.label = label; } }, TreeItemCollapsibleState: { None: 0 },
+      EventEmitter: class { constructor() { this.event = () => {}; } fire() {} dispose() {} },
+      workspace: { name: 'Empty', isTrusted: true, workspaceFolders: [], getConfiguration: () => ({ get: (_name, fallback) => fallback }) },
+      window: { createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }), registerTreeDataProvider: () => ({ dispose() {} }), createStatusBarItem: () => bar,
+        showErrorMessage: async () => {}, showWarningMessage: async message => { warned.push(message); },
+        showInformationMessage: async (message, ...actions) => { said.push(message); return actions[0]; } },
+      commands: { registerCommand: (id, handler) => { commands.set(id, handler); return { dispose() {} }; } },
+      env: { clipboard: { writeText: async value => { copied.push(value); } } }, Uri: { parse: value => value }
+    };
+    const entry = createVscodeRuntimeEntry(vscode, { client, clock: () => now });
+    // What every window of this editor shares, as the editor keeps it.
+    const globalState = { get: (key, fallback) => stored.has(key) ? stored.get(key) : fallback, update: async (key, value) => { stored.set(key, value); } };
+    const look = async () => { await commands.get('devMate.runtime.status')(); await new Promise(resolve => setImmediate(resolve)); return bar; };
+    return { entry, bar, commands, look, start: () => entry.activate({ subscriptions: [], globalState }) };
+  };
+  const one = window();
+  await one.start();
+  // The tunnel is still connecting: the status bar says so, and there is no address to copy. The local one is not offered in its place.
+  assert.equal((await one.look()).text, '$(sync~spin) DevMate'); assert.match(one.bar.tooltip, /\(connecting\)/);
+  assert.equal(await one.commands.get('devMate.runtime.copyMcpUrl')(), undefined); assert.deepEqual(copied, []); assert.match(said.pop(), /has not been given its address yet/);
+  // It has an address the world does not know yet: still waiting, nothing announced.
+  route = { ...quick, phase: 'connected', publicUrl: first, verification: { url: first, verified: false, reachable: false, pending: 'dns', reason: 'The address is seconds old and not in DNS yet.' } };
+  assert.equal((await one.look()).text, '$(sync~spin) DevMate'); assert.match(one.bar.tooltip, /waiting for the new address to be known/); assert.deepEqual(said, []);
+  // Checked end to end: this is the moment a client in the cloud can connect. It is said once, with the address one click away.
+  route = { ...quick, phase: 'connected', publicUrl: first, remoteMcpVerified: true, verification: { url: first, verified: true, reachable: true } };
+  assert.equal((await one.look()).text, '$(plug) DevMate'); assert.match(one.bar.tooltip, /Reachable from the cloud/);
+  assert.equal(said.length, 2); assert.match(said[0], /can be reached from the cloud at a new address/); assert.match(said[1], /Copied the public MCP URL\. It ends in the key of this start/); assert.deepEqual(copied, [first]);
+  await one.look(); assert.equal(said.length, 2, 'not said again');
+  // Another window of the same editor does not repeat it, and what the editor remembers is not the address: that ends in the key.
+  const two = window(); await two.start(); await two.look();
+  assert.equal(said.length, 2); assert.ok(![...stored.values()].some(value => /key-of-the-first-start|first-fixture/.test(String(value))));
+  // The route stops working. One failed check is not news; a route that stays broken is said once.
+  route = { ...quick, phase: 'connected', publicUrl: first, verification: { url: first, verified: false, reachable: false, reason: 'ECONNREFUSED' } };
+  assert.equal((await one.look()).text, '$(warning) DevMate'); assert.deepEqual(warned, []);
+  now += 21_000; await one.look(); await one.look();
+  assert.equal(warned.length, 1); assert.match(warned[0], /the public address does not reach this computer \(ECONNREFUSED\)/);
+  // It works again under the same address: the status bar shows it, nobody is interrupted.
+  route = { ...quick, phase: 'connected', publicUrl: first, remoteMcpVerified: true, verification: { url: first, verified: true, reachable: true } };
+  assert.equal((await one.look()).text, '$(plug) DevMate'); assert.equal(said.length, 2);
+  // The tunnel started again and has another address: the client needs the new one, so it is said.
+  route = { ...quick, phase: 'connected', publicUrl: second, remoteMcpVerified: true, verification: { url: second, verified: true, reachable: true } };
+  await one.look();
+  assert.equal(said.length, 4); assert.match(said[2], /new address/); assert.deepEqual(copied, [first, second]);
+  await one.entry.deactivate(); await two.entry.deactivate();
+});
+
 test('restorable versions are bounded by age and by total size, least recently used first', async t => {
   const { __test } = await import('../runtime/service.mjs');
   const owned = temporary(t, 'devmate-history-cap-'), directory = path.join(owned.directory, 'history');

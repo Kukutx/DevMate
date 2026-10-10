@@ -1,6 +1,6 @@
 'use strict';
 
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHostClient } = require('../runtime/host-client.cjs');
@@ -9,6 +9,9 @@ const POLL_MS = 15_000;
 const MAX_DIAGNOSTICS = 1000;
 const DECLINED_KEY = 'devMate.declinedFolders';
 const NOTIFIED_KEY = 'devMate.sharingNotified';
+const ROUTE_KEY = 'devMate.announcedRoute';
+const ROUTE_BROKEN = 'the public address does not reach this computer';
+const ROUTE_WAITING = ['connecting', 'reconnecting', 'waiting for the new address to be known'];
 // What devMate.shareFolders means for a folder nobody has decided about yet.
 const SHARING = { readWrite: 'write', readOnly: 'read', ask: null, never: null };
 const ACCESS_LABEL = { write: 'read and write', read: 'read only' };
@@ -25,6 +28,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   let refreshPromise, rerun = false, attachment = null, rememberedRoot = null, boundKey = '', boundGeneration = '', seenAt = 0;
   let state = { state: 'stopped', running: false }, contextTimer, publishedContext = '', asking = false, updateOffered = false, servedMcp = '', pendingConnection = '';
   const declined = new Set(), recoveries = [], announced = new Set();
+  let route = null, routeFailingSince = 0, announcedRoute = '', shared = null;
 
   function folders() {
     const all = vscode.workspace.workspaceFolders || [];
@@ -40,8 +44,19 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (command) item.command = { command, title: label, ...(args ? { arguments: args } : {}) };
     return item;
   }
+  // How the route from the cloud is doing, as far as the runtime knows: first its connector, then the check that
+  // goes out through the public address and must come back to this very runtime.
+  const routeNote = () => {
+    if (!route?.kind || route.kind === 'local') return '';
+    const phase = route.phase || route.status;
+    if (route.retryScheduled) return 'reconnecting';
+    if (['starting', 'connecting'].includes(phase)) return 'connecting';
+    if (phase && !['connected', 'relay-ready', 'configured', 'process-running'].includes(phase)) return 'connection ' + phase;
+    const checked = route.verification;
+    return !checked || checked.verified ? '' : checked.pending ? 'waiting for the new address to be known' : ROUTE_BROKEN;
+  };
   const connectionNote = () => state.health?.connection === 'failed' ? 'connection failed' : state.outdated ? 'older version running, restart to update'
-    : pendingConnection && pendingConnection === state.record?.generation ? 'restart to apply the saved connection' : '';
+    : pendingConnection && pendingConnection === state.record?.generation ? 'restart to apply the saved connection' : routeNote();
   const provider = {
     getTreeItem: item => item,
     getChildren() {
@@ -72,8 +87,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   function render() {
     if (statusBar) {
       const note = connectionNote();
-      statusBar.text = (state.running ? (note ? '$(warning)' : '$(plug)') : '$(circle-slash)') + ' DevMate';
+      statusBar.text = (state.running ? (ROUTE_WAITING.includes(note) ? '$(sync~spin)' : note ? '$(warning)' : '$(plug)') : '$(circle-slash)') + ' DevMate';
       statusBar.tooltip = 'DevMate runtime: ' + state.state + (note ? ' (' + note + ')' : '') +
+        (state.running && !note && route?.verification?.verified ? '\nReachable from the cloud: the public address was checked end to end' : '') +
         (state.running ? '\nPort ' + state.record?.port + (attachment?.selectedProjectId ? ''
           : attachment?.roots.some(folder => folder.projectId) ? '\nSeveral folders are shared: choose the one this window works in (DevMate: Select This Window Workspace)' : '\nThis window shares no folder') +
           '\nIt keeps running after this window closes, until you stop it' : '\nClick to start');
@@ -139,6 +155,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const data = event?.data, entity = data?.entity;
     // Sharing changed somewhere (the workbench, another window, the command line): show it now, not at the next poll.
     if (typeof data?.type === 'string' && data.type.startsWith('project.')) { seenAt = 0; scheduleRefresh(); return; }
+    // The route from the cloud started or stopped working: the status bar says so now.
+    if (data?.type === 'connection.verified') { scheduleRefresh(); return; }
     // The stream carries every project; only what happens in this window's own folders concerns the person at it.
     if (!attachment?.roots.some(folder => folder.projectId && folder.projectId === data?.projectId)) return;
     if (!['approval.created', 'input.created'].includes(data?.type) || entity?.status !== 'pending' || announced.has(entity.id)) return;
@@ -348,13 +366,44 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       '; this extension ships ' + state.host?.version + '. Restart the shared runtime to use the new version? Other windows and connected clients reconnect.', 'Restart');
     if (picked === 'Restart') await restart().catch(showError);
   }
+  // The moment a client in the cloud can connect is when a route was checked end to end under an address nobody was
+  // told yet, and a quick tunnel has a new one after every start. It is said once, by the window that sees it first.
+  // What is remembered is a fingerprint, never the address: the address of a quick tunnel ends in its key.
+  async function announceRoute() {
+    const checked = route?.verification, address = route?.publicUrl || route?.url;
+    if (!address || !checked || checked.pending || typeof vscode.window.showInformationMessage !== 'function') { routeFailingSince = 0; return; }
+    if (checked.verified) routeFailingSince = 0;
+    else {
+      // A route is also checked while its connector is still starting: one failed check is not news yet.
+      if (routeNote() !== ROUTE_BROKEN) { routeFailingSince = 0; return; }
+      routeFailingSince ||= clock();
+      if (clock() - routeFailingSince < 20_000) return;
+    }
+    const id = createHash('sha256').update(address).digest('hex').slice(0, 16), mark = id + (checked.verified ? ':verified' : ':failed');
+    const before = shared?.get(ROUTE_KEY, '') || announcedRoute;
+    if (before === mark || announcedRoute === mark) return;
+    announcedRoute = mark;
+    await shared?.update(ROUTE_KEY, mark);
+    if (!checked.verified) {
+      const picked = await vscode.window.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') + '. Cloud clients such as ChatGPT cannot connect.', 'Run Doctor');
+      if (picked === 'Run Doctor') await doctor();
+    } else if (!before.startsWith(id + ':')) {
+      // The same address working again is shown in the status bar and needs nothing from the person.
+      const picked = await vscode.window.showInformationMessage(route.temporaryAddress
+        ? 'DevMate can be reached from the cloud at a new address. Give it to your client (ChatGPT, Claude): a quick tunnel gets a new address at every start.'
+        : 'DevMate can be reached from the cloud: its public address was checked end to end.', 'Copy Address');
+      if (picked === 'Copy Address') await copyMcpUrl();
+    }
+  }
   async function refreshOnce() {
     if (!active) return state;
     const observed = await client.status();
     if (!active) return observed;
     state = observed;
     if (!state.running) await recover().catch(report);
+    route = state.running ? await client.call('connection.status', {}, { scoped: false }).catch(() => null) : null;
     if (state.running) {
+      void announceRoute().catch(report);
       // A problem with this window's folders is reported, and the window still shows the runtime it is connected to.
       try { await bindWindow(state.record?.generation || 'injected-runtime'); }
       catch (error) { render(); throw error; }
@@ -424,10 +473,16 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   }
   async function copyMcpUrl() {
     const connection = await client.call('connection.status', {});
+    // A quick tunnel without an address has nothing a client in the cloud could use, and the local address is not it.
+    if (connection.kind === 'cloudflare-quick' && !connection.publicUrl) {
+      await vscode.window.showInformationMessage('The quick tunnel has not been given its address yet. Try again in a few seconds; "DevMate: Doctor" shows what the tunnel says.');
+      return;
+    }
     const value = connection.publicUrl || connection.url || connection.tunnelId || await client.mcpUrl();
     await vscode.env.clipboard.writeText(value);
     await vscode.window.showInformationMessage(connection.tunnelId ? 'Copied the tunnel ID. In ChatGPT choose the Tunnel connection type.'
-      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.'
+      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in the key of this start: give it to your own client only.' : '') +
+          (connection.remoteMcpVerified === false ? ' It has not been checked end to end yet: "DevMate: Doctor" says whether it reaches this computer.' : '')
         // In a remote window the extension, and with it DevMate, runs on the remote computer.
         : 'Copied the local MCP URL' + (vscode.env.remoteName ? ' of the remote computer this window works on (' + vscode.env.remoteName + '); it answers there, not on this computer' : '') +
           '. Cloud clients need a public connection: run "DevMate: Configure Connection".');
@@ -559,6 +614,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   async function activate(context) {
     active = true;
     memory = context.workspaceState || null;
+    shared = context.globalState || null;
     const connect = () => suppliedClient || clientFactory({
       instanceRoot: settings().get('runtimeInstanceDirectory',''),
       nodePath: settings().get('nodeCommandPath',''),
