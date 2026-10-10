@@ -462,6 +462,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const hostName = value => /^(https?:\/\/)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d+)?(\/.*)?$/i.test(value.trim()) ? null : 'Enter a host name such as devmate.example.com';
     const httpsAddress = value => { try { return new URL(value.trim()).protocol === 'https:' ? null : 'The address starts with https://'; } catch { return 'Enter the full address, for example https://devmate.example.com/mcp'; } };
     const choice = await vscode.window.showQuickPick([
+      { label: 'Cloudflare quick tunnel', description: 'No account, no domain, nothing to set up. Any MCP client. The address changes when it starts again', kind: 'cloudflare-quick' },
       { label: 'Cloudflare Tunnel', description: 'Your own domain. Works with ChatGPT, Claude and any MCP client', kind: 'cloudflare' },
       { label: 'OpenAI Secure MCP Tunnel', description: 'ChatGPT and Codex only. No domain or public address', kind: 'openai-tunnel' },
       { label: 'Existing HTTPS reverse proxy', description: 'A proxy you already run', kind: 'external-https' },
@@ -473,7 +474,14 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const config = { ...saved };
     const was = (kind, field) => current.kind === kind ? current[field] || '' : '';
     let secret = null, publicUrl = null;
+    const cloudflaredDefault = () => (process.platform === 'win32' ? ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']
+      : ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared']).find(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile());
     if (choice.kind === 'local') config.connection = { kind: 'local' };
+    else if (choice.kind === 'cloudflare-quick') {
+      const executable = await ask('Absolute path of cloudflared. If it is not installed yet: winget install Cloudflare.cloudflared (Windows), brew install cloudflared (macOS)', { value: was('cloudflare-quick', 'executable') || was('cloudflare', 'executable') || cloudflaredDefault() || '' });
+      if (!executable) return;
+      config.connection = { kind: 'cloudflare-quick', executable: executable.trim() };
+    }
     else if (choice.kind === 'openai-tunnel') {
       const tunnelId = await ask('Tunnel ID from platform.openai.com → Settings → Tunnels', { value: was('openai-tunnel', 'tunnelId'), placeHolder: 'tunnel_…' });
       if (!tunnelId) return;
@@ -511,17 +519,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       const entered = await ask('Public HTTPS URL of the MCP endpoint', { value: was('external-https', 'url'), placeHolder: 'https://devmate.example.com/mcp', validateInput: httpsAddress });
       if (!entered) return;
       publicUrl = entered.trim();
-      // Optional: the tunnel program behind that address, for DevMate to start and keep running.
-      const before = current.kind === 'external-https' ? current.command : null;
-      const program = await ask('Optional: absolute path of a tunnel program DevMate should start and keep running for this address. Leave empty if the proxy runs on its own', { value: before?.executable || '' });
-      if (program === undefined) return;
-      let command = null;
-      if (program.trim()) {
-        const written = await ask('Its arguments. {port} is the local port to forward to, {host} the public host name', { value: (before?.args || []).map(word => /\s/.test(word) ? '"' + word + '"' : word).join(' '), placeHolder: 'http {port} --url https://{host}' });
-        if (written === undefined) return;
-        command = { executable: program.trim(), args: written.match(/"[^"]*"|\S+/g)?.map(word => word.replace(/^"|"$/g, '')) || [], ...(before?.env?.length ? { env: before.env } : {}) };
-      }
-      config.connection = { kind: 'external-https', url: publicUrl, ...(command ? { command } : {}) };
+      config.connection = { kind: 'external-https', url: publicUrl };
     }
     if (!publicUrl) config.auth = { mode: 'none' };
     else {
@@ -543,7 +541,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const answer = await vscode.window.showWarningMessage('Connection saved. Restart the shared DevMate runtime to apply it?',
       { modal: true, detail: 'Other windows and connected clients reconnect after the restart.' +
         (choice.kind === 'cloudflare' ? ' In the Cloudflare dashboard, route the hostname to http://127.0.0.1:' + ingress + '.'
-          : choice.kind === 'external-https' && !config.connection.command ? ' Point your proxy at http://127.0.0.1:' + ingress + '.' : '') }, 'Restart now');
+          : choice.kind === 'external-https' ? ' Point your proxy at http://127.0.0.1:' + ingress + '.' : '') }, 'Restart now');
     if (answer === 'Restart now') { await restart(); await doctor(); }
     // Saved is not active until the restart: the status says so for as long as this runtime keeps running.
     else { pendingConnection = state.record?.generation || ''; render(); }

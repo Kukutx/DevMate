@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { isIP } from 'node:net';
 import { spawn } from 'node:child_process';
@@ -6,6 +5,7 @@ import processTree from './platform/process-tree.js';
 import { DomainError } from './store.mjs';
 import { createConnectionRecovery } from './connection-recovery.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
+import { programExists } from './platform/tools.mjs';
 
 const fault = (code, message) => new DomainError(code, message);
 export function normalizeSshConfig(input) {
@@ -48,7 +48,7 @@ export function createSshConnection({ config, localMcpUrl, instanceRoot, env = p
   function start() {
     return serial(async () => {
       if (child && !processTree.childExited(child)) { recovery.enable(); return status(); }
-      if (!fs.statSync(settings.executable, { throwIfNoEntry: false })?.isFile()) throw fault('ssh_not_installed', 'OpenSSH was not found at the configured executable path.');
+      if (!programExists(settings.executable)) throw fault('ssh_not_installed', 'OpenSSH was not found at the configured executable path.');
       await owned?.reap();
       diagnostic = ''; lastError = null; phase = 'starting';
       // Authentication stays in the native SSH agent/identity files. DevMate stores no SSH password or key.

@@ -26,7 +26,7 @@ test('local default and external HTTPS do not start a relay', async () => {
 });
 
 test('connection configuration accepts secret references, not secret values or old providers', () => {
-  assert.throws(()=>normalizeConnectionConfig({kind:'ngrok'}), /Connection kind/);
+  assert.throws(()=>normalizeConnectionConfig({kind:'some-other-provider'}), /Connection kind/);
   assert.throws(()=>normalizeConnectionConfig({kind:'external-https',url:'http://example.test/mcp'}), /HTTPS/);
   assert.throws(()=>normalizeConnectionConfig({kind:'openai-tunnel',tunnelId:'tunnel_test',executable:process.execPath,apiKey:'do-not-store'}), /Unsupported connection setting/);
   assert.throws(()=>normalizeConnectionConfig({kind:'openai-tunnel',tunnelId:'tunnel_test',executable:path.resolve('client.cmd')}), /shell script/);
@@ -119,45 +119,16 @@ test('version failure excludes child output from diagnostics', async () => {
   }}), error => /version check failed/.test(error.message) && !error.message.includes('fake secret'));
 });
 
-test('an external HTTPS address can come with a program of the owner that DevMate starts, keeps to itself and stops', async t => {
-  const instanceRoot = fs.mkdtempSync(path.join(os.tmpdir(),'devmate-program-unit-'));
-  t.after(()=>fs.rmSync(instanceRoot,{recursive:true,force:true}));
-  const child = fakeChild(), base = {kind:'external-https',url:'https://tunnel.example.test/mcp'};
-  let invocation, terminated;
-  const connection = createConnection({
-    instanceRoot, localMcpUrl:'http://127.0.0.1:32123/mcp',
-    config:{...base,command:{executable:process.execPath,args:['http','{port}','--url','https://{host}'],env:['TUNNEL_AGENT_TOKEN']}},
-    env:{TUNNEL_AGENT_TOKEN:'agent-token',DEVMATE_UNRELATED_SECRET:'not-for-the-program',Path:'C:/bin'},
-    spawnImpl:(file,args,options)=>{invocation={file,args,options};return child;},
-    terminateImpl:async target=>{terminated=target;child.exitCode=0;child.emit('exit',0);return{exitConfirmed:true};}
-  });
-  const started = await connection.start();
-  assert.equal(started.phase,'process-running'); assert.equal(started.program,path.basename(process.execPath)); assert.equal(started.url,base.url);
-  // The placeholders are the local port public traffic enters by and the public host; nothing goes through a shell.
-  assert.equal(invocation.file,process.execPath); assert.deepEqual(invocation.args,['http','32123','--url','https://tunnel.example.test']);
-  assert.equal(invocation.options.shell,false);
-  // It gets the variables the owner named for it and the ordinary system ones, nothing else of the runtime's.
-  assert.equal(invocation.options.env.TUNNEL_AGENT_TOKEN,'agent-token'); assert.equal(invocation.options.env.DEVMATE_UNRELATED_SECRET,undefined); assert.equal(invocation.options.env.Path,'C:/bin');
-  assert.equal(JSON.stringify(await connection.status()).includes('agent-token'),false);
-  await connection.stop();
-  assert.equal(terminated,child); assert.equal((await connection.status()).phase,'stopped');
-  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:'ngrok',args:[]}}),/absolute path/);
-  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:path.resolve('tunnel.cmd')}}),/shell script/);
-  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:process.execPath,args:'http 80'}}),/list of at most 40 strings/);
-  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:process.execPath,env:['A=b']}}),/variable names/);
-  assert.throws(()=>normalizeConnectionConfig({...base,command:{executable:process.execPath,token:'value'}}),/executable, args, env/);
-  const needy = createConnection({instanceRoot,localMcpUrl:'http://127.0.0.1:32123/mcp',config:{...base,command:{executable:process.execPath,env:['ABSENT_TOKEN']}},env:{},spawnImpl:()=>{throw new Error('Must not spawn');}});
-  await assert.rejects(needy.start(),/devmate secret set ABSENT_TOKEN/);
-});
-
-test('devmate connect https takes the program and its arguments, and a later connect without them removes it', async t => {
+test('devmate connect quick needs nothing but cloudflared and never keeps a sign-in that has no address to live at', async t => {
   const { main } = await import('../runtime/cli.mjs');
-  const instance = fs.mkdtempSync(path.join(os.tmpdir(),'devmate-program-cli-'));
+  const instance = fs.mkdtempSync(path.join(os.tmpdir(),'devmate-quick-cli-'));
   t.after(()=>fs.rmSync(instance,{recursive:true,force:true}));
-  const run = async args => { let text=''; const code = await main([...args,'--instance',instance],{stdout:{write(value){text+=value;}},stderr:{write(){}}}); return {code,saved:code===0?JSON.parse(text).saved:null}; };
-  const first = await run(['connect','https','--url','https://tunnel.example.test/mcp','--executable',process.execPath,'--args','http {port} --url "https://{host}" --label "two words"']);
-  assert.equal(first.code,0);
-  assert.deepEqual(first.saved.connection.command,{executable:process.execPath,args:['http','{port}','--url','https://{host}','--label','two words'],env:[]});
-  const second = await run(['connect','https','--url','https://tunnel.example.test/mcp']);
-  assert.deepEqual(second.saved.connection,{kind:'external-https',url:'https://tunnel.example.test/mcp'});
+  const run = async args => { let text='',errors=''; const code = await main([...args,'--instance',instance],{stdout:{write(value){text+=value;}},stderr:{write(value){errors+=value;}}}); return {code,errors,answer:code===0?JSON.parse(text):null}; };
+  // Sign-in was on for an address that stays.
+  assert.equal((await run(['connect','https','--url','https://tunnel.example.test/mcp','--auth','oauth'])).answer.saved.auth.mode,'oauth');
+  const quick = await run(['connect','quick','--executable',process.execPath]);
+  assert.deepEqual(quick.answer.saved,{connection:{kind:'cloudflare-quick',executable:process.execPath},auth:{mode:'none'}});
+  assert.equal(quick.answer.credential,null); assert.ok(quick.answer.next.some(step=>/devmate mcp-url/.test(step)));
+  const refused = await run(['connect','quick','--executable',process.execPath,'--auth','oauth']);
+  assert.equal(refused.code,1); assert.match(refused.errors,/stays the same/);
 });

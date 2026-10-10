@@ -8,6 +8,7 @@ import { createSshConnection, normalizeSshConfig } from './ssh-connection.mjs';
 import { createCloudflareConnection, normalizeCloudflareConfig } from './cloudflare-connection.mjs';
 import { createConnectionRecovery } from './connection-recovery.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
+import { programExists } from './platform/tools.mjs';
 
 const { childExited, terminateProcessTree } = processTree;
 const executeFile = promisify(execFile);
@@ -31,27 +32,16 @@ export function normalizeConnectionConfig(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Connection configuration must be an object');
   const kind = value.kind || 'local';
   if (kind === 'ssh') return normalizeSshConfig(value);
-  if (kind === 'cloudflare') return normalizeCloudflareConfig(value);
+  if (kind === 'cloudflare' || kind === 'cloudflare-quick') return normalizeCloudflareConfig(value);
   const allowed = {
     local: new Set(['kind']),
-    'external-https': new Set(['kind', 'url', 'command']),
+    'external-https': new Set(['kind', 'url']),
     'openai-tunnel': new Set(['kind', 'tunnelId', 'executable', 'runtimeKeyEnv'])
   }[kind];
-  if (!allowed) throw new Error('Connection kind must be local, openai-tunnel, cloudflare, external-https, or ssh');
+  if (!allowed) throw new Error('Connection kind must be local, openai-tunnel, cloudflare, cloudflare-quick, external-https, or ssh');
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unsupported connection setting: ${key}`);
   if (kind === 'local') return { kind };
-  if (kind === 'external-https') {
-    const url = httpTarget(value.url, { publicOnly: true });
-    if (value.command === undefined || value.command === null) return { kind, url };
-    // The program that serves this address (a tunnel agent the owner chose): started with the connection, started
-    // again when it ends. Its arguments are a list, never a command line, and env names variables, never values.
-    const command = value.command, executable = String(command?.executable || '').trim(), args = command?.args ?? [], names = command?.env ?? [];
-    if (!command || typeof command !== 'object' || Array.isArray(command) || Object.keys(command).some(key => !['executable', 'args', 'env'].includes(key))) throw new Error('The connection program is {executable, args, env}');
-    if (!path.isAbsolute(executable) || /\.(cmd|bat|ps1)$/i.test(executable)) throw new Error('The connection program must be the absolute path of a native executable, not a shell script');
-    if (!Array.isArray(args) || args.length > 40 || args.some(arg => typeof arg !== 'string' || arg.length > 2000 || arg.includes('\0'))) throw new Error('The arguments of the connection program must be a list of at most 40 strings');
-    if (!Array.isArray(names) || names.length > 20 || names.some(name => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) throw new Error('env of the connection program must list environment variable names');
-    return { kind, url, command: { executable, args: [...args], env: [...names] } };
-  }
+  if (kind === 'external-https') return { kind, url: httpTarget(value.url, { publicOnly: true }) };
   const tunnelId = String(value.tunnelId || '').trim();
   const executable = String(value.executable || '').trim();
   const runtimeKeyEnv = String(value.runtimeKeyEnv || 'CONTROL_PLANE_API_KEY');
@@ -83,7 +73,7 @@ export function createConnection({
 } = {}) {
   const settings = normalizeConnectionConfig(config);
   if (settings.kind === 'ssh') return createSshConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl });
-  if (settings.kind === 'cloudflare') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
+  if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
   const localUrl = httpTarget(localMcpUrl);
   const healthFile = path.join(instanceDirectory(instanceRoot), 'tunnel-health.url');
   // Only a process this module really started is written down; a test double has none to find again.
@@ -106,7 +96,7 @@ export function createConnection({
     return {
       kind: settings.kind, phase,
       ...(settings.kind === 'openai-tunnel' ? { tunnelId: settings.tunnelId } : {}),
-      ...(settings.kind === 'external-https' ? { url: settings.url, ...(settings.command ? { program: path.basename(settings.command.executable) } : {}) } : { localMcpUrl: localUrl }),
+      ...(settings.kind === 'external-https' ? { url: settings.url } : { localMcpUrl: localUrl }),
       ...(child?.pid ? { pid: child.pid } : {}),
       ...(exitCode !== null ? { exitCode } : {}), ...(diagnostic ? { diagnostic } : {}),
       remoteMcpVerified: false, ...recovery.status()
@@ -142,42 +132,35 @@ export function createConnection({
       exitCode = null;
       failed = false;
       if (settings.kind === 'local') { phase = 'local'; return snapshot(); }
-      const program = settings.command;
-      if (settings.kind === 'external-https' && !program) { phase = 'configured'; return snapshot(); }
-      const executable = program ? program.executable : settings.executable;
-      if (!fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) throw new Error(program ? 'The connection program is not installed at the selected path: ' + executable : 'Official tunnel-client executable is not installed at the selected path');
-      const runtimeKey = program ? null : env[settings.runtimeKeyEnv];
-      if (!program && (typeof runtimeKey !== 'string' || !runtimeKey.trim())) throw new Error(`Missing runtime key environment variable: ${settings.runtimeKeyEnv}`);
-      const missing = program?.env.find(name => typeof env[name] !== 'string' || !env[name]);
-      if (missing) throw new Error('The connection program needs ' + missing + ': store it with devmate secret set ' + missing);
+      if (settings.kind === 'external-https') { phase = 'configured'; return snapshot(); }
+      if (!programExists(settings.executable)) throw new Error('Official tunnel-client executable is not installed at the selected path');
+      const runtimeKey = env[settings.runtimeKeyEnv];
+      if (typeof runtimeKey !== 'string' || !runtimeKey.trim()) throw new Error(`Missing runtime key environment variable: ${settings.runtimeKeyEnv}`);
       fs.mkdirSync(path.dirname(healthFile), { recursive: true, mode: 0o700 });
       fs.rmSync(healthFile, { force: true });
       await owned?.reap();
-      // {port} and {host} in the owner's arguments: the local port public traffic enters by, and the public host name.
-      const filled = { '{port}': new URL(localUrl).port, '{host}': program ? new URL(settings.url).host : '' };
-      const args = program ? program.args.map(arg => arg.replace(/\{port\}|\{host\}/g, name => filled[name])) : [
+      const args = [
         'run',
         '--control-plane.tunnel-id', settings.tunnelId,
         '--mcp.server-url', localUrl,
         '--health.listen-addr', '127.0.0.1:0',
         '--health.url-file', healthFile
       ];
-      phase = program ? 'process-running' : 'connecting';
+      phase = 'connecting';
       const inherited = new Set(['path','pathext','systemroot','windir','temp','tmp','home','userprofile',
         'appdata','localappdata','programdata','https_proxy','http_proxy','no_proxy',
         'ssl_cert_file','node_extra_ca_certs']);
       const environment = Object.fromEntries(Object.entries(env)
         .filter(([name]) => inherited.has(name.toLowerCase())));
-      child = spawnImpl(executable, args, {
+      child = spawnImpl(settings.executable, args, {
         cwd: path.dirname(healthFile), shell: false, windowsHide: true,
-        env: program ? { ...environment, ...Object.fromEntries(program.env.map(name => [name, env[name]])) } : { ...environment, CONTROL_PLANE_API_KEY: runtimeKey },
-        stdio: ['ignore', program ? 'pipe' : 'ignore', 'pipe']
+        env: { ...environment, CONTROL_PLANE_API_KEY: runtimeKey },
+        stdio: ['ignore', 'ignore', 'pipe']
       });
       const proc = child;
       // What the connector says when it cannot connect is the only explanation there is.
       diagnostic = '';
-      const said = chunk => { if (child === proc) diagnostic = (diagnostic + String(chunk)).slice(-4000); };
-      proc.stderr?.on('data', said); proc.stdout?.on('data', said);
+      proc.stderr?.on('data', chunk => { if (child === proc) diagnostic = (diagnostic + String(chunk)).slice(-4000); });
       proc.on('error', () => { failed = true; phase = 'failed'; });
       const departed = code => {
         if (child !== proc) return;
@@ -202,7 +185,7 @@ export function createConnection({
       if (!child || childExited(child)) { child = null; phase = 'stopped'; return snapshot(); }
       phase = 'stopping';
       const stopped = await terminateImpl(child);
-      if (!stopped.exitConfirmed) throw new Error(settings.command ? 'The connection program has not stopped' : 'Owned tunnel-client has not stopped');
+      if (!stopped.exitConfirmed) throw new Error('Owned tunnel-client has not stopped');
       child = null;
       phase = 'stopped';
       owned?.forget();

@@ -350,7 +350,7 @@ test('connected sessions are capped per provider with an actionable error', asyn
   const before = counts();
   await assert.rejects(f.delegate({ provider: 'claude', prompt: 'three', waitMs: 5000 }), error => {
     assert.equal(error.code, 'agent_limit'); assert.match(error.message, /2 claude sessions are already connected/);
-    assert.match(error.message, /agents\.stop/); assert.match(error.message, /providers\.claude\.maxSessions/); return true;
+    assert.match(error.message, /agents\.stop/); assert.match(error.message, /providers\.configure \{provider:"claude", settings:\{maxSessions:/); return true;
   });
   assert.deepEqual(counts(), before, 'a refused session leaves no workflow or agent behind');
   assert.equal((await f.delegate({ provider: 'codex', prompt: 'other provider', waitMs: 5000 })).settled, true);

@@ -1,7 +1,7 @@
 {
   "id": "devmate",
   "name": "DevMate",
-  "version": "4.0.1",
+  "version": "4.0.2",
   "minAppVersion": "1.12.7",
   "description": "Share this vault with ChatGPT, Claude and other MCP clients through a local DevMate runtime, so they can search, read and edit your notes. Requires Node.js 24.",
   "author": "Kukutx",

@@ -63,6 +63,34 @@ test('canonical containment rejects traversal, absolute, Windows alias and junct
   }
   assert.equal(fs.readFileSync(path.join(outside,'data.txt'),'utf8'),'outside');
 });
+test('a link that stays inside the project is read through and listed; nothing is changed through it, and it is never a way out or around the protection',async t=>{
+  const {root,project,service}=await fixture(t);
+  const kind=process.platform==='win32'?'junction':'dir';
+  // What a package manager builds: the real files in a store folder, and a linked folder that points at them.
+  fs.mkdirSync(path.join(root,'store','lib'),{recursive:true});fs.writeFileSync(path.join(root,'store','lib','index.js'),'module.exports = 1;\n');
+  fs.mkdirSync(path.join(root,'packages'));fs.symlinkSync(path.join(root,'store','lib'),path.join(root,'packages','lib'),kind);
+  assert.equal(service.read(project,{path:'packages/lib/index.js'}).text,'module.exports = 1;\n');
+  assert.deepEqual(service.files(project,{path:'packages'}).items.map(item=>[item.name,item.type]),[['lib','directory']]);
+  assert.deepEqual(service.files(project,{path:'packages/lib'}).items.map(item=>item.name),['index.js']);
+  assert.equal(Buffer.from(service.readBytes(project,{path:'packages/lib/index.js',offset:0}).base64,'base64').toString(),'module.exports = 1;\n');
+  // Changing goes to the real path, never through the link.
+  for(const change of [()=>service.write(project,{path:'packages/lib/new.js',text:'x',expectedSha256:null}),()=>service.edit(project,{path:'packages/lib/index.js',edits:[{oldText:'1',newText:'2'}]}),
+    ()=>service.remove(project,{path:'packages/lib/index.js'}),()=>service.move(project,{from:'packages/lib/index.js',to:'moved.js'})])
+    assert.throws(change,{code:'unsafe_path'});
+  assert.equal(fs.readFileSync(path.join(root,'store','lib','index.js'),'utf8'),'module.exports = 1;\n');
+  // A link to a protected place is judged by where it leads.
+  fs.mkdirSync(path.join(root,'credentials'));fs.writeFileSync(path.join(root,'credentials','token.txt'),'secret');
+  fs.symlinkSync(path.join(root,'credentials'),path.join(root,'harmless-name'),kind);
+  assert.throws(()=>service.read(project,{path:'harmless-name/token.txt'}),{code:'protected_workspace_path'});
+  assert.equal(service.files(project,{}).items.some(item=>item.name==='harmless-name'),false);
+  // A link that leads out of the project, or nowhere, is refused for reading as for everything else.
+  const outside=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-outside-'));t.after(()=>fs.rmSync(outside,{recursive:true,force:true}));
+  fs.writeFileSync(path.join(outside,'data.txt'),'outside');fs.symlinkSync(outside,path.join(root,'way-out'),kind);
+  assert.throws(()=>service.read(project,{path:'way-out/data.txt'}),{code:'outside_project'});
+  assert.equal(service.files(project,{}).items.some(item=>item.name==='way-out'),false);
+  fs.mkdirSync(path.join(root,'gone'));fs.symlinkSync(path.join(root,'gone'),path.join(root,'dangling'),kind);fs.rmdirSync(path.join(root,'gone'));
+  assert.throws(()=>service.read(project,{path:'dangling/x.txt'}),{code:'not_found'});
+});
 test('sensitive paths are excluded from files/search and rejected by direct access',async t=>{
   const {root,project,service}=await fixture(t);
   fs.writeFileSync(path.join(root,'.env'),'hiddenneedle=secret');
@@ -84,14 +112,18 @@ test('directory pagination is scoped and does not expose protected entries',asyn
   fs.mkdirSync(path.join(root,'sub'));
   assert.throws(()=>service.files(project,{path:'sub',cursor:one.nextCursor}),{code:'invalid_cursor'});
 });
-test('binary, invalid UTF-8 and hardlinked files are not editable text',async t=>{
+test('binary and invalid UTF-8 are not editable text, and a file with a second name is read but never changed',async t=>{
   const {root,project,service}=await fixture(t);
   fs.writeFileSync(path.join(root,'binary.dat'),Buffer.from([0,1,2]));
   fs.writeFileSync(path.join(root,'invalid.txt'),Buffer.from([0xff]));
   fs.writeFileSync(path.join(root,'original.txt'),'original');
   fs.linkSync(path.join(root,'original.txt'),path.join(root,'alias.txt'));
   assert.throws(()=>service.read(project,{path:'binary.dat'}),error=>error.code==='binary_file'&&/operations_call workspace\.read_bytes/.test(error.message));
-  assert.throws(()=>service.read(project,{path:'alias.txt'}),{code:'unsafe_file'});
+  // A file with two names (a hard link, as package managers make them) is read like any other. Changing it would change
+  // what its other name shows, possibly outside the project, so that stays refused.
+  assert.equal(service.read(project,{path:'alias.txt'}).text,'original');
+  assert.throws(()=>service.edit(project,{path:'alias.txt',edits:[{oldText:'original',newText:'changed'}]}),{code:'unsafe_file'});
+  assert.equal(fs.readFileSync(path.join(root,'original.txt'),'utf8'),'original');
   // Text in another encoding is still text: it can be read, and it is not rewritten as UTF-8 behind the user's back.
   const legacy=service.read(project,{path:'invalid.txt'});
   assert.equal(legacy.text.length,1);assert.ok(legacy.encoding);assert.match(legacy.note,/not UTF-8/);
@@ -199,7 +231,7 @@ test('large local files remain readable through bounded byte pages without loadi
   assert.throws(()=>service.readBytes(project,{path:'.env',offset:0}),{code:'protected_workspace_path'});
   fs.writeFileSync(path.join(root,'original.txt'),'original');
   fs.linkSync(path.join(root,'original.txt'),path.join(root,'hardlink.txt'));
-  assert.throws(()=>service.readBytes(project,{path:'hardlink.txt',offset:0}),{code:'unsafe_file'});
+  assert.equal(Buffer.from(service.readBytes(project,{path:'hardlink.txt',offset:0}).base64,'base64').toString(),'original');
 });
 
 test('an edit keeps the line endings of a CRLF file, listings say what they leave out, and long answers say where they were cut',async t=>{
@@ -216,11 +248,11 @@ test('an edit keeps the line endings of a CRLF file, listings say what they leav
   fs.writeFileSync(path.join(root,'.env'),'TOKEN=x\n');fs.mkdirSync(path.join(root,'credentials'));fs.writeFileSync(path.join(root,'credentials','login.txt'),'x');
   fs.linkSync(path.join(root,'windows.txt'),path.join(root,'second-name.txt'));
   const listing=service.files(project,{});
-  assert.deepEqual(listing.items.map(item=>item.name),['mixed.txt']);
-  assert.equal(listing.withheld,4);assert.match(listing.note,/4 entries are not shown/);
-  assert.equal(service.files({...project,protectSecrets:false},{}).withheld,2,'only the two names of the linked file remain withheld');
+  assert.deepEqual(listing.items.map(item=>item.name),['mixed.txt','second-name.txt','windows.txt'],'both names of a linked file are there to be read');
+  assert.equal(listing.withheld,2);assert.match(listing.note,/2 entries are not shown/);
+  assert.equal(service.files({...project,protectSecrets:false},{}).withheld,undefined,'without the protection nothing is kept back');
   const found=await service.find(project,{pattern:'**/*.txt'});
-  assert.deepEqual(found.items.map(item=>item.path),['mixed.txt']);assert.equal(found.withheld,3);
+  assert.deepEqual(found.items.map(item=>item.path),['mixed.txt','second-name.txt','windows.txt']);assert.equal(found.withheld,1);
   assert.throws(()=>service.read(project,{path:'credentials/login.txt'}),error=>error.code==='protected_workspace_path'&&/owner can lift that/.test(error.message));
   // One very long line in a search hit is cut with a mark.
   fs.rmSync(path.join(root,'second-name.txt'));

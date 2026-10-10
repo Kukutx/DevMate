@@ -167,14 +167,27 @@ http://127.0.0.1:8788/mcp
 
 ### ChatGPT 网页版和 Claude.ai
 
-它们从云端访问你的 MCP 服务，所以需要一条从外部到本机的通路。DevMate 提供四种，都不依赖 ngrok：
+它们从云端访问你的 MCP 服务，所以需要一条从外部到本机的通路。DevMate 提供五种：
 
 | 通路 | 适用 | 特点 |
 | --- | --- | --- |
+| `quick` | 任何客户端 | Cloudflare 快速隧道。不需要账号和域名，什么都不用配；每次重新启动地址会变 |
 | `openai-tunnel` | ChatGPT、Codex | OpenAI 官方隧道。只有出站连接，没有公网地址，也不需要域名 |
 | `cloudflare` | ChatGPT、Claude 及任何客户端 | 你自己域名上的 Cloudflare 命名隧道，DevMate 负责运行 `cloudflared`。免费 |
 | `https` | 任何客户端 | 你已经在维护的反向代理 |
 | `ssh` | 任何客户端 | OpenSSH 反向转发到你自己的服务器，由那里提供 HTTPS |
+
+**快速隧道：一分钟连上**
+
+装好 `cloudflared`（Windows：`winget install Cloudflare.cloudflared`；macOS：`brew install cloudflared`）之后，三条命令就能拿到给 ChatGPT 或 Claude 用的地址：
+
+```powershell
+devmate connect quick
+devmate restart
+devmate mcp-url
+```
+
+不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 地址，DevMate 会验证它确实能到达本机运行时。这个地址就是唯一的秘密，没有登录，所以只给你自己的客户端。DevMate 或隧道重新启动后地址会变，用 `devmate mcp-url` 取新地址。要固定地址，用下面的通路。
 
 **Cloudflare 隧道**
 
@@ -291,15 +304,7 @@ devmate restart
 4.0 从零开始。更新之后：
 
 - 3.x 的任何东西都不会被读取：项目、连接和登录要重新设置。编辑器里的旧设置会被忽略；磁盘上的旧状态原样保留，可以删除。
-- ngrok、Gateway 和 Runner 都没有了。云端客户端现在通过你自己的隧道进来，见[连接客户端](#连接客户端)。MCP 地址变了，要在 ChatGPT 或 Claude 里更新连接器。
-- DevMate 不再内置 ngrok 支持。已有的 ngrok 固定域名仍然可以用，并且可以交给 DevMate 启动和看护：
-
-  ```powershell
-  devmate connect https --url https://<你的域名>/mcp --executable "C:\Tools\ngrok\ngrok.exe" --args "http {port} --url https://{host}"
-  devmate restart
-  ```
-
-  `{port}` 是要转发到的本机入口端口（默认 8789，不是 8788），`{host}` 是公网域名。这个程序随连接启动，退出后自动拉起，随运行时停止。Tailscale Funnel、frp 等同理。
+- 3.x 的 Gateway、Runner 和内置的隧道都没有了。云端客户端通过[连接客户端](#连接客户端)里的通路进来，最快的是 `devmate connect quick`。MCP 地址是新的，要在 ChatGPT 或 Claude 里重新创建连接器。
 - 如果 3.x 的 Gateway 还在运行，它可能占着 8788 端口，4.0 会提示端口被占用。把所有编辑器窗口关一次，或结束旧的 `node` 进程，再启动。
 - 模型看到的工具名变了；客户端刷新连接器后就会拿到新的。
 
