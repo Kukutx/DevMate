@@ -50,6 +50,8 @@ function fixture(t, { registered = true, running = true, settings = {}, answers 
         case 'window.context': state.contexts.push(input); return { accepted: true };
         case 'window.detach': return { detached: state.windows.delete(input.windowId) };
         case 'connection.status': return state.connection;
+        case 'settings.read': return { active: { auth: state.auth || { mode: 'none' } } };
+        case 'auth.code.create': return { code: 'dml_one-time' };
         case 'runtime.doctor': return { version: '4.0.0', status: 'attention', checks: [{ id: 'node', status: 'ok', detail: 'Node 24' }, { id: 'security', status: 'warn', detail: 'No sign-in', fix: 'Require sign-in' }, { id: 'connection', status: 'info', detail: 'Local only', fix: 'Configure a connection' }] };
         default: throw new Error('unexpected operation ' + name);
       }
@@ -369,4 +371,14 @@ test('without that setting the plugin never starts the runtime by itself', async
   f.state.crashed = true;
   await f.entry.activate(); await f.entry.sync();
   assert.equal(starts, 0); assert.equal(f.entry.status().running, false);
+});
+test('the sign-in code is copied when sign-in is on, and the command says where it is switched on when it is off', async t => {
+  const f = fixture(t);
+  await f.entry.activate();
+  assert.equal(await f.run('login-code'), null);
+  assert.deepEqual(f.state.copied, []); assert.match(f.state.notices.at(-1), /Sign-in is off/);
+  assert.equal(f.state.calls.includes('auth.code.create'), false);
+  f.state.auth = { mode: 'oauth', issuer: 'https://devmate.example.test' };
+  await f.run('login-code');
+  assert.deepEqual(f.state.copied, ['dml_one-time']); assert.match(f.state.notices.at(-1), /Copied a one-time sign-in code/);
 });

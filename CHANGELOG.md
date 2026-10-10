@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Obsidian: **Copy one-time sign-in code**, for clients that sign in (OAuth mode).
+
 ## 4.0.1
 - A tunnel program of your own (ngrok with a reserved domain, Tailscale Funnel, frp and the like) can be handed to DevMate: `devmate connect https --url https://<host>/mcp --executable <program> --args "<its arguments>"`, or the same questions in **DevMate: Configure Connection**. It is started with the connection, started again if it ends and stopped with the runtime; `{port}` and `{host}` in the arguments are the local port to forward to and the public host. It receives only the environment variables named for it.
 - The VS Code extension is listed as "DevMate Agent" again. 4.0.0 renamed it to "DevMate", a display name another extension holds, so the Marketplace refused that upload: 4.0.1 is the first 4.x version there. The GitHub release and the Obsidian plugin of 4.0.0 were published.

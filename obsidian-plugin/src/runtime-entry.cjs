@@ -292,6 +292,20 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
       : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' : 'Copied the local MCP URL. Cloud clients need a public connection.');
     return value;
   }
+  // The one-time code a client asks for on the authorization page, when sign-in is on.
+  async function loginCode() {
+    const configured = await client.call('settings.read', {});
+    if ((configured.active || configured.saved)?.auth?.mode !== 'oauth') {
+      new api.Notice('Sign-in is off for this DevMate, so there is no code to copy. It is switched on with the connection: devmate connect … --auth oauth, or DevMate: Configure Connection in VS Code.');
+      return null;
+    }
+    const issued = await client.call('auth.code.create', {});
+    const target = clipboard || globalThis.navigator?.clipboard;
+    if (!target) throw new Error('The clipboard is not available here. The code is: ' + issued.code);
+    await target.writeText(issued.code);
+    new api.Notice('Copied a one-time sign-in code. Paste it on the DevMate authorization page; it expires in 10 minutes.');
+    return issued.code;
+  }
   async function doctor() {
     const result = await client.call('runtime.doctor', {});
     const lines = ['DevMate ' + result.version + ' — ' + result.status];
@@ -403,6 +417,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     command('status', 'Show status', async () => { await sync(); new api.Notice(statusText()); });
     command('workbench', 'Open workbench', async () => window.open(await client.workbenchUrl(), '_blank', 'noopener'));
     command('copy-mcp-url', 'Copy MCP URL', copyMcpUrl);
+    command('login-code', 'Copy one-time sign-in code', loginCode);
     command('doctor', 'Doctor', doctor);
     command('access-profile', 'Change permission profile (guarded or full access)', accessProfile);
     const workspace = plugin.app?.workspace;
@@ -450,7 +465,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     views.clear();
   }
 
-  return { activate, deactivate, open, attachVault, detachVault, changeSharing, accessProfile, stopRuntime, restartRuntime, sync, status, copyMcpUrl, doctor, editorContext, RuntimeView, windowId };
+  return { activate, deactivate, open, attachVault, detachVault, changeSharing, accessProfile, stopRuntime, restartRuntime, sync, status, copyMcpUrl, loginCode, doctor, editorContext, RuntimeView, windowId };
 }
 
 module.exports = { createObsidianRuntimeEntry, RUNTIME_VIEW_TYPE };
