@@ -112,9 +112,11 @@ test('the report for a bug says what happened and not who or where: no credentia
     'instance at ' + path.join(home, '.devmate', 'runtime') + ' and as JSON ' + JSON.stringify(path.join(home, 'work', 'shop')),
     'a second account: ' + (process.platform === 'win32' ? 'C:\\Users\\other\\file.txt' : '/home/other/file.txt') + ' and /Users/third/x',
     'reached at https://calm-river.trycloudflare.com/mcp/abcdefghijklmnopqrstuvwxyz012345 and https://devmate.example.com/mcp from 203.0.113.9, locally at 127.0.0.1:8788',
-    'git push https://maria:hunter2@github.com/x/y with --token s3cr3t-value and GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 by maria@example.com'
+    'git push https://maria:hunter2@github.com/x/y with --token s3cr3t-value and GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 by maria@example.com',
+    'the project Acme Billing failed at 10:15:42 from 2001:db8:85a3::8a2e:370:7334 and fe80::1, std::string and a::b::c stay code'
   ].join('\n');
-  const clean = anonymize(sample, { home, places: [[path.join(home, 'work', 'shop'), '<folder-1>']], hosts: ['devmate.example.com'] });
+  const clean = anonymize(sample, { home, places: [[path.join(home, 'work', 'shop'), '<folder-1>']], names: [['Acme Billing', '<folder-1>'], ['app', '<folder-2>']], hosts: ['devmate.example.com'] });
+  assert.match(clean, /the project <folder-1> failed at 10:15:42 from <address> and <address>, std::string and a::b::c stay code/);
   for (const kept of ['Maria', 'maria', 'other', 'third', 'calm-river', 'abcdefghijklmnopqrstuvwxyz012345', 'devmate.example.com', '203.0.113.9', 'hunter2', 's3cr3t-value', 'ghp_', 'shop']) assert.ok(!clean.includes(kept), kept + ' is still in: ' + clean);
   assert.match(clean, /instance at ~[\\/]\.devmate[\\/]runtime and as JSON "<folder-1>"/); assert.match(clean, /https:\/\/<assigned>\.trycloudflare\.com\/mcp\/<key>/);
   assert.match(clean, /https:\/\/<public-host>\/mcp from <address>, locally at 127\.0\.0\.1:8788/); assert.match(clean, /by <email>/);
@@ -129,8 +131,14 @@ test('the report for a bug says what happened and not who or where: no credentia
   const { text } = await runtime.call('runtime.report', {}, owner);
   assert.match(text, /^DevMate report\. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it\./);
   assert.match(text, /Connection: cloudflare · sign-in: none · profile: guarded/); assert.match(text, /Shared folders: 1 \(1 read and write, 0 read only\)/);
-  assert.match(text, /\n\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing/); assert.match(text, /\nworkspace\.read {2}2 \(2\) {2}1 {2}\d+ {2}\d+ {2}\w+×1\n/);
+  assert.match(text, /\n\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing/); assert.match(text, /\nworkspace\.read {2}2 \(2\) {2}1 {2}\d+ {2}\d+ {2}\d+ {2}\w+×1\n/);
   assert.match(text, /\n#\d+ \S+ workspace\.read \w+ \(connected, \d+ ms\): /); assert.match(text, /connection: could not reach <public-host> from <folder-1>/);
+  // A failure names its project; the report says which folder that was, not what it is called.
+  await runtime.call('project.update', { id: project.id, name: 'Client Secret Product' }, owner);
+  await assert.rejects(runtime.call('workspace.read', { projectId: 'Client Secret Product', path: 'missing-file.txt' }, { id: 'owner', role: 'owner' }));
+  fs.appendFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-11T10:00:01.000Z agent: turn failed in Client Secret Product\n');
+  const named = (await runtime.call('runtime.report', {}, owner)).text;
+  assert.match(named, /agent: turn failed in <folder-1>/); assert.ok(!named.includes('Client Secret Product'));
   for (const kept of ['A Private Folder Name', 'devmate.example.com', temp, path.basename(os.homedir()) + path.sep]) assert.ok(!text.includes(kept), kept + ' is still in the report');
   // It is the owner's to make at this computer; with full access their client may read it as well.
   await assert.rejects(runtime.call('runtime.report', {}, { id: 'owner', role: 'owner' }), { code: 'forbidden' });

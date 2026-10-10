@@ -64,7 +64,9 @@ export function defineAgentOperations(service, add) {
       try { started = await service.agents.delegate({ ...task, waitMs: 0, caller: context.id, ...(isolated ? { isolated: { root: isolated.root, branch: isolated.branch, base: isolated.base } } : {}) }, actor(context)); }
       catch (error) { if (isolated) await service.workspace.discardProposal(project, isolated).catch(() => {}); throw error; }
       const outcome = await withChanges(await service.agents.outcome(started.agentId, { deliveryId: started.deliveryId, waitMs: wait, signal: service.waitSignal(context) }));
-      return isolated?.uncommitted ? { ...outcome, copyNote: 'The agent\'s copy starts from the last commit: ' + isolated.uncommitted + ' uncommitted change(s) of the project are not in it.' } : outcome;
+      // What a copy lacks decides whether the agent can check its own work there: said every time one is made.
+      return isolated ? { ...outcome, copyNote: 'The agent\'s copy holds what is committed' + (isolated.uncommitted ? ': ' + isolated.uncommitted + ' uncommitted change(s) of the project are not in it, and neither are' : ', not') +
+        ' ignored files such as installed dependencies and build output. To run tests there the agent has to install what it needs first; say so in the task.' } : outcome;
     }, { present: turnText, meta: turnMeta, destructive: true, openWorld: true });
   const named = args => { const agent = args.agentId || args.id; if (!agent) throw new DomainError('invalid_input', 'agentId is required: the one agents_delegate returned.'); return agent; };
   add('agents.result', { agentId: id.optional(), id: id.optional().describe('Same as agentId.'), jobId: id.optional(), deliveryId: id.optional(), waitMs }, true,
@@ -94,7 +96,7 @@ export function defineAgentOperations(service, add) {
     args => { const agent = copyOf(args); return service.workspace.proposal(service.project(agent.projectId), agent.isolated, { paths: args.paths }); },
     { present: result => (result.files.map(file => file.status + ' ' + file.path).join('\n') || 'The agent changed nothing.') + (result.stdout ? '\n\n' + result.stdout : ''), meta: ['branch', 'base', 'truncated'], projectOf: projectOfAgent });
   add('agents.apply', { agentId: id, ...mutation }, false,
-    'Bring the work of an agent that has a copy of its own into the project, as changes in the working tree (not a commit): all of it, or none of it when the project changed in the same places meanwhile. The agent is stopped and its copy removed. These changes are not in workspace_history; take them back with Git.',
+    'Bring the work of an agent that has a copy of its own into the project, as changes in the working tree (not a commit): all of it, or none of it when the project changed in the same places meanwhile. The agent is stopped and its copy removed. The changes are in workspace_history like any other, so workspace_restore with since takes them back.',
     args => { const agent = copyOf(args); return settle(agent, 'applied', () => service.workspace.applyProposal(service.project(agent.projectId, { write: true }), agent.isolated)); },
     { destructive: true, projectOf: projectOfAgent });
   add('agents.discard', { agentId: id, ...mutation }, false, 'Throw away the copy of an agent and everything it did there. The project is not touched.',

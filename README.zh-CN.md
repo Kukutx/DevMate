@@ -260,7 +260,7 @@ devmate restart
 | 找代码 | `workspace_files` `workspace_find` `workspace_search` | 目录列表、glob 查找、ripgrep 内容搜索。遵守 `.gitignore`，大仓库也快 |
 | 读 | `workspace_read` | 带行号，大文件按行分页（32 MiB 以内）。UTF-16 和本机传统编码（如 GBK）可以读取，不能在这里改写 |
 | 改 | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | 精确文本替换，多处修改原子生效。覆盖已有文件必须带上读到的哈希，不会盲写 |
-| 撤销 | `workspace_history` `workspace_restore` | 经 DevMate 改动、覆盖或删除的文件都能恢复，默认保留 30 天。一次调用可以收回某个时间点之后的全部改动（`since`）；命令和委派的 Agent 改的文件不在这份历史里，那部分用 Git |
+| 撤销 | `workspace_history` `workspace_restore` | 经 DevMate 改动、覆盖或删除的文件都能恢复，默认保留 30 天。一次调用可以收回某个时间点之后的全部改动（`since`），包括从隔离副本应用进来的 Agent 改动；命令和直接在项目里工作的 Agent 改的文件不在这份历史里，那部分用 Git |
 | 运行 | `shell_run` `process_read` `process_write` `process_stop` `process_list` | 真实的 shell 语义（`npm test`、`git commit`）。输出按游标分页；长时间运行的命令在后台继续，可读输出、写标准输入、整棵进程树停止 |
 | Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | 只读，不会执行仓库里配置的任何程序。写操作用 `shell_run` |
 | 派发 | `agents_delegate` `agents_result` `providers_list` | 把整件任务交给本机的编码 Agent |

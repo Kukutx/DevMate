@@ -237,11 +237,11 @@ export function createWorkspaceService({ store } = {}) {
   // no hooks, fsmonitor, pager, signature program, external diff, and attributes
   // read from the empty tree so no filter or textconv driver applies. The
   // owner's own system and global configuration (autocrlf, excludes, safe.directory) stays in effect.
-  const git = (project, args, input) => invoke('git', [
+  const git = (project, args, input, extra) => invoke('git', [
     '--no-pager', '--attr-source=' + EMPTY_TREE, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull,
     '-c', 'core.quotePath=false', '-c', 'color.ui=false', '-c', 'log.showSignature=false', ...args
   ], projectRoot(project), input, { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0',
-    GIT_PAGER: 'cat', PAGER: 'cat', GIT_LITERAL_PATHSPECS: '1' });
+    GIT_PAGER: 'cat', PAGER: 'cat', GIT_LITERAL_PATHSPECS: '1', ...extra });
   // Only a commit may be named: `HEAD:.env` style object paths would bypass the path policy.
   async function commitOf(project, ref, input) {
     const result = await git(project, ['rev-parse', '--verify', '--quiet', '--end-of-options', gitRevision(ref) + '^{commit}'], input);
@@ -797,13 +797,15 @@ export function createWorkspaceService({ store } = {}) {
     return patch(checkedCommand(await git(project, [...base, '--', ...shown], { ...input, maxOutputChars: 2000000 })), omitted);
   }
 
-  // An agent can be given a copy of the project to work in: a Git worktree on a branch of its own, kept in the instance
-  // directory. The project sees nothing of what happens there until that work is applied, all of it or none.
+  // An agent can be given a copy of the project to work in: a Git worktree on a branch of its own, kept beside the
+  // instance directory and not inside it: a program that runs whatever it is asked to has no business two folders
+  // away from the owner token and the stored credentials. The project sees nothing of what happens in a copy until
+  // that work is applied, all of it or none.
   // Git that changes something runs here with the repository's hooks off and its attributes on: the copy has to look
   // like the owner's own checkout.
-  const gitChange = (cwd, args, input = {}) => invoke('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull, '-c', 'core.quotePath=false',
+  const gitChange = (cwd, args, input = {}, extra = {}) => invoke('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull, '-c', 'core.quotePath=false',
     '-c', 'color.ui=false', '-c', 'commit.gpgsign=false', ...(WINDOWS ? ['-c', 'core.longpaths=true'] : []), ...args], cwd, { timeoutMs: 120000, ...input },
-  { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_PAGER: 'cat', PAGER: 'cat' });
+  { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_PAGER: 'cat', PAGER: 'cat', ...extra });
   // The copy as a project of its own for reading: the same rules about what may be shown, another folder.
   const inCopy = (project, copy) => ({ ...project, root: copy.root, controlRoot: null });
   const copyExists = copy => { if (!copy?.root || !fs.existsSync(copy.root)) throw error('not_found', 'This agent has no working copy of its own (any more).'); };
@@ -813,7 +815,7 @@ export function createWorkspaceService({ store } = {}) {
     if (!/^[A-Za-z0-9-]{1,80}$/.test(name) || !project.controlRoot) throw error('invalid_input', 'A working copy needs a plain name.');
     const head = await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']), base = head.stdout.trim();
     if (head.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(base)) throw error('not_a_repository', 'A copy of its own needs a Git repository with at least one commit: what the agent proposes is what differs from that commit.');
-    const root = path.join(project.controlRoot, 'worktrees', name), branch = 'devmate/' + name;
+    const root = path.join(path.dirname(project.controlRoot), path.basename(project.controlRoot) + '-copies', name), branch = 'devmate/' + name;
     fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
     checkedCommand(await gitChange(projectRoot(project), ['worktree', 'add', '--quiet', '-b', branch, root, base]));
     // What is not committed is not in the copy; whoever delegates is told how much that is.
@@ -823,19 +825,26 @@ export function createWorkspaceService({ store } = {}) {
   // What the copy holds that the commit it started from does not, files the agent created included.
   async function proposal(project, copy, input = {}) {
     copyExists(copy);
-    const view = inCopy(project, copy), base = ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', copy.base];
-    checkedCommand(await gitChange(copy.root, ['add', '--intent-to-add', '.']));
-    const listed = checkedCommand(await git(view, [...base, '--name-status', '-z'], { ...input, maxOutputChars: 2000000 }));
-    if (listed.stdoutTruncated) throw error('output_limit', 'The list of changed files exceeds the output bound.');
-    const records = listed.stdout.split('\0'), all = [];
-    for (let index = 0; index + 1 < records.length; index += 2) all.push({ status: records[index].slice(0, 1), path: slash(records[index + 1]) });
-    const files = all.filter(file => !hidden(project, file.path)), omitted = all.length - files.length;
-    if (input.namesOnly) return { branch: copy.branch, base: copy.base, files, omittedProtected: omitted };
-    const wanted = (input.paths || []).map(relativeInput), shown = (wanted.length ? files.filter(file => wanted.includes(file.path)) : files).map(file => file.path);
-    const tooMany = shown.reduce((size, file) => size + file.length + 3, 0) > 20000;
-    const diff = !shown.length || tooMany ? emptyCommand() : checkedCommand(await git(view, [...base, '--', ...shown], { ...input, maxOutputChars: 2000000 }));
-    const text = patch(diff, omitted);
-    return { branch: copy.branch, base: copy.base, files, ...text, ...(tooMany ? { stdout: '[' + shown.length + ' files changed, too many for one diff: name some of them with paths]' + text.stdout } : {}) };
+    const view = inCopy(project, copy), base = ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', copy.base];
+    // The copy's index is the agent's, and the agent may be running Git this very moment: what it proposes is worked
+    // out in an index of its own, started from the copy's so that only what changed is read again.
+    const scratch = copy.root + '.index-' + randomUUID(), own = { GIT_INDEX_FILE: scratch };
+    try {
+      const index = (await git(view, ['rev-parse', '--git-path', 'index'])).stdout.trim();
+      try { if (index) fs.copyFileSync(path.resolve(copy.root, index), scratch); } catch { /* an empty index compares everything, which is slower and as right */ }
+      checkedCommand(await gitChange(copy.root, ['add', '--all', '.'], {}, own));
+      const listed = checkedCommand(await git(view, [...base, '--name-status', '-z'], { ...input, maxOutputChars: 2000000 }, own));
+      if (listed.stdoutTruncated) throw error('output_limit', 'The list of changed files exceeds the output bound.');
+      const records = listed.stdout.split('\0'), all = [];
+      for (let index = 0; index + 1 < records.length; index += 2) all.push({ status: records[index].slice(0, 1), path: slash(records[index + 1]) });
+      const files = all.filter(file => !hidden(project, file.path)), omitted = all.length - files.length;
+      if (input.namesOnly) return { branch: copy.branch, base: copy.base, files, omittedProtected: omitted };
+      const wanted = (input.paths || []).map(relativeInput), shown = (wanted.length ? files.filter(file => wanted.includes(file.path)) : files).map(file => file.path);
+      const tooMany = shown.reduce((size, file) => size + file.length + 3, 0) > 20000;
+      const diff = !shown.length || tooMany ? emptyCommand() : checkedCommand(await git(view, [...base, '--', ...shown], { ...input, maxOutputChars: 2000000 }, own));
+      const text = patch(diff, omitted);
+      return { branch: copy.branch, base: copy.base, files, ...text, ...(tooMany ? { stdout: '[' + shown.length + ' files changed, too many for one diff: name some of them with paths]' + text.stdout } : {}) };
+    } finally { for (const file of [scratch, scratch + '.lock']) fs.rmSync(file, { force: true }); }
   }
 
   async function removeCopy(project, copy) {
@@ -863,6 +872,16 @@ export function createWorkspaceService({ store } = {}) {
     if (!files.length) { await removeCopy(project, copy); return { applied: false, files: [], note: 'The agent changed nothing. Its copy was removed.' }; }
     const guarded = files.filter(file => hidden(project, file));
     if (guarded.length) throw error('protected_content', 'The agent changed files this project protects (' + guarded.slice(0, 5).join(', ') + '). Nothing was applied; its work stays in its copy.');
+    // What is about to change is kept first, as with every change these tools make: taking back everything after a
+    // point in the history then takes the agent's work back with it.
+    const before = new Map(files.map(file => {
+      try {
+        const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
+        if (!stat) return [file, { existed: false, sha256: null }];
+        // A file with a second name shares its bytes with a path that may lie outside the project: never copied into history.
+        return [file, { existed: true, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
+      } catch { return [file, { existed: false, sha256: null }]; }
+    }));
     const patchFile = copy.root + '.patch';
     try {
       checkedCommand(await gitChange(copy.root, ['diff', '--cached', '--binary', '--no-ext-diff', '--no-textconv', '--no-renames', '--output=' + patchFile, copy.base]));
@@ -875,7 +894,17 @@ export function createWorkspaceService({ store } = {}) {
       }
       checkedCommand(await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]));
     } finally { fs.rmSync(patchFile, { force: true }); }
-    const warning = event(project, 'workspace.proposal.applied', { files: files.slice(0, 500), count: files.length, branch: copy.branch, base: copy.base });
+    let warning = null;
+    const record = () => {
+      for (const file of files) {
+        const was = before.get(file);
+        let stat = null, full = null;
+        try { full = resolveProjectPath(project, file, { mustExist: false }); stat = fs.lstatSync(full, { throwIfNoEntry: false }); } catch { continue; }
+        if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: stat.size <= MAX_FILE_BYTES ? hash(readBytes(full)) : null, written: true, previousSha256: was.sha256, proposal: copy.branch });
+        else if (!stat && was.existed) warning ||= event(project, 'workspace.file.removed', { path: file, entry: 'file', previousSha256: was.sha256, proposal: copy.branch });
+      }
+    };
+    if (store?.transaction) store.transaction(record); else record();
     await removeCopy(project, copy);
     return { applied: true, files, ...(warning ? { warning } : {}) };
   }

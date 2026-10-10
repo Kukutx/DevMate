@@ -1,9 +1,9 @@
 # Changelog
 
 ## 4.0.5
-- **A delegated agent can work in a copy of the project.** `agents_delegate` with `isolate:true` starts the agent in a Git worktree of the last commit. The project does not change until its work is read (`agents.proposal`) and applied (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or discarded (`agents.discard`).
+- **A delegated agent can work in a copy of the project.** `agents_delegate` with `isolate:true` starts the agent in a Git worktree of the last commit. The project does not change until its work is read (`agents.proposal`) and applied (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or discarded (`agents.discard`). Applied work is in the history, so it can be taken back like any other change. The copy is kept beside DevMate's instance directory, never inside it.
 - **One call takes back a stretch of work.** `workspace_restore` with `since` (the number of a `workspace_history` entry, shown there as `#N`) takes back every change DevMate's file tools made after that entry, newest first. A file something else changed in the meantime is left alone and listed, and taking back can itself be taken back.
-- `runtime.metrics` says for every operation how often it was called, by whom, how long it took and which errors it returned, and lists the newest failures.
+- `runtime.metrics` says for every operation how often it was called, by whom, how long half of the calls and nineteen in twenty took, and which errors it returned, and lists the newest failures.
 - `devmate doctor --report` prints one text for a bug report: the checks, how the operations went, the newest failures and the last log lines, with credentials, private paths, account names and addresses taken out.
 - A call that names no project while several are shared says in its answer which project it was answered from.
 - What a connected client is told about the connection (`connection_status` with full access) no longer repeats the key a quick tunnel address ends in.

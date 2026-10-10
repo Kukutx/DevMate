@@ -48,6 +48,8 @@ test('every call is counted by operation: how often, by whom, how long, and what
   // Names nobody registered share one line: a caller cannot grow this list.
   assert.deepEqual([named('(unknown)').calls,named('(unknown)').errors],[2,{unknown_operation:2}]);assert.equal(named('job_start'),undefined);
   for(const item of usage.operations)assert.ok(Number.isInteger(item.averageMs)&&item.maxMs>=item.averageMs,item.name);
+  // Half of the calls and nineteen in twenty, in fixed steps: the usual case and the slow one, with no single measurement kept.
+  for(const item of usage.operations)assert.ok([1,2,5,10,20,50,100,200,500,1000,2000,5000,10000,20000,50000].includes(item.p50Ms)&&item.p95Ms>=item.p50Ms,item.name+' '+item.p50Ms+' '+item.p95Ms);
   // The newest failure first, with its request number, and nothing of what was sent.
   assert.equal(usage.recentFailures.length,4);assert.deepEqual([usage.recentFailures[0].operation,usage.recentFailures[0].code,usage.recentFailures[0].caller],['(unknown)','unknown_operation','connected']);
   assert.ok(usage.recentFailures[0].request>usage.recentFailures[3].request);assert.ok(!JSON.stringify(usage).includes('absent'));
