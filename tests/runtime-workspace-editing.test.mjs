@@ -68,6 +68,51 @@ test('every change made through DevMate is restorable, including overwrites and 
   assert.equal(fs.readdirSync(project.root).some(name => name.includes('history')), false, 'history lives in the private instance directory');
 });
 
+test('everything changed after one history entry is taken back in one call, and what something else changed is left alone', async t => {
+  const { project, service, file } = fixture(t);
+  const text = name => fs.readFileSync(file(name), 'utf8'), there = name => fs.existsSync(file(name));
+  // How the project stood before the work that is to be taken back.
+  service.write(project, { path: 'keep.md', text: 'kept as it was', expectedSha256: null });
+  service.write(project, { path: 'src/a.js', text: 'a one', expectedSha256: null });
+  service.write(project, { path: 'src/b.js', text: 'b one', expectedSha256: null });
+  service.write(project, { path: 'old/name.txt', text: 'named', expectedSha256: null });
+  service.write(project, { path: 'gone/x.txt', text: 'x', expectedSha256: null });
+  service.write(project, { path: 'gone/deep/y.txt', text: 'y', expectedSha256: null });
+  service.write(project, { path: 'mine.md', text: 'mine one', expectedSha256: null });
+  const point = service.history(project, {}).items[0].sequence;
+  // A stretch of work with every kind of change: edits (two of the same file), a new file, a rename, a deleted file and a deleted folder.
+  service.edit(project, { path: 'src/a.js', edits: [{ oldText: 'one', newText: 'two' }] });
+  service.edit(project, { path: 'src/a.js', edits: [{ oldText: 'two', newText: 'three' }] });
+  service.write(project, { path: 'src/new.js', text: 'created', expectedSha256: null });
+  service.move(project, { from: 'old/name.txt', to: 'new/renamed.txt' });
+  service.edit(project, { path: 'new/renamed.txt', edits: [{ oldText: 'named', newText: 'renamed and edited' }] });
+  service.remove(project, { path: 'src/b.js' });
+  service.remove(project, { path: 'gone', recursive: true });
+  service.edit(project, { path: 'mine.md', edits: [{ oldText: 'one', newText: 'two' }] });
+  // Meanwhile the person changed one of those files in their editor. That is theirs.
+  fs.writeFileSync(file('mine.md'), 'mine, changed by hand');
+  const before = service.history(project, {}).items[0].sequence;
+  const taken = service.restore(project, { since: point });
+  assert.equal(text('src/a.js'), 'a one', 'both edits are taken back, newest first');
+  assert.equal(there('src/new.js'), false, 'a file the work created is removed again');
+  assert.equal(text('old/name.txt'), 'named', 'the rename and the edit after it are both taken back'); assert.equal(there('new/renamed.txt'), false);
+  assert.equal(text('src/b.js'), 'b one'); assert.equal(text('gone/x.txt'), 'x'); assert.equal(text('gone/deep/y.txt'), 'y');
+  assert.equal(text('keep.md'), 'kept as it was');
+  assert.equal(text('mine.md'), 'mine, changed by hand', 'what something else changed is not touched');
+  assert.deepEqual(taken.left.map(item => [item.path, item.reason]), [['mine.md', 'it was changed again by something else']]);
+  assert.deepEqual(taken.restored.map(item => item.action).sort(), ['brought back', 'brought back', 'brought back', 'moved back', 'removed again (this change created it)', 'restored', 'restored', 'restored']);
+  // Taking back is itself in the history, so it can be taken back: the work is there again.
+  const again = service.restore(project, { since: before });
+  assert.deepEqual(again.left, []);
+  assert.equal(text('src/a.js'), 'a three'); assert.equal(text('src/new.js'), 'created'); assert.equal(text('new/renamed.txt'), 'renamed and edited');
+  assert.equal(there('src/b.js'), false); assert.equal(there('gone/x.txt'), false); assert.equal(there('old/name.txt'), false);
+  // One version of one file, or everything after an entry: not both, and not neither.
+  assert.throws(() => service.restore(project, { since: point, path: 'src/a.js' }), { code: 'invalid_input' });
+  assert.throws(() => service.restore(project, {}), { code: 'invalid_input', message: /or since/ });
+  assert.deepEqual(service.restore(project, { since: service.history(project, {}).items[0].sequence }), { since: service.history(project, {}).items[0].sequence, restored: [], left: [] });
+  assert.throws(() => service.restore({ ...project, access: 'read' }, { since: point }), { code: 'read_only' });
+});
+
 test('mkdir, move and delete stay inside the project and refuse unsafe replacements', async t => {
   const { project, service, file } = fixture(t);
   assert.deepEqual(service.mkdir(project, { path: 'src/deep/dir' }), { path: 'src/deep/dir', created: true });

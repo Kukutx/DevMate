@@ -141,13 +141,15 @@ export class AgentCoordinator {
       throw new DomainError('workflow_budget', 'Workflow turn budget reached (' + workflow.turnBudget + ' turns). Raise it to continue: workflow.update {id:"' + workflow.id + '", turnBudget:<more>}.');
   }
 
-  start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, caller }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
+  // isolated: the working copy this agent works in instead of the project folder ({ root, branch, base }).
+  start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, caller, isolated }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
     const { project, workflow } = this.scope(projectId, workflowId);
     this.admit(project, provider, model);
     if (prompt?.trim()) this.budget(workflow, 1);
     const agent = this.store.create('agent', { projectId, workflowId, provider, model: model || null,
-      label: name || title || provider, status: 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null, caller: caller || null });
+      label: name || title || provider, status: 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null, caller: caller || null,
+      ...(isolated ? { isolated } : {}) });
     this.connect(agent).catch(error => this.store.recordNotificationFailure(error));
     // Queued before the process is up: a start that fails then fails this message too.
     if (prompt?.trim()) this.send({ projectId, workflowId, recipientIds: [agent.id], body: prompt }, sender);
@@ -186,7 +188,7 @@ export class AgentCoordinator {
       session.record = settings.recordNativeEvents === true;
       this.issue(agent, session);
       session.adapter = this.adapterFactory({
-        ...settings, provider: agent.provider, cwd: project.root, privateDir: this.privateDir,
+        ...settings, provider: agent.provider, cwd: agent.isolated?.root || project.root, privateDir: this.privateDir,
         mcpServers: [...(settings.mcpServers || []), this.channel(session)],
         onEvent: event => this.nativeEvent(agent.id, session, event),
         onApproval: (request, extra) => this.request(agent.id, 'approval', request, extra),
@@ -762,6 +764,7 @@ export class AgentCoordinator {
     const previous = this.sessions.get(id);
     if (previous && !previous.stopped) throw new DomainError('agent_connected', 'Agent already has a connected process.');
     if (previous?.closeError) throw new DomainError('shutdown_unconfirmed', 'The previous agent process has not confirmed its exit. Stop the agent before resuming it.');
+    if (agent.isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + agent.isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
     const { project } = this.scope(agent.projectId, agent.workflowId);
     this.admit(project, agent.provider, agent.model);
     const next = this.store.update('agent', id, { status: 'starting', error: null, ...(caller ? { caller } : {}) });
@@ -771,7 +774,7 @@ export class AgentCoordinator {
 
   // Start (provider) or continue (agentId) an agent with one task and wait up to waitMs
   // for exactly that task. The outcome names its delivery and job for agents.result.
-  async delegate({ projectId, provider, prompt, agentId, workflowId, model, waitMs = 30000, caller } = {}, sender) {
+  async delegate({ projectId, provider, prompt, agentId, workflowId, model, waitMs = 30000, caller, isolated } = {}, sender) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
     if (!prompt?.trim()) throw new DomainError('invalid_input', 'A task prompt is required.');
     const owner = caller || (sender?.kind === 'user' ? sender.id : null);
@@ -791,7 +794,7 @@ export class AgentCoordinator {
       this.admit(project, provider, model);
       const target = workflowId || this.store.create('workflow', { projectId, status: 'active', turnBudget: 40, usedTurns: 0,
         title: 'Delegated: ' + prompt.trim().split(/\r?\n/)[0].slice(0, 80) }).id;
-      agent = this.start({ projectId, workflowId: target, provider, model, caller: owner });
+      agent = this.start({ projectId, workflowId: target, provider, model, caller: owner, isolated });
     }
     const message = this.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [agent.id], body: prompt }, sender);
     return this.outcome(agent.id, { deliveryId: message.deliveries[0].id, waitMs });

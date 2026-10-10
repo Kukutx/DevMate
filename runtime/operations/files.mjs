@@ -41,10 +41,11 @@ export function defineFileOperations(service, add) {
     ['workspace.delete', 'remove', { path: projectPath, recursive: z.boolean().optional(), force: z.boolean().optional(), ...mutation }, false,
       'Delete a project file or directory (recursive:true for one with content). Deleted files stay restorable through workspace_history, each under its own path; a very large file or directory needs force:true and is then not restorable.', { destructive: true }],
     ['workspace.history', 'history', { path: projectPath.optional(), limit: z.number().int().min(1).max(200).optional() }, true,
-      'List what DevMate changed, newest first: for one file, or without path every recent change in the project. Each entry carries the sha256 values workspace_restore accepts.',
-      { present: result => result.items.map(item => item.at + '  ' + item.action.padEnd(8) + item.path + (item.from ? '  (from ' + item.from + ')' : '') +
+      'List what DevMate changed, newest first: for one file, or without path every recent change in the project. Each entry carries its number and the sha256 values workspace_restore accepts.',
+      { present: result => result.items.map(item => '#' + item.sequence + '  ' + item.at + '  ' + item.action.padEnd(8) + item.path + (item.from ? '  (from ' + item.from + ')' : '') +
         (item.previousRestorable ? '  restore previous: ' + item.previousSha256 : '')).join('\n') || 'DevMate has not changed anything here.' }],
-    ['workspace.restore', 'restore', { path: projectPath, sha256: sha, ...mutation }, false, 'Restore a file to a version listed by workspace_history. The replaced version stays restorable.', { destructive: true }],
+    ['workspace.restore', 'restore', { path: projectPath.optional(), sha256: sha.optional(), since: z.number().int().nonnegative().optional().describe('The number of a workspace_history entry: every change made after it is taken back.'), ...mutation }, false,
+      'Restore a file to a version listed by workspace_history (path and sha256). Or take back, in one call, every change DevMate\'s file tools made in the project after one history entry (since: its number, shown as #N): newest first, each checked against the file as it is now, so a file that something else changed in the meantime is left alone and listed. Whatever is replaced stays restorable, so this can itself be taken back. Changes made by commands or by delegated agents are not in this history: use Git for those.', { destructive: true }],
     ['workspace.search', 'search', { query: z.string().min(1).max(4000), path: scope, regex: z.boolean().optional(), ignoreCase: z.boolean().optional(),
       glob: z.string().max(500).optional(), includeIgnored: z.boolean().optional(), limit: z.number().int().min(1).max(1000).optional() }, true,
       'Search project file contents with ripgrep. query is literal text unless regex is set. Honours .gitignore and skips dependency and build directories unless includeIgnored is set.',
