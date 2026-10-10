@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
-import { findOnPath, installHint, programExists, resolveTool } from '../platform/tools.mjs';
+import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { within } from './shared.mjs';
 
@@ -43,7 +43,7 @@ export async function doctor(service) {
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'Configure an openai-tunnel or cloudflare connection to use ChatGPT or Claude.ai.');
   else {
-    if (connection.executable) check('connection.executable', programExists(connection.executable) ? 'ok' : 'fail', connection.executable, 'Install the connector and set its absolute path in the connection settings.');
+    if (connection.executable) check('connection.executable', fs.statSync(connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', connection.executable, 'Install the connector and set its absolute path in the connection settings.');
     if (credential) check('connection.credential', env[credential] ? 'ok' : 'fail', credential + (env[credential] ? ' is set' : ' is missing'),
       'Store it with: devmate secret set ' + credential + ' (or "Configure Connection" in the editor), then restart DevMate.');
     const phase = status.phase || status.status || 'unknown', fault = status.error?.message || service.connectionFault?.message;

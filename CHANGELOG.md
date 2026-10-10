@@ -1,22 +1,21 @@
 # Changelog
 
+## 4.0.3
+- The documents, this changelog and the list of plugin versions describe the product as it is now. What is not done yet and what could not be verified is in `docs/STATUS.md`.
+- A connector program is looked for as an ordinary file at its path.
+
 ## 4.0.2
 - **Connected in a minute, with no account:** `devmate connect quick`, or the first choice in **DevMate: Configure Connection**, starts a Cloudflare quick tunnel. Nothing is registered anywhere; DevMate runs `cloudflared`, takes the address it is given, checks that it reaches this runtime, and `devmate mcp-url` prints it. The address changes whenever the tunnel starts again and has no sign-in; the doctor says so.
 - The check of a quick tunnel waits until public DNS knows the new address, and a computer whose own DNS has not caught up yet is told apart from a route that does not work.
-- A connection program installed from the Microsoft Store is found and started. 4.0.1 took such a program for missing.
 - Obsidian: **Configure connection** sets up the quick tunnel, and **Copy one-time sign-in code** serves clients that sign in.
 - How the coding agents are run (sessions at once, time limits, whether they get the owner's MCP servers and API keys) is changed while DevMate runs: `providers.configure`, by the owner or, with full access, by their client. The refusals that name a limit say how to raise it.
 - The file tools read and list through links that stay inside the project, and read files that have a second name: a `node_modules` built from links is readable. Nothing is changed through a link.
-- Removed: the option of 4.0.1 to hand DevMate a tunnel program of your own. The quick tunnel is the route that needs nothing; the others are OpenAI's tunnel, a Cloudflare tunnel on your domain, your HTTPS proxy and SSH.
-- The changelog describes DevMate 4 only.
 
 ## 4.0.1
-- An external HTTPS connection could name a program for DevMate to start and keep running. Removed again in 4.0.2.
-- The VS Code extension is listed as "DevMate Agent" again. 4.0.0 renamed it to "DevMate", a display name another extension holds, so the Marketplace refused that upload: 4.0.1 is the first 4.x version there. The GitHub release and the Obsidian plugin of 4.0.0 were published.
+- The VS Code extension is listed as "DevMate Agent": the Marketplace does not accept the display name "DevMate", which another extension holds. This is the first version of DevMate 4 on the Marketplace.
 - The build no longer fails when a package feed has an outage while installing ripgrep: the step tries again and checks that the tool is there.
 
 ## 4.0.0
-- Complete rebuild. DevMate 4 does not read, migrate or stay compatible with 3.x state, configuration, tools or APIs. All 3.x sources (Gateway, tunnel controllers and providers, Runners, team/work-session layers) are removed.
 - One local runtime per instance directory with a single SQLite state store, an explicit operation registry, and identical access through MCP, the CLI, the localhost workbench and the ChatGPT/Claude MCP App.
 - Direct tool surface for the connected model: line-paged reads, glob find, ripgrep search, exact-replacement `workspace_edit`, write/mkdir/move/delete with restorable per-file history, read-only Git status/diff/log/show/blame/branches, and `shell_run` with real shell semantics (PowerShell on Windows), full owner environment, disk-spooled output paged by cursor, long-running processes, stdin and whole-tree stop.
 - Tool results send bulk text once as plain content; tool hints distinguish read-only, ordinary writes, destructive and open-world operations; the server delivers working instructions including the registered projects.
@@ -26,7 +25,7 @@
 - Find and search are driven by ripgrep, honour `.gitignore` and have no tree-size limit. In VS Code nothing has to be installed for this: when PATH has no `rg`, the runtime uses the copy the editor ships, and remembers it for use without an editor.
 - Guided setup: **DevMate: Configure Connection**, **Copy MCP URL**, **Copy One-Time Sign-In Code** and **Doctor** in VS Code; `devmate doctor` on the command line. Connection credentials are stored in the private instance directory instead of environment variables.
 - The event journal, idempotency receipts and restorable file versions are pruned after `retentionDays` (default 30).
-- The model carries about three dozen tool definitions; every other operation is reachable through `operations_call` without spending context.
+- The model carries a short list of tool definitions; every other operation is reachable through `operations_call` without spending context.
 - Official MCP TypeScript SDK 2.3 for the 2026-07-28 protocol, also serving clients on the 2025 revisions, and the MCP Apps standard for the workbench.
 - One runtime per instance, guaranteed by the operating system: any number of VS Code windows, Obsidian and the CLI can start it at the same moment and all join the same process. A record left by a crash never blocks a start. Editors with `devMate.autoStart` bring a crashed runtime back; an explicit stop is respected.
 - The CLI is a complete entry on its own, with no editor required: `start`, `stop`, `restart`, `serve`, `status`, `doctor` (also when nothing is running), `logs`, `project add|list|remove`, `connect`, `secret set` (read from standard input), `mcp-url`, `login-code`, `ui --open`, and every operation by name.
@@ -40,7 +39,7 @@
 - `capability_query` and `operations_query` run what only reads, so clients that ask before every change do not ask for a status or a list. An answer to an agent's question can be plain text.
 - VS Code starts the runtime with the editor by default (`devMate.autoStart`); Obsidian can do the same with **Start the runtime with Obsidian**. Both bring a crashed runtime back and leave one you stopped alone.
 - With several editor windows open, read-only tools follow the window in use rather than the one that reported last; a call that names a workflow or an agent has named its project.
-- With several projects a change must name its project; read-only tools may follow the editor. `workspace_edit` keeps CRLF line endings, text in UTF-16 or the local legacy encoding can be read, text files up to 32 MiB are read in pages, and listings, blame, log and search say what they left out or cut.
+- With several projects a change must name its project; read-only tools may follow the editor. `workspace_edit` keeps CRLF line endings, text in UTF-16 or the computer's own encoding can be read, text files up to 32 MiB are read in pages, and listings, blame, log and search say what they left out or cut.
 - The command line installs on its own from `devmate-cli-<version>.tgz`, with no dependencies. `devmate mcp` never sends a call twice that may already have started.
 - Linux and macOS: commands run in bash, stopping a command ends its whole process group, a runtime started from a desktop icon finds the usual tool directories, a Git older than 2.41 is named instead of failing every Git tool, and the instance lock survives two simultaneous starts after a crash. Verified on Ubuntu 24.04 with the full test suite and end-to-end checks; macOS has not been run yet.
 - Finding files checks each folder once per call instead of once per file, which more than halves a find over a few thousand files. A path that runs through a file is reported as `not_directory` on every system, and replacing a file on Windows rides out the moment a scanner still holds it.
@@ -64,7 +63,3 @@
 - Sign-in (OAuth) also works for a client that publishes no description of itself: the owner registers it under `auth.clients` with its name and redirect addresses. It is a public client like any other, with PKCE.
 - Command output written in the system's own encoding (GBK, Shift_JIS, a Windows-125x page) is read as text, line by line, beside UTF-8.
 - Obsidian, found by driving the plugin in a real Obsidian: the active note and selection reach the runtime as soon as the vault is shared; a taken port names the setting to change; an earlier error no longer stays on screen; the doctor counts only what needs attention.
-- Upgrading from 3.x and uninstalling are described in the README.
-
-## Earlier versions
-DevMate 4 is a new architecture and shares nothing with 3.x. What 3.x and earlier versions changed is in the Git history and on the releases page.

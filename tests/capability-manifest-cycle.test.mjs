@@ -146,7 +146,7 @@ test('a manifest key no reader accepts is named, and bootstrap refuses to write 
   await f.call('godot.automation_bootstrap');
   const manifest = f.readManifest();
   manifest.plugins['devmate.godot'].bootstrap = { generatedBy: 'DevMate' };
-  manifest.plugins['devmate.godot-advanced'].scenarios.push({ id: 'legacy-tests', kind: 'gut' });
+  manifest.plugins['devmate.godot-advanced'].scenarios.push({ id: 'unknown-kind-tests', kind: 'gut' });
   const text = JSON.stringify(manifest);
   fs.writeFileSync(f.manifestFile, text);
   await assert.rejects(f.call('godot.automation_manifest'),

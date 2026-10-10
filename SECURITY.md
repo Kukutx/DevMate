@@ -93,11 +93,11 @@ Browser and reverse-engineering tools require explicit project and local tool co
 
 Review production dependency additions according to `AGENTS.md`. Use the official MCP and MCP Apps SDKs and package the third-party notices generated from the actual bundle. Keep native protocol versions and account readiness separate from package build success.
 
-Protocol, per-request identity, project grants, file writes, job outcomes, process cleanup, host drains and UI wiring are exercised by the current runtime test suites. See [AUDIT-4.0.md](docs/AUDIT-4.0.md) for what was found, what was fixed and what could not be verified without real accounts and deployments.
+Protocol, per-request identity, project grants, file writes, job outcomes, process cleanup, host drains and UI wiring are exercised by the current runtime test suites. See [STATUS.md](docs/STATUS.md) for what is not done yet and what could not be verified without real accounts and deployments.
 
 ## Reporting vulnerabilities
 
-Only the latest 4.x release receives security fixes; 3.x is not maintained.
+Only the latest release receives security fixes.
 
 Report suspected security vulnerabilities privately through GitHub's [Report a vulnerability](https://github.com/Kukutx/DevMate/security/advisories/new) flow. Do not open a public issue for an undisclosed vulnerability.
 

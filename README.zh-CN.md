@@ -30,8 +30,6 @@ DevMate 让聊天里的模型直接在你自己的电脑上干活：读写和搜
 
 ![DevMate 工作台，显示一个项目尚未提交的改动](docs/media/workbench.png)
 
-DevMate 4 是全新架构，不读取、不迁移、不兼容 3.x 的任何状态、配置或接口。[从 3.x 升级？](#从-3x-升级)
-
 ## 安装
 
 **前提：** Node.js 24 或更高版本，Git 2.41 或更高版本（macOS 开发者工具自带的 Git 更旧，用 `brew install git` 更新）。命令行和 Obsidian 还需要 `rg`（[ripgrep](https://github.com/BurntSushi/ripgrep)）；VS Code 扩展自带。
@@ -90,7 +88,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate access [guarded \| full]` | 权限档：连接进来的客户端可以决定什么（见下文“谁可以做什么”） |
 | `devmate mcp-url` | 给客户端填的地址 |
 | `devmate mcp` | 以标准输入输出提供 MCP；运行时没启动会自动拉起 |
-| `devmate connect local \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录 |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录 |
 | `devmate secret set <名称>` / `list` / `remove <名称>` | 连接凭据。值从标准输入读取，不会出现在命令行历史里 |
 | `devmate login-code` | 一次性登录码（启用登录时） |
 | `devmate ui [--open]` | 工作台的一次性链接 |
@@ -144,7 +142,7 @@ VS Code 的显示语言为简体中文时，命令和设置的说明以中文显
 
 **须知。** 插件只支持桌面版，需要另外安装 Node.js 24（找不到时在插件设置里填它的路径；ripgrep 也要自己安装）。它把 DevMate 运行时作为后台进程启动，Obsidian 关闭后运行时仍在运行，直到你执行 **Stop shared runtime**。运行时只监听 `127.0.0.1`（端口 8788 和 8789，另有一个用于库操作的本机端口）。它的状态、凭据和它自己的程序文件保存在库之外的 `~/.devmate/runtime`。这些程序文件以可读的纯文本形式装在 `main.js` 里（没有任何编码），由插件写到那里，每次启动都逐个校验哈希。除非你配置了公网连接（Cloudflare Tunnel、OpenAI Secure MCP Tunnel、SSH 或你自己的 HTTPS 代理），它不发起任何网络连接。没有遥测，不需要账号，不收费。
 
-4.0 的插件已经在 Windows 上真实的 Obsidian 1.12.7 里加载并操作过：加载、启动运行时、以只读和读写共享库、笔记工具、停止和停用。macOS 和 Linux 上的 Obsidian，以及在已安装的 3.x 插件之上更新，还没有试过。遇到问题请反馈。
+插件已经在 Windows 上真实的 Obsidian 1.12.7 里加载并操作过：加载、启动运行时、以只读和读写共享库、笔记工具、停止和停用。macOS 和 Linux 上的 Obsidian 还没有试过。遇到问题请反馈。
 
 ## 连接客户端
 
@@ -299,15 +297,6 @@ devmate restart
 | 云端客户端连不上 | 看 `doctor` 的 `connection.*` 几项；`devmate logs` 查看连接器输出 |
 | 启动失败 | 错误信息里带原因；完整日志在实例目录的 `runtime.log` |
 
-## 从 3.x 升级
-
-4.0 从零开始。更新之后：
-
-- 3.x 的任何东西都不会被读取：项目、连接和登录要重新设置。编辑器里的旧设置会被忽略；磁盘上的旧状态原样保留，可以删除。
-- 3.x 的 Gateway、Runner 和内置的隧道都没有了。云端客户端通过[连接客户端](#连接客户端)里的通路进来，最快的是 `devmate connect quick`。MCP 地址是新的，要在 ChatGPT 或 Claude 里重新创建连接器。
-- 如果 3.x 的 Gateway 还在运行，它可能占着 8788 端口，4.0 会提示端口被占用。把所有编辑器窗口关一次，或结束旧的 `node` 进程，再启动。
-- 模型看到的工具名变了；客户端刷新连接器后就会拿到新的。
-
 ## 卸载
 
 卸载扩展或插件不会停止运行时，因为其他入口可能还在用它。先停止它（**Stop DevMate Runtime**，或 `devmate stop`），再卸载。DevMate 保存的一切都在实例目录里（默认 `~/.devmate/runtime`）：删除它就清除了状态、凭据和可恢复的文件版本。你的项目文件不会因此被动到。
@@ -318,7 +307,7 @@ devmate restart
 
 ## 兼容性
 
-在 4.x 之内，下列内容视为公开接口：上面这些工具的名字和参数、操作名、配置键、命令行命令，以及工作台资源 `ui://devmate/workbench/v1`。其中任何一项的变化都会写进更新日志，改名时旧名字会继续可用一个次版本。有一项测试固定了工具的名字和参数，所以不会无意中改动。保存的状态带有格式编号：较旧的版本不会触碰较新版本写入的状态，并会说明涉及哪两个版本。4.x 不读取 3.x 的状态。
+下列内容视为公开接口：上面这些工具的名字和参数、操作名、配置键、命令行命令，以及工作台资源 `ui://devmate/workbench/v1`。其中任何一项的变化都会写进更新日志。有一项测试固定了工具的名字和参数，所以不会无意中改动。保存的状态带有格式编号：较旧的版本不会触碰较新版本写入的状态，并会说明涉及哪两个版本。
 
 ## 开发
 
@@ -350,7 +339,7 @@ npm run candidate          # 构建一次，对打包产物做冒烟，把一次
 - [安全策略](SECURITY.md)及已知限制
 - [更新日志](CHANGELOG.md)
 - [参与贡献与发布](CONTRIBUTING.md) · [支持](SUPPORT.md) · [行为准则](CODE_OF_CONDUCT.md)
-- [4.0 审计台账](docs/AUDIT-4.0.md)：三轮复审发现了什么、修了什么、哪些没法验证
+- [现状](docs/STATUS.md)：还没做的、没法验证的，以及实测的性能
 
 ## 许可
 

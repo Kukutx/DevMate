@@ -170,10 +170,10 @@ function textBytes(bytes) {
   catch { throw error('binary_file', 'This file is text in an encoding other than UTF-8. It can be read with workspace_read; changing it here would rewrite it as UTF-8, so change it with a command (shell_run) or convert it first.'); }
 }
 // Text that is not UTF-8 is still text. It is decoded so that it can be read: UTF-16 by its byte-order mark,
-// anything else as the legacy encoding this computer uses for such files, and as Latin-1 when that does not fit.
-let legacyEncoding;
+// anything else as the encoding this computer itself uses for such files, and as Latin-1 when that does not fit.
+let localEncoding;
 function systemEncoding() {
-  if (legacyEncoding !== undefined) return legacyEncoding;
+  if (localEncoding !== undefined) return localEncoding;
   const byCodePage = { 936: 'gbk', 950: 'big5', 932: 'shift_jis', 949: 'euc-kr', 874: 'windows-874' };
   let label = null;
   if (WINDOWS) {
@@ -187,14 +187,14 @@ function systemEncoding() {
     const language = Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase();
     label = /^zh-(tw|hk|mo)/.test(language) ? 'big5' : language.startsWith('zh') ? 'gb18030' : language.startsWith('ja') ? 'shift_jis' : language.startsWith('ko') ? 'euc-kr' : null;
   }
-  return legacyEncoding = label || 'windows-1252';
+  return localEncoding = label || 'windows-1252';
 }
-export function decodeOtherText(bytes, legacy = systemEncoding()) {
+export function decodeOtherText(bytes, local = systemEncoding()) {
   for (const [mark, label] of [[[0xFF, 0xFE], 'utf-16le'], [[0xFE, 0xFF], 'utf-16be']]) {
     if (bytes.length >= 2 && bytes[0] === mark[0] && bytes[1] === mark[1]) return { text: new TextDecoder(label).decode(bytes.subarray(2)), encoding: label };
   }
   if (bytes.includes(0)) return null;
-  try { return { text: new TextDecoder(legacy, { fatal: true }).decode(bytes), encoding: legacy }; } catch {}
+  try { return { text: new TextDecoder(local, { fatal: true }).decode(bytes), encoding: local }; } catch {}
   return { text: new TextDecoder('windows-1252').decode(bytes), encoding: 'windows-1252' };
 }
 function gitRevision(value, name = 'ref') {

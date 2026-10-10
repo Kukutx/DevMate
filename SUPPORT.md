@@ -12,7 +12,7 @@ Before reporting, the troubleshooting table in the [README](README.md#troublesho
 
 ## Supported versions
 
-Only the latest 4.x release is supported. DevMate 3.x is not maintained, and 4.x does not read 3.x state or configuration.
+Only the latest release is supported.
 
 ## Supported environments
 

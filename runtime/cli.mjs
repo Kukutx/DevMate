@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { CLIENT_COMMAND_ENV, createRuntimeClient, instanceDirectory } from './client.mjs';
 import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './launcher.mjs';
 import { inspectTunnelClient, TUNNEL_CLIENT_SETUP } from './connection.mjs';
-import { findCloudflared, findOnPath, installHint, programExists, recallTools, resolveTool } from './platform/tools.mjs';
+import { findCloudflared, findOnPath, installHint, recallTools, resolveTool } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
 import { VERSION } from './version.mjs';
 
@@ -169,7 +169,7 @@ async function offlineDoctor(instanceRoot) {
     const { readConfig, publicMcpUrl } = await import('./config.mjs');
     const config = readConfig(instanceRoot), url = publicMcpUrl(config);
     check('settings', 'ok', 'connection: ' + config.connection.kind + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url : ''));
-    if (config.connection.executable) check('connection.executable', programExists(config.connection.executable) ? 'ok' : 'fail',
+    if (config.connection.executable) check('connection.executable', fs.statSync(config.connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail',
       config.connection.executable, 'Install the connector and set its absolute path with devmate connect.');
   } catch (error) { check('settings', 'fail', 'config.json is not valid: ' + error.message, 'Fix or delete ' + path.join(instanceRoot, 'config.json') + '.'); }
   check('runtime', 'warn', 'The runtime is not running, so projects, the connection and agents were not checked.', 'Start it with: devmate start');
