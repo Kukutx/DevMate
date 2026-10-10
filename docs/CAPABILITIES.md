@@ -101,7 +101,7 @@ Every engine has `enabled` (default `true`). Switching an engine off closes what
 
 `capability.configure` and `capability.settings` are provided by the capability registry (`runtime/capabilities.mjs`):
 
-- `configure({ engine, settings, projectId? })`: owner only. Merges `settings` into the stored values; a `null` value restores the default. Invalid input changes nothing.
+- `configure({ engine, settings, projectId? })`: owner only, and at the owner's computer (the local workbench, or `devmate capability.configure --json '{…}'`). Merges `settings` into the stored values; a `null` value restores the default. Invalid input changes nothing. Through MCP it accepts exactly one change, `{ "enabled": false }`: a connected client can switch an engine off and nothing else, because the other settings name programs and folders on this computer.
 - `settings({ engine?, projectId? })`: the effective values, the stored layers and the JSON schema for the owner; other callers get the setting names only, because values name local programs and folders.
 
 ## Child process environment

@@ -1203,7 +1203,10 @@ function tick() {
 // An event only says that something changed; what changed is always fetched again.
 function scheduleRefresh() {
   if (refreshTimer || state.disposed || state.expired || document.hidden) return;
-  refreshTimer = setTimeout(() => { refreshTimer = null; void refresh(); }, Math.max(250, 1000 - (Date.now() - lastRefresh)));
+  // The overview and the changes are read from Git on every refresh: while events arrive in a stream they are
+  // refreshed at a slower pace than the pages that only read DevMate's own state.
+  const pace = ['Overview', 'Changes'].includes(state.tab) ? 3000 : 1000;
+  refreshTimer = setTimeout(() => { refreshTimer = null; void refresh(); }, Math.max(250, pace - (Date.now() - lastRefresh)));
 }
 async function connectFeed() {
   if (feed || state.disposed || state.expired) return;
