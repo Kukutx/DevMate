@@ -54,6 +54,11 @@ export function validateVersions(directory){
   assert.equal(obsidian.version,VERSION,'manifest.json (Obsidian) states another version.');
   assert.equal(read('versions.json')[VERSION],obsidian.minAppVersion,'versions.json must map this version to the minAppVersion of manifest.json.');
   assert.ok(fs.readFileSync(path.join(directory,'CHANGELOG.md'),'utf8').split(/\r?\n/).includes('## '+VERSION),'CHANGELOG.md has no section for version '+VERSION+'.');
+  // The number is the owner's to change. AGENTS.md records the one they approved; any other number stops here,
+  // before it can be committed, tagged or published.
+  const approved=/^- Owner-approved version: (\d+\.\d+\.\d+)\./m.exec(fs.readFileSync(path.join(directory,'AGENTS.md'),'utf8'))?.[1];
+  assert.ok(approved,'AGENTS.md must state the version the owner approved, as a line "- Owner-approved version: <number>."');
+  assert.equal(VERSION,approved,'The version is '+VERSION+', but the owner approved '+approved+' (AGENTS.md). Only the owner changes it: set the version back, do not edit that line.');
 }
 // Every action a workflow runs is named by its commit, so a moved tag cannot change what runs with this repository's permissions.
 export function validateWorkflows(directory){
