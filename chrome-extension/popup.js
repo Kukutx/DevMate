@@ -1,27 +1,61 @@
-// The popup: how DevMate stands, and the few things this entry can do. Everything that decides something (what is
-// shared, the permission profile, an agent's question) is done in the workbench it opens, not here.
+import { activityLine, describe, languageFor } from './panel.js';
+
+// The panel: how DevMate and this browser stand, the one thing to do when something is in the way, the two switches
+// that are the owner's, and what DevMate has been doing here. Everything that decides something about projects (what
+// is shared, the permission profile, an agent's question) is done in the workbench it opens, not here.
 
 const element = id => document.getElementById(id);
 const ask = message => chrome.runtime.sendMessage(message);
 const note = text => { element('note').textContent = text; };
+const COMMANDS = { install: 'devmate chrome install', restart: 'devmate restart' };
+let language = 'en', busy = false;
 
-function render({ state, settings }) {
-  const runtime = state.runtime, running = runtime?.running === true, connected = state.host === 'connected';
-  element('version').textContent = runtime?.version ? runtime.version : '';
-  element('status').textContent = state.host === 'missing' ? 'Not set up on this computer'
-    : !connected ? 'Connecting to DevMate…'
-    : running ? 'DevMate is running' + (state.pending > 0 ? ' · ' + state.pending + ' waiting for you' : '')
-    : 'DevMate is not running';
+// A sentence with {install} or {restart} in it, with the command shown as something to copy.
+function sentence(text) {
+  const parts = document.createDocumentFragment();
+  for (const piece of text.split(/(\{\w+\})/)) {
+    const command = COMMANDS[piece.slice(1, -1)];
+    parts.append(command && piece.startsWith('{') ? Object.assign(document.createElement('code'), { textContent: command }) : piece);
+  }
+  return parts;
+}
+
+function render({ state, settings, version }) {
+  language = languageFor(settings.language, chrome.i18n?.getUILanguage?.() || navigator.language);
+  document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+  const view = describe(state, language), t = view.texts;
+  element('version').textContent = state.runtime?.version || version || '';
+  element('language').textContent = t.language;
+  element('now').dataset.level = view.level;
+  element('status').textContent = view.status;
   const detail = element('detail');
-  detail.className = state.host === 'missing' ? 'problem' : '';
   detail.replaceChildren();
-  if (state.host === 'missing') detail.append('Register DevMate with this browser once, on this computer: ', Object.assign(document.createElement('code'), { textContent: 'devmate chrome install' }));
-  else if (!connected && state.problem) detail.textContent = state.problem;
-  else if (running) detail.textContent = 'This browser is available to it: bookmarks, tabs, history, downloads and the page in front.';
-  element('start').hidden = !connected || running;
-  element('workbench').disabled = !running;
-  element('copy').disabled = !running;
-  if (settings) element('autostart').checked = settings.startWithBrowser === true;
+  if (view.text) { const line = document.createElement('p'); line.append(sentence(view.text)); detail.append(line); }
+  if (view.steps) { const list = document.createElement('ol'); for (const step of view.steps) { const item = document.createElement('li'); item.append(sentence(step)); list.append(item); } detail.append(list); }
+  if (view.said) {
+    const said = Object.assign(document.createElement('div'), { className: 'said' });
+    said.append(Object.assign(document.createElement('b'), { textContent: t.browserSaid }), view.said);
+    detail.append(said);
+  }
+  for (const id of ['start', 'again']) { element(id).hidden = view.primary !== id; element(id).textContent = view.labels[id]; element(id).disabled = busy; }
+  element('workbench').textContent = view.labels.workbench;
+  element('workbench').disabled = !view.canOpen;
+  element('workbench').classList.toggle('primary', view.canOpen && state.pending > 0);
+  element('copy').textContent = view.labels.copy;
+  element('copy').disabled = !view.canOpen;
+  element('access').checked = settings.paused !== true;
+  element('autostart').checked = settings.startWithBrowser === true;
+  for (const id of ['accessTitle', 'accessText', 'autostartTitle', 'autostartText', 'activityTitle', 'none']) element(id).textContent = t[id];
+  const list = element('activity');
+  list.replaceChildren(...state.activity.map(entry => {
+    const line = activityLine(entry, language), item = document.createElement('li');
+    item.className = (line.change ? 'change ' : '') + (line.failed ? 'failed' : '');
+    item.append(Object.assign(document.createElement('time'), { textContent: line.time }), Object.assign(document.createElement('span'), { className: 'name', textContent: line.name, title: line.name }),
+      Object.assign(document.createElement('span'), { className: 'mark', textContent: line.mark }));
+    return item;
+  }));
+  element('none').hidden = state.activity.length > 0;
+  return view;
 }
 
 async function request(action) {
@@ -30,22 +64,22 @@ async function request(action) {
   return answer.result;
 }
 const refresh = async () => render(await ask({ ask: 'state' }));
+const texts = () => describe({ host: 'connecting', activity: [] }, language).texts;
 
 element('start').addEventListener('click', async () => {
-  element('start').disabled = true; note('Starting…');
+  busy = true; note(texts().starting); await refresh();
   try { await request('start'); note(''); } catch (error) { note(error.message); }
-  element('start').disabled = false;
-  await refresh();
+  busy = false; await refresh();
 });
+element('again').addEventListener('click', async () => { note(''); render(await ask({ ask: 'again' })); });
 element('workbench').addEventListener('click', async () => {
   try { const result = await request('workbench'); await chrome.tabs.create({ url: result.url }); window.close(); } catch (error) { note(error.message); }
 });
 element('copy').addEventListener('click', async () => {
-  try { const result = await request('mcpUrl'); await navigator.clipboard.writeText(result.url); note('Copied.'); } catch (error) { note(error.message); }
+  try { const result = await request('mcpUrl'); await navigator.clipboard.writeText(result.url); note(texts().copied); } catch (error) { note(error.message); }
 });
-element('autostart').addEventListener('change', async event => {
-  await ask({ ask: 'settings', startWithBrowser: event.target.checked });
-  note(event.target.checked ? 'DevMate will start when the browser does.' : 'DevMate will not be started by the browser.');
-});
+element('access').addEventListener('change', async event => render(await ask({ ask: 'pause', paused: !event.target.checked })));
+element('autostart').addEventListener('change', async event => render(await ask({ ask: 'settings', startWithBrowser: event.target.checked })));
+element('language').addEventListener('click', async () => render(await ask({ ask: 'settings', language: language === 'zh' ? 'en' : 'zh' })));
 chrome.runtime.onMessage.addListener(message => { if (message?.kind === 'state') void refresh(); });
 void refresh();

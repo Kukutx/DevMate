@@ -10,10 +10,10 @@ function fakePort() {
     say: async message => { for (const listener of listeners.message) listener(message); await new Promise(resolve => setImmediate(resolve)); },
     drop: reason => { for (const listener of listeners.disconnect) listener(reason); } };
 }
-function harness({ startWithBrowser = false, methods = { 'browser.info': async () => ({ ok: 1 }) } } = {}) {
-  const ports = [], timers = [], states = [];
+function harness({ startWithBrowser = false, paused = false, methods = { 'browser.info': async () => ({ ok: 1 }) } } = {}) {
+  const ports = [], timers = [], states = [], saved = { startWithBrowser, paused };
   const bridge = createBridge({ connect: name => { const link = fakePort(); link.name = name; ports.push(link); return link.port; }, methods, version: '9.9.9', browser: 'Test',
-    settings: { get: async () => ({ startWithBrowser }) }, onChange: state => states.push(state),
+    settings: { get: async () => ({ ...saved }), set: async values => { Object.assign(saved, values); } }, onChange: state => states.push(state), clock: () => 1000,
     schedule: (run, ms) => { const timer = { run, ms, cancelled: false }; timers.push(timer); return timer; }, cancel: timer => { if (timer) timer.cancelled = true; } });
   return { bridge, ports, timers, states };
 }
@@ -104,7 +104,8 @@ test('a host that is not registered is named as that, with the command that regi
   bridge.open();
   ports[0].drop('Specified native messaging host not found.');
   assert.equal(bridge.state().host, 'missing');
-  assert.match(bridge.state().problem, /devmate chrome install/);
+  assert.equal(bridge.state().said, 'Specified native messaging host not found.', 'the browser\'s own words are kept as they are');
+  assert.equal(bridge.state().attempts, 1);
   const again = timers.findLast(timer => !timer.cancelled);
   assert.equal(again.ms, 30000);
   again.run();
@@ -128,4 +129,51 @@ test('events keep the state current: the runtime, what waits for the owner', asy
   await ports[0].say({ type: 'event', name: 'runtime.status', data: { running: false } });
   assert.deepEqual(bridge.state().runtime, { running: false });
   assert.ok(states.length >= 4, 'every change is announced');
+});
+
+test('"Access … is forbidden" is the same case as a host that is not registered, and the owner can try again at once', async () => {
+  const { bridge, ports, timers } = harness();
+  bridge.open();
+  ports[0].drop('Access to the specified native messaging host is forbidden.');
+  assert.equal(bridge.state().host, 'missing');
+  bridge.again();
+  assert.equal(ports.length, 2, 'another try does not wait for the half minute');
+  assert.equal(timers.filter(timer => !timer.cancelled).length, 0, 'and the waiting one is called off');
+  bridge.again();
+  assert.equal(ports.length, 2, 'while a try is under way, asking again starts no second one');
+});
+
+test('a host that ends for another reason is a lost connection, not a missing registration', () => {
+  const { bridge, ports } = harness();
+  bridge.open();
+  ports[0].drop('Native host has exited.');
+  assert.equal(bridge.state().host, 'closed');
+  assert.equal(bridge.state().said, 'Native host has exited.');
+});
+
+test('every call is noted without what it carried: what, when, whether it worked', async () => {
+  const { bridge, ports } = harness({ methods: { 'tabs.list': async () => ({ items: [] }), 'tabs.close': async () => { throw Object.assign(new Error('No tab.'), { code: 'not_found' }); } } });
+  bridge.open();
+  await ports[0].say({ type: 'call', id: 'a', method: 'tabs.list', params: { query: 'secret words' } });
+  await ports[0].say({ type: 'call', id: 'b', method: 'tabs.close', params: { tabIds: [1] } });
+  const { activity, calls } = bridge.state();
+  assert.equal(calls, 2);
+  assert.deepEqual(activity.map(entry => [entry.method, entry.read, entry.ok, entry.code]), [['tabs.close', false, false, 'not_found'], ['tabs.list', true, true, undefined]]);
+  assert.equal(JSON.stringify(activity).includes('secret words'), false);
+});
+
+test('paused, nothing is run: the runtime is told so, and the refusal is noted', async () => {
+  const ran = [];
+  const { bridge, ports } = harness({ methods: { 'bookmarks.remove': async () => { ran.push(1); return {}; } } });
+  bridge.open();
+  await bridge.pause(true);
+  await ports[0].say({ type: 'call', id: 'p1', method: 'bookmarks.remove', params: { id: '5' } });
+  assert.deepEqual(ran, []);
+  const refused = ports[0].posted.find(message => message.id === 'p1');
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error.code, 'paused');
+  assert.equal(bridge.state().paused, true);
+  await bridge.pause(false);
+  await ports[0].say({ type: 'call', id: 'p2', method: 'bookmarks.remove', params: { id: '5' } });
+  assert.deepEqual(ran, [1]);
 });

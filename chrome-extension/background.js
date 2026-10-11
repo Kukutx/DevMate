@@ -2,22 +2,24 @@ import { createCapabilities } from './capabilities.js';
 import { createBridge } from './bridge.js';
 
 // The extension's background: it keeps the connection to DevMate open for as long as the browser runs, answers what
-// the runtime asks of the browser, and tells the popup how things stand. Chrome keeps this worker alive while the
+// the runtime asks of the browser, and tells the panel how things stand. Chrome keeps this worker alive while the
 // native connection is open; an alarm brings the connection back after the worker was put to sleep without one.
 
 const version = chrome.runtime.getManifest().version;
-const browser = globalThis.navigator?.userAgentData?.brands?.find(item => !/not.?a.?brand/i.test(item.brand))?.brand || 'Chromium';
+const browser = globalThis.navigator?.userAgentData?.brands?.find(item => !/not.?a.?brand|chromium/i.test(item.brand))?.brand || 'Chromium';
+const DEFAULTS = { startWithBrowser: false, paused: false, language: '' };
 const settings = {
-  get: async () => ({ startWithBrowser: false, ...(await chrome.storage.local.get(['startWithBrowser'])) }),
+  get: async () => ({ ...DEFAULTS, ...(await chrome.storage.local.get(Object.keys(DEFAULTS))) }),
   set: values => chrome.storage.local.set(values)
 };
 
 function show(state) {
-  // What waits for the owner is a number on the icon; a host that is not registered is a mark of its own.
-  const text = state.host === 'missing' ? '!' : state.pending > 0 ? String(Math.min(state.pending, 99)) : '';
+  // On the icon: what waits for the owner as a number, a pause as "II", a problem as "!".
+  const problem = state.host === 'missing' || (state.host === 'closed' && state.attempts > 2);
+  const text = problem ? '!' : state.paused ? 'II' : state.pending > 0 ? String(Math.min(state.pending, 99)) : '';
   chrome.action.setBadgeText({ text }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ color: state.host === 'missing' ? '#b3261e' : '#1f6feb' }).catch(() => {});
-  chrome.runtime.sendMessage({ kind: 'state', state }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: problem ? '#b3261e' : state.paused ? '#7a7a7a' : '#1f6feb' }).catch(() => {});
+  chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {});
 }
 
 const bridge = createBridge({
@@ -33,14 +35,23 @@ const bridge = createBridge({
 chrome.runtime.onStartup.addListener(() => bridge.open());
 chrome.runtime.onInstalled.addListener(() => bridge.open());
 chrome.alarms.create('devmate-connection', { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'devmate-connection' && !bridge.connected()) bridge.open(); });
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'devmate-connection' && !bridge.connected()) bridge.again(); });
 bridge.open();
 
-// The popup asks; only these three questions are answered.
+// The panel asks; these questions are answered and no others.
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !message || typeof message !== 'object') return false;
-  if (message.ask === 'state') { settings.get().then(saved => respond({ state: bridge.state(), settings: saved })); return true; }
-  if (message.ask === 'settings') { settings.set({ startWithBrowser: message.startWithBrowser === true }).then(() => respond({ ok: true })); return true; }
+  const whole = async () => ({ state: bridge.state(), settings: await settings.get(), version, browser });
+  if (message.ask === 'state') { whole().then(respond); return true; }
+  if (message.ask === 'again') { bridge.again(); whole().then(respond); return true; }
+  if (message.ask === 'pause') { bridge.pause(message.paused === true).then(whole).then(respond); return true; }
+  if (message.ask === 'settings') {
+    const wanted = {};
+    if (typeof message.startWithBrowser === 'boolean') wanted.startWithBrowser = message.startWithBrowser;
+    if (['', 'en', 'zh'].includes(message.language)) wanted.language = message.language;
+    settings.set(wanted).then(whole).then(respond);
+    return true;
+  }
   if (message.ask === 'request') {
     bridge.request(message.action).then(result => respond({ ok: true, result }), error => respond({ ok: false, error: { code: error.code || 'failed', message: error.message } }));
     return true;

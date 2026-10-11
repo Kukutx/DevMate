@@ -62,28 +62,40 @@ test('devmate chrome install tells Chrome and Edge which program the DevMate ext
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-chrome-')), root = path.join(temp, 'my instance 100%'), program = path.join(temp, 'cli.mjs'), home = path.join(temp, 'home');
   t.after(() => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   fs.writeFileSync(program, '');
-  // Windows: a registry key of the owner's own account for each browser, each naming the same small file.
-  const keys = new Map(), calls = [];
-  const run = async (file, args) => {
-    calls.push([path.win32.basename(file), ...args]);
-    const [action, key] = args;
-    if (action === 'add') { keys.set(key, args[args.indexOf('/d') + 1]); return { code: 0, stdout: '', stderr: '' }; }
-    if (action === 'query') return keys.has(key) ? { code: 0, stdout: key + '\r\n    (Default)    REG_SZ    ' + keys.get(key) + '\r\n', stderr: '' } : { code: 1, stdout: '', stderr: 'ERROR' };
-    if (action === 'delete') { keys.delete(key); return { code: 0, stdout: '', stderr: '' }; }
-    throw new Error('unexpected ' + args.join(' '));
+  // Windows: a registry key of the owner's own account for each browser, each naming the same small file. The registry
+  // is the one every program sees (reached through Windows' management service), stood in for here.
+  const keys = new Map(), asked = [];
+  const registry = {
+    read: async names => { asked.push(['read', names.length]); return names.map(name => keys.get(name) ?? null); },
+    write: async (names, value) => { asked.push(['write', names.length]); for (const name of names) keys.set(name, value); return names.map(() => 0); },
+    remove: async names => { asked.push(['remove', names.length]); return names.map(name => keys.delete(name) ? 0 : 2); }
   };
-  const windows = createChromeRegistration({ instanceRoot: root, cli: program, node: process.execPath, platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, run });
-  assert.deepEqual(await windows.status({ ask: false }), { registered: false, supported: true, browsers: [], host: NATIVE_HOST, extension: EXTENSION_ORIGIN }); assert.equal(calls.length, 0, 'a quick look asks nothing where nothing was written');
+  const run = async () => { throw new Error('nothing is started in this test'); };
+  const windows = createChromeRegistration({ instanceRoot: root, cli: program, node: process.execPath, platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, registry });
+  assert.deepEqual(await windows.status({ ask: false }), { registered: false, supported: true, browsers: [], host: NATIVE_HOST, extension: EXTENSION_ORIGIN }); assert.equal(asked.length, 0, 'a quick look asks nothing where nothing was written');
   const installed = await windows.install();
   assert.deepEqual([installed.registered, installed.browsers, installed.stale], [true, ['Chrome', 'Edge', 'Chromium'], undefined]);
-  assert.deepEqual([...keys.keys()], ['HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\' + NATIVE_HOST, 'HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\' + NATIVE_HOST, 'HKCU\\Software\\Chromium\\NativeMessagingHosts\\' + NATIVE_HOST]);
-  assert.ok([...keys.values()].every(value => value === windows.files.manifest)); assert.equal(calls[0][0], 'reg.exe');
+  assert.deepEqual([...keys.keys()], ['Software\\Google\\Chrome\\NativeMessagingHosts\\' + NATIVE_HOST, 'Software\\Microsoft\\Edge\\NativeMessagingHosts\\' + NATIVE_HOST, 'Software\\Chromium\\NativeMessagingHosts\\' + NATIVE_HOST]);
+  assert.ok([...keys.values()].every(value => value === windows.files.manifest)); assert.deepEqual(asked, [['write', 3], ['read', 3]]);
+  // A key that names another instance's file is not this registration.
+  keys.set('Software\\Chromium\\NativeMessagingHosts\\' + NATIVE_HOST, 'C:\\elsewhere\\' + NATIVE_HOST + '.json');
+  assert.deepEqual((await windows.status()).browsers, ['Chrome', 'Edge']);
+  // What Windows is asked: one script for all three keys, through its management service, in a form no quoting can break.
+  const scripts = [];
+  const real = createChromeRegistration({ instanceRoot: root, cli: program, node: process.execPath, platform: 'win32', env: { SystemRoot: 'C:\\Windows' },
+    run: async (tool, args) => { scripts.push([tool, args.slice(0, -1), Buffer.from(args.at(-1), 'base64').toString('utf16le')]);
+      return { code: 0, stdout: Buffer.from(JSON.stringify([windows.files.manifest, null, windows.files.manifest])).toString('base64') + '\r\n', stderr: '' }; } });
+  assert.deepEqual((await real.status()).browsers, ['Chrome', 'Chromium']);
+  assert.deepEqual(scripts[0].slice(0, 2), ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand']]);
+  assert.match(scripts[0][2], /Invoke-CimMethod -Namespace root\\default -ClassName StdRegProv/); assert.match(scripts[0][2], /hDefKey = \[uint32\]2147483649/); assert.match(scripts[0][2], /GetStringValue/);
+  assert.ok(scripts[0][2].includes("'Software\\Google\\Chrome\\NativeMessagingHosts\\" + NATIVE_HOST + "'"));
+  await assert.rejects(createChromeRegistration({ instanceRoot: root, cli: program, platform: 'win32', env: {}, run: async () => ({ code: 1, stdout: '', stderr: 'denied' }) }).status(), { code: 'registration_failed' });
   // The file names the program and the one extension that may start it; the program is this Node with this DevMate.
   assert.deepEqual(JSON.parse(fs.readFileSync(windows.files.manifest, 'utf8')), { name: NATIVE_HOST, description: 'DevMate: the runtime on this computer, for the DevMate browser extension.', path: windows.files.shim, type: 'stdio', allowed_origins: [EXTENSION_ORIGIN] });
   assert.equal(fs.readFileSync(windows.files.shim, 'utf8'), '@echo off\r\n"' + process.execPath + '" "' + program + '" chrome-host --instance "' + path.resolve(root).replace(/%/g, '%%') + '" %*\r\n');
   // The copy of DevMate it names is gone: said, with nothing else changed.
   fs.rmSync(program); assert.equal((await windows.status()).stale, true); fs.writeFileSync(program, '');
-  assert.deepEqual([(await windows.uninstall()).registered, keys.size, fs.existsSync(path.dirname(windows.files.manifest))], [false, 0, false]);
+  assert.deepEqual([(await windows.uninstall()).registered, [...keys.values()], fs.existsSync(path.dirname(windows.files.manifest))], [false, ['C:\\elsewhere\\' + NATIVE_HOST + '.json'], false], 'a key that names another instance\'s file is left where it is');
 
   // Elsewhere the same file lies in the folder of each browser that is installed, and the program is a shell script.
   fs.mkdirSync(path.join(home, '.config', 'microsoft-edge'), { recursive: true });
