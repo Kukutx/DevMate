@@ -429,10 +429,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
         if (!fs.existsSync(instanceRoot)) { process.stderr.write('DevMate: the instance directory is gone; stopping.\n'); void stop(); return; }
         if ((fs.statSync(logFile, { throwIfNoEntry: false })?.size || 0) > LOG_LIMIT_BYTES) { fs.copyFileSync(logFile, logFile + '.1'); fs.truncateSync(logFile, 0); }
         // The system proxy is switched on and off while the runtime runs; the route is checked again when it was.
-        if (proxy?.refresh()) {
+        void proxy?.refresh().then(changed => {
+          if (!changed || stopping) return;
           process.stderr.write(new Date().toISOString() + ' requests to the outside now go ' + (proxy.current()?.proxy ? 'through ' + proxy.current().proxy : 'directly') + '\n');
           if (publicUrl || quickTunnel) void service.verifyConnection().catch(() => {});
-        }
+        }, () => {});
       } catch {}
     }, UPKEEP_MS);
     upkeepTimer.unref();
@@ -453,6 +454,7 @@ export async function serve(options = {}) {
   hardenExecutableSearch();
   // For the whole process, and before the first request to the outside.
   const proxy = createOutboundProxy();
+  await proxy.refresh();
   const stamp = () => new Date().toISOString();
   let runtime;
   process.on('uncaughtException', error => {

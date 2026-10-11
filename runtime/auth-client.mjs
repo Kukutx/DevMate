@@ -117,6 +117,9 @@ export function createClientMetadataResolver({ lookup = dns.lookup, request = ht
       Promise.resolve(lookup(hostname, { all: true, verbatim: true })).catch(error => { throw new Error('Client metadata host could not be resolved' + (error?.code ? ' (' + error.code + ').' : '.')); }),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Client metadata DNS lookup timed out.')), budget); })
     ]).finally(() => clearTimeout(timer));
+    // 198.18.0.0/15 is what a proxy tool in TUN mode with made-up addresses answers for every name. The check is not
+    // loosened for it: said plainly, the owner knows what to switch.
+    if (!through && records.some(item => /^198\.1[89]\./.test(item.address))) throw new Error('This computer resolves names to made-up addresses (198.18.x.x), as a proxy tool does in TUN mode with fake addresses. Sign-in needs the real address of the client: switch that tool to system-proxy mode, or set HTTPS_PROXY for DevMate.');
     if (!through && (!records.length || records.some(item => !publicAddress(item.address)))) throw new Error('Client metadata must resolve exclusively to public addresses.');
     const response = await new Promise((resolve, reject) => {
       let finished = false, timer;

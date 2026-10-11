@@ -51,7 +51,8 @@ export async function doctor(service) {
   const proxy = service.proxy?.current();
   if (proxy?.proxy) check('proxy', 'ok', 'Requests to the outside go through ' + proxy.proxy + ' (' + (proxy.source === 'environment' ? 'the HTTPS_PROXY / HTTP_PROXY variables' : 'the system proxy of this account') + ').');
   else if (proxy?.script) check('proxy', 'warn', 'This account uses a proxy script, which DevMate cannot run: its requests to the outside go directly and may not get through.', 'Give the proxy\'s address in the HTTPS_PROXY variable for DevMate, then restart it (devmate restart).');
-  else if (proxy?.unsupported) check('proxy', 'warn', 'The system proxy of this account cannot be used here (' + proxy.unsupported + '): requests to the outside go directly and may not get through.', 'Give an HTTP proxy address in the HTTPS_PROXY variable, then restart DevMate (devmate restart).');
+  else if (proxy?.unsupported) check('proxy', 'warn', 'This computer is set to use a proxy that DevMate cannot use (' + proxy.unsupported + '): its requests to the outside go directly and may not get through.',
+    /Node\.js/.test(proxy.unsupported) ? 'Install Node.js 24.14 or newer, then restart DevMate (devmate restart).' : 'Give an HTTP proxy address in the HTTPS_PROXY variable, then restart DevMate (devmate restart).');
   const status = await service.connectionState();
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'For ChatGPT use OpenAI\'s own tunnel (devmate connect openai-tunnel --tunnel-id <id>); for any client a relay on a server of yours (devmate relay setup user@host).');

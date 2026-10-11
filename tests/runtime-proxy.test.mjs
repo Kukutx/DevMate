@@ -13,47 +13,58 @@ const registry = values => () => 'HKEY_CURRENT_USER\\Software\\Microsoft\\Window
   Object.entries(values).map(([name, value]) => '    ' + name + '    ' + (typeof value === 'number' ? 'REG_DWORD    0x' + value.toString(16) : 'REG_SZ    ' + value)).join('\r\n') + '\r\n';
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 
-test('the proxy comes from the environment, or on Windows from the system setting of the account', () => {
+test('the proxy comes from the environment, or on Windows from the system setting of the account', async () => {
   assert.equal(environmentProxy({}), null);
   assert.deepEqual(environmentProxy({ https_proxy: 'http://10.0.0.1:8080', NO_PROXY: 'a.example, .b.example' }),
     { source: 'environment', https: 'http://10.0.0.1:8080', http: 'http://10.0.0.1:8080', bypass: ['a.example', '.b.example'] });
   assert.deepEqual(environmentProxy({ HTTP_PROXY: 'http://plain:1', HTTPS_PROXY: 'http://secure:2' }), { source: 'environment', https: 'http://secure:2', http: 'http://plain:1', bypass: [] });
   assert.equal(environmentProxy({ ALL_PROXY: 'http://all:3' }).https, 'http://all:3');
   // One address for everything, as Clash and most tools set it.
-  assert.deepEqual(windowsSystemProxy(registry({ ProxyEnable: 1, ProxyServer: '127.0.0.1:7890', ProxyOverride: 'localhost;127.*;10.*;192.168.*;*.corp.example;<local>' })),
+  assert.deepEqual(await windowsSystemProxy(registry({ ProxyEnable: 1, ProxyServer: '127.0.0.1:7890', ProxyOverride: 'localhost;127.*;10.*;192.168.*;*.corp.example;<local>' })),
     { source: 'system', https: 'http://127.0.0.1:7890', http: 'http://127.0.0.1:7890', bypass: ['localhost', '127.0.0.0-127.255.255.255', '10.0.0.0-10.255.255.255', '192.168.0.0-192.168.255.255', '*.corp.example'] });
-  assert.deepEqual(windowsSystemProxy(registry({ ProxyEnable: 1, ProxyServer: 'http=proxy.example:80;https=secure.example:443;ftp=old:21' })),
+  assert.deepEqual(await windowsSystemProxy(registry({ ProxyEnable: 1, ProxyServer: 'http=proxy.example:80;https=secure.example:443;ftp=old:21' })),
     { source: 'system', https: 'http://secure.example:443', http: 'http://proxy.example:80', bypass: [] });
   // Set but switched off, as it is while such a tool is not running: no proxy.
-  assert.equal(windowsSystemProxy(registry({ ProxyEnable: 0, ProxyServer: '127.0.0.1:7890' })), null);
-  assert.equal(windowsSystemProxy(registry({})), null);
-  assert.equal(windowsSystemProxy(() => { throw new Error('no registry here'); }), null);
+  assert.equal(await windowsSystemProxy(registry({ ProxyEnable: 0, ProxyServer: '127.0.0.1:7890' })), null);
+  assert.equal(await windowsSystemProxy(registry({})), null);
+  assert.equal(await windowsSystemProxy(() => { throw new Error('no registry here'); }), null);
+  assert.equal(await windowsSystemProxy(() => Promise.reject(new Error('the system did not answer in time'))), null);
   // What cannot be used is said, not guessed at.
-  assert.deepEqual(windowsSystemProxy(registry({ ProxyEnable: 0, AutoConfigURL: 'http://wpad/proxy.pac' })), { source: 'system', script: true });
-  assert.deepEqual(windowsSystemProxy(registry({ ProxyEnable: 1, ProxyServer: 'socks=127.0.0.1:1080' })), { source: 'system', unsupported: 'only a SOCKS proxy is set' });
+  assert.deepEqual(await windowsSystemProxy(registry({ ProxyEnable: 0, AutoConfigURL: 'http://wpad/proxy.pac' })), { source: 'system', script: true });
+  assert.deepEqual(await windowsSystemProxy(registry({ ProxyEnable: 1, ProxyServer: 'socks=127.0.0.1:1080' })), { source: 'system', unsupported: 'only a SOCKS proxy is set' });
   assert.equal(shownProxy('http://user:secret@proxy.example:3128/'), 'http://proxy.example:3128');
   assert.equal(shownProxy('127.0.0.1:7890'), 'http://127.0.0.1:7890');
 });
 
-test('it is applied once, switched when the system setting is, and this computer itself is never asked through it', () => {
+test('it is applied once, switched when the system setting is, and this computer itself is never asked through it', async () => {
   const applied = [];
-  let restored = 0, system = null;
-  const proxy = createOutboundProxy({ env: {}, platform: 'win32', system: () => system, apply: settings => { applied.push(settings); return () => { restored++; }; } });
-  assert.equal(proxy.current(), null); assert.equal(proxy.refresh(), false); assert.deepEqual(applied, []);
+  let restored = 0, system = null, asked = 0;
+  const proxy = createOutboundProxy({ env: {}, platform: 'win32', system: async () => { asked++; return system; }, apply: settings => { applied.push(settings); return () => { restored++; }; } });
+  assert.equal(proxy.current(), null); assert.equal(await proxy.refresh(), false); assert.deepEqual(applied, []);
+  // Asked twice at the same moment, the system is asked once.
+  assert.deepEqual(await Promise.all([proxy.refresh(), proxy.refresh()]), [false, false]); assert.equal(asked, 2);
   system = { source: 'system', https: 'http://127.0.0.1:7890', http: 'http://127.0.0.1:7890', bypass: ['*.corp.example', 'localhost'] };
-  assert.equal(proxy.refresh(), true);
+  assert.equal(await proxy.refresh(), true);
   assert.deepEqual(applied, [{ HTTPS_PROXY: 'http://127.0.0.1:7890', HTTP_PROXY: 'http://127.0.0.1:7890', NO_PROXY: 'localhost,127.0.0.1,::1,*.corp.example' }]);
   assert.deepEqual(proxy.current(), { source: 'system', proxy: 'http://127.0.0.1:7890', settings: applied[0] });
-  assert.equal(proxy.refresh(), false, 'nothing changed, nothing is applied again'); assert.equal(applied.length, 1);
+  assert.equal(await proxy.refresh(), false, 'nothing changed, nothing is applied again'); assert.equal(applied.length, 1);
   // The owner switches the proxy off: back to direct, and the earlier setting is undone.
   system = null;
-  assert.equal(proxy.refresh(), true); assert.equal(restored, 1); assert.equal(proxy.current(), null);
+  assert.equal(await proxy.refresh(), true); assert.equal(restored, 1); assert.equal(proxy.current(), null);
   system = { source: 'system', script: true };
-  assert.equal(proxy.refresh(), true); assert.deepEqual(proxy.current(), { source: 'system', script: true }); assert.equal(applied.length, 1);
+  assert.equal(await proxy.refresh(), true); assert.deepEqual(proxy.current(), { source: 'system', script: true }); assert.equal(applied.length, 1);
   // The variables win over the system setting, and another system is never asked for one.
   const fromEnvironment = createOutboundProxy({ env: { HTTPS_PROXY: 'http://user:pw@corp:3128' }, platform: 'win32', system: () => { throw new Error('not asked'); }, apply: settings => { applied.push(settings); return () => {}; } });
+  await fromEnvironment.refresh();
   assert.deepEqual(fromEnvironment.current().proxy, 'http://corp:3128'); assert.equal(applied.at(-1).HTTPS_PROXY, 'http://user:pw@corp:3128');
-  assert.equal(createOutboundProxy({ env: {}, platform: 'linux', system: () => { throw new Error('not asked'); }, apply: () => () => {} }).current(), null);
+  const elsewhere = createOutboundProxy({ env: {}, platform: 'linux', system: () => { throw new Error('not asked'); }, apply: () => () => {} });
+  assert.equal(await elsewhere.refresh(), false); assert.equal(elsewhere.current(), null);
+  // A Node from before 24.14 cannot do this. It starts all the same, and what is in force says why requests go directly.
+  const older = createOutboundProxy({ env: { HTTPS_PROXY: 'http://corp:3128' }, platform: 'linux', apply: null });
+  assert.equal(await older.refresh(), true);
+  assert.deepEqual(Object.keys(older.current()).sort(), ['source', 'unsupported']); assert.match(older.current().unsupported, /^Node\.js \S+ cannot send its own requests through a proxy; that takes Node\.js 24\.14 or newer$/);
+  const without = createOutboundProxy({ env: {}, platform: 'linux', apply: null });
+  assert.equal(await without.refresh(), false); assert.equal(without.current(), null, 'with no proxy set there is nothing to say');
 });
 
 test('the doctor says which proxy is in force and names a setting it cannot use', async t => {
@@ -69,7 +80,10 @@ test('the doctor says which proxy is in force and names a setting it cannot use'
   assert.match((await line({ source: 'environment', proxy: 'http://corp:3128', settings: {} })).detail, /HTTPS_PROXY \/ HTTP_PROXY variables/);
   const script = await line({ source: 'system', script: true });
   assert.equal(script.status, 'warn'); assert.match(script.detail, /proxy script/); assert.match(script.fix, /HTTPS_PROXY/);
-  assert.match((await line({ source: 'system', unsupported: 'only a SOCKS proxy is set' })).detail, /only a SOCKS proxy is set/);
+  const socks = await line({ source: 'system', unsupported: 'only a SOCKS proxy is set' });
+  assert.match(socks.detail, /only a SOCKS proxy is set/); assert.match(socks.fix, /HTTPS_PROXY/);
+  const older = await line({ source: 'environment', unsupported: 'Node.js 24.3.0 cannot send its own requests through a proxy; that takes Node.js 24.14 or newer' });
+  assert.equal(older.status, 'warn'); assert.match(older.fix, /Install Node\.js 24\.14 or newer/);
 });
 
 test('with a proxy in force the runtime\'s own requests reach it: the tunnel service, and a sign-in client\'s metadata', async t => {
@@ -82,7 +96,10 @@ test('with a proxy in force the runtime\'s own requests reach it: the tunnel ser
   stand.on('connect', (req, socket) => { seen.push('CONNECT ' + req.url); socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); });
   const local = http.createServer((req, res) => { res.writeHead(200); res.end('direct'); });
   const proxyUrl = 'http://127.0.0.1:' + await listen(stand), localUrl = 'http://127.0.0.1:' + await listen(local) + '/';
-  const proxy = createOutboundProxy({ env: { HTTPS_PROXY: proxyUrl, HTTP_PROXY: proxyUrl }, platform: 'linux' });
+  // The system setting, switched on here and off again further down, as a tool like Clash switches it.
+  let system = { source: 'system', https: proxyUrl, http: proxyUrl, bypass: [] };
+  const proxy = createOutboundProxy({ env: {}, platform: 'win32', system: async () => system });
+  assert.equal(await proxy.refresh(), true);
   t.after(() => { proxy.stop(); stand.close(); local.close(); });
   // This computer itself is reached directly.
   assert.equal(await (await fetch(localUrl)).text(), 'direct'); assert.deepEqual(seen, []);
@@ -100,7 +117,25 @@ test('with a proxy in force the runtime\'s own requests reach it: the tunnel ser
   for (const local of ['https://192.168.1.10/client.json', 'https://intranet/client.json', 'https://build.corp/client.json', 'https://printer.local/client.json'])
     await assert.rejects(resolver(local), /public host name/, local);
   assert.equal(seen.filter(item => /192\.168|intranet|corp|printer/.test(item)).length, 0, 'nothing on the local network was asked for');
-  // Switched off again, requests go directly.
-  proxy.stop();
-  await assert.rejects(fetch('http://origin.devmate-proxy-test.invalid/'), error => error.cause?.code === 'ENOTFOUND');
+  // Without a proxy setting, a computer whose names all resolve to made-up addresses (a proxy tool in TUN mode) is told so.
+  const direct = createClientMetadataResolver({ lookup: async () => [{ address: '198.18.0.42', family: 4 }] });
+  await assert.rejects(direct('https://client.devmate-proxy-test.example/metadata.json'), /made-up addresses \(198\.18\.x\.x\).*system-proxy mode/);
+  // While it is on, a request to a name that exists nowhere goes to the proxy: a plain one is answered by it, and
+  // fetch asks it for a tunnel, which this stand-in refuses.
+  const plain = url => new Promise(resolve => { const request = http.get(url, response => { response.resume(); resolve(response.statusCode); }); request.on('error', error => resolve(error.code)); });
+  assert.equal(await plain('http://origin.devmate-proxy-test.invalid/through'), 200);
+  assert.ok(seen.includes('GET http://origin.devmate-proxy-test.invalid/through'), seen.join());
+  await assert.rejects(fetch('http://origin.devmate-proxy-test.invalid/fetched'));
+  assert.ok(seen.includes('CONNECT origin.devmate-proxy-test.invalid:80'), seen.join());
+  // The owner switches the system proxy off: the next look puts requests back on the direct way, and the proxy hears no more.
+  system = null;
+  const before = seen.length;
+  assert.equal(await proxy.refresh(), true); assert.equal(proxy.current(), null);
+  assert.equal(await plain('http://origin.devmate-proxy-test.invalid/direct'), 'ENOTFOUND');
+  await assert.rejects(fetch('http://origin.devmate-proxy-test.invalid/direct'), error => error.cause?.code === 'ENOTFOUND');
+  assert.equal(seen.length, before, 'nothing more reached the proxy');
+  // And on again.
+  system = { source: 'system', https: proxyUrl, http: proxyUrl, bypass: [] };
+  assert.equal(await proxy.refresh(), true);
+  assert.equal(await plain('http://origin.devmate-proxy-test.invalid/again'), 200);
 });

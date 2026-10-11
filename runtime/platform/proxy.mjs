@@ -1,6 +1,6 @@
 import http from 'node:http';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 
 // What the runtime itself asks of the outside (OpenAI's tunnel service, the check of its own public route, a
 // signing-in client's metadata document, an external MCP server) goes through the proxy this computer is set to
@@ -31,8 +31,10 @@ function registryValues(text) {
   }
   return values;
 }
+// Asked of the system's own program, and never in a way that holds this process up while it answers.
 function readInternetSettings() {
-  return execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe'), ['query', INTERNET_SETTINGS], { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+  return new Promise((resolve, reject) => execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe'), ['query', INTERNET_SETTINGS],
+    { encoding: 'utf8', windowsHide: true, timeout: 5000 }, (failure, stdout) => failure ? reject(failure) : resolve(stdout)));
 }
 // "localhost;127.*;10.*;*.corp.example;<local>" as Windows writes it, in the form NO_PROXY takes.
 function bypassList(value) {
@@ -43,9 +45,9 @@ function bypassList(value) {
   });
 }
 /** The system proxy of the owner's Windows account, or null when none is switched on. */
-export function windowsSystemProxy(read = readInternetSettings) {
+export async function windowsSystemProxy(read = readInternetSettings) {
   let values;
-  try { values = registryValues(read()); } catch { return null; }
+  try { values = registryValues(await read()); } catch { return null; }
   // A proxy script decides per address and would have to be run; that is not done here.
   if (parseInt(values.ProxyEnable, 16) !== 1 || !values.ProxyServer) return values.AutoConfigURL ? { source: 'system', script: true } : null;
   // Either one address for everything, or "http=host:port;https=host:port;socks=host:port".
@@ -55,23 +57,33 @@ export function windowsSystemProxy(read = readInternetSettings) {
   return { source: 'system', https: withScheme(https), http: withScheme(plain), bypass: bypassList(values.ProxyOverride) };
 }
 
+// Node sends its own requests through a proxy from 24.14 on (http.setGlobalProxyFromEnv). An earlier 24 runs
+// everything else; with a proxy set it is said to be too old for this, not failed.
+const builtIn = typeof http.setGlobalProxyFromEnv === 'function' ? settings => http.setGlobalProxyFromEnv(settings) : null;
+
 /**
- * Keeps the process on the proxy the computer is set to use. refresh() looks again (the system proxy is switched
- * while the runtime runs) and returns whether anything changed; current() says what is in force.
+ * Keeps the process on the proxy the computer is set to use. refresh() looks (again: the system proxy is switched
+ * while the runtime runs) and resolves to whether anything changed; current() says what is in force. Nothing is in
+ * force before the first refresh().
  */
-export function createOutboundProxy({ env = process.env, platform = process.platform, system = windowsSystemProxy, apply = settings => http.setGlobalProxyFromEnv(settings) } = {}) {
-  let restore = null, current = null, applied = '';
-  function refresh() {
-    const found = environmentProxy(env) || (platform === 'win32' ? system() : null);
-    const settings = found?.https ? { HTTPS_PROXY: found.https, HTTP_PROXY: found.http, NO_PROXY: [...new Set([...LOCAL, ...found.bypass])].join(',') } : null;
-    const key = JSON.stringify([settings, found?.script, found?.unsupported]);
+export function createOutboundProxy({ env = process.env, platform = process.platform, system = windowsSystemProxy, apply = builtIn } = {}) {
+  // Nothing is in force at first, so finding no proxy on the first look is no change.
+  const NOTHING = JSON.stringify([null, undefined, null]);
+  let restore = null, current = null, applied = NOTHING, looking = null;
+  async function look() {
+    const found = environmentProxy(env) || (platform === 'win32' ? await system() : null);
+    const wanted = found?.https ? { HTTPS_PROXY: found.https, HTTP_PROXY: found.http, NO_PROXY: [...new Set([...LOCAL, ...found.bypass])].join(',') } : null;
+    const settings = apply ? wanted : null;
+    const unsupported = found?.unsupported || (wanted && !apply ? 'Node.js ' + process.versions.node + ' cannot send its own requests through a proxy; that takes Node.js 24.14 or newer' : null);
+    const key = JSON.stringify([settings, found?.script, unsupported]);
     if (key === applied) return false;
     restore?.(); restore = null;
     if (settings) restore = apply(settings);
     applied = key;
-    current = found ? { source: found.source, ...(settings ? { proxy: shownProxy(found.https), settings } : {}), ...(found.script ? { script: true } : {}), ...(found.unsupported ? { unsupported: found.unsupported } : {}) } : null;
+    current = found ? { source: found.source, ...(settings ? { proxy: shownProxy(found.https), settings } : {}), ...(found.script ? { script: true } : {}), ...(unsupported ? { unsupported } : {}) } : null;
     return true;
   }
-  refresh();
-  return { refresh, current: () => current, stop() { restore?.(); restore = null; applied = ''; current = null; } };
+  // One look at a time: a second request while the system is being asked waits for that answer.
+  const refresh = () => looking ||= look().finally(() => { looking = null; });
+  return { refresh, current: () => current, stop() { restore?.(); restore = null; applied = NOTHING; current = null; } };
 }
