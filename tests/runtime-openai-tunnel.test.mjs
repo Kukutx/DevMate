@@ -66,7 +66,9 @@ test('the runtime speaks OpenAI\'s tunnel itself: it asks for work, hands each c
   assert.deepEqual([poll.headers.get('x-tunnel-client-name'), poll.headers.get('x-tunnel-client-version'), poll.headers.get('x-tunnel-client-wire-protocol-version'), poll.headers.get('x-tunnel-client-instance-id')],
     ['devmate', VERSION, WIRE_PROTOCOL_VERSION, 'instance-1']);
   assert.equal(poll.headers.get('x-tunnel-mcp-server-info'), '{"version":1,"channels":[{"name":"main"}]}'); assert.equal(poll.headers.get('openai-organization'), null);
-  assert.ok(Number(poll.query.get('limit')) >= 1 && Number(poll.query.get('limit')) <= 25); assert.equal(poll.query.get('timeout_ms'), '30000');
+  assert.ok(Number(poll.query.get('limit')) >= 1 && Number(poll.query.get('limit')) <= 25); assert.equal(poll.query.get('timeout_ms'), '1000');
+  // The first question is a short one, so that "connected" does not wait for a long poll; the ones after it are long.
+  await until(() => plane.polls.length > 1, 'the next poll'); assert.equal(plane.polls[1].query.get('timeout_ms'), '30000');
 
   // A call with a plain answer.
   plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list', params: {} },
@@ -236,7 +238,9 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   await until(() => plane.polls.length > 0, 'the runtime to ask OpenAI for work');
   assert.equal(plane.polls[0].headers.get('authorization'), 'Bearer the-runtime-key');
   const doctor = async () => Object.fromEntries((await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' })).checks.map(item => [item.id, item]));
+  // "connected" is said once OpenAI has answered the first question, not once it was asked.
   let checks = await doctor();
+  for (const end = Date.now() + 8000; !/: connected /.test(checks['connection.process'].detail) && Date.now() < end;) { await new Promise(resolve => setTimeout(resolve, 20)); checks = await doctor(); }
   assert.match(checks['connection.process'].detail, /^openai-tunnel: connected \(spoken by DevMate itself, protocol 2026-08-25, up to 32 calls at once\)$/); assert.equal(checks['connection.executable'], undefined);
   assert.equal(checks['connection.public'].status, 'info'); assert.match(checks['connection.public'].detail, /no call has come through it yet/);
   // Connected and not offered in ChatGPT is a matter of the OpenAI account: the doctor says so, and where OpenAI explains it.

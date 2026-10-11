@@ -15,6 +15,8 @@ export const WIRE_PROTOCOL_VERSION = '2026-08-25';
 // says why a tunnel is not offered in ChatGPT.
 export const TUNNEL_HELP = Object.freeze({ settings: 'https://platform.openai.com/settings/organization/tunnels', guide: 'https://developers.openai.com/api/docs/guides/secure-mcp-tunnels' });
 const CONTROL_PLANE = 'https://api.openai.com';
+// The wait asked for in a poll before any has come back (see loop()).
+const FIRST_POLL_MS = 1000;
 // OpenAI's interface has no code for a protocol version it has stopped taking, so that is told by what the answer says
 // about the version or about the client, and by nothing vaguer: "upgrade your plan" is not it.
 const OUTDATED = /(wire|protocol|client)[ _-]*version|(upgrade|update)[^.]{0,30}client|client[^.]{0,30}(too old|outdated|deprecated)/i;
@@ -189,9 +191,13 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       const room = maxConcurrentRequests - active.size - waiting.length;
       if (room <= 0) { await Promise.race([...active, pause(1000, signal)]); continue; }
       let response;
+      // Whether OpenAI takes this client is known when a poll comes back, and a long poll with nothing to hand out
+      // comes back late. Until one has come back the wait asked for is short, so that "connected", or the refusal,
+      // is there within a second or two of a start instead of half a minute.
+      const asked = phase === 'connected' ? pollTimeoutMs : Math.min(pollTimeoutMs, FIRST_POLL_MS);
       try {
-        response = await fetchImpl(base + '/poll?limit=' + Math.min(25, room) + '&timeout_ms=' + pollTimeoutMs, { headers: common(), redirect: 'error',
-          signal: AbortSignal.any([signal, AbortSignal.timeout(pollTimeoutMs + 5000)]) });
+        response = await fetchImpl(base + '/poll?limit=' + Math.min(25, room) + '&timeout_ms=' + asked, { headers: common(), redirect: 'error',
+          signal: AbortSignal.any([signal, AbortSignal.timeout(asked + 5000)]) });
       } catch (error) {
         if (signal.aborted) break;
         phase = 'connecting'; problem = { code: 'unreachable', message: 'api.openai.com could not be reached: ' + String(error?.cause?.code || error?.name || error?.message || error).slice(0, 200), at: stamp() };

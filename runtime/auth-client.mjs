@@ -9,6 +9,8 @@ import { publicAddress } from './platform/public-ip-policy.mjs';
 // https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations
 const MAX_BYTES = 64 * 1024;
 const TIMEOUT_MS = 5000;
+// Behind a proxy the name is still looked up here, for this long at most, to see where it leads (see load()).
+const PROXY_LOOKUP_MS = 1500;
 // A fetched document is reused for as long as its Cache-Control allows, within these
 // bounds. One sign-in reads the document more than once, so even "no-store" is held
 // for the minimum.
@@ -107,12 +109,22 @@ export function createClientMetadataResolver({ lookup = dns.lookup, request = ht
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
     const deadline = Date.now() + budget;
     let timer;
-    // Behind a proxy it is the proxy that looks the name up, so the address cannot be checked and pinned here. What
+    // Behind a proxy it is the proxy that looks the name up and connects, so the address cannot be pinned here. What
     // can be told from the name alone still is: a metadata document lives under a public name, never at an address
     // or under a name of the local network.
     const through = proxy();
     if (through && (net.isIP(hostname) || !hostname.includes('.') || /\.(local|localhost|internal|lan|home|corp|intranet|home\.arpa)$/i.test(hostname)))
       throw new Error('Client metadata must be published under a public host name.');
+    // And the name is still looked up on this computer, briefly: one that answers here with an address of this
+    // computer or of a local network is refused before the proxy is asked, so that the proxy is not sent there. A
+    // name this computer cannot look up, or not in time, or only to the made-up addresses of a proxy tool
+    // (198.18.x.x), is left to the proxy: that is how such a setup works.
+    if (through) {
+      let limit;
+      const here = await Promise.race([Promise.resolve().then(() => lookup(hostname, { all: true, verbatim: true })), new Promise(resolve => { limit = setTimeout(() => resolve([]), Math.min(PROXY_LOOKUP_MS, budget / 2)); })])
+        .catch(() => []).finally(() => clearTimeout(limit));
+      if ((Array.isArray(here) ? here : []).some(item => !/^198\.1[89]\./.test(String(item?.address)) && !publicAddress(String(item?.address)))) throw new Error('Client metadata must resolve exclusively to public addresses.');
+    }
     const records = through ? [] : net.isIP(hostname) ? [{ address: hostname, family: net.isIP(hostname) }] : await Promise.race([
       Promise.resolve(lookup(hostname, { all: true, verbatim: true })).catch(error => { throw new Error('Client metadata host could not be resolved' + (error?.code ? ' (' + error.code + ').' : '.')); }),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Client metadata DNS lookup timed out.')), budget); })

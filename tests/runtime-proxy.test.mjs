@@ -110,23 +110,37 @@ test('with a proxy in force the runtime\'s own requests reach it: the tunnel ser
   for (let attempt = 0; attempt < 100 && !seen.includes('CONNECT api.openai.com:443'); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
   await tunnel.stop();
   assert.ok(seen.includes('CONNECT api.openai.com:443'), seen.join());
-  // A client's metadata document: fetched through the proxy, and only under a public name.
-  const resolver = createClientMetadataResolver({ proxy: () => proxy.current().settings, lookup: () => { throw new Error('the name is not looked up here'); } });
+  // A client's metadata document: fetched through the proxy, and only under a public name. The proxy looks the name
+  // up and connects; a computer that cannot look names up itself (as behind such a proxy) leaves it to the proxy.
+  const behind = lookup => createClientMetadataResolver({ proxy: () => proxy.current().settings, lookup, timeoutMs: 2000 });
+  const resolver = behind(() => { throw new Error('this computer cannot look the name up'); });
   await assert.rejects(resolver('https://client.devmate-proxy-test.example/metadata.json'), /Client metadata request failed/);
   assert.ok(seen.includes('CONNECT client.devmate-proxy-test.example:443'), seen.join());
+  // Where this computer can look the name up, it does: a name that answers with an address of this computer or of a
+  // local network is refused before the proxy is asked, so that the proxy is not sent there.
+  for (const [name, answer] of [['inside', [{ address: '10.0.0.8', family: 4 }]], ['loop', [{ address: '127.0.0.1', family: 4 }]], ['link', [{ address: '169.254.169.254', family: 4 }]],
+    ['mixed', [{ address: '93.184.216.34', family: 4 }, { address: 'fd00::1', family: 6 }]]])
+    await assert.rejects(behind(async () => answer)('https://' + name + '.devmate-proxy-test.example/metadata.json'), /resolve exclusively to public addresses/, name);
+  assert.equal(seen.filter(item => /inside|loop|link|mixed/.test(item)).length, 0, 'the proxy was not sent to an address of a local network');
+  // A public address, the made-up addresses of a proxy tool, and a look that gets no answer in time go to the proxy.
+  for (const [name, lookup] of [['public', async () => [{ address: '93.184.216.34', family: 4 }]], ['faked', async () => [{ address: '198.18.0.42', family: 4 }]], ['silent', () => new Promise(() => {})]]) {
+    await assert.rejects(behind(lookup)('https://' + name + '.devmate-proxy-test.example/metadata.json'), /Client metadata request failed/, name);
+    assert.ok(seen.includes('CONNECT ' + name + '.devmate-proxy-test.example:443'), name + ': ' + seen.join());
+  }
   for (const local of ['https://192.168.1.10/client.json', 'https://intranet/client.json', 'https://build.corp/client.json', 'https://printer.local/client.json'])
     await assert.rejects(resolver(local), /public host name/, local);
   assert.equal(seen.filter(item => /192\.168|intranet|corp|printer/.test(item)).length, 0, 'nothing on the local network was asked for');
   // Without a proxy setting, a computer whose names all resolve to made-up addresses (a proxy tool in TUN mode) is told so.
   const direct = createClientMetadataResolver({ lookup: async () => [{ address: '198.18.0.42', family: 4 }] });
   await assert.rejects(direct('https://client.devmate-proxy-test.example/metadata.json'), /made-up addresses \(198\.18\.x\.x\).*system-proxy mode/);
-  // While it is on, a request to a name that exists nowhere goes to the proxy: a plain one is answered by it, and
-  // fetch asks it for a tunnel, which this stand-in refuses.
+  // While it is on, a request to a name that exists nowhere goes to the proxy: a plain one is answered by it. fetch
+  // reaches it too, in the way its Node does it for a plain address: it asks the proxy for a tunnel, which this
+  // stand-in refuses, or hands the proxy the request itself, as newer Node does.
   const plain = url => new Promise(resolve => { const request = http.get(url, response => { response.resume(); resolve(response.statusCode); }); request.on('error', error => resolve(error.code)); });
   assert.equal(await plain('http://origin.devmate-proxy-test.invalid/through'), 200);
   assert.ok(seen.includes('GET http://origin.devmate-proxy-test.invalid/through'), seen.join());
-  await assert.rejects(fetch('http://origin.devmate-proxy-test.invalid/fetched'));
-  assert.ok(seen.includes('CONNECT origin.devmate-proxy-test.invalid:80'), seen.join());
+  const fetched = await fetch('http://origin.devmate-proxy-test.invalid/fetched').then(response => response.status, () => 'refused');
+  assert.ok(fetched === 'refused' ? seen.includes('CONNECT origin.devmate-proxy-test.invalid:80') : fetched === 200 && seen.includes('GET http://origin.devmate-proxy-test.invalid/fetched'), fetched + ': ' + seen.join());
   // The owner switches the system proxy off: the next look puts requests back on the direct way, and the proxy hears no more.
   system = null;
   const before = seen.length;
