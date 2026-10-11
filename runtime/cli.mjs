@@ -180,7 +180,8 @@ async function offlineDoctor(instanceRoot) {
   try {
     const { readConfig, publicMcpUrl } = await import('./config.mjs');
     const config = readConfig(instanceRoot), url = publicMcpUrl(config);
-    check('settings', 'ok', 'connection: ' + config.connection.kind + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url : ''));
+    // What the doctor prints gets pasted into bug reports. The last part of a relay's address is its key.
+    check('settings', 'ok', 'connection: ' + config.connection.kind + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : ''));
     if (config.connection.executable) check('connection.executable', fs.statSync(config.connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail',
       config.connection.executable, 'Install the connector and set its absolute path with devmate connect.');
   } catch (error) { check('settings', 'fail', 'config.json is not valid: ' + error.message, 'Fix or delete ' + path.join(instanceRoot, 'config.json') + '.'); }

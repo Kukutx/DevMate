@@ -189,6 +189,10 @@ test('devmate relay setup makes that server how this computer is reached, keeps 
   // What is printed can be pasted anywhere: the address is there without its key.
   assert.match(first.stdout, /"relay": "https:\/\/devmate\.example\.com\/mcp\/<key>"/); assert.ok(!first.stdout.includes(address.split('/').pop())); assert.match(first.stdout, /devmate mcp-url/);
   assert.equal(asked[0].allowList, true); assert.equal(asked[0].key, undefined);
+  // The doctor of a runtime that is not running reads the saved settings: it too prints the address without its key.
+  const stopped = await run(['doctor']);
+  assert.match(stopped.stdout, /\[ ok \] settings: connection: ssh, auth: none, public URL: https:\/\/devmate\.example\.com\/mcp\/<key>\n/); assert.ok(!stopped.stdout.includes(address.split('/').pop()));
+  assert.ok(!(await run(['doctor', '--report'])).stdout.includes(address.split('/').pop()), 'nor does the report for a bug report');
   // Again, for the same server: the client's address must not change.
   await run(['relay', 'setup', 'deploy@203.0.113.7', '--domain', 'devmate.example.com', '--any-address']);
   assert.equal(saved().connection.publicUrl, address); assert.equal(asked[1].key, address.split('/').pop()); assert.equal(asked[1].allowList, false);
