@@ -154,6 +154,8 @@ devmate chrome install        # tell Chrome and Edge which program the extension
 
 Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge), switch on **Developer mode**, choose **Load unpacked** and pick the `chrome-extension` folder of DevMate. `devmate chrome` says whether the browser is registered and connected, and so does `devmate doctor`.
 
+Leave **Developer mode** on. The browser runs the copy it loaded from that folder: when an update of DevMate changes the files there, the extension notices within about two minutes and loads itself again, with nothing to click, and with Developer mode off Chrome switches an unpacked extension off at that moment. An update that puts DevMate into another folder (every version of the VS Code extension has its own) needs **Load unpacked** once more, for the new folder.
+
 - **An entry like the editors.** The extension's panel says in one sentence how things stand and the one thing to do about it, with the browser's own words when it cannot reach DevMate. It starts DevMate, opens the workbench, copies the address a client in the cloud needs (the public one where you have a route, otherwise this computer's) and counts what waits for your answer.
 - **Two switches, both yours.** **Let DevMate use this browser**: switched off, every request is refused and your client is told that you paused it. **Start DevMate with the browser**: off until you turn it on; like an editor it starts the runtime and never stops it.
 - **What DevMate did in this browser** is listed in the panel: the last calls with their time and outcome, never their content. The panel is in English and Chinese.
