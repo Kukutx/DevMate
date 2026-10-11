@@ -10,7 +10,7 @@ import { presentResult, MODEL_VISIBLE_OPERATIONS } from '../runtime/mcp.mjs';
 
 const require = createRequire(import.meta.url);
 const { createVscodeRuntimeEntry } = require('../vscode-host/runtime-entry.cjs');
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fixture(t) {
@@ -54,10 +54,8 @@ test('a window publishes its editor state and the model reads it project-relativ
   assert.equal((await service.call('editor.diagnostics', { projectId, severity: 'hint' }, owner)).total, 3);
   assert.equal((await service.call('editor.diagnostics', { projectId, severity: 'error' }, owner)).total, 1);
   assert.equal((await service.call('editor.diagnostics', { projectId, path: 'src/util.ts', severity: 'hint' }, owner)).items[0].message, 'unused import');
-  // Another window may only publish its own state, and a member needs a grant for the project.
+  // Only an attached window publishes state.
   await assert.rejects(service.call('window.context', { windowId: randomUUID(), context: {} }, owner), { code: 'window_missing' });
-  await assert.rejects(service.call('window.context', { windowId, context: {} }, { id: 'm', role: 'write', projectIds: [projectId] }), { code: 'forbidden' });
-  await assert.rejects(service.call('editor.context', { projectId }, { id: 'm', role: 'read', projectIds: [] }), { code: 'forbidden' });
   await service.call('window.detach', { windowId }, { ...owner, windowId });
   assert.match(await present('editor.context', { projectId }), /No editor is attached to this project/);
   for (const name of ['editor.context', 'editor.diagnostics', 'project.overview']) assert.ok(MODEL_VISIBLE_OPERATIONS.has(name), name);

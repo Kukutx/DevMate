@@ -68,7 +68,7 @@ Options: --instance <directory> selects another runtime instance, --timeout <ms>
 `;
 
 const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'auth', 'lines',
-  'host', 'user', 'member', 'domain', 'ssh-port', 'identity']);
+  'host', 'user', 'domain', 'ssh-port', 'identity']);
 const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version', 'report', 'any-address']);
 
 export function parseCli(argv) {
@@ -396,7 +396,7 @@ export async function main(argv = process.argv.slice(2), {
       return 0;
     }
     if (command === 'login-code') {
-      const issued = await client.call('auth.code.create', options.member ? { memberId: options.member } : {}, callOptions);
+      const issued = await client.call('auth.code.create', {}, callOptions);
       stdout.write(issued.code + '\n');
       stderr.write('Enter this code on the DevMate authorization page. It works once and expires at ' + issued.expiresAt + '.\n');
       return 0;

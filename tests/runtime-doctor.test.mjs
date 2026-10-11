@@ -12,7 +12,7 @@ import { main as cli } from '../runtime/cli.mjs';
 
 const require = createRequire(import.meta.url);
 const { createVscodeRuntimeEntry } = require('../vscode-host/runtime-entry.cjs');
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 // The owner of the instance closes first; only then can its directory be removed.
 function temporary(t, prefix, close = () => {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -40,7 +40,7 @@ test('connection credentials live in the instance, reach only the connection and
   for (const [name, value] of [['bad name', 'x'], ['OK', 'two\nlines']]) await assert.rejects(runtime.call('secret.set', { name, value }, owner), { code: 'invalid_input' });
   // Credentials and the doctor are local-owner only: an MCP caller, even the owner, cannot reach them.
   for (const operation of ['secret.set', 'secret.list', 'secret.remove', 'runtime.doctor']) {
-    await assert.rejects(runtime.call(operation, operation === 'secret.set' ? { name: 'A', value: 'b' } : operation === 'secret.remove' ? { name: 'A' } : {}, { id: 'owner', role: 'owner' }), { code: 'forbidden' });
+    await assert.rejects(runtime.call(operation, operation === 'secret.set' ? { name: 'A', value: 'b' } : operation === 'secret.remove' ? { name: 'A' } : {}, { id: 'owner' }), { code: 'forbidden' });
   }
   assert.equal((await runtime.call('secret.remove', { name: 'CLOUDFLARE_TUNNEL_TOKEN' }, owner)).removed, true);
   assert.deepEqual(secrets.names(), []);
@@ -125,8 +125,8 @@ test('the report for a bug says what happened and not who or where: no credentia
   const { service: runtime, temp } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } });
   const root = path.join(temp, 'A Private Folder Name'); fs.mkdirSync(root); fs.writeFileSync(path.join(root, 'a.txt'), 'x');
   const project = await runtime.call('project.create', { root }, owner);
-  await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, { id: 'owner', role: 'owner' });
-  await assert.rejects(runtime.call('workspace.read', { projectId: project.id, path: 'missing-file.txt' }, { id: 'owner', role: 'owner' }));
+  await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, { id: 'owner' });
+  await assert.rejects(runtime.call('workspace.read', { projectId: project.id, path: 'missing-file.txt' }, { id: 'owner' }));
   fs.writeFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-11T10:00:00.000Z connection: could not reach devmate.example.com from ' + root + '\n');
   const { text } = await runtime.call('runtime.report', {}, owner);
   assert.match(text, /^DevMate report\. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it\./);
@@ -135,13 +135,13 @@ test('the report for a bug says what happened and not who or where: no credentia
   assert.match(text, /\n#\d+ \S+ workspace\.read \w+ \(connected, \d+ ms\): /); assert.match(text, /connection: could not reach <public-host> from <folder-1>/);
   // A failure names its project; the report says which folder that was, not what it is called.
   await runtime.call('project.update', { id: project.id, name: 'Client Secret Product' }, owner);
-  await assert.rejects(runtime.call('workspace.read', { projectId: 'Client Secret Product', path: 'missing-file.txt' }, { id: 'owner', role: 'owner' }));
+  await assert.rejects(runtime.call('workspace.read', { projectId: 'Client Secret Product', path: 'missing-file.txt' }, { id: 'owner' }));
   fs.appendFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-11T10:00:01.000Z agent: turn failed in Client Secret Product\n');
   const named = (await runtime.call('runtime.report', {}, owner)).text;
   assert.match(named, /agent: turn failed in <folder-1>/); assert.ok(!named.includes('Client Secret Product'));
   for (const kept of ['A Private Folder Name', 'devmate.example.com', temp, path.basename(os.homedir()) + path.sep]) assert.ok(!text.includes(kept), kept + ' is still in the report');
   // It is the owner's to make at this computer; with full access their client may read it as well.
-  await assert.rejects(runtime.call('runtime.report', {}, { id: 'owner', role: 'owner' }), { code: 'forbidden' });
+  await assert.rejects(runtime.call('runtime.report', {}, { id: 'owner' }), { code: 'forbidden' });
   // The command prints exactly that, and without a runtime what can be seen from outside.
   const printed = [];
   assert.equal(await cli(['doctor', '--report'], { stdout: { write: value => printed.push(value) }, stderr: { write() {} }, clientFactory: () => ({ call: async name => { assert.equal(name, 'runtime.report'); return { text }; } }) }), 0);

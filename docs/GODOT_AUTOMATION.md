@@ -132,7 +132,7 @@ Without `outputPath`, the preset's own path or `build/exports/<preset>/<name>.<e
 
 - Paths are project-relative. Credential-like paths and everything under `.devmate` except the manifest and Godot baselines are refused as inputs and outputs.
 - Godot runs without a shell, with the allow-listed child environment, and is stopped when a call or job is cancelled or the project closes.
-- Capabilities that write or start Godot need write access to a writable project. `godot.quick_setup` is owner-only.
+- Capabilities that write or start Godot need a writable project. `godot.quick_setup` stores an executable path: the owner runs it at their computer, or their connected client does with the full access profile.
 
 ## Tests
 

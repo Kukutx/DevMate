@@ -10,7 +10,7 @@ import { godotAutomationConfigSchema } from '../runtime/engines/godot.mjs';
 // Everything here goes through a real DevMateService, the real capability registry and the
 // real project path policy. The "Godot" is a copy of the Node executable: a real child
 // process that matches the Godot executable pattern and fails every Godot command line.
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-manifest-cycle-'));
 const godot = path.join(shared, process.platform === 'win32' ? 'godot.exe' : 'godot');
 fs.copyFileSync(process.execPath, godot);

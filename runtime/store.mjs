@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 export const KINDS = Object.freeze([
   'project', 'workflow', 'agent', 'task', 'message', 'delivery', 'job',
   'approval', 'input', 'reference', 'artifact', 'capability', 'host',
-  'auth-member', 'auth-code', 'auth-grant'
+  'auth-code', 'auth-grant'
 ]);
 
 // Ids sort in creation order (time, then a per-process counter), so listing by
@@ -160,18 +160,12 @@ export class Store extends EventEmitter {
     return JSON.parse(row.data);
   }
 
-  list(kind, { projectId, projectIds, workflowId, status, afterId, query, limit = 1000, newestFirst = false } = {}) {
+  // projectId: what belongs to that project; for projects themselves, that one project.
+  list(kind, { projectId, workflowId, status, afterId, query, limit = 1000, newestFirst = false } = {}) {
     if (!KINDS.includes(kind)) throw new TypeError('Unknown entity kind: ' + kind);
     const clauses = ['kind=?'];
     const args = [kind];
-    if (projectId) { clauses.push('project_id=?'); args.push(projectId); }
-    if (projectIds !== undefined) {
-      if (!Array.isArray(projectIds)) throw new TypeError('Project grants must be an array.');
-      const grants = [...new Set(projectIds)];
-      if (!grants.length) return [];
-      clauses.push((kind === 'project' ? 'id' : 'project_id') + ' IN (' + grants.map(() => '?').join(',') + ')');
-      args.push(...grants);
-    }
+    if (projectId) { clauses.push((kind === 'project' ? 'id' : 'project_id') + '=?'); args.push(projectId); }
     if (workflowId) { clauses.push('workflow_id=?'); args.push(workflowId); }
     if (status) { clauses.push("json_extract(data,'$.status')=?"); args.push(status); }
     if (afterId) { clauses.push(newestFirst ? 'id<?' : 'id>?'); args.push(afterId); }
@@ -209,13 +203,12 @@ export class Store extends EventEmitter {
     return row ? JSON.parse(row.data) : null;
   }
 
-  activeExecutionJobs({projectId, callerId} = {}) {
+  activeExecutionJobs({projectId} = {}) {
     const conditions = ["kind='job'",
       "json_extract(data,'$.status') IN ('queued','running','cancelling')",
       "json_extract(data,'$.kind') IN ('command','capability')"];
     const args=[];
     if(projectId){conditions.push('project_id=?');args.push(projectId);}
-    if(callerId){conditions.push("json_extract(data,'$.input.caller.id')=?");args.push(callerId);}
     return this.db.prepare('SELECT data FROM entities WHERE '+conditions.join(' AND ')+' ORDER BY id')
       .all(...args).map(row=>JSON.parse(row.data));
   }

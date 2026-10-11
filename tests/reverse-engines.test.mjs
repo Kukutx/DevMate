@@ -17,7 +17,7 @@ const python = findExecutable(['python', 'python3']);
 const context = {
   state: createEngineState('devmate.reverse'), assertActive() {},
   settings: reverseSettingsSchema.parse({ pythonPath: python || '' }),
-  caller: () => 'owner', assertOwner() {}, assertCanMutate: () => {}, audit: async () => {},
+  assertCanMutate: () => {}, audit: async () => {},
   workspace: { get: () => workspace, resolve: resolveWorkspacePath },
   executables: {
     find: findExecutable,
@@ -63,7 +63,6 @@ test('external analysis keeps workspace and credential-path guards', async () =>
   await fsp.writeFile(path.join(temp, '.env'), 'synthetic-test-only');
   await assert.rejects(analyzeWithEngine(noEngines, workspace, { path: '../outside.bin', query: 'functions' }), /escapes/);
   await assert.rejects(analyzeWithEngine(noEngines, workspace, { path: '.env', query: 'functions' }), /protected/);
-  await assert.rejects(analyzeWithEngine({ ...noEngines, caller: () => 'write', assertOwner(action) { throw new Error(action + ' is available only to the owner'); } }, workspace, { path: 'raw.bin', query: 'functions' }), /only to the owner/);
 });
 
 test('fixed code commands reject injection and preserve 64-bit addresses', () => {

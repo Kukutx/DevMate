@@ -22,7 +22,7 @@ const browserSettings={playwrightModulePath:'node_modules/playwright-core/index.
 const python=findExecutable(['python','python3']);
 function reverseContext() {
   return {state:createEngineState('devmate.reverse'),settings:reverseSettingsSchema.parse({pythonPath:python||''}),
-    assertActive(){},assertCanMutate(){},caller:()=> 'owner',assertOwner(){},audit:async()=>{},
+    assertActive(){},assertCanMutate(){},audit:async()=>{},
     executables:{find:()=>python,assertAllowed(){}}};
 }
 async function waitFor(predicate,timeout=10000) {

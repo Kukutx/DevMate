@@ -183,10 +183,10 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   createSecretStore(instanceRoot).set('CONTROL_PLANE_API_KEY', 'the-runtime-key');
   const plane = controlPlane((url, init) => fetch(url, init));
   runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: options => createConnection({ ...options, fetchImpl: plane.fetch }) });
-  await runtime.service.call('project.create', { root: projectRoot, name: 'Tunnelled' }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root: projectRoot, name: 'Tunnelled' }, { id: 'owner', surface: 'local' });
   await until(() => plane.polls.length > 0, 'the runtime to ask OpenAI for work');
   assert.equal(plane.polls[0].headers.get('authorization'), 'Bearer the-runtime-key');
-  const doctor = async () => Object.fromEntries((await runtime.service.call('runtime.doctor', {}, { id: 'owner', role: 'owner', surface: 'local' })).checks.map(item => [item.id, item]));
+  const doctor = async () => Object.fromEntries((await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' })).checks.map(item => [item.id, item]));
   let checks = await doctor();
   assert.match(checks['connection.process'].detail, /^openai-tunnel: connected \(spoken by DevMate itself, protocol 2026-08-25, up to 32 calls at once\)$/); assert.equal(checks['connection.executable'], undefined);
   assert.equal(checks['connection.public'].status, 'info'); assert.match(checks['connection.public'].detail, /no call has come through it yet/);

@@ -100,7 +100,7 @@ Rollback records and batch plans are stored in the instance database of the runt
 
 - The listener accepts only loopback connections that present its token and the expected `Host` and `Origin`.
 - Only the attached vault of the project is reachable; paths are vault-relative.
-- A reader may call the read capabilities; changes need write access.
+- The read capabilities work in a read-only project; changes need a writable one.
 
 ## Tests
 

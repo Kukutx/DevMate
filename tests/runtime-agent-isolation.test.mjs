@@ -7,8 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { DevMateService } from '../runtime/service.mjs';
 import { presentResult } from '../runtime/mcp.mjs';
 
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
-const connected = Object.freeze({ id: 'owner', role: 'owner' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
+const connected = Object.freeze({ id: 'owner' });
 const git = (cwd, ...args) => {
   const result = spawnSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, 'git ' + args.join(' ') + ': ' + result.stderr);
@@ -147,10 +147,6 @@ test('a copy needs a repository, belongs to a new agent, and is not taken away w
   for (const operation of ['agents.apply', 'agents.discard']) await assert.rejects(service.call(operation, { agentId: running.agentId }, connected), { code: 'agent_busy' }, operation);
   instances[1].finish();
   assert.equal((await service.call('agents.result', { agentId: running.agentId, waitMs: 20000 }, connected)).settled, true);
-  // A reader may read what is proposed and may not bring it into the project.
-  const reader = { id: 'member', role: 'read', projectIds: [project.id] };
-  assert.deepEqual((await service.call('agents.proposal', { agentId: running.agentId }, reader)).files, []);
-  await assert.rejects(service.call('agents.apply', { agentId: running.agentId }, reader), { code: 'forbidden' });
   // Taking the project out of DevMate takes the copies with it: their folders and their branches.
   const copies = path.join(temp, 'instance-copies');
   assert.equal(fs.readdirSync(copies).length, 1);

@@ -19,7 +19,8 @@ export const ATTEMPT_WINDOW_SECONDS = 60;
 export const REQUEST_ATTEMPTS = 5;
 export const GLOBAL_ATTEMPTS = 30;
 
-const OWNER = Object.freeze({ id: 'owner', role: 'owner', projectIds: null });
+// DevMate has one owner and no other identity. Signing in on a public route proves being that owner.
+const OWNER = Object.freeze({ id: 'owner' });
 const VERIFICATION_CLIENT = 'devmate:route-verification';
 const VERIFICATION_SUBJECT = 'devmate:verification';
 const OAUTH_ERRORS = ['invalid_request', 'invalid_client', 'invalid_target', 'invalid_grant', 'invalid_scope', 'access_denied', 'unsupported_grant_type', 'unsupported_response_type'];
@@ -87,10 +88,6 @@ function requiredScope(value) {
   if (!values.includes('devmate') || values.some(s => !['devmate', 'offline_access'].includes(s))) throw fault('invalid_scope', 'Supported scopes are devmate and offline_access; devmate is required.');
   return values.join(' ');
 }
-function publicMember(value) {
-  return { id: value.id, name: value.name, role: value.role, projectIds: value.projectIds, disabled: value.disabled,
-    revision: value.revision, createdAt: value.createdAt, updatedAt: value.updatedAt };
-}
 // Failed one-time codes, counted in fixed windows. One sign-in (a client and its PKCE
 // challenge) is paused after REQUEST_ATTEMPTS. Past GLOBAL_ATTEMPTS overall, wrong codes
 // are answered without a retry form, but a correct code still signs in: a flood of
@@ -145,19 +142,10 @@ export function createAuth({ store, instanceRoot, config = {}, clientMetadata } 
   };
   const get = (kind, value) => { try { return store.get(kind, value); } catch (error) { if (error.code === 'not_found') return null; throw error; } };
   function identity(subject, version) {
-    if (subject === 'owner') return version === 1 ? { ...OWNER } : null;
+    if (version !== 1) return null;
+    if (subject === 'owner') return { ...OWNER };
     // The runtime's own check of its public route: allowed to ask which runtime answers, and nothing else.
-    if (subject === VERIFICATION_SUBJECT) return version === 1 ? { id: 'verification', role: 'read', projectIds: [] } : null;
-    const member = get('auth-member', subject);
-    if (!member || member.disabled || member.authVersion !== version || !['write', 'read'].includes(member.role)) return null;
-    return { id: member.id, role: member.role, projectIds: [...member.projectIds], authVersion: member.authVersion };
-  }
-  function revokeMember(memberId) {
-    const rows = store.db.prepare("SELECT id FROM entities WHERE kind='auth-grant' AND json_extract(data,'$.subject')=? AND json_extract(data,'$.status')='active'").all(memberId);
-    for (const row of rows) store.update('auth-grant', row.id, { status: 'revoked', reason: 'identity_changed' });
-  }
-  function validateProjects(projectIds) {
-    const values = [...new Set(projectIds)]; for (const projectId of values) store.get('project', projectId); return values;
+    return subject === VERIFICATION_SUBJECT ? { id: 'verification' } : null;
   }
   // This server protects one resource, so a request that names none means that one
   // (RFC 8707 section 2.1); a request that names another is refused.
@@ -178,28 +166,12 @@ export function createAuth({ store, instanceRoot, config = {}, clientMetadata } 
     operations.push({ name, schema, description, localOnly: true, readOnly, run: input => run(schema.parse(input || {})) });
   };
   add('auth.status', {}, true, 'Inspect optional OAuth identity configuration without revealing credentials.', () => ({ mode, issuer, resource }));
-  add('auth.member.list', {}, true, 'List local OAuth identities.', () => ({ items: store.list('auth-member', { limit: 10000 }).map(publicMember) }));
-  add('auth.member.create', { name: z.string().trim().min(1).max(200), role: z.enum(['write', 'read']), projectIds: z.array(id).max(1000) }, false,
-    'Create a scoped OAuth identity; no login credential is returned until auth.code.create.', args => publicMember(store.create('auth-member', { ...args, projectIds: validateProjects(args.projectIds), disabled: false, authVersion: 1 })));
-  add('auth.member.update', { id, name: z.string().trim().min(1).max(200).optional(), role: z.enum(['write', 'read']).optional(),
-    projectIds: z.array(id).max(1000).optional(), disabled: z.boolean().optional(), expectedRevision: z.number().int().positive().optional() }, false,
-    'Update an identity and immediately invalidate its previous authorization.', args => store.transaction(() => {
-      const member = store.get('auth-member', args.id), patch = { authVersion: member.authVersion + 1 };
-      for (const field of ['name', 'role', 'disabled']) if (args[field] !== undefined) patch[field] = args[field];
-      if (args.projectIds !== undefined) patch.projectIds = validateProjects(args.projectIds);
-      const result = store.update('auth-member', args.id, patch, args.expectedRevision); revokeMember(args.id);
-      return publicMember(result);
-    }));
-  add('auth.member.remove', { id }, false, 'Remove an OAuth identity and revoke its grants.', args => store.transaction(() => { revokeMember(args.id); return store.remove('auth-member', args.id); }));
-  add('auth.code.create', { memberId: id.optional(), ttlSeconds: z.number().int().min(60).max(900).default(600) }, false,
-    'Create a one-time authorization login code. The secret is returned only by this local call.', args => {
+  add('auth.code.create', { ttlSeconds: z.number().int().min(60).max(900).default(600) }, false,
+    'Create a one-time code with which a client signs in as the owner. The secret is returned only by this local call.', args => {
       if (mode !== 'oauth') throw fault('oauth_disabled', 'Enable OAuth with an explicit HTTPS issuer first.');
-      const member = args.memberId ? store.get('auth-member', args.memberId) : null;
-      if (member?.disabled) throw fault('identity_disabled', 'This identity is disabled.');
-      const subject = member?.id || 'owner', authVersion = member?.authVersion || 1;
       const code = secret('dml'), expiresAt = now() + args.ttlSeconds;
-      store.create('auth-code', { purpose: 'login', hash: hash(code), subject, authVersion, expiresAt, status: 'active' });
-      return { code, expiresAt: new Date(expiresAt * 1000).toISOString(), principal: identity(subject, authVersion) };
+      store.create('auth-code', { purpose: 'login', hash: hash(code), subject: 'owner', authVersion: 1, expiresAt, status: 'active' });
+      return { code, expiresAt: new Date(expiresAt * 1000).toISOString() };
     });
   add('auth.grant.list', { limit: z.number().int().min(1).max(500).default(100) }, true,
     'List the newest OAuth grants, newest first, without returning token material. purpose is client, or verification for the short-lived grant the runtime uses to check its own public route.', args => ({
@@ -225,7 +197,7 @@ export function createAuth({ store, instanceRoot, config = {}, clientMetadata } 
     if (!grant || grant.status !== 'active' || grant.expiresAt <= now() || grant.subject !== claims.sub || grant.authVersion !== claims.av || grant.scope !== claims.scope)
       return rejected('The sign-in behind this access token was revoked or has expired.');
     const principal = identity(claims.sub, claims.av);
-    return principal ? { principal, reason: null } : rejected('The identity behind this access token was changed or disabled.');
+    return principal ? { principal, reason: null } : rejected('The access token names no identity of this DevMate.');
   }
   const authenticate = req => check(req).principal;
   // The WWW-Authenticate value for a 401 from the MCP endpoint (RFC 6750 section 3, RFC 9728 section 5.1).
@@ -435,8 +407,9 @@ export function createAuth({ store, instanceRoot, config = {}, clientMetadata } 
     return true;
   }
   // A real, short-lived grant with no refresh token, for the runtime to connect to its own public URL as a
-  // client would. It is sent to whatever answers at that URL, which may be the wrong server: so it carries no
-  // access to any project. It is listed with purpose "verification" and removed once it has expired.
+  // client would. It is sent to whatever answers at that URL, which may be the wrong server: so it is not the
+  // owner, and the service lets it ask one thing only. It is listed with purpose "verification" and removed once
+  // it has expired.
   function issueVerificationToken({ ttlSeconds = 60 } = {}) {
     if (mode !== 'oauth') throw fault('oauth_disabled', 'A verification token exists only with OAuth sign-in enabled.');
     const lifetime = Math.min(VERIFICATION_MAX_SECONDS, Math.max(5, Math.floor(Number(ttlSeconds)) || 60));

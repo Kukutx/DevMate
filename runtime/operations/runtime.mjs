@@ -59,12 +59,9 @@ export function defineRuntimeOperations(service, add) {
       return service.call(args.operation, args.input || {}, context);
     });
   add('operations.read', { operationId: id }, true, 'Inspect the recorded result of a submitted operation without repeating it.', (args, context) => {
-    const key = (context.id || 'owner') + ':' + args.operationId;
+    const key = context.id + ':' + args.operationId;
     const record = service.store.operation(key);
     if (!record) throw new DomainError('not_found', 'Operation not found.');
-    // A result stays as private as the project it came from: an account that lost a project does not read it back here.
-    const projectId = record.result.value?.projectId;
-    if (context.role !== 'owner' && typeof projectId === 'string' && !context.projectIds?.includes(projectId)) throw new DomainError('forbidden', 'The project of this operation is outside the caller grants.');
     if (record.result.pending) return { status: service.inflight.has(key) ? 'running' : 'unknown' };
     return record.result.error ? { status: 'failed', error: record.result.error } : { status: 'completed', result: record.result.value };
   });

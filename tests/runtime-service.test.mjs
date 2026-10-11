@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DevMateService } from '../runtime/service.mjs';
 
-const testOwner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const testOwner = Object.freeze({ id: 'owner', surface: 'local' });
 const ownerCall = (service, name, input = {}) => service.call(name, input, testOwner);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, label = 'condition', timeout = 1800) {
@@ -192,14 +192,14 @@ test('restart expires approvals and marks interrupted job, delivery, message and
 test('service operations refuse unverified identities instead of assuming owner', async t => {
   const { service, project } = await fixture(t);
   await assert.rejects(service.call('project.list', {}), { code: 'unauthorized' });
-  await assert.rejects(service.call('project.list', {}, { role: 'owner' }), { code: 'unauthorized' });
+  for (const nobody of [{}, { surface: 'local' }, { id: 'someone' }]) await assert.rejects(service.call('project.list', {}, nobody), { code: 'unauthorized' });
   await assert.rejects(service.call('workflow.create', { projectId: project.id, title: 'unsafe' }), { code: 'unauthorized' });
   assert.equal(service.store.list('workflow', { projectId: project.id }).length, 1);
   assert.throws(() => service.visibleOperations(), { code: 'unauthorized' });
 });
 
 
-test('member pagination and search are scoped in SQLite before the result limit', async t => {
+test('what an editor window lists is scoped to its project in SQLite, before the result limit', async t => {
   const { service, project, temp, workflow } = await fixture(t);
   const foreignRoot = path.join(temp, 'foreign'); fs.mkdirSync(foreignRoot);
   const foreign = await ownerCall(service, 'project.create', { root: foreignRoot });
@@ -209,7 +209,7 @@ test('member pagination and search are scoped in SQLite before the result limit'
   const allowed = ['Needle first', 'Needle second', 'Needle third'].map(title =>
     service.store.create('task', { projectId: project.id, workflowId: workflow.id, title, status: 'active' }));
   service.store.create('task', { projectId: project.id, workflowId: workflow.id, title: 'Different', status: 'active' });
-  const member = { id: 'member-visibility', role: 'read', projectIds: [project.id] };
+  const window = { id: 'owner', surface: 'local', projectId: project.id };
   const seen = [], observed = [];
   const list = service.store.list.bind(service.store);
   service.store.list = (kind, options) => {
@@ -218,67 +218,15 @@ test('member pagination and search are scoped in SQLite before the result limit'
   };
   let cursor;
   do {
-    const response = await service.call('task.list', { query: 'NEEDLE', limit: 1, ...(cursor ? { cursor } : {}) }, member);
+    const response = await service.call('task.list', { query: 'NEEDLE', limit: 1, ...(cursor ? { cursor } : {}) }, window);
     seen.push(...response.items.map(item => item.id));
     cursor = response.nextCursor;
   } while (cursor);
   assert.deepEqual(new Set(seen), new Set(allowed.map(item => item.id)));
   assert.equal(seen.length, allowed.length);
-  assert.ok(observed.every(entry => entry.limit === 2 && entry.query === 'NEEDLE' &&
-    entry.projectIds?.length === 1 && entry.projectIds[0] === project.id));
-  assert.deepEqual((await service.call('project.list', {}, { ...member, projectIds: [] })).items, []);
+  assert.ok(observed.every(entry => entry.limit === 2 && entry.query === 'NEEDLE' && entry.projectId === project.id));
+  assert.deepEqual((await service.call('project.list', {}, window)).items.map(item => item.id), [project.id]);
   assert.equal(service.store.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='entities_status_scope'").get().n, 1);
-});
-
-
-test('revoking a member cancels their queued command before any side effect', async t => {
-  const { service, project } = await fixture(t);
-  const executed = [];
-  let release;
-  service.processes.complete = async (_project, input) => {
-    if (input.args?.[0] === 'block') return new Promise(resolve => release = () => resolve({ exitCode: 0, exitConfirmed: true }));
-    executed.push(input.args?.[0]); return { exitCode: 0, exitConfirmed: true };
-  };
-  const blocker = await ownerCall(service, 'job.start', { projectId: project.id, kind: 'command', input: { file: process.execPath, args: ['block'] } });
-  await until(() => !!release, 'blocker running');
-  const member = await ownerCall(service, 'auth.member.create', { name: 'Queued member', role: 'write', projectIds: [project.id] });
-  const principal = { id: member.id, role: 'write', projectIds: [project.id], authVersion: 1 };
-  const pending = await service.call('job.start', { projectId: project.id, kind: 'command',
-    input: { file: process.execPath, args: ['should-not-run'] } }, principal);
-  assert.equal(service.store.get('job', pending.id).status, 'queued');
-  await ownerCall(service, 'auth.member.update', { id: member.id, disabled: true, expectedRevision: member.revision });
-  assert.equal(service.store.get('job', pending.id).status, 'cancelled');
-  assert.equal(service.store.get('job', pending.id).outcome, 'not_started');
-  release();await until(() => service.store.get('job', blocker.id).status === 'completed');
-  assert.deepEqual(executed, []);
-  const retried = await ownerCall(service, 'job.retry', { id: pending.id });
-  await until(() => service.store.get('job', retried.id).status === 'completed');
-  assert.deepEqual(executed, ['should-not-run']);
-  assert.equal(service.store.get('job', retried.id).input.caller.id, 'owner');
-});
-
-test('execution preflight rejects jobs whose member changed without a cancellation callback', async t => {
-  const { service, project } = await fixture(t);
-  const executed = [];
-  let release;
-  service.processes.complete = async (_project, input) => {
-    if (input.args?.[0] === 'block') return new Promise(resolve => release = () => resolve({ exitCode: 0, exitConfirmed: true }));
-    executed.push(input.args?.[0]); return { exitCode: 0, exitConfirmed: true };
-  };
-  const blocker = await ownerCall(service, 'job.start', { projectId: project.id, kind: 'command', input: { file: process.execPath, args: ['block'] } });
-  await until(() => !!release, 'blocker running');
-  const member = await ownerCall(service, 'auth.member.create', { name: 'Preflight member', role: 'write', projectIds: [project.id] });
-  const pending = await service.call('job.start', { projectId: project.id, kind: 'command',
-    input: { file: process.execPath, args: ['forbidden-effect'] } },
-    { id: member.id, role: 'write', projectIds: [project.id], authVersion: 1 });
-  const row = service.store.get('auth-member', member.id);
-  service.store.update('auth-member', member.id, { disabled: true, authVersion: row.authVersion + 1 });
-  release();
-  await until(() => service.store.get('job', blocker.id).status === 'completed');
-  await until(() => service.store.get('job', pending.id).status === 'failed');
-  assert.deepEqual(executed, []);
-  assert.equal(service.store.get('job', pending.id).error.code, 'authorization_revoked');
-  assert.equal(service.store.get('job', pending.id).outcome, 'not_started');
 });
 
 
@@ -384,7 +332,7 @@ test('native child retaining a channel after failed shutdown cannot send peer me
 });
 
 
-test('event history is losslessly paginated and enforces owner/member project scopes',async t=>{
+test('event history is losslessly paginated and stays within its project',async t=>{
   const {service,project,workflow,temp}=await fixture(t);
   const otherRoot=path.join(temp,'other-events');fs.mkdirSync(otherRoot);
   const other=await ownerCall(service,'project.create',{root:otherRoot});
@@ -393,11 +341,10 @@ test('event history is losslessly paginated and enforces owner/member project sc
     {id:'agent-fixture',projectId:project.id,workflowId:workflow.id},
     {nativeEvent:{type:'message',delta:true,text:payload+'-'+i}});
   service.store.event('unrelated',{id:other.id,projectId:other.id},{private:'other'});
-  const principal={id:'read-member',role:'read',projectIds:[project.id],surface:'mcp'};
   let cursor=0;const all=[];
   do {
     const page=await service.call('event.list',{projectId:project.id,workflowId:workflow.id,
-      cursor,limit:4},principal);
+      cursor,limit:4},{id:'owner'});
     all.push(...page.items);
     cursor=page.nextCursor;
   } while(cursor);
@@ -406,7 +353,7 @@ test('event history is losslessly paginated and enforces owner/member project sc
   assert.deepEqual(native.map(item=>item.nativeEvent.text),
     Array.from({length:12},(_,i)=>payload+'-'+i));
   assert.ok(all.every(item=>item.projectId===project.id));
-  await assert.rejects(service.call('event.list',{projectId:other.id},principal),{code:'forbidden'});
+  assert.deepEqual((await ownerCall(service,'event.list',{projectId:other.id})).items.map(item=>item.type).filter(type=>type==='agent.native'),[]);
   await assert.rejects(ownerCall(service,'event.list',{projectId:project.id,workflowId:'workflow-not-real'}),{code:'not_found'});
 });
 

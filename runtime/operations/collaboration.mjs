@@ -2,7 +2,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { readProjectFile, statProjectFile } from '../workspace.mjs';
-import { actor, eventFor, hash, id, listOptions, mutation, projectPath, projectScope, revision, text, workflowScope } from './shared.mjs';
+import { actor, hash, id, listOptions, mutation, projectPath, projectScope, revision, text, workflowScope } from './shared.mjs';
 
 // Several agents working together in a workflow: messages and their deliveries, tasks,
 // the decisions agents wait on, and the references and artifacts a workflow carries.
@@ -26,14 +26,13 @@ export function defineCollaborationOperations(service, add) {
     });
   add('event.list', { ...projectScope, workflowId: id.optional(),
     cursor: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(100).default(50), latest: z.boolean().optional() }, true,
-    'Page through the durable events of a project by sequence: what changed, and the text agents wrote. latest:true returns the newest events instead of the first ones.', (args, context) => {
+    'Page through the durable events of a project by sequence: what changed, and the text agents wrote. latest:true returns the newest events instead of the first ones.', args => {
       service.project(args.projectId);
       if (args.workflowId && service.store.get('workflow', args.workflowId).projectId !== args.projectId)
         throw new DomainError('scope_mismatch', 'Events belong to another project workflow.');
-      const shown = event => eventFor(event, context);
-      if (args.latest) return { items: service.store.recentEvents({ projectId: args.projectId, workflowId: args.workflowId, limit: args.limit }).map(shown) };
+      if (args.latest) return { items: service.store.recentEvents({ projectId: args.projectId, workflowId: args.workflowId, limit: args.limit }) };
       const items = service.store.events({ projectId: args.projectId, workflowId: args.workflowId, after: args.cursor || 0, limit: args.limit + 1 });
-      return { items: items.slice(0, args.limit).map(shown), ...(items.length > args.limit ? { nextCursor: items[args.limit - 1].sequence } : {}) };
+      return { items: items.slice(0, args.limit), ...(items.length > args.limit ? { nextCursor: items[args.limit - 1].sequence } : {}) };
     });
   add('message.list', listOptions, true, 'Read workflow messages and delivery state.', (args, context) => service.list('message', args, context));
   add('message.send', { ...workflowScope, recipientIds: z.array(id).min(1).max(16), body: text.min(1), ...mutation }, false,

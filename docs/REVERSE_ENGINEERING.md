@@ -8,18 +8,19 @@ The `reverse` engine inspects binary files of a project with built-in parsers, c
 
 Listing, flags and settings are described in [CAPABILITIES.md](CAPABILITIES.md); installed backends in [REVERSE_BACKENDS.md](REVERSE_BACKENDS.md).
 
-## Who may call what
+## What each capability reaches
 
-| Capabilities | Reach | Callers |
+| Capabilities | Reach | Needs |
 |---|---|---|
-| `status`, `toolchain`, `binary_info`, `strings`, `hex_read`, `bytes_search`, `value_codec`, `address_map`, `binary_diff` | project files, built-in code only | anyone with read access |
-| `patch_copy` | writes a new project file | read access for a dry run, write access to create the copy |
-| `disassemble`, `code_analyze`, `decompile` | start Python, Rizin/radare2 or Ghidra | owner only |
-| `processes`, `session_open`, `sessions`, `session_close`, `modules`, `memory_regions`, `memory_read`, `memory_search`, `value_scan`, `value_rescan`, `scan_results`, `scan_close`, `pointer_chain`, `pointer_references`, `memory_write`, `memory_restore` | memory of a local process | owner only, and only with `allowProcessAccess` |
+| `status`, `toolchain`, `strings`, `hex_read`, `bytes_search`, `value_codec`, `address_map`, `binary_diff` | project files, built-in code only | a shared project |
+| `binary_info` | project files; an installed Python parser when there is one | a shared project |
+| `patch_copy` | writes a new project file | a writable project to create the copy; a dry run works read only |
+| `disassemble`, `code_analyze`, `decompile` | start Python, Rizin/radare2 or Ghidra | the program installed |
+| `processes`, `session_open`, `sessions`, `session_close`, `modules`, `memory_regions`, `memory_read`, `memory_search`, `value_scan`, `value_rescan`, `scan_results`, `scan_close`, `pointer_chain`, `pointer_references`, `memory_write`, `memory_restore` | memory of a local process | `allowProcessAccess` |
 
-With `auth.mode: none` every caller is the owner. For other callers `binary_info` in auto mode uses the built-in parser and says so, and `probe: true` on `status` and `toolchain` reports that probes are the owner's.
+`binary_info` in auto mode uses the built-in parser when no installed one is found, and says so. `probe: true` on `status` and `toolchain` runs the installed programs to check them.
 
-Process access and memory writes are off by default. The owner enables them explicitly:
+Process access and memory writes are off by default. The owner enables them explicitly, at their own computer:
 
 ```json
 { "engine": "reverse", "settings": { "allowProcessAccess": true } }
@@ -96,4 +97,4 @@ Sessions, scans and receipts live in memory only and are lost on a runtime resta
 
 ## Tests
 
-`tests/reverse-core.test.mjs`, `tests/reverse-plugin.test.mjs`, `tests/reverse-audit.test.mjs`, `tests/reverse-native.test.mjs` (the Windows process test targets only a child process the test itself starts), `tests/reverse-engines.test.mjs`, and `tests/capability-catalog.test.mjs` for the owner-only and read-only rules.
+`tests/reverse-core.test.mjs`, `tests/reverse-plugin.test.mjs`, `tests/reverse-audit.test.mjs`, `tests/reverse-native.test.mjs` (the Windows process test targets only a child process the test itself starts), `tests/reverse-engines.test.mjs`, and `tests/capability-catalog.test.mjs` for what works in a read-only project.

@@ -34,7 +34,7 @@ test('a client that speaks MCP over standard input and output works through devm
   fs.mkdirSync(root);
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: localConnection });
   // The folder is shared by its owner, at the computer; the client works in it.
-  await runtime.service.call('project.create', { root, name: 'Over stdio' }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root, name: 'Over stdio' }, { id: 'owner', surface: 'local' });
   const clients = [];
   t.after(async () => {
     for (const client of clients) await client.close().catch(() => {});
@@ -66,7 +66,7 @@ test('what happens to one request never decides another: a refused request is an
   const instanceRoot = path.join(temp, 'instance'), root = path.join(temp, 'project');
   fs.mkdirSync(root);
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: localConnection });
-  await runtime.service.call('project.create', { root }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root }, { id: 'owner', surface: 'local' });
   const { client } = await stdioClient(['--instance', instanceRoot], { versionNegotiation: { mode: 'auto' } });
   t.after(async () => { await client.close().catch(() => {}); await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const slow = client.callTool({ name: 'shell_run', arguments: { file: process.execPath, args: ['-e', 'setTimeout(() => console.log("slow command done"), 1500)'], waitMs: 20000 } });

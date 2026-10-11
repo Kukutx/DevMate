@@ -11,7 +11,7 @@ test('runtime exposes bounded owner-local storage and resource diagnostics witho
   const state=path.join(root,'runtime'),projectRoot=path.join(root,'project');fs.mkdirSync(projectRoot);
   const service=new DevMateService({instanceRoot:state});
   t.after(async()=>{await service.close();fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
-  const owner={id:'owner',role:'owner',surface:'local'};
+  const owner={id:'owner',surface:'local'};
   const project=await service.call('project.create',{root:projectRoot},owner);
   for(let i=0;i<16;i++)service.store.create('task',{projectId:project.id,title:'task-'+i,status:'queued'});
   const stats=await service.call('runtime.metrics',{},owner);
@@ -22,7 +22,7 @@ test('runtime exposes bounded owner-local storage and resource diagnostics witho
   assert.equal(stats.database.entities.task,16);
   assert.ok(stats.runtime.residentBytes>0);
   assert.equal(typeof stats.runtime.nativeSessions,'number');
-  await assert.rejects(service.call('runtime.metrics',{}, {id:'owner',role:'owner',surface:'mcp'}),{code:'forbidden'});
+  await assert.rejects(service.call('runtime.metrics',{}, {id:'owner',surface:'mcp'}),{code:'forbidden'});
   assert.ok(service.store.db.prepare('PRAGMA quick_check').get().quick_check==='ok');
 });
 
@@ -32,7 +32,7 @@ test('every call is counted by operation: how often, by whom, how long, and what
   fs.writeFileSync(path.join(projectRoot,'a.txt'),'one line\n');
   const service=new DevMateService({instanceRoot:state});
   t.after(async()=>{await service.close();fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
-  const owner={id:'owner',role:'owner',surface:'local'},connected={id:'owner',role:'owner'};
+  const owner={id:'owner',surface:'local'},connected={id:'owner'};
   const project=await service.call('project.create',{root:projectRoot},owner);
   for(let i=0;i<3;i++)await service.call('workspace.read',{projectId:project.id,path:'a.txt'},connected);
   // What a model gets wrong is mostly refused before anything runs; that is counted too, and so is a name that does not exist.

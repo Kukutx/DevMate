@@ -12,20 +12,15 @@ function result(response) {
   assert.equal(response.body.error, undefined, response.text);
   return response.body.result;
 }
-function denied(tool) {
-  assert.equal(tool.isError, true, JSON.stringify(tool));
-  assert.match(JSON.stringify(tool), /forbidden|read-only|outside.*grants/);
-}
 
-test('real OAuth HTTP authenticates every MCP request and filters read-member lists and app snapshots', async t => {
+test('real OAuth HTTP authenticates every MCP request: the signed-in owner gets the tools, the route check one question', async t => {
   const f = await fixture(t, { config });
-  const a = await f.project('granted'), b = await f.project('private');
-  // These inert records exercise disclosure rules; no native account or approval is impersonated.
+  const a = await f.project('first'), b = await f.project('second');
+  // These inert records exercise what a snapshot shows; no native account or approval is impersonated.
   for (const scope of [a.scope, b.scope]) for (const kind of ['approval', 'input']) f.runtime.service.store.create(kind, {
     ...scope, status: 'pending', details: { sentinel: scope.projectId }, summary: kind + ' fixture'
   });
-  const member = await f.call('auth.member.create', { name: 'Read fixture', role: 'read', projectIds: [a.project.id] });
-  const owner = await f.authorize(), reader = await f.authorize(member.id);
+  const owner = await f.authorize();
   // Sign-in guards the public address. A caller without credentials is refused there, with a challenge that says where to sign in.
   const publicHost = { host: new URL(issuer).host };
   const challenged = await f.rpc('tools/list', {}, publicHost);
@@ -43,40 +38,41 @@ test('real OAuth HTTP authenticates every MCP request and filters read-member li
   for (const absent of ['project_remove', 'approval_resolve', 'input_respond', 'task_create']) assert.equal(ownerTools.some(tool => tool.name === absent), false, absent);
   assert.ok(ownerTools.some(tool => tool.name === 'project_list'));
   assert.deepEqual(ownerTools.filter(tool => tool._meta?.ui?.visibility?.join() === 'app').map(tool => tool.name), ['workbench_call']);
-  const tools = result(await f.rpc('tools/list', {}, reader)).tools;
+  // A signed-in client is the owner as a connected client: what is decided at the owner's computer is not offered to it.
   for (const hidden of ['project_create', 'approval_resolve', 'input_respond', 'auth_code_create', 'settings_read', 'runtime_stop'])
-    assert.equal(tools.some(tool => tool.name === hidden), false, hidden);
-  const generic = (operation, input = {}) => f.tool('operations_call', { operation, input }, reader);
-  assert.deepEqual((await f.tool('project_list', {}, reader)).structuredContent.items.map(item => item.id), [a.project.id]);
+    assert.equal(ownerTools.some(tool => tool.name === hidden), false, hidden);
   for (const operation of ['approval.list', 'input.list']) {
-    const listed = (await generic(operation)).structuredContent.items;
+    const listed = (await f.tool('operations_query', { operation, input: { projectId: a.project.id } }, owner)).structuredContent.items;
     assert.equal(listed.length, 1, operation); assert.equal(listed[0].projectId, a.project.id);
   }
-  denied(await generic('approval.list', { projectId: b.project.id }));
-  denied(await generic('input.list', { workflowId: b.workflow.id }));
-  denied(await generic('workspace.write', { projectId: a.project.id, path: 'forbidden.txt', text: 'x' }));
-  denied(await f.tool('workbench_call', { operation: 'workspace.write', input: { projectId: a.project.id, path: 'forbidden.txt', text: 'x', expectedSha256: null } }, reader));
-  assert.equal(fs.existsSync(path.join(a.root, 'forbidden.txt')), false);
-  const opened = await f.tool('open_devmate_workbench', { projectId: a.project.id }, reader);
+  const opened = await f.tool('open_devmate_workbench', { projectId: a.project.id }, owner);
   assert.deepEqual(Object.keys(opened.structuredContent).sort(), ['counts', 'selection'], 'opening does not put the workspace into the conversation');
-  const snapshot = input => f.tool('workbench_call', { operation: 'workbench.snapshot', input }, reader);
+  const snapshot = input => f.tool('workbench_call', { operation: 'workbench.snapshot', input }, owner);
   const global = await snapshot({});
-  assert.equal(global.structuredContent.viewer.id, member.id);
-  assert.deepEqual(global.structuredContent.projects.map(item => item.id), [a.project.id]);
+  assert.deepEqual(global.structuredContent.projects.map(item => item.id).sort(), [a.project.id, b.project.id].sort());
   assert.deepEqual(global.structuredContent.approvals, []); assert.deepEqual(global.structuredContent.inputs, []);
   const scoped = await snapshot({ projectId: a.project.id });
   assert.equal(scoped.structuredContent.approvals.length, 1);
   assert.equal(scoped.structuredContent.inputs.length, 1);
-  assert.equal(JSON.stringify(scoped).includes(b.project.id), false);
-  // Alternate identities on the same listener, then revoke an already-issued token.
-  assert.equal((await f.tool('project_list', {}, owner)).structuredContent.items.length, 2);
-  assert.equal((await f.tool('project_list', {}, reader)).structuredContent.items.length, 1);
-  const concurrent = await Promise.all([f.tool('project_list', {}, owner), f.tool('project_list', {}, reader)]);
-  assert.deepEqual(concurrent.map(value => value.structuredContent.items.length), [2, 1]);
-  await f.call('auth.member.update', { id: member.id, disabled: true, expectedRevision: member.revision });
-  const revoked = await f.rpc('tools/list', {}, reader);
+  // The runtime's own check of the public route signs in as itself, and finds the one tool that says which runtime answers.
+  const probe = { ...publicHost, authorization: 'Bearer ' + f.runtime.service.auth.issueVerificationToken().accessToken };
+  assert.deepEqual(result(await f.rpc('tools/list', {}, probe)).tools.map(tool => tool.name), ['connection_status']);
+  assert.equal((await f.tool('connection_status', {}, probe)).structuredContent.instance.generation, f.runtime.service.identity.generation);
+  for (const [method, params] of [['tools/call', { name: 'project_list', arguments: {} }], ['tools/call', { name: 'workbench_call', arguments: { operation: 'project.list', input: {} } }],
+    ['resources/read', { uri: 'devmate://project/' + a.project.id + '/file/anything.txt' }]]) {
+    const refused = await f.rpc(method, params, probe);
+    assert.ok(refused.body?.error || refused.body?.result?.isError, method + ' ' + (params.name || params.uri) + ': ' + refused.text);
+    assert.equal(refused.text.includes(a.root), false);
+  }
+  // Both on the same listener, at the same time.
+  const concurrent = await Promise.all([f.rpc('tools/list', {}, owner), f.rpc('tools/list', {}, probe)]);
+  assert.deepEqual(concurrent.map(response => result(response).tools.length > 1), [true, false]);
+  // A sign-in the owner revokes stops working at once; at this computer nothing changes.
+  const grant = (await f.call('auth.grant.list')).items.find(item => item.purpose === 'client');
+  await f.call('auth.grant.revoke', { id: grant.id });
+  const revoked = await f.rpc('tools/list', {}, owner);
   assert.equal(revoked.status, 401); assert.match(revoked.headers['www-authenticate'], /error="invalid_token"/);
-  assert.equal((await f.rpc('tools/list', {}, owner)).status, 200);
+  assert.equal((await f.rpc('tools/list')).status, 200);
 });
 
 test('a client registered in the configuration signs in over real HTTP with PKCE, calls MCP and refreshes', async t => {
@@ -141,67 +137,51 @@ test('public Host cannot obtain local workbench cookies or use the local owner t
     body: JSON.stringify({ code: new URL(issued.body.result.url).searchParams.get('code') }) });
   assert.equal(entered.status, 200); assert.equal(entered.headers['set-cookie'], undefined);
   const snapshot = await f.request('/api/snapshot', { headers: { authorization: 'Bearer ' + entered.body.result.session } });
-  assert.equal(snapshot.status, 200); assert.equal(snapshot.body.result.viewer.role, 'owner');
+  assert.equal(snapshot.status, 200); assert.equal(snapshot.body.result.instance.name, 'DevMate');
   assert.equal((await f.request('/', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
 });
 
-test('real MCP resource reads preserve project text, task and binary artifact and reject cross-project reads', async t => {
+test('real MCP resource reads preserve project text, task and binary artifact', async t => {
   const f = await fixture(t, { config });
-  const a = await f.project('allowed'), b = await f.project('hidden');
-  const records = [];
-  for (const item of [a, b]) {
-    fs.mkdirSync(path.join(item.root, 'nested'));
-    fs.writeFileSync(path.join(item.root, 'nested', '中文 name.txt'), item.project.name + ' contents');
-    fs.writeFileSync(path.join(item.root, 'artifact.bin'), Buffer.from([0, 1, 128, 255]));
-    records.push({
-      task: await f.call('task.create', { ...item.scope, title: item.project.name, instruction: 'inspect only' }),
-      artifact: await f.call('artifact.create', { ...item.scope, path: 'artifact.bin', mimeType: 'application/octet-stream' })
-    });
-  }
-  const member = await f.call('auth.member.create', { name: 'Reader', role: 'read', projectIds: [a.project.id] });
-  const reader = await f.authorize(member.id);
-  const uris = (item, record) => [
-    'devmate://project/' + item.project.id + '/file/nested/' + encodeURIComponent('中文 name.txt'),
-    'devmate://task/' + record.task.id,
-    'devmate://artifact/' + record.artifact.id
-  ];
+  const a = await f.project('readable');
+  fs.mkdirSync(path.join(a.root, 'nested'));
+  fs.writeFileSync(path.join(a.root, 'nested', '中文 name.txt'), 'readable contents');
+  fs.writeFileSync(path.join(a.root, 'artifact.bin'), Buffer.from([0, 1, 128, 255]));
+  const task = await f.call('task.create', { ...a.scope, title: 'readable', instruction: 'inspect only' });
+  const artifact = await f.call('artifact.create', { ...a.scope, path: 'artifact.bin', mimeType: 'application/octet-stream' });
+  const owner = await f.authorize();
   const visible = [];
-  for (const uri of uris(a, records[0])) visible.push(result(await f.rpc('resources/read', { uri }, reader)).contents[0]);
-  assert.equal(visible[0].text, 'allowed contents');
-  assert.equal(JSON.parse(visible[1].text).id, records[0].task.id);
+  for (const uri of ['devmate://project/' + a.project.id + '/file/nested/' + encodeURIComponent('中文 name.txt'), 'devmate://task/' + task.id, 'devmate://artifact/' + artifact.id])
+    visible.push(result(await f.rpc('resources/read', { uri }, owner)).contents[0]);
+  assert.equal(visible[0].text, 'readable contents');
+  assert.equal(JSON.parse(visible[1].text).id, task.id);
   assert.equal(visible[2].blob, Buffer.from([0, 1, 128, 255]).toString('base64'));
   assert.equal(visible[2].mimeType, 'application/octet-stream');
-  for (const uri of uris(b, records[1])) {
-    const denied = await f.rpc('resources/read', { uri }, reader);
-    assert.equal(denied.status, 200, denied.text);
-    assert.ok(denied.body.error, denied.text);
-    assert.equal(denied.body.result, undefined);
-    assert.equal(denied.text.includes('hidden contents'), false);
+  for (const uri of ['devmate://project/project-does-not-exist/file/nested/x.txt', 'devmate://task/task-does-not-exist']) {
+    const missing = await f.rpc('resources/read', { uri }, owner);
+    assert.equal(missing.status, 200, missing.text); assert.ok(missing.body.error, missing.text); assert.equal(missing.body.result, undefined);
   }
-  const tools = result(await f.rpc('tools/list', {}, reader)).tools;
+  const tools = result(await f.rpc('tools/list', {}, owner)).tools;
   const launcher = tools.find(item => item.name === 'open_devmate_workbench');
   assert.deepEqual(launcher._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
   assert.equal(launcher._meta.ui.resourceUri, WORKBENCH_RESOURCE_URI);
   assert.deepEqual(tools.find(item => item.name === 'workbench_call')._meta.ui.visibility, ['app']);
-  const ui = result(await f.rpc('resources/read', { uri: WORKBENCH_RESOURCE_URI }, reader)).contents[0];
+  const ui = result(await f.rpc('resources/read', { uri: WORKBENCH_RESOURCE_URI }, owner)).contents[0];
   assert.equal(ui.mimeType, WORKBENCH_MIME);
   assert.deepEqual(Object.keys(ui._meta), ['ui'], 'the resource carries only what the MCP Apps standard defines');
   assert.deepEqual(ui._meta.ui.csp, { connectDomains: [], resourceDomains: [] });
   assert.match(ui.text, /DevMate/); assert.match(ui.text, /ui\/initialize/);
 });
 
-
-test('parallel OAuth MCP readers remain scoped and do not cross-contaminate identities', async t => {
+test('parallel requests of the signed-in owner and of the route check do not cross-contaminate identities', async t => {
   const f = await fixture(t, { config });
-  const left = await f.project('parallel-left'), right = await f.project('parallel-right');
-  const a = await f.call('auth.member.create', { name: 'Reader A', role: 'read', projectIds: [left.project.id] });
-  const b = await f.call('auth.member.create', { name: 'Reader B', role: 'read', projectIds: [right.project.id] });
-  const principals = [await f.authorize(a.id), await f.authorize(b.id)];
-  const results = await Promise.all(Array.from({ length: 48 }, (_, i) =>
-    f.tool('project_list', {}, principals[i % 2])));
-  results.forEach((value, i) => {
-    assert.equal(value.isError, undefined, JSON.stringify(value));
-    assert.deepEqual(value.structuredContent.items.map(item => item.id),
-      [i % 2 ? right.project.id : left.project.id]);
+  await f.project('parallel-left'); await f.project('parallel-right');
+  const owner = await f.authorize();
+  const probe = { host: new URL(issuer).host, authorization: 'Bearer ' + f.runtime.service.auth.issueVerificationToken().accessToken };
+  const results = await Promise.all(Array.from({ length: 48 }, (_, i) => f.rpc('tools/list', {}, i % 2 ? probe : owner)));
+  results.forEach((response, i) => {
+    const names = result(response).tools.map(tool => tool.name);
+    if (i % 2) assert.deepEqual(names, ['connection_status']);
+    else assert.ok(names.includes('project_list') && names.length > 30, names.join());
   });
 });

@@ -26,7 +26,7 @@ const dropped=error=>['ECONNRESET','EPIPE','UND_ERR_SOCKET'].includes(networkCod
 const rejected=response=>response.status===401||response.status===403;
 const operationSummary="'id',record_id,'action',json_extract(payload,'$.action'),'status',json_extract(payload,'$.status'),'path',json_extract(payload,'$.path'),'destination',json_extract(payload,'$.destination'),'batchPlanId',json_extract(payload,'$.batchPlanId'),'createdAt',json_extract(payload,'$.createdAt'),'rolledBackAt',json_extract(payload,'$.rolledBackAt')";
 const tools=Object.freeze(obsidianCapabilities.map(item=>Object.freeze({name:item.name,engine:'obsidian',description:item.description,schema:item.schema,
-  annotations:item.annotations,readOnly:item.annotations.readOnlyHint===true,readOnlyWhen:null,ownerOnly:false,longRunning:(item.timeoutMs||0)>=60000})));
+  annotations:item.annotations,readOnly:item.annotations.readOnlyHint===true,readOnlyWhen:null,longRunning:(item.timeoutMs||0)>=60000})));
 
 export function createHostRegistry({service,instanceRoot,fetchImpl=globalThis.fetch,sweepIntervalMs=SWEEP_INTERVAL_MS,
   requestTimeoutMs=definition=>definition.timeoutMs||30000}={}) {
@@ -159,13 +159,11 @@ export function createHostRegistry({service,instanceRoot,fetchImpl=globalThis.fe
       : ['not_recorded','No note change is journaled under this id, so no single-note change was applied. For a batch, read obsidian.properties_batch_list.'];
     return{operationId,outcome,guidance,operation:journal,request};
   }
-  async function call({projectId,capability,input={}},{callerRole,readOnly=false,signal}={}) {
+  async function call({projectId,capability,input={}},{readOnly=false,signal}={}) {
     ensure();
     const definition=obsidianCapabilities.find(item=>item.name===capability);
     if(!definition)throw unstarted('unknown_capability','Unknown Obsidian capability: '+capability+'. capability.list {engine:"obsidian"} shows them.');
     const write=!definition.annotations.readOnlyHint;
-    if(!['owner','write','read'].includes(callerRole))throw unstarted('forbidden','A verified caller role is required.');
-    if(callerRole==='read'&&write)throw unstarted('forbidden','This Obsidian operation requires write access.');
     if(readOnly&&write)throw unstarted('forbidden',capability+' changes something: call it with capability_call.');
     const project=service.project(projectId,{write});
     let args;

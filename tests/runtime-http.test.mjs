@@ -93,7 +93,7 @@ test('the workbench is entered through a single-use link; the session stays in i
   assert.match(session, /^[A-Za-z0-9_-]{43}$/); assert.notEqual(session, token);
   assert.equal((await exchange(code)).status, 401, 'the code works once');
   const snapshot = await raw(port, '/api/snapshot', { headers: { authorization: 'Bearer ' + session } });
-  assert.equal(snapshot.status, 200); assert.equal(snapshot.json.result.viewer.role, 'owner');
+  assert.equal(snapshot.status, 200); assert.equal(snapshot.json.result.instance.name, 'DevMate');
   // A browser sends a cookie to every port of this host, so a cookie means nothing here; and a session cannot mint further sessions.
   assert.equal((await raw(port, '/api/snapshot', { headers: { cookie: 'devmate_session=' + session, 'sec-fetch-site': 'same-origin' } })).status, 401);
   assert.equal((await raw(port, '/api/session', { method: 'POST', headers: { authorization: 'Bearer ' + session } })).status, 403);

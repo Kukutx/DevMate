@@ -1,6 +1,6 @@
 # Security Policy
 
-DevMate 4 is a personal and internal-team local runtime with filesystem, Git, native agent, command, browser, Godot, reverse-engineering and Obsidian capabilities. Code execution is performed under the operating-system account that runs the selected provider or host.
+DevMate 4 is a personal local runtime with one owner and no other identity. It has filesystem, Git, native agent, command, browser, Godot, reverse-engineering and Obsidian capabilities. Code execution is performed under the operating-system account that runs the selected provider or host.
 
 ## Connections and identity
 
@@ -10,9 +10,9 @@ Local control uses the private instance owner token, which is never given to a b
 
 One instance directory has exactly one runtime. Ownership is an operating-system endpoint (a named pipe on Windows, a Unix socket elsewhere) that exists only while the owning process lives, so concurrent starts from several editor windows, another editor and the CLI cannot produce two runtimes, and a record left by a crash is never mistaken for a running one.
 
-Single-owner MCP defaults to no authentication for both local and public ingress; OAuth is required for team/member identity. Public `auth.mode: none` does not prove caller identity, so that endpoint must remain private to the owner. On the control port a caller that presents no credentials is the local owner in either mode, so clients on the owner's own computer keep working when sign-in is enabled for the public address; a caller that presents a token is exactly who the token says, or is refused.
+MCP defaults to no authentication for both local and public ingress; OAuth is the owner's own sign-in on a public route. Public `auth.mode: none` does not prove caller identity, so that endpoint must remain private to the owner. On the control port a caller that presents no credentials is the local owner in either mode, so clients on the owner's own computer keep working when sign-in is enabled for the public address; a caller that presents a token is exactly who the token says, or is refused.
 
-Every service, capability, host and MCP call requires an explicit verified role; omitting identity never grants owner authority. The default `auth.mode: none` is the explicit single-owner trust model. Every request reaching `/mcp` receives owner authority. Keep such an endpoint private to the owner, including when a configured tunnel or HTTPS ingress is used.
+Every service and MCP call requires a verified identity; omitting it never grants owner authority. There are two: the owner, and the runtime's own check of its public route. With sign-in enabled that check presents a token it issued to itself, for a minute, to whatever answers at the public address; because that may be the wrong server, the token is not the owner's and is allowed one question only: which runtime is answering. It sees no project, no instructions and no other tool. The default `auth.mode: none` is the explicit single-owner trust model. Every request reaching `/mcp` receives owner authority. Keep such an endpoint private to the owner, including when a configured tunnel or HTTPS ingress is used.
 
 A Cloudflare quick tunnel cannot ask for sign-in, because its host name is new with every start and nobody could sign in at it. Its host name is not a secret either: a name is looked up through DNS in the clear. The runtime therefore answers a quick tunnel only under `/mcp/<key>`, where the key is 24 random bytes made at every start and compared in constant time; the host name alone, `/mcp` and every other path answer "not found". The key travels only inside TLS and is never on the command line of the connector. It is a bearer secret in an address: whoever holds the whole address has owner authority, `devmate doctor` prints the address without it, and a client that stores the address stores the key. Cloudflare terminates TLS and sees the requests of a quick tunnel as it does of any tunnel it runs.
 
@@ -20,7 +20,7 @@ OpenAI's tunnel is spoken by the runtime itself unless the path of OpenAI's `tun
 
 A relay of the owner's own (`devmate relay setup`) is a public server they control on which Caddy terminates TLS and forwards one path, `/mcp/<key>`, to a loopback port that this computer holds open with an OpenSSH remote forward. The key is 24 random bytes, kept in this instance's configuration and in the relay's site file, and stays the same so that the address does; every other path on the relay answers "not found". By default the relay also checks where a request comes from and answers only the published address ranges of ChatGPT and Claude and the address this computer last connected from; the ranges are fetched again every six hours and a list that cannot be read never replaces a good one. Setting a relay up runs a script as root on that server over the owner's SSH key login; no password is asked for or stored, and the first contact records the server's host key, which every later connection insists on. The relay sees the requests in the clear, as any TLS-terminating proxy does: it is the owner's machine.
 
-Optional OAuth provides team/member identity. It uses the configured HTTPS issuer, resource-bound tokens, S256 PKCE, client metadata documents, one-use login and authorization codes, refresh rotation and grant revocation. Member authorization changes invalidate old grants. Dynamic client registration and copied static member tokens are not supported.
+Optional OAuth proves that a client of the public address is the owner. It uses the configured HTTPS issuer, resource-bound tokens, S256 PKCE, client metadata documents, one-use login and authorization codes, refresh rotation and grant revocation. A one-time code is created at the owner's computer (`devmate login-code`), and the owner can list and revoke every sign-in (`auth.grant.list`, `auth.grant.revoke`). Dynamic client registration and copied static tokens are not supported.
 
 A configured public Host exposes the MCP and OAuth routes only. Local control, owner recovery, settings, host binding and the localhost UI remain private local surfaces. A local owner token does not authorize a public OAuth request. Tunnel process readiness is not proof of a working remote connection.
 
@@ -40,11 +40,11 @@ Decisions an agent waits for (approvals, questions) are the person's, and they a
 
 The two paragraphs above describe the default profile, *guarded*. The owner can replace it with *full access* (`devmate access full`, or the editor command). `access.update` is a local operation: no MCP path reaches it in either profile. The choice is stored with the instance, applies at once, and is reported by `devmate doctor`.
 
-With full access, a caller that is the owner on any surface may do what otherwise needs the local one: share a folder (`project.create`), widen a project, lift the credential-file protection, configure capability engines, answer approvals and questions, and read what says why something does not work (`runtime.doctor`, `runtime.metrics`, the names of stored credentials, the full connection status). Credential-like files are no longer withheld from the owner in the file tools and the project overview, whatever a project's own setting says. What a delegated agent asks permission for is granted by the runtime at once, preferring the option that grants it one time, when the owner started the agent and the task it is working on is the owner's; every such grant is kept as an approval record marked automatic. A question an agent asks, and a permission request that offers no granting option, still wait for an answer.
+With full access, the owner's connected client may do what otherwise needs the owner's computer: share a folder (`project.create`), widen a project, lift the credential-file protection, configure capability engines, answer approvals and questions, and read what says why something does not work (`runtime.doctor`, `runtime.metrics`, the names of stored credentials, the full connection status). Credential-like files are no longer withheld in the file tools and the project overview, whatever a project's own setting says. What a delegated agent asks permission for is granted by the runtime at once, preferring the option that grants it one time; every such grant is kept as an approval record marked automatic. A question an agent asks, and a permission request that offers no granting option, still wait for an answer.
 
 What full access does not change:
 
-- Members. An OAuth member keeps exactly its role and project grants: credential files stay withheld from it, it shares and answers nothing, and work it delegated waits for a person as before.
+- The route check. It stays what it is: one question, nothing else.
 - The editor context. It is one state for every reader, so an open credential file stays out of it.
 - Changing the installation: settings, stored credentials, starting or stopping the connection or the runtime, and the profile itself stay local, because a remote caller could cut its own route.
 - Switching on the tools that read or write the memory of other processes (`allowProcessAccess`, `allowMemoryWrite`).
@@ -53,15 +53,15 @@ The `devmate` command line is the owner's interface, and a command a client runs
 
 With full access the last distance between "can reach `/mcp` as the owner" and "is the owner at the keyboard" is gone. With `auth.mode: none` on a public address that is everyone who learns the address; `devmate doctor` reports this combination as a warning.
 
-Command lines are shown to others (process lists, a project's activity, jobs seen by another member) without the credentials written inline in them; the command that runs is unchanged. This recognises well-known forms only and is not a guarantee.
+Command lines are shown in process lists and recorded in a project's activity without the credentials written inline in them; the command that runs is unchanged. This recognises well-known forms only and is not a guarantee. A job keeps its exact command, so that it can run and be retried, and shows it as it is.
 
 Credential-like files (`.env`, key files, `.npmrc` and similar) are withheld from the file tools by default and can be enabled per project by the owner. Git status names them, marked as protected, so they are not committed by accident; their content is never returned. The read-only Git tools accept only commits as revisions and never run a program the repository configures (filters, textconv, external diff). Executables DevMate starts itself are resolved to absolute paths on `PATH`, never in the project directory.
 
-Members receive explicit project grants and read or write roles. Built-in file/resource APIs, collaboration records and MCP workbench snapshots enforce those grants. File operations check canonical project paths and exclude the runtime control directory. Reading and listing follow a link or junction only when its target is still inside the project, and judge that target: a link is never a way out of the project or around the credential protection. Nothing is written, moved or deleted through a link, and a file with a second name (a hard link) is read but never changed. File writes can require the hash observed when the file was read.
+Each shared folder is read only or writable, as the owner set it. File operations check canonical project paths and exclude the runtime control directory. Reading and listing follow a link or junction only when its target is still inside the project, and judge that target: a link is never a way out of the project or around the credential protection. Nothing is written, moved or deleted through a link, and a file with a second name (a hard link) is read but never changed. File writes can require the hash observed when the file was read.
 
-Write access is trusted local execution authority. Commands, native agents and domain engines may run with the host account's filesystem and network privileges. A project working directory or an API path check is not an operating-system sandbox. Give write access only to trusted participants; use an independently configured isolation boundary when that is required.
+Write access is trusted local execution authority. Commands, native agents and domain engines may run with the host account's filesystem and network privileges. A project working directory or an API path check is not an operating-system sandbox. Share a folder as writable only with a client you trust; use an independently configured isolation boundary when that is required.
 
-Configured external MCP servers may have independent machine-wide credentials and resources. Their discovery and calls are owner-only; members cannot reuse owner-configured MCP clients through an allowed project ID. Third-party annotations do not establish an authorization boundary.
+Configured external MCP servers may have independent machine-wide credentials and resources, and a connected client reaches them through any shared project. Third-party annotations do not establish an authorization boundary.
 
 ## Native sessions and decisions
 
@@ -75,7 +75,7 @@ Server-Sent Events are delivered from the journal by cursor: a slow reader pause
 
 An agent started with `isolate` works in a copy of the project: a Git worktree of the last commit on a branch named `devmate/copy-…` in the project's own repository. The copy is kept beside the instance directory and never inside it, so the owner token and the stored credentials are not in a folder above the one the agent works in. What the copy proposes is worked out in an index of its own; the copy's index, which the agent may be using, is not touched. Git runs there with the repository's hooks switched off. The copy keeps the agent's file changes away from the project until they are applied; it is not a sandbox: the agent's commands run with the owner's account as they do anywhere, and its permission requests are asked as usual. Applying needs write access and brings the work in as uncommitted changes, all of it or none; a change to a file the project protects stops the whole application. What is replaced is kept first, and the changes are recorded in the history like any other, so they can be taken back. A copy is removed when its work is applied or discarded and when its project is taken out of DevMate.
 
-Member OAuth principals carry their current authorization version. A queued command or capability job revalidates the member's enabled state, role, version and project grant immediately before the native effect; member updates/removal also cancel outstanding jobs. Explicit retries are attributed to the current authenticated caller. Cancellation cannot undo side effects that were already produced.
+A queued command or capability job checks immediately before the native effect that its project is still shared, and still writable when the job changes something. Cancellation cannot undo side effects that were already produced.
 
 ## Jobs and process ownership
 
@@ -101,7 +101,7 @@ Browser and reverse-engineering tools require explicit project and local tool co
 
 Review production dependency additions according to `AGENTS.md`. Use the official MCP and MCP Apps SDKs and package the third-party notices generated from the actual bundle. Keep native protocol versions and account readiness separate from package build success.
 
-Protocol, per-request identity, project grants, file writes, job outcomes, process cleanup, host drains and UI wiring are exercised by the current runtime test suites. See [STATUS.md](docs/STATUS.md) for what is not done yet and what could not be verified without real accounts and deployments.
+Protocol, per-request identity, project access, file writes, job outcomes, process cleanup, host drains and UI wiring are exercised by the current runtime test suites. See [STATUS.md](docs/STATUS.md) for what is not done yet and what could not be verified without real accounts and deployments.
 
 ## Reporting vulnerabilities
 

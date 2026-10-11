@@ -26,7 +26,6 @@ const BODY_LIMIT = 16 * 1024 * 1024;
 const REVERIFY_MS = 10 * 60_000;
 const UPKEEP_MS = 60_000;
 const LOG_LIMIT_BYTES = 8 * 1024 * 1024;
-const OWNER = Object.freeze({ id: 'owner', role: 'owner', projectIds: null });
 const STATUS = { unauthorized: 401, forbidden: 403, scope_mismatch: 403, invalid_origin: 403, not_found: 404, unknown_operation: 404,
   conflict: 409, operation_conflict: 409, body_too_large: 413, invalid_host: 421, forwarded_request: 421,
   runtime_stopping: 503, runtime_unavailable: 503 };
@@ -189,7 +188,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // The control port is reachable only from this computer, so a caller that
     // presents no credentials is its owner in either auth mode. A caller that
     // does present a token is exactly who that token says, or nobody.
-    const { principal, reason } = local && !req.headers.authorization ? { principal: { ...OWNER }, reason: null } : service.auth.check(req);
+    const { principal, reason } = local && !req.headers.authorization ? { principal: { id: 'owner' }, reason: null } : service.auth.check(req);
     for (const [name, value] of Object.entries(cors)) res.setHeader(name, value);
     if (!principal) {
       // The challenge tells a client where to sign in, and whether the token it sent was the problem.
@@ -274,14 +273,14 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       if (scope && requestProject && requestProject !== scope.projectId) throw new DomainError('scope_mismatch', 'Project is outside this editor window.');
       return send(res, 200, { ok: true, result: await service.snapshot({
         projectId: scope?.projectId || requestProject, workflowId: url.searchParams.get('workflowId') || undefined
-      }, { id: 'owner', role: 'owner', ...local, ...(scope || {}) }) });
+      }, { id: 'owner', ...local, ...(scope || {}) }) });
     }
     if (url.pathname === '/api/call' && req.method === 'POST') {
       const input = await body(req);
       if (typeof input.operation !== 'string' || !input.operation) throw new DomainError('invalid_input', 'operation must name a DevMate operation.');
       if (input.input !== undefined && (!input.input || typeof input.input !== 'object' || Array.isArray(input.input))) throw new DomainError('invalid_input', 'input must be a JSON object.');
       if (stopping && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(input.operation)) return refuse(res, 'runtime_stopping', 'Runtime is stopping.');
-      const context = { id: 'owner', role: 'owner', ...local };
+      const context = { id: 'owner', ...local };
       const windowId = req.headers['x-devmate-window-id'];
       if (windowId) {
         context.windowId = windowId;

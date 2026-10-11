@@ -17,7 +17,7 @@ async function project(t) {
   const service = { project: () => record, store: { event() {}, setting(key, value) { if (value !== undefined) settings.set(key, value); return settings.get(key); } } };
   const capabilities = await createCapabilities({ service, instanceRoot: path.join(temp, 'instance') });
   t.after(async () => { await capabilities.close(); await fsp.rm(temp, { recursive: true, force: true }); });
-  const call = async (capability, input = {}, callerRole = 'read') => (await capabilities.call({ projectId: record.id, capability, input }, { callerRole })).structuredContent;
+  const call = async (capability, input = {}) => (await capabilities.call({ projectId: record.id, capability, input })).structuredContent;
   return { root, call, write: manifest => fsp.writeFile(path.join(root, '.devmate', 'automation.json'), JSON.stringify(manifest), 'utf8') };
 }
 
@@ -47,7 +47,7 @@ test('rejects unsupported automation manifest versions and names an invalid key'
 test('a missing manifest says how to create one', async t => {
   const f = await project(t);
   assert.equal((await f.call('automation.manifest_status')).exists, false);
-  await assert.rejects(f.call('godot.acceptance_run_saved', { scenarioId: 'smoke' }, 'owner'),
+  await assert.rejects(f.call('godot.acceptance_run_saved', { scenarioId: 'smoke' }),
     /automation manifest not found: \.devmate\/automation\.json\. Start one from automation\.manifest_template, or for a Godot project with godot\.automation_bootstrap/);
 });
 

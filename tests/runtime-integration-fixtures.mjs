@@ -70,8 +70,8 @@ export async function fixture(t, { config = {}, ...extra } = {}) {
     assert.equal(response.status, 200, response.text); assert.equal(response.body.error, undefined, response.text);
     return response.body.result;
   };
-  const authorize = async memberId => {
-    const login = await call('auth.code.create', memberId ? { memberId } : {});
+  const authorize = async () => {
+    const login = await call('auth.code.create');
     const headers = { host: new URL(issuer).host, 'content-type': 'application/x-www-form-urlencoded' };
     const authorized = await request('/oauth/authorize', { method: 'POST', headers, body: new URLSearchParams({
       client_id: clientId, redirect_uri: redirectUri, response_type: 'code', resource: issuer + '/mcp',

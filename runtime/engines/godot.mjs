@@ -21,9 +21,6 @@ const settingsSchema = z.object({
   exportTimeoutMs: z.number().int().min(1000).max(1800000).optional()
 }).strict();
 
-// Where a program is installed describes the owner's computer; anyone else learns only which program it is.
-const shownExecutable = (context, executable) => !executable || context.caller() === 'owner' ? executable : String(executable).split(/[\\/]/).pop();
-
 export const godotStateAssertionSchema = z.object({
   statePath: z.string().max(1000).default(''),
   operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'includes', 'truthy', 'falsy']).default('eq'),
@@ -245,8 +242,7 @@ export const godotPlugin = definePlugin({
       let executable = null;
       let executableError = null;
       try { executable = resolveGodotExecutable(context); } catch (error) { executableError = error.message; }
-      // Settings and the full path of the editor name local programs and folders: they are shown to the owner only.
-      return context.toolText({ ...inspection, qaBridge, executable: shownExecutable(context, executable), executableError, ...(context.caller() === 'owner' ? { settings: context.settings } : {}) });
+      return context.toolText({ ...inspection, qaBridge, executable, executableError, settings: context.settings });
     });
 
     server.registerTool('project_audit', {
@@ -269,7 +265,7 @@ export const godotPlugin = definePlugin({
       const browser = browserService(context).status(project.workspace.root);
       const webPresets = audit.presets.filter(item => /web/i.test(item.platform) || /web/i.test(item.name));
       return context.toolText({
-        executable: shownExecutable(context, executable),
+        executable,
         version,
         audit,
         browserQa: browser,

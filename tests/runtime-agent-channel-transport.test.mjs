@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { startRuntime } from '../runtime/main.mjs';
 
-const owner={id:'owner',role:'owner',surface:'local'};
+const owner={id:'owner',surface:'local'};
 async function until(check,label,timeoutMs=10000) {
   const deadline=Date.now()+timeoutMs;
   while(!check()){

@@ -25,13 +25,12 @@ const methods = Object.freeze({
   'prompts.list': 'listPrompts', 'prompts.get': 'getPrompt', discover: 'discover'
 });
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const ROLES = ['owner','write','read'];
 // Vault tools are served by an attached host rather than an in-process engine.
 const HOST_ENGINE = 'obsidian';
 const MAX_ENGINE_PROCESSES = 8;
 const LIST_HINT = 'Flags are shown only when true. capability_list {name} returns the input schema of one capability and {engine} the schemas of one engine. ' +
   'Invoke a readOnly capability with capability_query {capability, input} and every other one with capability_call. A longRunning capability can exceed a minute: start it with operations_call {operation:"job.start", input:{kind:"capability", input:{capability, input}}} and follow it with operations_query {operation:"job.read", input:{id}}. ' +
-  'ownerOnly capabilities are refused for other callers. dryRun capabilities need write access only when their dryRun input is off.';
+  'dryRun capabilities need a writable project only when their dryRun input is off.';
 const issues = error => error.issues.slice(0, 8).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ');
 function oneLine(text) {
   const first = String(text || '').split(/(?<=[.!?])\s+/)[0];
@@ -108,16 +107,13 @@ export async function createCapabilities({
   const executionAbort = new AbortController();
   let closed = false;
   const assertOpen = () => { if (closed) throw fail('runtime_stopping', 'Capabilities are closing.'); };
-  const role = () => callContext.getStore()?.callerRole;
   const checkedProject = (id, write = false) => {
     assertOpen(); callContext.getStore()?.signal?.throwIfAborted();
-    if(write && !['owner','write'].includes(role()))throw fail('forbidden','Verified write access is required.');
     if(closingProjects.has(id))throw fail('project_closing','Project capability resources are closing.');
-    const project=service.project(id,{write,caller:{role:role()}});
+    const project=service.project(id,{write});
     if(!projectControllers.has(id))projectControllers.set(id,new AbortController());
     return project;
   };
-  const assertRole = value => { if(!ROLES.includes(value))throw fail('forbidden','Unknown caller role.'); };
   const tracked = async (projectId, action) => {
     assertOpen();
     const promise = Promise.resolve().then(action); pending.set(promise,projectId);
@@ -209,7 +205,6 @@ export async function createCapabilities({
       get settings() { return settingsFor(engine, projectId); },
       // Project-specific values an engine sets on the owner's behalf (for example godot.quick_setup).
       updateSettings(patch) {
-        if(role()!=='owner')throw fail('forbidden','Owner access is required to configure capabilities.');
         // The same rule as capability.configure: an engine is set up at the owner's computer, or by the owner's client with full access.
         if(!callContext.getStore()?.ownerDecides)throw fail('forbidden','Capability engines are set up by the owner on their own computer (local workbench or the devmate command), or by their connected client when they chose the full access profile.');
         project(true);
@@ -218,8 +213,6 @@ export async function createCapabilities({
         service.store.setting(projectKey(projectId, id), next); audit('configured',{keys:Object.keys(patch)});
         return settingsFor(engine, projectId);
       },
-      caller:()=>role(),
-      assertOwner(action) { if(role()!=='owner')throw fail('forbidden',action + ' is available only to the owner of this DevMate runtime.'); },
       assertCanMutate:()=>project(true),
       audit,
       toolText:value=>({content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}),
@@ -261,7 +254,7 @@ export async function createCapabilities({
           // an engine process keeps only the allow-listed part of it.
           const withheld=Object.fromEntries(Object.keys(env).filter(name=>!engineEnvironmentAllows(name)).map(name=>[name,undefined]));
           const started=await processes.run(current,{file,args,cwd:path.relative(current.root,directory).replace(/\\/g,'/')||'.',label:label||path.basename(file),
-            timeoutMs:Math.min(86400000,Math.max(1000,Number(autoStopAfterMs)||3600000)),caller:callContext.getStore()?.callerId||null,
+            timeoutMs:Math.min(86400000,Math.max(1000,Number(autoStopAfterMs)||3600000)),
             waitMs:300,environment:{...withheld,...environment}},{signal:requestSignal(projectId)});
           if(started.status==='failed')throw fail('process_not_started',(label||path.basename(file))+' could not be started: '+String(started.output||'').trim().slice(-500));
           state.processIds.add(started.id);
@@ -276,7 +269,7 @@ export async function createCapabilities({
         state.tools.set(capability,{name:capability,engine:id,description:String(definition.description||''),
           schema:z.object(shape).strict(),annotations:definition.annotations,handler,
           readOnly:definition.annotations?.readOnlyHint===true,readOnlyWhen:definition.readOnlyWhen||null,
-          ownerOnly:engine.manifest.ownerOnly===true||definition.ownerOnly===true,longRunning:definition.longRunning===true});
+          longRunning:definition.longRunning===true});
       }}
     };
     try {
@@ -285,7 +278,7 @@ export async function createCapabilities({
         description: 'Diagnose the ' + (engine.manifest.name || id) + ' engine for this project: effective settings and what its tools, executables and project files look like right now.',
         inputSchema: {}, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }
       }, async () => runtime.context.toolText({ engine: id, status: runtime.status,
-        ...(role() === 'owner' ? { settings: settingsFor(engine, projectId) } : {}), diagnostics: await engine.diagnose(runtime.context) }));
+        settings: settingsFor(engine, projectId), diagnostics: await engine.diagnose(runtime.context) }));
     } catch (error) {
       dropEngine(state, id);
       runtime.status = 'unavailable'; runtime.error = error?.message || String(error);
@@ -357,13 +350,10 @@ export async function createCapabilities({
     try{return await work;}catch(error){connections.delete(key);throw error;}
   }
 
-  // What a caller may invoke: owner-only tools for the owner, and for read access
-  // only tools that are read-only or have a read-only dry run.
-  const visible = (tool, callerRole) => (callerRole === 'owner' || !tool.ownerOnly) && (callerRole !== 'read' || tool.readOnly || !!tool.readOnlyWhen);
   const view = (tool, full) => ({
     name: tool.name, description: full ? tool.description : oneLine(tool.description),
-    ...(full ? { readOnly: tool.readOnly, ownerOnly: tool.ownerOnly, longRunning: tool.longRunning }
-      : { ...(tool.readOnly ? { readOnly: true } : {}), ...(tool.ownerOnly ? { ownerOnly: true } : {}), ...(tool.longRunning ? { longRunning: true } : {}) }),
+    ...(full ? { readOnly: tool.readOnly, longRunning: tool.longRunning }
+      : { ...(tool.readOnly ? { readOnly: true } : {}), ...(tool.longRunning ? { longRunning: true } : {}) }),
     ...(tool.readOnlyWhen ? { dryRun: true } : {}),
     ...(full ? { inputSchema: z.toJSONSchema(tool.schema), annotations: tool.annotations } : {})
   });
@@ -383,29 +373,26 @@ export async function createCapabilities({
       (near.length ? ' Did you mean ' + [...new Set(near.map(tool => tool.name))].slice(0, 3).join(', ') + '?' : '') + ' capability_list shows what this project has.');
   }
 
-  async function list({projectId,engine,name,summary,serverId,cursor}={}, {signal,callerRole}={}) {
-    assertRole(callerRole);
-    if(serverId && callerRole!=='owner')throw fail('forbidden','External MCP servers are available only to the owner.');
-    return callContext.run({signal,callerRole},()=>tracked(projectId,async()=>{
+  async function list({projectId,engine,name,summary,serverId,cursor}={}, {signal}={}) {
+    return callContext.run({signal},()=>tracked(projectId,async()=>{
       const state=await projectContext(projectId), host=hosted(projectId);
       const all=[...state.tools.values(),...(enabledFor(HOST_ENGINE,projectId)?host.items:[])];
       if(name!==undefined){
         const tool=all.find(item=>item.name===name);
         if(!tool)throw unknownCapability(state,name,all);
-        if(!visible(tool,callerRole))throw fail('forbidden',tool.ownerOnly&&callerRole!=='owner'?name+' is available only to the owner of this DevMate runtime.':name+' requires write access.');
         return{capability:{engine:tool.engine,...view(tool,true)},hint:'Invoke with '+(tool.readOnly?'capability_query':'capability_call')+' {capability:"'+name+'", input}.'+
           (tool.longRunning?' It can exceed a minute: start it with operations_call {operation:"job.start", input:{kind:"capability", input:{capability:"'+name+'", input}}} and follow it with operations_query {operation:"job.read", input:{id}}.':'')};
       }
       if(engine!==undefined && !engineIds().includes(engine))throw fail('unknown_engine','Unknown engine: '+engine+'. Engines are: '+engineIds().join(', ')+'.');
       const full=engine!==undefined && summary!==true;
-      const tools=id=>all.filter(tool=>tool.engine===id && visible(tool,callerRole)).map(tool=>view(tool,full));
+      const tools=id=>all.filter(tool=>tool.engine===id).map(tool=>view(tool,full));
       const groups=[];
       for(const [id,item] of catalog){
         if(engine!==undefined && engine!==id)continue;
         const runtime=state.runtimes.get(id), on=enabledFor(id,projectId);
         groups.push({id,name:item.manifest.name||id,...(item.manifest.description?{description:oneLine(item.manifest.description)}:{}),
           status:!on?'disabled':runtime?.status||'unavailable',...(runtime?.error?{error:runtime.error}:{}),
-          ...(item.manifest.ownerOnly?{ownerOnly:true}:{}),...(state.tools.has(id+'.diagnose')?{diagnose:id+'.diagnose'}:{}),capabilities:tools(id)});
+          ...(state.tools.has(id+'.diagnose')?{diagnose:id+'.diagnose'}:{}),capabilities:tools(id)});
       }
       // The vault engine is shown where it can matter: an attached host, a vault folder, or an explicit request.
       const vault=hostRegistry && (host.hosts.length>0 || engine===HOST_ENGINE || fs.existsSync(path.join(service.project(projectId).root,'.obsidian')));
@@ -415,7 +402,7 @@ export async function createCapabilities({
           status:!on?'disabled':host.hosts.length?'attached':'detached',hosts:host.hosts,capabilities:tools(HOST_ENGINE),
           ...(on&&!host.hosts.length?{hint:'Open this vault in Obsidian with the DevMate plugin enabled; it attaches by itself while the runtime runs.'}:{})});
       }
-      const configured=callerRole==='owner'?servers.map(({id,transport})=>({id,transport,connected:connections.has(projectId+':'+id)})):[];
+      const configured=servers.map(({id,transport})=>({id,transport,connected:connections.has(projectId+':'+id)}));
       const result={engines:groups,externalServers:configured,hint:LIST_HINT};
       if(!serverId)return result;
       const client=await connect(projectId,serverId);
@@ -434,21 +421,18 @@ export async function createCapabilities({
 
   // readOnly: the caller asked for something that only reads (capability.query); anything that would change is refused.
   // ownerDecides: the caller may set an engine up, as with capability.configure.
-  async function call({projectId,capability,input={}}={}, {signal,callerRole,callerId,ownerDecides=false,readOnly=false}={}) {
-    assertRole(callerRole);
+  async function call({projectId,capability,input={}}={}, {signal,ownerDecides=false,readOnly=false}={}) {
     const changes=name=>fail('forbidden',name+' changes something: call it with capability_call.');
-    return callContext.run({signal,callerRole,callerId,ownerDecides},()=>tracked(projectId,async()=>{
+    return callContext.run({signal,ownerDecides},()=>tracked(projectId,async()=>{
       checkedProject(projectId);
       if(typeof capability!=='string' || !capability)throw fail('invalid_input','capability must name a capability from capability_list.');
       if(!object(input))throw fail('invalid_input','Capability input must be an object.');
       if(capability.startsWith(HOST_ENGINE+'.')){
         if(!hostRegistry)throw fail('host_unavailable','No native vault host is attached.');
         if(!enabledFor(HOST_ENGINE,projectId))throw disabled(HOST_ENGINE);
-        return hostRegistry.call({projectId,capability,input},{callerRole,readOnly,signal:requestSignal(projectId)});
+        return hostRegistry.call({projectId,capability,input},{readOnly,signal:requestSignal(projectId)});
       }
       if(capability.startsWith('mcp.')){
-        // A configured server's credentials and resource scope belong to the owner.
-        if(callerRole!=='owner')throw fail('forbidden','External MCP servers are available only to the owner.');
         if(readOnly)throw changes(capability);
         const [,serverId,...parts]=capability.split('.');
         const method=parts.join('.'), target=methods[method];
@@ -466,10 +450,8 @@ export async function createCapabilities({
         const state=await projectContext(projectId);
         operation=state.tools.get(capability);
         if(!operation)throw unknownCapability(state,capability,[...state.tools.values(),...hosted(projectId).items]);
-        if(operation.ownerOnly && callerRole!=='owner')throw fail('forbidden',capability+' is available only to the owner of this DevMate runtime.');
         const requireWrite=()=>{
           if(readOnly)throw changes(capability);
-          if(callerRole==='read')throw fail('forbidden',capability+' requires write access'+(operation.readOnlyWhen?' unless it is a dry run.':'.'));
           checkedProject(projectId,true);
         };
         // Whether a dry-run capable tool writes depends on its input; every other tool is authorized before its input is looked at.
@@ -487,33 +469,30 @@ export async function createCapabilities({
     }));
   }
 
-  function settingsView(id, projectId, callerRole) {
+  function settingsView(id, projectId) {
     const engine = catalog.get(id), stored = layers(id, projectId), runtime = projectId ? projectStates.get(projectId)?.runtimes.get(id) : null;
-    const own = callerRole === 'owner';
     let effective = {}, error = null;
     if (engine) try { effective = settingsFor(engine, projectId); } catch (cause) { error = cause.message; }
     let schema;
     if (engine?.settingsSchema) try { schema = z.toJSONSchema(engine.settingsSchema); } catch {}
     return { engine: id, name: engine?.manifest.name || 'Obsidian vault', enabled: enabledFor(id, projectId),
       ...(runtime ? { status: runtime.status, ...(runtime.error ? { error: runtime.error } : {}) } : {}),
-      // Values can name local programs and folders; they are the owner's.
-      ...(own ? { settings: effective, stored } : { keys: ['enabled', ...(engine ? settingKeys(engine) : [])] }),
-      ...(error ? { settingsError: error } : {}), ...(own && schema ? { schema } : {}) };
+      settings: effective, stored,
+      ...(error ? { settingsError: error } : {}), ...(schema ? { schema } : {}) };
   }
 
   /** Read engine settings. With projectId the values that apply to that project, otherwise the instance-wide ones. */
-  async function settings({engine,projectId}={}, {callerRole}={}) {
-    assertOpen(); assertRole(callerRole);
+  async function settings({engine,projectId}={}) {
+    assertOpen();
     if(projectId)service.project(projectId);
     if(engine!==undefined && !engineIds().includes(engine))throw fail('unknown_engine','Unknown engine: '+engine+'. Engines are: '+engineIds().join(', ')+'.');
-    return{items:engineIds().filter(id=>engine===undefined||id===engine).map(id=>settingsView(id,projectId,callerRole)),
+    return{items:engineIds().filter(id=>engine===undefined||id===engine).map(id=>settingsView(id,projectId)),
       hint:'The owner changes settings with capability.configure {engine, settings}; a null value restores the default, enabled:false switches an engine off.'};
   }
 
-  /** Owner only. Merge settings into the instance-wide values of an engine, or with projectId into the values of one project. */
-  async function configure({engine,settings:patch,projectId}={}, {callerRole}={}) {
-    assertOpen(); assertRole(callerRole);
-    if(callerRole!=='owner')throw fail('forbidden','Owner access is required to configure capabilities.');
+  /** Merge settings into the instance-wide values of an engine, or with projectId into the values of one project. */
+  async function configure({engine,settings:patch,projectId}={}) {
+    assertOpen();
     if(!engineIds().includes(engine))throw fail('unknown_engine','Unknown engine: '+engine+'. Engines are: '+engineIds().join(', ')+'.');
     if(!object(patch))throw fail('invalid_input','settings must be an object of setting names and values.');
     if(projectId)service.project(projectId);
@@ -531,7 +510,7 @@ export async function createCapabilities({
       const runtime=state.runtimes.get(engine);
       if(runtime?.status==='stopping')warnings.push(runtime.error);
     }
-    return{...settingsView(engine,projectId,callerRole),scope:projectId?'project':'instance',...(warnings.length?{warnings}:{})};
+    return{...settingsView(engine,projectId),scope:projectId?'project':'instance',...(warnings.length?{warnings}:{})};
   }
 
   function closeProject(projectId) {

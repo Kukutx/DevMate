@@ -22,9 +22,7 @@ const context = {
   get settings() { return settings; },
   server: { registerTool(name, config, handler) { tools.set(name, { config, handler }); } },
   toolText: value => value,
-  // fullAccess: the owner on a writable project. readOnly: a read-only project. balanced: a write member.
-  caller: () => profile === 'balanced' ? 'write' : 'owner',
-  assertOwner(action) { if (this.caller() !== 'owner') throw new Error(action + ' is available only to the owner'); },
+  // fullAccess: a writable project. readOnly: a read-only project.
   assertCanMutate() { if (profile === 'readOnly') throw new Error('Read-only profile'); },
   workspace: {
     get(id, { writable = false } = {}) { if (id && id !== ws.id) throw new Error('Unknown workspace'); if (writable && profile === 'readOnly') throw new Error('Read-only workspace'); return ws; },
@@ -44,7 +42,7 @@ test('all 29 Reverse tools retain serializable schemas and explicit read/write a
   }
 });
 
-test('new capability composition scopes Reverse and refuses read-role writes', async t => {
+test('the capability registry scopes Reverse to its project', async t => {
   const project = { ...ws, access: 'write' }, saved = new Map();
   const service = {
     project(id) { assert.equal(id, ws.id); return project; },
@@ -52,21 +50,15 @@ test('new capability composition scopes Reverse and refuses read-role writes', a
   };
   const capabilities = await createCapabilities({ service, instanceRoot: path.join(temp, 'private'), engines: [reversePlugin] });
   t.after(() => capabilities.close());
-  const entries = (await capabilities.list({ projectId: ws.id, engine: 'reverse' }, { callerRole: 'owner' })).engines[0].capabilities;
+  const entries = (await capabilities.list({ projectId: ws.id, engine: 'reverse' })).engines[0].capabilities;
   assert.equal(entries.length, 30, 'the 29 tools and reverse.diagnose');
   assert.ok(entries.every(item => item.inputSchema.properties.workspaceId === undefined));
-  const status = await capabilities.call({ projectId: ws.id, capability: 'reverse.status' }, { callerRole: 'read' });
+  const status = await capabilities.call({ projectId: ws.id, capability: 'reverse.status' });
   assert.equal(status.structuredContent.processAccessEnabled, false);
-  const patch = { path: 'input.bin', expectedSha256: 'a'.repeat(64), patches: [{ offset: 0, expectedHex: '00', replacementHex: '01' }] };
-  await assert.rejects(capabilities.call({ projectId: ws.id, capability: 'reverse.patch_copy', input: { ...patch, dryRun: false, confirm: true, outputPath: 'out.bin' } }, { callerRole: 'read' }),
-    error => error.code === 'forbidden');
-  await assert.rejects(capabilities.call({ projectId: ws.id, capability: 'reverse.memory_read', input: { sessionId: '00000000-0000-4000-8000-000000000000', address: '0x1000' } }, { callerRole: 'write' }),
-    error => error.code === 'forbidden' && /owner/.test(error.message));
-  await assert.rejects(capabilities.call({ projectId: ws.id, capability: 'reverse.status', input: { workspaceId: 'other' } }, { callerRole: 'read' }));
+  await assert.rejects(capabilities.call({ projectId: ws.id, capability: 'reverse.status', input: { workspaceId: 'other' } }));
 });
 
 test('Reverse defaults keep process access disabled, settings strict and install nothing', async () => {
-  assert.equal(reversePlugin.manifest.ownerOnly, false, 'static tools stay available to members; process and backend tools declare ownerOnly themselves');
   assert.equal(settings.allowProcessAccess, false); assert.equal(settings.allowMemoryWrite, false);
   assert.throws(() => reverseSettingsSchema.parse({ surprise: true }));
   assert.throws(() => reverseSettingsSchema.parse({ maxFileBytes: 1024 }));
@@ -140,9 +132,6 @@ test('process-access revocation and write-off defaults are checked on existing s
   await assert.rejects(call('memory_read', { sessionId: current.id, address: '0x1000' }), /disabled/);
   settings = reverseSettingsSchema.parse({ allowProcessAccess: true });
   await assert.rejects(call('memory_write', { sessionId: current.id, address: '0x1000', expectedHex: '01', replacementHex: '02', dryRun: false, confirm: true }), /writes are disabled/);
-  profile = 'balanced';
-  await assert.rejects(call('memory_read', { sessionId: current.id, address: '0x1000' }), /only to the owner/);
-  profile = 'fullAccess';
   await assert.rejects(call('memory_read', { sessionId: current.id, address: '0x10000000000000000' }), /64 bits/);
   assert.equal((await call('session_close', { sessionId: current.id })).closed, true);
   settings = reverseSettingsSchema.parse({});

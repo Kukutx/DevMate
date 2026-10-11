@@ -80,7 +80,6 @@ export async function runNative(context, operation, payload = {}) {
   if (state.closing) throw new Error('Reverse native engine is closed');
   const assertAccess = () => {
     signal?.throwIfAborted();
-    context.assertOwner('Running the reverse-analysis helper');
     context.assertActive();
     if (!['status', 'disassemble'].includes(operation) && !context.settings.allowProcessAccess) throw new Error('Process access was disabled before helper execution');
     if (operation === 'write' && payload.dryRun === false && !context.settings.allowMemoryWrite) throw new Error('Memory writes were disabled before helper execution');

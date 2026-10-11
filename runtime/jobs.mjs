@@ -180,19 +180,11 @@ export function createJobRunner({ store, execute }) {
     await entry.promise;
     return store.get('job', id);
   }
-  function retry(id, caller) {
+  function retry(id) {
     const job = owned(id);
     if (!['failed', 'cancelled', 'unknown'].includes(job.status)) throw fail('job_not_retryable', 'Only failed, cancelled or unknown jobs can be explicitly retried.');
     if (active.has(id)) throw fail('execution_unconfirmed', 'Confirm the previous executor has stopped before retrying.');
-    return start({ projectId: job.projectId, workflowId: job.workflowId, kind: job.kind,
-      input: { ...job.input, ...(caller ? { caller } : {}) }, retryOf: job.id });
-  }
-  async function cancelForCaller(callerId) {
-    const pending = store.activeExecutionJobs({callerId});
-    const settled = await Promise.allSettled(pending.map(job => cancel(job.id)));
-    const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
-    if (errors.length) throw new AggregateError(errors, 'Some revoked caller executions did not confirm shutdown.');
-    return { callerId, jobIds: pending.map(job => job.id) };
+    return start({ projectId: job.projectId, workflowId: job.workflowId, kind: job.kind, input: job.input, retryOf: job.id });
   }
   async function closeProject(projectId) {
     store.get('project', projectId);
@@ -226,5 +218,5 @@ export function createJobRunner({ store, execute }) {
     });
     return shutdown;
   }
-  return { start, cancel, retry, cancelForCaller, closeProject, reopenProject, close, retained: () => [...active.keys()] };
+  return { start, cancel, retry, closeProject, reopenProject, close, retained: () => [...active.keys()] };
 }

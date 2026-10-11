@@ -1,5 +1,5 @@
 const ENGINE_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
-const MANIFEST_KEYS = new Set(['id', 'name', 'version', 'description', 'ownerOnly', 'permissions']);
+const MANIFEST_KEYS = new Set(['id', 'name', 'version', 'description', 'permissions']);
 
 /**
  * An engine manifest holds only what the capability registry reads:
@@ -30,7 +30,6 @@ export function validatePluginManifest(input) {
   return Object.freeze({
     id, name, version,
     description: String(input.description || '').trim(),
-    ownerOnly: input.ownerOnly === true,
     permissions: Object.freeze({ executablePatterns: Object.freeze([...new Set(executablePatterns)]) })
   });
 }
@@ -80,7 +79,6 @@ export function extendPlugin(base, extension = {}) {
       name: base.manifest.name,
       version,
       description: String(extension.description ?? base.manifest.description),
-      ownerOnly: base.manifest.ownerOnly,
       permissions: { executablePatterns: [...base.manifest.permissions.executablePatterns, ...(extension.executablePatterns || [])] }
     },
     settingsSchema: extension.settingsSchema ?? base.settingsSchema,

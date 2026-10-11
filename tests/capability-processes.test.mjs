@@ -12,7 +12,7 @@ import { finalGodotPlugin } from '../runtime/engines/godot-final.mjs';
 import { engineEnvironment as reverseEngineEnvironment } from '../runtime/engines/reverse-engines.mjs';
 
 // Engine processes are started through a real DevMateService and its real process manager.
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-capability-processes-'));
 const godot = path.join(shared, process.platform === 'win32' ? 'godot.exe' : 'godot');
 fs.copyFileSync(process.execPath, godot);
@@ -117,13 +117,11 @@ test('engine children inherit the toolchain allow-list and nothing else, however
   assert.deepEqual([scratch.PATH, scratch.ANDROID_HOME, scratch.DISPLAY, scratch.HOME, scratch.GITHUB_TOKEN], ['bin', 'sdk', ':0', 'scratch', undefined]);
 });
 
-test('engine processes are bounded per project, refused without write access, and stopped when the project closes', { timeout: 60000 }, async t => {
+test('engine processes are bounded per project and stopped when the project closes', { timeout: 60000 }, async t => {
   const f = await fixture(t);
   const wait = 'setInterval(()=>{},1000);';
   await assert.rejects(f.call('child.start_missing'), error => error.code === 'process_not_started' && /missing program could not be started/.test(error.message));
   await assert.rejects(f.call('child.start_other'), error => error.code === 'invalid_executable' && /child engine may not start godot/.test(error.message));
-  const reader = { id: 'member', role: 'read', surface: 'mcp', projectIds: [f.project.id] };
-  await assert.rejects(f.call('child.start', { script: wait }, reader), error => error.code === 'forbidden');
 
   const started = [];
   for (let index = 0; index < 8; index++) started.push(await f.call('child.start', { script: wait }));

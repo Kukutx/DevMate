@@ -12,7 +12,7 @@ import { DevMateService } from '../runtime/service.mjs';
 import { workbenchHtml } from '../runtime/workbench.mjs';
 import { resolveTool } from '../runtime/platform/tools.mjs';
 
-const testOwner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const testOwner = Object.freeze({ id: 'owner', surface: 'local' });
 const ownerCall = (service, name, input = {}) => service.call(name, input, testOwner);
 const candidates=[process.env.DEVMATE_TEST_BROWSER,chromium.executablePath(),
   path.join(process.env.PROGRAMFILES||'C:/Program Files','Google/Chrome/Application/chrome.exe'),
@@ -46,7 +46,7 @@ function fixture() {
     const items=ordered.slice(start,start+limit);
     return {items,...(start+limit<ordered.length?{nextCursor:items.at(-1).id}:{})};
   }
-  const snapshot=input=>({instance:{name:'Isolated fixture'},viewer:{id:'owner',displayName:'Owner',role:'owner'},projects,workflows:workflows.filter(item=>item.projectId===input.projectId),
+  const snapshot=input=>({instance:{name:'Isolated fixture'},projects,workflows:workflows.filter(item=>item.projectId===input.projectId),
     selection:{projectId:input.projectId||null,workflowId:input.workflowId||null},providers:['codex','claude','gemini','grok'].map(id=>({id,name:id,available:true})),
     agents:inProject(agents,input),tasks:[],approvals:[],inputs:[],artifacts:[],references:refs,activity:[],revision:0});
   async function call(operation,input={}) {

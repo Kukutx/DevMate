@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { analyzeWithEngine, reverseToolchain } from './reverse-engines.mjs';
 
 export function registerReverseEngineTools(context, register, { filePath, addressSchema }) {
-  register('toolchain', 'Discover optional reverse-engineering tools and setup guidance. probe=true also runs their import/version checks (owner only), not an analysis test. Does not install anything or change configuration.', {
+  register('toolchain', 'Discover optional reverse-engineering tools and setup guidance. probe=true also runs their import/version checks, not an analysis test. Does not install anything or change configuration.', {
     probe: z.boolean().default(false)
   }, args => reverseToolchain(context, args.probe));
 
@@ -18,12 +18,12 @@ export function registerReverseEngineTools(context, register, { filePath, addres
     if (args.engine === 'ghidra' && !['functions', 'xrefs'].includes(args.query)) throw new Error('Ghidra adapter supports functions/xrefs here; use Rizin/radare2 for this query');
     if (args.query === 'disassembly' && args.offset !== 0) throw new Error('Disassembly uses address continuation, not offset pagination');
     return analyzeWithEngine(context, context.workspace.get(args.workspaceId), args);
-  }, { ownerOnly: true, longRunning: true });
+  }, { longRunning: true });
 
   register('decompile', 'Decompile one function containing an explicit address using separately installed Ghidra and PyGhidra 3+. Uses a disposable project and never executes the input. Missing runtimes are errors, not fabricated pseudocode. Decompiled C is not original source.', {
     path: filePath, address: addressSchema,
     analysisSeconds: z.number().int().min(1).max(180).default(60),
     decompileSeconds: z.number().int().min(1).max(60).default(30),
     maxChars: z.number().int().min(1000).max(100000).default(30000)
-  }, args => analyzeWithEngine(context, context.workspace.get(args.workspaceId), { ...args, query: 'decompile', engine: 'ghidra' }), { ownerOnly: true, longRunning: true });
+  }, args => analyzeWithEngine(context, context.workspace.get(args.workspaceId), { ...args, query: 'decompile', engine: 'ghidra' }), { longRunning: true });
 }

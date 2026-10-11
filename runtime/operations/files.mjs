@@ -59,7 +59,7 @@ export function defineFileOperations(service, add) {
     ['git.blame', 'gitBlame', { path: projectPath, startLine: line.optional(), endLine: line.optional(), ref }, true, 'Show who last changed each line of a file.', { present: stdout }],
     ['git.branches', 'gitBranches', {}, true, 'List local and remote branches and the current branch.']
   ]) {
-    // A page of a file is sized for a model's client, except for the owner at this computer.
-    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly, caller: context }), args, { local: context.surface === 'local' }), options);
+    // A page of a file is sized for a model's client, except at this computer.
+    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args, { local: context.surface === 'local' }), options);
   }
 }

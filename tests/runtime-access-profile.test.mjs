@@ -10,9 +10,9 @@ import { callWorkbenchTool } from '../runtime/workbench.mjs';
 import { main } from '../runtime/cli.mjs';
 import { AdapterBase } from '../runtime/agents/common.mjs';
 
-// The owner at this computer, the same owner reached through MCP, and a signed-in member.
-const local = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
-const connected = Object.freeze({ id: 'owner', role: 'owner', projectIds: null });
+// The owner at this computer, and the same owner reached through MCP.
+const local = Object.freeze({ id: 'owner', surface: 'local' });
+const connected = Object.freeze({ id: 'owner' });
 const ALLOW_DENY = [{ optionId: 'allow', name: 'Allow once' }, { optionId: 'deny', name: 'Deny' }];
 
 // A native adapter stand-in whose every turn asks what `asks` lists, in order, before it finishes.
@@ -84,7 +84,7 @@ test('full access hands the owner\'s decisions to the owner\'s connected client,
     await assert.rejects(service.call('workspace.read', { projectId: project.id, path: '.env' }, connected), { code: 'protected_workspace_path' });
     await assert.rejects(service.call('capability.configure', { engine: 'godot', settings: { enabled: true } }, connected), { code: 'forbidden' });
     for (const name of ['project.create', 'approval.resolve', 'input.respond']) assert.equal(offered(service, connected).includes(name), false, name);
-    assert.doesNotMatch(serverInstructions(service, connected), /full access/);
+    assert.doesNotMatch(serverInstructions(service), /full access/);
   };
   await refused();
 
@@ -113,7 +113,7 @@ test('full access hands the owner\'s decisions to the owner\'s connected client,
   await service.call('window.attach', { windowId, title: 'Fixture', roots: [{ root: app, name: 'app' }] }, { ...local, windowId });
   await service.call('window.context', { windowId, context: { active: { file: path.join(app, '.env'), languageId: 'dotenv', lineCount: 1 } } }, { ...local, windowId });
   assert.equal((await service.call('editor.context', { projectId: project.id }, connected)).active, null);
-  const told = serverInstructions(service, connected);
+  const told = serverInstructions(service);
   assert.match(told, /full access/); assert.match(told, /project\.create/); assert.ok(told.length <= 2000, 'the instructions are ' + told.length + ' characters');
   // A folder that is not shared yet: the refusal says what this caller can do about it, and a path is recognised however it is spelled.
   await assert.rejects(service.call('workspace.files', { projectId: folder('not-shared') }, connected), { code: 'project_not_registered', message: /operations_call \{operation:"project\.create"/ });
@@ -135,17 +135,6 @@ test('full access hands the owner\'s decisions to the owner\'s connected client,
   for (const [operation, input] of [['settings.read', {}], ['settings.replace', { config: {} }], ['secret.set', { name: 'X', value: 'y' }], ['connection.restart', {}], ['runtime.stop', {}], ['access.update', { profile: 'guarded' }]])
     await assert.rejects(service.call(operation, input, connected), { code: 'forbidden', message: /local control interface/ }, operation);
 
-  // Full access is the owner's. An account the owner invited keeps exactly its grants: no sharing, no answering,
-  // no diagnostics, and credential files stay withheld from it, in the file tools and in the overview alike.
-  for (const member of [{ id: 'member-1', role: 'write', projectIds: [project.id] }, { id: 'member-2', role: 'read', projectIds: [project.id] }]) {
-    await assert.rejects(service.call('project.create', { root: folder('members') }, member), { code: 'forbidden' });
-    for (const name of ['project.create', 'approval.resolve', 'input.respond', 'runtime.doctor']) assert.equal(offered(service, member).includes(name), false, member.role + ' ' + name);
-    assert.doesNotMatch(serverInstructions(service, member), /full access/);
-    await assert.rejects(service.call('workspace.read', { projectId: project.id, path: '.env' }, member), { code: 'protected_workspace_path' }, member.role);
-    assert.equal((await service.call('workspace.files', { projectId: project.id }, member)).items.some(item => item.name === '.env'), false, member.role);
-    await assert.rejects(service.call('operations.query', { operation: 'runtime.doctor' }, member), { code: 'unknown_operation' });
-  }
-
   await service.call('access.update', { profile: 'guarded' }, local);
   await service.call('project.update', { id: project.id, access: 'read' }, local);
   await refused();
@@ -162,9 +151,6 @@ test('the read-only twins run what only reads and refuse everything else', async
   await assert.rejects(service.call('operations.query', { operation: 'workflow.create', input: { projectId: project.id, title: 'x' } }, connected), { code: 'forbidden', message: /operations_call/ });
   for (const operation of ['operations.call', 'operations.query', 'runtime.stop', 'settings.read'])
     await assert.rejects(service.call('operations.query', { operation }, connected), { code: 'unknown_operation' }, operation);
-  // A reader may use it: it is the only generic call such an account needs.
-  const reader = { id: 'reader', role: 'read', projectIds: [project.id] };
-  assert.ok(Array.isArray((await service.call('operations.query', { operation: 'job.list', input: { projectId: project.id } }, reader)).items));
   const status = await service.call('capability.query', { projectId: project.id, capability: 'automation.manifest_status' }, connected);
   assert.ok(status.structuredContent || status.content);
   await assert.rejects(service.call('capability.query', { projectId: project.id, capability: 'godot.quick_setup', input: { executablePath: 'C:/godot.exe' } }, connected), { code: 'forbidden', message: /capability_call/ });
@@ -247,28 +233,6 @@ test('choosing full access grants the permission an agent is already waiting for
   assert.deepEqual([record.status, record.automatic, record.answer.optionId], ['resolved', true, 'allow']);
 });
 
-test('full access grants nothing to work that an invited account delegated', async t => {
-  const { service, folder, factory } = await fixture(t);
-  const project = await service.call('project.create', { root: folder('project') }, local);
-  await service.call('access.update', { profile: 'full' }, local);
-  const member = { id: 'member-1', role: 'write', projectIds: [project.id] };
-  factory.asks = [['approval', { kind: 'Write', options: ALLOW_DENY }]];
-  const theirs = await service.call('agents.delegate', { projectId: project.id, provider: 'claude', prompt: 'Member task', waitMs: 20000 }, member);
-  assert.equal(theirs.status, 'waiting'); assert.equal(theirs.approvals.length, 1);
-  // An agent the owner started, given a task by the member: that task is the member's, and waits for a person.
-  factory.asks = [];
-  const mine = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Owner task', waitMs: 20000 }, connected);
-  assert.equal(mine.settled, true);
-  factory.asks = [['approval', { kind: 'Write', options: ALLOW_DENY }]];
-  const borrowed = await service.call('agents.delegate', { projectId: project.id, agentId: mine.agentId, prompt: 'Member task on the owner\'s agent', waitMs: 20000 }, member);
-  assert.equal(borrowed.status, 'waiting'); assert.equal(borrowed.approvals.length, 1);
-  await service.call('approval.resolve', { id: borrowed.approvals[0].id, optionId: 'allow' }, local);
-  assert.equal((await service.call('agents.result', { agentId: mine.agentId, waitMs: 5000 }, connected)).settled, true);
-  // The owner's own next task on the same agent is granted at once again.
-  const again = await service.call('agents.delegate', { projectId: project.id, agentId: mine.agentId, prompt: 'Owner again', waitMs: 20000 }, connected);
-  assert.equal(again.settled, true); assert.deepEqual(again.approvals, []);
-});
-
 test('an answer to an agent\'s question is understood however a client writes it', () => {
   const one = [{ id: 'q1', question: 'Which branch?', header: 'Branch' }];
   assert.deepEqual(AdapterBase.answersFor(one, 'main'), [['main']]);
@@ -302,10 +266,9 @@ test('how the coding agents are run is changed while DevMate runs, by the owner 
   await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { command: { file: 'codex.cmd' } } }, local), { code: 'invalid_executable' });
   const shown = (await service.call('providers.settings', { provider: 'codex' }, local)).items[0];
   assert.equal(shown.settings.maxSessions, 1); assert.equal(shown.settings.turnTimeoutMs, 3600000, 'what was never set shows its default');
-  // With full access the owner's client does it; a member never does.
+  // With full access the owner's client does it.
   await service.call('access.update', { profile: 'full' }, local);
   assert.equal((await service.call('operations.call', { operation: 'providers.configure', input: { provider: 'codex', settings: { maxSessions: 4 } } }, connected)).settings.maxSessions, 4);
-  await assert.rejects(service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 9 } }, { id: 'member-1', role: 'write', projectIds: [project.id] }), { code: 'forbidden' });
   // It is kept across a restart, and null takes a change back.
   const again = await restart();
   assert.equal(again.agents.limits('codex').maxSessions, 4); assert.equal(again.agents.providerSettings.codex.inheritMcpServers, true);

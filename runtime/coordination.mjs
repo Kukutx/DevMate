@@ -142,13 +142,13 @@ export class AgentCoordinator {
   }
 
   // isolated: the working copy this agent works in instead of the project folder ({ root, branch, base }).
-  start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, caller, isolated }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
+  start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, isolated }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
     const { project, workflow } = this.scope(projectId, workflowId);
     this.admit(project, provider, model);
     if (prompt?.trim()) this.budget(workflow, 1);
     const agent = this.store.create('agent', { projectId, workflowId, provider, model: model || null,
-      label: name || title || provider, status: 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null, caller: caller || null,
+      label: name || title || provider, status: 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null,
       ...(isolated ? { isolated } : {}) });
     this.connect(agent).catch(error => this.store.recordNotificationFailure(error));
     // Queued before the process is up: a start that fails then fails this message too.
@@ -624,7 +624,7 @@ export class AgentCoordinator {
       summary: typeof nativeRequest.summary === 'string' && nativeRequest.summary.trim() ? nativeRequest.summary.slice(0, 500) : nativeRequest.kind,
       options: nativeRequest.options || [], details, ...(session.record ? { native: nativeRequest.native } : {}) };
     // Full access is the owner's standing answer: the permission is granted at once, and what was granted stays on record.
-    const granted = kind === 'approval' && this.grantsApprovals(agent, this.turnPrincipal(session)) ? grantOnce(record.options) : undefined;
+    const granted = kind === 'approval' && this.grantsApprovals() ? grantOnce(record.options) : undefined;
     if (granted) {
       const answer = { optionId: granted };
       this.store.create(kind, { ...record, status: 'resolved', answer, automatic: true });
@@ -667,16 +667,10 @@ export class AgentCoordinator {
     });
   }
 
-  // Whose task the running turn is: the account that sent it, or the one that started the agent that sent it.
-  turnPrincipal(session) {
-    const sender = session?.turn?.sender;
-    return (sender?.kind === 'agent' ? this.find('agent', sender.id)?.caller : sender?.id) || null;
-  }
-
   // Permissions that were already waiting when the owner chose full access.
   grantWaiting() {
     for (const [id, pending] of [...this.decisions]) {
-      if (pending.kind !== 'approval' || !this.grantsApprovals(this.store.get('agent', pending.agentId), this.turnPrincipal(this.sessions.get(pending.agentId)))) continue;
+      if (pending.kind !== 'approval' || !this.grantsApprovals()) continue;
       const optionId = grantOnce(pending.nativeRequest.options || []);
       try { if (optionId) this.resolve('approval', { id, optionId, automatic: true }); }
       catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }
@@ -747,19 +741,7 @@ export class AgentCoordinator {
     return this.store.update('agent', id, { status: 'closed' });
   }
 
-  // End every session a principal started, for example when it loses access.
-  async stopForCaller(callerId) {
-    const agentIds = [];
-    for (const [agentId, session] of this.sessions) {
-      if (!session.stopped && this.find('agent', agentId)?.caller === callerId) agentIds.push(agentId);
-    }
-    const results = await Promise.allSettled(agentIds.map(id => this.stop(id)));
-    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
-    if (errors.length) throw new AggregateError(errors, 'Some agent sessions of the revoked caller did not confirm shutdown.');
-    return { callerId, agentIds };
-  }
-
-  resume(id, { caller } = {}) {
+  resume(id) {
     const agent = this.store.get('agent', id);
     const previous = this.sessions.get(id);
     if (previous && !previous.stopped) throw new DomainError('agent_connected', 'Agent already has a connected process.');
@@ -767,17 +749,16 @@ export class AgentCoordinator {
     if (agent.isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + agent.isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
     const { project } = this.scope(agent.projectId, agent.workflowId);
     this.admit(project, agent.provider, agent.model);
-    const next = this.store.update('agent', id, { status: 'starting', error: null, ...(caller ? { caller } : {}) });
+    const next = this.store.update('agent', id, { status: 'starting', error: null });
     this.connect(next, previous).catch(error => this.store.recordNotificationFailure(error));
     return next;
   }
 
   // Start (provider) or continue (agentId) an agent with one task and wait up to waitMs
   // for exactly that task. The outcome names its delivery and job for agents.result.
-  async delegate({ projectId, provider, prompt, agentId, workflowId, model, waitMs = 30000, caller, isolated } = {}, sender) {
+  async delegate({ projectId, provider, prompt, agentId, workflowId, model, waitMs = 30000, isolated } = {}, sender) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
     if (!prompt?.trim()) throw new DomainError('invalid_input', 'A task prompt is required.');
-    const owner = caller || (sender?.kind === 'user' ? sender.id : null);
     let agent;
     if (agentId) {
       agent = this.store.get('agent', agentId);
@@ -786,7 +767,7 @@ export class AgentCoordinator {
       if (provider && agent.provider !== provider) throw new DomainError('invalid_input', 'This agent runs ' + agent.provider + '. Omit provider to continue it, or omit agentId to start a new agent.');
       this.budget(this.scope(agent.projectId, agent.workflowId).workflow, 1);
       // A disconnected, unavailable or closed agent continues in a new process.
-      if (this.sessions.get(agentId)?.stopped !== false) agent = this.resume(agentId, { caller: owner });
+      if (this.sessions.get(agentId)?.stopped !== false) agent = this.resume(agentId);
     } else {
       if (!provider) throw new DomainError('invalid_input', 'Choose a provider for a new agent, or pass agentId to continue one.');
       const project = this.store.get('project', projectId);
@@ -794,7 +775,7 @@ export class AgentCoordinator {
       this.admit(project, provider, model);
       const target = workflowId || this.store.create('workflow', { projectId, status: 'active', turnBudget: 40, usedTurns: 0,
         title: 'Delegated: ' + prompt.trim().split(/\r?\n/)[0].slice(0, 80) }).id;
-      agent = this.start({ projectId, workflowId: target, provider, model, caller: owner, isolated });
+      agent = this.start({ projectId, workflowId: target, provider, model, isolated });
     }
     const message = this.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [agent.id], body: prompt }, sender);
     return this.outcome(agent.id, { deliveryId: message.deliveries[0].id, waitMs });

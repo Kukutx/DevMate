@@ -140,7 +140,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
   }
 
   // environment and label are for internal callers (engines); the public operations do not expose them.
-  function start(project, { command, file, args, cwd = '.', timeoutMs, interactive = false, caller = null, environment = {}, label = null } = {}) {
+  function start(project, { command, file, args, cwd = '.', timeoutMs, interactive = false, environment = {}, label = null } = {}) {
     if (closing) throw fail('runtime_stopping', 'Runtime is stopping.');
     if (project.access !== 'write') throw fail('read_only', 'Commands require a writable project.');
     if ((command === undefined) === (file === undefined)) throw fail('invalid_command', 'Supply either command text or an executable file with args.');
@@ -166,7 +166,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     const log = path.join(directory, id + '.log');
     // What is kept for display and for the journal is the command without inline credentials; what runs is the command as given.
-    const entry = { id, projectId: project.id, caller, label, command: redactSecrets(command ?? [file, ...(args ?? [])].join(' ')), cwd: cwd || '.',
+    const entry = { id, projectId: project.id, label, command: redactSecrets(command ?? [file, ...(args ?? [])].join(' ')), cwd: cwd || '.',
       shell: command !== undefined ? shell.label : 'direct', status: 'running', exitCode: null, signal: null, interactive,
       base: 0, bytes: 0, startedAt: new Date().toISOString(), finishedAt: null, log, fd: fs.openSync(log, 'w+', 0o600),
       waiters: new Set(), child: null, timer: null, stopReason: null, rootExited: false, detached: false, stdinEnded: false, logError: null };
@@ -348,11 +348,6 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     const errors = await stopAll(entry => entry.projectId === projectId);
     if (errors.length) throw new AggregateError(errors, 'Some project processes did not confirm termination.');
   }
-  /** Stop what one caller started, when that caller loses access. */
-  async function stopForCaller(callerId) {
-    const errors = await stopAll(entry => entry.caller === callerId);
-    if (errors.length) throw new AggregateError(errors, 'Some processes of this caller did not confirm termination.');
-  }
   async function close() {
     closing = true;
     const errors = await stopAll(() => true);
@@ -374,6 +369,6 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     return { reaped, found: names.length };
   }
-  return { run, read, write, stop, complete, list, closeProject, stopForCaller, close, shell, reapLeftovers,
+  return { run, read, write, stop, complete, list, closeProject, close, shell, reapLeftovers,
     projectOf: id => owned(id).projectId, get size() { return processes.size; } };
 }

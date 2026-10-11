@@ -116,7 +116,7 @@ test('service exposes shell and process tools with project scoping, model-facing
   const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
   await service.ready;
   t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true }); });
-  const owner = { id: 'owner', role: 'owner', surface: 'local' };
+  const owner = { id: 'owner', surface: 'local' };
   const a = await service.call('project.create', { root: rootA, name: 'Alpha' }, owner);
   const b = await service.call('project.create', { root: rootB, name: 'Beta' }, owner);
   // A project may be named by id, by registered directory or by unique name.
@@ -125,11 +125,8 @@ test('service exposes shell and process tools with project scoping, model-facing
   const byRoot = await service.call('shell.run', { projectId: rootA, command: "node -e 'setInterval(()=>console.log(1),100)'", waitMs: 500 }, owner);
   assert.equal(byRoot.projectId, a.id); assert.equal(byRoot.status, 'running');
   await assert.rejects(service.call('shell.run', { projectId: path.join(temp, 'unregistered'), command: 'x' }, owner), { code: 'project_not_registered' });
-  const memberOfB = { id: 'member-b', role: 'write', projectIds: [b.id] };
-  await assert.rejects(service.call('process.read', { id: byRoot.id }, memberOfB), { code: 'forbidden' });
-  await assert.rejects(service.call('process.stop', { id: byRoot.id }, memberOfB), { code: 'forbidden' });
   await assert.rejects(service.call('process.read', { id: byRoot.id }, { ...owner, projectId: b.id, windowId: 'w' }), { code: 'scope_mismatch' });
-  assert.deepEqual((await service.call('process.list', { projectId: b.id }, memberOfB)).items, []);
+  assert.deepEqual((await service.call('process.list', { projectId: b.id }, owner)).items, []);
   const shown = presentResult(service.operations.get('process.read'), await service.call('process.read', { id: byRoot.id }, owner));
   // The hint is a call that really waits: followed literally, it does not spin.
   assert.match(shown.content[0].text, /still running; process_read \{id:"process-[^"]+", cursor:\d+, waitMs:30000\} waits for more output/);

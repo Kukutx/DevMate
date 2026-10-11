@@ -183,7 +183,7 @@ test('the SSH route carries the relay\'s path, tells the relay this computer\'s 
   const ask = pathname => new Promise((resolve, reject) => { const req = http.request({ hostname: '127.0.0.1', port: runtime.ingressPort, path: pathname, method: 'OPTIONS', headers: { host: 'devmate.example.com' } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); req.once('error', reject); req.end(); });
   assert.deepEqual([await ask('/mcp/' + key), await ask('/mcp'), await ask('/mcp/' + 'A'.repeat(32))], [204, 404, 404]);
   // Through a relay answers may stream again: only the quick tunnel is held to plain JSON.
-  const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', role: 'owner', surface: 'local' });
+  const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' });
   assert.ok(!JSON.stringify(doctor).includes(key), 'the doctor prints the address without its key');
 });
 

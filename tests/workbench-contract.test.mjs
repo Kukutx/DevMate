@@ -61,7 +61,7 @@ test('the allow-list is exactly what the app calls, exists in the service and ne
   const ownDecision=name=>{const operation=service.operations.get(name);return operation.humanOnly===true||!!operation.ownerDecision;};
   assert.deepEqual(named.filter(ownDecision).sort(),['approval.resolve','input.respond','project.create']);
   assert.deepEqual(named.filter(name=>!service.operations.get(name).localOnly).sort(),[...WORKBENCH_OPERATIONS].sort());
-  const embedded=()=>service.visibleOperations({id:'owner',role:'owner',projectIds:null}).map(operation=>operation.name);
+  const embedded=()=>service.visibleOperations({id:'owner'}).map(operation=>operation.name);
   for(const name of ['approval.resolve','input.respond','project.create'])assert.equal(embedded().includes(name),false,name);
   service.setAccessProfile('full');
   for(const name of ['approval.resolve','input.respond','project.create'])assert.equal(embedded().includes(name),true,name);

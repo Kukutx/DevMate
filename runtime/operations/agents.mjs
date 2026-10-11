@@ -19,7 +19,7 @@ export function defineAgentOperations(service, add) {
       settings: { ...service.agents.limits(name), ...(service.agents.providerSettings[name] || {}) }, changed: (service.store.setting('providers.live') || {})[name] || {} })) }),
     { ownerDecision: OWNER_SETS_AGENTS });
   add('providers.configure', { provider: z.enum(AGENT_PROVIDERS), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
-    'Owner only. Change how one coding agent is run, without a restart: maxSessions, turnTimeoutMs, turnIdleTimeoutMs, sessionIdleMs, inheritMcpServers, inheritApiKeys and the other provider settings (providers.settings shows them). A null value takes a change back. Sessions started afterwards use it.',
+    'Change how one coding agent is run, without a restart: maxSessions, turnTimeoutMs, turnIdleTimeoutMs, sessionIdleMs, inheritMcpServers, inheritApiKeys and the other provider settings (providers.settings shows them). A null value takes a change back. Sessions started afterwards use it.',
     args => service.configureProvider(args.provider, args.settings), { ownerDecision: OWNER_SETS_AGENTS, idempotent: true });
 
   const waiting = result => [result.approvals.length ? result.approvals.length + ' approval(s)' : null, result.inputs.length ? result.inputs.length + ' question(s)' : null].filter(Boolean).join(' and ');
@@ -61,7 +61,7 @@ export function defineAgentOperations(service, add) {
       const isolated = isolate ? await service.workspace.isolate(project, 'copy-' + randomBytes(6).toString('hex')) : null;
       // The task is handed over first; waiting for it is separate, so giving up on the wait never withdraws the task.
       let started;
-      try { started = await service.agents.delegate({ ...task, waitMs: 0, caller: context.id, ...(isolated ? { isolated: { root: isolated.root, branch: isolated.branch, base: isolated.base } } : {}) }, actor(context)); }
+      try { started = await service.agents.delegate({ ...task, waitMs: 0, ...(isolated ? { isolated: { root: isolated.root, branch: isolated.branch, base: isolated.base } } : {}) }, actor(context)); }
       catch (error) { if (isolated) await service.workspace.discardProposal(project, isolated).catch(() => {}); throw error; }
       const outcome = await withChanges(await service.agents.outcome(started.agentId, { deliveryId: started.deliveryId, waitMs: wait, signal: service.waitSignal(context) }));
       // What a copy lacks decides whether the agent can check its own work there: said every time one is made.
@@ -106,7 +106,7 @@ export function defineAgentOperations(service, add) {
   add('agents.list', listOptions, true, 'List native agent sessions.', (args, context) => service.list('agent', args, context));
   add('agents.start', { ...workflowScope, provider: z.enum(AGENT_PROVIDERS), model,
     name: z.string().max(200).optional(), title: z.string().max(200).optional(), prompt: text.optional(), sessionId: z.string().max(200).optional(), ...mutation }, false,
-    'Start or explicitly resume a native provider session for this workflow.', (args, context) => service.agents.start({ ...args, caller: context.id }), { openWorld: true });
+    'Start or explicitly resume a native provider session for this workflow.', args => service.agents.start(args), { openWorld: true });
   for (const action of ['stop', 'resume', 'cancel']) add('agents.' + action, { id, ...mutation }, false,
     action + ' a native agent session.', args => service.agents[action](args.id));
   add('agents.steer', { id, body: text.min(1), ...mutation }, false, 'Steer a running turn when the provider supports it.',

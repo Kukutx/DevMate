@@ -18,7 +18,7 @@ test('the tools a model sees and the operations scripts call are the recorded on
   const service = new DevMateService({ instanceRoot: directory, endpoint: '' });
   t.after(async () => { await service.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   await service.ready;
-  const connected = { id: 'owner', role: 'owner', projectIds: null };
+  const connected = { id: 'owner' };
   const tools = {};
   for (const operation of service.visibleOperations(connected)) {
     if (!MODEL_VISIBLE_OPERATIONS.has(operation.name) || operation.localOnly) continue;

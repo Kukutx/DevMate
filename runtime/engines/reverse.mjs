@@ -38,11 +38,10 @@ async function status(context, probe = false) {
     pythonAvailable, pythonError, processAccessEnabled: context.settings.allowProcessAccess,
     memoryWriteEnabled: context.settings.allowMemoryWrite,
     limits: { maxFileBytes: context.settings.maxFileBytes, maxSessions: 8, scansPerSession: 4, candidatesPerScan: 5000, nativeProcesses: 2, externalProcesses: 2, scanBytes: 67108864, nativeTimeoutMs: context.settings.nativeTimeoutMs, analysisTimeoutMs: context.settings.analysisTimeoutMs, sessionTtlMs: context.settings.sessionTtlMs },
-    limitations: ['Process memory requires Windows and 64-bit Python', 'Disassembly requires separately installed Capstone', 'Code analysis requires Rizin/radare2 or Ghidra; decompilation requires PyGhidra and Ghidra', 'No debugger attachment, protection bypass, injection, code-page writes, or persistent value freezing',
-      'Installed backends and process memory are available only to the owner; other callers use the built-in parsers'],
+    limitations: ['Process memory requires Windows and 64-bit Python', 'Disassembly requires separately installed Capstone', 'Code analysis requires Rizin/radare2 or Ghidra; decompilation requires PyGhidra and Ghidra', 'No debugger attachment, protection bypass, injection, code-page writes, or persistent value freezing'],
     configure: 'The owner sets pythonPath, rizinPath, radare2Path, ghidraInstallDir, allowProcessAccess and allowMemoryWrite with capability.configure {engine:"reverse", settings:{…}}'
   };
-  if (probe && pythonAvailable && context.caller() === 'owner') {
+  if (probe && pythonAvailable) {
     try { result.nativeProbe = await runNative(context, 'status'); }
     catch (error) { result.nativeProbe = { available: false, error: error.message }; }
   }
@@ -61,13 +60,12 @@ export const reversePlugin = definePlugin({
   diagnose: context => status(context, true),
   async deactivate(context) { context.state.sessions.clear(); await Promise.all([stopNativeHelpers(context.state.native), stopReverseEngines(context.state.engines)]); },
   activate(context) {
-    // ownerOnly: reaches a local process or starts an installed analysis backend.
     // readOnlyWhen: the inputs for which a tool that can write only plans.
-    const register = (name, description, shape, handler, { readOnly = true, destructive = false, idempotent = readOnly, ownerOnly = false, longRunning = false, readOnlyWhen } = {}) => {
+    const register = (name, description, shape, handler, { readOnly = true, destructive = false, idempotent = readOnly, longRunning = false, readOnlyWhen } = {}) => {
       const inputSchema = { workspaceId: z.string().max(200).optional(), ...shape };
       const validated = z.object(inputSchema).strict();
       context.server.registerTool(name, {
-        title: name.replaceAll('_', ' '), description, inputSchema, ownerOnly, longRunning, readOnlyWhen,
+        title: name.replaceAll('_', ' '), description, inputSchema, longRunning, readOnlyWhen,
         annotations: { readOnlyHint: readOnly, destructiveHint: destructive, idempotentHint: idempotent, openWorldHint: false }
       }, async input => {
         context.assertActive();
@@ -79,9 +77,9 @@ export const reversePlugin = definePlugin({
     const workspace = args => context.workspace.get(args.workspaceId);
     const binary = args => readBinary(context, workspace(args), args.path);
 
-    register('status', 'Inspect reverse-analysis capabilities and limits. probe=true also runs the installed engines to check them (owner only); no dependencies are installed.', { probe: z.boolean().default(false) }, args => status(context, args.probe));
+    register('status', 'Inspect reverse-analysis capabilities and limits. probe=true also runs the installed engines to check them; no dependencies are installed.', { probe: z.boolean().default(false) }, args => status(context, args.probe));
 
-    register('binary_info', 'Inspect a project binary. The owner gets LIEF, pefile or pyelftools when installed; auto mode falls back to the limited built-in parser, labels it, and is what other callers get. Includes the selected backend/version and source hash; never executes the input.', {
+    register('binary_info', 'Inspect a project binary with LIEF, pefile or pyelftools when installed; auto mode falls back to the limited built-in parser and labels it. Includes the selected backend/version and source hash; never executes the input.', {
       path: filePath, engine: z.enum(['auto', 'lief', 'pefile', 'pyelftools', 'builtin']).optional(), maxEntries: z.number().int().min(1).max(5000).default(1000)
     }, args => inspectWithEngine(context, workspace(args), args));
 
@@ -145,7 +143,7 @@ export const reversePlugin = definePlugin({
       else bytes = hexBytes(args.hex, 8192);
       if (!bytes.length) throw new Error('No bytes to disassemble');
       return { sourceSha256: hash, ...await runNative(context, 'disassemble', { workspaceId: workspace(args).id, hex: bytes.toString('hex'), architecture: args.architecture, endian: args.endian, address: args.address, count: args.count }) };
-    }, { ownerOnly: true });
+    });
 
     registerReverseEngineTools(context, register, { filePath, addressSchema });
     registerReverseProcessTools(context, register, { addressSchema, typeSchema, endianSchema, valueSchema });

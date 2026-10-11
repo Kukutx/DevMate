@@ -34,7 +34,7 @@
 - Prefer official SDKs and protocols over hand-written equivalents.
 - Review your diff before finishing substantive code changes.
 - Stay on the current branch. Do not create branches or pull requests unless the user asks.
-- The version number changes only when the owner says so. Never raise it, tag, push or publish on your own: finish the work in local commits and release once, with the owner's approval. Every release costs CI runs, store publishes and updates on installed copies.
+- Owner-approved version: 4.0.0. The version number changes only when the owner says so, and this line changes with it, by the owner's word alone. Never raise it, tag, push or publish on your own: finish the work in local commits and release once, with the owner's approval. Every release costs CI runs, store publishes and updates on installed copies.
 
 ## Safety
 

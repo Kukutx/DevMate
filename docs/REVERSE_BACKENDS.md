@@ -2,7 +2,7 @@
 
 The `reverse` engine can hand format parsing, code analysis and decompilation to tools installed on the owner's computer. DevMate finds them, starts them with fixed arguments on a private copy of the file, bounds the result and cleans up. It does not download or install anything, never executes the analyzed file, and has no decompiler of its own.
 
-Starting an installed backend is available to the owner only. Other callers keep the built-in tools described in [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md).
+The built-in tools, which need none of this, are described in [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md).
 
 ## Which backend does what
 
