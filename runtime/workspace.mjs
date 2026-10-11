@@ -305,6 +305,18 @@ export function createWorkspaceService({ store } = {}) {
     return sha256;
   }
   const snapshotPath = (project, sha256) => project.controlRoot ? path.join(project.controlRoot, 'history', sha256) : null;
+  // What a file holds, as its hash: read whole up to the size of an edit, in pieces beyond it, and not at all beyond
+  // what history would keep (null: not known).
+  function contentHash(full, size) {
+    if (size <= MAX_FILE_BYTES) return hash(readBytes(full));
+    if (size > DELETE_SNAPSHOT_BYTES) return null;
+    const source = fs.openSync(full, 'r');
+    try {
+      const digest = createHash('sha256'), chunk = Buffer.allocUnsafe(1024 * 1024);
+      for (;;) { const read = fs.readSync(source, chunk, 0, chunk.length, null); if (!read) break; digest.update(chunk.subarray(0, read)); }
+      return digest.digest('hex');
+    } finally { fs.closeSync(source); }
+  }
   // The same for a file too large to hold in memory: copied and hashed in one pass.
   function snapshotFile(project, full) {
     if (!project.controlRoot) return null;
@@ -737,7 +749,10 @@ export function createWorkspaceService({ store } = {}) {
           restored.push({ ...step, action: 'brought back' });
         } else {
           const stat = present(item.path);
-          if ((stat?.isFile() && stat.size <= MAX_FILE_BYTES ? hash(readBytes(at(item.path))) : null) !== item.sha256) throw leave('it was changed again by something else');
+          // A file whose content after the change is not known (too large to have been read) cannot be told from one
+          // that was changed since: it is left alone, never taken for unchanged.
+          if (stat?.isFile() && !item.sha256) throw leave('what this change wrote was too large to be recorded, so it cannot be told whether it was changed since');
+          if ((stat?.isFile() ? contentHash(at(item.path), stat.size) : null) !== item.sha256) throw leave('it was changed again by something else');
           if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }); restored.push({ ...step, action: 'restored' }); }
           else { remove(project, { path: item.path }); restored.push({ ...step, action: 'removed again (this change created it)' }); }
         }
@@ -1019,18 +1034,23 @@ export function createWorkspaceService({ store } = {}) {
       checkedCommand(await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]));
     } finally { fs.rmSync(patchFile, { force: true }); }
     let warning = null;
+    // What is applied and cannot be recorded: a link (never followed, so never read) and anything else that is no
+    // plain file. It is in the project like the rest, and taking the work back does not reach it: that is said.
+    const unrecorded = [];
     const record = () => {
       for (const file of files) {
         const was = before.get(file);
         let stat = null, full = null;
-        try { full = resolveProjectPath(project, file, { mustExist: false }); stat = fs.lstatSync(full, { throwIfNoEntry: false }); } catch { continue; }
-        if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: stat.size <= MAX_FILE_BYTES ? hash(readBytes(full)) : null, written: true, previousSha256: was.sha256, proposal: copy.branch });
+        try { full = resolveProjectPath(project, file, { mustExist: false }); stat = fs.lstatSync(full, { throwIfNoEntry: false }); } catch { unrecorded.push(file); continue; }
+        if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: contentHash(full, stat.size), written: true, previousSha256: was.sha256, proposal: copy.branch });
         else if (!stat && was.existed) warning ||= event(project, 'workspace.file.removed', { path: file, entry: 'file', previousSha256: was.sha256, proposal: copy.branch });
+        else if (stat) unrecorded.push(file);
       }
     };
     if (store?.transaction) store.transaction(record); else record();
     await removeCopy(project, copy);
-    return { applied: true, files, ...(warning ? { warning } : {}) };
+    return { applied: true, files, ...(warning ? { warning } : {}),
+      ...(unrecorded.length ? { notInHistory: unrecorded, note: 'Applied, but not in the history (links and other entries that are no plain files): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') } : {}) };
   }
   async function discardProposal(project, copy) {
     await removeCopy(project, copy);

@@ -64,7 +64,10 @@ export async function buildRuntimeCandidate({root=path.resolve(import.meta.dirna
     fs.cpSync(path.join(root,'chrome-extension'),path.join(staging,'chrome-extension'),{recursive:true});
     const license=fs.readFileSync(path.join(root,'LICENSE'),'utf8');fs.writeFileSync(path.join(staging,'LICENSE'),license);
     const thirdParty=notices(root,inputs);fs.writeFileSync(path.join(staging,'THIRD_PARTY_NOTICES.txt'),thirdParty);
-    const embeddedPaths=[...outputs.filter(file=>file.startsWith('runtime/')||file.startsWith('workbench/')),'LICENSE','THIRD_PARTY_NOTICES.txt'];
+    // The Obsidian plugin carries the runtime inside it and writes it out beside its data. The browser extension goes
+    // with it, so that a DevMate that came through Obsidian has an extension to register and to keep current too.
+    const extensionFiles=fs.readdirSync(path.join(staging,'chrome-extension'),{recursive:true}).map(file=>'chrome-extension/'+String(file).replaceAll('\\','/')).filter(file=>fs.statSync(path.join(staging,file)).isFile());
+    const embeddedPaths=[...outputs.filter(file=>file.startsWith('runtime/')||file.startsWith('workbench/')),...extensionFiles,'LICENSE','THIRD_PARTY_NOTICES.txt'];
     // The files travel inside the plugin as the text they are, so that whoever reviews main.js reads the very code it will
     // write to disk. Nothing in it is encoded.
     const assets=embeddedPaths.sort().map(file=>{

@@ -108,6 +108,46 @@ test('an agent with a copy of its own leaves the project alone until its work is
   assert.equal(instances.length, 1);
 });
 
+test('a very large file an agent brought is taken back only while it is as the agent left it', { timeout: 120000 }, async t => {
+  const { service, project, factory, file } = await fixture(t);
+  // Larger than a file these tools read whole (8 MiB): its content is still known after the work is applied.
+  const large = Buffer.alloc(9 * 1024 * 1024, 0x61);
+  factory.work = (cwd, text) => fs.writeFileSync(path.join(cwd, text + '.bin'), large);
+  const arrive = async name => {
+    const point = (await service.call('workspace.history', { projectId: project.id }, connected)).items[0]?.sequence ?? 0;
+    const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: name, isolate: true, waitMs: 50000 }, connected);
+    assert.equal((await service.call('agents.apply', { agentId: done.agentId }, connected)).applied, true);
+    const entry = (await service.call('workspace.history', { projectId: project.id }, connected)).items.find(item => item.path === name + '.bin');
+    assert.match(String(entry.sha256), /^[a-f0-9]{64}$/, 'what the work wrote is recorded although it is too large to read whole');
+    return point;
+  };
+  // The person went on working in it: taking the agent's work back leaves it alone, and says so.
+  const first = await arrive('kept');
+  fs.appendFileSync(file('kept.bin'), 'mine');
+  const left = await service.call('workspace.restore', { projectId: project.id, since: first }, connected);
+  assert.deepEqual([left.restored, left.left.map(item => [item.path, item.reason])], [[], [['kept.bin', 'it was changed again by something else']]]);
+  assert.equal(fs.statSync(file('kept.bin')).size, large.length + 4, 'the person\'s file is as they left it');
+  // Nobody touched it: it goes again with the rest.
+  const second = await arrive('gone');
+  const taken = await service.call('workspace.restore', { projectId: project.id, since: second }, connected);
+  assert.deepEqual(taken.restored.map(item => [item.path, item.action]), [['gone.bin', 'removed again (this change created it)']]);
+  assert.equal(fs.existsSync(file('gone.bin')), false); assert.equal(fs.existsSync(file('kept.bin')), true);
+});
+
+test('a link an agent\'s work brought is applied and said not to be in the history', { skip: process.platform === 'win32' && 'links are plain files to Git on Windows', timeout: 60000 }, async t => {
+  const { service, project, factory, file } = await fixture(t);
+  factory.work = cwd => { fs.symlinkSync('src/a.js', path.join(cwd, 'shortcut')); fs.writeFileSync(path.join(cwd, 'plain.txt'), 'a file\n'); };
+  const point = (await service.call('workspace.history', { projectId: project.id }, connected)).items[0]?.sequence ?? 0;
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'link', isolate: true, waitMs: 20000 }, connected);
+  const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+  assert.deepEqual([applied.applied, applied.files.sort(), applied.notInHistory], [true, ['plain.txt', 'shortcut'], ['shortcut']]);
+  assert.match(applied.note, /not in the history \(links and other entries that are no plain files\): workspace_restore does not take these back\. Use Git for them: shortcut$/);
+  assert.equal(fs.lstatSync(file('shortcut')).isSymbolicLink(), true);
+  // Taking the work back takes the file and leaves the link, as it was told.
+  const taken = await service.call('workspace.restore', { projectId: project.id, since: point }, connected);
+  assert.deepEqual(taken.restored.map(item => item.path), ['plain.txt']); assert.equal(fs.lstatSync(file('shortcut')).isSymbolicLink(), true);
+});
+
 test('work that no longer fits is not applied in part, stays on its branch, and can be discarded', async t => {
   const { service, project, root, factory, instances, file, read } = await fixture(t);
   factory.work = work;

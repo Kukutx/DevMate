@@ -223,6 +223,12 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   const older = await connect('whatever', { negotiation: {}, headers: { 'user-agent': 'openai-mcp/1.0.0' } });
   assert.ok(has(await names(older), 'exec_command'));
   assert.deepEqual([...last(), runtime.service.lastClient.userAgent], ['whatever', 'gpt', 'name', 'openai-mcp/1.0.0'], 'the name it gave at the start stays with its later requests');
+  // Where its sender line says nothing about it (a library's own), the name it gave at the start is what its later
+  // requests are known by; a sender line that never gave a known name is shown DevMate's own names.
+  const quiet = await names(await connect('openai-mcp', { negotiation: {}, headers: { 'user-agent': 'python-httpx/0.27' } }));
+  assert.ok(has(quiet, 'exec_command') && !has(quiet, 'workspace_edit'), quiet.join());
+  const nobody = await names(await connect('some-tool', { negotiation: {}, headers: { 'user-agent': 'other-library/1' } }));
+  assert.ok(has(nobody, 'workspace_edit') && !has(nobody, 'exec_command'), nobody.join());
   // The owner's word in the address wins over all of it.
   const chosen = await names(await connect('openai-mcp', { query: '?tools=claude' }));
   assert.ok(has(chosen, SHELL_TOOL) && !has(chosen, 'exec_command'), chosen.join());

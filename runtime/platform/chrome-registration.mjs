@@ -168,7 +168,9 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
       // And what an earlier registration left in this program's own view of the registry, where there is such a view.
       for (const key of await apart()) await run(reg, ['delete', 'HKCU\\' + key, '/f']).catch(() => {});
     }
-    else for (const place of places()) if (read(place.file) === description || read(place.file)?.includes('"' + NATIVE_HOST + '"')) fs.rmSync(place.file, { force: true });
+    // Elsewhere the file itself lies in the browser's folder, one per account: it is this instance's while it names
+    // this instance's program, and another instance's (registered later, and in use) when it names another.
+    else for (const place of places()) { let named = null; try { named = JSON.parse(read(place.file)).path; } catch { named = null; } if (named === shim) fs.rmSync(place.file, { force: true }); }
     fs.rmSync(directory, { recursive: true, force: true });
     return status();
   }

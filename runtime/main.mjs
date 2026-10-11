@@ -369,6 +369,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // What a request says about its client and what it asks for decides which tool names it is shown (./surfaces.mjs):
     // read from the message before the SDK takes it, and carried to the factory that serves this very request.
     const asked = new AsyncLocalStorage();
+    // A client of the 2025 protocol names itself once, when it begins, and its later requests carry its sender line
+    // only. What a sender line last named itself is remembered, so that the tools it is shown stay those of its name.
+    const named = new Map();
     const noting = handler => ({ close: handler.close, async fetch(request, extra = {}) {
       // Asking which tools there are, and saying who asks, are small messages; a large one is a call and is not read twice.
       let messages = [];
@@ -378,7 +381,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       const said = messages.map(message => message.params?._meta?.['io.modelcontextprotocol/clientInfo']?.name || message.params?.clientInfo?.name).find(Boolean);
       // OpenAI's tunnel is the one thing that reaches the ingress port by its loopback address.
       const sender = request.headers.get('user-agent'), tunnel = config.connection.kind === 'openai-tunnel' && Number(new URL(request.url).port) === ingressPort;
-      const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said, userAgent: sender, tunnel });
+      if (said && sender) { named.delete(sender); named.set(sender, String(said).slice(0, 200)); if (named.size > 64) named.delete(named.keys().next().value); }
+      const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said || (sender ? named.get(sender) : undefined), userAgent: sender, tunnel });
       // Who asked last and which tool names they were given, for the doctor. What a client says of itself is its own
       // text: kept short and printable. A client of the 2025 protocol names itself once; its later requests keep that
       // name while the sender line stays the same. The check of the public route asks as itself and is not a client.

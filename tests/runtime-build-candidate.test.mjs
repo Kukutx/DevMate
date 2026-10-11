@@ -37,6 +37,10 @@ test('candidate is self contained and its Obsidian main materializes a verified 
   assert.ok(commands.has('runtime-attach-vault'));assert.equal(notices.length,0);
   const assetRoot=path.join(instance,'host-assets',built.runtimeAssetId);
   for(const file of ['main.mjs','cli.mjs','agent-channel.mjs','claude-permission-server.mjs','client.mjs','launcher.mjs','host-client.cjs'])assert.ok(fs.existsSync(path.join(assetRoot,'runtime',file)),file);
+  // The browser extension comes out beside the runtime as it is in the repository, so that a DevMate that came through
+  // Obsidian has one to register with a browser and to keep current.
+  const extension=new URL('../chrome-extension/',import.meta.url);
+  for(const file of fs.readdirSync(extension))assert.equal(fs.readFileSync(path.join(assetRoot,'chrome-extension',file),'utf8'),fs.readFileSync(new URL(file,extension),'utf8'),file);
   assert.equal(fs.existsSync(path.join(instance,'runtime.json')),false);
   assert.equal(fs.existsSync(path.join(instance,'owner-token')),false);
   const embeddedCli=spawnSync(process.execPath,[path.join(assetRoot,'runtime','cli.mjs'),'--help'],{cwd:temporary,encoding:'utf8',shell:false,windowsHide:true,timeout:15000});

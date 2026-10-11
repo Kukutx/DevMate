@@ -176,7 +176,12 @@ test('devmate chrome install tells Chrome and Edge which program the DevMate ext
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.config', 'google-chrome', 'NativeMessagingHosts', NATIVE_HOST + '.json'), 'utf8')).path, linux.files.shim);
   assert.equal(fs.readFileSync(linux.files.shim, 'utf8'), '#!/bin/sh\nexec \'/opt/node 24/bin/node\' \'' + program + '\' \'chrome-host\' \'--instance\' \'' + path.resolve(root) + '\' "$@"\n');
   assert.equal(fs.existsSync(path.join(home, '.config', 'chromium')), false, 'a browser that is not installed gets no folder');
-  assert.equal((await linux.uninstall()).registered, false); assert.equal(fs.existsSync(path.join(home, '.config', 'microsoft-edge', 'NativeMessagingHosts', NATIVE_HOST + '.json')), false);
+  // Another instance registered itself with Edge after this one: its file is in the same place under the same name,
+  // names its own program, and is not this instance's to take away.
+  const theirs = path.join(home, '.config', 'microsoft-edge', 'NativeMessagingHosts', NATIVE_HOST + '.json'), other = JSON.stringify({ name: NATIVE_HOST, path: '/elsewhere/devmate-chrome-host', type: 'stdio', allowed_origins: [EXTENSION_ORIGIN] });
+  fs.writeFileSync(theirs, other);
+  assert.equal((await linux.uninstall()).registered, false); assert.equal(fs.readFileSync(theirs, 'utf8'), other);
+  assert.equal(fs.existsSync(path.join(home, '.config', 'google-chrome', 'NativeMessagingHosts', NATIVE_HOST + '.json')), false, 'its own is gone');
   assert.deepEqual(await createChromeRegistration({ instanceRoot: root, cli: program, platform: 'freebsd', run }).status(), { registered: false, supported: false });
 
   // The command: the owner's to run, and it says what is left to do in the browser.
