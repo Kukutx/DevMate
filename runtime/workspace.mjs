@@ -867,6 +867,60 @@ export function createWorkspaceService({ store } = {}) {
     return patch(checkedCommand(await git(project, [...base, '--', ...shown], { ...input, maxOutputChars: 2000000 })), omitted);
   }
 
+  // What is not committed yet, for review: per file what happened to it and how many lines came and went, against
+  // the last commit. A new file that Git does not ignore counts as added. With since:'last_review' what was already
+  // shown and marked (markReviewed) is left out, judged by each file's content now: nothing new, nothing shown.
+  async function changes(project, input = {}) {
+    if ((await git(project, ['rev-parse', '--is-inside-work-tree'], input)).exitCode !== 0)
+      throw error('not_a_repository', 'This project is not a Git repository, so there is no commit to compare it with. workspace_history lists what DevMate\'s own tools changed here, and workspace_restore takes it back.');
+    const base = (await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], input)).exitCode === 0 ? 'HEAD' : EMPTY_TREE;
+    const status = checkedCommand(await git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { ...input, maxOutputChars: 2000000 }));
+    if (status.stdoutTruncated) throw error('output_limit', 'Too many files changed to list them here; look at them with git_status and git_diff.');
+    const files = new Map(), untracked = new Set();
+    let omittedProtected = 0;
+    const records = status.stdout.split('\0');
+    for (let index = 0; index < records.length; index++) {
+      const record = records[index]; if (!record) continue;
+      const code = record.slice(0, 2), file = slash(record.slice(3)), previousPath = /[RC]/.test(code) ? slash(records[++index] || '') : null;
+      if (hidden(project, file) || (previousPath && hidden(project, previousPath))) { omittedProtected++; continue; }
+      if (!listable(project, file, { mustExist: false })) continue;
+      if (code === '??') untracked.add(file);
+      files.set(file, { path: file, ...(previousPath ? { previousPath } : {}), type: code === '??' || code.includes('A') ? 'added' : code.includes('D') ? 'deleted' : previousPath ? 'renamed' : 'modified', additions: 0, removals: 0 });
+    }
+    if (files.size > untracked.size) {
+      // "added<TAB>removed<TAB>path", and for a rename an empty path followed by the old and the new one.
+      const counted = checkedCommand(await git(project, ['diff', '--no-ext-diff', '--no-textconv', '-M', '--numstat', '-z', base, '--'], { ...input, maxOutputChars: 2000000 })).stdout.split('\0');
+      for (let index = 0; index < counted.length; index++) {
+        const [added, removed, name] = counted[index].split('\t');
+        if (removed === undefined) continue;
+        const file = files.get(slash(name || (index += 2, counted[index])));
+        if (file) Object.assign(file, added === '-' ? { binary: true } : { additions: Number(added), removals: Number(removed) });
+      }
+    }
+    // What a file holds now, in a form that is cheap to compare later.
+    const state = item => {
+      const stat = item.type === 'deleted' ? null : fs.lstatSync(path.join(projectRoot(project), item.path), { throwIfNoEntry: false });
+      if (!stat?.isFile()) return 'absent';
+      return stat.size <= MAX_FILE_BYTES ? hash(readRegular(path.join(projectRoot(project), item.path), { linked: true })) : stat.size + ':' + stat.mtimeMs;
+    };
+    for (const item of files.values()) {
+      item.state = state(item);
+      // Git counts no lines for a file it does not track yet.
+      if (untracked.has(item.path) && item.state.length === 64) {
+        const bytes = readRegular(path.join(projectRoot(project), item.path), { linked: true });
+        if (bytes.includes(0)) item.binary = true; else if (bytes.length) item.additions = bytes.toString('utf8').split('\n').length - (bytes.at(-1) === 10 ? 1 : 0);
+      }
+    }
+    const key = 'changes.reviewed.' + project.id, reviewed = store?.setting?.(key) || {};
+    const since = input.since === 'last_commit' ? 'last_commit' : 'last_review';
+    const all = [...files.values()], shown = since === 'last_commit' ? all : all.filter(item => reviewed[item.path] !== item.state);
+    if (input.markReviewed && store?.setting) store.setting(key, Object.fromEntries(all.slice(0, 5000).map(item => [item.path, item.state])));
+    return { since, files: shown.slice(0, 500).map(({ state, ...item }) => item), ...(shown.length > 500 ? { moreFiles: shown.length - 500 } : {}),
+      additions: shown.reduce((sum, item) => sum + item.additions, 0), removals: shown.reduce((sum, item) => sum + item.removals, 0),
+      ...(since === 'last_review' && all.length > shown.length ? { alreadyReviewed: all.length - shown.length } : {}), ...(omittedProtected ? { omittedProtected } : {}),
+      ...(input.markReviewed ? { markedReviewed: all.length } : {}) };
+  }
+
   // An agent can be given a copy of the project to work in: a Git worktree on a branch of its own, kept beside the
   // instance directory and not inside it: a program that runs whatever it is asked to has no business two folders
   // away from the owner token and the stored credentials. The project sees nothing of what happens in a copy until
@@ -1033,6 +1087,6 @@ export function createWorkspaceService({ store } = {}) {
     return { items, current: items.find(item => item.current)?.name || null };
   }
   const isRepository = project => fs.existsSync(path.join(projectRoot(project), '.git'));
-  return { files, read, readBytes: readBytePage, write, edit, applyPatch, mkdir, move, remove, find, history, restore, search,
+  return { files, read, readBytes: readBytePage, write, edit, applyPatch, changes, mkdir, move, remove, find, history, restore, search,
     gitStatus, gitDiff, gitLog, gitShow, gitBlame, gitBranches, isRepository, isolate, proposal, applyProposal, discardProposal };
 }

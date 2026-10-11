@@ -21,11 +21,11 @@ export function clientSurface({ chosen, name, userAgent, tunnel } = {}) {
 const CORE = ['project.overview', 'workspace.find', 'workspace.search', 'git.status', 'git.diff', 'editor.diagnostics', 'process.stop',
   'agents.delegate', 'agents.result', 'operations.list', 'operations.query', 'operations.call'];
 export const SURFACES = Object.freeze({
-  generic: { native: [], direct: [...CORE, 'workspace.read', 'workspace.edit', 'workspace.patch', 'workspace.write', 'shell.run', 'process.read'], names: {} },
-  gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin'], direct: CORE,
-    names: { 'workspace.read': 'read', 'workspace.patch': 'apply_patch', 'workspace.edit': 'apply_patch', 'workspace.write': 'apply_patch', 'shell.run': 'exec_command', 'process.read': 'write_stdin', 'process.write': 'write_stdin' } },
-  claude: { native: ['read', 'write', 'edit', 'bash'], direct: [...CORE, 'process.read'],
-    names: { 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } }
+  generic: { native: [], direct: [...CORE, 'workspace.read', 'workspace.edit', 'workspace.patch', 'workspace.write', 'workspace.changes', 'shell.run', 'process.read'], names: {} },
+  gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin', 'show_changes'], direct: CORE,
+    names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.patch': 'apply_patch', 'workspace.edit': 'apply_patch', 'workspace.write': 'apply_patch', 'shell.run': 'exec_command', 'process.read': 'write_stdin', 'process.write': 'write_stdin' } },
+  claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...CORE, 'process.read'],
+    names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } }
 });
 
 /**
@@ -94,6 +94,10 @@ export const NATIVE_TOOLS = Object.freeze({
       if (input.chars) await call('process.write', { id: input.session_id, input: input.chars });
       return session(await call('process.read', { id: input.session_id, cursor: cursors.get(input.session_id), waitMs: input.yield_time_ms ?? (input.chars ? AFTER_WRITE_MS : POLL_MS) }), input.max_output_tokens);
     } },
+  show_changes: { title: 'Show changes', labels: ['Looking at the changes', 'Looked at the changes'], readOnly: true, operation: 'workspace.changes',
+    shape: { since: z.enum(['last_review', 'last_commit']).optional().describe('last_review (the default) leaves out what was already shown and marked; last_commit shows everything that is not committed.'),
+      mark_reviewed: z.boolean().optional().describe('Remember what is shown now as reviewed.'), ...project },
+    run: async ({ call, present }, input) => present('workspace.changes', await call('workspace.changes', { projectId: input.projectId, since: input.since, markReviewed: input.mark_reviewed })) },
   write: { title: 'Write file', labels: ['Writing a file', 'Wrote a file'], destructive: true,
     description: () => 'Create a file, or replace the whole content of an existing one. Missing folders are created; the version that was there stays restorable. To change part of a file use edit.',
     shape: { path: projectPath, content: fileText, ...project },

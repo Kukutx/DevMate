@@ -56,6 +56,15 @@ export function defineFileOperations(service, add) {
       glob: z.string().max(500).optional(), includeIgnored: z.boolean().optional(), limit: z.number().int().min(1).max(1000).optional() }, true,
       'Search project file contents with ripgrep. query is literal text unless regex is set. Honours .gitignore and skips dependency and build directories unless includeIgnored is set.',
       { present: result => result.items.map(item => item.path + ':' + item.line + ': ' + item.text).join('\n') + (result.truncated ? '\n[more matches; narrow the query, glob or path]' : '') || 'No matches.' }],
+    ['workspace.changes', 'changes', { since: z.enum(['last_review', 'last_commit']).optional().describe('last_review (the default) leaves out what was already shown and marked; last_commit shows everything that is not committed.'),
+      markReviewed: z.boolean().optional().describe('Remember what is shown now as reviewed.') }, true,
+      'Say what changed in the project and is not committed yet, whoever changed it: per file whether it was added, modified, renamed or deleted and how many lines came and went. With markReviewed the next call shows only what changed after this one, and nothing when nothing did. git_diff shows the lines themselves.',
+      { present: result => (result.files.length ? result.files.length + (result.moreFiles ? '+' : '') + ' file(s) changed (+' + result.additions + ' −' + result.removals + ')' + (result.since === 'last_review' ? ' since the last review' : ' since the last commit') + ':\n' +
+        result.files.map(file => '  ' + file.type.padEnd(9) + (file.previousPath ? file.previousPath + ' → ' : '') + file.path + (file.binary ? '  (binary)' : '  (+' + file.additions + ' −' + file.removals + ')')).join('\n') +
+        (result.moreFiles ? '\n  … and ' + result.moreFiles + ' more' : '')
+        : result.since === 'last_review' ? 'Nothing changed since the last review.' : 'Nothing is uncommitted.') +
+        (result.alreadyReviewed ? '\n[' + result.alreadyReviewed + ' other changed file(s) were reviewed before and are unchanged since; since:"last_commit" shows them]' : '') +
+        (result.omittedProtected ? '\n[' + result.omittedProtected + ' protected file(s) changed and are not shown]' : '') + (result.markedReviewed !== undefined ? '\n[marked as reviewed]' : '') }],
     ['git.status', 'gitStatus', {}, true, 'Read project Git status. Credential-like files are listed and marked protected so they are not staged by accident.', { present: result => result.stdout || 'Working tree clean.' }],
     ['git.diff', 'gitDiff', { paths: z.array(projectPath).max(100).optional(), staged: z.boolean().optional() }, true, 'Read a bounded Git diff of the working tree or the index.', { present: stdout }],
     ['git.log', 'gitLog', { ref, paths: z.array(projectPath).max(100).optional(), limit: z.number().int().min(1).max(200).optional() }, true,

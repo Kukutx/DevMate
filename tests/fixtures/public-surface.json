@@ -318,6 +318,18 @@
       "idempotentHint": false,
       "openWorldHint": true
     },
+    "workspace_changes": {
+      "parameters": [
+        "markReviewed",
+        "projectId",
+        "since"
+      ],
+      "required": [],
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
     "workspace_delete": {
       "parameters": [
         "force",
@@ -605,6 +617,7 @@
     "workflow.create",
     "workflow.list",
     "workflow.update",
+    "workspace.changes",
     "workspace.delete",
     "workspace.edit",
     "workspace.files",

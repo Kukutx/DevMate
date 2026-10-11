@@ -23,6 +23,7 @@ const MODEL_TOOLS = Object.freeze({
   'workspace.search': ['Search files', 'Searching files', 'Searched files'],
   'workspace.edit': ['Edit file', 'Editing a file', 'Edited a file'],
   'workspace.patch': ['Apply patch', 'Applying a patch', 'Applied a patch'],
+  'workspace.changes': ['Show changes', 'Looking at the changes', 'Looked at the changes'],
   'workspace.write': ['Write file', 'Writing a file', 'Wrote a file'],
   'workspace.mkdir': ['Create directory', 'Creating a directory', 'Created a directory'],
   'workspace.move': ['Move or rename', 'Moving', 'Moved'],

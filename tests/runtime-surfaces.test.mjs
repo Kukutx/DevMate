@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { DevMateService } from '../runtime/service.mjs';
 import { createMcpServer, serverInstructions } from '../runtime/mcp.mjs';
@@ -58,7 +59,7 @@ test('each surface lists a handful of tools under the names its model knows, and
   }
   t.diagnostic('tools/list bytes: ' + JSON.stringify(sizes));
   // Measured before the surfaces: 40,135 bytes for 39 tools. Every surface is now under half of that.
-  for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 20500, surface + ' lists ' + bytes + ' bytes');
+  for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 22000, surface + ' lists ' + bytes + ' bytes');
   assert.deepEqual(await names(await f.open({ surface: 'gpt', listing: true })).then(list => list.filter(name => ['read', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)).length), 4);
   assert.match(serverInstructions(f.service, 'gpt'), /read with read, change with apply_patch .*, then verify with exec_command/);
   assert.match(serverInstructions(f.service, 'claude'), /read with read, change with edit .* or write, then verify with bash/);
@@ -164,4 +165,35 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   // The owner's word in the address wins over all of it.
   const chosen = await names(await connect('openai-mcp', { query: '?tools=claude' }));
   assert.ok(has(chosen, 'bash') && !has(chosen, 'exec_command'), chosen.join());
+});
+
+test('show_changes says what is uncommitted, whoever changed it, and after a review only what is new', { timeout: 60000 }, async t => {
+  const f = await fixture(t), client = await f.open({ surface: 'claude' });
+  const call = async (name, args = {}) => f.text(await client.callTool({ name, arguments: args }));
+  const git = (...args) => { const result = spawnSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.autocrlf=false', ...args], { cwd: f.root, encoding: 'utf8', windowsHide: true }); assert.equal(result.status, 0, result.stderr); };
+  const put = (name, text) => fs.writeFileSync(path.join(f.root, name), text);
+  // Without a repository there is no commit to compare with, and the answer says what there is instead.
+  const none = await client.callTool({ name: 'show_changes', arguments: {} });
+  assert.equal(none.isError, true); assert.match(none.content[0].text, /not_a_repository/); assert.match(none.content[0].text, /workspace\.history/);
+  git('init', '-q');
+  put('a.txt', 'one\ntwo\nthree\n'); put('b.txt', 'b\n'); put('old.txt', 'x\ny\n'); put('r.txt', 'r1\nr2\nr3\nr4\nr5\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'base');
+  assert.equal(await call('show_changes'), 'Nothing changed since the last review.');
+  assert.equal(await call('show_changes', { since: 'last_commit' }), 'Nothing is uncommitted.');
+  // A change by a tool, one by a command, a deletion, a rename, a new file, and a credential file that stays out of it.
+  await call('edit', { path: 'a.txt', edits: [{ old_text: 'two', new_text: '2\n2.5' }] });
+  fs.rmSync(path.join(f.root, 'old.txt')); git('mv', 'r.txt', 'renamed.txt'); put('new.txt', 'n1\nn2\nn3\n'); put('.env', 'TOKEN=x\n');
+  const first = await call('show_changes');
+  assert.match(first, /^4 file\(s\) changed \(\+5 −3\) since the last review:/);
+  for (const line of ['  modified a.txt  (+2 −1)', '  deleted  old.txt  (+0 −2)', '  renamed  r.txt → renamed.txt  (+0 −0)', '  added    new.txt  (+3 −0)']) assert.ok(first.includes(line), line + '\n' + first);
+  assert.match(first, /\[1 protected file\(s\) changed and are not shown\]/); assert.equal(first.includes('.env'), false);
+  // Marked as reviewed, the same state has nothing new in it; a further change is the only thing shown next time.
+  assert.match(await call('show_changes', { mark_reviewed: true }), /\[marked as reviewed\]$/);
+  assert.equal(await call('show_changes'), 'Nothing changed since the last review.\n[4 other changed file(s) were reviewed before and are unchanged since; since:"last_commit" shows them]\n[1 protected file(s) changed and are not shown]');
+  put('b.txt', 'b\nmore\n'); put('new.txt', 'n1\nn2\nn3\nn4\n');
+  const next = await call('show_changes');
+  assert.match(next, /^2 file\(s\) changed \(\+5 −0\) since the last review:\n {2}modified b\.txt {2}\(\+1 −0\)\n {2}added {4}new\.txt {2}\(\+4 −0\)\n\[3 other changed file/);
+  assert.match(await call('show_changes', { since: 'last_commit' }), /^5 file\(s\) changed \(\+7 −3\) since the last commit:/);
+  // The same operation under DevMate's own name.
+  assert.match(f.text(await client.callTool({ name: 'workspace_changes', arguments: { since: 'last_commit' } })), /^5 file\(s\) changed/);
 });
