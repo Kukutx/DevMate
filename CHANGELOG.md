@@ -1,38 +1,5 @@
 # Changelog
 
-## 4.0.5
-- **A delegated agent can work in a copy of the project.** `agents_delegate` with `isolate:true` starts the agent in a Git worktree of the last commit. The project does not change until its work is read (`agents.proposal`) and applied (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or discarded (`agents.discard`). Applied work is in the history, so it can be taken back like any other change. The copy is kept beside DevMate's instance directory, never inside it.
-- **One call takes back a stretch of work.** `workspace_restore` with `since` (the number of a `workspace_history` entry, shown there as `#N`) takes back every change DevMate's file tools made after that entry, newest first. A file something else changed in the meantime is left alone and listed, and taking back can itself be taken back.
-- `runtime.metrics` says for every operation how often it was called, by whom, how long half of the calls and nineteen in twenty took, and which errors it returned, and lists the newest failures.
-- `devmate doctor --report` prints one text for a bug report: the checks, how the operations went, the newest failures and the last log lines, with credentials, private paths, account names and addresses taken out.
-- A call that names no project while several are shared says in its answer which project it was answered from.
-- What a connected client is told about the connection (`connection_status` with full access) no longer repeats the key a quick tunnel address ends in.
-- A long-running capability is started with `operations_call {operation:"job.start", …}`: the hints and the documents no longer name a tool that does not exist.
-- What every tool tells a client about itself (read-only, destructive, reaching outside) is part of the recorded public surface, so such a hint cannot change by accident.
-
-## 4.0.4
-- **The address of a quick tunnel ends in a key**, new with every start: `https://<name>.trycloudflare.com/mcp/<key>`. Only the whole address opens anything; the host name alone, which anyone watching DNS can see, answers "not found". `devmate doctor` prints the address without the key. After updating, give your client the new address from `devmate mcp-url`.
-- Through a quick tunnel DevMate answers in plain JSON, for clients of both protocol generations and without progress messages: Cloudflare does not carry event streams through quick tunnels. `npm run smoke:quick-tunnel` checks this against a real tunnel.
-- One call waits at most 50 seconds (`shell_run`, `process_read`, `agents_delegate`, `agents_result`) and one text result stays under 140,000 characters, which fits the limits of ChatGPT and Claude. Longer work keeps running and is asked about again; a result that would be larger says where it was cut and how to ask for less. A page of `workspace_read` or of a diff holds 120,000 characters, a page of command output 128 KiB, a page of bytes 96 KiB.
-- VS Code says when a route from the cloud was checked end to end under a new address, with the address one click away, and when a route stays broken; the status bar tells connecting, reconnecting and a failed check apart. Copying the address of a quick tunnel that has none yet no longer hands out the local one (also `devmate mcp-url` and Obsidian).
-- The README says which ChatGPT and Claude plans let a connector you add change things and which only read, with the sources.
-- `npm run check` fails when a file names an earlier version of DevMate or an option that was taken out.
-
-## 4.0.3
-- The documents, this changelog and the list of plugin versions describe the product as it is now. What is not done yet and what could not be verified is in `docs/STATUS.md`.
-- A connector program is looked for as an ordinary file at its path.
-
-## 4.0.2
-- **Connected in a minute, with no account:** `devmate connect quick`, or the first choice in **DevMate: Configure Connection**, starts a Cloudflare quick tunnel. Nothing is registered anywhere; DevMate runs `cloudflared`, takes the address it is given, checks that it reaches this runtime, and `devmate mcp-url` prints it. The address changes whenever the tunnel starts again and has no sign-in; the doctor says so.
-- The check of a quick tunnel waits until public DNS knows the new address, and a computer whose own DNS has not caught up yet is told apart from a route that does not work.
-- Obsidian: **Configure connection** sets up the quick tunnel, and **Copy one-time sign-in code** serves clients that sign in.
-- How the coding agents are run (sessions at once, time limits, whether they get the owner's MCP servers and API keys) is changed while DevMate runs: `providers.configure`, by the owner or, with full access, by their client. The refusals that name a limit say how to raise it.
-- The file tools read and list through links that stay inside the project, and read files that have a second name: a `node_modules` built from links is readable. Nothing is changed through a link.
-
-## 4.0.1
-- The VS Code extension is listed as "DevMate Agent": the Marketplace does not accept the display name "DevMate", which another extension holds. This is the first version of DevMate 4 on the Marketplace.
-- The build no longer fails when a package feed has an outage while installing ripgrep: the step tries again and checks that the tool is there.
-
 ## 4.0.0
 - One local runtime per instance directory with a single SQLite state store, an explicit operation registry, and identical access through MCP, the CLI, the localhost workbench and the ChatGPT/Claude MCP App.
 - Direct tool surface for the connected model: line-paged reads, glob find, ripgrep search, exact-replacement `workspace_edit`, write/mkdir/move/delete with restorable per-file history, read-only Git status/diff/log/show/blame/branches, and `shell_run` with real shell semantics (PowerShell on Windows), full owner environment, disk-spooled output paged by cursor, long-running processes, stdin and whole-tree stop.
@@ -81,3 +48,25 @@
 - Sign-in (OAuth) also works for a client that publishes no description of itself: the owner registers it under `auth.clients` with its name and redirect addresses. It is a public client like any other, with PKCE.
 - Command output written in the system's own encoding (GBK, Shift_JIS, a Windows-125x page) is read as text, line by line, beside UTF-8.
 - Obsidian, found by driving the plugin in a real Obsidian: the active note and selection reach the runtime as soon as the vault is shared; a taken port names the setting to change; an earlier error no longer stays on screen; the doctor counts only what needs attention.
+- **Connected in a minute, with no account:** `devmate connect quick`, or the first choice in **DevMate: Configure Connection**, starts a Cloudflare quick tunnel. Nothing is registered anywhere; DevMate runs `cloudflared`, takes the address it is given, checks that it reaches this runtime, and `devmate mcp-url` prints it. The address changes whenever the tunnel starts again and has no sign-in; the doctor says so.
+- The check of a quick tunnel waits until public DNS knows the new address, and a computer whose own DNS has not caught up yet is told apart from a route that does not work.
+- Obsidian: **Configure connection** sets up the quick tunnel, and **Copy one-time sign-in code** serves clients that sign in.
+- How the coding agents are run (sessions at once, time limits, whether they get the owner's MCP servers and API keys) is changed while DevMate runs: `providers.configure`, by the owner or, with full access, by their client. The refusals that name a limit say how to raise it.
+- The file tools read and list through links that stay inside the project, and read files that have a second name: a `node_modules` built from links is readable. Nothing is changed through a link.
+- **The address of a quick tunnel ends in a key**, new with every start: `https://<name>.trycloudflare.com/mcp/<key>`. Only the whole address opens anything; the host name alone, which anyone watching DNS can see, answers "not found". `devmate doctor` prints the address without the key.
+- Through a quick tunnel DevMate answers in plain JSON, for clients of both protocol generations and without progress messages: Cloudflare does not carry event streams through quick tunnels. `npm run smoke:quick-tunnel` checks this against a real tunnel.
+- One call waits at most 50 seconds (`shell_run`, `process_read`, `agents_delegate`, `agents_result`) and one text result stays under 140,000 characters, which fits the limits of ChatGPT and Claude. Longer work keeps running and is asked about again; a result that would be larger says where it was cut and how to ask for less. A page of `workspace_read` or of a diff holds 120,000 characters, a page of command output 128 KiB, a page of bytes 96 KiB.
+- VS Code says when a route from the cloud was checked end to end under a new address, with the address one click away, and when a route stays broken; the status bar tells connecting, reconnecting and a failed check apart. Copying the address of a quick tunnel that has none yet does not hand out the local one (also `devmate mcp-url` and Obsidian).
+- The README says which ChatGPT and Claude plans let a connector you add change things and which only read, with the sources.
+- `npm run check` fails when a file names an earlier version of DevMate or an option that was taken out.
+- **A delegated agent can work in a copy of the project.** `agents_delegate` with `isolate:true` starts the agent in a Git worktree of the last commit. The project does not change until its work is read (`agents.proposal`) and applied (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or discarded (`agents.discard`). Applied work is in the history, so it can be taken back like any other change. The copy is kept beside DevMate's instance directory, never inside it.
+- **One call takes back a stretch of work.** `workspace_restore` with `since` (the number of a `workspace_history` entry, shown there as `#N`) takes back every change DevMate's file tools made after that entry, newest first. A file something else changed in the meantime is left alone and listed, and taking back can itself be taken back.
+- `runtime.metrics` says for every operation how often it was called, by whom, how long half of the calls and nineteen in twenty took, and which errors it returned, and lists the newest failures.
+- `devmate doctor --report` prints one text for a bug report: the checks, how the operations went, the newest failures and the last log lines, with credentials, private paths, account names and addresses taken out.
+- A call that names no project while several are shared says in its answer which project it was answered from.
+- What a connected client is told about the connection (`connection_status` with full access) never repeats the key a quick tunnel address ends in.
+- A long-running capability is started with `operations_call {operation:"job.start", …}` and read with `operations_query {operation:"job.read", …}`.
+- What every tool tells a client about itself (read-only, destructive, reaching outside) is part of the recorded public surface, so such a hint cannot change by accident.
+- The VS Code extension is listed on the Marketplace as "DevMate Agent".
+- The release build rides out an outage of a package feed while installing ripgrep: the step tries again and checks that the tool is there.
+- What is not done yet and what could not be verified is in `docs/STATUS.md`.
