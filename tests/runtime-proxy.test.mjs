@@ -112,7 +112,7 @@ test('with a proxy in force the runtime\'s own requests reach it: the tunnel ser
   assert.ok(seen.includes('CONNECT api.openai.com:443'), seen.join());
   // A client's metadata document: fetched through the proxy, and only under a public name. The proxy looks the name
   // up and connects; a computer that cannot look names up itself (as behind such a proxy) leaves it to the proxy.
-  const behind = lookup => createClientMetadataResolver({ proxy: () => proxy.current().settings, lookup, timeoutMs: 2000 });
+  const behind = lookup => createClientMetadataResolver({ proxy: () => proxy.current().settings, lookup });
   const resolver = behind(() => { throw new Error('this computer cannot look the name up'); });
   await assert.rejects(resolver('https://client.devmate-proxy-test.example/metadata.json'), /Client metadata request failed/);
   assert.ok(seen.includes('CONNECT client.devmate-proxy-test.example:443'), seen.join());

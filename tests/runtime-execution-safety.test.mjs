@@ -226,7 +226,9 @@ test('a command that leaves something running in the background still reports it
   assert.ok(Date.now() - started < 10000, 'the exit is noticed without waiting for the background child');
   assert.deepEqual([result.status, result.exitCode, result.backgroundOutput], ['exited', 0, true]);
   assert.match(result.output, /parent done/);
-  const later = await manager.read({ id: result.id, cursor: result.cursor, waitMs: 3000 });
+  // The background child prints when it has started, later on a busy computer: it is read again until it has.
+  let later = await manager.read({ id: result.id, cursor: result.cursor, waitMs: 3000 });
+  for (const end = Date.now() + 30000; !/still/.test(later.output) && Date.now() < end;) later = await manager.read({ id: result.id, cursor: result.cursor, waitMs: 3000 });
   assert.match(later.output, /still/, 'what the background child prints is still collected');
   await assert.rejects(manager.stop({ id: result.id }), error => error.code === 'background_processes' && /not tracked/.test(error.message));
   assert.equal(alive(orphan), true, 'nothing was claimed to be stopped');

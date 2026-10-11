@@ -47,7 +47,8 @@ test('real HTTP command jobs retain results, retry with new execution, and confi
     "import fs from 'node:fs';",
     "const mode=process.argv[2];",
     "if(mode==='retry'){const n=fs.existsSync('attempt.txt')?Number(fs.readFileSync('attempt.txt','utf8'))+1:1;fs.writeFileSync('attempt.txt',String(n));console.log('attempt:'+n);process.exitCode=n===1?7:0;}",
-    "else {fs.writeFileSync('child.pid',String(process.pid));console.log('started:'+process.pid);setInterval(()=>{},1000);}"
+    // It prints before it leaves the file the test waits for: ended in between, it would have printed nothing.
+    "else {console.log('started:'+process.pid);fs.writeFileSync('child.pid',String(process.pid));setInterval(()=>{},1000);}"
   ].join('\n'));
   const launch = mode => f.call('job.start', { ...p.scope, kind: 'command', input: { file: process.execPath, args: ['command.mjs', mode] } });
   const read = id => f.call('job.read', { id });
