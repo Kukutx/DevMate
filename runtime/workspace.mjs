@@ -7,6 +7,7 @@ import { assertSafeWorkspaceRoot, assertSafeWorkspacePath, isSensitiveWorkspaceP
 import { executeCommand } from './platform/command-process.mjs';
 import { resolveTool } from './platform/tools.mjs';
 import { replaceFile } from './platform/atomic-write.mjs';
+import { parsePatch, patchText } from './patch.mjs';
 
 const WINDOWS = process.platform === 'win32';
 const CASE_INSENSITIVE = WINDOWS || process.platform === 'darwin';
@@ -503,6 +504,70 @@ export function createWorkspaceService({ store } = {}) {
     return { ...publish(project, input.path, after, sha256), previousSha256: sha256, replacements };
   }
 
+  // Several files changed as one. Every change is worked out first, against what is on disk, and nothing is written
+  // unless all of them fit. Each file is then changed like any other change (the previous version kept, the change
+  // recorded); should one fail on the way, the ones already made are taken back.
+  function applyPatch(project, input = {}) {
+    writable(project);
+    const named = new Set();
+    const claim = rel => {
+      const key = CASE_INSENSITIVE ? rel.toLowerCase() : rel;
+      if (named.has(key)) throw error('invalid_patch', 'The patch names ' + rel + ' more than once. Put everything that changes one file into one section.');
+      named.add(key);
+      return rel;
+    };
+    const plan = parsePatch(input.patch).map(change => {
+      const rel = claim(relativeInput(change.path));
+      if (change.action === 'add') {
+        if (fs.existsSync(resolveProjectPath(project, rel, { mustExist: false }))) throw error('already_exists', rel + ' already exists. Change it with an update section, or delete it in the same patch under another name first.');
+        const bytes = Buffer.from(change.text);
+        if (change.text.includes('\0') || bytes.length > MAX_FILE_BYTES) throw error('invalid_input', rel + ' must be UTF-8 text up to 8 MiB.');
+        return { operation: 'add', path: rel, bytes, expected: null, additions: change.text ? change.text.split('\n').length - (change.text.endsWith('\n') ? 1 : 0) : 0, removals: 0 };
+      }
+      const before = readBytes(resolveProjectPath(project, rel)), sha256 = hash(before);
+      if (change.action === 'delete' && !change.hunks.length) return { operation: 'delete', path: rel, expected: sha256 };
+      const result = patchText(textBytes(before), change);
+      if (change.action === 'delete') {
+        if (result.text) throw error('patch_failed', 'The patch deletes ' + rel + ', but its hunks leave part of the file. Read the file again. Nothing was changed.', { path: rel });
+        return { operation: 'delete', path: rel, expected: sha256, additions: 0, removals: result.removals };
+      }
+      // The decoder drops a leading byte-order mark; the file keeps the one it had.
+      const bytes = before.subarray(0, 3).equals(BOM) ? Buffer.concat([BOM, Buffer.from(result.text)]) : Buffer.from(result.text);
+      if (result.text.includes('\0') || bytes.length > MAX_FILE_BYTES) throw error('invalid_input', rel + ' must remain UTF-8 text up to 8 MiB.');
+      const step = { path: rel, bytes, expected: sha256, additions: result.additions, removals: result.removals, ...(result.lines.length ? { lines: result.lines } : {}) };
+      if (!change.moveTo) return { operation: 'update', ...step };
+      const to = claim(relativeInput(change.moveTo));
+      if (fs.existsSync(resolveProjectPath(project, to, { mustExist: false }))) throw error('already_exists', 'The patch moves ' + rel + ' to ' + to + ', where something already is.');
+      return { operation: 'move', ...step, path: to, previousPath: rel };
+    });
+    const shown = plan.map(({ bytes, expected, ...step }) => step);
+    const totals = { additions: plan.reduce((sum, step) => sum + (step.additions || 0), 0), removals: plan.reduce((sum, step) => sum + (step.removals || 0), 0) };
+    if (input.dryRun) return { dryRun: true, files: shown, ...totals };
+    const since = store?.revision ?? null;
+    let started = 0, warning = null;
+    try {
+      // What a patch deletes goes last: a failure before that has lost nothing yet.
+      for (const step of [...plan.filter(item => item.operation !== 'delete'), ...plan.filter(item => item.operation === 'delete')]) {
+        started++;
+        if (step.operation === 'delete') {
+          if (hash(readBytes(resolveProjectPath(project, step.path))) !== step.expected) throw error('conflict', step.path + ' changed while the patch was being applied.');
+          warning ||= remove(project, { path: step.path }).warning;
+        } else {
+          if (step.operation === 'move') warning ||= move(project, { from: step.previousPath, to: step.path }).warning;
+          warning ||= publish(project, step.path, step.bytes, step.expected).warning;
+        }
+      }
+    } catch (failure) {
+      // What was already written is undone the way a person would undo it: from the history, newest first.
+      const left = since === null ? (started > 1 ? ['what was written before the failure (no history is kept here)'] : [])
+        : takeBack(project, { since }).left.map(item => item.path + ' (' + item.reason + ')');
+      failure.message = 'The patch was not applied: ' + failure.message +
+        (left.length ? ' These changes of it could not be taken back and are still there: ' + left.join('; ') + '.' : ' Nothing of it was kept.');
+      throw failure;
+    }
+    return { files: shown, ...totals, ...(since !== null ? { since } : {}), ...(warning ? { warning } : {}) };
+  }
+
   function mkdir(project, input = {}) {
     writable(project);
     const rel = relativeInput(input.path);
@@ -963,6 +1028,6 @@ export function createWorkspaceService({ store } = {}) {
     return { items, current: items.find(item => item.current)?.name || null };
   }
   const isRepository = project => fs.existsSync(path.join(projectRoot(project), '.git'));
-  return { files, read, readBytes: readBytePage, write, edit, mkdir, move, remove, find, history, restore, search,
+  return { files, read, readBytes: readBytePage, write, edit, applyPatch, mkdir, move, remove, find, history, restore, search,
     gitStatus, gitDiff, gitLog, gitShow, gitBlame, gitBranches, isRepository, isolate, proposal, applyProposal, discardProposal };
 }

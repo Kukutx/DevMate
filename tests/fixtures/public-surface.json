@@ -422,6 +422,20 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
+    "workspace_patch": {
+      "parameters": [
+        "dryRun",
+        "patch",
+        "projectId"
+      ],
+      "required": [
+        "patch"
+      ],
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
     "workspace_read": {
       "parameters": [
         "lineCount",
@@ -597,6 +611,7 @@
     "workspace.history",
     "workspace.mkdir",
     "workspace.move",
+    "workspace.patch",
     "workspace.read",
     "workspace.read_bytes",
     "workspace.restore",

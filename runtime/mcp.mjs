@@ -20,6 +20,7 @@ const MODEL_TOOLS = Object.freeze({
   'workspace.read': ['Read file', 'Reading a file', 'Read a file'],
   'workspace.search': ['Search files', 'Searching files', 'Searched files'],
   'workspace.edit': ['Edit file', 'Editing a file', 'Edited a file'],
+  'workspace.patch': ['Apply patch', 'Applying a patch', 'Applied a patch'],
   'workspace.write': ['Write file', 'Writing a file', 'Wrote a file'],
   'workspace.mkdir': ['Create directory', 'Creating a directory', 'Created a directory'],
   'workspace.move': ['Move or rename', 'Moving', 'Moved'],
@@ -66,6 +67,7 @@ export function serverInstructions(service) {
     'projectId is a project id, root directory or unique name, and may be omitted when only one project exists.';
   const rest = [
     'shell_run executes ' + service.processes.shell.label + ' on ' + process.platform + ': tests, builds, package managers and every Git write. A command still running after waitMs keeps running; follow it with process_read and stop servers with process_stop.',
+    'workspace_patch changes several places or files in one call, all of it or none: a "*** Begin Patch" envelope or a unified diff.',
     'editor_diagnostics lists the errors the user\'s editor already reports; editor_context shows their active file and selection.',
     'agents_delegate hands a whole task to a coding agent installed here (providers_list) and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation or parallel work.',
     'Other operations (workflows, tasks, messages between agents, jobs, artifacts): operations_list {summary:true}, then operations_query to read and operations_call to change.',
