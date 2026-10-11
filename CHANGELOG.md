@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.0.0
+## 4.0.5
 - One local runtime per instance directory with a single SQLite state store, an explicit operation registry, and identical access through MCP, the CLI, the localhost workbench and the ChatGPT/Claude MCP App.
 - Direct tool surface for the connected model: line-paged reads, glob find, ripgrep search, exact-replacement `workspace_edit`, write/mkdir/move/delete with restorable per-file history, read-only Git status/diff/log/show/blame/branches, and `shell_run` with real shell semantics (PowerShell on Windows), full owner environment, disk-spooled output paged by cursor, long-running processes, stdin and whole-tree stop.
 - Tool results send bulk text once as plain content; tool hints distinguish read-only, ordinary writes, destructive and open-world operations; the server delivers working instructions including the registered projects.
