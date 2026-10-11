@@ -40,6 +40,21 @@ const unlistable = new Set(['unsafe_path', 'unsafe_file', 'outside_project', 'in
 const hash = value => createHash('sha256').update(value).digest('hex');
 const slash = value => value.replace(/\\/g, '/');
 const error = (code, message, details) => new DomainError(code, message, details);
+// On Windows a file another program has open for a moment (a virus scanner or an indexer, right after a file is
+// written) cannot be replaced, moved or deleted until it is let go. These calls hold the runtime up while they
+// wait. So for a caller that tries again by itself (quickly(), which the operations use: operations/files.mjs) it is
+// tried a few times at once and no more, and the refusal is then said as what it is, apart from every other fault:
+// the caller makes the whole change again with the runtime free in between. Any other caller gets the long wait of
+// replaceFile and the system's own error.
+const HELD = ['EPERM', 'EBUSY', 'EACCES'], QUICK_REPEATS = 4;
+const busy = rel => error('file_busy', 'Windows does not let ' + rel + ' be changed right now: another program has it open (a virus scanner or an indexer does that for a moment after a file is written). Nothing was changed. Try again in a moment.');
+// A file marked read-only is refused for good, not for a moment.
+const writableFile = full => { try { fs.accessSync(full, fs.constants.W_OK); return true; } catch { return false; } };
+function unheld(quick, rel, full, work) {
+  if (!quick) return work();
+  try { return work(); }
+  catch (failure) { throw WINDOWS && HELD.includes(failure?.code) && writableFile(full) ? busy(rel) : failure; }
+}
 const bounded = (value, fallback, max) => Number.isInteger(value) && value > 0 ? Math.min(value, max) : fallback;
 const inside = (root, target) => {
   const rel = path.relative(root, target);
@@ -225,6 +240,10 @@ function checkedCommand(result, accepted = [0]) {
 function emptyCommand() { return { exitCode: 0, stdout: '', stderr: '', timedOut: false, exitConfirmed: true, stdoutTruncated: false, stderrTruncated: false }; }
 
 export function createWorkspaceService({ store } = {}) {
+  // True while a change is made for a caller that tries again by itself (see unheld above). The changes are made in
+  // one go, without a pause in which another could begin, so one flag is enough.
+  let quick = false;
+  function quickly(change) { const before = quick; quick = true; try { return change(); } finally { quick = before; } }
   // Bookkeeping must never turn a change that already happened into a reported failure.
   const event = (project, type, data) => {
     try { store?.event(type, { id: project.id, projectId: project.id }, data); return null; }
@@ -466,14 +485,25 @@ export function createWorkspaceService({ store } = {}) {
       resolveProjectPath(project, rel, { mustExist: false });
       const latest = fs.existsSync(full) ? readBytes(full) : null;
       if ((latest === null ? null : hash(latest)) !== currentSha256) throw error('conflict', 'File changed before publication.');
-      if (current !== null) replaceFile(temp, full);
+      // A file that is in the way and open in another program is moved aside under a working copy's name (never
+      // listed), see replaceFile.
+      if (current !== null) unheld(quick, rel, full, () => replaceFile(temp, full, { aside: path.join(parent, '.devmate-write-' + randomUUID()), ...(quick ? { repeats: QUICK_REPEATS } : {}) }));
       else {
-        // Create must never replace a file that appeared meanwhile. Hard links do that
-        // atomically; filesystems without them (exFAT, some network shares) use an exclusive copy.
-        try { fs.linkSync(temp, full); }
+        // Create must never replace a file that appeared meanwhile. A second name for the working copy does that at
+        // once and whole. Not on Windows: the new file would be the very file a scanner has opened as the working
+        // copy, and Windows replaces no file that anyone has open. Measured on a busy computer, 19 of 2400 files
+        // made that way could not be replaced a moment later, for a minute and more; of 2400 made as files of their
+        // own, none. So there, and on filesystems without second names (exFAT, some network shares), it is an
+        // exclusive copy.
+        const copied = () => {
+          try { fs.copyFileSync(temp, full, fs.constants.COPYFILE_EXCL); }
+          catch (failure) { throw failure.code === 'EEXIST' ? error('conflict', 'File changed before publication.') : failure; }
+        };
+        if (WINDOWS) copied();
+        else try { fs.linkSync(temp, full); }
         catch (failure) {
           if (failure.code === 'EEXIST') throw error('conflict', 'File changed before publication.');
-          fs.copyFileSync(temp, full, fs.constants.COPYFILE_EXCL);
+          copied();
         }
       }
     } finally {
@@ -580,6 +610,8 @@ export function createWorkspaceService({ store } = {}) {
         : takeBack(project, { since }).left.map(item => item.path + ' (' + item.reason + ')');
       failure.message = 'The patch was not applied: ' + failure.message +
         (left.length ? ' These changes of it could not be taken back and are still there: ' + left.join('; ') + '.' : ' Nothing of it was kept.');
+      // With something of it still there the same patch no longer fits: it is not to be tried again as it is.
+      if (left.length) failure.incomplete = true;
       throw failure;
     }
     return { files: shown, ...totals, ...(since !== null ? { since } : {}), ...(warning ? { warning } : {}) };
@@ -636,7 +668,8 @@ export function createWorkspaceService({ store } = {}) {
       if (!input.overwrite || !sourceStat.isFile() || !targetStat.isFile()) throw error('already_exists', 'Destination exists. Only a file can replace a file, with overwrite:true.');
       replacedSha256 = snapshot(project, readBytes(target));
     }
-    fs.renameSync(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target);
+    unheld(quick, from, source, () => replaceFile(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target,
+      { repeats: quick ? QUICK_REPEATS : 0, ...(targetStat ? { aside: path.join(parent, '.devmate-write-' + randomUUID()) } : {}) }));
     const result = { from, to, type: sourceStat.isDirectory() ? 'directory' : 'file' };
     const warning = event(project, 'workspace.file.moved', { from, path: to, entry: result.type, ...(replacedSha256 ? { previousSha256: replacedSha256 } : {}) });
     return warning ? { ...result, warning } : result;
@@ -661,7 +694,7 @@ export function createWorkspaceService({ store } = {}) {
         throw error('too_large_to_keep', 'This file is ' + Math.round(stat.size / 1048576) + ' MiB, more than DevMate keeps for undo. Pass force:true to delete it without a restorable copy.');
       }
       const previousSha256 = keep(full);
-      fs.unlinkSync(full);
+      unheld(quick, rel, full, () => fs.unlinkSync(full));
       const warning = event(project, 'workspace.file.removed', { path: rel, entry: 'file', previousSha256 });
       return { path: rel, removed: true, type: 'file', restorable: !!previousSha256, ...(previousSha256 ? { previousSha256 } : {}), ...(warning ? { warning } : {}) };
     }
@@ -682,7 +715,8 @@ export function createWorkspaceService({ store } = {}) {
       if (!failure) warning ||= event(project, 'workspace.file.removed', { path: rel, entry: 'directory', files: contents.length });
     };
     if (store?.transaction) store.transaction(record); else record();
-    if (failure) throw failure;
+    // What is left of it is removed by the same call made again: what is gone is recorded already.
+    if (failure) throw quick && WINDOWS && HELD.includes(failure.code) ? busy(rel) : failure;
     return { path: rel, removed: true, type: 'directory', files: contents.length, restorableFiles: kept.length,
       restorable: kept.length === contents.length, ...(warning ? { warning } : {}) };
   }
@@ -1107,6 +1141,6 @@ export function createWorkspaceService({ store } = {}) {
     return { items, current: items.find(item => item.current)?.name || null };
   }
   const isRepository = project => fs.existsSync(path.join(projectRoot(project), '.git'));
-  return { files, read, readBytes: readBytePage, write, edit, applyPatch, changes, mkdir, move, remove, find, history, restore, search,
+  return { quickly, files, read, readBytes: readBytePage, write, edit, applyPatch, changes, mkdir, move, remove, find, history, restore, search,
     gitStatus, gitDiff, gitLog, gitShow, gitBlame, gitBranches, isRepository, isolate, proposal, applyProposal, discardProposal };
 }

@@ -13,6 +13,21 @@ export function defineFileOperations(service, add) {
     return lines.map((value, index) => String(first + index).padStart(6) + '\t' + value.replace(/\r$/, '')).join('\n');
   };
   const stdout = result => result.stdout || '(no output)';
+  // On Windows a file another program holds for a moment cannot be changed until it is let go (workspace.mjs says
+  // so with file_busy, and has changed nothing). The whole change is made again, a little later each time, for up to
+  // twenty seconds. Between the tries the runtime is free: other calls are served while this one waits.
+  const FILE_BUSY_PATIENCE_MS = 20000;
+  async function patiently(change) {
+    for (let attempt = 0, waited = 0; ; attempt++) {
+      try { return await change(); }
+      catch (failure) {
+        const pause = Math.min(1000, 100 * 2 ** attempt);
+        if (failure?.code !== 'file_busy' || failure.incomplete || waited + pause > (service.fileBusyPatienceMs ?? FILE_BUSY_PATIENCE_MS)) throw failure;
+        await new Promise(resolve => setTimeout(resolve, pause));
+        waited += pause;
+      }
+    }
+  }
   const scope = z.string().max(4096).default('');
   const ref = z.string().max(250).optional();
   for (const [name, method, shape, readOnly, description, options] of [
@@ -75,6 +90,7 @@ export function defineFileOperations(service, add) {
     ['git.branches', 'gitBranches', {}, true, 'List local and remote branches and the current branch.']
   ]) {
     // A page of a file is sized for a model's client, except at this computer.
-    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args, { local: context.surface === 'local' }), options);
+    const direct = (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args, { local: context.surface === 'local' });
+    add(name, { ...projectScope, ...shape }, readOnly, description, readOnly ? direct : (args, context) => patiently(() => service.workspace.quickly(() => direct(args, context))), options);
   }
 }
