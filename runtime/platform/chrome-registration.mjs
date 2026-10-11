@@ -131,7 +131,8 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
     if (!supported || read(manifest) === null) return { refreshed: false };
     const programs = noted(), kept = programs && fs.existsSync(programs.node) ? programs.node : null;
     let host = false;
-    if (kept && read(shim) !== starts(kept, cli)) {
+    // A runtime built into another program has no command line of its own beside it: what the browser starts stays.
+    if (kept && fs.existsSync(cli) && read(shim) !== starts(kept, cli)) {
       fs.writeFileSync(shim, starts(kept, cli), { mode: 0o755 });
       fs.writeFileSync(note, JSON.stringify({ node: kept, cli }, null, 2) + '\n', { mode: 0o600 });
       host = true;

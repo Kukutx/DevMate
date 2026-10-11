@@ -221,6 +221,8 @@ test('a registered browser is given the extension in a folder that stays, and a 
   assert.deepEqual(['manifest.json', 'background.js', 'old.js', 'icons/16.png'].map(held), ['{"version":"2"}', 'two', null, 'a picture']);
   const shim = fs.readFileSync(registration(second).files.shim, 'utf8');
   assert.ok(shim.includes(node) && shim.includes(second) && !shim.includes(first) && !shim.includes(editor), shim);
+  // A runtime that has no command line beside it (built into another program) leaves what the browser starts as it is.
+  assert.deepEqual(registration(path.join(temp, 'built-in', 'cli.mjs')).refresh(), { refreshed: true, host: false, extension: false }); assert.equal(fs.readFileSync(registration(second).files.shim, 'utf8'), shim);
   fs.rmSync(path.join(temp, 'devmate-1'), { recursive: true, force: true });
   assert.deepEqual([(await registration(second).status()).stale, (await registration(second).status()).folder], [undefined, folder], 'the old copy may go: nothing names it any more');
   // The Node it was registered with is gone: no other program is put in its place (the doctor says to register again).
