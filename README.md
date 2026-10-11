@@ -282,9 +282,9 @@ A model is shown a short list, under the names it was trained on. Which list a c
 | --- | --- | --- | --- |
 | Read a file | `read` | `read` | `workspace_read` |
 | Change files | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
-| Run a command | `exec_command` `write_stdin` | `bash` `process_read` | `shell_run` `process_read` |
-| Review what changed | `show_changes` | `show_changes` | `workspace_changes` |
-| On every list | `project_overview` `workspace_find` `workspace_search` `git_status` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+| Run a command | `exec_command` `write_stdin` | `bash` (`powershell` where commands run in PowerShell, as on Windows) `process_read` | `shell_run` `process_read` |
+| Review what changed | `show_changes` | `show_changes` | `workspace_changes` `git_status` |
+| On every list | `project_overview` `workspace_find` `workspace_search` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
 
 | Area | What it does |
 | --- | --- |
@@ -301,7 +301,7 @@ A model is shown a short list, under the names it was trained on. Which list a c
 - Every tool of every list can be called by every client: the list only decides what a model is told about up front. To choose a list yourself, add `?tools=gpt`, `?tools=claude` or `?tools=generic` to the MCP address you give the client.
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
-- A tool list has 19 to 21 entries and takes 19 to 21 KB, about half of what one list of everything took. Everything else is reached through `operations_query` and `operations_call` and costs no context until it is used.
+- A tool list has 18 to 21 entries and takes 18 to 21 KB, about half of what one list of everything took. Everything else is reached through `operations_query` and `operations_call` and costs no context until it is used.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.

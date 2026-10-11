@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { McpServer, ResourceNotFoundError, ResourceTemplate } from '@modelcontextprotocol/server';
 import { registerWorkbench } from './workbench.mjs';
 import { FOLLOWED_PROJECT } from './operations/shared.mjs';
-import { NATIVE_TOOLS, SURFACES, respell } from './surfaces.mjs';
+import { NATIVE_TOOLS, respell, surfaceFor } from './surfaces.mjs';
 import { VERSION } from './version.mjs';
 
 // The operations that can be called as tools of their own, each with the title a
@@ -59,7 +59,7 @@ const TOOL_NAME = new RegExp('\\b(' + Object.keys(MODEL_TOOLS).map(name => name.
 export const toolSpelling = text => text.replace(TOOL_NAME, name => name.replace('.', '_'));
 // The same names as they are written for a model, to be put into the words of one surface.
 const WRITTEN = new RegExp('\\b(' + Object.keys(MODEL_TOOLS).map(name => name.replace('.', '_')).join('|') + ')\\b', 'g');
-export const surfaceSpelling = (text, surface) => respell(toolSpelling(text), surface, WRITTEN);
+export const surfaceSpelling = (text, shown) => respell(toolSpelling(text), shown, WRITTEN);
 
 // Clients cut server instructions short: some read only the first 512
 // characters, others stop at 2048. The first paragraph therefore carries the
@@ -92,7 +92,7 @@ export function serverInstructions(service, surface = 'generic') {
     if (known.length + entry.length > budget - 40) { known += ' and ' + (projects.length - index) + ' more (project_list).'; break; }
     known += entry;
   }
-  return surfaceSpelling([lead, known, rest].join('\n'), surface);
+  return surfaceSpelling([lead, known, rest].join('\n'), surfaceFor(surface, service.processes.shell));
 }
 
 // What a client is told about a tool before it decides whether to ask the person first.
@@ -189,9 +189,9 @@ const found = (uri, reading) => reading.catch(error => { throw error.code === 'n
 export function createMcpServer(service, context, { surface = 'generic', listing = false } = {}) {
   // Whoever is not the owner is the runtime checking its own public route. It gets the one tool that says which
   // runtime answers: no instructions, no workbench, no resources, nothing that names a project.
-  const operations = service.visibleOperations(context), owner = context.id === 'owner', shown = SURFACES[surface];
+  const operations = service.visibleOperations(context), owner = context.id === 'owner', shown = surfaceFor(surface, service.processes.shell);
   const server = new McpServer({ name: 'devmate', title: 'DevMate', version: VERSION }, owner ? { instructions: serverInstructions(service, surface) } : {});
-  const spelled = text => surfaceSpelling(text, surface);
+  const spelled = text => surfaceSpelling(text, shown);
   const failed = error => ({ isError: true, content: [{ type: 'text', text: JSON.stringify({
     code: error.code || 'operation_failed', message: spelled(error.message), ...(error.details ? { details: error.details } : {}) }) }] });
   // What an operation says to a model in words is said with the names of the caller's surface; data stays as it is.

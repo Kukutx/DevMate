@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { DevMateService } from '../runtime/service.mjs';
 import { createMcpServer, serverInstructions } from '../runtime/mcp.mjs';
-import { SURFACES, clientSurface } from '../runtime/surfaces.mjs';
+import { clientSurface, surfaceFor } from '../runtime/surfaces.mjs';
 import { startRuntime } from '../runtime/main.mjs';
 
 const owner = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
@@ -33,6 +33,8 @@ async function fixture(t) {
 }
 const names = async client => (await client.listTools()).tools.map(tool => tool.name);
 const WORKBENCH = ['open_devmate_workbench', 'workbench_call'];
+// Commands run in PowerShell on Windows and in bash or sh elsewhere, and the Claude surface's tool is named after that.
+const SHELL_TOOL = process.platform === 'win32' ? 'powershell' : 'bash', OTHER_SHELL_TOOL = process.platform === 'win32' ? 'bash' : 'powershell';
 
 test('a client gets the tools of the model it is: by its name, by how it reached the runtime, or as the owner chose', () => {
   for (const [said, surface] of [[{ name: 'openai-mcp' }, 'gpt'], [{ name: 'ChatGPT' }, 'gpt'], [{ name: 'codex-mcp-client' }, 'gpt'], [{ userAgent: 'openai-mcp/1.0.0' }, 'gpt'],
@@ -50,7 +52,11 @@ test('each surface lists a handful of tools under the names its model knows, and
   for (const surface of ['generic', 'gpt', 'claude']) {
     const client = await f.open({ surface, listing: true }), listed = await client.listTools();
     sizes[surface] = Buffer.byteLength(JSON.stringify(listed));
-    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [...SURFACES[surface].direct.map(name => name.replace('.', '_')), ...SURFACES[surface].native, ...WORKBENCH].sort(), surface);
+    const shown = surfaceFor(surface, f.service.processes.shell);
+    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [...shown.direct.map(name => name.replace('.', '_')), ...shown.native, ...WORKBENCH].sort(), surface);
+    // A tool's name does not promise another shell than the one that runs.
+    if (surface === 'claude') { assert.ok(shown.native.includes(SHELL_TOOL) && !shown.native.includes(OTHER_SHELL_TOOL), shown.native.join()); assert.ok(listed.tools.find(tool => tool.name === SHELL_TOOL).description.includes(f.service.processes.shell.label)); }
+    if (surface === 'gpt') assert.ok(listed.tools.find(tool => tool.name === 'exec_command').description.startsWith('The shell here is ' + f.service.processes.shell.label), 'the first thing exec_command says is which shell this is');
     // What the instructions and the descriptions name is there to be called: a tool of this surface, or an operation (written with a dot).
     const tools = new Set(listed.tools.map(tool => tool.name)), words = client.getInstructions() + '\n' + listed.tools.map(tool => tool.description).join('\n');
     for (const named of words.match(/\b(?:workspace|shell|process|git|project|editor|agents|operations|capability|providers|connection)_[a-z_]+\b/g) || []) assert.ok(tools.has(named), surface + ': ' + named + ' is named but not a tool here');
@@ -62,7 +68,13 @@ test('each surface lists a handful of tools under the names its model knows, and
   for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 22000, surface + ' lists ' + bytes + ' bytes');
   assert.deepEqual(await names(await f.open({ surface: 'gpt', listing: true })).then(list => list.filter(name => ['read', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)).length), 4);
   assert.match(serverInstructions(f.service, 'gpt'), /read with read, change with apply_patch .*, then verify with exec_command/);
-  assert.match(serverInstructions(f.service, 'claude'), /read with read, change with edit .* or write, then verify with bash/);
+  assert.match(serverInstructions(f.service, 'claude'), new RegExp('read with read, change with edit .* or write, then verify with ' + SHELL_TOOL));
+  // Whatever this computer runs, both ways round: bash where commands run in bash or sh, powershell where they run in PowerShell.
+  for (const [shell, named] of [[{ kind: 'sh', label: 'bash' }, 'bash'], [{ kind: 'sh', label: 'POSIX sh' }, 'bash'], [{ kind: 'powershell', label: 'Windows PowerShell 5.1', noChaining: true }, 'powershell'], [{ kind: 'powershell', label: 'PowerShell 7' }, 'powershell']]) {
+    const claude = surfaceFor('claude', shell);
+    assert.deepEqual([claude.native.filter(name => ['bash', 'powershell'].includes(name)), claude.names['shell.run']], [[named], named], shell.label);
+    assert.equal(surfaceFor('gpt', shell).native.includes('exec_command'), true); assert.equal(surfaceFor('generic', shell).direct.includes('shell.run'), true);
+  }
   assert.match(serverInstructions(f.service, 'generic'), /read with workspace_read, change with workspace_edit .*, then verify with shell_run/);
   assert.match(serverInstructions(f.service, 'gpt'), /follow it with write_stdin and stop servers with process_stop/);
   // A tool that is not listed is named as the operation it is.
@@ -72,7 +84,7 @@ test('each surface lists a handful of tools under the names its model knows, and
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {
   const f = await fixture(t), client = await f.open({ surface: 'gpt' });
   const all = await names(client);
-  for (const name of ['read', 'apply_patch', 'exec_command', 'write_stdin', 'write', 'edit', 'bash', 'workspace_read', 'workspace_history', 'git_show', 'capability_list', 'connection_status', 'project_list']) assert.ok(all.includes(name), name);
+  for (const name of ['read', 'apply_patch', 'exec_command', 'write_stdin', 'write', 'edit', 'bash', 'powershell', 'workspace_read', 'workspace_history', 'git_show', 'capability_list', 'connection_status', 'project_list']) assert.ok(all.includes(name), name);
   fs.writeFileSync(path.join(f.root, 'a.txt'), 'alpha\n');
   // The names of another surface, and DevMate's own, are answered all the same.
   assert.match(f.text(await client.callTool({ name: 'workspace_read', arguments: { path: 'a.txt' } })), /1\talpha/);
@@ -111,7 +123,7 @@ test('the tools a GPT model knows work as it expects: read, apply_patch, exec_co
   assert.equal(gone.isError, true); assert.match(gone.content[0].text, /not_found/);
 });
 
-test('the tools a Claude model knows work as it expects: read, write, edit, bash', { timeout: 60000 }, async t => {
+test('the tools a Claude model knows work as it expects: read, write, edit and the shell of this computer', { timeout: 60000 }, async t => {
   const f = await fixture(t), client = await f.open({ surface: 'claude' });
   const call = async (name, args) => f.text(await client.callTool({ name, arguments: args }));
   assert.match(await call('write', { path: 'notes/a.md', content: '# Title\n\nfirst\n' }), /"written":true/);
@@ -125,7 +137,7 @@ test('the tools a Claude model knows work as it expects: read, write, edit, bash
   assert.equal(ambiguous.isError, true); assert.match(ambiguous.content[0].text, /edit_ambiguous/);
   fs.writeFileSync(path.join(f.root, 'answer.js'), 'console.log(6*7)');
   fs.writeFileSync(path.join(f.root, 'wait.js'), 'setInterval(()=>{},1000)');
-  const ran = await call('bash', { command: run('answer.js') });
+  const ran = await call(SHELL_TOOL, { command: run('answer.js') });
   assert.match(ran, /^42\s*\n\[exited, exit code 0\]/);
   // A command that outlives the call says, in this surface's words, how it is followed and ended.
   const running = f.service.processes.run ? await client.callTool({ name: 'workspace_read', arguments: { path: 'wait.js' } }).then(() => f.service.call('shell.run', { command: run('wait.js'), waitMs: 300 }, connected)) : null;
@@ -150,21 +162,21 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   };
   const has = (list, name) => list.includes(name);
   const gpt = await connect('openai-mcp'), listed = await names(gpt);
-  assert.ok(has(listed, 'apply_patch') && has(listed, 'exec_command') && !has(listed, 'workspace_edit') && !has(listed, 'bash'), listed.join());
+  assert.ok(has(listed, 'apply_patch') && has(listed, 'exec_command') && !has(listed, 'workspace_edit') && !has(listed, 'bash') && !has(listed, 'powershell'), listed.join());
   assert.match(gpt.getInstructions(), /change with apply_patch/);
   // Not on its list, and still its to call.
   assert.match((await gpt.callTool({ name: 'workspace_read', arguments: { path: 'a.txt' } })).content[0].text, /1\talpha/);
   assert.match((await gpt.callTool({ name: 'read', arguments: { path: 'a.txt' } })).content[0].text, /1\talpha/);
   const claude = await names(await connect('claude-ai'));
-  assert.ok(has(claude, 'edit') && has(claude, 'bash') && has(claude, 'process_read') && !has(claude, 'apply_patch'), claude.join());
+  assert.ok(has(claude, 'edit') && has(claude, SHELL_TOOL) && !has(claude, OTHER_SHELL_TOOL) && has(claude, 'process_read') && !has(claude, 'apply_patch'), claude.join());
   const other = await names(await connect('some-editor'));
-  assert.ok(has(other, 'workspace_edit') && has(other, 'shell_run') && !has(other, 'bash') && !has(other, 'apply_patch'), other.join());
+  assert.ok(has(other, 'workspace_edit') && has(other, 'shell_run') && !has(other, 'bash') && !has(other, 'powershell') && !has(other, 'apply_patch'), other.join());
   // A client of the 2025 protocol names itself once, at the start; after that its requests are told apart by their sender line.
   const older = await connect('whatever', { negotiation: {}, headers: { 'user-agent': 'openai-mcp/1.0.0' } });
   assert.ok(has(await names(older), 'exec_command'));
   // The owner's word in the address wins over all of it.
   const chosen = await names(await connect('openai-mcp', { query: '?tools=claude' }));
-  assert.ok(has(chosen, 'bash') && !has(chosen, 'exec_command'), chosen.join());
+  assert.ok(has(chosen, SHELL_TOOL) && !has(chosen, 'exec_command'), chosen.join());
 });
 
 test('show_changes says what is uncommitted, whoever changed it, and after a review only what is new', { timeout: 60000 }, async t => {

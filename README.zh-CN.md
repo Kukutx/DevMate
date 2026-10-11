@@ -283,9 +283,9 @@ devmate restart
 | --- | --- | --- | --- |
 | 读文件 | `read` | `read` | `workspace_read` |
 | 改文件 | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
-| 运行命令 | `exec_command` `write_stdin` | `bash` `process_read` | `shell_run` `process_read` |
-| 审阅改动 | `show_changes` | `show_changes` | `workspace_changes` |
-| 每份清单都有 | `project_overview` `workspace_find` `workspace_search` `git_status` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+| 运行命令 | `exec_command` `write_stdin` | `bash`（命令在 PowerShell 里运行时叫 `powershell`，例如 Windows） `process_read` | `shell_run` `process_read` |
+| 审阅改动 | `show_changes` | `show_changes` | `workspace_changes` `git_status` |
+| 每份清单都有 | `project_overview` `workspace_find` `workspace_search` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
 
 | 方面 | 能做什么 |
 | --- | --- |
@@ -302,7 +302,7 @@ devmate restart
 - 每份清单里的每个工具，任何客户端都能调用：清单只决定事先告诉模型哪些。想自己指定清单，就在给客户端的 MCP 地址后面加 `?tools=gpt`、`?tools=claude` 或 `?tools=generic`。
 - `projectId` 可以是项目 ID、项目根目录或唯一的项目名；只共享了一个项目时可以省略。有多个项目时，只读工具跟随你正在使用的编辑器窗口，写操作必须写明项目。
 - 没有“共享文件夹”这个工具。那是你自己的事；模型会被告知请你去做。
-- 一份工具清单有 19 到 21 项，19 到 21 KB，大约是原先“全部列出”那一份的一半。其余操作经 `operations_query` 和 `operations_call` 调用，用到之前不占对话上下文。
+- 一份工具清单有 18 到 21 项，18 到 21 KB，大约是原先“全部列出”那一份的一半。其余操作经 `operations_query` 和 `operations_call` 调用，用到之前不占对话上下文。
 - 工具带有准确的提示（只读、写入、破坏性、对外），客户端只在真正需要时请求确认。
 - 调用被取消或超时，只是不再等待：已经启动的命令或 Agent 任务继续运行，随后仍可读取或停止。
 - 服务同时支持 2026-07-28 和 2025 年的 MCP 协议版本。

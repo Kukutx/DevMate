@@ -20,21 +20,34 @@ export function clientSurface({ chosen, name, userAgent, tunnel } = {}) {
 // What stays a tool of its own on every surface; everything else is an operation, one generic call away.
 const CORE = ['project.overview', 'workspace.find', 'workspace.search', 'git.status', 'git.diff', 'editor.diagnostics', 'process.stop',
   'agents.delegate', 'agents.result', 'operations.list', 'operations.query', 'operations.call'];
+// Where show_changes says what is uncommitted, Git's own status is one tool more than a model needs to be shown.
+const REVIEWED = CORE.filter(name => name !== 'git.status');
 export const SURFACES = Object.freeze({
   generic: { native: [], direct: [...CORE, 'workspace.read', 'workspace.edit', 'workspace.patch', 'workspace.write', 'workspace.changes', 'shell.run', 'process.read'], names: {} },
-  gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin', 'show_changes'], direct: CORE,
+  gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin', 'show_changes'], direct: REVIEWED,
     names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.patch': 'apply_patch', 'workspace.edit': 'apply_patch', 'workspace.write': 'apply_patch', 'shell.run': 'exec_command', 'process.read': 'write_stdin', 'process.write': 'write_stdin' } },
-  claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...CORE, 'process.read'],
+  claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...REVIEWED, 'process.read'],
     names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } }
 });
 
 /**
- * A text written with DevMate's own tool names, as a client of this surface has to read it: a tool it was given
- * keeps its name or gets the surface's, and anything else is named as the operation it is (with a dot), which the
- * generic calls take.
+ * A surface as it is on this computer. A tool's name must not promise another shell than the one that runs: where
+ * commands run in PowerShell, the Claude surface's command tool is called powershell, the name Claude Code itself
+ * gives that tool on Windows, and not bash.
  */
-export function respell(text, surface, known) {
-  const { direct, names } = SURFACES[surface] || SURFACES.generic;
+export function surfaceFor(surface, shell) {
+  const shown = SURFACES[surface] || SURFACES.generic;
+  if (surface !== 'claude' || !/^(powershell|pwsh)/.test(shell?.kind || '')) return shown;
+  return { ...shown, native: shown.native.map(name => name === 'bash' ? 'powershell' : name), names: { ...shown.names, 'shell.run': 'powershell' } };
+}
+
+/**
+ * A text written with DevMate's own tool names, as a client of this surface (surfaceFor) has to read it: a tool it
+ * was given keeps its name or gets the surface's, and anything else is named as the operation it is (with a dot),
+ * which the generic calls take.
+ */
+export function respell(text, shown, known) {
+  const { direct, names } = shown;
   return String(text).replace(known, name => {
     const operation = name.replace('_', '.');
     return names[operation] || (direct.includes(operation) ? name : operation);
@@ -67,6 +80,15 @@ function session(result, maxTokens) {
   return { content: [{ type: 'text', text: state + (result.skippedBytes ? '\n[' + result.skippedBytes + ' bytes of earlier output are not shown]' : '') + '\nOutput:\n' + budgeted(result.output || '', maxTokens) }] };
 }
 
+// The Claude surface's command tool, under the name of the shell that runs it.
+const commandTool = opening => ({ title: 'Run command', labels: ['Running a command', 'Ran a command'], destructive: true, openWorld: true,
+  description: shell => opening(shell) + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
+    ': tests, builds, package managers, Git. It returns when the command exits, or after ten seconds (with timeout: after up to 50 seconds); a command still running then keeps running and is followed with process_read and ended with process_stop.',
+  shape: { command: z.string().min(1).max(100000), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
+    timeout: z.number().int().min(1000).max(86400000).optional().describe('End the command after this many milliseconds.'), ...project },
+  run: async ({ call, present }, input) => present('shell.run', await call('shell.run', { projectId: input.projectId, command: input.command, cwd: input.working_directory,
+    ...(input.timeout ? { timeoutMs: input.timeout, waitMs: Math.min(input.timeout, 50000) } : {}) })) });
+
 /**
  * The tools of the model-native surfaces. run({ call, present, shell }, input) calls operations through the service
  * and returns an MCP tool result; present(operation, result) gives a result the form that operation's own tool gives it.
@@ -80,8 +102,8 @@ export const NATIVE_TOOLS = Object.freeze({
     shape: { patch: fileText.min(1).describe('The whole patch, from "*** Begin Patch" to "*** End Patch".'), ...project },
     run: async ({ call, present }, input) => present('workspace.patch', await call('workspace.patch', { projectId: input.projectId, patch: input.patch })) },
   exec_command: { title: 'Run command', labels: ['Running a command', 'Ran a command'], destructive: true, openWorld: true,
-    description: shell => 'Run a command in the project, in ' + shell.label + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
-      ': tests, builds, package managers, Git. It returns when the command exits or after yield_time_ms; a command that is still running then keeps running and is followed, given input and waited for with write_stdin and its session ID.',
+    description: shell => 'The shell here is ' + shell.label + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
+      '. Run a command in the project: tests, builds, package managers, Git. It returns when the command exits or after yield_time_ms; a command that is still running then keeps running and is followed, given input and waited for with write_stdin and its session ID.',
     shape: { cmd: z.string().min(1).max(100000).describe('The command line.'), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
       yield_time_ms: yieldMs(YIELD_MS), max_output_tokens: tokens, ...project },
     run: async ({ call }, input) => session(await call('shell.run', { projectId: input.projectId, command: input.cmd, cwd: input.working_directory, interactive: true,
@@ -107,11 +129,6 @@ export const NATIVE_TOOLS = Object.freeze({
     shape: { path: projectPath, edits: z.array(z.object({ old_text: z.string().min(1).max(100000), new_text: z.string().max(100000) }).strict()).min(1).max(200), ...project },
     run: async ({ call, present }, input) => present('workspace.edit', await call('workspace.edit', { projectId: input.projectId, path: input.path,
       edits: input.edits.map(item => ({ oldText: item.old_text, newText: item.new_text })) })) },
-  bash: { title: 'Run command', labels: ['Running a command', 'Ran a command'], destructive: true, openWorld: true,
-    description: shell => 'Run a command in the project. The shell here is ' + shell.label + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
-      ': tests, builds, package managers, Git. It returns when the command exits, or after ten seconds (with timeout: after up to 50 seconds); a command still running then keeps running and is followed with process_read and ended with process_stop.',
-    shape: { command: z.string().min(1).max(100000), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
-      timeout: z.number().int().min(1000).max(86400000).optional().describe('End the command after this many milliseconds.'), ...project },
-    run: async ({ call, present }, input) => present('shell.run', await call('shell.run', { projectId: input.projectId, command: input.command, cwd: input.working_directory,
-      ...(input.timeout ? { timeoutMs: input.timeout, waitMs: Math.min(input.timeout, 50000) } : {}) })) }
+  bash: commandTool(shell => 'Run a command in the project. The shell here is ' + shell.label),
+  powershell: commandTool(shell => 'Run a PowerShell command in the project (' + shell.label + ')')
 });
