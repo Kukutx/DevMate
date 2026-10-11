@@ -7,7 +7,7 @@
 ### 连接
 
 - 快速隧道的地址在每次启动后都会变，客户端要换成新地址。地址固定的通路里，OpenAI 隧道只需要所有者在 OpenAI Platform 上建一条隧道（给 ChatGPT 用）；其余几种（自己的中继、Cloudflare 命名隧道、HTTPS 代理、SSH）需要所有者自己的服务器或域名。
-- 运行时自己发出的请求（对接 OpenAI 隧道、通路自检、OAuth 客户端信息获取）不走系统代理：在必须经代理上网的环境里它们会直连失败。
+- 运行时自己发出的请求（对接 OpenAI 隧道、通路自检、OAuth 客户端信息获取、外部 MCP 服务器）走这台电脑的代理：`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 变量，Windows 上没有这些变量时用当前账户的系统代理（开关变化在一分钟内跟上）。还不支持的：代理脚本（PAC）、只有 SOCKS 的系统代理、macOS 和 Linux 桌面的系统代理设置；这几种情况请设置 `HTTPS_PROXY`，体检会指出。连接器子进程（`cloudflared`、`ssh`）和委派的 Agent 只继承环境变量里的代理，不继承 Windows 系统代理。经代理验证过的只有本机替身代理，没有经过真实的 Clash 或公司代理。
 - 内置的 OpenAI 隧道客户端不实现“集群纠正”这项可选能力（`wrong-cluster-v1`），也不启动 Cloudflare 托管伴随进程；它只实现文档规定的两种命令，其余种类会被跳过并在体检里指出。
 - 自己的中继（`devmate relay setup`）在命令行里配置；VS Code 和 Obsidian 的向导里还没有这一项。中继的服务器脚本支持有 `apt-get`、`dnf` 或 `apk` 的系统，或者已经装了 Caddy 的系统。
 - 快速隧道是 Cloudflare 提供给测试和开发用的：不保证可用性，最多同时 200 个请求，不支持事件流。DevMate 经它只回普通 JSON，调用进行中不发进度消息。它适合试用，不适合当日常通路。

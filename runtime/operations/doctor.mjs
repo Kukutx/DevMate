@@ -46,6 +46,12 @@ export async function doctor(service) {
   const direct = addresses.some(item => (item.family === 'IPv4' || item.family === 4) && !privateV4(item.address));
   if (!direct && connection.kind === 'local') check('network', 'info', 'This computer has no public IPv4 address of its own: it is behind a router or a provider\'s address translation, so a client in the cloud cannot connect to it directly.',
     'Give it a way in that you control: a relay on a public server of yours (devmate relay setup user@host), or for ChatGPT OpenAI\'s own tunnel (devmate connect openai-tunnel).');
+  // How the runtime's own requests leave this computer: OpenAI's tunnel service, the check of the public route, a
+  // signing-in client's metadata document.
+  const proxy = service.proxy?.current();
+  if (proxy?.proxy) check('proxy', 'ok', 'Requests to the outside go through ' + proxy.proxy + ' (' + (proxy.source === 'environment' ? 'the HTTPS_PROXY / HTTP_PROXY variables' : 'the system proxy of this account') + ').');
+  else if (proxy?.script) check('proxy', 'warn', 'This account uses a proxy script, which DevMate cannot run: its requests to the outside go directly and may not get through.', 'Give the proxy\'s address in the HTTPS_PROXY variable for DevMate, then restart it (devmate restart).');
+  else if (proxy?.unsupported) check('proxy', 'warn', 'The system proxy of this account cannot be used here (' + proxy.unsupported + '): requests to the outside go directly and may not get through.', 'Give an HTTP proxy address in the HTTPS_PROXY variable, then restart DevMate (devmate restart).');
   const status = await service.connectionState();
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'For ChatGPT use OpenAI\'s own tunnel (devmate connect openai-tunnel --tunnel-id <id>); for any client a relay on a server of yours (devmate relay setup user@host).');

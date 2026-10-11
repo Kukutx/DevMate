@@ -110,7 +110,7 @@ function createAttemptLimiter() {
   };
 }
 
-export function createAuth({ store, instanceRoot, config = {}, clientMetadata } = {}) {
+export function createAuth({ store, instanceRoot, config = {}, clientMetadata, proxy } = {}) {
   const mode = config.mode || 'none';
   if (!['none', 'oauth'].includes(mode)) throw fault('unsupported_auth', 'Choose none or oauth.');
   let issuer = null, key = null;
@@ -132,7 +132,7 @@ export function createAuth({ store, instanceRoot, config = {}, clientMetadata } 
     // without that, a client that never asks for offline_access would have to sign in again every few minutes.
     configured.set(item.clientId, { client_name: item.name, redirect_uris: [...item.redirectUris], grant_types: ['authorization_code', 'refresh_token'], configured: true });
   }
-  const resolveMetadata = clientMetadata || createClientMetadataResolver();
+  const resolveMetadata = clientMetadata || createClientMetadataResolver({ proxy });
   const attempts = createAttemptLimiter(), timers = new Set();
   const findCode = (value, purpose) => {
     if (typeof value !== 'string' || value.length > 256) return null;

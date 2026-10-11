@@ -17,6 +17,7 @@ import { createEventStreams } from './event-stream.mjs';
 import { writeAtomic } from './platform/atomic-write.mjs';
 import { hardenExecutableSearch } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
+import { createOutboundProxy } from './platform/proxy.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -101,7 +102,7 @@ function listen(listener, port, purpose) {
 }
 
 export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.devmate', 'runtime'), port = 8788, ingressPort,
-  adapterFactory, connectionFactory = createConnection, capabilitiesFactory, authOptions, onReady } = {}) {
+  adapterFactory, connectionFactory = createConnection, capabilitiesFactory, authOptions, onReady, proxy = null } = {}) {
   instanceRoot = path.resolve(instanceRoot);
   fs.mkdirSync(instanceRoot, { recursive: true, mode: 0o700 });
   // The mode applies only when the directory is created. One that already existed is made private too:
@@ -356,6 +357,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     } else ingressPort = null;
     service.agents.endpoint = 'http://127.0.0.1:' + port + '/api/agent';
     service.identity = { instanceId, generation };
+    service.proxy = proxy;
     connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, instanceId, env: service.secrets.environment(),
       localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
     service.connection = connection;
@@ -409,6 +411,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       try {
         if (!fs.existsSync(instanceRoot)) { process.stderr.write('DevMate: the instance directory is gone; stopping.\n'); void stop(); return; }
         if ((fs.statSync(logFile, { throwIfNoEntry: false })?.size || 0) > LOG_LIMIT_BYTES) { fs.copyFileSync(logFile, logFile + '.1'); fs.truncateSync(logFile, 0); }
+        // The system proxy is switched on and off while the runtime runs; the route is checked again when it was.
+        if (proxy?.refresh()) {
+          process.stderr.write(new Date().toISOString() + ' requests to the outside now go ' + (proxy.current()?.proxy ? 'through ' + proxy.current().proxy : 'directly') + '\n');
+          if (publicUrl || quickTunnel) void service.verifyConnection().catch(() => {});
+        }
       } catch {}
     }, UPKEEP_MS);
     upkeepTimer.unref();
@@ -427,6 +434,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
  */
 export async function serve(options = {}) {
   hardenExecutableSearch();
+  // For the whole process, and before the first request to the outside.
+  const proxy = createOutboundProxy();
   const stamp = () => new Date().toISOString();
   let runtime;
   process.on('uncaughtException', error => {
@@ -438,7 +447,7 @@ export async function serve(options = {}) {
   });
   // A stray rejected promise is reported, not fatal: the request behind it has already failed on its own.
   process.on('unhandledRejection', error => { process.stderr.write(stamp() + ' unhandled rejection: ' + (error?.stack || error) + '\n'); });
-  runtime = await startRuntime({ ...options, onReady: info => process.stdout.write(JSON.stringify({ event: 'ready', ...info }) + '\n') });
+  runtime = await startRuntime({ ...options, proxy, onReady: info => process.stdout.write(JSON.stringify({ event: 'ready', ...info }) + '\n') });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { void runtime.stop().catch(() => {}); });
   return runtime;
 }

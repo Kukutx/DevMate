@@ -99,29 +99,37 @@ function remember(map, key, entry) {
   if (map.size >= MAX_ENTRIES) map.delete(map.keys().next().value);
   map.set(key, entry);
 }
-export function createClientMetadataResolver({ lookup = dns.lookup, request = https.request, timeoutMs = TIMEOUT_MS } = {}) {
+// proxy(): the proxy settings in force for requests to the outside, or null (runtime/platform/proxy.mjs).
+export function createClientMetadataResolver({ lookup = dns.lookup, request = https.request, timeoutMs = TIMEOUT_MS, proxy = () => null } = {}) {
   const budget = Math.max(1, Math.min(TIMEOUT_MS, Number(timeoutMs) || TIMEOUT_MS));
   const cache = new Map(), failures = new Map(), inflight = new Map(), pendingByHost = new Map();
   async function load(url) {
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
     const deadline = Date.now() + budget;
     let timer;
-    const records = net.isIP(hostname) ? [{ address: hostname, family: net.isIP(hostname) }] : await Promise.race([
+    // Behind a proxy it is the proxy that looks the name up, so the address cannot be checked and pinned here. What
+    // can be told from the name alone still is: a metadata document lives under a public name, never at an address
+    // or under a name of the local network.
+    const through = proxy();
+    if (through && (net.isIP(hostname) || !hostname.includes('.') || /\.(local|localhost|internal|lan|home|corp|intranet|home\.arpa)$/i.test(hostname)))
+      throw new Error('Client metadata must be published under a public host name.');
+    const records = through ? [] : net.isIP(hostname) ? [{ address: hostname, family: net.isIP(hostname) }] : await Promise.race([
       Promise.resolve(lookup(hostname, { all: true, verbatim: true })).catch(error => { throw new Error('Client metadata host could not be resolved' + (error?.code ? ' (' + error.code + ').' : '.')); }),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Client metadata DNS lookup timed out.')), budget); })
     ]).finally(() => clearTimeout(timer));
-    if (!records.length || records.some(item => !publicAddress(item.address))) throw new Error('Client metadata must resolve exclusively to public addresses.');
+    if (!through && (!records.length || records.some(item => !publicAddress(item.address)))) throw new Error('Client metadata must resolve exclusively to public addresses.');
     const response = await new Promise((resolve, reject) => {
       let finished = false, timer;
       const finish = (error, value) => { if (finished) return; finished = true; clearTimeout(timer); error ? reject(error) : resolve(value); };
       const selected = records[0];
       // No shared agent: a pooled connection opened elsewhere would bypass the pinned address.
-      const req = request(url, { method: 'GET', agent: false, headers: { accept: 'application/json', 'user-agent': 'DevMate-CIMD/4' },
-        lookup(_hostname, options, callback) {
-          // Newer Node versions may request all addresses. Always use the validated set.
-          if (options?.all) callback(null, [{ address: selected.address, family: selected.family }]);
-          else callback(null, selected.address, selected.family);
-        }
+      const req = request(url, { method: 'GET', headers: { accept: 'application/json', 'user-agent': 'DevMate-CIMD/4' },
+        ...(through ? { agent: new https.Agent({ proxyEnv: through, keepAlive: false }) } : { agent: false,
+          lookup(_hostname, options, callback) {
+            // Newer Node versions may request all addresses. Always use the validated set.
+            if (options?.all) callback(null, [{ address: selected.address, family: selected.family }]);
+            else callback(null, selected.address, selected.family);
+          } })
       }, res => {
         if (res.statusCode !== 200) { res.destroy(); return finish(new Error('Client metadata requires HTTP 200; redirects are not followed.')); }
         const contentType = String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();

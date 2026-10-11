@@ -81,6 +81,8 @@ export class DevMateService {
     this.verifier = verifier;
     this.identity = null;
     this.verification = null;
+    // How requests to the outside leave this computer (runtime/platform/proxy.mjs); set by the process that serves.
+    this.proxy = null;
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
     this.config = normalizeConfig(config);
@@ -116,7 +118,7 @@ export class DevMateService {
     this.ready = Promise.resolve().then(async () => {
       // Before any new work: what an earlier runtime of this instance left running when it died.
       await this.processes.reapLeftovers().catch(error => this.store.recordNotificationFailure(error));
-      this.auth = createAuth({ ...authOptions, store: this.store, instanceRoot: this.instanceRoot, config: this.config.auth });
+      this.auth = createAuth({ ...authOptions, store: this.store, instanceRoot: this.instanceRoot, config: this.config.auth, proxy: () => this.proxy?.current()?.settings || null });
       for (const operation of this.auth.operations) this.operations.set(operation.name, operation);
       this.hosts = createHostRegistry({ service: this, instanceRoot: this.instanceRoot });
       for (const operation of this.hosts.operations) this.operations.set(operation.name, operation);

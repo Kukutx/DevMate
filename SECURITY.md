@@ -22,6 +22,8 @@ A relay of the owner's own (`devmate relay setup`) is a public server they contr
 
 Optional OAuth proves that a client of the public address is the owner. It uses the configured HTTPS issuer, resource-bound tokens, S256 PKCE, client metadata documents, one-use login and authorization codes, refresh rotation and grant revocation. A one-time code is created at the owner's computer (`devmate login-code`), and the owner can list and revoke every sign-in (`auth.grant.list`, `auth.grant.revoke`). Dynamic client registration and copied static tokens are not supported.
 
+A signing-in client's metadata document is fetched from a public address only: the host name is looked up here, every address it has must be public, and the request is pinned to the address that was checked. Where the computer is set to use a proxy (the `HTTPS_PROXY` variable, or the Windows system proxy), the runtime's requests to the outside go through it, and it is the proxy that looks the name up: the address can then not be checked here, so the name itself must be a public one (no address, no single-label or local-network name). Requests to this computer itself never go through a proxy. A proxy address is shown without the credentials in it.
+
 A configured public Host exposes the MCP and OAuth routes only. Local control, owner recovery, settings, host binding and the localhost UI remain private local surfaces. A local owner token does not authorize a public OAuth request. Tunnel process readiness is not proof of a working remote connection.
 
 ## Project access and trusted execution
