@@ -188,9 +188,10 @@ devmate mcp-url
 `relay setup` installs [Caddy](https://caddyserver.com) on the server from the system's own packages, lets it get the certificate for that name, and forwards one path nobody can guess to a loopback port there. This computer holds that port open from the inside with OpenSSH, so nothing has to be opened on your router. Answers stream as they do locally, and there is no request count, size limit or changing address: the only limits are the server's own.
 
 - By default the relay answers only to the addresses ChatGPT and Claude connect from (their published ranges, fetched again every six hours) and to this computer. `--any-address` leaves the protection to the key in the path.
-- Without `--domain` the relay is reached by the server's IP address and asks for a certificate for that address, which needs Caddy 2.10 or newer on the server.
+- A relay asks for no sign-in and cannot: it forwards that one path and nothing else, so the pages of a sign-in would not be reachable. What keeps strangers out is the key and the list of addresses; `--auth oauth` together with a relay is refused when you set it.
+- Without `--domain` the relay is reached by the server's IP address and asks for a certificate for that address, which needs Caddy 2.10 or newer on the server. Where the system's own package is older or missing (Debian, Ubuntu, Fedora, RHEL), `relay setup` takes Caddy from Caddy's own package repository. A Caddy that was on the server before is never replaced: the setup stops and prints the commands that would do it.
 - It needs root on the server, or a login that may use `sudo` without a password. No password is ever asked for or stored: authentication is your SSH key.
-- Running it again changes nothing and keeps the address. `devmate relay remove root@203.0.113.7` takes the relay off the server, and Caddy too if this had installed it.
+- Running it again changes nothing and keeps the address. `devmate relay remove root@203.0.113.7` takes the relay off the server, and Caddy and its package repository too if this had installed them.
 
 The server script and the forwarding are tested; a relay on a real public server has not been tried yet. [STATUS](docs/STATUS.md) says exactly what is unverified.
 

@@ -11,6 +11,7 @@ import { normalizeSshConfig, sshArguments, ownerAddressArguments, createSshConne
 import { verifyPublicMcp } from '../runtime/connection-verify.mjs';
 import { startRuntime } from '../runtime/main.mjs';
 import { main as cli } from '../runtime/cli.mjs';
+import { normalizeConfig } from '../runtime/config.mjs';
 
 const key = 'k'.repeat(32);
 const output = () => { const sink = { text: '', write(value) { sink.text += value; } }; return sink; };
@@ -41,6 +42,8 @@ test('the server script forwards one unguessable path, unbuffered, and by defaul
   assert.ok(!script.includes('profile shortlived'));
   const byAddress = relayScript(relaySettings({ target: 'root@203.0.113.7', key }));
   assert.match(byAddress, /profile shortlived/); assert.match(byAddress, /cannot get a certificate for an IP address/);
+  // Where that Caddy comes from when the system's own is too old: Caddy's own repository, by the steps Caddy publishes.
+  assert.match(byAddress, /dl\.cloudsmith\.io\/public\/caddy\/stable\/gpg\.key/); assert.match(byAddress, /dnf copr enable -y @caddy\/caddy/); assert.match(byAddress, /It was here before, so it is left as it is/);
   assert.match(relayScript(relaySettings({ target: 'root@203.0.113.7', key, allowList: false })), /ALLOW_LIST='no'/);
   assert.match(relayRemovalScript(), /Caddy was here before and stays/);
 });
@@ -88,6 +91,59 @@ test('the server script really runs: it writes the site, keeps a good list, is t
     assert.match(run(relayRemovalScript()), /removed: the relay\. Caddy was here before and stays\./);
     assert.equal(fs.existsSync(devmate), false); assert.equal(fs.existsSync(path.join(root, 'usr', 'local', 'lib', 'devmate')), false);
     assert.equal(main(), '# what the distribution ships\n:80 {\n\tfile_server\n}\n\n');
+  });
+
+test('a relay reached by its address gets a Caddy that can do that: this script\'s own is brought up to date from Caddy\'s repository, the owner\'s is left alone',
+  { skip: process.platform === 'win32' ? 'a POSIX shell script; run on Linux and macOS' : spawnSync('sh', ['-c', 'command -v caddy'], { env: { PATH: '/usr/bin:/bin' } }).status === 0 && 'this machine has a Caddy of its own' }, t => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-relay-caddy-'));
+    t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+    // A server, as stand-ins: its package manager installs Caddy 2.6 from the system's packages (or none at all), and
+    // 2.10 once Caddy's own repository is on the list. Nothing here reaches a network or needs root.
+    const server = (name, { caddy, packaged = true } = {}) => {
+      const root = path.join(work, name, 'root'), bin = path.join(work, name, 'bin'), calls = path.join(work, name, 'calls.log');
+      fs.mkdirSync(path.join(root, 'etc', 'caddy'), { recursive: true }); fs.mkdirSync(bin); fs.writeFileSync(calls, '');
+      const stand = (tool, body) => fs.writeFileSync(path.join(bin, tool), '#!/bin/sh\necho "' + tool + ' $*" >> "' + calls + '"\n' + body + '\n', { mode: 0o755 });
+      const installed = version => '#!/bin/sh\nif [ "${1:-}" = version ]; then echo "' + version + ' stand-in"; fi\n';
+      if (caddy) fs.writeFileSync(path.join(bin, 'caddy'), installed(caddy), { mode: 0o755 });
+      const source = path.join(root, 'etc', 'apt', 'sources.list.d', 'caddy-stable.list');
+      stand('apt-get', String.raw`case "$*" in *" caddy")
+  if [ -s "${source}" ]; then VERSION=v2.10.2; elif [ "${packaged}" = true ]; then VERSION=v2.6.2; else echo "E: Unable to locate package caddy" >&2; exit 100; fi
+  printf '#!/bin/sh\nif [ "$1" = version ]; then echo "%s stand-in"; fi\n' "$VERSION" > "${path.join(bin, 'caddy')}"; chmod 755 "${path.join(bin, 'caddy')}";;
+esac`);
+      stand('curl', 'echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main"');
+      stand('gpg', 'while [ $# -gt 0 ]; do if [ "$1" = -o ]; then cat > "$2"; fi; shift; done');
+      const run = script => { const file = path.join(work, name, 'script.sh'); fs.writeFileSync(file, script);
+        return spawnSync('sh', [file], { encoding: 'utf8', env: { PATH: bin + ':/usr/bin:/bin', DEVMATE_RELAY_ROOT: root, SSH_CLIENT: '198.51.100.7 51234 22' } }); };
+      return { root, run, source, called: () => fs.readFileSync(calls, 'utf8'), has: (...parts) => fs.existsSync(path.join(root, ...parts)) };
+    };
+    const byAddress = relayScript(relaySettings({ target: 'root@203.0.113.7', key }));
+
+    // Nothing installed: the system's own Caddy comes first, is found too old for an address, and is replaced.
+    const fresh = server('fresh'), first = fresh.run(byAddress);
+    assert.equal(first.status, 0, first.stdout + first.stderr);
+    assert.match(first.stdout, /devmate-relay: this system packages Caddy 2\.6, which cannot get a certificate for an IP address: taking the current one from the package repository of Caddy itself/);
+    assert.match(first.stdout, /devmate-relay: ready: https:\/\/203\.0\.113\.7\/mcp\/<key> forwards to 127\.0\.0\.1:18443 \(v2\.10\.2 stand-in\)/);
+    assert.match(fresh.called(), /apt-get install -y -qq caddy\n(.*\n)*apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg\n(.*\n)*gpg --batch --yes --dearmor -o .*caddy-stable-archive-keyring\.gpg\n(.*\n)*apt-get update -qq\napt-get install -y -qq caddy\n/);
+    assert.match(fs.readFileSync(fresh.source, 'utf8'), /^deb \[signed-by=/); assert.ok(fresh.has('usr', 'share', 'keyrings', 'caddy-stable-archive-keyring.gpg'));
+    assert.ok(fresh.has('etc', 'caddy', '.installed-by-devmate') && fresh.has('etc', 'caddy', '.repository-by-devmate'));
+    assert.match(fs.readFileSync(path.join(fresh.root, 'etc', 'caddy', 'devmate', 'site.caddy'), 'utf8'), /profile shortlived/);
+    // Taking the relay off takes the repository off as well: the server is as it was.
+    assert.match(fresh.run(relayRemovalScript()).stdout, /removed: the relay, and Caddy, which this had installed/);
+    assert.ok(!fs.existsSync(fresh.source) && !fresh.has('usr', 'share', 'keyrings', 'caddy-stable-archive-keyring.gpg') && !fresh.has('etc', 'caddy', '.repository-by-devmate') && !fresh.has('etc', 'caddy', '.installed-by-devmate'));
+
+    // A Caddy that was on the server before is the owner's: it is not replaced, and the way to do that is spelled out.
+    const theirs = server('theirs', { caddy: 'v2.6.2' }), refused = theirs.run(byAddress);
+    assert.equal(refused.status, 6, refused.stdout + refused.stderr);
+    assert.match(refused.stdout, /devmate-relay: error: this server has Caddy 2\.6, which cannot get a certificate for an IP address \(2\.10 or newer can\)\. It was here before, so it is left as it is\. To replace it with the current one, run on the server as root: apt install -y debian-keyring .* && apt install -y caddy \. Or give the relay a name with --domain\./);
+    assert.equal(theirs.called(), '', 'nothing was installed or fetched'); assert.ok(!fs.existsSync(theirs.source) && !theirs.has('etc', 'caddy', 'devmate', 'site.caddy'));
+    // The same server and a name instead of an address: any Caddy 2 will do, and it stays as it is.
+    assert.equal(theirs.run(relayScript(relaySettings({ target: 'root@203.0.113.7', domain: 'devmate.example.com', key }))).status, 0); assert.ok(!theirs.called().includes('apt-get'));
+
+    // A system that packages no Caddy at all gets it from Caddy's repository, whatever the relay is reached by.
+    const bare = server('bare', { packaged: false }), third = bare.run(relayScript(relaySettings({ target: 'root@203.0.113.7', domain: 'devmate.example.com', key })));
+    assert.equal(third.status, 0, third.stdout + third.stderr);
+    assert.match(third.stdout, /devmate-relay: this system packages no Caddy: taking it from the package repository of Caddy itself/); assert.match(third.stdout, /ready: https:\/\/devmate\.example\.com\/mcp\/<key>/);
+    assert.ok(bare.has('etc', 'caddy', '.repository-by-devmate') && bare.has('etc', 'caddy', '.installed-by-devmate'));
   });
 
 test('setting a relay up runs that script over the owner\'s own SSH, and says plainly what went wrong', async () => {
@@ -152,6 +208,10 @@ test('the SSH route carries the relay\'s path, tells the relay this computer\'s 
     assert.throws(() => normalizeSshConfig({ ...config, publicUrl: bad }), { code: 'invalid_connection' }, bad);
   }
   assert.throws(() => normalizeSshConfig({ ...config, relay: 'yes' }), { code: 'invalid_connection' });
+  // A relay forwards one path and no sign-in pages: the two together are refused when they are set, not found out later.
+  const issuer = 'https://devmate.example.com';
+  assert.throws(() => normalizeConfig({ connection: config, auth: { mode: 'oauth', issuer } }), { code: 'invalid_issuer', message: /forwards that one path only, so nobody can sign in through it/ });
+  assert.equal(normalizeConfig({ connection: { kind: 'ssh', publicUrl: issuer + '/mcp', executable: process.execPath, host: '203.0.113.7', user: 'deploy' }, auth: { mode: 'oauth', issuer } }).auth.mode, 'oauth');
   const forward = sshArguments(normalizeSshConfig(config), 'http://127.0.0.1:8789/mcp/' + key);
   assert.deepEqual(forward.slice(-3), ['-R', '127.0.0.1:18443:127.0.0.1:8789', '203.0.113.7']); assert.ok(forward.includes('StrictHostKeyChecking=yes')); assert.ok(!forward.join(' ').includes(key));
   assert.deepEqual(ownerAddressArguments(normalizeSshConfig(config)).slice(-2), ['203.0.113.7', '/usr/local/lib/devmate/allow-owner']);
@@ -185,6 +245,9 @@ test('the SSH route carries the relay\'s path, tells the relay this computer\'s 
   // Through a relay answers may stream again: only the quick tunnel is held to plain JSON.
   const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' });
   assert.ok(!JSON.stringify(doctor).includes(key), 'the doctor prints the address without its key');
+  // What keeps strangers out of a relay is said as it is; sign-in, which it cannot have, is not what the doctor advises.
+  const security = doctor.checks.find(item => item.id === 'security');
+  assert.equal(security.status, 'warn'); assert.match(security.detail, /^The relay has no sign-in and cannot have one: it forwards only the path its address ends in\./); assert.doesNotMatch(security.fix, /sign-in|oauth/i);
 });
 
 test('a relay that does not list this computer is told apart from a route that does not work', async () => {

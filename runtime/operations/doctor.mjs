@@ -89,6 +89,9 @@ export async function doctor(service) {
   // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.
   if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key, new with every start, and whoever has the whole address can read and change your projects and run commands.',
     'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
+  // A relay forwards one path and no sign-in pages. It is kept private by the key and by the addresses it answers.
+  else if (url && new URL(url).pathname !== '/mcp') check('security', 'warn', 'The relay has no sign-in and cannot have one: it forwards only the path its address ends in. That path ends in a key, and unless the relay was set up with --any-address it answers only the addresses ChatGPT and Claude connect from and this computer. Whoever has the whole address and comes from such an address can read and change your projects and run commands.',
+    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else.');
   else if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
   else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');

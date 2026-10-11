@@ -99,6 +99,11 @@ export function normalizeConfig(input = {}) {
     throw new DomainError('invalid_issuer', 'A quick tunnel gets a new address each time it starts, so nobody can sign in at it. Use it without sign-in, or use a tunnel with a hostname of your own.');
   }
   const publicUrl = publicMcpUrl(config);
+  // A relay forwards the one path its address ends in and nothing else, so the pages of a sign-in cannot be reached
+  // through it. What keeps strangers out there is the key in that path and the list of addresses the relay answers.
+  if (config.auth.mode === 'oauth' && publicUrl && new URL(publicUrl).pathname !== '/mcp') {
+    throw new DomainError('invalid_issuer', 'An address that ends in a key (a relay set up with devmate relay setup) forwards that one path only, so nobody can sign in through it. It is protected by the key and by the list of addresses the relay answers: use it without sign-in.');
+  }
   if (config.auth.mode === 'oauth' && publicUrl && new URL(publicUrl).origin !== config.auth.issuer) {
     throw new DomainError('invalid_issuer', 'The external MCP URL and OAuth issuer must use the same origin.');
   }

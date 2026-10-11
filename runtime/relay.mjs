@@ -55,19 +55,65 @@ if [ -n "$AS_ROOT" ] && ! $AS_ROOT true 2>/dev/null; then
   say "error: this needs root. Log in as root, or give $LOGIN sudo without a password."; exit 3
 fi
 
-# 1. Caddy, from the system's own packages.
-if ! command -v caddy >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then $AS_ROOT env DEBIAN_FRONTEND=noninteractive apt-get update -qq && $AS_ROOT env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy
+# 1. Caddy: from the system's own packages, and from Caddy's own package repository where the system has none or,
+#    for a relay that is reached by its address, one too old for that. These are the steps of caddyserver.com/docs/install.
+APT='env DEBIAN_FRONTEND=noninteractive apt-get'
+KEYRING="$ROOT/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+SOURCE="$ROOT/etc/apt/sources.list.d/caddy-stable.list"
+if command -v apt-get >/dev/null 2>&1; then
+  STEPS="apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | tee /etc/apt/sources.list.d/caddy-stable.list && apt update && apt install -y caddy"
+elif command -v dnf >/dev/null 2>&1; then STEPS='dnf install -y dnf-plugins-core && dnf copr enable -y @caddy/caddy && dnf install -y caddy'
+else STEPS=''
+fi
+from_system() {
+  if command -v apt-get >/dev/null 2>&1; then $AS_ROOT $APT update -qq && $AS_ROOT $APT install -y -qq caddy
   elif command -v dnf >/dev/null 2>&1; then $AS_ROOT dnf install -y -q caddy
   elif command -v apk >/dev/null 2>&1; then $AS_ROOT apk add --quiet caddy
-  else say 'error: no caddy and no apt-get, dnf or apk to install it with. Install Caddy 2, then run this again.'; exit 4
+  else return 1
   fi
-  $AS_ROOT touch "$ROOT/etc/caddy/.installed-by-devmate" 2>/dev/null || true
+}
+from_caddy() {
+  [ -n "$STEPS" ] || return 1
+  if command -v apt-get >/dev/null 2>&1; then
+    $AS_ROOT $APT install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg &&
+      $AS_ROOT mkdir -p "$(dirname "$KEYRING")" "$(dirname "$SOURCE")" &&
+      curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | $AS_ROOT gpg --batch --yes --dearmor -o "$KEYRING" &&
+      curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | $AS_ROOT tee "$SOURCE" >/dev/null && [ -s "$SOURCE" ] &&
+      $AS_ROOT chmod o+r "$KEYRING" "$SOURCE" && $AS_ROOT $APT update -qq && $AS_ROOT $APT install -y -qq caddy || return 1
+  else
+    { $AS_ROOT dnf install -y -q dnf5-plugins 2>/dev/null || $AS_ROOT dnf install -y -q dnf-plugins-core; } && $AS_ROOT dnf copr enable -y @caddy/caddy && $AS_ROOT dnf install -y -q caddy || return 1
+  fi
+  $AS_ROOT mkdir -p "$ROOT/etc/caddy" && $AS_ROOT touch "$ROOT/etc/caddy/.repository-by-devmate"
+}
+if ! command -v caddy >/dev/null 2>&1; then
+  if ! command -v apt-get >/dev/null 2>&1 && ! command -v dnf >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
+    say 'error: no caddy and no apt-get, dnf or apk to install it with. Install Caddy 2, then run this again.'; exit 4
+  fi
+  if ! from_system || ! command -v caddy >/dev/null 2>&1; then
+    say 'this system packages no Caddy: taking it from the package repository of Caddy itself'
+    from_caddy && command -v caddy >/dev/null 2>&1 || { say 'error: Caddy could not be installed, neither from the packages of this system nor from the repository of Caddy itself. Install Caddy 2 (https://caddyserver.com/docs/install), then run this again.'; exit 4; }
+  fi
+  $AS_ROOT mkdir -p "$ROOT/etc/caddy" && $AS_ROOT touch "$ROOT/etc/caddy/.installed-by-devmate"
 fi
 $AS_ROOT mkdir -p "$DIR" "$LIB"
-${byAddress ? String.raw`# A certificate for an address instead of a name is something only a recent Caddy can ask for.
-VERSION="$(caddy version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -n 1)"
-case "$VERSION" in 2.1[0-9]|2.[2-9][0-9]|[3-9].*) ;; *) [ -n "$ROOT" ] || { say "error: this server has Caddy $VERSION, which cannot get a certificate for an IP address (2.10 or newer can). Install a current Caddy (https://caddyserver.com/docs/install), or give the relay a name with --domain."; exit 6; };; esac
+${byAddress ? String.raw`# A certificate for an address instead of a name is something only a recent Caddy can ask for. A Caddy this script
+# installed is brought up to date from the repository of Caddy itself; one that was here before is the owner's and stays.
+version() { caddy version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -n 1; }
+recent() { case "$(version)" in 2.1[0-9]|2.[2-9][0-9]|[3-9].*) return 0;; *) return 1;; esac; }
+if ! recent; then
+  if [ -f "$ROOT/etc/caddy/.installed-by-devmate" ] && [ -n "$STEPS" ]; then
+    say "this system packages Caddy $(version), which cannot get a certificate for an IP address: taking the current one from the package repository of Caddy itself"
+    from_caddy || true
+  fi
+  if ! recent; then
+    if [ ! -f "$ROOT/etc/caddy/.installed-by-devmate" ] && [ -n "$STEPS" ]; then
+      say "error: this server has Caddy $(version), which cannot get a certificate for an IP address (2.10 or newer can). It was here before, so it is left as it is. To replace it with the current one, run on the server as root: $STEPS . Or give the relay a name with --domain."
+    else
+      say "error: this server has Caddy $(version), which cannot get a certificate for an IP address (2.10 or newer can), and a newer one could not be installed here. Give the relay a name with --domain, or install a current Caddy (https://caddyserver.com/docs/install)."
+    fi
+    exit 6
+  fi
+fi
 ` : ''}
 # 2. Who may reach the relay: ChatGPT's and Claude's own addresses, and the computer behind it.
 #    The published list is kept when it cannot be fetched; a list that is empty or malformed never replaces a good one.
@@ -173,6 +219,11 @@ if [ -z "$ROOT" ] && command -v systemctl >/dev/null 2>&1; then
   $AS_ROOT systemctl disable --now devmate-relay-allow.timer >/dev/null 2>&1 || true
   $AS_ROOT rm -f /etc/systemd/system/devmate-relay-allow.service /etc/systemd/system/devmate-relay-allow.timer
   $AS_ROOT systemctl daemon-reload || true
+fi
+# The package repository of Caddy itself, where setup had to add it.
+if [ -f "$ROOT/etc/caddy/.repository-by-devmate" ]; then
+  $AS_ROOT rm -f "$ROOT/etc/caddy/.repository-by-devmate" "$ROOT/etc/apt/sources.list.d/caddy-stable.list" "$ROOT/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+  if [ -z "$ROOT" ] && command -v dnf >/dev/null 2>&1; then $AS_ROOT dnf copr disable -y @caddy/caddy >/dev/null 2>&1 || true; fi
 fi
 if [ -f "$ROOT/etc/caddy/.installed-by-devmate" ]; then
   $AS_ROOT rm -f "$ROOT/etc/caddy/.installed-by-devmate"
