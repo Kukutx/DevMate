@@ -149,13 +149,16 @@ test('auth:none MCP 2026 discovers and calls real project/file tools without pri
   const described = Object.fromEntries(tools.body.result.tools.map(tool => [tool.name, tool.description]));
   assert.match(described.shell_run, /process_read/); assert.doesNotMatch(Object.values(described).join('\n'), /\b(process\.read|workspace\.read|agents\.result|workspace\.edit)\b(?!_)/);
 });
-test('a model sees a short tool list with readable titles and no idempotency key to misuse', async t => {
+test('a model sees its tools with readable titles and no idempotency key to misuse, and nothing that only reads is kept from it', async t => {
   const { rpc, call, projectRoot } = await fixture(t);
   const listed = (await rpc('tools/list')).body.result.tools;
   const named = name => listed.find(tool => tool.name === name);
-  assert.ok(listed.length <= 22, 'only everyday tools and the workbench pair are listed: ' + listed.length);
-  for (const hidden of ['workflow_create', 'task_create', 'approval_resolve', 'project_remove', 'job_start', 'settings_read', 'secret_set', 'workspace_mkdir', 'git_show', 'capability_call', 'project_list'])
+  assert.ok(listed.length <= 40, 'everyday tools, what reads, the capability tools and the workbench pair are listed: ' + listed.length);
+  for (const hidden of ['workflow_create', 'task_create', 'approval_resolve', 'project_remove', 'job_start', 'settings_read', 'secret_set', 'workspace_mkdir', 'workspace_move', 'workspace_delete'])
     assert.equal(named(hidden), undefined, hidden + ' stays behind operations_call and the workbench');
+  // What only reads is shown, and says that it only reads: a client does not ask its user about it.
+  for (const shown of ['git_show', 'git_log', 'workspace_files', 'workspace_history', 'project_list', 'capability_list', 'capability_query']) assert.equal(named(shown).annotations.readOnlyHint, true, shown);
+  assert.equal(named('capability_call').annotations.readOnlyHint, false);
   assert.equal(named('workspace_read').title, 'Read file');
   assert.equal(named('shell_run')._meta['openai/toolInvocation/invoking'], 'Running a command');
   for (const name of ['workspace_write', 'workspace_edit', 'shell_run', 'workspace_patch']) assert.equal(named(name).inputSchema.properties.operationId, undefined, name);

@@ -308,15 +308,15 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 
 ## Tools the model gets
 
-A model is shown a short list, under the names it was trained on. Which list a client gets is decided by what it says it is; a client that is not recognised gets DevMate's own names.
+A model is shown its tools under the names it was trained on. Which list a client gets is decided by what it says it is; a client that is not recognised gets DevMate's own names.
 
 | | ChatGPT and Codex | Claude | Other clients |
 | --- | --- | --- | --- |
 | Read a file | `read` | `read` | `workspace_read` |
 | Change files | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
-| Run a command | `exec_command` `write_stdin` | `bash` (`powershell` where commands run in PowerShell, as on Windows) `process_read` | `shell_run` `process_read` |
-| Review what changed | `show_changes` | `show_changes` | `workspace_changes` `git_status` |
-| On every list | `project_overview` `workspace_find` `workspace_search` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+| Run a command | `exec_command` `write_stdin` | `bash` (`powershell` where commands run in PowerShell, as on Windows) `process_read` `process_write` | `shell_run` `process_read` `process_write` |
+| Review what changed | `show_changes` | `show_changes` | `workspace_changes` |
+| On every list | Everything that only reads: `project_list` `project_overview` `editor_context` `editor_diagnostics` `workspace_files` `workspace_find` `workspace_search` `workspace_history` `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` `process_list` `providers_list` `connection_status`. Taking a change back: `workspace_restore`. The engines, your browser among them: `capability_list` `capability_query` `capability_call`. And `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
 
 | Area | What it does |
 | --- | --- |
@@ -324,16 +324,18 @@ A model is shown a short list, under the names it was trained on. Which list a c
 | Finding code | Glob find and ripgrep content search. Honours `.gitignore`; fast on large repositories |
 | Reading | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
 | Changing | A patch (the `*** Begin Patch` envelope Codex writes, or a unified diff as `git diff` prints it) changes several files at once, all of it or none, and is taken back as one. Exact text replacement applies several edits atomically. Overwriting keeps what was there |
-| Running | Real shell semantics (`npm test`, `git commit`). A call returns after ten seconds at the latest by default; a command still running then keeps running and is followed, fed input and stopped as a whole process tree |
+| Running | Real shell semantics (`npm test`, `git commit`). A call returns after 30 seconds at the latest by default (50 at the most); a command still running then keeps running and is followed, fed input and stopped as a whole process tree |
 | Reviewing | What is uncommitted, whoever changed it (a tool, a command, a delegated agent): per file what happened and how many lines came and went. Marked as reviewed, the next look shows only what changed since. Needs a Git repository |
 | Editor | The compiler, type and lint errors VS Code already computed |
 | Delegation | Hand a whole task to a coding agent on this machine |
-| Everything else | Operations, called by name through `operations_query` (those that only read) and `operations_call`: directory listings, move, delete, change history and undo (`workspace.history`, `workspace.restore`, kept 30 days by default), more Git (`git.log`, `git.show`, `git.blame`, `git.branches`; read only, never running a program the repository configures), the editor's open files, browser control and QA, Godot, reverse engineering, Obsidian and external MCP servers (`capability.*`), workflows, tasks, jobs, artifacts |
+| History and Git | What DevMate changed and taking it back (`workspace_history`, `workspace_restore`, kept 30 days by default); the commit log, a commit, who changed a line, the branches (read only, never running a program the repository configures) |
+| Engines | Through `capability_list`, `capability_query` and `capability_call`: your own browser (the Chrome and Edge extension), browser control and QA, Godot, reverse engineering, Obsidian and external MCP servers |
+| Everything else | Operations, called by name through `operations_query` (those that only read) and `operations_call`: making a folder, moving, deleting (a patch or a command does these as well), workflows, tasks, jobs, artifacts |
 
 - Every tool of every list can be called by every client: the list only decides what a model is told about up front. To choose a list yourself, add `?tools=gpt`, `?tools=claude` or `?tools=generic` to the MCP address you give the client. `devmate doctor` says what the last client called itself, which list it was shown and why.
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
-- A tool list has 18 to 21 entries and takes 18 to 21 KB, about half of what one list of everything took. Everything else is reached through `operations_query` and `operations_call` and costs no context until it is used.
+- A tool list has 34 to 37 entries and takes 32 to 35 KB. Nothing that only reads is kept off it: a tool a model cannot see is a tool it does not use, and what only reads is what a client does not ask you about.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.

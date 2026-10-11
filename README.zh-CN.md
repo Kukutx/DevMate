@@ -309,15 +309,15 @@ OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答
 
 ## 模型可以用的工具
 
-模型看到的是一份短清单，用的是它训练时熟悉的工具名。给哪一份由客户端自报的身份决定；认不出的客户端拿到 DevMate 自己的命名。
+模型看到的工具用的是它训练时熟悉的名字。给哪一份由客户端自报的身份决定；认不出的客户端拿到 DevMate 自己的命名。
 
 | | ChatGPT 和 Codex | Claude | 其他客户端 |
 | --- | --- | --- | --- |
 | 读文件 | `read` | `read` | `workspace_read` |
 | 改文件 | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
-| 运行命令 | `exec_command` `write_stdin` | `bash`（命令在 PowerShell 里运行时叫 `powershell`，例如 Windows） `process_read` | `shell_run` `process_read` |
-| 审阅改动 | `show_changes` | `show_changes` | `workspace_changes` `git_status` |
-| 每份清单都有 | `project_overview` `workspace_find` `workspace_search` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+| 运行命令 | `exec_command` `write_stdin` | `bash`（命令在 PowerShell 里运行时叫 `powershell`，例如 Windows） `process_read` `process_write` | `shell_run` `process_read` `process_write` |
+| 审阅改动 | `show_changes` | `show_changes` | `workspace_changes` |
+| 每份清单都有 | 所有只读的：`project_list` `project_overview` `editor_context` `editor_diagnostics` `workspace_files` `workspace_find` `workspace_search` `workspace_history` `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` `process_list` `providers_list` `connection_status`。撤回改动：`workspace_restore`。各个引擎，包括你的浏览器：`capability_list` `capability_query` `capability_call`。以及 `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
 
 | 方面 | 能做什么 |
 | --- | --- |
@@ -325,16 +325,18 @@ OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答
 | 找代码 | 按通配符找文件、ripgrep 全文搜索。遵守 `.gitignore`，大仓库也快 |
 | 读 | 带行号，大文件分页（最大 32 MiB）。UTF-16 和本机编码（GBK 等）的文件能读，不会被改写 |
 | 改 | 补丁（Codex 写的 `*** Begin Patch` 格式，或 `git diff` 输出的统一 diff）一次改多个文件，要么全部生效要么一个不动，并且可以整体撤回。精确文本替换，多处修改原子生效。覆盖写入会保留原来的版本 |
-| 运行 | 真实的 shell 语义（`npm test`、`git commit`）。一次调用默认最多等十秒就返回；还在跑的命令继续跑，可以继续读输出、送输入、整棵进程树一起停 |
+| 运行 | 真实的 shell 语义（`npm test`、`git commit`）。一次调用默认最多等 30 秒就返回（最长 50 秒）；还在跑的命令继续跑，可以继续读输出、送输入、整棵进程树一起停 |
 | 审阅 | 还没提交的改动，不管是谁改的（工具、命令、委派的 Agent）：每个文件发生了什么、增减多少行。标记为已审阅之后，下次只显示之后新改的。需要 Git 仓库 |
 | 编辑器 | VS Code 已经算好的编译、类型和 lint 错误 |
 | 委派 | 把整件任务交给本机上的编码 Agent |
-| 其余 | 都是按名字调用的操作，只读的走 `operations_query`，其余走 `operations_call`：列目录、移动、删除、改动历史与撤销（`workspace.history`、`workspace.restore`，默认保留 30 天）、更多 Git（`git.log`、`git.show`、`git.blame`、`git.branches`；只读，绝不运行仓库自己配置的程序）、编辑器打开的文件、浏览器控制与 QA、Godot、逆向工程、Obsidian 和外部 MCP 服务器（`capability.*`）、工作流、任务、作业、产物 |
+| 历史与 Git | DevMate 改过什么、怎么撤回（`workspace_history`、`workspace_restore`，默认保留 30 天）；提交记录、某次提交、某一行是谁改的、分支（只读，绝不运行仓库自己配置的程序） |
+| 引擎 | 通过 `capability_list`、`capability_query`、`capability_call`：你自己的浏览器（Chrome 和 Edge 扩展）、浏览器控制与 QA、Godot、逆向工程、Obsidian 和外部 MCP 服务器 |
+| 其余 | 都是按名字调用的操作，只读的走 `operations_query`，其余走 `operations_call`：新建文件夹、移动、删除（补丁和命令行也能做）、工作流、任务、作业、产物 |
 
 - 每份清单里的每个工具，任何客户端都能调用：清单只决定事先告诉模型哪些。想自己指定清单，就在给客户端的 MCP 地址后面加 `?tools=gpt`、`?tools=claude` 或 `?tools=generic`。`devmate doctor` 会显示最近一个客户端自报的名字、它拿到的是哪份清单，以及依据是什么。
 - `projectId` 可以是项目 ID、项目根目录或唯一的项目名；只共享了一个项目时可以省略。有多个项目时，只读工具跟随你正在使用的编辑器窗口，写操作必须写明项目。
 - 没有“共享文件夹”这个工具。那是你自己的事；模型会被告知请你去做。
-- 一份工具清单有 18 到 21 项，18 到 21 KB，大约是原先“全部列出”那一份的一半。其余操作经 `operations_query` 和 `operations_call` 调用，用到之前不占对话上下文。
+- 一份工具清单有 34 到 37 项，32 到 35 KB。只读的工具一个都不藏：模型看不到的工具就不会去用，而只读的工具正是客户端不会来问你的那些。
 - 工具带有准确的提示（只读、写入、破坏性、对外），客户端只在真正需要时请求确认。
 - 调用被取消或超时，只是不再等待：已经启动的命令或 Agent 任务继续运行，随后仍可读取或停止。
 - 服务同时支持 2026-07-28 和 2025 年的 MCP 协议版本。

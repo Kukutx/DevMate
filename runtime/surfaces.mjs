@@ -20,16 +20,19 @@ export function clientSurfaceBy({ chosen, name, userAgent, tunnel } = {}) {
   return tunnel ? { surface: 'gpt', by: 'tunnel' } : { surface: 'generic', by: 'default' };
 }
 
-// What stays a tool of its own on every surface; everything else is an operation, one generic call away.
-const CORE = ['project.overview', 'workspace.find', 'workspace.search', 'git.status', 'git.diff', 'editor.diagnostics', 'process.stop',
-  'agents.delegate', 'agents.result', 'operations.list', 'operations.query', 'operations.call'];
-// Where show_changes says what is uncommitted, Git's own status is one tool more than a model needs to be shown.
-const REVIEWED = CORE.filter(name => name !== 'git.status');
+// What is a tool of its own on every surface. Everything that only reads is: a tool a model cannot see is a tool it
+// does not use, and a reading tool is one its client does not ask the person about, where the same look through the
+// command line would be asked about every time. So are the capability tools (the owner's browser, browser automation,
+// Godot, Obsidian are reached through them) and taking a change back. What is left as an operation, one generic call
+// away, is what a patch or a command does as well (making a folder, moving, deleting), and the rest of the catalog.
+const CORE = ['project.list', 'project.overview', 'editor.context', 'editor.diagnostics', 'workspace.files', 'workspace.find', 'workspace.search', 'workspace.history', 'workspace.restore',
+  'git.status', 'git.diff', 'git.log', 'git.show', 'git.blame', 'git.branches', 'process.list', 'process.stop', 'agents.delegate', 'agents.result', 'providers.list',
+  'capability.list', 'capability.query', 'capability.call', 'connection.status', 'operations.list', 'operations.query', 'operations.call'];
 export const SURFACES = Object.freeze({
-  generic: { native: [], direct: [...CORE, 'workspace.read', 'workspace.edit', 'workspace.patch', 'workspace.write', 'workspace.changes', 'shell.run', 'process.read'], names: {} },
-  gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin', 'show_changes'], direct: REVIEWED,
+  generic: { native: [], direct: [...CORE, 'workspace.read', 'workspace.edit', 'workspace.patch', 'workspace.write', 'workspace.changes', 'shell.run', 'process.read', 'process.write'], names: {} },
+  gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin', 'show_changes'], direct: CORE,
     names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.patch': 'apply_patch', 'workspace.edit': 'apply_patch', 'workspace.write': 'apply_patch', 'shell.run': 'exec_command', 'process.read': 'write_stdin', 'process.write': 'write_stdin' } },
-  claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...REVIEWED, 'process.read'],
+  claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...CORE, 'process.read', 'process.write'],
     names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } }
 });
 
@@ -62,7 +65,7 @@ const project = { projectId: projectReference.optional().describe('Project id, r
 const CHARS_PER_TOKEN = 4, DEFAULT_TOKENS = 10000, MAX_TOKENS = 100000, MAX_CHARS = 120000;
 const tokens = z.number().int().min(100).max(MAX_TOKENS).optional().describe('How much output to return, in tokens (default ' + DEFAULT_TOKENS + '). Longer output keeps its beginning and its end.');
 // How long one call waits before it hands back what there is. A chat host ends a call that takes much longer.
-const YIELD_MS = 10000, YIELD_MAX_MS = 12000, POLL_MS = 5000, AFTER_WRITE_MS = 250;
+const YIELD_MS = 30000, YIELD_MAX_MS = 50000, POLL_MS = 5000, AFTER_WRITE_MS = 250;
 const yieldMs = fallback => z.number().int().min(0).max(YIELD_MAX_MS).optional().describe('How long to wait for output before returning, in milliseconds (default ' + fallback + ', at most ' + YIELD_MAX_MS + '). The command keeps running either way.');
 
 function budgeted(text, maxTokens) {
@@ -86,7 +89,7 @@ function session(result, maxTokens) {
 // The Claude surface's command tool, under the name of the shell that runs it.
 const commandTool = opening => ({ title: 'Run command', labels: ['Running a command', 'Ran a command'], destructive: true, openWorld: true,
   description: shell => opening(shell) + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
-    ': tests, builds, package managers, Git. It returns when the command exits, or after ten seconds (with timeout: after up to 50 seconds); a command still running then keeps running and is followed with process_read and ended with process_stop.',
+    ': tests, builds, package managers, Git. It returns when the command exits, or after 30 seconds (with a longer timeout: after up to 50 seconds); a command still running then keeps running and is followed with process_read and ended with process_stop.',
   shape: { command: z.string().min(1).max(100000), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
     timeout: z.number().int().min(1000).max(86400000).optional().describe('End the command after this many milliseconds.'), ...project },
   run: async ({ call, present }, input) => present('shell.run', await call('shell.run', { projectId: input.projectId, command: input.command, cwd: input.working_directory,

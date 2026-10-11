@@ -52,10 +52,10 @@ export function defineAgentOperations(service, add) {
     workflowId: id.optional(), model, waitMs,
     isolate: z.boolean().optional().describe('For a new agent: work in a copy of the project (a Git worktree of the last commit). Nothing in the project changes until agents.apply.'), ...mutation }, false,
     'Hand a whole task to a coding agent installed on this computer (' + AGENT_PROVIDERS.join(', ') + '; providers_list says which are installed). Use it when the user asks for delegation or for work in parallel; otherwise do the work yourself. With isolate:true the agent works in a copy whose changes are reviewed (agents.proposal) and then applied or discarded. ' +
-    'Without agentId a new session starts; with agentId the task continues that session. Returns the result when it finishes within waitMs (default 10s, at most 50s), otherwise follow with agents_result.',
+    'Without agentId a new session starts; with agentId the task continues that session. Returns the result when it finishes within waitMs (default 30s, at most 50s), otherwise follow with agents_result.',
     async (args, context) => {
       const project = service.project(args.projectId, { write: true });
-      const { waitMs: wait = 10000, operationId, isolate, ...task } = args;
+      const { waitMs: wait = 30000, operationId, isolate, ...task } = args;
       if (args.agentId && service.store.get('agent', args.agentId).isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + service.store.get('agent', args.agentId).isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
       if (isolate && args.agentId) throw new DomainError('invalid_input', 'isolate is chosen when an agent is started. An agent that continues keeps working where it started.');
       const isolated = isolate ? await service.workspace.isolate(project, 'copy-' + randomBytes(6).toString('hex')) : null;

@@ -49,7 +49,7 @@ test('a client gets the tools of the model it is: by its name, by how it reached
   assert.deepEqual([{ chosen: 'claude', name: 'openai-mcp' }, { name: 'ChatGPT' }, { userAgent: 'Claude-User' }, { tunnel: true }, { name: 'my-script' }].map(said => clientSurfaceBy(said).by), ['address', 'name', 'name', 'tunnel', 'default']);
 });
 
-test('each surface lists a handful of tools under the names its model knows, and the list is a fraction of what it was', async t => {
+test('each surface lists its tools under the names its model knows: everything that reads and the capability tools are on every list', async t => {
   const f = await fixture(t), sizes = {};
   for (const surface of ['generic', 'gpt', 'claude']) {
     const client = await f.open({ surface, listing: true }), listed = await client.listTools();
@@ -66,8 +66,20 @@ test('each surface lists a handful of tools under the names its model knows, and
     assert.match(client.getInstructions().slice(0, 512), /project_overview/);
   }
   t.diagnostic('tools/list bytes: ' + JSON.stringify(sizes));
-  // Measured before the surfaces: 40,135 bytes for 39 tools. Every surface is now under half of that.
-  for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 22000, surface + ' lists ' + bytes + ' bytes');
+  // Measured before the surfaces: 40,135 bytes for 39 tools. No list is longer than that; what makes a list shorter is
+  // a shorter description, never a tool that is kept from the model.
+  for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 40135, surface + ' lists ' + bytes + ' bytes');
+  // A tool a model cannot see is a tool it does not use: every surface lists whatever only reads, the capability tools
+  // (the owner's browser and the other engines are behind them) and taking a change back.
+  for (const surface of ['generic', 'gpt', 'claude']) {
+    const listed = (await (await f.open({ surface, listing: true })).listTools()).tools, named = new Set(listed.map(tool => tool.name));
+    for (const name of ['project_list', 'project_overview', 'editor_context', 'editor_diagnostics', 'workspace_files', 'workspace_find', 'workspace_search', 'workspace_history', 'workspace_restore', 'git_status', 'git_diff', 'git_log',
+      'git_show', 'git_blame', 'git_branches', 'process_list', 'providers_list', 'connection_status', 'capability_list', 'capability_query', 'capability_call', 'operations_list', 'operations_query', 'operations_call'])
+      assert.ok(named.has(name), surface + ' does not list ' + name);
+    for (const tool of listed.filter(item => ['capability_query', 'workspace_files', 'git_log'].includes(item.name))) assert.equal(tool.annotations.readOnlyHint, true, tool.name);
+    // What a patch or a command does as well stays one generic call away.
+    for (const name of ['workspace_mkdir', 'workspace_move', 'workspace_delete']) assert.ok(!named.has(name), surface + ' lists ' + name);
+  }
   assert.deepEqual(await names(await f.open({ surface: 'gpt', listing: true })).then(list => list.filter(name => ['read', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)).length), 4);
   assert.match(serverInstructions(f.service, 'gpt'), /read with read, change with apply_patch .*, then verify with exec_command/);
   assert.match(serverInstructions(f.service, 'claude'), new RegExp('read with read, change with edit .* or write, then verify with ' + SHELL_TOOL));
@@ -79,8 +91,8 @@ test('each surface lists a handful of tools under the names its model knows, and
   }
   assert.match(serverInstructions(f.service, 'generic'), /read with workspace_read, change with workspace_edit .*, then verify with shell_run/);
   assert.match(serverInstructions(f.service, 'gpt'), /follow it with write_stdin and stop servers with process_stop/);
-  // A tool that is not listed is named as the operation it is.
-  assert.match(serverInstructions(f.service, 'claude'), /Changed files stay restorable \(workspace\.history, workspace\.restore\)/);
+  assert.match(serverInstructions(f.service, 'claude'), /Changed files stay restorable \(workspace_history, workspace_restore\)/);
+  assert.match(serverInstructions(f.service, 'gpt'), /capability_list shows the engines: the owner's own browser \(engine "chrome"/);
 });
 
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {
@@ -99,8 +111,7 @@ test('the tools a GPT model knows work as it expects: read, apply_patch, exec_co
   const call = async (name, args) => f.text(await client.callTool({ name, arguments: args }));
   const applied = await call('apply_patch', { patch: '*** Begin Patch\n*** Add File: src/app.txt\n+one\n+two\n+three\n*** End Patch\n' });
   assert.match(applied, /^Changed 1 file\(s\) \(\+3 −0\):\n {2}add {4}src\/app\.txt/);
-  // What a result says in words uses this surface's names: the way to take the patch back is an operation here.
-  assert.match(applied, /Take all of it back with workspace\.restore \{since:\d+\}/);
+  assert.match(applied, /Take all of it back with workspace_restore \{since:\d+\}/);
   assert.match(await call('read', { path: 'src/app.txt', offset: 2, limit: 1 }), /^ {5}2\ttwo\n/);
   assert.match(await call('apply_patch', { patch: '*** Begin Patch\n*** Update File: src/app.txt\n one\n-two\n+2\n*** End Patch\n' }), /update src\/app\.txt {2}\(\+1 −1\) {2}at line 1/);
   assert.equal(fs.readFileSync(path.join(f.root, 'src', 'app.txt'), 'utf8'), 'one\n2\nthree\n');
@@ -157,7 +168,7 @@ test('the tools a Claude model knows work as it expects: read, write, edit and t
   const running = f.service.processes.run ? await client.callTool({ name: 'workspace_read', arguments: { path: 'wait.js' } }).then(() => f.service.call('shell.run', { command: run('wait.js'), waitMs: 300 }, connected)) : null;
   assert.equal(running.status, 'running');
   const followed = await call('process_read', { id: running.id, waitMs: 100 });
-  assert.match(followed, /\[still running; process_read \{id:"[^"]+", cursor:\d+, waitMs:10000\} waits for more output, process_stop ends it\]/);
+  assert.match(followed, /\[still running; process_read \{id:"[^"]+", cursor:\d+, waitMs:30000\} waits for more output, process_stop ends it\]/);
   await call('process_stop', { id: running.id });
 });
 
@@ -215,7 +226,7 @@ test('show_changes says what is uncommitted, whoever changed it, and after a rev
   const put = (name, text) => fs.writeFileSync(path.join(f.root, name), text);
   // Without a repository there is no commit to compare with, and the answer says what there is instead.
   const none = await client.callTool({ name: 'show_changes', arguments: {} });
-  assert.equal(none.isError, true); assert.match(none.content[0].text, /not_a_repository/); assert.match(none.content[0].text, /workspace\.history/);
+  assert.equal(none.isError, true); assert.match(none.content[0].text, /not_a_repository/); assert.match(none.content[0].text, /workspace_history/);
   git('init', '-q');
   put('a.txt', 'one\ntwo\nthree\n'); put('b.txt', 'b\n'); put('old.txt', 'x\ny\n'); put('r.txt', 'r1\nr2\nr3\nr4\nr5\n');
   git('add', '-A'); git('commit', '-q', '-m', 'base');

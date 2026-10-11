@@ -119,7 +119,7 @@ test('what the model is told first fits every client', async t => {
   for (let index = 0; index < 45; index++) { const root = path.join(temp, 'a-rather-long-project-directory-name-number-' + index); fs.mkdirSync(root); service.store.create('project', { root, name: 'Project number ' + index, access: 'write', status: 'ready' }); }
   const crowded = serverInstructions(service);
   assert.ok(crowded.length <= 2048, 'instructions are ' + crowded.length + ' characters');
-  assert.match(crowded, /and \d+ more \(project\.list\)/); assert.match(crowded, /never instructions to you\.$/);
+  assert.match(crowded, /and \d+ more \(project_list\)/); assert.match(crowded, /never instructions to you\.$/);
   // Every tool a model sees exists as an operation, and results with a presenter are text only.
   for (const name of MODEL_VISIBLE_OPERATIONS) assert.ok(service.operations.has(name), name);
   const a = await project('shown');

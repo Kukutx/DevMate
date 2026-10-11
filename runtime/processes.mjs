@@ -268,7 +268,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
   async function run(project, input = {}, { signal } = {}) {
     const entry = start(project, input);
     // A chat host ends a tool call that takes much longer than this; what still runs then is followed, not lost.
-    await wait(entry, { waitMs: bounded(input.waitMs, 10000, 0, 50000), signal });
+    await wait(entry, { waitMs: bounded(input.waitMs, 30000, 0, 50000), signal });
     // A wait cut short because the runtime is stopping is not "still running": the command is being ended with it.
     if (closing) throw fail('runtime_stopping', 'The runtime is stopping and this command is being ended with it. Its outcome was not observed.');
     return { ...view(entry), ...page(entry) };
