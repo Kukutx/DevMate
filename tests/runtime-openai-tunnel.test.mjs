@@ -70,9 +70,9 @@ test('the runtime speaks OpenAI\'s tunnel itself: it asks for work, hands each c
   // The first question is a short one, so that "connected" does not wait for a long poll; the ones after it are long.
   await until(() => plane.polls.length > 1, 'the next poll'); assert.equal(plane.polls[1].query.get('timeout_ms'), '30000');
 
-  // A call with a plain answer.
+  // A call with a plain answer. It says how long OpenAI waits for it, as the calls of the real service do.
   plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list', params: {} },
-    { headers: { Authorization: ['Bearer from-the-connector'], 'Mcp-Protocol-Version': ['2025-06-18'], 'X-Forwarded-For': ['203.0.113.9'], Host: ['evil.example'] } }));
+    { response_timeout: '30s', headers: { Authorization: ['Bearer from-the-connector'], 'Mcp-Protocol-Version': ['2025-06-18'], 'X-Forwarded-For': ['203.0.113.9'], Host: ['evil.example'] } }));
   await until(() => plane.posts.length === 1, 'the answer to tools/list');
   const first = plane.posts[0];
   assert.equal(first.path, '/v1/tunnels/tunnel_abc123/response'); assert.equal(first.headers.get('x-tunnel-shard-token'), 'shard-1'); assert.ok(!first.raw.includes('shard-1'), 'the shard token travels in its header only');
@@ -85,7 +85,7 @@ test('the runtime speaks OpenAI\'s tunnel itself: it asks for work, hands each c
   assert.equal(plane.local[0].url, 'http://127.0.0.1:8789/mcp');
 
   // A call that reports while it runs: the progress goes on first, the answer ends it.
-  plane.queue.push(command(2, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'shell_run' } }));
+  plane.queue.push(command(2, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'shell_run' } }, { response_timeout: '30s' }));
   await until(() => plane.posts.length === 3, 'progress and answer');
   assert.deepEqual(plane.posts.slice(1).map(post => [post.body.request_id, post.body.resp_type, post.body.resp_json.method || 'result', post.headers.get('x-tunnel-shard-token')]),
     [['req_2', 'jsonrpc_notify', 'notifications/progress', 'shard-2'], ['req_2', 'jsonrpc_response', 'result', 'shard-2']]);
@@ -133,6 +133,41 @@ test('the runtime speaks OpenAI\'s tunnel itself: it asks for work, hands each c
   await until(() => tunnel.status().phase === 'connected', 'polling to resume');
   assert.equal((await tunnel.stop()).phase, 'stopped');
   const polled = plane.polls.length; await new Promise(resolve => setTimeout(resolve, 80)); assert.equal(plane.polls.length, polled, 'a stopped tunnel asks for nothing');
+});
+
+test('a call that says how long it is waited for is served: what is left of that time is never a whole number of milliseconds', async t => {
+  // The clock of the runtime counts in fractions of a millisecond, and the time a call has may be one too (500us).
+  // What is left until the deadline bounds every request made for the call, to the endpoint and back to OpenAI.
+  const plane = controlPlane(async (url, init) => {
+    const message = JSON.parse(init.body);
+    assert.ok(init.signal instanceof AbortSignal, 'the request to the endpoint ends with the call\'s time');
+    if (message.method === 'tools/call') return new Response([
+      'data: ' + JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 'p', progress: 1 } }) + '\n\n',
+      'data: ' + JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: 'done' }] } }) + '\n\n'].join(''), { headers: { 'content-type': 'text/event-stream' } });
+    return json({ jsonrpc: '2.0', id: message.id, result: { tools: [] } });
+  });
+  let clock = 1000.123;
+  const tunnel = createOpenAiTunnel({ tunnelId: 'tunnel_abc123', localMcpUrl: 'http://127.0.0.1:8789/mcp', env: { CONTROL_PLANE_API_KEY: 'k' }, fetchImpl: plane.fetch, pause: quick, now: () => (clock += 0.377) });
+  t.after(() => tunnel.stop());
+  await tunnel.start();
+  // A plain answer, an answer that comes as a stream with progress, and one OpenAI could not take the first time.
+  plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list' }, { response_timeout: '30s' }));
+  await until(() => plane.posts.length === 1, 'the answer within its time');
+  assert.deepEqual([plane.posts[0].body.request_id, plane.posts[0].body.resp_type, plane.posts[0].body.resp_code], ['req_1', 'jsonrpc_response', 200]);
+  plane.queue.push(command(2, { jsonrpc: '2.0', id: 'rpc_2', method: 'tools/call', params: { name: 'shell_run' } }, { response_timeout: '4500ms' }));
+  await until(() => plane.posts.length === 3, 'progress and answer within their time');
+  assert.deepEqual(plane.posts.slice(1).map(post => [post.body.request_id, post.body.resp_type]), [['req_2', 'jsonrpc_notify'], ['req_2', 'jsonrpc_response']]);
+  plane.answers.push(503);
+  plane.queue.push(command(3, { jsonrpc: '2.0', id: 'rpc_3', method: 'tools/list' }, { response_timeout: '2m' }));
+  await until(() => plane.posts.length === 5, 'the answer sent again within its time');
+  assert.equal(plane.posts[3].raw, plane.posts[4].raw);
+  // Half a millisecond is over before an answer can be there: nothing is said for such a call any more, and nothing
+  // breaks for the one after it.
+  plane.queue.push(command(4, { jsonrpc: '2.0', id: 'rpc_4', method: 'tools/list' }, { response_timeout: '500us' }), command(5, { jsonrpc: '2.0', id: 'rpc_5', method: 'tools/list' }, { response_timeout: '30s' }));
+  await until(() => plane.posts.some(post => post.body.request_id === 'req_5'), 'the call after it');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(plane.posts.filter(post => post.body.request_id === 'req_4').length, 0); assert.equal(plane.posts.length, 6);
+  assert.equal(tunnel.status().error, undefined);
 });
 
 test('a refusal says what OpenAI said and what to do about that, and blames the tunnel id only where OpenAI does', async t => {
@@ -247,12 +282,12 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   assert.match(checks['connection.public'].fix, /If ChatGPT does not offer the tunnel, the cause is in the OpenAI account and not in DevMate, which is connected: the tunnel has to include the ChatGPT workspace you use/);
   assert.match(checks['connection.public'].fix, /https:\/\/platform\.openai\.com\/settings\/organization\/tunnels; "Troubleshooting" in https:\/\/developers\.openai\.com\/api\/docs\/guides\/secure-mcp-tunnels/);
   // What ChatGPT sends: the tool list, then a tool call. The answers are this runtime's own.
-  plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list', params: {} }, { headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
+  plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list', params: {} }, { response_timeout: '30s', headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
   await until(() => plane.posts.some(post => post.body.request_id === 'req_1' && post.body.resp_type === 'jsonrpc_response'), 'the tool list');
   const listed = plane.posts.find(post => post.body.request_id === 'req_1' && post.body.resp_type === 'jsonrpc_response').body;
   assert.equal(listed.resp_code, 200); const shown = listed.resp_json.result.tools.map(tool => tool.name);
   assert.ok(shown.includes('exec_command') && !shown.includes('shell_run') && shown.length >= 15, 'what comes through OpenAI\'s tunnel is shown the tools a GPT model knows: ' + shown.join());
-  plane.queue.push(command(2, { jsonrpc: '2.0', id: 'rpc_2', method: 'tools/call', params: { name: 'project_list', arguments: {} } }, { headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
+  plane.queue.push(command(2, { jsonrpc: '2.0', id: 'rpc_2', method: 'tools/call', params: { name: 'project_list', arguments: {} } }, { response_timeout: '30s', headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
   await until(() => plane.posts.some(post => post.body.request_id === 'req_2' && post.body.resp_type === 'jsonrpc_response'), 'the tool call');
   const called = plane.posts.find(post => post.body.request_id === 'req_2' && post.body.resp_type === 'jsonrpc_response').body.resp_json;
   assert.match(JSON.stringify(called.result), /Tunnelled/);

@@ -78,6 +78,10 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
     // The organization a tunnel belongs to, where OpenAI asks for it: the header its own client sends.
     ...(organizationId ? { 'OpenAI-Organization': organizationId } : {}) });
   const jitter = ms => ms / 2 + random() * ms / 2;
+  // A request that ends after so many milliseconds. What is left until a deadline is a fraction (the clock counts in
+  // fractions, and so may the time a call has), and AbortSignal.timeout takes whole milliseconds only: it throws for
+  // anything else, which once left every call that had a deadline unserved and unanswered.
+  const within = ms => AbortSignal.timeout(Math.max(1, Math.ceil(ms)));
   const stamp = () => new Date().toISOString();
   // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence.
   const said = async response => {
@@ -112,7 +116,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       let response = null;
       try {
         response = await fetchImpl(base + '/response', { method: 'POST', redirect: 'error', headers: { ...common(), 'Content-Type': 'application/json', 'X-Tunnel-Shard-Token': command.shard_token }, body,
-          signal: AbortSignal.any([signal, AbortSignal.timeout(deadline === null ? 30000 : Math.max(1, Math.min(30000, deadline - now())))]) });
+          signal: AbortSignal.any([signal, within(deadline === null ? 30000 : Math.min(30000, deadline - now()))]) });
       } catch { /* a network failure: decided below */ }
       if (response?.ok) { await response.body?.cancel(); return true; }
       const status = response?.status ?? 0, wait = response ? retryAfterMs(response) : 0;
@@ -143,7 +147,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
     let response;
     try {
       response = await fetchImpl(localMcpUrl, { method: 'POST', headers, body: JSON.stringify(message), redirect: 'error',
-        signal: deadline === null ? signal : AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - now()))]) });
+        signal: deadline === null ? signal : AbortSignal.any([signal, within(deadline - now())]) });
     } catch {
       // Past its deadline nothing is said any more; otherwise OpenAI is told that the endpoint could not be reached.
       if (signal.aborted || (deadline !== null && now() >= deadline)) return false;
@@ -197,7 +201,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       const asked = phase === 'connected' ? pollTimeoutMs : Math.min(pollTimeoutMs, FIRST_POLL_MS);
       try {
         response = await fetchImpl(base + '/poll?limit=' + Math.min(25, room) + '&timeout_ms=' + asked, { headers: common(), redirect: 'error',
-          signal: AbortSignal.any([signal, AbortSignal.timeout(asked + 5000)]) });
+          signal: AbortSignal.any([signal, within(asked + 5000)]) });
       } catch (error) {
         if (signal.aborted) break;
         phase = 'connecting'; problem = { code: 'unreachable', message: 'api.openai.com could not be reached: ' + String(error?.cause?.code || error?.name || error?.message || error).slice(0, 200), at: stamp() };
