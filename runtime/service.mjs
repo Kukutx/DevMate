@@ -42,10 +42,15 @@ function commandEnvironment(config, env = process.env) {
     config.connection?.tokenEnv, config.connection?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
   // The marker tells the devmate command line that a connected client started it: it then acts with that
   // client's authority, not as the owner at this computer (CLIENT_COMMAND_ENV in runtime/client.mjs).
-  return { ...Object.fromEntries(Object.entries(env).filter(([name]) => {
+  // A command started here has no terminal: nothing may wait in a pager or at a prompt, and colour codes are noise
+  // to whoever reads the output. What the owner's own environment says about any of these stands.
+  const unattended = { NO_COLOR: '1', TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat', GH_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' };
+  const own = Object.fromEntries(Object.entries(env).filter(([name]) => {
     const upper = name.toUpperCase();
     return !withheld.has(upper) && !upper.startsWith('VSCODE_') && !upper.startsWith('DEVMATE_AGENT_');
-  })), [CLIENT_COMMAND_ENV]: '1' };
+  }));
+  const set = new Set(Object.keys(own).map(name => name.toUpperCase()));
+  return { ...Object.fromEntries(Object.entries(unattended).filter(([name]) => !set.has(name))), ...own, [CLIENT_COMMAND_ENV]: '1' };
 }
 function readable(error) {
   return error.issues.slice(0, 6).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ');

@@ -152,7 +152,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   const quickTunnel = config.connection.kind === 'cloudflare-quick';
   // A quick tunnel cannot ask for sign-in, and its host name is no secret: a name travels through DNS in the clear.
   // What keeps the endpoint the owner's is a path nobody can guess, new with every start, that travels only inside TLS.
-  const mcpPath = quickTunnel ? '/mcp/' + randomBytes(24).toString('base64url') : '/mcp';
+  // A relay of the owner's own forwards one such path as well; there it is part of the configured address and stays.
+  const mcpPath = quickTunnel ? '/mcp/' + randomBytes(24).toString('base64url') : publicUrl ? new URL(publicUrl).pathname : '/mcp';
   const currentOrigin = () => {
     if (config.auth.mode === 'oauth') return config.auth.issuer;
     const url = publicUrl || (quickTunnel ? connection?.publicUrl?.() : null);

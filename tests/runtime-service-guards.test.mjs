@@ -28,6 +28,10 @@ test('project commands never inherit the connection credentials or the variables
   const a = await project('env');
   const seen = await service.call('shell.run', { projectId: a.id, file: node, args: ['-p', 'JSON.stringify(' + JSON.stringify(names) + '.filter(name => process.env[name] !== undefined))'] }, owner);
   assert.deepEqual(JSON.parse(seen.output.trim()), ['DEVMATE_GUARD_VISIBLE'], 'the owner\'s ordinary environment is inherited, nothing else from this list');
+  // A command has no terminal: nothing waits in a pager or at a prompt, and what the owner set themselves stands.
+  const unattended = await service.call('shell.run', { projectId: a.id, file: node, args: ['-p', 'JSON.stringify(Object.fromEntries(["NO_COLOR","PAGER","GIT_PAGER","GH_PAGER","GIT_TERMINAL_PROMPT"].map(name => [name, process.env[name]])))'] }, owner);
+  const expected = { NO_COLOR: '1', PAGER: 'cat', GIT_PAGER: 'cat', GH_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' };
+  assert.deepEqual(JSON.parse(unattended.output.trim()), Object.fromEntries(Object.entries(expected).map(([name, value]) => [name, previous[name] ?? process.env[name] ?? value])));
 });
 
 test('what an MCP caller learns about the connection is its state, not the machine behind it', async t => {

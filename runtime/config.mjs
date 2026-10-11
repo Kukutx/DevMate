@@ -72,7 +72,7 @@ export const configSchema = z.object({
     z.object({ kind: z.literal('local') }).strict(),
     z.object({ kind: z.literal('external-https'), url: z.string().url() }).strict(),
     z.object({ kind: z.literal('ssh'), publicUrl: z.string().url(), executable: z.string(), host: z.string(), user: z.string(),
-      sshPort: z.number().int().optional(), remotePort: z.number().int().optional(), identityFile: z.string().optional() }).strict(),
+      sshPort: z.number().int().optional(), remotePort: z.number().int().optional(), identityFile: z.string().optional(), relay: z.boolean().optional() }).strict(),
     z.object({ kind: z.literal('openai-tunnel'), tunnelId: z.string(), executable: z.string(), runtimeKeyEnv: envName.optional() }).strict(),
     z.object({ kind: z.literal('cloudflare'), publicUrl: z.string().url(), executable: z.string(), tokenEnv: envName.optional() }).strict(),
     z.object({ kind: z.literal('cloudflare-quick'), executable: z.string() }).strict()

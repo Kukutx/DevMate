@@ -164,15 +164,35 @@ Any other client: add an HTTP (Streamable HTTP) MCP server with this address. A 
 
 ### ChatGPT on the web and Claude.ai
 
-They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers five:
+They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers six. Two of them have nothing of a third party in between: a relay on a server of your own, and for ChatGPT OpenAI's own tunnel.
 
 | Route | For | Notes |
 | --- | --- | --- |
+| `relay` | Any client | A public Linux server of yours becomes the way in: `devmate relay setup user@host`. An address that stays, answers that stream, no limits but the server's own |
 | `quick` | Any client | A Cloudflare quick tunnel, for trying DevMate out. No account, no domain, nothing to set up; the address changes whenever it starts again |
 | `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
 | `https` | Any client | A reverse proxy you already run |
-| `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that provides HTTPS |
+| `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that already provides HTTPS (the relay without the setup) |
+
+**A relay of your own: an address that stays**
+
+With a public Linux server you control (a small rented one is enough) and key login to it over SSH:
+
+```powershell
+devmate relay setup root@203.0.113.7 --domain devmate.example.com
+devmate restart
+devmate mcp-url
+```
+
+`relay setup` installs [Caddy](https://caddyserver.com) on the server from the system's own packages, lets it get the certificate for that name, and forwards one path nobody can guess to a loopback port there. This computer holds that port open from the inside with OpenSSH, so nothing has to be opened on your router. Answers stream as they do locally, and there is no request count, size limit or changing address: the only limits are the server's own.
+
+- By default the relay answers only to the addresses ChatGPT and Claude connect from (their published ranges, fetched again every six hours) and to this computer. `--any-address` leaves the protection to the key in the path.
+- Without `--domain` the relay is reached by the server's IP address and asks for a certificate for that address, which needs Caddy 2.10 or newer on the server.
+- It needs root on the server, or a login that may use `sudo` without a password. No password is ever asked for or stored: authentication is your SSH key.
+- Running it again changes nothing and keeps the address. `devmate relay remove root@203.0.113.7` takes the relay off the server, and Caddy too if this had installed it.
+
+The server script and the forwarding are tested; a relay on a real public server has not been tried yet. [STATUS](docs/STATUS.md) says exactly what is unverified.
 
 **Quick tunnel: connected in a minute**
 

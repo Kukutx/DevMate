@@ -53,7 +53,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (['starting', 'connecting'].includes(phase)) return 'connecting';
     if (phase && !['connected', 'relay-ready', 'configured', 'process-running'].includes(phase)) return 'connection ' + phase;
     const checked = route.verification;
-    return !checked || checked.verified ? '' : checked.pending ? 'waiting for the new address to be known' : ROUTE_BROKEN;
+    // A relay that does not list this computer's own address still serves the clients in the cloud: nothing to show.
+    return !checked || checked.verified || checked.pending === 'not-listed' ? '' : checked.pending ? 'waiting for the new address to be known' : ROUTE_BROKEN;
   };
   const connectionNote = () => state.health?.connection === 'failed' ? 'connection failed' : state.outdated ? 'older version running, restart to update'
     : pendingConnection && pendingConnection === state.record?.generation ? 'restart to apply the saved connection' : routeNote();

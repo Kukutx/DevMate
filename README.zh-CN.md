@@ -165,7 +165,7 @@ http://127.0.0.1:8788/mcp
 
 ### ChatGPT 网页版和 Claude.ai
 
-它们从云端访问你的 MCP 服务，所以需要一条从外部到本机的通路。DevMate 提供五种：
+它们从云端访问你的 MCP 服务，所以需要一条从外部到本机的通路。DevMate 提供六种。其中两种中间没有任何第三方：放在你自己服务器上的中继，以及给 ChatGPT 用的 OpenAI 自己的隧道。
 
 | 通路 | 适用 | 特点 |
 | --- | --- | --- |
@@ -173,7 +173,27 @@ http://127.0.0.1:8788/mcp
 | `openai-tunnel` | ChatGPT、Codex | OpenAI 官方隧道。只有出站连接，没有公网地址，也不需要域名 |
 | `cloudflare` | ChatGPT、Claude 及任何客户端 | 你自己域名上的 Cloudflare 命名隧道，DevMate 负责运行 `cloudflared`。免费 |
 | `https` | 任何客户端 | 你已经在维护的反向代理 |
-| `ssh` | 任何客户端 | OpenSSH 反向转发到你自己的服务器，由那里提供 HTTPS |
+| `relay` | 任何客户端 | 把你自己的一台公网 Linux 服务器变成入口：`devmate relay setup 用户@主机`。地址固定，响应可以流式返回，除了服务器本身没有别的限制 |
+| `ssh` | 任何客户端 | OpenSSH 反向转发到你自己的服务器，由那里已有的反向代理提供 HTTPS（不带安装步骤的中继） |
+
+**自己的中继：地址固定**
+
+需要一台你自己掌握的公网 Linux 服务器（租一台小的就够），并且能用 SSH 密钥登录：
+
+```powershell
+devmate relay setup root@203.0.113.7 --domain devmate.example.com
+devmate restart
+devmate mcp-url
+```
+
+`relay setup` 用系统自己的软件包在服务器上装好 [Caddy](https://caddyserver.com)，由它为这个域名申请证书，只把一条猜不到的路径转发到服务器的回环端口。本机用 OpenSSH 从内向外把这个端口接通，路由器上不用开任何端口。响应像在本机一样可以流式返回，没有请求数、大小上限，地址也不会变：唯一的限制是服务器本身。
+
+- 默认只答复 ChatGPT 和 Claude 连接时用的地址（它们公布的地址段，每六小时重新获取一次）和本机。加 `--any-address` 就只靠路径里的密钥保护。
+- 不给 `--domain` 时用服务器的 IP 地址访问，并为这个地址申请证书，这需要服务器上的 Caddy 是 2.10 或更新的版本。
+- 服务器上需要 root，或者一个可以免密码 `sudo` 的账户。全程不询问也不保存任何密码，认证用的是你的 SSH 密钥。
+- 重复执行不会改变任何东西，地址保持不变。`devmate relay remove root@203.0.113.7` 把中继从服务器上拿掉；Caddy 如果是这条命令装的，也一并卸载。
+
+服务器脚本和转发逻辑有测试；在真实的公网服务器上还没有跑过。具体哪些没验证见[现状](docs/STATUS.md)。
 
 **快速隧道：一分钟连上**
 

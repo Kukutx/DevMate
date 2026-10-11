@@ -51,6 +51,13 @@ export async function verifyPublicMcp({ url, authMode = 'none', accessToken, exp
     }
     return { verified: true, reachable: true, tools: listed.tools.length };
   } catch (error) {
+    // A relay of the owner's own answers only to the addresses on its list. When this computer's address is not on it
+    // (it changed since the tunnel connected), the relay says so itself: the route works, it just cannot be checked from here.
+    const refused = await Promise.resolve().then(() => fetchImpl(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(Math.min(timeoutMs, 8000)),
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: '{}' }))
+      .then(async response => response.status === 403 && (await response.text()).startsWith('devmate-relay:'), () => false);
+    if (refused) return { verified: false, reachable: true, pending: 'not-listed',
+      reason: 'The relay answers, but this computer\'s current address is not on its list, so the route cannot be checked from here. ChatGPT and Claude are on the list. Restarting the connection (devmate connection.restart) puts this computer back on it.' };
     // The client library reports its own error; whether this computer can resolve the name is asked directly.
     const unresolved = await Promise.resolve().then(() => lookup(host)).then(() => false, failure => failure?.code === 'ENOTFOUND');
     if (unresolved && await knownPublicly(host).catch(() => false)) return { verified: false, reachable: false, pending: 'local-dns',

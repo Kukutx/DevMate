@@ -16,8 +16,8 @@ export async function doctor(service) {
   const shell = service.processes.shell;
   check('shell', fs.statSync(shell.file, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', shell.label + ' at ' + shell.file, 'Commands cannot run without the system shell.');
   // Models write `a && b` by habit. Windows PowerShell 5.1 does not have it; PowerShell 7 does.
-  if (shell.label === 'Windows PowerShell 5.1') check('shell.version', 'info', 'Commands run in Windows PowerShell 5.1, which has no && and ||.',
-    'Install PowerShell 7 (winget install Microsoft.PowerShell) and restart DevMate: it is used automatically and accepts what models usually write.');
+  if (shell.label === 'Windows PowerShell 5.1') check('shell.version', 'info', 'Commands run in Windows PowerShell 5.1: it has no && and ||, which models write by habit, and every command pays about a third of a second for its start.',
+    'Install PowerShell 7 with one command (winget install --id Microsoft.PowerShell --source winget) and restart DevMate: it is used automatically, accepts what models usually write and starts faster.');
   for (const [tool, purpose] of [['rg', 'file find and search'], ['git', 'Git tools']]) {
     let found = null, problem = null;
     try { found = resolveTool(tool); } catch (error) { if (error.code === 'tool_outdated') problem = error.message; }
@@ -39,6 +39,13 @@ export async function doctor(service) {
       installed ? null : absent ? 'Only needed to delegate tasks to ' + provider.id + '.' : 'Update or reinstall ' + provider.id + (provider.minimumVersion ? ' (version ' + provider.minimumVersion + ' or newer)' : '') + ' to delegate tasks to it.');
   }
   const connection = service.config.connection, url = service.publicUrl(), env = service.secrets.environment();
+  // Whether a client in the cloud could reach this computer at all without something in between. An address that is
+  // private, shared by a provider (100.64.0.0/10) or link-local is not reachable from outside, whatever is forwarded.
+  const addresses = Object.values(os.networkInterfaces()).flat().filter(item => item && !item.internal);
+  const privateV4 = address => /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(address);
+  const direct = addresses.some(item => (item.family === 'IPv4' || item.family === 4) && !privateV4(item.address));
+  if (!direct && connection.kind === 'local') check('network', 'info', 'This computer has no public IPv4 address of its own: it is behind a router or a provider\'s address translation, so a client in the cloud cannot connect to it directly.',
+    'Give it a way in that you control: a relay on a public server of yours (devmate relay setup user@host), or for ChatGPT OpenAI\'s own tunnel (devmate connect openai-tunnel).');
   const status = await service.connectionState();
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'Configure an openai-tunnel or cloudflare connection to use ChatGPT or Claude.ai.');
@@ -51,8 +58,8 @@ export async function doctor(service) {
       connection.kind + ': ' + phase + (fault ? ' — ' + fault : ''), status.diagnostic ? String(status.diagnostic).slice(-400) : fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
     if (url) {
       const verification = service.verification?.url === url ? service.verification : await service.verifyConnection();
-      // What the doctor prints gets pasted into bug reports. The last part of a quick tunnel address is its key.
-      const shown = connection.kind === 'cloudflare-quick' ? new URL(url).origin + '/mcp/<key>' : url;
+      // What the doctor prints gets pasted into bug reports. The last part of a quick tunnel or relay address is its key.
+      const shown = url.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>');
       // A name this computer's own DNS has not caught up with is not a broken route.
       check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
