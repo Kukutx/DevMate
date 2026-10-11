@@ -156,6 +156,27 @@ test('capability.configure and capability.settings: layered values, clear errors
   await assert.rejects(cap.settings({ engine: 'nope' }), error => error.code === 'unknown_engine');
 });
 
+test('what a client is shown of engines and external servers holds no credential: a setting is a path, a switch or a number, and a server is its name', async t => {
+  const f = fixture(t);
+  // An external server is configured by naming where its credential is kept, never by the credential itself.
+  for (const refused of [{ id: 'x', transport: 'http', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer a-value' } }, { id: 'x', transport: 'http', url: 'https://user:a-value@mcp.example.com/mcp' },
+    { id: 'x', transport: 'http', url: 'https://mcp.example.com/mcp', bearerTokenEnv: 'a-value-not-a-name' }, { id: 'x', transport: 'stdio', command: process.execPath, environment: { API_KEY: 'sk-a-value-not-a-name' } }]) {
+    await assert.rejects(f.open({ externalServers: [refused] }), { code: 'invalid_mcp_config' }, JSON.stringify(refused));
+  }
+  const cap = await f.open({ externalServers: [{ id: 'remote', transport: 'http', url: 'https://mcp.example.com/mcp', bearerTokenEnv: 'REMOTE_MCP_TOKEN' },
+    { id: 'local', transport: 'stdio', command: process.execPath, args: ['server.js', '--profile', 'private-profile-name'], environment: { API_KEY: 'LOCAL_MCP_KEY' } }] });
+  // What is listed of a server is that it exists: not its address, its arguments or the names its credentials go by.
+  const listing = await cap.list({ projectId: 'one' }), shown = await cap.settings({ projectId: 'one' });
+  assert.deepEqual(listing.externalServers, [{ id: 'remote', transport: 'http', connected: false }, { id: 'local', transport: 'stdio', connected: false }]);
+  const text = JSON.stringify([listing, shown, await cap.settings({})]);
+  for (const hidden of ['REMOTE_MCP_TOKEN', 'LOCAL_MCP_KEY', 'private-profile-name', 'mcp.example.com']) assert.equal(text.includes(hidden), false, hidden);
+  // No engine has a setting that could hold a credential. This fails when one is added whose name says it does: such a
+  // setting names an environment variable instead, as the external servers do, and is then left out of what is shown.
+  const credential = /token|secret|passw|credential|authori[sz]ation|header|cookie|api_?key|bearer/i;
+  for (const item of shown.items) for (const name of [...Object.keys(item.settings), ...Object.keys(item.stored.config), ...Object.keys(item.schema?.properties || {})]) assert.doesNotMatch(name, credential, item.engine + '.' + name);
+  assert.ok(shown.items.length >= 5 && shown.items.filter(item => Object.keys(item.schema?.properties || {}).length > 2).length >= 4, 'the engines\' own settings were looked at');
+});
+
 test('an engine can be switched off and on again; switching off closes what it had open', async t => {
   const f = fixture(t);
   let activations = 0, deactivations = 0;
