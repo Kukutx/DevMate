@@ -287,6 +287,13 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       if (input.input !== undefined && (!input.input || typeof input.input !== 'object' || Array.isArray(input.input))) throw new DomainError('invalid_input', 'input must be a JSON object.');
       if (stopping && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(input.operation)) return refuse(res, 'runtime_stopping', 'Runtime is stopping.');
       const context = { id: 'owner', ...local };
+      // The browser host waits here for work. When it goes away unanswered (its browser was closed, or ended), the
+      // link is told that nobody listens on it any more, instead of finding out when a call is not answered.
+      if (input.operation === 'chrome.next') {
+        const left = new AbortController();
+        res.once('close', () => { if (!res.writableEnded) left.abort(); });
+        context.signal = left.signal;
+      }
       const windowId = req.headers['x-devmate-window-id'];
       if (windowId) {
         context.windowId = windowId;

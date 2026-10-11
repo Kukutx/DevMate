@@ -121,45 +121,74 @@ const HOW_TO_CONNECT = 'Open Chrome or Edge with the DevMate extension on the ow
 const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused', 'page_error', 'dialog_open', 'covered', 'timeout']);
 // The owner's own switch in the extension. It is a decision, not a fault, and a model is told so.
 const PAUSED = 'The owner has paused DevMate\'s use of this browser, in the DevMate extension. That is their decision, not a fault: do not try again or work around it. Say so; they switch it back on when they want.';
-// A browser host asks again at least this often; one that has not asked for longer is gone.
-const ALIVE_MS = 45000, CALL_TIMEOUT_MS = 30000;
+// A browser host asks for work again the moment it was answered. A link nobody is asking on for longer than this
+// belongs to a browser that is gone: closed, or ended before its host could say so.
+const IDLE_MS = 5000, CALL_TIMEOUT_MS = 30000;
 
 /** The browsers connected to this runtime, and the calls that wait for them. */
-export function createBrowserLink({ now = Date.now, aliveMs = ALIVE_MS, callTimeoutMs = CALL_TIMEOUT_MS } = {}) {
+export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, callTimeoutMs = CALL_TIMEOUT_MS } = {}) {
   const links = new Map();
+  // The order in which they connected: two can connect within one millisecond.
+  let connected = 0;
+  const hand = link => {
+    if (!link.waiter || !link.queue.length) return;
+    const waiter = link.waiter; link.waiter = null; clearTimeout(link.timer); unasked(link);
+    waiter({ calls: link.queue.splice(0).map(({ id, method, params }) => ({ id, method, params })) });
+  };
   const drop = (link, why) => {
     if (links.get(link.id) !== link) return;
     links.delete(link.id);
-    clearTimeout(link.timer); link.waiter?.({ calls: [] });
+    clearTimeout(link.timer); clearTimeout(link.idleTimer); link.waiter?.({ calls: [] }); link.waiter = null;
+    // What it was not handed yet goes to a browser that is still there and can do it; without one it is refused now,
+    // and was never begun. What it was handed is answered now too: nobody will bring its answer.
+    for (const item of link.queue.splice(0)) {
+      const entry = link.pending.get(item.id), other = current();
+      link.pending.delete(item.id);
+      if (!entry) continue;
+      if (other?.methods.has(item.method)) { entry.link = other; other.pending.set(item.id, entry); other.queue.push(item); hand(other); }
+      else { clearTimeout(entry.timer); entry.reject(fault('browser_unavailable', 'The browser was closed or disconnected before it was asked (' + why + '). ' + HOW_TO_CONNECT, { notStarted: true })); }
+    }
     for (const call of link.pending.values()) { clearTimeout(call.timer); call.reject(fault('browser_unavailable', 'The browser was closed or disconnected before it answered (' + why + '). ' + HOW_TO_CONNECT)); }
     link.pending.clear();
   };
-  const sweep = () => { for (const link of [...links.values()]) if (now() - link.seenAt > aliveMs) drop(link, 'it stopped asking for work'); };
-  // The browser a call goes to: the one that connected last.
-  const current = () => { sweep(); return [...links.values()].sort((a, b) => b.attachedAt - a.attachedAt)[0] || null; };
-  const owned = linkId => { const link = links.get(linkId); if (!link) throw fault('not_found', 'This browser link is no longer known to the runtime; attach again.'); link.seenAt = now(); return link; };
-  const hand = link => {
-    if (!link.waiter || !link.queue.length) return;
-    const waiter = link.waiter; link.waiter = null; clearTimeout(link.timer);
-    waiter({ calls: link.queue.splice(0).map(({ id, method, params }) => ({ id, method, params })) });
-  };
+  const gone = link => !link.waiter && now() - link.unaskedSince > idleMs;
+  const sweep = () => { for (const link of [...links.values()]) if (gone(link)) drop(link, 'it stopped asking for work'); };
+  // From now on nobody asks on this link. Its host is given idleMs to ask again; the look is made after whatever
+  // arrived meanwhile was read, so that a runtime that was busy for a moment does not take a waiting host for gone.
+  function unasked(link) {
+    link.unaskedSince = now();
+    clearTimeout(link.idleTimer);
+    link.idleTimer = setTimeout(() => setImmediate(() => { if (links.get(link.id) === link && gone(link)) drop(link, 'it stopped asking for work'); }), idleMs + 1);
+    link.idleTimer.unref?.();
+  }
+  // The browser a call goes to: the one that connected last. One whose host went away in the middle of asking is
+  // passed over while another is there.
+  const current = () => { sweep(); const live = [...links.values()].sort((a, b) => b.order - a.order); return live.find(link => !link.lost) || live[0] || null; };
+  const owned = linkId => { const link = links.get(linkId); if (!link) throw fault('not_found', 'This browser link is no longer known to the runtime; attach again.'); return link; };
 
   function attach({ browser = '', extension = '', methods = [] } = {}) {
     sweep();
     const link = { id: 'browser-' + randomUUID(), browser: String(browser).slice(0, 100), extension: String(extension).slice(0, 40), methods: new Set(methods),
-      attachedAt: now(), seenAt: now(), queue: [], pending: new Map(), waiter: null, timer: null };
+      attachedAt: now(), order: ++connected, unaskedSince: now(), lost: false, queue: [], pending: new Map(), waiter: null, timer: null, idleTimer: null };
     links.set(link.id, link);
+    unasked(link);
     return { linkId: link.id };
   }
-  /** What the browser should do next: at once when something waits, otherwise when something arrives or after waitMs. */
-  function next({ linkId, waitMs = 25000 } = {}) {
+  /**
+   * What the browser should do next: at once when something waits, otherwise when something arrives or after waitMs.
+   * signal: the one who asks went away before being answered (its browser was closed, or ended).
+   */
+  function next({ linkId, waitMs = 25000 } = {}, { signal } = {}) {
     const link = owned(linkId);
     // One reader at a time: an earlier one that is still waiting is answered with nothing.
     if (link.waiter) { clearTimeout(link.timer); link.waiter({ calls: [] }); link.waiter = null; }
+    clearTimeout(link.idleTimer); link.lost = false;
     return new Promise(resolve => {
       link.waiter = resolve;
-      link.timer = setTimeout(() => { if (link.waiter === resolve) { link.waiter = null; link.seenAt = now(); resolve({ calls: [] }); } }, Math.max(0, waitMs));
+      const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); link.lost = lost; unasked(link); resolve({ calls: [] }); };
+      link.timer = setTimeout(() => left(false), Math.max(0, waitMs));
       link.timer.unref?.();
+      if (signal?.aborted) left(true); else signal?.addEventListener('abort', () => left(true), { once: true });
       hand(link);
     });
   }
@@ -199,8 +228,9 @@ export function createBrowserLink({ now = Date.now, aliveMs = ALIVE_MS, callTime
     if (!link.methods.has(definition.method)) throw refuse('not_supported', 'The DevMate extension in this browser (version ' + (link.extension || 'unknown') + ') has no ' + definition.method + '. Update the extension.');
     const id = 'call-' + randomUUID();
     const answer = await new Promise((resolve, reject) => {
-      const entry = { resolve, reject, timer: null };
-      const give = failure => { link.pending.delete(id); clearTimeout(entry.timer); const queued = link.queue.findIndex(item => item.id === id); if (queued >= 0) link.queue.splice(queued, 1); reject(failure(queued >= 0)); };
+      // The link is the one the call waits on now: another one, when the first went away before it was handed on.
+      const entry = { resolve, reject, timer: null, link };
+      const give = failure => { const on = entry.link; on.pending.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); reject(failure(queued >= 0)); };
       const patience = Math.max(callTimeoutMs, definition.waitMs?.(params) ?? 0);
       entry.timer = setTimeout(() => give(waiting => fault('browser_timeout', 'The browser did not answer ' + capability + ' within ' + Math.round(patience / 1000) + ' seconds.' +
         (definition.readOnly || waiting ? '' : ' Whether it was done is not known: look before repeating it.'), waiting ? { notStarted: true } : {})), patience);

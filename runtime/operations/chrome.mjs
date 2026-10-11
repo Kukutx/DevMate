@@ -10,7 +10,7 @@ export function defineChromeOperations(service, add) {
   add('chrome.attach', { browser: z.string().max(100).default(''), extension: z.string().max(40).default(''), methods: z.array(z.string().min(1).max(80)).max(200) }, false,
     'Connect a browser to this runtime. Used by DevMate\'s browser host.', args => service.browser.attach(args), local);
   add('chrome.next', { linkId, waitMs: z.number().int().min(0).max(30000).default(25000) }, false,
-    'Wait for what the runtime asks of the browser next. Used by DevMate\'s browser host.', args => service.browser.next(args), local);
+    'Wait for what the runtime asks of the browser next. Used by DevMate\'s browser host.', (args, context) => service.browser.next(args, { signal: context?.signal }), local);
   add('chrome.result', { linkId, id: z.string().min(1).max(80), ok: z.boolean(), result: z.unknown().optional(),
     error: z.object({ code: z.string().max(80).optional(), message: z.string().max(2000).optional() }).optional() }, false,
     'Bring back what the browser answered. Used by DevMate\'s browser host.', args => service.browser.result(args), { ...local, projectOf: () => undefined });

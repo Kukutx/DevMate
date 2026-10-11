@@ -73,6 +73,61 @@ test('a browser link hands a call to the browser that asks for work and brings i
   await assert.rejects(async () => link.next({ linkId }), { code: 'not_found' });
 });
 
+test('a browser that is gone is noticed in a moment: its link goes, and no call is left waiting for it', async () => {
+  const link = createBrowserLink({ idleMs: 80, callTimeoutMs: 10000 });
+  const methods = ['tabs.list', 'tabs.close'];
+  // A browser host as it behaves: it asks for work again the moment it was answered, and brings each answer back.
+  const host = (linkId, name) => {
+    const stop = new AbortController();
+    void (async () => { while (!stop.signal.aborted) { let work; try { work = await link.next({ linkId, waitMs: 300 }, { signal: stop.signal }); } catch { return; }
+      for (const call of work.calls) link.result({ linkId, id: call.id, ok: true, result: { by: name } }); } })();
+    return () => stop.abort();
+  };
+  const quickly = async (work, what) => { const started = Date.now(), value = await work.then(result => result, failure => failure); assert.ok(Date.now() - started < 2000, what + ' took ' + (Date.now() - started) + ' ms'); return value; };
+  // The owner's browser, and a second one that connected after it: calls go to the second.
+  const chrome = link.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId; host(chrome, 'chrome');
+  const edge = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId, endEdge = host(edge, 'edge');
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), { by: 'edge' });
+  // The second browser is ended, and its host with it, in the middle of asking: the very next call goes to the one
+  // that is there, and a moment later the link of the other is no more.
+  endEdge();
+  assert.deepEqual(await quickly(link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), 'the call after a browser went'), { by: 'chrome' });
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual([link.status().browser, link.status().browsers], ['Google Chrome', 1]);
+  await assert.rejects(async () => link.next({ linkId: edge }), { code: 'not_found' });
+
+  // A browser whose host stopped asking without a word (it hangs, or was ended between two questions): what waits for
+  // it and was not handed on yet goes to the browser that is there.
+  const silent = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
+  assert.deepEqual(await quickly(link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), 'the call that waited on a browser that never asked'), { by: 'chrome' });
+  await assert.rejects(async () => link.next({ linkId: silent }), { code: 'not_found' });
+
+  // The only browser goes: a call is refused within that moment, as never begun, and not after half a minute.
+  const alone = createBrowserLink({ idleMs: 80, callTimeoutMs: 10000 });
+  const only = alone.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, leaving = new AbortController();
+  const asking = alone.next({ linkId: only, waitMs: 5000 }, { signal: leaving.signal });
+  leaving.abort(); assert.deepEqual(await asking, { calls: [] });
+  const refused = await quickly(alone.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), 'the refusal');
+  assert.deepEqual([refused.code, refused.notStarted], ['browser_unavailable', true]); assert.match(refused.message, /closed or disconnected before it was asked \(it stopped asking for work\)/);
+  assert.deepEqual(alone.status(), { connected: false });
+  // One that was handed to the browser before it went is answered too, and nothing is claimed about whether it was done.
+  const again = alone.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
+  const closing = alone.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }), handed = await alone.next({ linkId: again, waitMs: 1000 });
+  assert.equal(handed.calls[0].method, 'tabs.close');
+  const lostAnswer = await quickly(closing, 'the answer for a call the browser took with it');
+  assert.deepEqual([lostAnswer.code, lostAnswer.notStarted], ['browser_unavailable', undefined]); assert.match(lostAnswer.message, /before it answered/);
+  // A host that lost one question (its connection, not its browser) and asks again in time is the browser it was.
+  const back = alone.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, away = new AbortController();
+  const dropped = alone.next({ linkId: back, waitMs: 5000 }, { signal: away.signal }); away.abort(); await dropped;
+  const wanted = alone.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), returned = await alone.next({ linkId: back, waitMs: 1000 });
+  alone.result({ linkId: back, id: returned.calls[0].id, ok: true, result: { by: 'the same browser' } });
+  assert.deepEqual(await wanted, { by: 'the same browser' }); assert.equal(alone.status().connected, true);
+  // And one that keeps asking stays, however long nothing is asked of it.
+  const steady = createBrowserLink({ idleMs: 80 }), kept = steady.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
+  for (let round = 0; round < 6; round++) { await steady.next({ linkId: kept, waitMs: 40 }); assert.equal(steady.status().connected, true); }
+  alone.close(); steady.close(); link.close();
+});
+
 test('what a developer debugs a page with: answers read as lines, a wait that is given its time, and cookie values only as a change', async () => {
   const link = createBrowserLink({ callTimeoutMs: 300 });
   const { linkId } = link.attach({ browser: 'Google Chrome', extension: '4.0.5', methods: BROWSER_CAPABILITIES.map(item => item.method) });
@@ -248,6 +303,25 @@ test('a registered browser is given the extension in a folder that stays, and a 
   await runtime.stop(); runtime = null;
   // Taking the registration away takes the folder with it.
   await registration(third).uninstall(); assert.equal(fs.existsSync(folder), false);
+});
+
+test('a browser that is ended without closing leaves no link behind: the runtime knows within seconds, end to end', { timeout: 60000 }, async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-chrome-gone-')), instanceRoot = path.join(temp, 'instance');
+  let runtime, host;
+  t.after(async () => { host?.kill(); await runtime?.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: () => ({ async start() {}, async stop() {}, status() { return { kind: 'local', status: 'ready' }; } }) });
+  host = spawn(process.execPath, [fileURLToPath(new URL('../runtime/cli.mjs', import.meta.url)), 'chrome-host', EXTENSION_ORIGIN, '--parent-window=0', '--instance', instanceRoot], { stdio: ['pipe', 'pipe', 'pipe'] });
+  host.stdout.on('data', () => {}); host.stderr.on('data', () => {});
+  host.stdin.write(frame({ type: 'hello', protocol: 1, extension: '4.0.5', browser: 'Google Chrome', methods: BROWSER_CAPABILITIES.map(item => item.method) }));
+  await until(() => runtime.service.browser.status().connected, 'the browser to be linked');
+  // The browser's process is ended, and its host with it: no goodbye is said. A call made at that moment is refused
+  // within seconds, as never begun, instead of waiting half a minute for an answer nobody will bring.
+  const ended = new Promise(resolve => host.once('exit', resolve));
+  host.kill(); await ended;
+  const started = Date.now();
+  await assert.rejects(runtime.service.call('capability.query', { capability: 'chrome.tabs.list' }, connected), { code: 'browser_unavailable' });
+  assert.ok(Date.now() - started < 12000, 'refused after ' + (Date.now() - started) + ' ms');
+  assert.deepEqual(runtime.service.browser.status(), { connected: false });
 });
 
 test('the browser host is the link, end to end: started as a browser starts it, it serves the extension as an entry and carries the runtime\'s calls to the browser', { timeout: 120000 }, async t => {
