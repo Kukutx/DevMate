@@ -60,6 +60,8 @@ export async function buildRuntimeCandidate({root=path.resolve(import.meta.dirna
     for(const file of ['index.html','styles.css','app.js']){
       fs.copyFileSync(path.join(root,'workbench',file),path.join(staging,'workbench',file));outputs.push('workbench/'+file);
     }
+    // The browser extension is loaded from its folder as it is: every package carries that folder.
+    fs.cpSync(path.join(root,'chrome-extension'),path.join(staging,'chrome-extension'),{recursive:true});
     const license=fs.readFileSync(path.join(root,'LICENSE'),'utf8');fs.writeFileSync(path.join(staging,'LICENSE'),license);
     const thirdParty=notices(root,inputs);fs.writeFileSync(path.join(staging,'THIRD_PARTY_NOTICES.txt'),thirdParty);
     const embeddedPaths=[...outputs.filter(file=>file.startsWith('runtime/')||file.startsWith('workbench/')),'LICENSE','THIRD_PARTY_NOTICES.txt'];

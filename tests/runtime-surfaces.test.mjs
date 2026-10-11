@@ -193,6 +193,10 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   const unknown = (await runtime.service.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'client');
   assert.equal(unknown.status, 'info'); assert.match(unknown.detail, /^The last MCP client called itself "some-editor\[31mx+" \(sender line "[^"]*"\) and was shown the tool names of DevMate itself, because nothing about it was recognised, at 20\d\d-/);
   assert.match(unknown.fix, /add \?tools=gpt, \?tools=claude or \?tools=generic to the MCP address it uses/);
+  // The runtime's own check of its public route arrives as the owner where no sign-in is asked for. It is not a client:
+  // what the doctor says of the last client stays what it was.
+  await names(await connect('devmate-connection-verify'));
+  assert.deepEqual(last(), ['some-editor[31m' + 'x'.repeat(65), 'generic', 'default']);
   // A client of the 2025 protocol names itself once, at the start; after that its requests are told apart by their sender line.
   const older = await connect('whatever', { negotiation: {}, headers: { 'user-agent': 'openai-mcp/1.0.0' } });
   assert.ok(has(await names(older), 'exec_command'));

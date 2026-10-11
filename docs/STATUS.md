@@ -92,6 +92,7 @@
 - macOS：测试和打包在 CI 上通过，没有人实际使用过。
 - Linux：只在 Ubuntu 24.04（WSL 2）上实跑过。
 - Obsidian：当前版本的插件（含“随 Obsidian 启动”和“配置连接”）没有在真实的 Obsidian 里运行；macOS 和 Linux 上的 Obsidian 没有试过。
+- Chrome 和 Edge 扩展：运行时这一头用浏览器自己的消息格式（4 字节长度加 JSON）对着真实的运行时端到端跑通（由测试扮演扩展：握手、五种入口请求、能力调用往返、浏览器关闭后本机程序退出而运行时继续）；`devmate chrome install` 的注册表写入和清单文件只用替身测过。扩展本身的各项浏览器能力用假的 `chrome` 对象测过。在真实的 Chrome 里加载扩展、经真实的 Native Messaging 连上、逐项调用浏览器接口，以这里写明的那一次实测为准；Edge、macOS、Linux 上没有试过。截图以图片内容返回，大页面的图片客户端收不收得下没有验证。
 - VS Code 的远程窗口（SSH、WSL、容器）。
 - 发布到 Open VSX 和 npm 的两个可选作业没有运行过。
 - 真实的 Playwright 会话和逆向分析后端（LIEF、pefile、pyelftools、Rizin、Ghidra）。

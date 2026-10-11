@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { createChromeRegistration } from '../platform/chrome-registration.mjs';
 import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
@@ -102,6 +104,14 @@ export async function doctor(service) {
     { address: 'as the address it used says (?tools=' + client.surface + ')', name: 'going by that name', tunnel: 'because it came through OpenAI\'s tunnel', default: 'because nothing about it was recognised' }[client.by] + ', at ' + client.at + '.',
   // The address is the owner's to add to; a tunnel id has no place for it.
   client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
+  // The owner's browser: connected, registered and waiting for a browser to be opened, or not set up. A quick look:
+  // the system is asked about the registration only where this instance has written one.
+  const browser = service.browser.status();
+  const registration = browser.connected ? null : await (service.browserHost || createChromeRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) })).status({ ask: false }).catch(() => null);
+  if (browser.connected) check('chrome', 'ok', 'The DevMate extension' + (browser.extension ? ' ' + browser.extension : '') + ' in ' + (browser.browser || 'the browser') + ' is connected: its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).');
+  else if (registration?.stale) check('chrome', 'warn', 'The browser was registered with a Node or a copy of DevMate that is no longer there, so the DevMate extension cannot reach this runtime.', 'Register it again: devmate chrome install');
+  else if (registration?.registered) check('chrome', 'info', 'DevMate is registered with ' + registration.browsers.join(', ') + '; no browser with the DevMate extension is connected right now.', 'Open the browser. If the extension is not in it yet, devmate chrome says where to load it from.');
+  else if (registration?.supported) check('chrome', 'info', 'The browser is not connected to DevMate: its bookmarks, tabs, history and downloads are not available to your client.', 'Connect it: devmate chrome install');
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
   if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
     'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +

@@ -344,6 +344,7 @@
     "vscode-host/runtime-entry.cjs",
     "vscode-host/walkthrough/**",
     "workbench/**",
+    "chrome-extension/**",
     "assets/icon.png",
     "plugin.json",
     "package.nls.json",

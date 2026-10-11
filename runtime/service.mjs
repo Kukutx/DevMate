@@ -18,6 +18,7 @@ import { createSecretStore } from './secrets.mjs';
 import { CLIENT_COMMAND_ENV } from './client.mjs';
 import { createUsage } from './usage.mjs';
 import { defineOperations } from './operations/index.mjs';
+import { createBrowserLink } from './chrome.mjs';
 import { projectOverview } from './operations/projects.mjs';
 import { doctor } from './operations/doctor.mjs';
 import { snapshot } from './operations/snapshot.mjs';
@@ -85,6 +86,8 @@ export class DevMateService {
     this.proxy = null;
     // The MCP client that asked last: what it called itself and which tool names it was shown (set where requests arrive).
     this.lastClient = null;
+    // The owner's browser, where the DevMate extension in it is connected (./chrome.mjs).
+    this.browser = createBrowserLink();
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
     this.config = normalizeConfig(config);
@@ -328,7 +331,7 @@ export class DevMateService {
     try { args = operation.schema.parse(input); }
     catch (error) { throw error.name === 'ZodError' ? new DomainError('invalid_input', 'Invalid input for ' + name + ': ' + readable(error)) : error; }
     if (args.projectId !== undefined) args.projectId = this.resolveProjectReference(args.projectId, context);
-    else if (operation.needsProject) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation, chosen);
+    else if (operation.needsProject && !operation.withoutProject?.(args)) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation, chosen);
     if (operation.localOnly && !this.reachesLocal(operation, context)) throw new DomainError('forbidden', 'This operation is available only through the local control interface: the owner does it at their own computer.');
     // A decision that is the person's own (answering what an agent asks) is taken at this computer. Anywhere else
     // the caller may be the very model that started the agent, and nothing a client says about itself proves otherwise.
@@ -441,6 +444,7 @@ export class DevMateService {
     clearInterval(this.maintenanceTimer);
     this.execution.abort(new DomainError('runtime_stopping', 'Runtime is stopping.'));
     this.inputs.close();
+    this.browser.close();
     const results = await Promise.allSettled([this.agents.close(), this.jobs?.close(), this.capabilities?.close(), this.hosts?.close(), this.auth?.close()]);
     // Jobs run through the process manager, so it closes after they have settled.
     results.push(...await Promise.allSettled([this.processes.close()]));

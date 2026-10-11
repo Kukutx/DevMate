@@ -61,13 +61,14 @@ devmate mcp-url                        # the address to give a client
 devmate ui --open                      # the workbench in your browser
 ```
 
-## Three entries, one runtime
+## Four entries, one runtime
 
 | Entry | For | Adds |
 | --- | --- | --- |
 | `devmate` command line | Working without an editor | Everything: start, share folders, configure the connection, open the workbench, call any operation. `devmate mcp` serves MCP on standard input and output for clients that start their servers as a program |
 | VS Code extension | Everyday development | The editor's diagnostics, active file and selection; a status bar item |
 | Obsidian plugin | A knowledge base | Note search, properties, graph and vault operations |
+| Chrome and Edge extension | The browser itself | Bookmarks, tabs and windows, history, downloads, the reading list and the page in front of you |
 
 One instance directory (default `~/.devmate/runtime`) has exactly one runtime process at a time.
 
@@ -142,6 +143,34 @@ Settings (user settings only: a repository's `.vscode/settings.json` cannot chan
 **Disclosures.** The plugin is desktop only and needs Node.js 24 installed separately (set its path in the plugin settings when it is not found; ripgrep must be installed too). It starts the DevMate runtime as a background process that keeps running after Obsidian closes, until you run **Stop shared runtime**. The runtime listens on `127.0.0.1` only (ports 8788 and 8789, and one more loopback port for vault operations). Its state, credentials and its own program files are kept in `~/.devmate/runtime`, outside the vault. The plugin carries those program files inside `main.js` as plain, readable text (nothing is encoded), writes them there and checks each against its hash on every start. It makes no network connection unless you configure a public connection (Cloudflare Tunnel, OpenAI Secure MCP Tunnel, SSH or your own HTTPS proxy). No telemetry, no account, no payment.
 
 The plugin has been loaded and driven in a real Obsidian 1.12.7 on Windows: loading, starting the runtime, sharing the vault read only and read and write, the note tools, stopping and disabling. Obsidian on macOS and Linux has not been tried. Please report what you find.
+
+## Chrome and Edge extension
+
+DevMate can drive a browser of its own (the browser control engine), but that browser is not yours: it has none of your bookmarks, tabs, history or sign-ins. The extension gives your client the browser you actually use.
+
+```powershell
+devmate chrome install        # tell Chrome and Edge which program the extension may talk to (your account only)
+```
+
+Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge), switch on **Developer mode**, choose **Load unpacked** and pick the `chrome-extension` folder of DevMate. `devmate chrome` says whether the browser is registered and connected, and so does `devmate doctor`.
+
+- **An entry like the editors.** The extension's popup shows whether DevMate runs, starts it, opens the workbench, copies the MCP address and counts what waits for your approval. **Start DevMate with the browser** is a switch in the popup, off until you turn it on; like an editor it starts the runtime and never stops it.
+- **What your client can do with the browser** (through `capability_list {engine:"chrome"}`, `capability_query` for what only reads and `capability_call` for changes; no project is needed):
+
+  | | Read | Change |
+  | --- | --- | --- |
+  | Bookmarks | the tree, search | create, rename, move, remove |
+  | Tabs and windows | list tabs, windows and tab groups | open, go to an address, bring to front, reload, close, move, group, ungroup; open and close windows |
+  | History | search by words and time | delete an address or a time range |
+  | Downloads | list | start a download |
+  | Recently closed | list | bring back |
+  | Reading list, most visited | list | add, remove |
+  | The page in front | title, address and text; a picture of it | |
+
+- Text read from a web page is marked as untrusted: it is data for the model, never instructions.
+- The browser talks to DevMate through a native messaging host, a small program the browser itself starts for this one extension. Nothing listens for it and it works with no public connection. `devmate chrome uninstall` takes the registration away.
+
+The runtime's side has been run end to end with the browser's own message framing against a real runtime. [STATUS](docs/STATUS.md) says what has been tried in a real browser.
 
 ## Connecting a client
 

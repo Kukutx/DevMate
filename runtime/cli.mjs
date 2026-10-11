@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { CLIENT_COMMAND_ENV, createRuntimeClient, instanceDirectory } from './client.mjs';
 import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './launcher.mjs';
 import { inspectTunnelClient, TUNNEL_CLIENT_SETUP } from './connection.mjs';
@@ -22,6 +23,13 @@ Runtime
   devmate doctor --report           the same with usage and the last log lines, private paths, addresses
                                     and credentials taken out: for a bug report
   devmate logs [--lines <n>]        newest runtime log lines
+
+Browser
+  devmate chrome install            let the DevMate extension in Chrome and Edge reach this runtime: bookmarks,
+                                    tabs, history, downloads and the page in front become available to your
+                                    client, and the extension can start DevMate with the browser
+  devmate chrome                    whether a browser is registered and connected
+  devmate chrome uninstall          take the registration away again
 
 Projects
   devmate project add [<directory>] [--name <name>] [--read-only]
@@ -229,9 +237,13 @@ export async function main(argv = process.argv.slice(2), {
   clientFactory = createRuntimeClient,
   launch = startRuntime, stop = stopRuntime, status = runtimeStatus,
   inspect = inspectTunnelClient, open = openInBrowser, env = process.env,
-  setup = options => import('./relay.mjs').then(relay => relay.setupRelay(options)), remove = options => import('./relay.mjs').then(relay => relay.removeRelay(options))
+  setup = options => import('./relay.mjs').then(relay => relay.setupRelay(options)), remove = options => import('./relay.mjs').then(relay => relay.removeRelay(options)),
+  browserHost = options => import('./platform/chrome-registration.mjs').then(module => module.createChromeRegistration(options))
 } = {}) {
   const print = value => stdout.write(`${JSON.stringify(publicOutput(value), null, 2)}\n`);
+  // Started by a browser for the DevMate extension: its standard output carries the browser's own framing and nothing
+  // else, and its arguments are the browser's (the extension that asks, a window handle), not this command line's.
+  if (argv[0] === 'chrome-host') return (await import('./chrome-host.mjs')).chromeHostMain(argv.slice(1), { stdin, stdout, stderr });
   try {
     const { command, positional, options } = parseCli(argv);
     // Started by a connected client (its shell tool, or an agent it delegated to): the runtime then answers as it
@@ -281,6 +293,26 @@ export async function main(argv = process.argv.slice(2), {
     if (command === 'logs') {
       const lines = runtimeLogTail(instanceRoot, { bytes: 64000 }).split(/\r?\n/);
       stdout.write(lines.slice(-Math.max(1, Number(options.lines) || 40)).join('\n') + '\n');
+      return 0;
+    }
+    if (command === 'chrome') {
+      const action = positional[0] || 'status';
+      if (!['install', 'uninstall', 'status'].includes(action)) throw new Error('Use chrome install, chrome uninstall, or chrome alone to see how the browser is connected');
+      // Which program a browser may start for the extension is set at this computer, by its owner.
+      if (viaClient && action !== 'status') throw new Error('devmate chrome ' + action + ' is run by the owner in their own terminal, not through a connected client');
+      const registration = await browserHost({ instanceRoot, cli: fileURLToPath(import.meta.url), env });
+      const state = action === 'install' ? await registration.install() : action === 'uninstall' ? await registration.uninstall() : await registration.status();
+      // Where the extension is, for a browser that does not have it yet: the folder beside the runtime.
+      const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'chrome-extension');
+      let connected = null;
+      if (action !== 'uninstall') { try { connected = await clientFactory(runtimeOptions).call('chrome.status', {}, { timeoutMs: 5000 }); } catch { connected = null; } }
+      print({ ...state, ...(connected ? { browser: connected } : {}),
+        next: action === 'uninstall' ? ['Remove the DevMate extension in the browser too (chrome://extensions).']
+          : [!state.registered ? 'Register DevMate with Chrome and Edge: devmate chrome install' : null,
+            state.stale ? 'It was registered with a Node or a copy of DevMate that is gone. Register again: devmate chrome install' : null,
+            state.registered && !connected?.connected ? 'In the browser open chrome://extensions (Edge: edge://extensions), switch on "Developer mode", choose "Load unpacked" and pick ' + (fs.existsSync(folder) ? path.resolve(folder) : 'the chrome-extension folder of DevMate') +
+              '. With the extension already there, reload it or restart the browser.' : null,
+            connected?.connected ? 'Connected. A model reaches the browser through capability_list {engine:"chrome"}.' : null].filter(Boolean) });
       return 0;
     }
     if (command === 'connect') { print(await configureConnection(positional[0], options, instanceRoot)); return 0; }

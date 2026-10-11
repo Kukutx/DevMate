@@ -47,7 +47,7 @@ async function writeObsidianArchive(candidate,file){
 }
 // The command line on its own: the built runtime under a manifest that holds only what npm needs.
 // Everything is bundled, so `npm install -g <file>` gives the `devmate` command with nothing to download or build.
-const CLI_PAYLOAD=['runtime','workbench','plugin.json','LICENSE','README.md','THIRD_PARTY_NOTICES.txt'];
+const CLI_PAYLOAD=['runtime','workbench','chrome-extension','plugin.json','LICENSE','README.md','THIRD_PARTY_NOTICES.txt'];
 function npm(args,cwd){
   // npm is a shell script on Windows; the arguments here are fixed words and paths never go through the shell.
   const result=spawnSync('npm '+args,{cwd,encoding:'utf8',shell:true,windowsHide:true,timeout:180000,maxBuffer:8*1024*1024});
@@ -100,7 +100,7 @@ export async function packageRuntime(kind,{candidate,out,manifestPath,pluginMani
       for(const file of ['extension.vsixmanifest','[Content_Types].xml','extension/'+manifest.main.replace(/^\.\//,''),'extension/'+manifest.icon,
         'extension/runtime/main.mjs','extension/runtime/cli.mjs','extension/runtime/agent-channel.mjs','extension/runtime/claude-permission-server.mjs',
         'extension/runtime/host-client.cjs','extension/runtime/client.mjs','extension/runtime/launcher.mjs',
-        'extension/LICENSE.txt','extension/readme.md','extension/changelog.md','extension/package.nls.json','extension/package.nls.zh-cn.json','extension/vscode-host/walkthrough/start.md','extension/vscode-host/walkthrough/share.md','extension/vscode-host/walkthrough/connect.md','extension/workbench/index.html','extension/workbench/bridge.bundle.js','extension/workbench/styles.css','extension/workbench/app.js','extension/plugin.json','extension/THIRD_PARTY_NOTICES.txt'])assert.ok(files.has(file),'Missing VSIX file: '+file);
+        'extension/LICENSE.txt','extension/readme.md','extension/changelog.md','extension/package.nls.json','extension/package.nls.zh-cn.json','extension/vscode-host/walkthrough/start.md','extension/vscode-host/walkthrough/share.md','extension/vscode-host/walkthrough/connect.md','extension/workbench/index.html','extension/workbench/bridge.bundle.js','extension/workbench/styles.css','extension/workbench/app.js','extension/chrome-extension/manifest.json','extension/chrome-extension/background.js','extension/plugin.json','extension/THIRD_PARTY_NOTICES.txt'])assert.ok(files.has(file),'Missing VSIX file: '+file);
       assert.equal([...files.keys()].some(file=>file.startsWith('extension/gateway/')||file.startsWith('extension/node_modules/')),false);
       for(const [name,data]of files)if(name.startsWith('extension/')){
         // VSCE's documented processors rename LICENSE and README, and rewrite

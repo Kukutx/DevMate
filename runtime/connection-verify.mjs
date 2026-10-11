@@ -3,6 +3,8 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { VERSION } from './version.mjs';
 
 const reason = error => String(error?.cause?.code || error?.code || error?.message || error).slice(0, 300);
+// The name the runtime's own check of its public route gives itself: it is not a client of the owner's.
+export const VERIFY_CLIENT = 'devmate-connection-verify';
 // Whether the world's DNS knows a host name, asked of public resolvers directly. The answer of this computer's own
 // resolver is a different question: asked too early about a name that is seconds old, it remembers "no such name".
 export async function publicDnsKnows(host, { servers = ['1.1.1.1', '8.8.8.8'], timeoutMs = 3000 } = {}) {
@@ -24,7 +26,7 @@ export async function publicDnsKnows(host, { servers = ['1.1.1.1', '8.8.8.8'], t
  * route that does not work.
  */
 export async function verifyPublicMcp({ url, authMode = 'none', accessToken, expectedGeneration, timeoutMs = 15000, newAddress = false, knownPublicly = publicDnsKnows, lookup = dns.lookup,
-  fetchImpl = globalThis.fetch, clientFactory = () => new Client({ name: 'devmate-connection-verify', version: VERSION }, { versionNegotiation: { mode: 'auto' } }),
+  fetchImpl = globalThis.fetch, clientFactory = () => new Client({ name: VERIFY_CLIENT, version: VERSION }, { versionNegotiation: { mode: 'auto' } }),
   transportFactory = (target, headers) => new StreamableHTTPClientTransport(new URL(target), { requestInit: { redirect: 'error', ...(headers ? { headers } : {}) } }) } = {}) {
   if (authMode === 'oauth' && !accessToken) {
     // Without a token only reachability and the OAuth challenge can be confirmed.

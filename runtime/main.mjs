@@ -20,6 +20,7 @@ import { hardenExecutableSearch } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
 import { createOutboundProxy } from './platform/proxy.mjs';
 import { clientSurfaceBy } from './surfaces.mjs';
+import { VERIFY_CLIENT } from './connection-verify.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -379,7 +380,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       // Who asked last and which tool names they were given, for the doctor. What a client says of itself is its own
       // text: kept short and printable. A client of the 2025 protocol names itself once; its later requests keep that
       // name while the sender line stays the same. The check of the public route asks as itself and is not a client.
-      if (messages.length && extra.authInfo?.extra?.devmatePrincipal?.id === 'owner') {
+      // Without sign-in that check arrives as the owner, like everything else: it is known by the name it gives itself.
+      if (messages.length && extra.authInfo?.extra?.devmatePrincipal?.id === 'owner' && said !== VERIFY_CLIENT) {
         const plain = value => String(value || '').replace(/[^\x20-\x7e]/g, '').slice(0, 80), userAgent = plain(sender);
         service.lastClient = { name: plain(said) || (service.lastClient?.userAgent === userAgent ? service.lastClient.name : ''), userAgent, ...decided, tunnel, at: new Date().toISOString() };
       }

@@ -4,6 +4,7 @@ import { defineFileOperations } from './files.mjs';
 import { defineCommandOperations } from './commands.mjs';
 import { defineAgentOperations } from './agents.mjs';
 import { defineCapabilityOperations } from './capability.mjs';
+import { defineChromeOperations } from './chrome.mjs';
 import { defineCollaborationOperations } from './collaboration.mjs';
 import { defineRuntimeOperations } from './runtime.mjs';
 
@@ -20,6 +21,7 @@ export function defineOperations(service, add) {
   defineCommandOperations(service, add);
   defineAgentOperations(service, add);
   defineCapabilityOperations(service, add);
+  defineChromeOperations(service, add);
   defineCollaborationOperations(service, add);
   defineRuntimeOperations(service, add);
 }

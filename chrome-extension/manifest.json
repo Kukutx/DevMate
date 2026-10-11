@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "DevMate",
+  "version": "4.0.5",
+  "description": "Lets the DevMate runtime on this computer use the browser itself: bookmarks, tabs, windows, history, downloads and the page you are on. Requires DevMate.",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs4FVJ26CBuYUMZNe1oIfSfjqdrWhjZnJRHhJ7HygkBdcJW+9FiPy9I2QOIYnW+xAdiSIZ3PirIB9FnePZ7KymS2zk7OlbvNHXz//BK9pVCotX2gdsww/jUTrMtT/WXsbanqdqmbCqEwwE5dFcVoyM52J1lLmTMMEL8JfecowS5Q+jtBYU1iR84fSo/IL3XLvtgx/fsDlc+ahix7Fo1MUTbL8GfbaTbZSB46dN5Lh62pO+QHVtoCvTrMhPP0GFTN7lM9vtZlUSq8xIKlLhQN0LwvS9B8uE2DJ/7e+Lgl/niIgvIl8S+y2/UiQ8ZcRG32J4uLjvFCQDGBwbr6ka8YtHwIDAQAB",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "DevMate" },
+  "permissions": ["nativeMessaging", "bookmarks", "tabs", "tabGroups", "history", "downloads", "sessions", "readingList", "topSites", "scripting", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"]
+}
