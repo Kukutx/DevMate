@@ -170,7 +170,7 @@ They reach your MCP server from the cloud, so they need a route from outside to 
 | --- | --- | --- |
 | `relay` | Any client | A public Linux server of yours becomes the way in: `devmate relay setup user@host`. An address that stays, answers that stream, no limits but the server's own |
 | `quick` | Any client | A Cloudflare quick tunnel, for trying DevMate out. No account, no domain, nothing to set up; the address changes whenever it starts again |
-| `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
+| `openai-tunnel` | ChatGPT, Codex | OpenAI's own tunnel, spoken by DevMate itself: outbound only, no public address, no domain, no server, nothing to install, and an id that stays |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
 | `https` | Any client | A reverse proxy you already run |
 | `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that already provides HTTPS (the relay without the setup) |
@@ -224,19 +224,23 @@ devmate doctor
 
 **OpenAI tunnel**
 
-Create a tunnel in the organisation settings of the OpenAI Platform and download the official `tunnel-client`:
+Create a tunnel in the organisation settings of the OpenAI Platform (Settings → Tunnels). It gives you a tunnel id and a runtime key:
 
 ```powershell
-devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx --executable C:\Tools\OpenAI\tunnel-client.exe
-devmate secret set CONTROL_PLANE_API_KEY
+devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # paste the runtime key and press Enter
 devmate restart
 ```
 
-`devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it.
+`devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it. It stays the same across restarts.
+
+This computer only reaches out, to `api.openai.com`, and asks for work: nothing listens for the outside, no router setting and no server are needed, and the only party that can limit the route is OpenAI. DevMate speaks the tunnel's [published protocol](https://github.com/openai/tunnel-client/blob/master/docs/protocol.md) itself, so there is no second program to download and keep current, and it serves up to 32 calls at once (`maxConcurrentRequests` in the connection settings, 1 to 256). To use OpenAI's own `tunnel-client` program instead, add `--executable <its path>`. `devmate doctor` says which of the two is in use, and counts the calls that have arrived: a call that came through is the proof that the route works.
+
+Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
 
 **Is it really connected?**
 
-A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to probe: confirm it by calling a tool from ChatGPT.
+A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to connect back through: there the doctor shows that OpenAI accepts the runtime key, and how many calls have arrived.
 
 A connector that cannot start does not take local work down and is never hidden: `doctor` and `connection.status` give the reason. After storing a new credential, restart only the connector: `devmate connection.restart`.
 

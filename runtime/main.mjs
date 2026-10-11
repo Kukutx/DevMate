@@ -357,7 +357,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     } else ingressPort = null;
     service.agents.endpoint = 'http://127.0.0.1:' + port + '/api/agent';
     service.identity = { instanceId, generation };
-    connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, env: service.secrets.environment(),
+    connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, instanceId, env: service.secrets.environment(),
       localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
     service.connection = connection;
     const serverFor = ({ authInfo }) => {

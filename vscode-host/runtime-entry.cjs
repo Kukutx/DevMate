@@ -520,7 +520,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const choice = await vscode.window.showQuickPick([
       { label: 'Cloudflare quick tunnel', description: 'No account, no domain, nothing to set up. Any MCP client. The address changes when it starts again', kind: 'cloudflare-quick' },
       { label: 'Cloudflare Tunnel', description: 'Your own domain. Works with ChatGPT, Claude and any MCP client', kind: 'cloudflare' },
-      { label: 'OpenAI Secure MCP Tunnel', description: 'ChatGPT and Codex only. No domain or public address', kind: 'openai-tunnel' },
+      { label: 'OpenAI Secure MCP Tunnel', description: 'ChatGPT and Codex. Outbound only: no domain, no public address, nothing to install, and an id that stays', kind: 'openai-tunnel' },
       { label: 'Existing HTTPS reverse proxy', description: 'A proxy you already run', kind: 'external-https' },
       { label: 'SSH reverse tunnel', description: 'A server of yours forwards its HTTPS address to this computer', kind: 'ssh' },
       { label: 'Local only', description: 'Remove the public connection', kind: 'local' }
@@ -541,11 +541,12 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     else if (choice.kind === 'openai-tunnel') {
       const tunnelId = await ask('Tunnel ID from platform.openai.com → Settings → Tunnels', { value: was('openai-tunnel', 'tunnelId'), placeHolder: 'tunnel_…' });
       if (!tunnelId) return;
-      const executable = await ask('Absolute path of the official tunnel-client executable', { value: was('openai-tunnel', 'executable') });
-      if (!executable) return;
+      // DevMate speaks the tunnel itself. OpenAI's own tunnel-client program is used only where its path is given.
+      const executable = await ask('Leave empty: DevMate connects to the tunnel itself. Only to use OpenAI\'s tunnel-client program instead, enter its absolute path', { value: was('openai-tunnel', 'executable') });
+      if (executable === undefined) return;
       const key = await ask('Runtime API key of the tunnel. Stored privately; leave empty to keep the stored one', { password: true });
       if (key === undefined) return;
-      config.connection = { kind: 'openai-tunnel', tunnelId: tunnelId.trim(), executable: executable.trim(), runtimeKeyEnv: 'CONTROL_PLANE_API_KEY' };
+      config.connection = { kind: 'openai-tunnel', tunnelId: tunnelId.trim(), ...(executable.trim() ? { executable: executable.trim() } : {}), runtimeKeyEnv: 'CONTROL_PLANE_API_KEY' };
       if (key.trim()) secret = ['CONTROL_PLANE_API_KEY', key];
     } else if (choice.kind === 'cloudflare') {
       const host = await ask('Public hostname of your Cloudflare tunnel', { value: current.kind === 'cloudflare' ? new URL(current.publicUrl).host : '', placeHolder: 'devmate.example.com', validateInput: hostName });

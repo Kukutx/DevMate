@@ -159,7 +159,8 @@ test('with no runtime, no editor and nothing configured, the CLI says what to do
   assert.equal(JSON.parse(fs.readFileSync(path.join(instance,'secrets.json'),'utf8')).CLOUDFLARE_TUNNEL_TOKEN,'token-from-stdin');
   // Mistakes are refused before anything is saved, and sign-in never outlives the address it belongs to.
   assert.equal(cli(['connect','cloudflare','--url','http://insecure.example.com/mcp','--executable',process.execPath,...at]).status,1);
-  assert.match(JSON.parse(cli(['connect','openai-tunnel','--tunnel-id','tunnel_abc',...at]).stderr).error.message,/needs --executable/);
+  assert.match(JSON.parse(cli(['connect','openai-tunnel',...at]).stderr).error.message,/needs --tunnel-id/);
+  assert.match(JSON.parse(cli(['connect','openai-tunnel','--tunnel-id','tunnel_abc','--executable','tunnel-client.cmd',...at]).stderr).error.message,/tunnel-client executable, not a shell script/);
   assert.match(JSON.parse(cli(['connect','local','--auth','oauth',...at]).stderr).error.message,/needs a connection with a public URL/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(instance,'config.json'),'utf8')).connection.kind,'cloudflare','a refused change left the saved settings alone');
   const local=JSON.parse(cli(['connect','local',...at]).stdout);

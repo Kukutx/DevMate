@@ -81,7 +81,7 @@ test('the doctor names what works, what is missing and the exact next step', asy
   const quiet = await local.service.call('runtime.doctor', {}, owner);
   const find = (report, id) => report.checks.find(item => item.id === id);
   assert.equal(find(quiet, 'node').status, 'ok'); assert.equal(find(quiet, 'shell').status, 'ok');
-  assert.equal(find(quiet, 'connection').status, 'info'); assert.match(find(quiet, 'connection').fix, /openai-tunnel or cloudflare/);
+  assert.equal(find(quiet, 'connection').status, 'info'); assert.match(find(quiet, 'connection').fix, /devmate connect openai-tunnel --tunnel-id <id>/); assert.match(find(quiet, 'connection').fix, /devmate relay setup user@host/);
   assert.equal(find(quiet, 'projects').status, 'warn'); assert.equal(find(quiet, 'security').status, 'ok');
   const exposed = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } },
     { verifier: async () => ({ verified: false, reachable: false, reason: 'ENOTFOUND' }) });

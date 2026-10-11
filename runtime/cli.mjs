@@ -39,7 +39,10 @@ Connecting an AI client
   devmate connect quick             a Cloudflare quick tunnel: no account, no domain, nothing to set up;
                                     the address changes whenever it starts again
   devmate connect cloudflare --url https://<host>/mcp --executable <cloudflared> [--auth oauth]
-  devmate connect openai-tunnel --tunnel-id <tunnel_…> --executable <tunnel-client>
+  devmate connect openai-tunnel --tunnel-id <tunnel_…>
+                                    OpenAI's own tunnel, for ChatGPT: outbound only, no public address, an id
+                                    that stays. DevMate speaks it itself; --executable <tunnel-client> uses
+                                    OpenAI's program instead
   devmate connect https --url https://<host>/mcp [--auth oauth]
   devmate connect ssh --url https://<host>/mcp --host <server> --user <name> --executable <ssh>
   devmate relay setup <user@host> [--domain <name>] [--ssh-port <n>] [--identity <key file>] [--any-address]
@@ -197,7 +200,7 @@ async function configureConnection(kind, options, instanceRoot) {
   const connection = kind === 'local' ? { kind: 'local' }
     : kind === 'quick' ? { kind: 'cloudflare-quick', executable: cloudflared() }
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
-    : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), executable: executable() }
+    : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), ...(options.executable ? { executable: executable() } : {}) }
     : kind === 'https' ? { kind: 'external-https', url: need('url') }
     : kind === 'ssh' ? { kind, publicUrl: need('url'), executable: executable(), host: need('host'), user: need('user') }
     : null;

@@ -170,7 +170,7 @@ http://127.0.0.1:8788/mcp
 | 通路 | 适用 | 特点 |
 | --- | --- | --- |
 | `quick` | 任何客户端 | Cloudflare 快速隧道，用来试用 DevMate。不需要账号和域名，什么都不用配；每次重新启动地址会变 |
-| `openai-tunnel` | ChatGPT、Codex | OpenAI 官方隧道。只有出站连接，没有公网地址，也不需要域名 |
+| `openai-tunnel` | ChatGPT、Codex | OpenAI 自己的隧道，由 DevMate 直接对接：只有出站连接，不需要公网地址、域名或服务器，不用另装程序，隧道 ID 固定不变 |
 | `cloudflare` | ChatGPT、Claude 及任何客户端 | 你自己域名上的 Cloudflare 命名隧道，DevMate 负责运行 `cloudflared`。免费 |
 | `https` | 任何客户端 | 你已经在维护的反向代理 |
 | `relay` | 任何客户端 | 把你自己的一台公网 Linux 服务器变成入口：`devmate relay setup 用户@主机`。地址固定，响应可以流式返回，除了服务器本身没有别的限制 |
@@ -225,19 +225,23 @@ devmate doctor
 
 **OpenAI 隧道**
 
-在 OpenAI Platform 的组织设置里创建隧道，下载官方 `tunnel-client`：
+在 OpenAI Platform 的组织设置里创建一条隧道（Settings → Tunnels），会得到隧道 ID 和运行密钥：
 
 ```powershell
-devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx --executable C:\Tools\OpenAI\tunnel-client.exe
-devmate secret set CONTROL_PLANE_API_KEY
+devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # 粘贴运行密钥后回车
 devmate restart
 ```
 
-`devmate mcp-url` 会输出隧道 ID；在 ChatGPT 里选择“隧道”连接类型并填入它。
+`devmate mcp-url` 会输出隧道 ID；在 ChatGPT 里选择“隧道”连接类型并填入它。重启后它不会变。
+
+本机只向外连 `api.openai.com` 去取任务：不对外监听任何端口，不用改路由器，也不需要服务器，能限制这条通路的只有 OpenAI。DevMate 自己实现了这条隧道[公开的协议](https://github.com/openai/tunnel-client/blob/master/docs/protocol.md)，所以不用另外下载和更新一个程序，最多同时处理 32 个调用（连接设置里的 `maxConcurrentRequests`，1 到 256）。要改用 OpenAI 自己的 `tunnel-client` 程序，加上 `--executable <它的路径>`。`devmate doctor` 会显示当前用的是哪一种，并统计已经到达的调用数：有调用到达，就是通路可用的证明。
+
+你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；这一步还没有用真实账号试过。
 
 **真的连通了吗**
 
-隧道进程活着不等于通路可用。DevMate 会作为真正的 MCP 客户端从公网地址连回来，列出工具并调用一次，而且应答必须来自当前这个运行时；之后定期复查，断了就如实显示。`devmate doctor` 里 `connection.public` 一项为 `ok` 才算通。OpenAI 隧道没有公网地址可探测，需要从 ChatGPT 里实际调用一次工具来确认。
+隧道进程活着不等于通路可用。DevMate 会作为真正的 MCP 客户端从公网地址连回来，列出工具并调用一次，而且应答必须来自当前这个运行时；之后定期复查，断了就如实显示。`devmate doctor` 里 `connection.public` 一项为 `ok` 才算通。OpenAI 隧道没有可以连回来的公网地址：体检在那里显示 OpenAI 是否接受运行密钥，以及已经到达了多少次调用。
 
 连接器启动失败不会拖垮本地使用，也不会被隐藏：`doctor` 和 `connection.status` 会给出原因。保存了新凭据后可以只重启连接器：`devmate connection.restart`。
 
