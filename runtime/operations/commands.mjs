@@ -7,7 +7,7 @@ import { actor, commandShape, id, listOptions, mutation, oneCommand, projectScop
 export function defineCommandOperations(service, add) {
   // The hint is a complete call. Without waitMs a read answers at once, and a model following the hint would poll in a tight loop.
   const processOutput = result => (result.skippedBytes ? '[earlier output omitted: ' + result.skippedBytes + ' bytes; page it with process_read cursor:0]\n' : '') + result.output +
-    '\n[' + (result.status === 'running' ? 'still running; process_read {id:"' + result.id + '", cursor:' + result.cursor + ', waitMs:30000} waits for more output, process_stop ends it'
+    '\n[' + (result.status === 'running' ? 'still running; process_read {id:"' + result.id + '", cursor:' + result.cursor + ', waitMs:10000} waits for more output, process_stop ends it'
       : result.status + (result.exitCode !== null ? ', exit code ' + result.exitCode : '')) + ']';
   const processMeta = ['id', 'status', 'exitCode', 'cursor', 'hasMore'];
   const projectOf = args => service.processes.projectOf(args.id);
@@ -19,7 +19,7 @@ export function defineCommandOperations(service, add) {
   };
   add('shell.run', { ...projectScope, ...commandShape, waitMs, interactive: z.boolean().optional(), ...mutation }, false,
     'Run a command in the project: tests, builds, package managers, Git writes, dev servers. command is ' + service.processes.shell.label +
-    (service.processes.shell.noChaining ? ' text (no && or ||: chain with ";" and "if ($?) { ... }")' : ' text') + '; file+args launches one executable with exact arguments and no shell quoting (useful for a commit message). Returns when the command exits or after waitMs (default 30s, at most 50s); a still-running command, such as a dev server, keeps running until it exits or you stop it and is followed with process_read. timeoutMs ends it automatically. Output is paged by cursor; the newest 64 MiB are kept.',
+    (service.processes.shell.noChaining ? ' text (no && or ||: chain with ";" and "if ($?) { ... }")' : ' text') + '; file+args launches one executable with exact arguments and no shell quoting. Returns when the command exits or after waitMs (default 10s, at most 50s); a command still running then, such as a dev server, keeps running and is followed with process_read. timeoutMs ends it automatically.',
     (args, context) => observed(service.processes.run(service.project(args.projectId, { write: true }), oneCommand(args), { signal: service.waitSignal(context) })),
     { destructive: true, openWorld: true, present: processOutput, meta: processMeta });
   add('process.list', { ...projectScope }, true, 'List commands started in this project during the current runtime session.', args => {

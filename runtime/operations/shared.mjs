@@ -21,7 +21,7 @@ export const waitMs = z.number().int().min(0).max(50000).optional();
 // Optional in the schema, always present for the handler: call() fills in the project that is meant.
 /** How a caller names a project: its id, its unique name, or its root directory. */
 export const projectReference = z.string().min(1).max(32768);
-export const projectScope = { projectId: projectReference.optional().describe('Project id, root directory or unique name. May be omitted when exactly one project is available; with several, read-only tools use the project of the editor window used last and every change needs it.') };
+export const projectScope = { projectId: projectReference.optional().describe('Project id, root directory or unique name. Needed only when several projects are shared.') };
 export const workflowScope = { ...projectScope, workflowId: id };
 export const mutation = { operationId: id.optional() };
 // Set on the result of a call that named no project while several were available: the project it was answered

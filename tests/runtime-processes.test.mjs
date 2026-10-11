@@ -129,7 +129,7 @@ test('service exposes shell and process tools with project scoping, model-facing
   assert.deepEqual((await service.call('process.list', { projectId: b.id }, owner)).items, []);
   const shown = presentResult(service.operations.get('process.read'), await service.call('process.read', { id: byRoot.id }, owner));
   // The hint is a call that really waits: followed literally, it does not spin.
-  assert.match(shown.content[0].text, /still running; process_read \{id:"process-[^"]+", cursor:\d+, waitMs:30000\} waits for more output/);
+  assert.match(shown.content[0].text, /still running; process_read \{id:"process-[^"]+", cursor:\d+, waitMs:10000\} waits for more output/);
   // Command output is text for the model, sent once; the last line carries what is needed to continue.
   assert.equal(shown.structuredContent, undefined);
   const follow = JSON.parse(shown.content[0].text.split('\n').at(-1));

@@ -79,7 +79,9 @@ test('registration uses the same callbacks as the direct contract and keeps the 
   // Opening answers the model with what was opened and how much is there, never with the workspace itself.
   assert.deepEqual((await open.fn({},{})).structuredContent,{selection:{projectId:null,workflowId:null},counts:{tasks:3}});
   const call=tools.get('workbench_call');
-  assert.equal(call.config.inputSchema.safeParse({operation:'runtime.doctor'}).success,false);
+  // Which operations it takes is decided when it is called, not by a list sent to every model with every tool list.
+  const unknown=await call.fn({operation:'runtime.doctor'},{});
+  assert.equal(unknown.isError,true);assert.equal(unknown.structuredContent.error.code,'invalid_input');
   assert.deepEqual((await call.fn({operation:'project.list'},{})).structuredContent,{items:[]});
   const failed=await call.fn({operation:'workspace.delete',input:{path:'big'}},{});
   assert.equal(failed.isError,true);

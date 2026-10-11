@@ -46,7 +46,7 @@ test('a client that speaks MCP over standard input and output works through devm
     clients.push(client);
     assert.match(client.getInstructions(), /^DevMate works directly in software projects/, generation + ': the working instructions arrive');
     const tools = (await client.listTools()).tools;
-    assert.ok(tools.length >= 35, generation + ': ' + tools.length + ' tools');
+    assert.ok(tools.length >= 15, generation + ': ' + tools.length + ' tools');
     assert.equal(tools.find(tool => tool.name === 'workspace_read').title, 'Read file');
     const file = generation + '.txt';
     const written = await client.callTool({ name: 'workspace_write', arguments: { path: file, text: 'written through the ' + generation + ' client\nsecond line' } });
@@ -93,7 +93,7 @@ test('devmate mcp starts the runtime when none is running and keeps working when
   client = started.client;
   const first = await runtimeStatus({ instanceRoot });
   assert.deepEqual([first.running, first.record.port], [true, port], 'the stdio entry brought the runtime up');
-  assert.ok((await client.listTools()).tools.length >= 35);
+  assert.ok((await client.listTools()).tools.length >= 15);
   assert.ok(started.noise.join('').includes('starting the runtime'), 'what it did is said on standard error, never on the protocol stream');
   // The runtime goes away under the connected client and comes back on the next call.
   await stopRuntime({ instanceRoot, timeoutMs: 20000 });

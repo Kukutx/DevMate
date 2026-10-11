@@ -276,23 +276,30 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 
 ## Tools the model gets
 
-| Area | Tools | Notes |
-| --- | --- | --- |
-| Orientation | `project_overview` `project_list` | Git branch and changes, the project's own agent instructions (`AGENTS.md` and similar), runnable scripts, top-level layout and the editor's error count, in one call |
-| Editor | `editor_diagnostics` `editor_context` | The compiler, type and lint errors VS Code already computed; your active file, selection and open files |
-| Finding code | `workspace_files` `workspace_find` `workspace_search` | Directory listing, glob find, ripgrep content search. Honours `.gitignore`; fast on large repositories |
-| Reading | `workspace_read` | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
-| Changing | `workspace_edit` `workspace_patch` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | Exact text replacement, several edits applied atomically. A patch (the `*** Begin Patch` envelope Codex writes, or a unified diff as `git diff` prints it) changes several files at once, all of it or none, and is taken back as one. Overwriting needs the hash that was read, so nothing is written blind |
-| Undo | `workspace_history` `workspace_restore` | Every file changed, overwritten or deleted through DevMate can be restored, kept 30 days by default. One call takes back everything changed after a point (`since`), the applied work of an isolated agent included; what commands and agents working directly in the project changed is not in this history, use Git for that |
-| Running | `shell_run` `process_read` `process_write` `process_stop` `process_list` | Real shell semantics (`npm test`, `git commit`). Output is paged by cursor; long commands keep running and can be read, fed input and stopped as a whole process tree |
-| Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | Read only, and never run a program the repository configures. Writes go through `shell_run` |
-| Delegation | `agents_delegate` `agents_result` `providers_list` | Hand a whole task to a coding agent on this machine |
-| Domain capabilities | `capability_list` `capability_call` | Browser control and QA, Godot, reverse engineering, Obsidian, and external MCP servers you configure |
-| Everything else | `operations_list` `operations_call` `connection_status` | Workflows, tasks, messages between agents, jobs, artifacts and references, called by name |
+A model is shown a short list, under the names it was trained on. Which list a client gets is decided by what it says it is; a client that is not recognised gets DevMate's own names.
 
+| | ChatGPT and Codex | Claude | Other clients |
+| --- | --- | --- | --- |
+| Read a file | `read` | `read` | `workspace_read` |
+| Change files | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
+| Run a command | `exec_command` `write_stdin` | `bash` `process_read` | `shell_run` `process_read` |
+| On every list | `project_overview` `workspace_find` `workspace_search` `git_status` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+
+| Area | What it does |
+| --- | --- |
+| Orientation | `project_overview`: Git branch and changes, the project's own agent instructions (`AGENTS.md` and similar), runnable scripts, top-level layout and the editor's error count, in one call |
+| Finding code | Glob find and ripgrep content search. Honours `.gitignore`; fast on large repositories |
+| Reading | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
+| Changing | A patch (the `*** Begin Patch` envelope Codex writes, or a unified diff as `git diff` prints it) changes several files at once, all of it or none, and is taken back as one. Exact text replacement applies several edits atomically. Overwriting keeps what was there |
+| Running | Real shell semantics (`npm test`, `git commit`). A call returns after ten seconds at the latest by default; a command still running then keeps running and is followed, fed input and stopped as a whole process tree |
+| Editor | The compiler, type and lint errors VS Code already computed |
+| Delegation | Hand a whole task to a coding agent on this machine |
+| Everything else | Operations, called by name through `operations_query` (those that only read) and `operations_call`: directory listings, move, delete, change history and undo (`workspace.history`, `workspace.restore`, kept 30 days by default), more Git (`git.log`, `git.show`, `git.blame`, `git.branches`; read only, never running a program the repository configures), the editor's open files, browser control and QA, Godot, reverse engineering, Obsidian and external MCP servers (`capability.*`), workflows, tasks, jobs, artifacts |
+
+- Every tool of every list can be called by every client: the list only decides what a model is told about up front. To choose a list yourself, add `?tools=gpt`, `?tools=claude` or `?tools=generic` to the MCP address you give the client.
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
-- The tool list has 38 entries: 36 operations, one that opens the workbench and one that only the workbench itself calls. Everything else is reached through `operations_call` and costs no context.
+- A tool list has 18 to 20 entries and takes 18 to 20 KB, about half of what one list of everything took. Everything else is reached through `operations_query` and `operations_call` and costs no context until it is used.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.

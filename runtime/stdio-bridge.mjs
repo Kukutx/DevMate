@@ -49,8 +49,12 @@ export async function serveStdioBridge({ connect, stdin = process.stdin, stdout 
     if (carries(transport)) retired.add(transport); else void transport.close().catch(() => {});
   }
 
+  // Who is on the other end of the pipe, in its own words. A client of an earlier protocol revision says it once, at the
+  // start; the runtime, which keeps nothing between requests, is told with every request, so that the client is shown
+  // the tools of the model it is.
+  let clientName = '';
   const open = () => opening ||= (async () => {
-    const transport = new StreamableHTTPClientTransport(new URL(await connect()), { requestInit: { redirect: 'error' } });
+    const transport = new StreamableHTTPClientTransport(new URL(await connect()), { requestInit: { redirect: 'error', ...(clientName ? { headers: { 'user-agent': 'devmate-mcp (' + clientName + ')' } } : {}) } });
     transport.onmessage = message => {
       // A client of an earlier protocol revision names its revision once; every later request must carry it.
       if (typeof message?.result?.protocolVersion === 'string') { protocolVersion = message.result.protocolVersion; transport.setProtocolVersion?.(protocolVersion); }
@@ -84,6 +88,7 @@ export async function serveStdioBridge({ connect, stdin = process.stdin, stdout 
     }
   }
   client.onmessage = message => {
+    if (message?.method === 'initialize' && typeof message.params?.clientInfo?.name === 'string') clientName = message.params.clientInfo.name.replace(/[^\x20-\x7e]/g, '').slice(0, 100);
     relay(message).catch(error => {
       log('not relayed: ' + error.message);
       // A request is owed exactly one answer; a failed relay is that answer unless it was already given.

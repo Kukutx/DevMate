@@ -277,23 +277,30 @@ devmate restart
 
 ## 模型可以用的工具
 
-| 类别 | 工具 | 说明 |
-| --- | --- | --- |
-| 上手 | `project_overview` `project_list` | 一次返回 Git 分支与改动、项目自己的 Agent 指令（`AGENTS.md` 等）、可运行的脚本、顶层结构和编辑器报错数 |
-| 编辑器 | `editor_diagnostics` `editor_context` | VS Code 已经算出的编译、类型和 lint 报错；你当前的文件、选区和打开的文件 |
-| 找代码 | `workspace_files` `workspace_find` `workspace_search` | 目录列表、glob 查找、ripgrep 内容搜索。遵守 `.gitignore`，大仓库也快 |
-| 读 | `workspace_read` | 带行号，大文件按行分页（32 MiB 以内）。UTF-16 和本机传统编码（如 GBK）可以读取，不能在这里改写 |
-| 改 | `workspace_edit` `workspace_patch` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | 精确文本替换，多处修改原子生效。补丁（Codex 写的 `*** Begin Patch` 格式，或 `git diff` 输出的统一 diff）一次改多个文件，要么全部生效要么一个不动，并且可以整体撤回。覆盖已有文件必须带上读到的哈希，不会盲写 |
-| 撤销 | `workspace_history` `workspace_restore` | 经 DevMate 改动、覆盖或删除的文件都能恢复，默认保留 30 天。一次调用可以收回某个时间点之后的全部改动（`since`），包括从隔离副本应用进来的 Agent 改动；命令和直接在项目里工作的 Agent 改的文件不在这份历史里，那部分用 Git |
-| 运行 | `shell_run` `process_read` `process_write` `process_stop` `process_list` | 真实的 shell 语义（`npm test`、`git commit`）。输出按游标分页；长时间运行的命令在后台继续，可读输出、写标准输入、整棵进程树停止 |
-| Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | 只读，不会执行仓库里配置的任何程序。写操作用 `shell_run` |
-| 派发 | `agents_delegate` `agents_result` `providers_list` | 把整件任务交给本机的编码 Agent |
-| 领域能力 | `capability_list` `capability_call` | 浏览器控制与 QA、Godot、逆向分析、Obsidian，以及你配置的外部 MCP 服务 |
-| 其余操作 | `operations_list` `operations_call` `connection_status` | 工作流、任务、Agent 之间的消息、作业、产物和引用，按名字调用 |
+模型看到的是一份短清单，用的是它训练时熟悉的工具名。给哪一份由客户端自报的身份决定；认不出的客户端拿到 DevMate 自己的命名。
 
+| | ChatGPT 和 Codex | Claude | 其他客户端 |
+| --- | --- | --- | --- |
+| 读文件 | `read` | `read` | `workspace_read` |
+| 改文件 | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
+| 运行命令 | `exec_command` `write_stdin` | `bash` `process_read` | `shell_run` `process_read` |
+| 每份清单都有 | `project_overview` `workspace_find` `workspace_search` `git_status` `git_diff` `editor_diagnostics` `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+
+| 方面 | 能做什么 |
+| --- | --- |
+| 了解项目 | `project_overview`：一次调用拿到 Git 分支与改动、项目自己的 Agent 规则（`AGENTS.md` 等）、可运行的脚本、顶层结构和编辑器的错误数 |
+| 找代码 | 按通配符找文件、ripgrep 全文搜索。遵守 `.gitignore`，大仓库也快 |
+| 读 | 带行号，大文件分页（最大 32 MiB）。UTF-16 和本机编码（GBK 等）的文件能读，不会被改写 |
+| 改 | 补丁（Codex 写的 `*** Begin Patch` 格式，或 `git diff` 输出的统一 diff）一次改多个文件，要么全部生效要么一个不动，并且可以整体撤回。精确文本替换，多处修改原子生效。覆盖写入会保留原来的版本 |
+| 运行 | 真实的 shell 语义（`npm test`、`git commit`）。一次调用默认最多等十秒就返回；还在跑的命令继续跑，可以继续读输出、送输入、整棵进程树一起停 |
+| 编辑器 | VS Code 已经算好的编译、类型和 lint 错误 |
+| 委派 | 把整件任务交给本机上的编码 Agent |
+| 其余 | 都是按名字调用的操作，只读的走 `operations_query`，其余走 `operations_call`：列目录、移动、删除、改动历史与撤销（`workspace.history`、`workspace.restore`，默认保留 30 天）、更多 Git（`git.log`、`git.show`、`git.blame`、`git.branches`；只读，绝不运行仓库自己配置的程序）、编辑器打开的文件、浏览器控制与 QA、Godot、逆向工程、Obsidian 和外部 MCP 服务器（`capability.*`）、工作流、任务、作业、产物 |
+
+- 每份清单里的每个工具，任何客户端都能调用：清单只决定事先告诉模型哪些。想自己指定清单，就在给客户端的 MCP 地址后面加 `?tools=gpt`、`?tools=claude` 或 `?tools=generic`。
 - `projectId` 可以是项目 ID、项目根目录或唯一的项目名；只共享了一个项目时可以省略。有多个项目时，只读工具跟随你正在使用的编辑器窗口，写操作必须写明项目。
 - 没有“共享文件夹”这个工具。那是你自己的事；模型会被告知请你去做。
-- 工具清单共 38 项：36 个操作，1 个打开工作台，1 个只供工作台自己调用。其余操作都经 `operations_call` 调用，不占用对话上下文。
+- 一份工具清单有 18 到 20 项，18 到 20 KB，大约是原先“全部列出”那一份的一半。其余操作经 `operations_query` 和 `operations_call` 调用，用到之前不占对话上下文。
 - 工具带有准确的提示（只读、写入、破坏性、对外），客户端只在真正需要时请求确认。
 - 调用被取消或超时，只是不再等待：已经启动的命令或 Agent 任务继续运行，随后仍可读取或停止。
 - 服务同时支持 2026-07-28 和 2025 年的 MCP 协议版本。

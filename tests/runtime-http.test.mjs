@@ -153,12 +153,13 @@ test('a model sees a short tool list with readable titles and no idempotency key
   const { rpc, call, projectRoot } = await fixture(t);
   const listed = (await rpc('tools/list')).body.result.tools;
   const named = name => listed.find(tool => tool.name === name);
-  assert.ok(listed.length <= 40, 'only everyday tools and the workbench pair are listed: ' + listed.length);
-  for (const hidden of ['workflow_create', 'task_create', 'approval_resolve', 'project_remove', 'job_start', 'settings_read', 'secret_set'])
+  assert.ok(listed.length <= 22, 'only everyday tools and the workbench pair are listed: ' + listed.length);
+  for (const hidden of ['workflow_create', 'task_create', 'approval_resolve', 'project_remove', 'job_start', 'settings_read', 'secret_set', 'workspace_mkdir', 'git_show', 'capability_call', 'project_list'])
     assert.equal(named(hidden), undefined, hidden + ' stays behind operations_call and the workbench');
   assert.equal(named('workspace_read').title, 'Read file');
   assert.equal(named('shell_run')._meta['openai/toolInvocation/invoking'], 'Running a command');
-  for (const name of ['workspace_write', 'workspace_edit', 'shell_run', 'workspace_mkdir']) assert.equal(named(name).inputSchema.properties.operationId, undefined, name);
+  for (const name of ['workspace_write', 'workspace_edit', 'shell_run', 'workspace_patch']) assert.equal(named(name).inputSchema.properties.operationId, undefined, name);
+  // A tool that is not on the list is still there to be called, and takes no idempotency key either.
   const refused = await rpc('tools/call', { name: 'workspace_mkdir', arguments: { projectId: 'x', path: 'a', operationId: 'reused' } });
   assert.ok(refused.body.error || refused.body.result.isError, 'an idempotency key is not part of the model tool');
   // Everything else stays one call away.

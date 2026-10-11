@@ -417,6 +417,11 @@ export function createWorkspaceService({ store } = {}) {
     if (typeof input.text !== 'string' || Buffer.byteLength(input.text) > MAX_FILE_BYTES || input.text.includes('\0')) throw error('invalid_input', 'A UTF-8 text value up to 8 MiB is required.');
     const expected = input.expectedSha256 ?? null;
     if (expected !== null && (typeof expected !== 'string' || !/^[a-f0-9]{64}$/i.test(expected))) throw error('invalid_input', 'expectedSha256 is the sha256 returned by workspace_read.');
+    // overwrite: the caller means to replace whatever is there. What is there is still kept, like before any change.
+    if (input.overwrite && expected === null) {
+      const full = resolveProjectPath(project, input.path, { mustExist: false });
+      return publish(project, input.path, Buffer.from(input.text), fs.existsSync(full) ? hash(readBytes(full)) : null);
+    }
     return publish(project, input.path, Buffer.from(input.text), expected?.toLowerCase() ?? null);
   }
 

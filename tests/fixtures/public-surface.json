@@ -487,6 +487,7 @@
     "workspace_write": {
       "parameters": [
         "expectedSha256",
+        "overwrite",
         "path",
         "projectId",
         "text"

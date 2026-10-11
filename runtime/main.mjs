@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createMcpHandler, isLegacyRequest, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.mjs';
@@ -18,6 +19,7 @@ import { writeAtomic } from './platform/atomic-write.mjs';
 import { hardenExecutableSearch } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
 import { createOutboundProxy } from './platform/proxy.mjs';
+import { clientSurface } from './surfaces.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -361,20 +363,35 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, instanceId, env: service.secrets.environment(),
       localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
     service.connection = connection;
+    // What a request says about its client and what it asks for decides which tool names it is shown (./surfaces.mjs):
+    // read from the message before the SDK takes it, and carried to the factory that serves this very request.
+    const asked = new AsyncLocalStorage();
+    const noting = handler => ({ close: handler.close, async fetch(request, extra = {}) {
+      // Asking which tools there are, and saying who asks, are small messages; a large one is a call and is not read twice.
+      let messages = [];
+      if (request.method === 'POST' && !(Number(request.headers.get('content-length')) > 65536)) {
+        try { messages = [extra.parsedBody ?? await request.clone().json()].flat().filter(message => message && typeof message === 'object'); } catch { /* the handler answers a malformed message */ }
+      }
+      const said = messages.map(message => message.params?._meta?.['io.modelcontextprotocol/clientInfo']?.name || message.params?.clientInfo?.name).find(Boolean);
+      return asked.run({ listing: messages.length > 0 && messages.every(message => message.method === 'tools/list'),
+        surface: clientSurface({ chosen: new URL(request.url).searchParams.get('tools'), name: said, userAgent: request.headers.get('user-agent'),
+          // OpenAI's tunnel is the one thing that reaches the ingress port by its loopback address.
+          tunnel: config.connection.kind === 'openai-tunnel' && Number(new URL(request.url).port) === ingressPort }) }, () => handler.fetch(request, extra));
+    } });
     const serverFor = ({ authInfo }) => {
       const principal = authInfo?.extra?.devmatePrincipal;
       if (!principal) throw new DomainError('unauthorized', 'A verified MCP identity is required.');
-      return createMcpServer(service, principal);
+      return createMcpServer(service, principal, asked.getStore());
     };
     // The SDK default also serves MCP clients that still speak a 2025 protocol
     // revision, statelessly. Which clients may connect is not DevMate's own history.
     // The largest text the file tools accept must fit in one request; the SDK's own bound is 4 MiB.
     mcpHandler = createMcpHandler(serverFor, { maxRequestBodySize: BODY_LIMIT });
     // The Node adapter reads the body first and has a bound of its own.
-    mcp = toNodeHandler(mcpHandler, { maxRequestBodySize: BODY_LIMIT });
+    mcp = toNodeHandler(noting(mcpHandler), { maxRequestBodySize: BODY_LIMIT });
     if (quickTunnel) {
       plainHandler = plainJsonHandler(serverFor, { maxRequestBodySize: BODY_LIMIT });
-      plainMcp = toNodeHandler(plainHandler, { maxRequestBodySize: BODY_LIMIT });
+      plainMcp = toNodeHandler(noting(plainHandler), { maxRequestBodySize: BODY_LIMIT });
     }
     // A connector that cannot start does not take local work down with it, but it is never silent:
     // health says so, and connection.status and the doctor carry the reason.

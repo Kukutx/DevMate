@@ -36,7 +36,7 @@ test('real OAuth HTTP authenticates every MCP request: the signed-in owner gets 
   const ownerTools = result(await f.rpc('tools/list', {}, owner)).tools;
   // What only the workbench needs is not a tool at all: a client that ignores visibility hints cannot show it to a model.
   for (const absent of ['project_remove', 'approval_resolve', 'input_respond', 'task_create']) assert.equal(ownerTools.some(tool => tool.name === absent), false, absent);
-  assert.ok(ownerTools.some(tool => tool.name === 'project_list'));
+  assert.ok(ownerTools.some(tool => tool.name === 'project_overview'));
   assert.deepEqual(ownerTools.filter(tool => tool._meta?.ui?.visibility?.join() === 'app').map(tool => tool.name), ['workbench_call']);
   // A signed-in client is the owner as a connected client: what is decided at the owner's computer is not offered to it.
   for (const hidden of ['project_create', 'approval_resolve', 'input_respond', 'auth_code_create', 'settings_read', 'runtime_stop'])
@@ -106,7 +106,7 @@ test('a client registered in the configuration signs in over real HTTP with PKCE
   assert.equal((await f.tool('project_list', {}, bearer(issued.body.access_token))).structuredContent.items.length, 1);
   const refreshed = await post('/oauth/token', { grant_type: 'refresh_token', client_id: registered.clientId, refresh_token: issued.body.refresh_token });
   assert.equal(refreshed.status, 200, refreshed.text); assert.notEqual(refreshed.body.refresh_token, issued.body.refresh_token);
-  assert.equal(result(await f.rpc('tools/list', {}, bearer(refreshed.body.access_token))).tools.some(tool => tool.name === 'project_list'), true);
+  assert.equal(result(await f.rpc('tools/list', {}, bearer(refreshed.body.access_token))).tools.some(tool => tool.name === 'project_overview'), true);
   assert.equal((await post('/oauth/revoke', { client_id: registered.clientId, token: refreshed.body.refresh_token })).status, 200);
   assert.equal((await f.rpc('tools/list', {}, bearer(refreshed.body.access_token))).status, 401);
   // The client that publishes a metadata document signs in beside it exactly as before, and nothing invites self-registration.
@@ -182,6 +182,6 @@ test('parallel requests of the signed-in owner and of the route check do not cro
   results.forEach((response, i) => {
     const names = result(response).tools.map(tool => tool.name);
     if (i % 2) assert.deepEqual(names, ['connection_status']);
-    else assert.ok(names.includes('project_list') && names.length > 30, names.join());
+    else assert.ok(names.includes('project_overview') && names.length > 10, names.join());
   });
 });

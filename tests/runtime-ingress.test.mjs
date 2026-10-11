@@ -76,7 +76,7 @@ test('verification is a real MCP round trip that must reach this exact runtime',
   const url = 'http://127.0.0.1:' + runtime.ingressPort + '/mcp';
   const generation = runtime.health.generation;
   const verified = await verifyPublicMcp({ url, expectedGeneration: generation });
-  assert.equal(verified.verified, true, JSON.stringify(verified)); assert.ok(verified.tools > 20);
+  assert.equal(verified.verified, true, JSON.stringify(verified)); assert.ok(verified.tools > 10);
   const other = await verifyPublicMcp({ url, expectedGeneration: 'another-runtime' });
   assert.deepEqual([other.verified, other.reachable], [false, true]); assert.match(other.reason, /different DevMate runtime/);
   const dead = await verifyPublicMcp({ url: 'http://127.0.0.1:1/mcp', expectedGeneration: generation, timeoutMs: 3000 });

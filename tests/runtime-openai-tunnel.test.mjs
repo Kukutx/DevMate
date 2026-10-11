@@ -194,7 +194,8 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list', params: {} }, { headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
   await until(() => plane.posts.some(post => post.body.request_id === 'req_1' && post.body.resp_type === 'jsonrpc_response'), 'the tool list');
   const listed = plane.posts.find(post => post.body.request_id === 'req_1' && post.body.resp_type === 'jsonrpc_response').body;
-  assert.equal(listed.resp_code, 200); assert.ok(listed.resp_json.result.tools.some(tool => tool.name === 'shell_run') && listed.resp_json.result.tools.length >= 36);
+  assert.equal(listed.resp_code, 200); const shown = listed.resp_json.result.tools.map(tool => tool.name);
+  assert.ok(shown.includes('exec_command') && !shown.includes('shell_run') && shown.length >= 15, 'what comes through OpenAI\'s tunnel is shown the tools a GPT model knows: ' + shown.join());
   plane.queue.push(command(2, { jsonrpc: '2.0', id: 'rpc_2', method: 'tools/call', params: { name: 'project_list', arguments: {} } }, { headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
   await until(() => plane.posts.some(post => post.body.request_id === 'req_2' && post.body.resp_type === 'jsonrpc_response'), 'the tool call');
   const called = plane.posts.find(post => post.body.request_id === 'req_2' && post.body.resp_type === 'jsonrpc_response').body.resp_json;
