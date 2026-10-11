@@ -48,13 +48,12 @@ async function fixture(t,{fetchImpl,requestTimeoutMs}={}){
   await bridge.start();
   const cap=await createCapabilities({service,instanceRoot:instance,engines:[],hostRegistry:registry});
   t.after(async()=>{await bridge.stop().catch(()=>{});bridge.dispose();await cap.close();await registry.close();store.close();fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
-  const ownerRole={callerRole:'owner'};
-  const call=(name,input={},options=ownerRole)=>cap.call({projectId:project.id,capability:'obsidian.'+name,input},options);
+  const call=(name,input={},options)=>cap.call({projectId:project.id,capability:'obsidian.'+name,input},options);
   return{root,instance,vaultRoot,store,project,service,registry,client,bindings,...fake,bridge,cap,call};
 }
 test('actual Vault domains use HTTP and SQLite across query, mutations, batch and rollback',async t=>{
   const f=await fixture(t);
-  const vault=(await f.cap.list({projectId:f.project.id},{callerRole:'owner'})).engines.find(engine=>engine.id==='obsidian');
+  const vault=(await f.cap.list({projectId:f.project.id})).engines.find(engine=>engine.id==='obsidian');
   assert.equal(vault.status,'attached');assert.equal(vault.capabilities.length,16);
   assert.deepEqual(vault.capabilities.filter(item=>item.longRunning).map(item=>item.name),['obsidian.content_search','obsidian.properties_batch_apply','obsidian.properties_batch_rollback']);
   assert.equal(JSON.stringify(vault).includes(f.bindings[0].token),false);
@@ -94,7 +93,6 @@ test('actual Vault domains use HTTP and SQLite across query, mutations, batch an
 });
 test('host/project/caller boundaries and direct Host, Origin, Bearer validation fail closed',async t=>{
   const f=await fixture(t),binding=f.bindings[0];
-  await assert.rejects(f.call('note_create',{path:'Denied.md'},{callerRole:'read'}),/write access/);
   await assert.rejects(f.call('note_create',{path:'../outside.md'}),/path|outside|traversal/i);
   assert.equal(f.files.size,0);
   const otherRoot=path.join(f.root,'other');fs.mkdirSync(otherRoot);
@@ -258,7 +256,7 @@ test('host.list reports reachability and status describes the bridge truthfully'
   const [listed]=(await f.client.call('host.list',{projectId:f.project.id})).items;
   assert.deepEqual([listed.id,listed.kind,listed.reachable],[f.bindings[0].hostId,'obsidian',true]);
   assert.ok(Date.parse(listed.lastSeenAt)>0);
-  const status=await f.call('status',{}, {callerRole:'read'});
+  const status=await f.call('status');
   assert.equal(status.protocolVersion,3);
   assert.equal(status.capabilities.length,16);
   assert.equal(fs.realpathSync.native(status.root),fs.realpathSync.native(f.vaultRoot));

@@ -76,7 +76,7 @@ test('verification is a real MCP round trip that must reach this exact runtime',
   const url = 'http://127.0.0.1:' + runtime.ingressPort + '/mcp';
   const generation = runtime.health.generation;
   const verified = await verifyPublicMcp({ url, expectedGeneration: generation });
-  assert.equal(verified.verified, true, JSON.stringify(verified)); assert.ok(verified.tools > 20);
+  assert.equal(verified.verified, true, JSON.stringify(verified)); assert.ok(verified.tools > 10);
   const other = await verifyPublicMcp({ url, expectedGeneration: 'another-runtime' });
   assert.deepEqual([other.verified, other.reachable], [false, true]); assert.match(other.reason, /different DevMate runtime/);
   const dead = await verifyPublicMcp({ url: 'http://127.0.0.1:1/mcp', expectedGeneration: generation, timeoutMs: 3000 });
@@ -84,10 +84,10 @@ test('verification is a real MCP round trip that must reach this exact runtime',
   // Without a public URL there is nothing to probe, and the status says so instead of claiming success.
   const unverifiable = await runtime.service.verifyConnection();
   assert.equal(unverifiable.verified, false); assert.match(unverifiable.reason, /from ChatGPT/);
-  const owner = { id: 'owner', role: 'owner', surface: 'local' };
+  const owner = { id: 'owner', surface: 'local' };
   const status = await runtime.service.call('connection.status', {}, owner);
   assert.equal(status.remoteMcpVerified, false); assert.equal(status.instance.generation, generation);
-  await assert.rejects(runtime.service.call('connection.verify', {}, { id: 'owner', role: 'owner' }), { code: 'forbidden' });
+  await assert.rejects(runtime.service.call('connection.verify', {}, { id: 'owner' }), { code: 'forbidden' });
 });
 
 test('service records a successful public verification and reports it in connection status', async t => {
@@ -98,7 +98,7 @@ test('service records a successful public verification and reports it in connect
     verifier: async input => { calls.push(input); return { verified: true, reachable: true, tools: 60 }; } });
   await service.ready; service.identity = { instanceId: 'i', generation: 'g' };
   t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true }); });
-  const owner = { id: 'owner', role: 'owner', surface: 'local' };
+  const owner = { id: 'owner', surface: 'local' };
   const result = await service.call('connection.verify', {}, owner);
   assert.equal(result.verified, true); assert.equal(result.url, 'https://' + publicHost + '/mcp');
   assert.deepEqual(calls, [{ url: 'https://' + publicHost + '/mcp', authMode: 'none', expectedGeneration: 'g' }]);
@@ -217,7 +217,7 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   assert.equal((await ask('first-fixture.trycloudflare.com')).status, 421);
   assert.equal((await ask('second-fixture.trycloudflare.com')).status, 204);
   assert.equal(runtime.service.publicUrl(), address);
-  const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', role: 'owner', surface: 'local' });
+  const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' });
   const named = id => doctor.checks.find(item => item.id === id);
   assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /changes whenever/); assert.match(named('connection.address').detail, /no event streams/);
   assert.match(named('security').detail, /quick tunnel has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);
@@ -234,7 +234,7 @@ test('through a quick tunnel every answer is one JSON body, also for a call that
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { address = 'https://' + host + new URL(localMcpUrl).pathname;
     return { async start() {}, async stop() {}, publicUrl: () => address, status() { return { kind: 'cloudflare-quick', phase: 'connected', publicUrl: address, remoteMcpVerified: false }; } }; } });
   t.after(async () => { await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true }); });
-  await runtime.service.call('project.create', { root: projectRoot }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root: projectRoot }, { id: 'owner', surface: 'local' });
   // Cloudflare does not carry event streams through a quick tunnel, so none may be answered there.
   const listening = await request(runtime.ingressPort, new URL(address).pathname, { headers: { host, accept: 'text/event-stream' } });
   assert.equal(listening.status, 405); assert.match(listening.headers['content-type'], /^application\/json/);

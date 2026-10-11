@@ -21,9 +21,9 @@ A capability is `<engine>.<name>`.
 | `reverse` | `reverse.*` | the runtime, optionally starting Python, Rizin/radare2 and Ghidra |
 | `obsidian` | `obsidian.*` | the Obsidian plugin of an attached vault |
 
-Configured external MCP servers are reached as `mcp.<serverId>.<operation>` and are available to the owner only.
+Configured external MCP servers are reached as `mcp.<serverId>.<operation>`.
 
-Every engine with a diagnostic routine has `<engine>.diagnose`: effective settings (owner only) and what the engine sees in this project right now.
+Every engine with a diagnostic routine has `<engine>.diagnose`: effective settings and what the engine sees in this project right now.
 
 ## Discovering capabilities
 
@@ -35,7 +35,7 @@ Every engine with a diagnostic routine has `<engine>.diagnose`: effective settin
 | `engine: "godot"` | That engine with the full description, flags and input schema of each capability. |
 | `engine: "godot", summary: true` | That engine in summary form. |
 | `name: "godot.export"` | One capability: full description, flags, input schema. |
-| `serverId` | Additionally the tools of one external MCP server (owner only). |
+| `serverId` | Additionally the tools of one external MCP server. |
 
 An engine entry has `status`: `ready`, `disabled` (switched off), `unavailable` (it could not activate; `error` says why and the other engines keep working), or for `obsidian` `attached` / `detached`.
 
@@ -43,36 +43,31 @@ Flags, shown in the summary only when true:
 
 | Flag | Meaning |
 |---|---|
-| `readOnly` | Needs no write access and works on a read-only project. |
-| `ownerOnly` | Refused for every caller except the owner of the runtime. |
+| `readOnly` | Changes nothing and works on a read-only project. |
 | `longRunning` | Can exceed a minute. Start it as a job (below). |
-| `dryRun` | Needs write access only when its `dryRun` input is off. |
-
-A caller is shown only what it may call: members do not see owner-only capabilities, and callers with read access see only `readOnly` and `dryRun` capabilities.
+| `dryRun` | Needs a writable project only when its `dryRun` input is off. |
 
 ## Long-running capabilities as jobs
 
-A connected client usually gives up on a tool call after one or two minutes. Start a `longRunning` capability with `job_start` and poll it with `job_read`:
+A connected client gives up on a tool call after one to four minutes. Start a `longRunning` capability as a job and ask for its result later. Jobs are operations, reached through the `operations_call` and `operations_query` tools:
 
 ```json
-{ "kind": "capability", "input": { "capability": "godot.export", "input": { "preset": "Web" } } }
+{ "operation": "job.start", "input": { "kind": "capability", "input": { "capability": "godot.export", "input": { "preset": "Web" } } } }
 ```
 
-`job_cancel` cancels it; the engines stop their child processes when a call is cancelled. `godot.automation_plan` returns a ready `call` and `job` payload for each saved export and scenario.
+`operations_query {operation:"job.read", input:{id}}` returns its state and output, and `operations_call {operation:"job.cancel", input:{id}}` cancels it; the engines stop their child processes when a call is cancelled. `godot.automation_plan` returns a ready `call` and `job` payload for each saved export and scenario.
 
 Persistent processes started by an engine (`godot.run`) are ordinary project processes: the returned process id works with `process_list`, `process_read` (paged by cursor) and `process_stop`. A project runs at most 8 engine processes at a time.
 
-## Owner-only capabilities
+## What reaches beyond the project
 
-With `auth.mode: none` every caller is the owner. With OAuth members, these are refused for members:
+Every caller is the owner, at their computer or through a connected client. Some capabilities reach further than the project's files, and a connected client has them like any other:
 
 - all of `browser-control.*`: a session is a browser on the owner's desktop and may hold a signed-in persistent profile;
-- `reverse.*` capabilities that read or write the memory of a local process (`processes`, `session_*`, `modules`, `memory_*`, `value_scan`, `value_rescan`, `scan_*`, `pointer_*`);
 - `reverse.code_analyze`, `reverse.decompile`, `reverse.disassemble`: they start installed analysis programs;
-- `godot.quick_setup`: it stores an executable path;
-- everything under `mcp.*`.
+- everything under `mcp.*`: an external server has credentials and resources of its own.
 
-For members, `reverse.binary_info` in auto mode uses the built-in parser, and `probe: true` on `reverse.status` / `reverse.toolchain` reports that probes are the owner's.
+Two things stay at the owner's computer unless the owner chose the full access profile: setting an engine up (`capability.configure`, `godot.quick_setup`), and, in either profile, switching on the `reverse.*` capabilities that read or write the memory of a local process (`allowProcessAccess`, `allowMemoryWrite`).
 
 ## Engine settings
 
@@ -102,8 +97,8 @@ Every engine has `enabled` (default `true`). Switching an engine off closes what
 `capability.configure` and `capability.settings` are provided by the capability registry (`runtime/capabilities.mjs`):
 
 - A capability that stores a setting itself (`godot.quick_setup`) follows the same rule as `configure`.
-- `configure({ engine, settings, projectId? })`: owner only, and at the owner's computer (the local workbench, or `devmate capability.configure --json '{…}'`). Merges `settings` into the stored values; a `null` value restores the default. Invalid input changes nothing. Through MCP it accepts exactly one change, `{ "enabled": false }`: a connected client can switch an engine off and nothing else, because the other settings name programs and folders on this computer. With the owner's full access profile (`devmate access full`) a client connected as the owner may change all of them.
-- `settings({ engine?, projectId? })`: the effective values, the stored layers and the JSON schema for the owner; other callers get the setting names only, because values name local programs and folders.
+- `configure({ engine, settings, projectId? })`: done at the owner's computer (the local workbench, or `devmate capability.configure --json '{…}'`). Merges `settings` into the stored values; a `null` value restores the default. Invalid input changes nothing. Through MCP it accepts exactly one change, `{ "enabled": false }`: a connected client can switch an engine off and nothing else, because the other settings name programs and folders on this computer. With the owner's full access profile (`devmate access full`) a client connected as the owner may change all of them.
+- `settings({ engine?, projectId? })`: the effective values, the stored layers and the JSON schema.
 
 ## Child process environment
 
@@ -118,7 +113,8 @@ Failures carry a code and a readable message.
 | `invalid_input` | The input does not match the schema; the message lists `path: problem` pairs. |
 | `unknown_capability` | No such capability; near matches are suggested. |
 | `capability_disabled` / `capability_unavailable` | The engine is switched off / could not activate. |
-| `forbidden` | Owner-only capability, or write access is missing. |
+| `forbidden` | Setting an engine up from a connected client without full access, or a change asked for through `capability_query`. |
+| `read_only` | The capability changes something and the project is shared read only. |
 | `invalid_manifest` | `.devmate/automation.json` has a key no reader accepts; the key is named. |
 | `invalid_settings` | A stored or supplied engine setting is invalid. |
 | `host_unavailable`, `host_timeout`, `outcome_unknown` | Obsidian host conditions, see [OBSIDIAN_DATA_WORKFLOWS.md](OBSIDIAN_DATA_WORKFLOWS.md). |
@@ -166,4 +162,4 @@ Output paths in scenarios are project-relative and may not point at credential-l
 
 ## Tests
 
-`tests/capability-catalog.test.mjs` (listing, flags, owner-only, read-only, settings), `tests/capability-manifest-cycle.test.mjs` (bootstrap, read, run-saved and baseline through a real service), `tests/capability-processes.test.mjs` (engine processes and child environment), `tests/runtime-capabilities.test.mjs` (external MCP servers and lifecycle).
+`tests/capability-catalog.test.mjs` (listing, flags, read-only projects, settings), `tests/capability-manifest-cycle.test.mjs` (bootstrap, read, run-saved and baseline through a real service), `tests/capability-processes.test.mjs` (engine processes and child environment), `tests/runtime-capabilities.test.mjs` (external MCP servers and lifecycle).

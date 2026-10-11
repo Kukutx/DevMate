@@ -3,6 +3,8 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { VERSION } from './version.mjs';
 
 const reason = error => String(error?.cause?.code || error?.code || error?.message || error).slice(0, 300);
+// The name the runtime's own check of its public route gives itself: it is not a client of the owner's.
+export const VERIFY_CLIENT = 'devmate-connection-verify';
 // Whether the world's DNS knows a host name, asked of public resolvers directly. The answer of this computer's own
 // resolver is a different question: asked too early about a name that is seconds old, it remembers "no such name".
 export async function publicDnsKnows(host, { servers = ['1.1.1.1', '8.8.8.8'], timeoutMs = 3000 } = {}) {
@@ -24,7 +26,7 @@ export async function publicDnsKnows(host, { servers = ['1.1.1.1', '8.8.8.8'], t
  * route that does not work.
  */
 export async function verifyPublicMcp({ url, authMode = 'none', accessToken, expectedGeneration, timeoutMs = 15000, newAddress = false, knownPublicly = publicDnsKnows, lookup = dns.lookup,
-  fetchImpl = globalThis.fetch, clientFactory = () => new Client({ name: 'devmate-connection-verify', version: VERSION }, { versionNegotiation: { mode: 'auto' } }),
+  fetchImpl = globalThis.fetch, clientFactory = () => new Client({ name: VERIFY_CLIENT, version: VERSION }, { versionNegotiation: { mode: 'auto' } }),
   transportFactory = (target, headers) => new StreamableHTTPClientTransport(new URL(target), { requestInit: { redirect: 'error', ...(headers ? { headers } : {}) } }) } = {}) {
   if (authMode === 'oauth' && !accessToken) {
     // Without a token only reachability and the OAuth challenge can be confirmed.
@@ -51,6 +53,13 @@ export async function verifyPublicMcp({ url, authMode = 'none', accessToken, exp
     }
     return { verified: true, reachable: true, tools: listed.tools.length };
   } catch (error) {
+    // A relay of the owner's own answers only to the addresses on its list. When this computer's address is not on it
+    // (it changed since the tunnel connected), the relay says so itself: the route works, it just cannot be checked from here.
+    const refused = await Promise.resolve().then(() => fetchImpl(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(Math.min(timeoutMs, 8000)),
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: '{}' }))
+      .then(async response => response.status === 403 && (await response.text()).startsWith('devmate-relay:'), () => false);
+    if (refused) return { verified: false, reachable: true, pending: 'not-listed',
+      reason: 'The relay answers, but this computer\'s current address is not on its list, so the route cannot be checked from here. ChatGPT and Claude are on the list. Restarting the connection (devmate connection.restart) puts this computer back on it.' };
     // The client library reports its own error; whether this computer can resolve the name is asked directly.
     const unresolved = await Promise.resolve().then(() => lookup(host)).then(() => false, failure => failure?.code === 'ENOTFOUND');
     if (unresolved && await knownPublicly(host).catch(() => false)) return { verified: false, reachable: false, pending: 'local-dns',

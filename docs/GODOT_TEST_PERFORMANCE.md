@@ -1,6 +1,6 @@
 # Godot tests, performance budgets and deterministic capture
 
-These capabilities run Godot and can take minutes: all of them are flagged `longRunning`. Start them with `job_start` and follow with `job_read`, as described in [CAPABILITIES.md](CAPABILITIES.md). They need write access to a writable project and the current QA Bridge (`godot.qa_bridge_install`, version 3) for everything except framework tests.
+These capabilities run Godot and can take minutes: all of them are flagged `longRunning`. Start them with the `job.start` operation and follow with `job.read`, as described in [CAPABILITIES.md](CAPABILITIES.md). They need write access to a writable project and the current QA Bridge (`godot.qa_bridge_install`, version 3) for everything except framework tests.
 
 ## Performance tests
 

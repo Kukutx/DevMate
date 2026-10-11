@@ -6,7 +6,7 @@ import path from 'node:path';
 import { findOnPath, offerTool, recallTools, resolveTool, __test } from '../runtime/platform/tools.mjs';
 import { DevMateService } from '../runtime/service.mjs';
 
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const executable = name => name + (process.platform === 'win32' ? '.exe' : '');
 
 test('an editor\'s own ripgrep is used only when PATH has none, only while it exists, and is remembered for a start without an editor', t => {
@@ -61,9 +61,8 @@ test('with no ripgrep on PATH, finding files works once an editor window has att
   process.env[pathName] = path.join(temp, 'empty');
   await assert.rejects(service.call('workspace.find', { projectId: project.id, pattern: '*.txt' }, owner), { code: 'tool_missing' });
   const window = { windowId: '6f1c1f0e-1d8f-4a55-9d0f-3a6f1f2b9c11', title: 'Editor', roots: [{ root, name: 'project' }], tools: { rg: real } };
-  // A connected model or member cannot point DevMate at a program of its choosing.
-  await assert.rejects(service.call('window.attach', window, { id: 'owner', role: 'owner', surface: 'mcp' }), { code: 'forbidden' });
-  await assert.rejects(service.call('window.attach', window, { id: 'member', role: 'write', projectIds: [project.id], surface: 'local' }), { code: 'forbidden' });
+  // A connected client cannot point DevMate at a program of its choosing.
+  await assert.rejects(service.call('window.attach', window, { id: 'owner', surface: 'mcp' }), { code: 'forbidden' });
   await assert.rejects(service.call('workspace.find', { projectId: project.id, pattern: '*.txt' }, owner), { code: 'tool_missing' });
   await assert.rejects(service.call('window.attach', { ...window, tools: { rg: real, git: real } }, owner), { code: 'invalid_input' });
   const attached = await service.call('window.attach', window, owner);

@@ -9,10 +9,12 @@ import { ownedProcess } from './platform/owned-process.mjs';
 
 const fault = (code, message) => new DomainError(code, message);
 export function normalizeSshConfig(input) {
-  const allowed = new Set(['kind', 'publicUrl', 'executable', 'host', 'user', 'sshPort', 'remotePort', 'identityFile']);
+  const allowed = new Set(['kind', 'publicUrl', 'executable', 'host', 'user', 'sshPort', 'remotePort', 'identityFile', 'relay']);
   if (!input || Object.keys(input).some(key => !allowed.has(key))) throw fault('invalid_connection', 'Unsupported SSH connection setting.');
   const url = new URL(input.publicUrl);
-  if (url.protocol !== 'https:' || url.pathname !== '/mcp' || url.username || url.password || url.search || url.hash) throw fault('invalid_connection', 'SSH publicUrl must be an HTTPS /mcp URL without credentials.');
+  // The path is /mcp, or /mcp/<key> where the server forwards only a path nobody can guess (devmate relay setup).
+  if (url.protocol !== 'https:' || !/^\/mcp(?:\/[A-Za-z0-9_-]{32,64})?$/.test(url.pathname) || url.username || url.password || url.search || url.hash) throw fault('invalid_connection', 'SSH publicUrl must be an HTTPS /mcp URL without credentials.');
+  if (input.relay !== undefined && typeof input.relay !== 'boolean') throw fault('invalid_connection', 'relay is true for a server set up with devmate relay setup.');
   if (!path.isAbsolute(input.executable || '') || /\.(cmd|bat|ps1)$/i.test(input.executable)) throw fault('invalid_executable', 'Select an absolute native OpenSSH executable.');
   if (typeof input.host !== 'string' || !(isIP(input.host) || /^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9.])?$/.test(input.host))) throw fault('invalid_connection', 'SSH host must be a hostname or IP address.');
   if (typeof input.user !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(input.user)) throw fault('invalid_connection', 'Choose an explicit SSH login user.');
@@ -20,18 +22,19 @@ export function normalizeSshConfig(input) {
   if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535 || !Number.isInteger(remotePort) || remotePort < 1024 || remotePort > 65535) throw fault('invalid_connection', 'SSH ports are outside their allowed range.');
   if (input.identityFile !== undefined && !path.isAbsolute(input.identityFile)) throw fault('invalid_connection', 'identityFile must be an absolute path selected by the owner.');
   return { kind: 'ssh', publicUrl: url.href, executable: input.executable, host: input.host, user: input.user, sshPort, remotePort,
-    ...(input.identityFile ? { identityFile: input.identityFile } : {}) };
+    ...(input.identityFile ? { identityFile: input.identityFile } : {}), ...(input.relay ? { relay: true } : {}) };
 }
 export function sshArguments(config, localMcpUrl) {
   const target = new URL(localMcpUrl);
-  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || !target.port || target.pathname !== '/mcp') throw fault('invalid_target', 'SSH must forward this runtime loopback port.');
-  return ['-N', '-T', '-a', '-F', 'none', '-S', 'none',
-    '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'StrictHostKeyChecking=yes',
-    '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
-    '-p', String(config.sshPort), '-l', config.user,
-    ...(config.identityFile ? ['-i', config.identityFile, '-o', 'IdentitiesOnly=yes'] : []),
+  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || !target.port || !target.pathname.startsWith('/mcp')) throw fault('invalid_target', 'SSH must forward this runtime loopback port.');
+  return ['-N', ...sshLogin(config), '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
     '-R', '127.0.0.1:' + config.remotePort + ':127.0.0.1:' + target.port, config.host];
 }
+const sshLogin = config => ['-T', '-a', '-F', 'none', '-S', 'none', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=15',
+  '-p', String(config.sshPort), '-l', config.user, ...(config.identityFile ? ['-i', config.identityFile, '-o', 'IdentitiesOnly=yes'] : [])];
+// A relay answers only to the addresses on its list, and this computer's own address is one of them so that the
+// route can be checked from here. That address changes; the relay is told the current one at every connection.
+export const ownerAddressArguments = config => [...sshLogin(config), config.host, '/usr/local/lib/devmate/allow-owner'];
 export function createSshConnection({ config, localMcpUrl, instanceRoot, env = process.env,
   spawnImpl = spawn, terminateImpl = processTree.terminateProcessTree,
   owned = spawnImpl === spawn && instanceRoot ? ownedProcess(path.join(instanceRoot, 'connector.json')) : null } = {}) {
@@ -54,6 +57,15 @@ export function createSshConnection({ config, localMcpUrl, instanceRoot, env = p
       // Authentication stays in the native SSH agent/identity files. DevMate stores no SSH password or key.
       const inherited = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'ssh_auth_sock']);
       const environment = Object.fromEntries(Object.entries(env).filter(([name]) => inherited.has(name.toLowerCase())));
+      // Best effort and bounded: a relay that cannot be told still forwards, and the check then says what is the matter.
+      if (settings.relay) await new Promise(resolve => {
+        let told;
+        try { told = spawnImpl(settings.executable, ownerAddressArguments(settings), { cwd: instanceRoot, env: environment, shell: false, windowsHide: true, stdio: 'ignore' }); }
+        catch { return resolve(); }
+        const timer = setTimeout(() => { try { told.kill?.(); } catch {} resolve(); }, 20000);
+        const done = () => { clearTimeout(timer); resolve(); };
+        told.once('error', done); told.once('exit', done);
+      });
       const proc = spawnImpl(settings.executable, args, { cwd: instanceRoot, env: environment,
         shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe'] });
       child = proc;

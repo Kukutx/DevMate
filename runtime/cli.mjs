@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { CLIENT_COMMAND_ENV, createRuntimeClient, instanceDirectory } from './client.mjs';
 import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './launcher.mjs';
 import { inspectTunnelClient, TUNNEL_CLIENT_SETUP } from './connection.mjs';
@@ -19,7 +20,16 @@ Runtime
   devmate status                    whether it runs, its ports and process
   devmate serve [--port <port>]     run in the foreground until Ctrl+C
   devmate doctor                    check everything DevMate needs and say what to fix
+  devmate doctor --report           the same with usage and the last log lines, private paths, addresses
+                                    and credentials taken out: for a bug report
   devmate logs [--lines <n>]        newest runtime log lines
+
+Browser
+  devmate chrome install            let the DevMate extension in Chrome and Edge reach this runtime: bookmarks,
+                                    tabs, history, downloads and the page in front become available to your
+                                    client, and the extension can start DevMate with the browser
+  devmate chrome                    whether a browser is registered and connected
+  devmate chrome uninstall          take the registration away again
 
 Projects
   devmate project add [<directory>] [--name <name>] [--read-only]
@@ -37,9 +47,19 @@ Connecting an AI client
   devmate connect quick             a Cloudflare quick tunnel: no account, no domain, nothing to set up;
                                     the address changes whenever it starts again
   devmate connect cloudflare --url https://<host>/mcp --executable <cloudflared> [--auth oauth]
-  devmate connect openai-tunnel --tunnel-id <tunnel_…> --executable <tunnel-client>
+  devmate connect openai-tunnel --tunnel-id <tunnel_…> [--organization <org-…>]
+                                    OpenAI's own tunnel, for ChatGPT: outbound only, no public address, an id
+                                    that stays. DevMate speaks it itself; --executable <tunnel-client> uses
+                                    OpenAI's program instead. --organization names the tunnel's organization,
+                                    for a key OpenAI wants it named with (the doctor says when)
   devmate connect https --url https://<host>/mcp [--auth oauth]
   devmate connect ssh --url https://<host>/mcp --host <server> --user <name> --executable <ssh>
+  devmate relay setup <user@host> [--domain <name>] [--ssh-port <n>] [--identity <key file>] [--any-address]
+                                    make a public Linux server of yours the way in: an address that stays,
+                                    with nothing of a third party in between. Installs Caddy there over SSH
+                                    (key login, root or sudo), forwards one unguessable path to this computer,
+                                    and answers only ChatGPT, Claude and this computer unless --any-address
+  devmate relay remove <user@host>  take the relay off that server again
   devmate secret set <NAME>         store a connection credential, read from standard input
   devmate secret list | remove <NAME>
   devmate login-code                one-time sign-in code for a client (OAuth mode)
@@ -56,9 +76,9 @@ Everything the runtime can do
 Options: --instance <directory> selects another runtime instance, --timeout <ms>.
 `;
 
-const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'auth', 'lines',
-  'host', 'user', 'member']);
-const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version']);
+const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'organization', 'auth', 'lines',
+  'host', 'user', 'domain', 'ssh-port', 'identity']);
+const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version', 'report', 'any-address']);
 
 export function parseCli(argv) {
   const positional = [];
@@ -168,7 +188,8 @@ async function offlineDoctor(instanceRoot) {
   try {
     const { readConfig, publicMcpUrl } = await import('./config.mjs');
     const config = readConfig(instanceRoot), url = publicMcpUrl(config);
-    check('settings', 'ok', 'connection: ' + config.connection.kind + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url : ''));
+    // What the doctor prints gets pasted into bug reports. The last part of a relay's address is its key.
+    check('settings', 'ok', 'connection: ' + config.connection.kind + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : ''));
     if (config.connection.executable) check('connection.executable', fs.statSync(config.connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail',
       config.connection.executable, 'Install the connector and set its absolute path with devmate connect.');
   } catch (error) { check('settings', 'fail', 'config.json is not valid: ' + error.message, 'Fix or delete ' + path.join(instanceRoot, 'config.json') + '.'); }
@@ -189,7 +210,7 @@ async function configureConnection(kind, options, instanceRoot) {
   const connection = kind === 'local' ? { kind: 'local' }
     : kind === 'quick' ? { kind: 'cloudflare-quick', executable: cloudflared() }
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
-    : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), executable: executable() }
+    : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), ...(options.executable ? { executable: executable() } : {}), ...(options.organization ? { organizationId: options.organization } : {}) }
     : kind === 'https' ? { kind: 'external-https', url: need('url') }
     : kind === 'ssh' ? { kind, publicUrl: need('url'), executable: executable(), host: need('host'), user: need('user') }
     : null;
@@ -215,15 +236,20 @@ export async function main(argv = process.argv.slice(2), {
   stdout = process.stdout, stderr = process.stderr, stdin = process.stdin,
   clientFactory = createRuntimeClient,
   launch = startRuntime, stop = stopRuntime, status = runtimeStatus,
-  inspect = inspectTunnelClient, open = openInBrowser, env = process.env
+  inspect = inspectTunnelClient, open = openInBrowser, env = process.env,
+  setup = options => import('./relay.mjs').then(relay => relay.setupRelay(options)), remove = options => import('./relay.mjs').then(relay => relay.removeRelay(options)),
+  browserHost = options => import('./platform/chrome-registration.mjs').then(module => module.createChromeRegistration(options))
 } = {}) {
   const print = value => stdout.write(`${JSON.stringify(publicOutput(value), null, 2)}\n`);
+  // Started by a browser for the DevMate extension: its standard output carries the browser's own framing and nothing
+  // else, and its arguments are the browser's (the extension that asks, a window handle), not this command line's.
+  if (argv[0] === 'chrome-host') return (await import('./chrome-host.mjs')).chromeHostMain(argv.slice(1), { stdin, stdout, stderr });
   try {
     const { command, positional, options } = parseCli(argv);
     // Started by a connected client (its shell tool, or an agent it delegated to): the runtime then answers as it
     // would answer that client, and what only the owner at this computer does is not done from here.
     const viaClient = env[CLIENT_COMMAND_ENV] === '1';
-    if (viaClient && ['stop', 'restart', 'connect', 'secret', 'serve'].includes(command))
+    if (viaClient && ['stop', 'restart', 'connect', 'relay', 'secret', 'serve'].includes(command))
       throw new Error('devmate ' + command + ' is run by the owner in their own terminal, not through a connected client');
     const runtimeOptions = {
       ...(options.instance ? { instanceRoot: path.resolve(options.instance) } : {}),
@@ -269,7 +295,56 @@ export async function main(argv = process.argv.slice(2), {
       stdout.write(lines.slice(-Math.max(1, Number(options.lines) || 40)).join('\n') + '\n');
       return 0;
     }
+    if (command === 'chrome') {
+      const action = positional[0] || 'status';
+      if (!['install', 'uninstall', 'status'].includes(action)) throw new Error('Use chrome install, chrome uninstall, or chrome alone to see how the browser is connected');
+      // Which program a browser may start for the extension is set at this computer, by its owner.
+      if (viaClient && action !== 'status') throw new Error('devmate chrome ' + action + ' is run by the owner in their own terminal, not through a connected client');
+      const registration = await browserHost({ instanceRoot, cli: fileURLToPath(import.meta.url), env });
+      const state = action === 'install' ? await registration.install() : action === 'uninstall' ? await registration.uninstall() : await registration.status();
+      // Where the extension is, for a browser that does not have it yet: the copy the registration keeps in the
+      // instance directory, which stays where it is when DevMate is updated.
+      const folder = state.folder || null;
+      let connected = null;
+      if (action !== 'uninstall') { try { connected = await clientFactory(runtimeOptions).call('chrome.status', {}, { timeoutMs: 5000 }); } catch { connected = null; } }
+      print({ ...state, ...(connected ? { browser: connected } : {}),
+        next: action === 'uninstall' ? ['Remove the DevMate extension in the browser too (chrome://extensions).']
+          : [state.unseen ? 'A registration is there that no browser can see: it was written from inside an app that Windows gives a registry of its own. Register again, which now writes where browsers read: devmate chrome install'
+            : !state.registered ? 'Register DevMate with Chrome and Edge: devmate chrome install' : null,
+            state.stale ? 'It was registered with a Node or a copy of DevMate that is gone. Register again: devmate chrome install' : null,
+            state.registered && !connected?.connected ? 'In the browser open chrome://extensions (Edge: edge://extensions), switch on "Developer mode", choose "Load unpacked" and pick ' + (folder || 'the chrome-extension folder of DevMate') +
+              '. Leave Developer mode on: the extension loads itself again when DevMate is updated.' : null,
+            connected?.connected ? 'Connected. A model reaches the browser through capability_list {engine:"chrome"}.' : null].filter(Boolean) });
+      return 0;
+    }
     if (command === 'connect') { print(await configureConnection(positional[0], options, instanceRoot)); return 0; }
+    if (command === 'relay') {
+      const [action, target] = positional;
+      if (!['setup', 'remove'].includes(action) || !target) throw new Error('Use relay setup <user@host> [--domain <name>], or relay remove <user@host>');
+      const { relayTarget } = await import('./relay.mjs');
+      const ssh = options.executable ? path.resolve(options.executable) : findOnPath('ssh');
+      if (!ssh) throw new Error('OpenSSH is not on this computer. Windows has it as an optional feature (OpenSSH Client); or name the program with --executable');
+      const sshPort = options['ssh-port'] ? Number(options['ssh-port']) : 22;
+      const login = { target, sshPort, executable: ssh, ...(options.identity ? { identityFile: path.resolve(options.identity) } : {}) };
+      const { readConfig, saveConfig } = await import('./config.mjs');
+      fs.mkdirSync(instanceRoot, { recursive: true, mode: 0o700 });
+      const current = readConfig(instanceRoot), mine = current.connection.kind === 'ssh' && current.connection.relay === true && current.connection.host === relayTarget(target).host;
+      if (action === 'remove') {
+        const removed = await remove(login);
+        // A relay that is gone is no longer how this computer is reached.
+        if (mine) saveConfig(instanceRoot, { ...current, connection: { kind: 'local' }, auth: { mode: 'none' } });
+        print({ ...removed, ...(mine ? { next: ['This computer no longer uses it: devmate restart'] } : {}) });
+        return 0;
+      }
+      // Setting the same server up again keeps its address: the same key under the same name.
+      const relay = await setup({ ...login, domain: options.domain, allowList: !options['any-address'],
+        ...(mine && (!options.domain || new URL(current.connection.publicUrl).hostname === options.domain) ? { key: new URL(current.connection.publicUrl).pathname.split('/')[2] } : {}) });
+      saveConfig(instanceRoot, { ...current, connection: { ...relay.connection, relay: true }, auth: { mode: 'none' } });
+      print({ relay: 'https://' + relay.site + '/mcp/<key>', server: relay.user + '@' + relay.host,
+        answers: relay.allowList ? 'ChatGPT, Claude and this computer, under the one path' : 'whoever has the whole address',
+        said: relay.notes, next: ['Apply it: devmate restart', 'Check it: devmate doctor', 'The address for your client, which stays the same from now on: devmate mcp-url'] });
+      return 0;
+    }
     if (command === 'connection') {
       const action = positional[0] || 'info';
       if (action === 'info') { print(TUNNEL_CLIENT_SETUP); return 0; }
@@ -287,6 +362,16 @@ export async function main(argv = process.argv.slice(2), {
       throw new Error('Use secret set <NAME>, secret list or secret remove <NAME>');
     }
     const client = clientFactory(runtimeOptions);
+    if (command === 'doctor' && options.report) {
+      let text;
+      try { text = (await client.call('runtime.report', {}, { timeoutMs: 60000 })).text; }
+      catch (error) {
+        if (error.code !== 'RUNTIME_STOPPED') throw error;
+        text = (await import('./report.mjs')).offlineReport(instanceRoot, await offlineDoctor(instanceRoot));
+      }
+      stdout.write(text + '\n');
+      return 0;
+    }
     if (command === 'doctor') {
       let report;
       try { report = await client.call('runtime.doctor', {}, { timeoutMs: 60000 }); }
@@ -347,7 +432,7 @@ export async function main(argv = process.argv.slice(2), {
       return 0;
     }
     if (command === 'login-code') {
-      const issued = await client.call('auth.code.create', options.member ? { memberId: options.member } : {}, callOptions);
+      const issued = await client.call('auth.code.create', {}, callOptions);
       stdout.write(issued.code + '\n');
       stderr.write('Enter this code on the DevMate authorization page. It works once and expires at ' + issued.expiresAt + '.\n');
       return 0;

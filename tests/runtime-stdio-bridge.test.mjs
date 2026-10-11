@@ -34,7 +34,7 @@ test('a client that speaks MCP over standard input and output works through devm
   fs.mkdirSync(root);
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: localConnection });
   // The folder is shared by its owner, at the computer; the client works in it.
-  await runtime.service.call('project.create', { root, name: 'Over stdio' }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root, name: 'Over stdio' }, { id: 'owner', surface: 'local' });
   const clients = [];
   t.after(async () => {
     for (const client of clients) await client.close().catch(() => {});
@@ -46,7 +46,7 @@ test('a client that speaks MCP over standard input and output works through devm
     clients.push(client);
     assert.match(client.getInstructions(), /^DevMate works directly in software projects/, generation + ': the working instructions arrive');
     const tools = (await client.listTools()).tools;
-    assert.ok(tools.length >= 35, generation + ': ' + tools.length + ' tools');
+    assert.ok(tools.length >= 15, generation + ': ' + tools.length + ' tools');
     assert.equal(tools.find(tool => tool.name === 'workspace_read').title, 'Read file');
     const file = generation + '.txt';
     const written = await client.callTool({ name: 'workspace_write', arguments: { path: file, text: 'written through the ' + generation + ' client\nsecond line' } });
@@ -66,7 +66,7 @@ test('what happens to one request never decides another: a refused request is an
   const instanceRoot = path.join(temp, 'instance'), root = path.join(temp, 'project');
   fs.mkdirSync(root);
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: localConnection });
-  await runtime.service.call('project.create', { root }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root }, { id: 'owner', surface: 'local' });
   const { client } = await stdioClient(['--instance', instanceRoot], { versionNegotiation: { mode: 'auto' } });
   t.after(async () => { await client.close().catch(() => {}); await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const slow = client.callTool({ name: 'shell_run', arguments: { file: process.execPath, args: ['-e', 'setTimeout(() => console.log("slow command done"), 1500)'], waitMs: 20000 } });
@@ -93,7 +93,7 @@ test('devmate mcp starts the runtime when none is running and keeps working when
   client = started.client;
   const first = await runtimeStatus({ instanceRoot });
   assert.deepEqual([first.running, first.record.port], [true, port], 'the stdio entry brought the runtime up');
-  assert.ok((await client.listTools()).tools.length >= 35);
+  assert.ok((await client.listTools()).tools.length >= 15);
   assert.ok(started.noise.join('').includes('starting the runtime'), 'what it did is said on standard error, never on the protocol stream');
   // The runtime goes away under the connected client and comes back on the next call.
   await stopRuntime({ instanceRoot, timeoutMs: 20000 });

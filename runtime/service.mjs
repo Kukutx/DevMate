@@ -16,23 +16,24 @@ import { createProcessManager } from './processes.mjs';
 import { verifyPublicMcp } from './connection-verify.mjs';
 import { createSecretStore } from './secrets.mjs';
 import { CLIENT_COMMAND_ENV } from './client.mjs';
+import { createUsage } from './usage.mjs';
 import { defineOperations } from './operations/index.mjs';
+import { createBrowserLink } from './chrome.mjs';
 import { projectOverview } from './operations/projects.mjs';
 import { doctor } from './operations/doctor.mjs';
 import { snapshot } from './operations/snapshot.mjs';
-import { hash, now, projectScope } from './operations/shared.mjs';
+import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.mjs';
 
 // The service is the one registry every caller goes through: MCP, the CLI, the editor
-// hosts and the workbench. It owns identity and project authorization, idempotency and
-// the lifetime of everything the runtime runs. What the operations are is defined in
-// ./operations; how each is authorized is decided here.
-const ownerOperations = new Set(['project.create', 'project.update', 'project.remove', 'runtime.stop', 'capability.configure',
-  'window.attach', 'window.detach', 'window.select', 'window.heartbeat', 'window.list']);
-// These operations dispatch to another operation, which performs its own authorization.
-const dispatching = new Set(['capability.call', 'operations.call']);
+// hosts and the workbench. It owns authorization, idempotency and the lifetime of
+// everything the runtime runs. What the operations are is defined in ./operations; how
+// each is authorized is decided here.
+// DevMate has one owner. The only other caller is the runtime's own check of its public route (auth.mjs): its token
+// is sent to whatever answers at that address, so it may ask which runtime that is, and nothing else.
+const PROBE_ID = 'verification', PROBE_OPERATION = 'connection.status';
 const storedKinds = ['agent', 'workflow', 'task', 'job', 'approval', 'input', 'reference', 'artifact'];
 const MAINTENANCE_INTERVAL_MS = 6 * 3600000;
-const LOCAL_OWNER = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const LOCAL_OWNER = Object.freeze({ id: 'owner', surface: 'local' });
 const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root;
 // What a project command inherits: the owner's environment without DevMate's own
 // connection credentials and without the variables an editor host injects for itself.
@@ -41,10 +42,15 @@ function commandEnvironment(config, env = process.env) {
     config.connection?.tokenEnv, config.connection?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
   // The marker tells the devmate command line that a connected client started it: it then acts with that
   // client's authority, not as the owner at this computer (CLIENT_COMMAND_ENV in runtime/client.mjs).
-  return { ...Object.fromEntries(Object.entries(env).filter(([name]) => {
+  // A command started here has no terminal: nothing may wait in a pager or at a prompt, and colour codes are noise
+  // to whoever reads the output. What the owner's own environment says about any of these stands.
+  const unattended = { NO_COLOR: '1', TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat', GH_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' };
+  const own = Object.fromEntries(Object.entries(env).filter(([name]) => {
     const upper = name.toUpperCase();
     return !withheld.has(upper) && !upper.startsWith('VSCODE_') && !upper.startsWith('DEVMATE_AGENT_');
-  })), [CLIENT_COMMAND_ENV]: '1' };
+  }));
+  const set = new Set(Object.keys(own).map(name => name.toUpperCase()));
+  return { ...Object.fromEntries(Object.entries(unattended).filter(([name]) => !set.has(name))), ...own, [CLIENT_COMMAND_ENV]: '1' };
 }
 function readable(error) {
   return error.issues.slice(0, 6).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ');
@@ -76,11 +82,18 @@ export class DevMateService {
     this.verifier = verifier;
     this.identity = null;
     this.verification = null;
+    // How requests to the outside leave this computer (runtime/platform/proxy.mjs); set by the process that serves.
+    this.proxy = null;
+    // The MCP client that asked last: what it called itself and which tool names it was shown (set where requests arrive).
+    this.lastClient = null;
+    // The owner's browser, where the DevMate extension in it is connected (./chrome.mjs).
+    this.browser = createBrowserLink();
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
     this.config = normalizeConfig(config);
     this.execution = new AbortController();
     this.activeCalls = new Set();
+    this.usage = createUsage();
     this.projectTransitions = new Set();
     this.closing = false;
     this.workspace = createWorkspaceService({ store: this.store });
@@ -91,9 +104,8 @@ export class DevMateService {
     this.maintenanceTimer.unref();
     this.accessProfile = this.store.setting('access.profile') === 'full' ? 'full' : 'guarded';
     this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers,
-      // Full access is the owner's: what an agent asks is granted without a person only when the owner started the
-      // agent and the task it is working on is the owner's too.
-      grantsApprovals: (agent, principal) => this.fullAccess() && agent.caller === 'owner' && principal === 'owner' });
+      // Full access is the owner's standing answer to what an agent asks.
+      grantsApprovals: () => this.fullAccess() });
     // What the owner changed about the coding agents while the runtime ran lies on top of the configuration.
     if (!providerSettings) for (const name of Object.keys(this.store.setting('providers.live') || {})) {
       try { this.applyProviderSettings(name); } catch (error) { this.store.recordNotificationFailure(error); }
@@ -111,29 +123,16 @@ export class DevMateService {
     this.ready = Promise.resolve().then(async () => {
       // Before any new work: what an earlier runtime of this instance left running when it died.
       await this.processes.reapLeftovers().catch(error => this.store.recordNotificationFailure(error));
-      this.auth = createAuth({ ...authOptions, store: this.store, instanceRoot: this.instanceRoot, config: this.config.auth });
-      for (const operation of this.auth.operations) {
-        if (['auth.member.update','auth.member.remove'].includes(operation.name)) {
-          const originalRun = operation.run;
-          this.operations.set(operation.name, { ...operation, run: async args => {
-            const result = await originalRun(args);
-            // Losing access ends what that identity still has running.
-            await this.jobs.cancelForCaller(args.id);
-            await this.processes.stopForCaller(args.id);
-            await this.agents.stopForCaller(args.id);
-            return result;
-          } });
-        } else this.operations.set(operation.name, operation);
-      }
+      this.auth = createAuth({ ...authOptions, store: this.store, instanceRoot: this.instanceRoot, config: this.config.auth, proxy: () => this.proxy?.current()?.settings || null });
+      for (const operation of this.auth.operations) this.operations.set(operation.name, operation);
       this.hosts = createHostRegistry({ service: this, instanceRoot: this.instanceRoot });
       for (const operation of this.hosts.operations) this.operations.set(operation.name, operation);
       this.capabilities = await capabilitiesFactory({ service: this, instanceRoot: this.instanceRoot,
         externalServers: this.config.externalServers, engineSettings: this.config.engineSettings, hostRegistry: this.hosts,
         onInputRequest: request => this.inputs.request(request), inputCapabilities: { elicitation: { form: {} } } });
       this.jobs = createJobRunner({ store: this.store, execute: async (job, { signal }) => {
-        this.authorizeQueuedJob(job);
         if (job.kind === 'command') return this.processes.complete(this.project(job.projectId, { write: true }), job.input.args, { signal });
-        try { return await this.capabilities.call(job.input.args, { signal, callerRole: job.input.caller.role, callerId: job.input.caller.id }); }
+        try { return await this.capabilities.call(job.input.args, { signal }); }
         catch (error) {
           // The capability registry owns its client/process lifetime separately from this request.
           error.executionSettled = true;
@@ -144,19 +143,6 @@ export class DevMateService {
       return this;
     });
     this.ready.catch(() => {});
-  }
-
-  authorizeQueuedJob(job) {
-    const caller = job.input?.caller;
-    if (caller?.id === 'owner' && caller.role === 'owner') return;
-    let member;
-    try { member = this.store.get('auth-member', caller?.id); } catch {}
-    if (!member || member.disabled || member.authVersion !== caller?.authVersion ||
-        member.role !== 'write' || caller.role !== member.role || !member.projectIds?.includes(job.projectId)) {
-      const error = new DomainError('authorization_revoked', 'The queued request no longer has valid project authorization.');
-      error.notStarted = true;
-      throw error;
-    }
   }
 
   // Which coding agents are installed, with their versions. Looked up once every half minute at most.
@@ -179,22 +165,19 @@ export class DevMateService {
   }
 
   // Callers may name a project by its id, its registered root directory or its unique name.
-  // A member only ever resolves among its own grants, so a name or path reveals nothing about other projects.
   resolveProjectReference(value, context) {
     if (typeof value !== 'string' || value.startsWith('project-')) return value;
-    const granted = project => context.role === 'owner' || context.projectIds?.includes(project.id);
     if (path.isAbsolute(value)) {
-      // Only the owner at this computer has a path looked up on disk. For anyone else it is compared, as written,
+      // Only at this computer is a path looked up on disk. A connected client's path is compared, as written,
       // with the roots of the projects: a path a caller supplies must never make this process open a network share.
       // Spelled the way a root is stored (separators, no trailing one): that needs no look at the disk.
       let root = path.resolve(value);
-      if (context.surface === 'local' && context.role === 'owner') { try { root = fs.realpathSync.native(value); } catch {} }
+      if (context.surface === 'local') { try { root = fs.realpathSync.native(value); } catch {} }
       const project = this.store.projectForRoot(root);
-      if (project && granted(project)) return project.id;
-      if (context.role !== 'owner') return value;
+      if (project) return project.id;
       throw new DomainError('project_not_registered', 'This directory is not a shared project. ' + this.howToShare(context));
     }
-    const matches = this.store.list('project', { limit: 10000 }).filter(project => project.name === value && granted(project));
+    const matches = this.store.list('project', { limit: 10000 }).filter(project => project.name === value);
     if (matches.length > 1) throw new DomainError('ambiguous_project', 'Several projects share this name; use the project id.');
     return matches.length ? matches[0].id : value;
   }
@@ -216,14 +199,14 @@ export class DevMateService {
   // command line, in the local workbench. A connected client can narrow what is shared; it cannot widen it. That
   // includes a workbench embedded in a chat app: what such a client is, only the client itself says.
   // The one exception is the owner's own, and is also made at this computer: the full access profile hands these
-  // decisions to whoever connects as the owner, for people who drive everything from a chat client.
-  ownerDecides(context) { return context?.role === 'owner' && (context.surface === 'local' || this.fullAccess()); }
+  // decisions to the owner's connected client, for people who drive everything from a chat client.
+  ownerDecides(context) { return context?.id === 'owner' && (context.surface === 'local' || this.fullAccess()); }
   fullAccess() { return this.accessProfile === 'full'; }
   // The local control interface. With full access the owner's connected client may also read what tells it why
   // something does not work (fullAccessRead: the doctor, metrics, credential names). Changing anything there stays
   // at this computer in either profile: a remote caller could cut its own route.
   reachesLocal(operation, context) {
-    return context.role === 'owner' && (context.surface === 'local' || (operation.fullAccessRead === true && this.fullAccess()));
+    return context?.id === 'owner' && (context.surface === 'local' || (operation.fullAccessRead === true && this.fullAccess()));
   }
   setAccessProfile(profile) {
     this.store.setting('access.profile', profile);
@@ -245,18 +228,18 @@ export class DevMateService {
     this.store.setting('sharing.declined', [...all].slice(-2000));
   }
 
-  // The project a call means when it names none: the window's own, the caller's only one,
+  // The project a call means when it names none: the window's own, the only one there is,
   // or the one whose editor window was used most recently.
-  defaultProject(context, operation) {
+  defaultProject(context, operation, chosen = {}) {
     if (context.projectId) return context.projectId;
     // An editor window never borrows the project of another window.
     if (context.windowId) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
-    const available = this.store.list('project', { limit: 10000, ...(context.role !== 'owner' ? { projectIds: context.projectIds || [] } : {}) });
+    const available = this.store.list('project', { limit: 10000 });
     if (available.length === 1) return available[0].id;
     // Reading may follow the editor: "what is this file" means the project in front of the user. A change may not:
     // the same call would land in another project the moment the user clicks into a different window.
     const focused = operation?.readOnly ? this.windows.focusedProject(available.map(project => project.id)) : null;
-    if (focused) return focused;
+    if (focused) { chosen.followed = available.find(project => project.id === focused); return focused; }
     throw new DomainError('project_required', available.length
       ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name).join('; ')
       : 'No folder is shared yet. ' + this.howToShare(context));
@@ -286,43 +269,42 @@ export class DevMateService {
     finally { this.projectTransitions.delete(projectId); }
   }
 
-  // caller: who the project is being opened for. With full access nothing is withheld from the owner, whatever the
-  // project's own setting says; every other account keeps the protection.
-  project(projectId, { write = false, caller } = {}) {
+  // With full access nothing is withheld from the owner, whatever the project's own setting says.
+  project(projectId, { write = false } = {}) {
     const project = this.store.get('project', projectId);
     if (write && this.projectTransitions.has(projectId)) throw new DomainError('project_busy', 'Project execution resources are closing.');
     if (write && project.access !== 'write') throw new DomainError('read_only', 'Project is read-only.');
-    return { ...project, ...(this.fullAccess() && caller?.role === 'owner' ? { protectSecrets: false } : {}), controlRoot: this.instanceRoot };
+    return { ...project, ...(this.fullAccess() ? { protectSecrets: false } : {}), controlRoot: this.instanceRoot };
+  }
+
+  // Who may call: the owner anything, the runtime's own route check the one operation it exists for.
+  admit(context, name) {
+    if (context?.id === 'owner') return;
+    if (context?.id !== PROBE_ID) throw new DomainError('unauthorized', 'A verified caller identity is required.');
+    if (name !== PROBE_OPERATION) throw new DomainError('forbidden', 'The route check may only ask which runtime answers.');
   }
 
   list(kind, input, context) {
-    if (!context?.id || !['owner','write','read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
+    this.admit(context);
     if (input.projectId) this.project(input.projectId);
     if (input.workflowId) {
       const workflow = this.store.get('workflow', input.workflowId);
       if (input.projectId && input.projectId !== workflow.projectId) throw new DomainError('scope_mismatch', 'Workflow belongs to another project.');
     }
-    if (context.role !== 'owner' && !Array.isArray(context.projectIds)) throw new DomainError('forbidden', 'Project grants are required.');
     const limit = input.limit || 200;
-    const windowScope = context.projectId;
-    const items = this.store.list(kind, {
-      ...input, ...(windowScope && kind !== 'project' ? {projectId:windowScope} : {}),
-      afterId: input.cursor, limit: limit + 1,
-      ...(windowScope && kind === 'project' ? {projectIds:[windowScope]} :
-        context.role !== 'owner' ? {projectIds:context.projectIds} : {})
-    });
+    // An editor window sees its own project and what belongs to it.
+    const items = this.store.list(kind, { ...input, ...(context.projectId ? { projectId: context.projectId } : {}), afterId: input.cursor, limit: limit + 1 });
     const nextCursor = items.length > limit ? items[limit - 1].id : undefined;
     return { items: items.slice(0, limit).map(item => ['task','artifact'].includes(kind)
       ? { ...item, uri: 'devmate://' + kind + '/' + item.id } : item), ...(nextCursor ? { nextCursor } : {}) };
   }
 
   visibleOperations(context) {
-    if (!context?.id || !['owner','write','read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
+    if (context?.id === PROBE_ID) return [this.operations.get(PROBE_OPERATION)];
+    this.admit(context);
     return [...this.operations.values()].filter(operation =>
       (!operation.localOnly || this.reachesLocal(operation, context)) &&
-      (!(operation.humanOnly || operation.ownerDecision) || context.surface === 'local' || this.ownerDecides(context)) &&
-      (context.role === 'owner' || !ownerOperations.has(operation.name)) &&
-      (context.role !== 'read' || operation.readOnly || dispatching.has(operation.name)));
+      (!(operation.humanOnly || operation.ownerDecision) || this.ownerDecides(context)));
   }
 
   async invoke(operation, args, context) {
@@ -331,37 +313,41 @@ export class DevMateService {
     try { return await work; } finally { this.activeCalls.delete(work); }
   }
 
+  // Every call is counted here, also one that is refused before it runs: a model using a tool wrongly is mostly that.
   async call(name, input = {}, context) {
-    if (!context?.id || !['owner','write','read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
+    const done = this.usage.begin(this.operations.has(name) ? name : '(unknown)', context);
+    try { const result = await this.perform(name, input, context); done(); return result; }
+    catch (error) { done(error); throw error; }
+  }
+
+  async perform(name, input = {}, context) {
+    this.admit(context, name);
     await this.ready;
     if (this.closing && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(name)) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
     const operation = this.operations.get(name);
     if (!operation) throw new DomainError('unknown_operation', 'Unknown DevMate operation: ' + name);
-    if (context.role === 'read' && !operation.readOnly && !dispatching.has(name)) throw new DomainError('forbidden', 'This caller has read-only access.');
     let args;
+    const chosen = {};
     try { args = operation.schema.parse(input); }
     catch (error) { throw error.name === 'ZodError' ? new DomainError('invalid_input', 'Invalid input for ' + name + ': ' + readable(error)) : error; }
     if (args.projectId !== undefined) args.projectId = this.resolveProjectReference(args.projectId, context);
-    else if (operation.needsProject) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation);
-    if (!['owner', 'write', 'read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
+    else if (operation.needsProject && !operation.withoutProject?.(args)) args.projectId = (args.workflowId ? this.store.get('workflow', args.workflowId).projectId : args.agentId ? this.store.get('agent', args.agentId).projectId : null) || this.defaultProject(context, operation, chosen);
     if (operation.localOnly && !this.reachesLocal(operation, context)) throw new DomainError('forbidden', 'This operation is available only through the local control interface: the owner does it at their own computer.');
     // A decision that is the person's own (answering what an agent asks) is taken at this computer. Anywhere else
     // the caller may be the very model that started the agent, and nothing a client says about itself proves otherwise.
-    if (operation.humanOnly && context.surface !== 'local' && !this.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is the user\'s own. They answer it on their computer: in the DevMate workbench (devmate ui) or in their editor. (With the full access profile, devmate access full, permissions are granted automatically and the owner\'s client may answer.)');
+    if (operation.humanOnly && !this.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is the user\'s own. They answer it on their computer: in the DevMate workbench (devmate ui) or in their editor. (With the full access profile, devmate access full, permissions are granted automatically and the owner\'s client may answer.)');
     if (operation.ownerDecision && !this.ownerDecides(context)) throw new DomainError('forbidden', operation.ownerDecision);
-    if (context.role !== 'owner') {
-      if (!Array.isArray(context.projectIds)) throw new DomainError('forbidden', 'No project grants are assigned.');
-      if (ownerOperations.has(name)) throw new DomainError('forbidden', 'Owner access required.');
-      if (args.projectId && !context.projectIds.includes(args.projectId)) throw new DomainError('forbidden', 'Project is outside the caller grants.');
-      const projectId = this.operationProject(name, operation, args);
-      if (projectId && !context.projectIds.includes(projectId)) throw new DomainError('forbidden', 'Item is outside the caller grants.');
-    }
     const executionProject = this.operationProject(name, operation, args);
     if (!operation.readOnly && name !== 'host.record.put' && executionProject && this.projectTransitions.has(executionProject)) throw new DomainError('project_busy', 'Project execution resources are closing.');
     if (context.projectId && executionProject && executionProject !== context.projectId) throw new DomainError('scope_mismatch', 'Project is outside this caller scope.');
     if (context.windowId && !context.projectId && executionProject && !name.startsWith('window.')) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
-    if (operation.readOnly || !args.operationId) return this.invoke(operation, args, context);
-    const operationKey = (context.id || 'owner') + ':' + args.operationId;
+    if (operation.readOnly || !args.operationId) {
+      const result = await this.invoke(operation, args, context);
+      // Which project that was is part of the answer when the caller did not say and there were several.
+      if (chosen.followed && result && typeof result === 'object' && Object.isExtensible(result)) Object.defineProperty(result, FOLLOWED_PROJECT, { value: { id: chosen.followed.id, name: chosen.followed.name } });
+      return result;
+    }
+    const operationKey = context.id + ':' + args.operationId;
     const fingerprint = hash(JSON.stringify({ name, args }));
     const existing = this.store.operation(operationKey);
     if (existing) {
@@ -458,6 +444,7 @@ export class DevMateService {
     clearInterval(this.maintenanceTimer);
     this.execution.abort(new DomainError('runtime_stopping', 'Runtime is stopping.'));
     this.inputs.close();
+    this.browser.close();
     const results = await Promise.allSettled([this.agents.close(), this.jobs?.close(), this.capabilities?.close(), this.hosts?.close(), this.auth?.close()]);
     // Jobs run through the process manager, so it closes after they have settled.
     results.push(...await Promise.allSettled([this.processes.close()]));

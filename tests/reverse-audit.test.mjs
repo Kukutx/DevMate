@@ -19,8 +19,6 @@ function contextFor(workspace) {
   const context = {
     state: createEngineState('devmate.reverse'),
     settings: reverseSettingsSchema.parse({ pythonPath: python || '' }),
-    caller: () => 'owner',
-    assertOwner(action) { if (this.caller() !== 'owner') throw new Error(action + ' is available only to the owner'); },
     assertCanMutate() { if (profile === 'readOnly') throw new Error('Read-only profile'); },
     revoke() { profile = 'readOnly'; },
     disable() { enabled = false; },

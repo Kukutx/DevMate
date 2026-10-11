@@ -48,8 +48,7 @@ test('registers Browser Control with scoped schemas, for the owner only', async 
   };
   const capabilities = await createCapabilities({ service, instanceRoot: path.join(root, 'private'), engines: [browserControlPlugin] });
   t.after(async () => { await capabilities.close(); await fsp.rm(root, { recursive: true, force: true }); });
-  const [engine] = (await capabilities.list({ projectId: project.id, engine: 'browser-control' }, { callerRole: 'owner' })).engines;
-  assert.equal(engine.ownerOnly, true);
+  const [engine] = (await capabilities.list({ projectId: project.id, engine: 'browser-control' })).engines;
   const tools = engine.capabilities;
   assert.deepEqual(tools.map(tool => tool.name), [
     'browser-control.status', 'browser-control.start', 'browser-control.tabs',
@@ -60,22 +59,10 @@ test('registers Browser Control with scoped schemas, for the owner only', async 
     assert.equal(tool.inputSchema.properties.workspaceId, undefined);
     assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(typeof tool.annotations.readOnlyHint, 'boolean', tool.name);
-    assert.equal(tool.ownerOnly, true, tool.name);
   }
-  const status = await capabilities.call({ projectId: project.id, capability: 'browser-control.status' }, { callerRole: 'owner' });
+  const status = await capabilities.call({ projectId: project.id, capability: 'browser-control.status' });
   assert.equal(status.structuredContent.workspace.id, project.id);
-  // A session is a browser on the owner's desktop, possibly with a signed-in persistent profile:
-  // neither a write member nor a reader may start, drive or even read one.
-  for (const callerRole of ['write', 'read']) {
-    for (const [capability, input] of [['browser-control.start', { profileMode: 'workspace' }], ['browser-control.snapshot', { sessionId: 'any' }], ['browser-control.status', {}]]) {
-      await assert.rejects(capabilities.call({ projectId: project.id, capability, input }, { callerRole }),
-        error => error.code === 'forbidden' && /owner/.test(error.message), callerRole + ' ' + capability);
-    }
-    const listed = (await capabilities.list({ projectId: project.id, engine: 'browser-control' }, { callerRole })).engines[0];
-    assert.deepEqual(listed.capabilities, [], 'owner-only capabilities are not offered to ' + callerRole);
-    await assert.rejects(capabilities.list({ projectId: project.id, name: 'browser-control.start' }, { callerRole }), error => error.code === 'forbidden');
-  }
-  await assert.rejects(capabilities.call({ projectId: project.id, capability: 'browser-control.status', input: { workspaceId: 'other' } }, { callerRole: 'owner' }));
+  await assert.rejects(capabilities.call({ projectId: project.id, capability: 'browser-control.status', input: { workspaceId: 'other' } }));
 });
 
 test('keeps managed browser sessions workspace-bound and rejects stale element refs', async t => {

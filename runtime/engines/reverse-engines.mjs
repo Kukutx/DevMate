@@ -46,8 +46,6 @@ export const ENGINE_GUIDANCE = Object.freeze({
 
 function assertExecution(context, signal) {
   signal?.throwIfAborted();
-  // Installed backends are the owner's programs; they parse project bytes and never change the project.
-  context.assertOwner('Running an installed reverse-engineering backend');
   context.assertActive();
   if (context.state.engines.closing) throw new Error('Reverse external engine is closed');
 }
@@ -153,7 +151,6 @@ export async function reverseToolchain(context, probe = false) {
   try { ghidraInstallation(context); result.ghidraInstallationFound = true; }
   catch (error) { result.ghidraInstallationFound = false; result.ghidraError = error.message; }
   if (!probe) return result;
-  if (context.caller() !== 'owner') return { ...result, probeError: 'Probes run the installed backends, which only the owner may do' };
   return engineTask(context, 'toolchain_probe', async task => {
     if (result.pythonFound) {
       try { result.python = await pythonCall(context, task, { operation: 'probe' }); }
@@ -191,7 +188,6 @@ export async function inspectWithEngine(context, workspace, args) {
   };
   if (engine === 'builtin') return fallback('Explicitly selected limited built-in parser');
   if (engine === 'auto' && binaryKind(input.bytes) === 'raw') return fallback('Raw or unrecognized data; use byte/value tools, or select a parser explicitly');
-  if (engine === 'auto' && context.caller() !== 'owner') return fallback('Installed parsers run only for the owner of this DevMate runtime');
   try { pythonExecutable(context); }
   catch (error) { if (engine === 'auto') return fallback(error.message); throw error; }
   const result = await engineTask(context, 'binary_inspect', async task => pythonCall(context, task, { operation: 'inspect', input: await snapshot(task, input), engine, limit }));

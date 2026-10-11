@@ -53,7 +53,7 @@ if(argv.includes('-p')){
   });
 }
 `;
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const actor = Object.freeze({ kind: 'user', id: 'owner', label: 'You' });
 async function until(check, label, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -86,7 +86,7 @@ async function fixture(t) {
 
 test('a delegated Claude turn keeps its credentials off the command line and its channel token dies with the process', { timeout: 60000 }, async t => {
   const f = await fixture(t);
-  const done = await f.agents.delegate({ projectId: f.project.id, provider: 'claude', prompt: 'Report your launch', waitMs: 30000, caller: 'owner' }, actor);
+  const done = await f.agents.delegate({ projectId: f.project.id, provider: 'claude', prompt: 'Report your launch', waitMs: 30000 }, actor);
   assert.equal(done.settled, true, JSON.stringify(done.error || done.turn));
   assert.equal(done.turn.status, 'completed');
   const seen = JSON.parse(done.output);

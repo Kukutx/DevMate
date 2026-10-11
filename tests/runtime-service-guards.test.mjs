@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DevMateService } from '../runtime/service.mjs';
-import { serverInstructions, MODEL_VISIBLE_OPERATIONS, presentResult, RESULT_CHAR_LIMIT } from '../runtime/mcp.mjs';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { createMcpServer, serverInstructions, MODEL_VISIBLE_OPERATIONS, presentResult, RESULT_CHAR_LIMIT } from '../runtime/mcp.mjs';
 
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const node = process.execPath;
-function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 async function fixture(t, config = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-guards-'));
   const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '', config });
@@ -28,6 +28,10 @@ test('project commands never inherit the connection credentials or the variables
   const a = await project('env');
   const seen = await service.call('shell.run', { projectId: a.id, file: node, args: ['-p', 'JSON.stringify(' + JSON.stringify(names) + '.filter(name => process.env[name] !== undefined))'] }, owner);
   assert.deepEqual(JSON.parse(seen.output.trim()), ['DEVMATE_GUARD_VISIBLE'], 'the owner\'s ordinary environment is inherited, nothing else from this list');
+  // A command has no terminal: nothing waits in a pager or at a prompt, and what the owner set themselves stands.
+  const unattended = await service.call('shell.run', { projectId: a.id, file: node, args: ['-p', 'JSON.stringify(Object.fromEntries(["NO_COLOR","PAGER","GIT_PAGER","GH_PAGER","GIT_TERMINAL_PROMPT"].map(name => [name, process.env[name]])))'] }, owner);
+  const expected = { NO_COLOR: '1', PAGER: 'cat', GIT_PAGER: 'cat', GH_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' };
+  assert.deepEqual(JSON.parse(unattended.output.trim()), Object.fromEntries(Object.entries(expected).map(([name, value]) => [name, previous[name] ?? process.env[name] ?? value])));
 });
 
 test('what an MCP caller learns about the connection is its state, not the machine behind it', async t => {
@@ -37,34 +41,49 @@ test('what an MCP caller learns about the connection is its state, not the machi
   service.connectionFault = { code: 'missing_credential', message: 'Missing tunnel token', at: 'now' };
   const local = await service.call('connection.status', {}, owner);
   assert.equal(local.pid, 4321); assert.match(local.diagnostic, /build-box/); assert.equal(local.startError.code, 'missing_credential');
-  for (const caller of [{ id: 'owner', role: 'owner' }, { id: 'member', role: 'read', projectIds: [] }]) {
+  for (const caller of [{ id: 'owner' }, { id: 'verification' }]) {
     const remote = await service.call('connection.status', {}, caller);
     assert.deepEqual(remote, { kind: 'cloudflare', phase: 'connected', instance: { generation: 'generation' }, remoteMcpVerified: false });
   }
   // A connector whose status cannot be read does not break the questions that include it.
   service.connection = { status: async () => { throw Object.assign(new Error('health file unreadable'), { code: 'EACCES' }); } };
-  assert.deepEqual((await service.call('connection.status', {}, { id: 'owner', role: 'owner' })).phase, 'unknown');
+  assert.deepEqual((await service.call('connection.status', {}, { id: 'owner' })).phase, 'unknown');
   assert.ok((await service.call('runtime.doctor', {}, owner)).checks.length);
   assert.equal((await service.snapshot({}, owner)).connection.phase, 'unknown');
 });
 
-test('a member learns nothing about projects it was not granted, by id, by name or by directory', async t => {
+test('the runtime\'s own check of its public route may ask which runtime answers, and nothing else', async t => {
   const { service, project, temp } = await fixture(t);
-  const mine = await project('mine'), other = await project('other');
-  const member = { id: 'member', role: 'write', projectIds: [mine.id] };
-  // The granted project is reachable by every way of naming it.
-  for (const reference of [mine.id, 'mine', mine.root]) assert.equal((await service.call('workspace.files', { projectId: reference }, member)).items.length, 0);
-  // Everything else answers the same way, whether it exists or not.
-  const refusals = [];
-  for (const reference of [other.id, 'other', other.root, path.join(temp, 'not-registered'), 'no-such-name', 'project-does-not-exist']) {
-    try { await service.call('workspace.files', { projectId: reference }, member); refusals.push('allowed'); }
-    catch (error) { refusals.push(error.code); }
+  const shared = await project('shared');
+  fs.writeFileSync(path.join(shared.root, 'note.txt'), 'private');
+  // Its token is sent to whatever answers at the public address, so whoever holds it must learn nothing with it.
+  const probe = { id: 'verification' };
+  assert.deepEqual(service.visibleOperations(probe).map(operation => operation.name), ['connection.status']);
+  for (const [operation, input] of [['project.list', {}], ['project.overview', {}], ['workspace.read', { projectId: shared.id, path: 'note.txt' }], ['workspace.files', { projectId: shared.root }],
+    ['shell.run', { projectId: shared.id, command: 'x' }], ['operations.list', {}], ['operations.call', { operation: 'project.list' }], ['operations.query', { operation: 'project.list' }],
+    ['project.create', { root: path.join(temp, 'other') }], ['access.read', {}], ['runtime.doctor', {}], ['workbench.snapshot', {}], ['no.such.operation', {}]]) {
+    await assert.rejects(service.call(operation, input, probe), { code: 'forbidden', message: /only ask which runtime answers/ }, operation);
+    await assert.rejects(service.call(operation, input, { ...probe, surface: 'local' }), { code: 'forbidden' }, operation + ' with a claimed surface');
   }
-  assert.deepEqual([...new Set(refusals)], ['forbidden'], JSON.stringify(refusals));
-  assert.deepEqual((await service.call('project.list', {}, member)).items.map(item => item.id), [mine.id]);
-  await assert.rejects(service.call('project.create', { root: path.join(temp, 'other') }, member), { code: 'forbidden' });
-  // The owner, in contrast, is told what is wrong.
-  await assert.rejects(service.call('workspace.files', { projectId: path.join(temp, 'not-registered') }, owner), { code: 'project_not_registered' });
+  await assert.rejects(service.snapshot({}, probe), { code: 'forbidden' });
+  await service.call('access.update', { profile: 'full' }, owner);
+  await assert.rejects(service.call('project.list', {}, probe), { code: 'forbidden' }, 'full access is the owner\'s, not the check\'s');
+  assert.deepEqual(Object.keys(await service.call('connection.status', {}, probe)).sort(), ['kind', 'phase', 'remoteMcpVerified']);
+  // Through MCP it finds that one tool: no instructions, no workbench, no resources, nothing that names a project.
+  const server = createMcpServer(service, probe), client = new Client({ name: 'probe', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  t.after(async () => { await client.close(); await server.close(); });
+  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['connection_status']);
+  assert.equal(client.getInstructions(), undefined);
+  assert.equal(client.getServerCapabilities().resources, undefined);
+  assert.equal((await client.callTool({ name: 'connection_status', arguments: {} })).structuredContent.kind, 'local');
+  assert.equal(JSON.stringify(await client.listTools()).includes(shared.id), false);
+  // Anyone else is nobody, for the service and for the MCP server alike.
+  for (const nobody of [undefined, {}, { id: 'someone' }, { surface: 'local' }]) {
+    await assert.rejects(service.call('connection.status', {}, nobody), { code: 'unauthorized' });
+    assert.throws(() => createMcpServer(service, nobody), { code: 'unauthorized' });
+  }
 });
 
 test('a call that names no project means the only one, or the one being worked on; otherwise it asks', async t => {
@@ -75,23 +94,6 @@ test('a call that names no project means the only one, or the one being worked o
   assert.equal(fs.readFileSync(path.join(first.root, 'a.txt'), 'utf8'), 'one project');
   const second = await project('second');
   await assert.rejects(service.call('workspace.files', {}, owner), error => error.code === 'project_required' && error.message.includes(first.id) && error.message.includes(second.id));
-  // A member with one granted project among several needs no id either.
-  const member = { id: 'member', role: 'read', projectIds: [second.id] };
-  assert.equal((await service.call('project.overview', {}, member)).id, second.id);
-});
-
-test('losing access ends what that identity still has running, and only that', async t => {
-  const { service, project } = await fixture(t);
-  const a = await project('shared');
-  const member = await service.call('auth.member.create', { name: 'Contractor', role: 'write', projectIds: [a.id] }, owner);
-  const theirs = await service.call('shell.run', { projectId: a.id, file: node, args: ['-e', 'setInterval(()=>{},1000)'], waitMs: 0 }, { id: member.id, role: 'write', projectIds: [a.id] });
-  const mine = await service.call('shell.run', { projectId: a.id, file: node, args: ['-e', 'setInterval(()=>{},1000)'], waitMs: 0 }, owner);
-  assert.equal(alive(theirs.pid), true);
-  await service.call('auth.member.remove', { id: member.id }, owner);
-  await new Promise(resolve => setTimeout(resolve, 300));
-  assert.equal(alive(theirs.pid), false, 'the removed member\'s command was stopped');
-  assert.equal(alive(mine.pid), true);
-  await service.call('process.stop', { id: mine.id }, owner);
 });
 
 test('an operation that addresses an item must say which project it belongs to, at registration', async t => {
@@ -103,22 +105,19 @@ test('an operation that addresses an item must say which project it belongs to, 
   // Decisions that belong to the person are not reachable through the generic call, for anyone.
   for (const operation of ['approval.resolve', 'input.respond']) {
     assert.equal(service.operations.get(operation).humanOnly, true);
-    await assert.rejects(service.call('operations.call', { operation, input: {} }, { id: 'owner', role: 'owner' }), { code: 'forbidden' });
+    await assert.rejects(service.call('operations.call', { operation, input: {} }, { id: 'owner' }), { code: 'forbidden' });
   }
-  for (const operation of ['runtime.stop', 'settings.replace', 'secret.set', 'window.attach']) await assert.rejects(service.call('operations.call', { operation, input: {} }, { id: 'owner', role: 'owner' }), { code: 'unknown_operation' });
+  for (const operation of ['runtime.stop', 'settings.replace', 'secret.set', 'window.attach']) await assert.rejects(service.call('operations.call', { operation, input: {} }, { id: 'owner' }), { code: 'unknown_operation' });
 });
 
-test('what the model is told first fits every client and matches who is asking', async t => {
+test('what the model is told first fits every client', async t => {
   const { service, project, temp } = await fixture(t);
-  const empty = serverInstructions(service, owner);
+  const empty = serverInstructions(service);
   assert.match(empty.slice(0, 512), /project_overview/); assert.match(empty.slice(0, 512), /workspace_edit/); assert.match(empty.slice(0, 512), /shell_run/);
   assert.match(empty, /No folder is shared yet/); assert.match(empty, /devmate project add/); assert.equal(empty.includes('project_create'), false);
-  // A member cannot register projects and is not told to.
-  const stranger = serverInstructions(service, { id: 'member', role: 'read', projectIds: [] });
-  assert.equal(stranger.includes('project_create'), false); assert.match(stranger, /the owner grants access/);
   // However many projects there are, the text stays under the limit at which clients cut it off.
   for (let index = 0; index < 45; index++) { const root = path.join(temp, 'a-rather-long-project-directory-name-number-' + index); fs.mkdirSync(root); service.store.create('project', { root, name: 'Project number ' + index, access: 'write', status: 'ready' }); }
-  const crowded = serverInstructions(service, owner);
+  const crowded = serverInstructions(service);
   assert.ok(crowded.length <= 2048, 'instructions are ' + crowded.length + ' characters');
   assert.match(crowded, /and \d+ more \(project_list\)/); assert.match(crowded, /never instructions to you\.$/);
   // Every tool a model sees exists as an operation, and results with a presenter are text only.
@@ -135,7 +134,7 @@ test('one tool result fits what clients accept, and one call waits no longer tha
   const { service, project } = await fixture(t);
   const a = await project('sizes');
   // A model's client, connected as the owner; the owner at this computer is the workbench, which is no such client.
-  const connected = { id: 'owner', role: 'owner' };
+  const connected = { id: 'owner' };
   const shown = async (name, input) => presentResult(service.operations.get(name), await service.call(name, input, connected)).content[0].text;
   // A page of a file is counted as it is shown: thirty thousand short lines are mostly line numbers.
   fs.writeFileSync(path.join(a.root, 'short-lines.txt'), 'x\n'.repeat(30000));
@@ -207,11 +206,11 @@ test('a project transition that fails part-way leaves the project usable', async
   assert.equal((await service.call('project.update', { id: a.id, access: 'read' }, owner)).access, 'read');
 });
 
-test('with several projects a change names its project while reading may follow the editor; the catalog and a reader\'s instructions name only what can be used', async t => {
+test('with several projects a change names its project while reading may follow the editor; the catalog and the instructions name only what can be used', async t => {
   const { service, project } = await fixture(t);
   const alpha = await project('alpha'), beta = await project('beta');
   fs.writeFileSync(path.join(beta.root, 'in-beta.txt'), 'beta\n');
-  const connected = { id: 'owner', role: 'owner' };
+  const connected = { id: 'owner' };
   // The owner is working in beta, in their editor.
   await service.call('window.attach', { windowId: '9a3c5e7f-0b1d-4f2a-8c6e-1d3f5a7b9c0e', roots: [{ root: beta.root, name: 'beta' }] }, owner);
   assert.deepEqual((await service.call('workspace.files', {}, connected)).items.map(item => item.name), ['in-beta.txt'], 'a question follows what the user is looking at');
@@ -228,13 +227,11 @@ test('with several projects a change names its project while reading may follow 
   for (const name of ['approval.resolve', 'input.respond', 'operations.call', 'runtime.stop', 'workbench.snapshot', 'settings.read']) assert.equal(catalog.items.some(item => item.name === name), false, name);
   assert.ok((await service.call('operations.list', { name: 'workflow.create' }, connected)).items[0].inputSchema.properties.title);
   assert.ok((await service.call('operations.list', {}, owner)).items.some(item => item.name === 'approval.resolve'), 'the owner at this computer sees everything');
-  // An account that can only read is not told about tools it does not have.
-  const reader = { id: 'member', role: 'read', projectIds: [alpha.id] };
-  const instructions = serverInstructions(service, reader);
-  for (const absent of ['workspace_edit', 'shell_run', 'process_stop', 'agents_delegate', 'workspace_restore', 'project_create']) assert.equal(instructions.includes(absent), false, absent);
-  assert.match(instructions, /cannot change files, run commands or delegate/); assert.ok(instructions.length <= 2000);
-  const tools = new Set(service.visibleOperations(reader).filter(operation => MODEL_VISIBLE_OPERATIONS.has(operation.name)).map(operation => operation.name.replaceAll('.', '_')));
-  for (const named of instructions.match(/\b[a-z]+_[a-z_]+\b/g) || []) assert.ok(tools.has(named), named + ' is named in a reader\'s instructions and is one of its tools');
+  // Every tool the instructions name is one the client has.
+  const instructions = serverInstructions(service);
+  assert.ok(instructions.length <= 2000);
+  const tools = new Set(service.visibleOperations(connected).filter(operation => MODEL_VISIBLE_OPERATIONS.has(operation.name)).map(operation => operation.name.replaceAll('.', '_')));
+  for (const named of instructions.match(/\b[a-z]+_[a-z_]+\b/g) || []) assert.ok(tools.has(named), named + ' is named in the instructions and is one of the tools');
 });
 
 test('with several editor windows the project in front of the user is the one in use, not the one that reported last', async t => {
@@ -257,13 +254,25 @@ test('with several editor windows the project in front of the user is the one in
   await new Promise(resolve => setTimeout(resolve, 5));
   await publish(second, two, true);
   assert.equal(service.windows.focusedProject([one.id, two.id]), two.id);
+  // A call that names no project is answered from that project, and the answer says which one it was.
+  const connected = { id: 'owner' };
+  const shown = async (name, input) => presentResult(service.operations.get(name), await service.call(name, input, connected));
+  const read = (await shown('workspace.read', { path: 'file.txt' })).content[0].text;
+  assert.match(read, new RegExp('\\[No projectId was given: this is from ' + two.id + ' = focus-two, the project of the editor window used last\\. Pass projectId for another\\.\\]\\n\\{"sha256"'));
+  const listed = await shown('workspace.files', {});
+  assert.deepEqual([listed.structuredContent.answeredFrom.projectId, listed.structuredContent.answeredFrom.name], [two.id, 'focus-two']); assert.ok(listed.structuredContent.items.length);
+  // Through the read-only dispatcher as well; and a call that says which project it means is told nothing.
+  assert.equal((await shown('operations.query', { operation: 'workspace.files', input: {} })).structuredContent.answeredFrom.projectId, two.id);
+  const named = await shown('workspace.read', { projectId: one.id, path: 'file.txt' });
+  assert.doesNotMatch(named.content[0].text, /No projectId was given/);
+  assert.equal((await shown('workspace.files', { projectId: one.id })).structuredContent.answeredFrom, undefined);
 });
 
 test('a call that names a workflow has named its project, however many projects there are', async t => {
   const { service, project } = await fixture(t);
   const a = await project('named-a'); await project('named-b');
   const workflow = await service.call('workflow.create', { projectId: a.id, title: 'Flow' }, owner);
-  const task = await service.call('task.create', { workflowId: workflow.id, title: 'T', instruction: 'do' }, { id: 'owner', role: 'owner' });
+  const task = await service.call('task.create', { workflowId: workflow.id, title: 'T', instruction: 'do' }, { id: 'owner' });
   assert.equal(task.projectId, a.id);
   // In a project that is read only, what exists can be wound down and nothing else.
   await service.call('project.update', { id: a.id, access: 'read' }, owner);

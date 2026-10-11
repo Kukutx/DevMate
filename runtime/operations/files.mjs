@@ -34,21 +34,37 @@ export function defineFileOperations(service, add) {
     ['workspace.edit', 'edit', { path: projectPath, edits: z.array(z.object({ oldText: z.string().min(1).max(100000), newText: z.string().max(100000),
       replaceAll: z.boolean().optional() }).strict()).min(1).max(200), expectedSha256: sha.optional(), ...mutation }, false,
       'Edit a text file by exact replacement. Each oldText must match exactly once unless replaceAll is set. Edits apply in order, each to the result of the one before, and all of them or none are written. Preferred over rewriting a whole file. The previous version stays restorable.'],
-    ['workspace.write', 'write', { path: projectPath, text: fileText, expectedSha256: sha.nullable().optional(), ...mutation }, false,
-      'Create a new file, creating missing folders. To replace an existing file pass its sha256 from workspace_read as expectedSha256; to change part of a file prefer workspace_edit. The previous version stays restorable.'],
+    ['workspace.patch', 'applyPatch', { patch: fileText.min(1), dryRun: z.boolean().optional().describe('Work the patch out and say what it would change, without changing anything.'), ...mutation }, false,
+      'Change one or several files with one patch: all of it is applied, or none. Either "*** Begin Patch", then per file "*** Update File: <path>" (optionally "*** Move to: <path>") with hunks of unchanged lines (leading space), "-" removed and "+" added lines, a hunk optionally opened by "@@" or "@@ <a line it comes after>"; "*** Add File: <path>" whose every line starts with "+", in a new file too; "*** Delete File: <path>"; and "*** End Patch". Or a unified diff as git diff prints it. Give a few unchanged lines around every change: a hunk is found by its text, and refused when it fits nowhere or in two places. The result says what changed and how to take all of it back: do not read the files again to confirm it.',
+      { destructive: true, meta: ['since', 'warning'], present: result => (result.dryRun ? 'Would change ' : 'Changed ') + result.files.length + ' file(s) (+' + result.additions + ' −' + result.removals + '):\n' +
+        result.files.map(file => '  ' + file.operation.padEnd(7) + (file.previousPath ? file.previousPath + ' → ' : '') + file.path + (file.additions !== undefined ? '  (+' + file.additions + ' −' + file.removals + ')' : '') +
+          (file.lines ? '  at line ' + file.lines.join(', ') : '')).join('\n') +
+        (result.since !== undefined ? '\nTake all of it back with workspace_restore {since:' + result.since + '}.' : '') }],
+    ['workspace.write', 'write', { path: projectPath, text: fileText, expectedSha256: sha.nullable().optional(), overwrite: z.boolean().optional(), ...mutation }, false,
+      'Create a new file, creating missing folders. To replace an existing file pass its sha256 from workspace_read as expectedSha256 (or overwrite:true to replace it whatever it holds); to change part of a file prefer workspace_edit. The previous version stays restorable.'],
     ['workspace.mkdir', 'mkdir', { path: projectPath, ...mutation }, false, 'Create a project directory, including missing parents.', { idempotent: true }],
     ['workspace.move', 'move', { from: projectPath, to: projectPath, overwrite: z.boolean().optional(), ...mutation }, false, 'Move or rename a project file or directory, creating missing destination folders. overwrite:true lets a file replace a file; the replaced file stays restorable.'],
     ['workspace.delete', 'remove', { path: projectPath, recursive: z.boolean().optional(), force: z.boolean().optional(), ...mutation }, false,
       'Delete a project file or directory (recursive:true for one with content). Deleted files stay restorable through workspace_history, each under its own path; a very large file or directory needs force:true and is then not restorable.', { destructive: true }],
     ['workspace.history', 'history', { path: projectPath.optional(), limit: z.number().int().min(1).max(200).optional() }, true,
-      'List what DevMate changed, newest first: for one file, or without path every recent change in the project. Each entry carries the sha256 values workspace_restore accepts.',
-      { present: result => result.items.map(item => item.at + '  ' + item.action.padEnd(8) + item.path + (item.from ? '  (from ' + item.from + ')' : '') +
+      'List what DevMate changed, newest first: for one file, or without path every recent change in the project. Each entry carries its number and the sha256 values workspace_restore accepts.',
+      { present: result => result.items.map(item => '#' + item.sequence + '  ' + item.at + '  ' + item.action.padEnd(8) + item.path + (item.from ? '  (from ' + item.from + ')' : '') +
         (item.previousRestorable ? '  restore previous: ' + item.previousSha256 : '')).join('\n') || 'DevMate has not changed anything here.' }],
-    ['workspace.restore', 'restore', { path: projectPath, sha256: sha, ...mutation }, false, 'Restore a file to a version listed by workspace_history. The replaced version stays restorable.', { destructive: true }],
+    ['workspace.restore', 'restore', { path: projectPath.optional(), sha256: sha.optional(), since: z.number().int().nonnegative().optional().describe('The number of a workspace_history entry: every change made after it is taken back.'), ...mutation }, false,
+      'Restore a file to a version listed by workspace_history (path and sha256). Or take back, in one call, every change DevMate\'s file tools made in the project after one history entry (since: its number, shown as #N): newest first, each checked against the file as it is now, so a file that something else changed in the meantime is left alone and listed. Whatever is replaced stays restorable, so this can itself be taken back. Changes made by commands or by delegated agents are not in this history: use Git for those.', { destructive: true }],
     ['workspace.search', 'search', { query: z.string().min(1).max(4000), path: scope, regex: z.boolean().optional(), ignoreCase: z.boolean().optional(),
       glob: z.string().max(500).optional(), includeIgnored: z.boolean().optional(), limit: z.number().int().min(1).max(1000).optional() }, true,
       'Search project file contents with ripgrep. query is literal text unless regex is set. Honours .gitignore and skips dependency and build directories unless includeIgnored is set.',
       { present: result => result.items.map(item => item.path + ':' + item.line + ': ' + item.text).join('\n') + (result.truncated ? '\n[more matches; narrow the query, glob or path]' : '') || 'No matches.' }],
+    ['workspace.changes', 'changes', { since: z.enum(['last_review', 'last_commit']).optional().describe('last_review (the default) leaves out what was already shown and marked; last_commit shows everything that is not committed.'),
+      markReviewed: z.boolean().optional().describe('Remember what is shown now as reviewed.') }, true,
+      'Say what changed in the project and is not committed yet, whoever changed it: per file whether it was added, modified, renamed or deleted and how many lines came and went. With markReviewed the next call shows only what changed after this one, and nothing when nothing did. git_diff shows the lines themselves.',
+      { present: result => (result.files.length ? result.files.length + (result.moreFiles ? '+' : '') + ' file(s) changed (+' + result.additions + ' −' + result.removals + ')' + (result.since === 'last_review' ? ' since the last review' : ' since the last commit') + ':\n' +
+        result.files.map(file => '  ' + file.type.padEnd(9) + (file.previousPath ? file.previousPath + ' → ' : '') + file.path + (file.binary ? '  (binary)' : '  (+' + file.additions + ' −' + file.removals + ')')).join('\n') +
+        (result.moreFiles ? '\n  … and ' + result.moreFiles + ' more' : '')
+        : result.since === 'last_review' ? 'Nothing changed since the last review.' : 'Nothing is uncommitted.') +
+        (result.alreadyReviewed ? '\n[' + result.alreadyReviewed + ' other changed file(s) were reviewed before and are unchanged since; since:"last_commit" shows them]' : '') +
+        (result.omittedProtected ? '\n[' + result.omittedProtected + ' protected file(s) changed and are not shown]' : '') + (result.markedReviewed !== undefined ? '\n[marked as reviewed]' : '') }],
     ['git.status', 'gitStatus', {}, true, 'Read project Git status. Credential-like files are listed and marked protected so they are not staged by accident.', { present: result => result.stdout || 'Working tree clean.' }],
     ['git.diff', 'gitDiff', { paths: z.array(projectPath).max(100).optional(), staged: z.boolean().optional() }, true, 'Read a bounded Git diff of the working tree or the index.', { present: stdout }],
     ['git.log', 'gitLog', { ref, paths: z.array(projectPath).max(100).optional(), limit: z.number().int().min(1).max(200).optional() }, true,
@@ -58,7 +74,7 @@ export function defineFileOperations(service, add) {
     ['git.blame', 'gitBlame', { path: projectPath, startLine: line.optional(), endLine: line.optional(), ref }, true, 'Show who last changed each line of a file.', { present: stdout }],
     ['git.branches', 'gitBranches', {}, true, 'List local and remote branches and the current branch.']
   ]) {
-    // A page of a file is sized for a model's client, except for the owner at this computer.
-    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly, caller: context }), args, { local: context.surface === 'local' }), options);
+    // A page of a file is sized for a model's client, except at this computer.
+    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args, { local: context.surface === 'local' }), options);
   }
 }

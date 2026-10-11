@@ -33,8 +33,8 @@ try {
   const elapsed=performance.now()-start;
   for(let i=0;i<200;i++){
     const cursor= i%2===0 ? undefined : 'task-';
-    time('scopedReads',()=>store.list('task',{projectIds:[mine.id],afterId:cursor,limit:50}));
-    time('statusReads',()=>store.list('task',{projectIds:[mine.id],status:'queued',limit:50}));
+    time('scopedReads',()=>store.list('task',{projectId:mine.id,afterId:cursor,limit:50}));
+    time('statusReads',()=>store.list('task',{projectId:mine.id,status:'queued',limit:50}));
     time('events',()=>store.events({projectId:mine.id,after:0,limit:50}));
   }
   const dbSize=fs.statSync(path.join(directory,'state.sqlite')).size;

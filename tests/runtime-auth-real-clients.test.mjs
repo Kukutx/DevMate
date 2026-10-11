@@ -109,7 +109,7 @@ for (const client of clients) {
       assert.equal(issued.status, 200, issued.text);
       assert.equal(issued.json.token_type, 'Bearer'); assert.equal(issued.json.scope, client.scope);
       assert.ok(issued.json.refresh_token, 'no second sign-in after fifteen minutes');
-      assert.deepEqual(f.auth.authenticate({ headers: { authorization: 'Bearer ' + issued.json.access_token } }), { id: 'owner', role: 'owner', projectIds: null });
+      assert.deepEqual(f.auth.authenticate({ headers: { authorization: 'Bearer ' + issued.json.access_token } }), { id: 'owner' });
 
       const refreshed = await f.request('/oauth/token', { grant_type: 'refresh_token', client_id: client.clientId, refresh_token: issued.json.refresh_token, resource });
       assert.equal(refreshed.status, 200, refreshed.text); assert.notEqual(refreshed.json.refresh_token, issued.json.refresh_token);

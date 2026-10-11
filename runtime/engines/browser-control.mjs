@@ -106,9 +106,7 @@ export const browserControlPlugin = definePlugin({
     id: 'devmate.browser-control',
     name: 'Browser Control',
     version: '0.2.0',
-    description: 'Long-lived Playwright browser sessions with semantic and visual snapshots, file transfer, persistent project profiles, human takeover, and bounded user-visible automation.',
-    // A session is a browser on the owner's desktop and may hold a signed-in persistent profile.
-    ownerOnly: true
+    description: 'Long-lived Playwright browser sessions with semantic and visual snapshots, file transfer, persistent project profiles, human takeover, and bounded user-visible automation.'
   },
   settingsSchema,
   defaultSettings: {

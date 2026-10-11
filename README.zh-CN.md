@@ -61,13 +61,14 @@ devmate mcp-url                        # 给客户端填的地址
 devmate ui --open                      # 在浏览器里打开工作台
 ```
 
-## 三个入口，一个运行时
+## 四个入口，一个运行时
 
 | 入口 | 适合 | 额外提供 |
 | --- | --- | --- |
 | 命令行 `devmate` | 不开编辑器也要用 | 完整入口：启动、共享文件夹、配置连接、打开工作台、调用任何操作。`devmate mcp` 以标准输入输出提供 MCP，供“把服务器当程序启动”的客户端使用 |
 | VS Code 扩展 | 日常开发 | 编辑器里的报错、当前文件和选区；状态栏项 |
 | Obsidian 插件 | 知识库 | 笔记检索、属性、关系图和库操作 |
+| Chrome 和 Edge 扩展 | 浏览器本身 | 收藏夹、标签页和窗口、历史记录、下载、阅读清单，以及你正在看的页面 |
 
 一个实例目录（默认 `~/.devmate/runtime`）同一时刻只有一个运行时进程。
 
@@ -144,6 +145,42 @@ VS Code 的显示语言为简体中文时，命令和设置的说明以中文显
 
 插件已经在 Windows 上真实的 Obsidian 1.12.7 里加载并操作过：加载、启动运行时、以只读和读写共享库、笔记工具、停止和停用。macOS 和 Linux 上的 Obsidian 还没有试过。遇到问题请反馈。
 
+## Chrome 和 Edge 扩展
+
+DevMate 自己能操作一个浏览器（浏览器控制引擎），但那不是你的浏览器：里面没有你的收藏夹、标签页、历史记录和登录状态。这个扩展把你平时真正在用的浏览器交给你的客户端。
+
+```powershell
+devmate chrome install        # 告诉 Chrome 和 Edge 这个扩展可以和哪个程序通信（只对你自己的账户）
+```
+
+然后加载扩展：打开 `chrome://extensions`（Edge 是 `edge://extensions`），打开“开发者模式”，点“加载已解压的扩展程序”，选 `devmate chrome` 给出的那个文件夹：DevMate 实例目录下的 `chrome/extension`（没改过实例目录的话是 `~/.devmate/runtime/chrome/extension`）。`devmate chrome` 会显示浏览器是否已注册、是否已连上，`devmate doctor` 里也有这一项。
+
+“开发者模式”要一直开着，此外不用再做什么，更新也一样。这个文件夹的位置不变，由 DevMate 保持最新：运行时每次启动，都把它变成正在运行的这份 DevMate 所带的扩展（那里已有的比它新时不动），不管是从哪个入口更新的；浏览器要启动的本机程序也同时换成这一份 DevMate。扩展大约两分钟内自己发现文件变了并重新加载，不用点任何东西。开发者模式关着的话，Chrome 会在这一刻把未打包的扩展停用。
+
+- **和编辑器一样是一个入口。** 扩展的面板用一句话说明现状，下面是该做的那一件事；连不上 DevMate 时会给出浏览器的原话。它可以启动 DevMate、打开工作台、复制云端客户端要用的地址（有公网通路时是公网地址，否则是本机地址），并显示有几件事在等你回答。
+- **两个开关，都由你决定。** “允许 DevMate 使用这个浏览器”：关掉后所有请求都被拒绝，你的客户端会被告知是你暂停了。“随浏览器启动 DevMate”：默认关，你打开才生效；和编辑器一样，它只负责把运行时带起来，从不停止它。
+- **DevMate 在这个浏览器里做过的事**列在面板里：最近的调用、时间和成败，不记内容。面板有中文和英文。
+- **你的客户端能用浏览器做什么**（通过 `capability_list {engine:"chrome"}`，只读的用 `capability_query`，会改东西的用 `capability_call`；不需要项目）：
+
+  | | 读 | 改 |
+  | --- | --- | --- |
+  | 收藏夹 | 整棵树、搜索 | 新建、改名、移动、删除 |
+  | 标签页和窗口 | 列出标签页、窗口、标签页分组 | 打开、转到某个地址、切到前台、刷新、关闭、移动、分组、取消分组；新开和关闭窗口 |
+  | 历史记录 | 按关键词和时间搜索 | 删除某个地址或一段时间 |
+  | 下载 | 列出 | 发起下载 |
+  | 最近关闭 | 列出 | 恢复 |
+  | 阅读清单、最常访问 | 列出 | 添加、移除 |
+  | 标签页里的页面 | 标题、地址和正文；可见部分或整页的截图 | 后退、前进 |
+  | 调试页面 | 控制台输出和未捕获的错误、网络请求及某一条的完整内容、页面的元素结构、某个元素的细节（属性、位置、样式）、页面存了什么、等待某个元素或文字出现 | 点击、输入、按键、下拉选择、悬停、滚动、执行脚本、回答弹出的对话框、刷新、模拟屏幕尺寸、深浅色或离线 |
+
+- **调试的用法和开发者工具一样，作用于你指定的标签页，不指定就是最前面的那个。** 第一次调用时把 Chrome 的调试器挂到这个标签页上；挂着的时候 Chrome 会在该标签页顶部显示它自己的提示条。五分钟没有调用，或者调用 `chrome.page.debugStop`，调试器就摘掉。控制台和网络从挂上那一刻开始记录：想看页面从头加载，用 `chrome.page.reload`。`chrome.page.snapshot` 给每个元素一个编号，点击、输入、悬停、滚动和查看元素都可以用这个编号、CSS 选择器，或者元素上显示的文字。
+- 页面存的值（包括 Cookie）是凭据。`chrome.page.storage` 只给名字；值要带 `includeValues` 并且只能经 `capability_call` 取，客户端会先问你。
+- 从网页读到的文字（正文、控制台、请求、元素、脚本的返回值）都会标记为不可信：它是给模型看的数据，不是指令。
+- 浏览器和 DevMate 之间走的是 Native Messaging：由浏览器自己为这一个扩展启动的一个小程序。没有任何端口为它监听，不需要公网连接也能用。`devmate chrome uninstall` 撤销注册。
+- 在 Windows 上，注册经系统自带的管理服务写入，所以无论从哪个终端执行，都落在浏览器读得到的地方。打包应用里的终端有一份自己的注册表，浏览器看不到；`devmate chrome` 发现注册只在那里时会明说。
+
+运行时这一头已经用浏览器自己的消息格式对着真实的运行时端到端跑通。在真实浏览器里试过什么，见[现状](docs/STATUS.md)。
+
 ## 连接客户端
 
 ### 同一台电脑上的客户端
@@ -165,15 +202,36 @@ http://127.0.0.1:8788/mcp
 
 ### ChatGPT 网页版和 Claude.ai
 
-它们从云端访问你的 MCP 服务，所以需要一条从外部到本机的通路。DevMate 提供五种：
+它们从云端访问你的 MCP 服务，所以需要一条从外部到本机的通路。DevMate 提供六种。其中两种中间没有任何第三方：放在你自己服务器上的中继，以及给 ChatGPT 用的 OpenAI 自己的隧道。
 
 | 通路 | 适用 | 特点 |
 | --- | --- | --- |
 | `quick` | 任何客户端 | Cloudflare 快速隧道，用来试用 DevMate。不需要账号和域名，什么都不用配；每次重新启动地址会变 |
-| `openai-tunnel` | ChatGPT、Codex | OpenAI 官方隧道。只有出站连接，没有公网地址，也不需要域名 |
+| `openai-tunnel` | ChatGPT、Codex | OpenAI 自己的隧道，由 DevMate 直接对接：只有出站连接，不需要公网地址、域名或服务器，不用另装程序，隧道 ID 固定不变 |
 | `cloudflare` | ChatGPT、Claude 及任何客户端 | 你自己域名上的 Cloudflare 命名隧道，DevMate 负责运行 `cloudflared`。免费 |
 | `https` | 任何客户端 | 你已经在维护的反向代理 |
-| `ssh` | 任何客户端 | OpenSSH 反向转发到你自己的服务器，由那里提供 HTTPS |
+| `relay` | 任何客户端 | 把你自己的一台公网 Linux 服务器变成入口：`devmate relay setup 用户@主机`。地址固定，响应可以流式返回，除了服务器本身没有别的限制 |
+| `ssh` | 任何客户端 | OpenSSH 反向转发到你自己的服务器，由那里已有的反向代理提供 HTTPS（不带安装步骤的中继） |
+
+**自己的中继：地址固定**
+
+需要一台你自己掌握的公网 Linux 服务器（租一台小的就够），并且能用 SSH 密钥登录：
+
+```powershell
+devmate relay setup root@203.0.113.7 --domain devmate.example.com
+devmate restart
+devmate mcp-url
+```
+
+`relay setup` 用系统自己的软件包在服务器上装好 [Caddy](https://caddyserver.com)，由它为这个域名申请证书，只把一条猜不到的路径转发到服务器的回环端口。本机用 OpenSSH 从内向外把这个端口接通，路由器上不用开任何端口。响应像在本机一样可以流式返回，没有请求数、大小上限，地址也不会变：唯一的限制是服务器本身。
+
+- 默认只答复 ChatGPT 和 Claude 连接时用的地址（它们公布的地址段，每六小时重新获取一次）和本机。加 `--any-address` 就只靠路径里的密钥保护。
+- 中继不要求登录，也做不到：它只转发那一条路径，登录用的页面经它到不了本机。挡住陌生人的是路径里的密钥和地址名单；中继和 `--auth oauth` 同时设置会在设置时被拒绝。
+- 不给 `--domain` 时用服务器的 IP 地址访问，并为这个地址申请证书，这需要服务器上的 Caddy 是 2.10 或更新的版本。系统自带的软件包太旧或者没有 Caddy 时（Debian、Ubuntu、Fedora、RHEL），`relay setup` 会从 Caddy 自己的软件仓库安装。服务器上原本就有的 Caddy 不会被替换：安装会停下，并给出替换它要执行的命令。
+- 服务器上需要 root，或者一个可以免密码 `sudo` 的账户。全程不询问也不保存任何密码，认证用的是你的 SSH 密钥。
+- 重复执行不会改变任何东西，地址保持不变。`devmate relay remove root@203.0.113.7` 把中继从服务器上拿掉；Caddy 和它的软件仓库如果是这条命令装的，也一并卸载。
+
+服务器脚本和转发逻辑有测试；在真实的公网服务器上还没有跑过。具体哪些没验证见[现状](docs/STATUS.md)。
 
 **快速隧道：一分钟连上**
 
@@ -205,19 +263,25 @@ devmate doctor
 
 **OpenAI 隧道**
 
-在 OpenAI Platform 的组织设置里创建隧道，下载官方 `tunnel-client`：
+在 OpenAI Platform 的组织设置里创建一条隧道（Settings → Tunnels），会得到隧道 ID 和运行密钥：
 
 ```powershell
-devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx --executable C:\Tools\OpenAI\tunnel-client.exe
-devmate secret set CONTROL_PLANE_API_KEY
+devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # 粘贴运行密钥后回车
 devmate restart
 ```
 
-`devmate mcp-url` 会输出隧道 ID；在 ChatGPT 里选择“隧道”连接类型并填入它。
+`devmate mcp-url` 会输出隧道 ID；在 ChatGPT 里选择“隧道”连接类型并填入它。重启后它不会变。
+
+本机只向外连 `api.openai.com` 去取任务：不对外监听任何端口，不用改路由器，也不需要服务器，能限制这条通路的只有 OpenAI。DevMate 自己实现了这条隧道[公开的协议](https://github.com/openai/tunnel-client/blob/master/docs/protocol.md)，所以不用另外下载和更新一个程序，最多同时处理 32 个调用（连接设置里的 `maxConcurrentRequests`，1 到 256）。要改用 OpenAI 自己的 `tunnel-client` 程序，加上 `--executable <它的路径>`。`devmate doctor` 会显示当前用的是哪一种，并统计已经到达的调用数：有调用到达，就是通路可用的证明。
+
+OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答复，并说明该怎么办。如果 OpenAI 要求指明隧道所属的组织，就在 `connect` 命令上加 `--organization <org-…>`。
+
+如果体检显示隧道已连上，ChatGPT 里却选不到它，原因在 OpenAI 账号一侧，不在 DevMate：隧道必须包含你正在用的 ChatGPT 工作区，而不只是 Platform 组织，你的账号还需要 Tunnels 的 Read 和 Use 权限（见 [OpenAI 的指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)里的“Troubleshooting”一节）。你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；这一步还没有用真实账号试过。
 
 **真的连通了吗**
 
-隧道进程活着不等于通路可用。DevMate 会作为真正的 MCP 客户端从公网地址连回来，列出工具并调用一次，而且应答必须来自当前这个运行时；之后定期复查，断了就如实显示。`devmate doctor` 里 `connection.public` 一项为 `ok` 才算通。OpenAI 隧道没有公网地址可探测，需要从 ChatGPT 里实际调用一次工具来确认。
+隧道进程活着不等于通路可用。DevMate 会作为真正的 MCP 客户端从公网地址连回来，列出工具并调用一次，而且应答必须来自当前这个运行时；之后定期复查，断了就如实显示。`devmate doctor` 里 `connection.public` 一项为 `ok` 才算通。OpenAI 隧道没有可以连回来的公网地址：体检在那里显示 OpenAI 是否接受运行密钥，以及已经到达了多少次调用。
 
 连接器启动失败不会拖垮本地使用，也不会被隐藏：`doctor` 和 `connection.status` 会给出原因。保存了新凭据后可以只重启连接器：`devmate connection.restart`。
 
@@ -241,9 +305,9 @@ devmate restart
 - **共享什么，在你的电脑上决定。** 文件夹从编辑器、`devmate project add` 或本机工作台共享。连接进来的客户端不能共享文件夹，不能放宽只读，不能关闭凭据文件保护，也不能把你取消共享的文件夹带回来；它只能收紧。
 - **可写就等于完全访问。** 在可写的项目里，客户端可以运行命令，而命令以你的系统账户运行。只要有一个项目是可写的，对其他文件夹的限制能让守规矩的模型不越界，但挡不住恶意的客户端。对不完全信任的客户端，只用只读共享：这时没有命令可运行，上面的限制才是真正的边界。DevMate 不是沙箱。
 - **默认 `auth.mode` 是 `none`。** 能到达 MCP 地址的就是你。公网地址要像密码一样保密，或者启用登录。
-- **可选的登录（OAuth）。** `devmate connect … --auth oauth` 要求公网地址的客户端登录：第一次连接时跳到 DevMate 的授权页，输入 `devmate login-code` 生成的一次性代码。还可以用 `auth.member.create` 创建只读或可写、限定到具体项目的身份。不公开自身说明（客户端元数据文档）的客户端，由你在配置的 `auth.clients` 里登记它的名字和回调地址。本机上的客户端始终不需要登录。
+- **可选的登录（OAuth）。** `devmate connect … --auth oauth` 要求公网地址的客户端登录：第一次连接时跳到 DevMate 的授权页，输入 `devmate login-code` 生成的一次性代码。登录证明的是“这个客户端就是你”：DevMate 只有一个所有者，没有其他账户。不公开自身说明（客户端元数据文档）的客户端，由你在配置的 `auth.clients` 里登记它的名字和回调地址。本机上的客户端始终不需要登录。
 - **审批和提问由你在自己的电脑上回答。** Agent 请求批准时，你在编辑器或本机工作台里回答。任何连接进来的客户端都不能回答，包括派发这个任务的模型。
-- **嫌这些碍事时：完全访问。** 默认的权限档是“受保护”（guarded），也就是上面这些规则。如果你主要在聊天客户端里干活、不想每次都回到电脑前，可以在自己的电脑上打开“完全访问”（full）：`devmate access full`，VS Code 里的 **DevMate: Change Permission Profile**，或 Obsidian 里的 **Permissions…**。之后，以你的身份连接进来的客户端可以共享文件夹、放宽权限、读取凭据文件、设置能力引擎、回答 Agent 的提问、运行体检；你派发的 Agent 请求的权限自动批准（每一次都留有记录）。它立即生效，只有你在自己的电脑上才能打开；`devmate access guarded` 随时收回。打开之后，能访问你 MCP 地址的人不经询问就能以你的身份做一切：请保管好地址，或者要求登录。登录的成员身份不受影响，仍然只有授予它的权限。
+- **嫌这些碍事时：完全访问。** 默认的权限档是“受保护”（guarded），也就是上面这些规则。如果你主要在聊天客户端里干活、不想每次都回到电脑前，可以在自己的电脑上打开“完全访问”（full）：`devmate access full`，VS Code 里的 **DevMate: Change Permission Profile**，或 Obsidian 里的 **Permissions…**。之后，以你的身份连接进来的客户端可以共享文件夹、放宽权限、读取凭据文件、设置能力引擎、回答 Agent 的提问、运行体检；你派发的 Agent 请求的权限自动批准（每一次都留有记录）。它立即生效，只有你在自己的电脑上才能打开；`devmate access guarded` 随时收回。打开之后，能访问你 MCP 地址的人不经询问就能以你的身份做一切：请保管好地址，或者要求登录。
 - **凭据类文件默认受保护。** `.env`、密钥文件、`.npmrc` 等不会被文件工具读取或列出内容；Git 状态里会列出它们的名字并标记“不要提交”。你可以在自己的电脑上对某个项目关闭这项保护。
 - **命令行里的凭据不外显。** 进程列表和活动记录里，命令行中内联的令牌、密码会被替换成 `[redacted]`；实际执行的命令不变。这只识别常见写法，不是保证。
 - **工作台的会话只留在它自己的浏览器标签页里。** 工作台通过一次性链接进入，会话从不以 cookie 形式存在，其他本机服务拿不到。
@@ -253,23 +317,34 @@ devmate restart
 
 ## 模型可以用的工具
 
-| 类别 | 工具 | 说明 |
-| --- | --- | --- |
-| 上手 | `project_overview` `project_list` | 一次返回 Git 分支与改动、项目自己的 Agent 指令（`AGENTS.md` 等）、可运行的脚本、顶层结构和编辑器报错数 |
-| 编辑器 | `editor_diagnostics` `editor_context` | VS Code 已经算出的编译、类型和 lint 报错；你当前的文件、选区和打开的文件 |
-| 找代码 | `workspace_files` `workspace_find` `workspace_search` | 目录列表、glob 查找、ripgrep 内容搜索。遵守 `.gitignore`，大仓库也快 |
-| 读 | `workspace_read` | 带行号，大文件按行分页（32 MiB 以内）。UTF-16 和本机传统编码（如 GBK）可以读取，不能在这里改写 |
-| 改 | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | 精确文本替换，多处修改原子生效。覆盖已有文件必须带上读到的哈希，不会盲写 |
-| 撤销 | `workspace_history` `workspace_restore` | 经 DevMate 改动、覆盖或删除的文件都能恢复，默认保留 30 天 |
-| 运行 | `shell_run` `process_read` `process_write` `process_stop` `process_list` | 真实的 shell 语义（`npm test`、`git commit`）。输出按游标分页；长时间运行的命令在后台继续，可读输出、写标准输入、整棵进程树停止 |
-| Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | 只读，不会执行仓库里配置的任何程序。写操作用 `shell_run` |
-| 派发 | `agents_delegate` `agents_result` `providers_list` | 把整件任务交给本机的编码 Agent |
-| 领域能力 | `capability_list` `capability_call` | 浏览器控制与 QA、Godot、逆向分析、Obsidian，以及你配置的外部 MCP 服务 |
-| 其余操作 | `operations_list` `operations_call` `connection_status` | 工作流、任务、Agent 之间的消息、作业、产物和引用，按名字调用 |
+模型看到的工具用的是它训练时熟悉的名字。给哪一份由客户端自报的身份决定；认不出的客户端拿到 DevMate 自己的命名。
 
+| | ChatGPT 和 Codex | Claude | 其他客户端 |
+| --- | --- | --- | --- |
+| 读文件 | `read` | `read` | `workspace_read` |
+| 改文件 | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
+| 运行命令 | `exec_command` `write_stdin` | `bash`（命令在 PowerShell 里运行时叫 `powershell`，例如 Windows） `process_read` `process_write` | `shell_run` `process_read` `process_write` |
+| 审阅改动 | `show_changes` | `show_changes` | `workspace_changes` |
+| 每份清单都有 | 所有只读的：`project_list` `project_overview` `editor_context` `editor_diagnostics` `workspace_files` `workspace_find` `workspace_search` `workspace_history` `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` `process_list` `providers_list` `connection_status`。撤回改动：`workspace_restore`。各个引擎，包括你的浏览器：`capability_list` `capability_query` `capability_call`。以及 `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+
+| 方面 | 能做什么 |
+| --- | --- |
+| 了解项目 | `project_overview`：一次调用拿到 Git 分支与改动、项目自己的 Agent 规则（`AGENTS.md` 等）、可运行的脚本、顶层结构和编辑器的错误数 |
+| 找代码 | 按通配符找文件、ripgrep 全文搜索。遵守 `.gitignore`，大仓库也快 |
+| 读 | 带行号，大文件分页（最大 32 MiB）。UTF-16 和本机编码（GBK 等）的文件能读，不会被改写 |
+| 改 | 补丁（Codex 写的 `*** Begin Patch` 格式，或 `git diff` 输出的统一 diff）一次改多个文件，要么全部生效要么一个不动，并且可以整体撤回。精确文本替换，多处修改原子生效。覆盖写入会保留原来的版本 |
+| 运行 | 真实的 shell 语义（`npm test`、`git commit`）。一次调用默认最多等 30 秒就返回（最长 50 秒）；还在跑的命令继续跑，可以继续读输出、送输入、整棵进程树一起停 |
+| 审阅 | 还没提交的改动，不管是谁改的（工具、命令、委派的 Agent）：每个文件发生了什么、增减多少行。标记为已审阅之后，下次只显示之后新改的。需要 Git 仓库 |
+| 编辑器 | VS Code 已经算好的编译、类型和 lint 错误 |
+| 委派 | 把整件任务交给本机上的编码 Agent |
+| 历史与 Git | DevMate 改过什么、怎么撤回（`workspace_history`、`workspace_restore`，默认保留 30 天）；提交记录、某次提交、某一行是谁改的、分支（只读，绝不运行仓库自己配置的程序） |
+| 引擎 | 通过 `capability_list`、`capability_query`、`capability_call`：你自己的浏览器（Chrome 和 Edge 扩展）、浏览器控制与 QA、Godot、逆向工程、Obsidian 和外部 MCP 服务器 |
+| 其余 | 都是按名字调用的操作，只读的走 `operations_query`，其余走 `operations_call`：新建文件夹、移动、删除（补丁和命令行也能做）、工作流、任务、作业、产物 |
+
+- 每份清单里的每个工具，任何客户端都能调用：清单只决定事先告诉模型哪些。想自己指定清单，就在给客户端的 MCP 地址后面加 `?tools=gpt`、`?tools=claude` 或 `?tools=generic`。`devmate doctor` 会显示最近一个客户端自报的名字、它拿到的是哪份清单，以及依据是什么。
 - `projectId` 可以是项目 ID、项目根目录或唯一的项目名；只共享了一个项目时可以省略。有多个项目时，只读工具跟随你正在使用的编辑器窗口，写操作必须写明项目。
 - 没有“共享文件夹”这个工具。那是你自己的事；模型会被告知请你去做。
-- 模型只带着三十多个工具的定义，其余操作不占用对话上下文。
+- 一份工具清单有 34 到 37 项，32 到 35 KB。只读的工具一个都不藏：模型看不到的工具就不会去用，而只读的工具正是客户端不会来问你的那些。
 - 工具带有准确的提示（只读、写入、破坏性、对外），客户端只在真正需要时请求确认。
 - 调用被取消或超时，只是不再等待：已经启动的命令或 Agent 任务继续运行，随后仍可读取或停止。
 - 服务同时支持 2026-07-28 和 2025 年的 MCP 协议版本。
@@ -285,6 +360,7 @@ devmate restart
 
 - 任务在等待时间内完成就直接返回结果和改动的文件列表，否则返回 `agentId`，用 `agents_result` 继续等待。
 - 再次传入同一个 `agentId` 会在原会话里继续，保留上下文。
+- 加上 `"isolate": true`，Agent 就改在项目的一份副本里工作（最后一次提交的 Git worktree，放在 DevMate 自己的目录里）。在你看过它提出的改动（`agents.proposal`）并应用（`agents.apply`：全部作为未提交的改动进入项目；如果这期间项目在同样的位置改过，就一点也不应用）或丢弃（`agents.discard`）之前，项目不会变。副本里只有已提交的内容：未提交的改动和被忽略的文件（比如装好的依赖）不在里面。
 - Agent 用它自己的账户、额度和工具在项目目录里工作。它向你提出的审批和提问出现在工作台，VS Code 和 Obsidian 会提醒你，由你在自己的电脑上回答。
 - 同一家厂商内部的协作（Claude Code 会话之间互发消息、Codex 的子 Agent）由它们原生完成。DevMate 负责客户端之间这一段，例如从 ChatGPT 网页把任务交给本机的 Claude Code。
 

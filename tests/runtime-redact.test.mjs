@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { redactCommand, redactSecrets } from '../runtime/platform/redact.mjs';
+import { redactSecrets } from '../runtime/platform/redact.mjs';
 import { DevMateService } from '../runtime/service.mjs';
 import { presentResult } from '../runtime/mcp.mjs';
 
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const node = process.execPath;
 
 test('credentials written inline in a command are not shown; everything else is left exactly as it was', () => {
@@ -34,13 +34,9 @@ test('credentials written inline in a command are not shown; everything else is 
     assert.equal(redactSecrets(plain), plain, 'left alone: ' + plain);
   }
   for (const other of [undefined, null, 7, '']) assert.equal(redactSecrets(other), other);
-  // With an executable and separate arguments, a flag and its value are seen together.
-  assert.deepEqual(redactCommand({ file: 'gh', args: ['auth', 'login', '--token', 'ghp_abcdefghijklmnopqrstuvwxyz0123', '--hostname', 'github.com'] }).args,
-    ['auth', 'login', '--token', '[redacted]', '--hostname', 'github.com']);
-  assert.deepEqual(redactCommand({ command: 'curl -u bob:pw https://x', cwd: 'sub' }), { command: 'curl -u bob:pw https://x', cwd: 'sub' }, 'an unusual form is not recognised, and nothing is invented');
 });
 
-test('a command runs exactly as given while lists, the journal and other members see it without its credentials', async t => {
+test('a command runs exactly as given while lists and the journal show it without its credentials', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-redact-'));
   const root = path.join(temp, 'project'); fs.mkdirSync(root);
   const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
@@ -56,21 +52,14 @@ test('a command runs exactly as given while lists, the journal and other members
   assert.equal(JSON.stringify(await service.call('process.list', {}, owner)).includes(secret), false);
   const journal = service.store.events({ limit: 200 }).filter(event => event.type === 'workspace.process.started');
   assert.equal(journal.length, 1); assert.equal(JSON.stringify(journal).includes(secret), false, 'the activity record never held it');
-  // A job keeps its exact command to run and retry; who may see it depends on who asks.
+  // A job keeps its exact command, to run and to retry.
   const job = await service.call('job.start', { kind: 'command', input: { file: node, args } }, owner);
   let state = await service.call('job.read', { id: job.id }, owner);
   for (let attempt = 0; attempt < 100 && state.status !== 'completed'; attempt++) { await new Promise(resolve => setTimeout(resolve, 50)); state = await service.call('job.read', { id: job.id }, owner); }
-  assert.equal(state.status, 'completed'); assert.ok(state.input.args.args.includes(secret), 'the owner sees their own command');
-  const member = { id: 'member', role: 'read', projectIds: [project.id] };
-  const seen = await service.call('job.read', { id: job.id }, member);
-  assert.deepEqual(seen.input.args.args.slice(-2), ['--token', '[redacted]']);
-  assert.equal(JSON.stringify((await service.call('job.list', {}, member)).items.map(item => item.input)).includes(secret), false);
-  const events = await service.call('event.list', { latest: true, limit: 100 }, member);
-  assert.ok(events.items.some(event => event.type === 'job.created')); assert.equal(JSON.stringify(events.items.map(event => event.entity?.input)).includes(secret), false);
-  assert.ok(JSON.stringify((await service.call('event.list', { latest: true, limit: 100 }, owner)).items).includes(secret), 'the owner\'s own view is complete');
-  const snapshot = await service.snapshot({ projectId: project.id }, member);
-  assert.equal(JSON.stringify(snapshot.activity.map(event => event.entity?.input)).includes(secret), false);
-  assert.deepEqual(Object.keys(snapshot.connection).sort(), ['kind', 'phase', 'remoteMcpVerified'], 'a member\'s snapshot carries the connection state, not the machine behind it');
+  assert.equal(state.status, 'completed'); assert.ok(state.input.args.args.includes(secret));
+  // What a connected client is shown of the connection is its state, not the machine behind it.
+  const snapshot = await service.snapshot({ projectId: project.id }, { id: 'owner' });
+  assert.deepEqual(Object.keys(snapshot.connection).sort(), ['kind', 'phase', 'remoteMcpVerified']);
 });
 
 test('every text a caller sends is bounded, and a monorepo\'s own instruction files are pointed out', async t => {

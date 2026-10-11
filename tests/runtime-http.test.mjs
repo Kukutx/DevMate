@@ -93,7 +93,7 @@ test('the workbench is entered through a single-use link; the session stays in i
   assert.match(session, /^[A-Za-z0-9_-]{43}$/); assert.notEqual(session, token);
   assert.equal((await exchange(code)).status, 401, 'the code works once');
   const snapshot = await raw(port, '/api/snapshot', { headers: { authorization: 'Bearer ' + session } });
-  assert.equal(snapshot.status, 200); assert.equal(snapshot.json.result.viewer.role, 'owner');
+  assert.equal(snapshot.status, 200); assert.equal(snapshot.json.result.instance.name, 'DevMate');
   // A browser sends a cookie to every port of this host, so a cookie means nothing here; and a session cannot mint further sessions.
   assert.equal((await raw(port, '/api/snapshot', { headers: { cookie: 'devmate_session=' + session, 'sec-fetch-site': 'same-origin' } })).status, 401);
   assert.equal((await raw(port, '/api/session', { method: 'POST', headers: { authorization: 'Bearer ' + session } })).status, 403);
@@ -149,16 +149,20 @@ test('auth:none MCP 2026 discovers and calls real project/file tools without pri
   const described = Object.fromEntries(tools.body.result.tools.map(tool => [tool.name, tool.description]));
   assert.match(described.shell_run, /process_read/); assert.doesNotMatch(Object.values(described).join('\n'), /\b(process\.read|workspace\.read|agents\.result|workspace\.edit)\b(?!_)/);
 });
-test('a model sees a short tool list with readable titles and no idempotency key to misuse', async t => {
+test('a model sees its tools with readable titles and no idempotency key to misuse, and nothing that only reads is kept from it', async t => {
   const { rpc, call, projectRoot } = await fixture(t);
   const listed = (await rpc('tools/list')).body.result.tools;
   const named = name => listed.find(tool => tool.name === name);
-  assert.ok(listed.length <= 40, 'only everyday tools and the workbench pair are listed: ' + listed.length);
-  for (const hidden of ['workflow_create', 'task_create', 'approval_resolve', 'project_remove', 'job_start', 'settings_read', 'secret_set'])
+  assert.ok(listed.length <= 40, 'everyday tools, what reads, the capability tools and the workbench pair are listed: ' + listed.length);
+  for (const hidden of ['workflow_create', 'task_create', 'approval_resolve', 'project_remove', 'job_start', 'settings_read', 'secret_set', 'workspace_mkdir', 'workspace_move', 'workspace_delete'])
     assert.equal(named(hidden), undefined, hidden + ' stays behind operations_call and the workbench');
+  // What only reads is shown, and says that it only reads: a client does not ask its user about it.
+  for (const shown of ['git_show', 'git_log', 'workspace_files', 'workspace_history', 'project_list', 'capability_list', 'capability_query']) assert.equal(named(shown).annotations.readOnlyHint, true, shown);
+  assert.equal(named('capability_call').annotations.readOnlyHint, false);
   assert.equal(named('workspace_read').title, 'Read file');
   assert.equal(named('shell_run')._meta['openai/toolInvocation/invoking'], 'Running a command');
-  for (const name of ['workspace_write', 'workspace_edit', 'shell_run', 'workspace_mkdir']) assert.equal(named(name).inputSchema.properties.operationId, undefined, name);
+  for (const name of ['workspace_write', 'workspace_edit', 'shell_run', 'workspace_patch']) assert.equal(named(name).inputSchema.properties.operationId, undefined, name);
+  // A tool that is not on the list is still there to be called, and takes no idempotency key either.
   const refused = await rpc('tools/call', { name: 'workspace_mkdir', arguments: { projectId: 'x', path: 'a', operationId: 'reused' } });
   assert.ok(refused.body.error || refused.body.result.isError, 'an idempotency key is not part of the model tool');
   // Everything else stays one call away.

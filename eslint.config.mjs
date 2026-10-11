@@ -28,6 +28,8 @@ export default [
   { files: ['workbench/bridge.js'], languageOptions: { sourceType: 'module', globals: globals.browser } },
   // The Obsidian plugin runs inside Obsidian's desktop window, with Node available; the build inlines the runtime files.
   { files: ['obsidian-plugin/src/**'], languageOptions: { globals: { ...globals.node, ...globals.browser, __DEVMATE_RUNTIME_ASSETS__: 'readonly' } } },
+  // The Chrome extension: modules that run in the browser's extension worker and popup, with the extension API.
+  { files: ['chrome-extension/**/*.js'], languageOptions: { sourceType: 'module', globals: { ...globals.browser, ...globals.serviceworker, chrome: 'readonly' } } },
   // These hold functions that are sent to a browser page and run there.
   { files: ['runtime/engines/browser-control-snapshot.mjs', 'runtime/engines/browser-runner.mjs'], languageOptions: { globals: { ...globals.node, ...globals.browser } } },
   // The workbench test also reads what its own test page recorded.

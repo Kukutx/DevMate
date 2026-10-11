@@ -130,7 +130,6 @@ export const enhancedGodotPlugin = extendPlugin(godotPlugin, {
     server.registerTool('quick_setup', {
       title: 'Configure Godot project integration',
       description: 'Set the Godot executable and export defaults for this project and optionally install the reviewed QA Bridge, in one step. Instance-wide values are set with capability.configure.',
-      ownerOnly: true,
       inputSchema: {
         workspaceId: z.string().optional(),
         projectSubpath: z.string().optional(),

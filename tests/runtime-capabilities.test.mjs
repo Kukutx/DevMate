@@ -8,7 +8,8 @@ import { McpServer, inputRequired } from '@modelcontextprotocol/server';
 import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { createCapabilities, normalizeExternalServers } from '../runtime/capabilities.mjs';
 // The owner at their computer, who may also set an engine up.
-const testOwnerRole = Object.freeze({ callerRole: 'owner', ownerDecides: true });
+// The owner where a decision is theirs to make: at their computer, or connected with full access.
+const testOwner = Object.freeze({ ownerDecides: true });
 
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-capability-'));
@@ -26,21 +27,21 @@ function fixture(t) {
 test('Godot catalog and static engine use the selected project without old config',async t=>{
   const f=fixture(t),cap=await createCapabilities({service:f.service,instanceRoot:path.join(f.root,'instance')});
   t.after(()=>cap.close());
-  const catalog=await cap.list({projectId:'one'}, testOwnerRole);
+  const catalog=await cap.list({projectId:'one'}, testOwner);
   const names=catalog.engines.flatMap(engine=>engine.capabilities.map(item=>item.name));
   assert.ok(names.includes('godot.performance_regression'));
   assert.ok(names.includes('godot.status'));
-  assert.equal((await cap.list({projectId:'one',name:'godot.status'}, testOwnerRole)).capability.inputSchema.properties.workspaceId,undefined);
-  const result=await cap.call({projectId:'one',capability:'godot.status'}, testOwnerRole);
+  assert.equal((await cap.list({projectId:'one',name:'godot.status'}, testOwner)).capability.inputSchema.properties.workspaceId,undefined);
+  const result=await cap.call({projectId:'one',capability:'godot.status'}, testOwner);
   assert.equal(result.structuredContent.workspace.id,'one');
-  await assert.rejects(cap.call({projectId:'one',capability:'godot.status',input:{workspaceId:'two'}}, testOwnerRole));
-  await assert.rejects(cap.call({projectId:'one',capability:'godot.status',input:{projectSubpath:'../'}}, testOwnerRole));
-  const configured=await cap.call({projectId:'one',capability:'godot.quick_setup',input:{defaultWebPreset:'Web fixture'}}, testOwnerRole);
+  await assert.rejects(cap.call({projectId:'one',capability:'godot.status',input:{workspaceId:'two'}}, testOwner));
+  await assert.rejects(cap.call({projectId:'one',capability:'godot.status',input:{projectSubpath:'../'}}, testOwner));
+  const configured=await cap.call({projectId:'one',capability:'godot.quick_setup',input:{defaultWebPreset:'Web fixture'}}, testOwner);
   assert.equal(configured.structuredContent.settings.defaultWebPreset,'Web fixture');
   assert.equal(f.settings.get('capability.one.godot').defaultWebPreset,'Web fixture');
   assert.equal(fs.existsSync(path.join(f.root,'instance','config.json')),false);
   f.project.access='read';
-  await assert.rejects(cap.call({projectId:'one',capability:'godot.qa_bridge_install'}, testOwnerRole),/read only/);
+  await assert.rejects(cap.call({projectId:'one',capability:'godot.qa_bridge_install'}, testOwner),/read only/);
 });
 
 test('external config requires native command and credential references',()=>{
@@ -62,14 +63,14 @@ test('external MCP keeps schema, resources and manual input_required fields inta
   const cap=await createCapabilities({service:f.service,instanceRoot:f.root,engines:[],
     externalServers:[{id:'dc',transport:'http',url:'http://127.0.0.1:34567/mcp'}],
     clientFactory:value=>{options=value;return client;},transportFactory:async()=>({})});
-  await cap.list({projectId:'one'}, testOwnerRole);assert.equal(connected,0);
-  const catalog=await cap.list({projectId:'one',serverId:'dc'}, testOwnerRole);
+  await cap.list({projectId:'one'}, testOwner);assert.equal(connected,0);
+  const catalog=await cap.list({projectId:'one',serverId:'dc'}, testOwner);
   assert.deepEqual(catalog.external.tools[0].outputSchema,{type:'object'});
   const input={name:'read_file',arguments:{path:'hello'},inputResponses:{answer:{action:'accept'}},requestState:'old opaque'};
-  assert.deepEqual(await cap.call({projectId:'one',capability:'mcp.dc.tools.call',input}, testOwnerRole),requirement);
+  assert.deepEqual(await cap.call({projectId:'one',capability:'mcp.dc.tools.call',input}, testOwner),requirement);
   assert.deepEqual(seen.params,input);assert.equal(seen.opts.allowInputRequired,true);
   assert.deepEqual(options.versionNegotiation,{mode:'auto'});assert.equal(options.inputRequired.autoFulfill,false);
-  const resource=await cap.call({projectId:'one',capability:'mcp.dc.resources.read',input:{uri:'file:///fixture'}}, testOwnerRole);
+  const resource=await cap.call({projectId:'one',capability:'mcp.dc.resources.read',input:{uri:'file:///fixture'}}, testOwner);
   assert.equal(resource.contents[0].mimeType,'text/plain');
   await cap.close();assert.equal(closed,1);
 });
@@ -84,7 +85,7 @@ test('explicit elicitation bridge preserves request and response objects',async 
       setRequestHandler:(method,run)=>{assert.equal(method,'elicitation/create');handler=run;},
       connect:async()=>{},close:async()=>{},listTools:async()=>({tools:[]})
     };},transportFactory:async()=>({})});
-  t.after(()=>cap.close());await cap.list({projectId:'one',serverId:'fixture'}, testOwnerRole);
+  t.after(()=>cap.close());await cap.list({projectId:'one',serverId:'fixture'}, testOwner);
   const params={message:'Your name?',requestedSchema:{type:'object',properties:{name:{type:'string'}}},_meta:{extra:'keep'}};
   const request={method:'elicitation/create',params};
   assert.deepEqual(await handler(request),{action:'accept',content:{name:'Ada'}});
@@ -105,11 +106,11 @@ test('installed official SDK talks to a real MCP server and preserves tool and r
     externalServers:[{id:'fixture',transport:'http',url:'http://127.0.0.1:34567/mcp'}],
     transportFactory:async()=>clientTransport});
   t.after(()=>cap.close());
-  const catalog=await cap.list({projectId:'one',serverId:'fixture'}, testOwnerRole);
+  const catalog=await cap.list({projectId:'one',serverId:'fixture'}, testOwner);
   assert.equal(catalog.external.tools[0].name,'echo');
-  const result=await cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'echo',arguments:{text:'中文 literal & %PATH%'}}}, testOwnerRole);
+  const result=await cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'echo',arguments:{text:'中文 literal & %PATH%'}}}, testOwner);
   assert.equal(result.structuredContent.text,'中文 literal & %PATH%');
-  const resource=await cap.call({projectId:'one',capability:'mcp.fixture.resources.read',input:{uri:'fixture://document'}}, testOwnerRole);
+  const resource=await cap.call({projectId:'one',capability:'mcp.fixture.resources.read',input:{uri:'fixture://document'}}, testOwner);
   assert.equal(resource.contents[0].text,'original resource');
 });
 
@@ -131,7 +132,7 @@ test('real modern MCP input_required completes through the explicit user input b
     onInputRequest:async({method,params})=>{questions++;assert.equal(method,'elicitation/create');assert.equal(params.message,'Continue?');return{action:'accept',content:{confirm:true}};},
     transportFactory:async()=>clientTransport});
   t.after(()=>cap.close());
-  const result=await cap.call({projectId:'one',capability:'mcp.interactive.tools.call',input:{name:'confirm',arguments:{}}}, testOwnerRole);
+  const result=await cap.call({projectId:'one',capability:'mcp.interactive.tools.call',input:{name:'confirm',arguments:{}}}, testOwner);
   assert.equal(result.isError,undefined,JSON.stringify(result));
   assert.equal(result.content[0].text,'confirmed');assert.equal(questions,1);assert.equal(rounds,2);
 });
@@ -151,7 +152,7 @@ test('official stdio transport launches a native Node server with spaced Unicode
   const cap=await createCapabilities({service:f.service,instanceRoot:f.root,engines:[],
     externalServers:[{id:'native',transport:'stdio',command:process.execPath,args:[filename,literal]}]});
   t.after(()=>cap.close());
-  const result=await cap.call({projectId:'one',capability:'mcp.native.tools.call',input:{name:'identity',arguments:{}}}, testOwnerRole);
+  const result=await cap.call({projectId:'one',capability:'mcp.native.tools.call',input:{name:'identity',arguments:{}}}, testOwner);
   assert.equal(result.structuredContent.literal,literal);
   const pid=result.structuredContent.pid;
   await cap.close();
@@ -167,19 +168,19 @@ test('closing one project closes only its external clients and prevents its new 
     externalServers:[{id:'fixture',transport:'http',url:'http://127.0.0.1:34567/mcp'}],
     clientFactory:()=>{const id=++sequence;return{connect:async()=>{},close:async()=>closed.push(id),listTools:async()=>({tools:[]})};},
     transportFactory:async()=>({})});
-  await cap.list({projectId:'one',serverId:'fixture'}, testOwnerRole);
-  await cap.list({projectId:'two',serverId:'fixture'}, testOwnerRole);
+  await cap.list({projectId:'one',serverId:'fixture'}, testOwner);
+  await cap.list({projectId:'two',serverId:'fixture'}, testOwner);
   await cap.closeProject('one');assert.deepEqual(closed,[1]);
-  await assert.rejects(cap.list({projectId:'one'}, testOwnerRole),error=>error.code==='project_closing');
-  await cap.list({projectId:'two',serverId:'fixture'}, testOwnerRole);assert.equal(sequence,2);
+  await assert.rejects(cap.list({projectId:'one'}, testOwner),error=>error.code==='project_closing');
+  await cap.list({projectId:'two',serverId:'fixture'}, testOwner);assert.equal(sequence,2);
   f.project.access='read';
   await cap.reopenProject('one');
-  await cap.list({projectId:'one',serverId:'fixture'}, testOwnerRole);assert.equal(sequence,3);
-  await assert.rejects(cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'write'}}, testOwnerRole),/read only/);
+  await cap.list({projectId:'one',serverId:'fixture'}, testOwner);assert.equal(sequence,3);
+  await assert.rejects(cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'write'}}, testOwner),/read only/);
   await cap.close();assert.deepEqual(closed,[1,2,3]);
 });
 
-test('concurrent engine calls keep caller role isolated and only owners may update settings',async t=>{
+test('concurrent engine calls keep apart who may decide, and an engine is set up only where the owner decides',async t=>{
   const f=fixture(t);let count=0,release;
   const gate=new Promise(resolve=>{release=resolve;});
   const engine={manifest:{id:'devmate.fixture',permissions:{}},settingsSchema:z.object({value:z.string().optional()}),defaultSettings:{},
@@ -191,20 +192,18 @@ test('concurrent engine calls keep caller role isolated and only owners may upda
       });
     }};
   const cap=await createCapabilities({service:f.service,instanceRoot:f.root,engines:[engine]});t.after(()=>cap.close());
-  assert.equal((await cap.call({projectId:'one',capability:'fixture.read'},{callerRole:'read'})).structuredContent.ok,true);
-  await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'read'}},{callerRole:'read'}),error=>error.code==='forbidden');
+  assert.equal((await cap.call({projectId:'one',capability:'fixture.read'})).structuredContent.ok,true);
   const results=await Promise.allSettled([
-    cap.call({projectId:'one',capability:'fixture.configure',input:{value:'owner'}},testOwnerRole),
-    cap.call({projectId:'one',capability:'fixture.configure',input:{value:'writer'}},{callerRole:'write'})
+    cap.call({projectId:'one',capability:'fixture.configure',input:{value:'owner'}},testOwner),
+    // The owner reached through a connected client sets an engine up only with the full access profile (ownerDecides).
+    cap.call({projectId:'one',capability:'fixture.configure',input:{value:'remote'}})
   ]);
   assert.equal(results[0].status,'fulfilled');assert.equal(results[1].status,'rejected');
-  assert.equal(results[1].reason.code,'forbidden');
+  assert.equal(results[1].reason.code,'forbidden');assert.match(results[1].reason.message,/set up by the owner/);
   assert.deepEqual(f.settings.get('capability.one.fixture'),{value:'owner'});
-  // The owner reached through a connected client sets an engine up only with the full access profile (ownerDecides).
-  await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'remote'}},{callerRole:'owner'}),error=>error.code==='forbidden'&&/set up by the owner/.test(error.message));
   // The read-only call never reaches something that changes.
-  await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'query'}},{...testOwnerRole,readOnly:true}),error=>error.code==='forbidden'&&/capability_call/.test(error.message));
-  assert.equal((await cap.call({projectId:'one',capability:'fixture.read'},{callerRole:'owner',readOnly:true})).structuredContent.ok,true);
+  await assert.rejects(cap.call({projectId:'one',capability:'fixture.configure',input:{value:'query'}},{...testOwner,readOnly:true}),error=>error.code==='forbidden'&&/capability_call/.test(error.message));
+  assert.equal((await cap.call({projectId:'one',capability:'fixture.read'},{readOnly:true})).structuredContent.ok,true);
   assert.deepEqual(f.settings.get('capability.one.fixture'),{value:'owner'});
 });
 
@@ -223,11 +222,10 @@ test('per-call cancellation reaches the official MCP request and does not close 
   const cap=await createCapabilities({service:f.service,instanceRoot:f.root,engines:[],
     externalServers:[{id:'fixture',transport:'http',url:'http://127.0.0.1:34567/mcp'}],transportFactory:async()=>clientTransport});
   t.after(()=>cap.close());
-  const work=cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'wait',arguments:{}}},{signal:controller.signal,callerRole:'owner'});
+  const work=cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'wait',arguments:{}}},{signal:controller.signal});
   const rejected=assert.rejects(work);await entered;controller.abort(new Error('cancel this call'));await rejected;
-  const result=await cap.call({projectId:'one',capability:'mcp.fixture.resources.read',input:{uri:'fixture://alive'}},{callerRole:'owner'});
+  const result=await cap.call({projectId:'one',capability:'mcp.fixture.resources.read',input:{uri:'fixture://alive'}});
   assert.equal(result.contents[0].text,'still connected');
-  await assert.rejects(cap.call({projectId:'one',capability:'mcp.fixture.tools.call',input:{name:'wait',arguments:{}}},{callerRole:'read'}),error=>error.code==='forbidden');
 });
 
 test('failed cleanup retains ownership, forbids calls, and retries both project and runtime close',async t=>{
@@ -236,24 +234,13 @@ test('failed cleanup retains ownership, forbids calls, and retries both project 
     context.server.registerTool('status',{inputSchema:{},annotations:{readOnlyHint:true}},()=>({ready:true}));
   },deactivate(){if(++attempts===1)throw new Error('exit is unconfirmed');}};
   const cap=await createCapabilities({service:f.service,instanceRoot:f.root,engines:[engine]});
-  await cap.list({projectId:'one'}, testOwnerRole);
+  await cap.list({projectId:'one'}, testOwner);
   await assert.rejects(cap.closeProject('one'),/unconfirmed|shutdown/);
-  await assert.rejects(cap.call({projectId:'one',capability:'retry.status'}, testOwnerRole),/closing/);
+  await assert.rejects(cap.call({projectId:'one',capability:'retry.status'}, testOwner),/closing/);
   await cap.closeProject('one');assert.equal(attempts,2);
-  await cap.reopenProject('one');await cap.list({projectId:'one'}, testOwnerRole);
+  await cap.reopenProject('one');await cap.list({projectId:'one'}, testOwner);
   attempts=0;
   await assert.rejects(cap.close(),/unconfirmed|shutdown/);
-  await assert.rejects(cap.list({projectId:'one'}, testOwnerRole),/closing/);
+  await assert.rejects(cap.list({projectId:'one'}, testOwner),/closing/);
   await cap.close();assert.equal(attempts,2);
-});
-
-
-test('capability entrypoints refuse omitted identity and never assume owner privileges', async t => {
-  const f = fixture(t);
-  const cap = await createCapabilities({ service: f.service, instanceRoot: f.root, engines: [] });
-  t.after(() => cap.close());
-  await assert.rejects(cap.list({ projectId: 'one' }), { code: 'forbidden' });
-  await assert.rejects(cap.call({ projectId: 'one', capability: 'godot.status' }), { code: 'forbidden' });
-  await assert.rejects(cap.settings({}), { code: 'forbidden' });
-  await assert.rejects(cap.configure({ engine: 'godot', settings: {} }), { code: 'forbidden' });
 });

@@ -3,9 +3,7 @@ import { hexBytes } from './reverse-values.mjs';
 import { runNative } from './reverse-native.mjs';
 import { addScan, assertProcessAccess, nativeForSession, rescan, scanPage, writeSessionMemory } from './reverse-sessions.mjs';
 
-export function registerReverseProcessTools(context, registerTool, { addressSchema, typeSchema, endianSchema, valueSchema }) {
-  // Every tool here reaches the memory of a local process: owner only.
-  const register = (name, description, shape, handler, options = {}) => registerTool(name, description, shape, handler, { ...options, ownerOnly: true });
+export function registerReverseProcessTools(context, register, { addressSchema, typeSchema, endianSchema, valueSchema }) {
   const planOnly = args => args.dryRun !== false;
   const reverseSessions = context.state.sessions;
   const session = { sessionId: z.string().uuid() };

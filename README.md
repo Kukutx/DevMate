@@ -61,13 +61,14 @@ devmate mcp-url                        # the address to give a client
 devmate ui --open                      # the workbench in your browser
 ```
 
-## Three entries, one runtime
+## Four entries, one runtime
 
 | Entry | For | Adds |
 | --- | --- | --- |
 | `devmate` command line | Working without an editor | Everything: start, share folders, configure the connection, open the workbench, call any operation. `devmate mcp` serves MCP on standard input and output for clients that start their servers as a program |
 | VS Code extension | Everyday development | The editor's diagnostics, active file and selection; a status bar item |
 | Obsidian plugin | A knowledge base | Note search, properties, graph and vault operations |
+| Chrome and Edge extension | The browser itself | Bookmarks, tabs and windows, history, downloads, the reading list and the page in front of you |
 
 One instance directory (default `~/.devmate/runtime`) has exactly one runtime process at a time.
 
@@ -143,6 +144,42 @@ Settings (user settings only: a repository's `.vscode/settings.json` cannot chan
 
 The plugin has been loaded and driven in a real Obsidian 1.12.7 on Windows: loading, starting the runtime, sharing the vault read only and read and write, the note tools, stopping and disabling. Obsidian on macOS and Linux has not been tried. Please report what you find.
 
+## Chrome and Edge extension
+
+DevMate can drive a browser of its own (the browser control engine), but that browser is not yours: it has none of your bookmarks, tabs, history or sign-ins. The extension gives your client the browser you actually use.
+
+```powershell
+devmate chrome install        # tell Chrome and Edge which program the extension may talk to (your account only), and put the extension where the browser loads it from
+```
+
+Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge), switch on **Developer mode**, choose **Load unpacked** and pick the folder `devmate chrome` names: `chrome/extension` in DevMate's instance directory (`~/.devmate/runtime/chrome/extension` unless you chose another). `devmate chrome` says whether the browser is registered and connected, and so does `devmate doctor`.
+
+Leave **Developer mode** on, and that is all there is to do, updates included. The folder stays where it is and DevMate keeps it current: every start of the runtime makes it the extension of the DevMate that runs (a newer one that is already there is left alone), whichever entry was updated, and makes the program the browser starts that same DevMate. The extension notices within about two minutes that its files changed and loads itself again, with nothing to click. With Developer mode off, Chrome switches an unpacked extension off at that moment.
+
+- **An entry like the editors.** The extension's panel says in one sentence how things stand and the one thing to do about it, with the browser's own words when it cannot reach DevMate. It starts DevMate, opens the workbench, copies the address a client in the cloud needs (the public one where you have a route, otherwise this computer's) and counts what waits for your answer.
+- **Two switches, both yours.** **Let DevMate use this browser**: switched off, every request is refused and your client is told that you paused it. **Start DevMate with the browser**: off until you turn it on; like an editor it starts the runtime and never stops it.
+- **What DevMate did in this browser** is listed in the panel: the last calls with their time and outcome, never their content. The panel is in English and Chinese.
+- **What your client can do with the browser** (through `capability_list {engine:"chrome"}`, `capability_query` for what only reads and `capability_call` for changes; no project is needed):
+
+  | | Read | Change |
+  | --- | --- | --- |
+  | Bookmarks | the tree, search | create, rename, move, remove |
+  | Tabs and windows | list tabs, windows and tab groups | open, go to an address, bring to front, reload, close, move, group, ungroup; open and close windows |
+  | History | search by words and time | delete an address or a time range |
+  | Downloads | list | start a download |
+  | Recently closed | list | bring back |
+  | Reading list, most visited | list | add, remove |
+  | A tab's page | title, address and text; a picture of what it shows or of the whole page | go back, go forward |
+  | Debugging a page | the console and uncaught errors, the network requests and one of them in full, the page as its elements, one element in detail (attributes, box, styles), what the page stores, wait for an element or a text | click, type, press a key, choose from a list, hover, scroll, run a script, answer a dialog, reload, emulate a screen, a color scheme or being offline |
+
+- **Debugging works like DevTools, on the tab you name or the one in front.** The first call puts Chrome's debugger on that tab; Chrome shows its own bar on the tab while it is there, and it comes off after five minutes without a call or with `chrome.page.debugStop`. The console and the network are recorded from that moment: `chrome.page.reload` shows a page loading from the start. `chrome.page.snapshot` gives every element a number, and click, type, hover, scroll and inspect take that number, a CSS selector, or the text the element shows.
+- The values a page stores (its cookies among them) are credentials. `chrome.page.storage` gives names only; the values come only with `includeValues` through `capability_call`, which your client asks you about.
+- Text read from a web page (its text, its console, its requests, its elements, what a script returns) is marked as untrusted: it is data for the model, never instructions.
+- The browser talks to DevMate through a native messaging host, a small program the browser itself starts for this one extension. Nothing listens for it and it works with no public connection. `devmate chrome uninstall` takes the registration away.
+- On Windows the registration is written through the system's own management service, so that it lands where browsers read it whichever terminal the command is run from. A terminal inside a packaged app has a registry of its own that no browser sees; `devmate chrome` says so when it finds a registration only there.
+
+The runtime's side has been run end to end with the browser's own message framing against a real runtime. [STATUS](docs/STATUS.md) says what has been tried in a real browser.
+
 ## Connecting a client
 
 ### On the same computer
@@ -164,15 +201,36 @@ Any other client: add an HTTP (Streamable HTTP) MCP server with this address. A 
 
 ### ChatGPT on the web and Claude.ai
 
-They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers five:
+They reach your MCP server from the cloud, so they need a route from outside to your machine. DevMate offers six. Two of them have nothing of a third party in between: a relay on a server of your own, and for ChatGPT OpenAI's own tunnel.
 
 | Route | For | Notes |
 | --- | --- | --- |
+| `relay` | Any client | A public Linux server of yours becomes the way in: `devmate relay setup user@host`. An address that stays, answers that stream, no limits but the server's own |
 | `quick` | Any client | A Cloudflare quick tunnel, for trying DevMate out. No account, no domain, nothing to set up; the address changes whenever it starts again |
-| `openai-tunnel` | ChatGPT, Codex | OpenAI's official tunnel. Outbound only, no public address, no domain |
+| `openai-tunnel` | ChatGPT, Codex | OpenAI's own tunnel, spoken by DevMate itself: outbound only, no public address, no domain, no server, nothing to install, and an id that stays |
 | `cloudflare` | ChatGPT, Claude, any client | A named Cloudflare tunnel on your own domain; DevMate runs `cloudflared`. Free |
 | `https` | Any client | A reverse proxy you already run |
-| `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that provides HTTPS |
+| `ssh` | Any client | OpenSSH reverse forwarding to a server of yours that already provides HTTPS (the relay without the setup) |
+
+**A relay of your own: an address that stays**
+
+With a public Linux server you control (a small rented one is enough) and key login to it over SSH:
+
+```powershell
+devmate relay setup root@203.0.113.7 --domain devmate.example.com
+devmate restart
+devmate mcp-url
+```
+
+`relay setup` installs [Caddy](https://caddyserver.com) on the server from the system's own packages, lets it get the certificate for that name, and forwards one path nobody can guess to a loopback port there. This computer holds that port open from the inside with OpenSSH, so nothing has to be opened on your router. Answers stream as they do locally, and there is no request count, size limit or changing address: the only limits are the server's own.
+
+- By default the relay answers only to the addresses ChatGPT and Claude connect from (their published ranges, fetched again every six hours) and to this computer. `--any-address` leaves the protection to the key in the path.
+- A relay asks for no sign-in and cannot: it forwards that one path and nothing else, so the pages of a sign-in would not be reachable. What keeps strangers out is the key and the list of addresses; `--auth oauth` together with a relay is refused when you set it.
+- Without `--domain` the relay is reached by the server's IP address and asks for a certificate for that address, which needs Caddy 2.10 or newer on the server. Where the system's own package is older or missing (Debian, Ubuntu, Fedora, RHEL), `relay setup` takes Caddy from Caddy's own package repository. A Caddy that was on the server before is never replaced: the setup stops and prints the commands that would do it.
+- It needs root on the server, or a login that may use `sudo` without a password. No password is ever asked for or stored: authentication is your SSH key.
+- Running it again changes nothing and keeps the address. `devmate relay remove root@203.0.113.7` takes the relay off the server, and Caddy and its package repository too if this had installed them.
+
+The server script and the forwarding are tested; a relay on a real public server has not been tried yet. [STATUS](docs/STATUS.md) says exactly what is unverified.
 
 **Quick tunnel: connected in a minute**
 
@@ -204,19 +262,25 @@ devmate doctor
 
 **OpenAI tunnel**
 
-Create a tunnel in the organisation settings of the OpenAI Platform and download the official `tunnel-client`:
+Create a tunnel in the organisation settings of the OpenAI Platform (Settings → Tunnels). It gives you a tunnel id and a runtime key:
 
 ```powershell
-devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx --executable C:\Tools\OpenAI\tunnel-client.exe
-devmate secret set CONTROL_PLANE_API_KEY
+devmate connect openai-tunnel --tunnel-id tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # paste the runtime key and press Enter
 devmate restart
 ```
 
-`devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it.
+`devmate mcp-url` prints the tunnel ID; choose the Tunnel connection type in ChatGPT and enter it. It stays the same across restarts.
+
+This computer only reaches out, to `api.openai.com`, and asks for work: nothing listens for the outside, no router setting and no server are needed, and the only party that can limit the route is OpenAI. DevMate speaks the tunnel's [published protocol](https://github.com/openai/tunnel-client/blob/master/docs/protocol.md) itself, so there is no second program to download and keep current, and it serves up to 32 calls at once (`maxConcurrentRequests` in the connection settings, 1 to 256). To use OpenAI's own `tunnel-client` program instead, add `--executable <its path>`. `devmate doctor` says which of the two is in use, and counts the calls that have arrived: a call that came through is the proof that the route works.
+
+When OpenAI refuses the key or the tunnel, `devmate doctor` repeats OpenAI's answer and says what to do about it. For a key OpenAI wants the tunnel's organisation named with, that is `--organization <org-…>` on the `connect` command.
+
+If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
 
 **Is it really connected?**
 
-A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to probe: confirm it by calling a tool from ChatGPT.
+A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to connect back through: there the doctor shows that OpenAI accepts the runtime key, and how many calls have arrived.
 
 A connector that cannot start does not take local work down and is never hidden: `doctor` and `connection.status` give the reason. After storing a new credential, restart only the connector: `devmate connection.restart`.
 
@@ -240,9 +304,9 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 - **What is shared is decided at your computer.** Folders are shared from an editor, with `devmate project add`, or in the local workbench. A connected client cannot share a folder, widen read-only access, lift the protection of credential files or bring back a folder you took out; it can only narrow.
 - **Write access is full access.** In a writable project a client can run commands, and commands run as your operating-system account. With at least one writable project the limits on other folders keep a well-behaved model in place; they are not a wall against a hostile one. For a client you do not fully trust, share read only: then there are no commands and the limits hold. DevMate is not a sandbox.
 - **`auth.mode` is `none` by default.** Whoever reaches the MCP address is you. Treat a public address like a password, or require sign-in.
-- **Optional sign-in (OAuth).** `devmate connect … --auth oauth` makes clients of the public address sign in: on first connection they are sent to DevMate's authorisation page, where you enter a one-time code from `devmate login-code`. With `auth.member.create` you can issue read-only or read-write identities limited to named projects. A client that publishes no description of itself (a client metadata document) is registered by you under `auth.clients` in the configuration, with its name and redirect addresses. Clients on your own computer never need to sign in.
+- **Optional sign-in (OAuth).** `devmate connect … --auth oauth` makes clients of the public address sign in: on first connection they are sent to DevMate's authorisation page, where you enter a one-time code from `devmate login-code`. Signing in proves the client is you: DevMate has one owner and no other accounts. A client that publishes no description of itself (a client metadata document) is registered by you under `auth.clients` in the configuration, with its name and redirect addresses. Clients on your own computer never need to sign in.
 - **Approvals and questions are answered by you, at your computer.** When an agent asks for permission, you answer in the editor or the local workbench. No connected client can answer, including the model that started the agent.
-- **Full access, when you want none of that in your way.** The default profile is *guarded*: everything above. If you drive your work from a chat client and do not want to walk to the computer, switch on *full access* there: `devmate access full`, **DevMate: Change Permission Profile** in VS Code, or **Permissions…** in Obsidian. A client connected as you can then share folders, widen access, read credential files, set up capability engines, answer what an agent asks and run the doctor, and what an agent you delegated to asks permission for is granted automatically (each grant stays on record). It takes effect at once and only you, at your computer, can switch it on; `devmate access guarded` takes it back. With full access, whoever reaches your MCP address acts as you without asking: keep the address private or require sign-in. Signed-in members keep exactly their grants.
+- **Full access, when you want none of that in your way.** The default profile is *guarded*: everything above. If you drive your work from a chat client and do not want to walk to the computer, switch on *full access* there: `devmate access full`, **DevMate: Change Permission Profile** in VS Code, or **Permissions…** in Obsidian. A client connected as you can then share folders, widen access, read credential files, set up capability engines, answer what an agent asks and run the doctor, and what an agent you delegated to asks permission for is granted automatically (each grant stays on record). It takes effect at once and only you, at your computer, can switch it on; `devmate access guarded` takes it back. With full access, whoever reaches your MCP address acts as you without asking: keep the address private or require sign-in.
 - **Credential files are protected by default.** `.env`, key files, `.npmrc` and the like are not read or listed by the file tools; Git status names them, marked "do not commit". You can switch that off for one project, at your computer.
 - **Secrets in command lines are not shown.** Process lists and activity records replace inline tokens and passwords with `[redacted]`; the command that runs is unchanged. This recognises common forms and is no guarantee.
 - **The workbench session stays in its browser tab.** It is entered through a single-use link, and its session is never a cookie that other local services would receive.
@@ -252,23 +316,34 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 
 ## Tools the model gets
 
-| Area | Tools | Notes |
-| --- | --- | --- |
-| Orientation | `project_overview` `project_list` | Git branch and changes, the project's own agent instructions (`AGENTS.md` and similar), runnable scripts, top-level layout and the editor's error count, in one call |
-| Editor | `editor_diagnostics` `editor_context` | The compiler, type and lint errors VS Code already computed; your active file, selection and open files |
-| Finding code | `workspace_files` `workspace_find` `workspace_search` | Directory listing, glob find, ripgrep content search. Honours `.gitignore`; fast on large repositories |
-| Reading | `workspace_read` | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
-| Changing | `workspace_edit` `workspace_write` `workspace_mkdir` `workspace_move` `workspace_delete` | Exact text replacement, several edits applied atomically. Overwriting needs the hash that was read, so nothing is written blind |
-| Undo | `workspace_history` `workspace_restore` | Every file changed, overwritten or deleted through DevMate can be restored, kept 30 days by default |
-| Running | `shell_run` `process_read` `process_write` `process_stop` `process_list` | Real shell semantics (`npm test`, `git commit`). Output is paged by cursor; long commands keep running and can be read, fed input and stopped as a whole process tree |
-| Git | `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` | Read only, and never run a program the repository configures. Writes go through `shell_run` |
-| Delegation | `agents_delegate` `agents_result` `providers_list` | Hand a whole task to a coding agent on this machine |
-| Domain capabilities | `capability_list` `capability_call` | Browser control and QA, Godot, reverse engineering, Obsidian, and external MCP servers you configure |
-| Everything else | `operations_list` `operations_call` `connection_status` | Workflows, tasks, messages between agents, jobs, artifacts and references, called by name |
+A model is shown its tools under the names it was trained on. Which list a client gets is decided by what it says it is; a client that is not recognised gets DevMate's own names.
 
+| | ChatGPT and Codex | Claude | Other clients |
+| --- | --- | --- | --- |
+| Read a file | `read` | `read` | `workspace_read` |
+| Change files | `apply_patch` | `edit` `write` | `workspace_edit` `workspace_patch` `workspace_write` |
+| Run a command | `exec_command` `write_stdin` | `bash` (`powershell` where commands run in PowerShell, as on Windows) `process_read` `process_write` | `shell_run` `process_read` `process_write` |
+| Review what changed | `show_changes` | `show_changes` | `workspace_changes` |
+| On every list | Everything that only reads: `project_list` `project_overview` `editor_context` `editor_diagnostics` `workspace_files` `workspace_find` `workspace_search` `workspace_history` `git_status` `git_diff` `git_log` `git_show` `git_blame` `git_branches` `process_list` `providers_list` `connection_status`. Taking a change back: `workspace_restore`. The engines, your browser among them: `capability_list` `capability_query` `capability_call`. And `process_stop` `agents_delegate` `agents_result` `operations_list` `operations_query` `operations_call` | | |
+
+| Area | What it does |
+| --- | --- |
+| Orientation | `project_overview`: Git branch and changes, the project's own agent instructions (`AGENTS.md` and similar), runnable scripts, top-level layout and the editor's error count, in one call |
+| Finding code | Glob find and ripgrep content search. Honours `.gitignore`; fast on large repositories |
+| Reading | With line numbers, paged for large files (up to 32 MiB). UTF-16 and the computer's own encoding (GBK and the like) can be read, not rewritten |
+| Changing | A patch (the `*** Begin Patch` envelope Codex writes, or a unified diff as `git diff` prints it) changes several files at once, all of it or none, and is taken back as one. Exact text replacement applies several edits atomically. Overwriting keeps what was there |
+| Running | Real shell semantics (`npm test`, `git commit`). A call returns after 30 seconds at the latest by default (50 at the most); a command still running then keeps running and is followed, fed input and stopped as a whole process tree |
+| Reviewing | What is uncommitted, whoever changed it (a tool, a command, a delegated agent): per file what happened and how many lines came and went. Marked as reviewed, the next look shows only what changed since. Needs a Git repository |
+| Editor | The compiler, type and lint errors VS Code already computed |
+| Delegation | Hand a whole task to a coding agent on this machine |
+| History and Git | What DevMate changed and taking it back (`workspace_history`, `workspace_restore`, kept 30 days by default); the commit log, a commit, who changed a line, the branches (read only, never running a program the repository configures) |
+| Engines | Through `capability_list`, `capability_query` and `capability_call`: your own browser (the Chrome and Edge extension), browser control and QA, Godot, reverse engineering, Obsidian and external MCP servers |
+| Everything else | Operations, called by name through `operations_query` (those that only read) and `operations_call`: making a folder, moving, deleting (a patch or a command does these as well), workflows, tasks, jobs, artifacts |
+
+- Every tool of every list can be called by every client: the list only decides what a model is told about up front. To choose a list yourself, add `?tools=gpt`, `?tools=claude` or `?tools=generic` to the MCP address you give the client. `devmate doctor` says what the last client called itself, which list it was shown and why.
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
-- The model carries 38 tool definitions; the rest costs no context.
+- A tool list has 34 to 37 entries and takes 32 to 35 KB. Nothing that only reads is kept off it: a tool a model cannot see is a tool it does not use, and what only reads is what a client does not ask you about.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.
@@ -284,6 +359,7 @@ One call hands a task to Codex, Claude Code, Gemini CLI or Grok CLI installed he
 
 - A task that finishes within the wait returns its result and the list of changed files; otherwise it returns an `agentId` to follow with `agents_result`.
 - Passing the same `agentId` again continues that session with its context.
+- With `"isolate": true` the agent works in a copy of the project instead (a Git worktree of the last commit, kept in DevMate's own directory). The project does not change until you have read what it proposes (`agents.proposal`) and brought it in (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or dropped it (`agents.discard`). The copy holds what is committed: uncommitted changes and ignored files such as installed dependencies are not in it.
 - The agent works in the project folder with its own account, quota and tools. What it asks you (approvals, questions) appears in the workbench and as a notification in VS Code and Obsidian, and you answer it at your computer.
 - Collaboration inside one vendor (Claude Code sessions messaging each other, Codex sub-agents) is done natively by them. DevMate covers the part between clients, for example handing a task from ChatGPT on the web to Claude Code on your machine.
 

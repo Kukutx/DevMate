@@ -121,7 +121,8 @@ export function registerWorkbench(server, service) {
     ...open, inputSchema: z.object({ projectId: z.string().trim().min(1).optional(), workflowId: z.string().trim().min(1).optional() }).strict()
   }, answer(open.name));
   server.registerTool(call.name, {
-    ...call, inputSchema: z.object({ operation: z.enum(WORKBENCH_OPERATIONS), input: z.record(z.string(), z.unknown()).optional() }).strict()
+    // Which operations it takes is checked when it is called: the list of them is not sent to every model with every tool list.
+    ...call, inputSchema: z.object({ operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }).strict()
   }, answer(call.name));
 }
 /** The page itself: static, the same for every caller, with no data in it. Everything it shows is loaded by authenticated calls. */

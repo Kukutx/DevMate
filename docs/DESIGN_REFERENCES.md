@@ -1,13 +1,13 @@
 # DevMate design references
 
-Reviewed on 2026-10-06, 2026-10-07 and 2026-10-09. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
+Reviewed on 2026-10-06, 2026-10-07, 2026-10-09 and 2026-10-11. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
 
 ## Official protocols and UI
 
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk): use the official client, server and Node transports. Preserve native tool schemas, structured results, resources, content blocks, cancellation and form elicitation. DevMate's own HTTP endpoint uses the current protocol; configured third-party clients negotiate through the official SDK.
 - [MCP Apps specification and SDK](https://github.com/modelcontextprotocol/ext-apps): the workbench imports the official App implementation. It uses the standard UI tool and context channels. The reviewed production dependency addition is exactly `@modelcontextprotocol/ext-apps@2.0.3`.
 - [OpenAI plugin extensions](https://developers.openai.com/plugins/build/extensions): declare global and thread entrypoints on the workbench tool and serve the registered MCP App resource. This supports the sidebar/fullscreen product shape requested for DevMate. Actual installation and availability depend on the user's ChatGPT account and a reachable MCP connection.
-- [OpenAI secure MCP tunnels](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) and [official tunnel-client](https://github.com/openai/tunnel-client): own only the explicitly configured native tunnel process. Use a real tunnel ID and an environment reference for its runtime credential. Local relay readiness and successful remote MCP verification remain distinct facts.
+- [OpenAI secure MCP tunnels](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) and [official tunnel-client](https://github.com/openai/tunnel-client): DevMate implements the client side of the tunnel's published wire protocol (`docs/protocol.md` and `docs/openapi.json`, written for authors of tunnel clients) inside the runtime, and can run the official program instead where its path is configured. Use a real tunnel ID and an environment reference for its runtime credential. That OpenAI accepts the key and that a call has actually arrived remain distinct facts, and the doctor reports them separately.
 
 ## Native execution and communication
 
@@ -24,6 +24,24 @@ The adapters preserve the providers' different capabilities. A missing steering 
 Reviewed its workbench, workflow/session separation, durable delivery and handoff patterns. DevMate adopts explicit project/workflow selection, separate task and execution records, bounded reference/context selection, exact session correlations and visible delivery outcomes.
 
 The DevMate 4 implementation uses its own service, SQLite records and native adapters. It does not embed WebCodex source or promise feature parity with its changing development branch.
+
+Its repository also holds a desktop app and a browser bridge extension (`extensions/browser-bridge`), and its README speaks of one-command sharing for a quick session. DevMate has no extension in the user's own browser: its browser capability drives a separate, isolated browser.
+
+## DevSpace
+
+[Repository](https://github.com/Waishnav/devspace)
+
+Reviewed from its README. A self-hosted MCP server that brings a Codex-style workflow to ChatGPT: set up with one `npx` command, a new connection approved on an owner-password page, project roots the owner allows, and isolated Git worktrees for parallel coding sessions. The tunnel is the user's to provide.
+
+DevMate shares the starting point (the owner's machine, the owner's route, folders the owner approves) and differs in what it adds around it: routes it starts and verifies itself, editor diagnostics, several hosts on one runtime, a permission profile. From it DevMate takes worktree isolation for delegated work: an agent started with `isolate` works in a Git worktree, and its changes reach the project only when they are applied. A trial without installing is what DevSpace has and DevMate does not; it is listed in [STATUS.md](STATUS.md).
+
+## CodexPro
+
+[Repository](https://github.com/rebel0789/codexpro)
+
+Reviewed from its README. A local MCP server for ChatGPT's developer mode with a guarded patch tool, allow-listed commands and handoff plans. On a public tunnel it requires a token of at least 24 bytes, which travels in the server address because ChatGPT offers no other place for it without OAuth.
+
+DevMate's quick tunnel follows the same reasoning: with no sign-in possible, the address ends in a random key of 24 bytes that is new with every start, and the host name alone opens nothing.
 
 ## ThreadCrew
 

@@ -18,7 +18,7 @@ Two bounded, read-only capabilities of an attached vault, called through `capabi
 - Notes are read newest first. Defaults and maxima: 1000 candidate notes (2000), 50 returned matches (200), 1 MiB per note (5 MiB), 8 concurrent reads (16), 280-character snippets (1000).
 - Each match has a score, the matched terms, the occurrence count, the first matching line and a snippet. `stats` reports how many notes were selected, read and skipped; `truncated` says whether candidates or results were cut.
 
-A search can take up to two minutes and is flagged `longRunning`: for a large vault start it with `job_start`, or narrow it with a selector. It does not block changes, and changes do not block it.
+A search can take up to two minutes and is flagged `longRunning`: for a large vault start it with the `job.start` operation, or narrow it with a selector. It does not block changes, and changes do not block it.
 
 ## Note graph
 

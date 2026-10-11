@@ -12,7 +12,7 @@ import { DevMateService } from '../runtime/service.mjs';
 import { workbenchHtml } from '../runtime/workbench.mjs';
 import { resolveTool } from '../runtime/platform/tools.mjs';
 
-const testOwner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const testOwner = Object.freeze({ id: 'owner', surface: 'local' });
 const ownerCall = (service, name, input = {}) => service.call(name, input, testOwner);
 const candidates=[process.env.DEVMATE_TEST_BROWSER,chromium.executablePath(),
   path.join(process.env.PROGRAMFILES||'C:/Program Files','Google/Chrome/Application/chrome.exe'),
@@ -46,7 +46,7 @@ function fixture() {
     const items=ordered.slice(start,start+limit);
     return {items,...(start+limit<ordered.length?{nextCursor:items.at(-1).id}:{})};
   }
-  const snapshot=input=>({instance:{name:'Isolated fixture'},viewer:{id:'owner',displayName:'Owner',role:'owner'},projects,workflows:workflows.filter(item=>item.projectId===input.projectId),
+  const snapshot=input=>({instance:{name:'Isolated fixture'},projects,workflows:workflows.filter(item=>item.projectId===input.projectId),
     selection:{projectId:input.projectId||null,workflowId:input.workflowId||null},providers:['codex','claude','gemini','grok'].map(id=>({id,name:id,available:true})),
     agents:inProject(agents,input),tasks:[],approvals:[],inputs:[],artifacts:[],references:refs,activity:[],revision:0});
   async function call(operation,input={}) {
@@ -259,9 +259,11 @@ test('finding 1: a server event refreshes the lists and never touches what the p
   await until(()=>f.count('workbench.snapshot')>snapshots,'a refresh during the burst');
   assert.equal(await draft.inputValue(),'halfX012345ten thought');
   assert.equal((await focused(page)).tag,'TEXTAREA');
-  // Events of another project are not this page's business.
-  await delay(1200);const quiet=f.count('workbench.snapshot');
-  server.push({type:'task.updated',projectId:'p-two'});await delay(900);
+  // Events of another project are not this page's business. What the burst still owes arrives first: a refresh follows
+  // its event by up to a second, and later than that on a busy machine.
+  let quiet;
+  do{quiet=f.count('workbench.snapshot');await delay(1500);}while(f.count('workbench.snapshot')!==quiet);
+  server.push({type:'task.updated',projectId:'p-two'});await delay(1500);
   assert.equal(f.count('workbench.snapshot'),quiet);
   // A structured answer in progress survives a new request arriving.
   await page.getByRole('tab',{name:'Approvals',exact:true}).click();

@@ -1097,8 +1097,6 @@ function renderSelectors() {
   $('workflow').disabled = !state.projectId;
   $('new-workflow').disabled = !state.projectId || !can('workflow.create');
   $('instance').textContent = 'Workbench' + (state.snapshot.instance?.version ? ' · ' + state.snapshot.instance.version : '') + (state.snapshot.access?.profile === 'full' ? ' · Full access' : '');
-  const viewer = state.snapshot.viewer;
-  $('viewer').textContent = viewer ? [viewer.displayName || viewer.id, viewer.role].filter(Boolean).join(' · ') : '';
   $('scope').textContent = state.projectId ? [name(selectedProject()) || state.projectId, name(selectedWorkflow())].filter(Boolean).join(' / ') : 'No project selected';
 }
 function buildTabs() {

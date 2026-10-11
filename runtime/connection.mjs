@@ -7,6 +7,7 @@ import { instanceDirectory, localControlUrl } from './client.mjs';
 import { createSshConnection, normalizeSshConfig } from './ssh-connection.mjs';
 import { createCloudflareConnection, normalizeCloudflareConfig } from './cloudflare-connection.mjs';
 import { createConnectionRecovery } from './connection-recovery.mjs';
+import { createOpenAiTunnel } from './openai-tunnel.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
 
 const { childExited, terminateProcessTree } = processTree;
@@ -35,7 +36,7 @@ export function normalizeConnectionConfig(value = {}) {
   const allowed = {
     local: new Set(['kind']),
     'external-https': new Set(['kind', 'url']),
-    'openai-tunnel': new Set(['kind', 'tunnelId', 'executable', 'runtimeKeyEnv'])
+    'openai-tunnel': new Set(['kind', 'tunnelId', 'executable', 'runtimeKeyEnv', 'maxConcurrentRequests', 'organizationId'])
   }[kind];
   if (!allowed) throw new Error('Connection kind must be local, openai-tunnel, cloudflare, cloudflare-quick, external-https, or ssh');
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unsupported connection setting: ${key}`);
@@ -44,10 +45,17 @@ export function normalizeConnectionConfig(value = {}) {
   const tunnelId = String(value.tunnelId || '').trim();
   const executable = String(value.executable || '').trim();
   const runtimeKeyEnv = String(value.runtimeKeyEnv || 'CONTROL_PLANE_API_KEY');
-  if (!/^tunnel_[A-Za-z0-9]+$/.test(tunnelId)) throw new Error('A valid OpenAI tunnel_id is required');
-  if (!path.isAbsolute(executable) || /\.(cmd|bat|ps1)$/i.test(executable)) throw new Error('Select the absolute official tunnel-client executable, not a shell script');
+  if (!/^tunnel_[A-Za-z0-9_]+$/.test(tunnelId)) throw new Error('A valid OpenAI tunnel_id is required');
+  // The tunnel is spoken by the runtime itself. OpenAI's own tunnel-client is used instead only where its executable is named.
+  if (executable && (!path.isAbsolute(executable) || /\.(cmd|bat|ps1)$/i.test(executable))) throw new Error('Select the absolute official tunnel-client executable, not a shell script');
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(runtimeKeyEnv)) throw new Error('runtimeKeyEnv must name an environment variable');
-  return { kind, tunnelId, executable, runtimeKeyEnv };
+  // How many calls from OpenAI are served at once. OpenAI's own client defaults to ten.
+  const maxConcurrentRequests = value.maxConcurrentRequests ?? 32;
+  if (!Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 1 || maxConcurrentRequests > 256) throw new Error('maxConcurrentRequests is a whole number from 1 to 256');
+  // The organization the tunnel belongs to, for a key OpenAI wants it named with. It is an id, not a credential.
+  const organizationId = String(value.organizationId || '').trim();
+  if (organizationId && !/^[A-Za-z0-9_-]{1,100}$/.test(organizationId)) throw new Error('organizationId is the id of the OpenAI organization the tunnel belongs to, such as org-…');
+  return { kind, tunnelId, ...(executable ? { executable } : {}), runtimeKeyEnv, maxConcurrentRequests, ...(organizationId ? { organizationId } : {}) };
 }
 
 export async function inspectTunnelClient({ executable, execFileImpl = executeFile } = {}) {
@@ -66,13 +74,18 @@ export async function inspectTunnelClient({ executable, execFileImpl = executeFi
 }
 
 export function createConnection({
-  config = { kind: 'local' }, localMcpUrl, instanceRoot,
+  config = { kind: 'local' }, localMcpUrl, instanceRoot, instanceId,
   env = process.env, spawnImpl = spawn, fetchImpl = globalThis.fetch,
   terminateImpl = terminateProcessTree
 } = {}) {
   const settings = normalizeConnectionConfig(config);
   if (settings.kind === 'ssh') return createSshConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl });
   if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
+  if (settings.kind === 'openai-tunnel' && !settings.executable) {
+    const tunnel = createOpenAiTunnel({ tunnelId: settings.tunnelId, runtimeKeyEnv: settings.runtimeKeyEnv, organizationId: settings.organizationId, maxConcurrentRequests: settings.maxConcurrentRequests,
+      localMcpUrl: httpTarget(localMcpUrl), instanceId, env, fetchImpl });
+    return { ...tunnel, config: settings };
+  }
   const localUrl = httpTarget(localMcpUrl);
   const healthFile = path.join(instanceDirectory(instanceRoot), 'tunnel-health.url');
   // Only a process this module really started is written down; a test double has none to find again.
@@ -94,7 +107,7 @@ export function createConnection({
   function snapshot() {
     return {
       kind: settings.kind, phase,
-      ...(settings.kind === 'openai-tunnel' ? { tunnelId: settings.tunnelId } : {}),
+      ...(settings.kind === 'openai-tunnel' ? { tunnelId: settings.tunnelId, client: 'tunnel-client', maxConcurrentRequests: settings.maxConcurrentRequests } : {}),
       ...(settings.kind === 'external-https' ? { url: settings.url } : { localMcpUrl: localUrl }),
       ...(child?.pid ? { pid: child.pid } : {}),
       ...(exitCode !== null ? { exitCode } : {}), ...(diagnostic ? { diagnostic } : {}),
@@ -142,8 +155,10 @@ export function createConnection({
         'run',
         '--control-plane.tunnel-id', settings.tunnelId,
         '--mcp.server-url', localUrl,
+        '--mcp.max-concurrent-requests', String(settings.maxConcurrentRequests),
         '--health.listen-addr', '127.0.0.1:0',
-        '--health.url-file', healthFile
+        '--health.url-file', healthFile,
+        ...(settings.organizationId ? ['--control-plane.organization-id', settings.organizationId] : [])
       ];
       phase = 'connecting';
       const inherited = new Set(['path','pathext','systemroot','windir','temp','tmp','home','userprofile',

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { DevMateService } from '../runtime/service.mjs';
 import { presentResult, serverInstructions, MODEL_VISIBLE_OPERATIONS } from '../runtime/mcp.mjs';
 
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // A native adapter stand-in: each instance is one owned agent process.
 function adapters() {
@@ -95,18 +95,13 @@ test('approvals and unavailable agents surface immediately instead of being wait
   assert.equal(missing.status, 'unavailable'); assert.equal(missing.settled, true); assert.equal(missing.error.code, 'agent_not_installed'); assert.equal(missing.turn, null);
   await assert.rejects(service.call('agents.delegate', { projectId: project.id, prompt: 'no provider' }, owner), { code: 'invalid_input' });
   await assert.rejects(service.call('agents.delegate', { projectId: second.id, agentId: blocked.agentId, prompt: 'cross project' }, owner), { code: 'scope_mismatch' });
-  const reader = { id: 'reader', role: 'read', projectIds: [project.id] };
-  await assert.rejects(service.call('agents.delegate', { projectId: project.id, provider: 'claude', prompt: 'x' }, reader), { code: 'forbidden' });
-  assert.equal((await service.call('agents.result', { id: blocked.agentId }, reader)).status, 'ready', 'a reader may observe results');
-  await assert.rejects(service.call('agents.result', { id: blocked.agentId }, { id: 'outsider', role: 'write', projectIds: [second.id] }), { code: 'forbidden' });
 });
 
 test('the model is told how to work: registered projects, the shell in use and the delegation path', async t => {
   const { service, project } = await fixture(t);
-  const text = serverInstructions(service, owner);
+  const text = serverInstructions(service);
   assert.match(text, new RegExp(project.id + ' = Delegation'));
   assert.ok(text.includes(service.processes.shell.label)); assert.match(text, /agents_delegate/); assert.match(text, /workspace_edit/);
-  assert.equal(serverInstructions(service, { id: 'm', role: 'read', projectIds: [] }).includes(project.id), false, 'a member is not shown projects outside its grants');
   for (const name of ['shell.run', 'process.read', 'workspace.edit', 'workspace.find', 'workspace.restore', 'git.log', 'agents.delegate', 'agents.result']) {
     assert.ok(MODEL_VISIBLE_OPERATIONS.has(name), name + ' is visible to the model'); assert.ok(service.operations.has(name), name + ' exists');
   }
@@ -116,8 +111,8 @@ test('the model is told how to work: registered projects, the shell in use and t
 });
 
 test('less common operations are one generic call away and keep their own authorization', async t => {
-  const { service, project, second } = await fixture(t);
-  const remote = { id: 'owner', role: 'owner' };
+  const { service, project } = await fixture(t);
+  const remote = { id: 'owner' };
   const summary = await service.call('operations.list', { summary: true }, remote);
   assert.ok(summary.items.some(item => item.name === 'task.create')); assert.equal(summary.items[0].inputSchema, undefined);
   assert.equal(summary.items.some(item => item.name === 'secret.set' || item.name === 'runtime.doctor'), false, 'local-only operations are not offered to an MCP caller');
@@ -128,11 +123,6 @@ test('less common operations are one generic call away and keep their own author
   for (const operation of ['secret.list', 'settings.read', 'runtime.stop', 'operations.call', 'no.such']) {
     await assert.rejects(service.call('operations.call', { operation }, remote), { code: 'unknown_operation' }, operation);
   }
-  const reader = { id: 'reader', role: 'read', projectIds: [project.id] };
-  assert.ok((await service.call('operations.call', { operation: 'workflow.list', input: { projectId: project.id } }, reader)).items.length);
-  await assert.rejects(service.call('operations.call', { operation: 'workflow.create', input: { projectId: project.id, title: 'x' } }, reader), { code: 'forbidden' });
-  await assert.rejects(service.call('operations.call', { operation: 'workflow.list', input: { projectId: second.id } }, reader), { code: 'forbidden' });
-  await assert.rejects(service.call('operations.call', { operation: 'project.remove', input: { id: project.id } }, { id: 'writer', role: 'write', projectIds: [project.id] }), { code: 'forbidden' });
 });
 
 test('a finished delegation says what the working tree looks like afterwards', async t => {

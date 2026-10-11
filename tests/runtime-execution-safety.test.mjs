@@ -183,20 +183,17 @@ test('the shell reports success and failure the way the command meant them', { s
   assert.equal((await manager.run(project, { command: "Write-Output 'tail' `" })).output.includes('tail'), true);
 });
 
-test('giving up on a wait never ends the command; access removal ends exactly that caller\'s commands', async t => {
+test('giving up on a wait never ends the command', async t => {
   const { manager, project } = processes(t);
   const controller = new AbortController();
-  const pending = manager.run(project, { file: node, args: ['-e', "console.log('started');setInterval(()=>{},1000)"], waitMs: 60000, caller: 'member-a' }, { signal: controller.signal });
+  const pending = manager.run(project, { file: node, args: ['-e', "console.log('started');setInterval(()=>{},1000)"], waitMs: 60000 }, { signal: controller.signal });
   await delay(500); controller.abort();
   const cancelled = await pending;
   assert.equal(cancelled.status, 'running', 'the request stopped waiting');
   assert.equal(alive(cancelled.pid), true, 'the command it started is still there to be read or stopped');
-  const owners = await manager.run(project, { file: node, args: ['-e', 'setInterval(()=>{},1000)'], waitMs: 0, caller: 'owner' });
-  await manager.stopForCaller('member-a');
-  await delay(200);
-  assert.equal(alive(cancelled.pid), false); assert.equal(alive(owners.pid), true);
+  await manager.stop({ id: cancelled.id });
+  assert.equal(alive(cancelled.pid), false);
   assert.equal(manager.list(project.id).items.find(item => item.id === cancelled.id).status, 'stopped');
-  await manager.stop({ id: owners.id });
 });
 
 test('a bare program name is resolved on PATH, never in the project, and a finished stdin stays finished', async t => {
@@ -229,7 +226,9 @@ test('a command that leaves something running in the background still reports it
   assert.ok(Date.now() - started < 10000, 'the exit is noticed without waiting for the background child');
   assert.deepEqual([result.status, result.exitCode, result.backgroundOutput], ['exited', 0, true]);
   assert.match(result.output, /parent done/);
-  const later = await manager.read({ id: result.id, cursor: result.cursor, waitMs: 3000 });
+  // The background child prints when it has started, later on a busy computer: it is read again until it has.
+  let later = await manager.read({ id: result.id, cursor: result.cursor, waitMs: 3000 });
+  for (const end = Date.now() + 30000; !/still/.test(later.output) && Date.now() < end;) later = await manager.read({ id: result.id, cursor: result.cursor, waitMs: 3000 });
   assert.match(later.output, /still/, 'what the background child prints is still collected');
   await assert.rejects(manager.stop({ id: result.id }), error => error.code === 'background_processes' && /not tracked/.test(error.message));
   assert.equal(alive(orphan), true, 'nothing was claimed to be stopped');

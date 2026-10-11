@@ -9,7 +9,6 @@ function baseEngine(events) {
       name: 'Example',
       version: '1.0.0',
       description: 'Base engine.',
-      ownerOnly: true,
       permissions: { executablePatterns: ['^example$'] }
     },
     defaultSettings: { base: true },
@@ -57,7 +56,6 @@ test('an extension keeps the identity and owner-only declaration of its base', (
   assert.equal(extended.manifest.name, base.manifest.name);
   assert.equal(extended.manifest.version, '1.1.0');
   assert.equal(extended.manifest.description, 'Base engine.');
-  assert.equal(extended.manifest.ownerOnly, true);
   assert.deepEqual(extended.manifest.permissions.executablePatterns, ['^example$', '^helper$']);
   assert.throws(() => extendPlugin(base, {}), /requires version/);
   assert.throws(() => extendPlugin(base, { version: '1.1.0', activate: 'now' }), /activate must be a function/);

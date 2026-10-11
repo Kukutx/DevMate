@@ -1,12 +1,11 @@
 import { DomainError } from '../store.mjs';
 import { VERSION } from '../version.mjs';
-import { eventFor, now } from './shared.mjs';
+import { now } from './shared.mjs';
 
-/** The state the workbench shows for one caller, bounded so that it stays quick with years of history. */
+/** The state the workbench shows, bounded so that it stays quick with years of history. */
 export async function snapshot(service, { projectId, workflowId } = {}, context) {
-  if (!context?.id || !['owner', 'write', 'read'].includes(context.role)) throw new DomainError('unauthorized', 'A verified caller identity is required.');
+  service.admit(context);
   await service.ready;
-  if (context.role !== 'owner' && (!Array.isArray(context.projectIds) || (projectId && !context.projectIds.includes(projectId)))) throw new DomainError('forbidden', 'Project is outside the caller grants.');
   if (projectId) service.project(projectId);
   if (workflowId) {
     const workflow = service.store.get('workflow', workflowId);
@@ -32,20 +31,19 @@ export async function snapshot(service, { projectId, workflowId } = {}, context)
   } : { agents: 0, activeTasks: 0, pendingReviews: 0, artifacts: 0 };
   const providers = await service.call('providers.list', {}, context);
   return {
-    instance: { name: 'DevMate', version: VERSION }, viewer: { id: context.id, displayName: context.role === 'owner' ? 'Owner' : context.id, role: context.role },
+    instance: { name: 'DevMate', version: VERSION },
     capabilities: { operations: service.visibleOperations(context).map(op => op.name) }, access: { profile: service.accessProfile }, counts,
-    projects: service.store.list('project', { ...(context.projectId ? { projectIds: [context.projectId] } :
-      context.role !== 'owner' ? { projectIds: context.projectIds } : {}) }),
-    // What an editor has open but does not share is the owner's business at this computer only.
-    windows: context.role === 'owner' ? service.windows.list().filter(item => !context.windowId || item.windowId === context.windowId)
-      .map(item => context.surface === 'local' ? item : { ...item, roots: item.roots.filter(root => root.projectId) }) : [], workflows: projectId ? service.store.list('workflow', { projectId }) : [],
+    projects: service.store.list('project', context.projectId ? { projectId: context.projectId } : {}),
+    // What an editor has open but does not share stays at this computer.
+    windows: service.windows.list().filter(item => !context.windowId || item.windowId === context.windowId)
+      .map(item => context.surface === 'local' ? item : { ...item, roots: item.roots.filter(root => root.projectId) }), workflows: projectId ? service.store.list('workflow', { projectId }) : [],
     selection: { projectId: projectId || null, workflowId: workflowId || null },
     agents: scoped('agent'), tasks: scoped('task'), messages: scoped('message').sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     approvals: awaiting('approval'), inputs: awaiting('input'), artifacts: scoped('artifact'), references: scoped('reference'),
     hosts: projectId ? service.hosts.list({ projectId }).hosts : [],
-    // The same view of the connection the caller would get by asking for it: full for the local owner, state only for everyone else.
+    // The same view of the connection the caller would get by asking for it: full at this computer, state only for a connected client.
     providers: providers.items, connection: await service.call('connection.status', {}, context),
-    activity: projectId ? service.store.recentEvents({ ...scope, limit: 100 }).map(event => eventFor(event, context)) : [],
+    activity: projectId ? service.store.recentEvents({ ...scope, limit: 100 }) : [],
     revision: service.store.revision, updatedAt: now()
   };
 }

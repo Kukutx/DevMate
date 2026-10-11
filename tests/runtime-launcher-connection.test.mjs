@@ -41,7 +41,7 @@ test('official tunnel child uses native argv and its key stays out of arguments 
   const key = 'test-runtime-key-not-a-real-credential';
   const connection = createConnection({
     instanceRoot, localMcpUrl:'http://127.0.0.1:32123/mcp',
-    config:{kind:'openai-tunnel',tunnelId:'tunnel_isolated',executable:process.execPath,runtimeKeyEnv:'TEST_RUNTIME_KEY'},
+    config:{kind:'openai-tunnel',tunnelId:'tunnel_isolated',executable:process.execPath,runtimeKeyEnv:'TEST_RUNTIME_KEY',organizationId:'org-isolated'},
     env:{TEST_RUNTIME_KEY:key,DEVMATE_UNRELATED_SECRET:'not-for-tunnel',HTTPS_PROXY:'http://127.0.0.1:7890'},
     spawnImpl:(file,args,options)=>{invocation={file,args,options};return child;},
     terminateImpl:async target=>{terminated=target;child.exitCode=0;child.emit('exit',0);return{exitConfirmed:true};},
@@ -59,6 +59,8 @@ test('official tunnel child uses native argv and its key stays out of arguments 
   assert.equal(JSON.stringify(invocation.args).includes(key),false);
   assert.equal(invocation.args[0],'run');
   assert.equal(invocation.args.includes('--mcp.server-url'),true);
+  // The organization named for the tunnel is passed on by the option OpenAI's program has for it.
+  assert.equal(invocation.args[invocation.args.indexOf('--control-plane.organization-id')+1],'org-isolated');
   fs.writeFileSync(path.join(instanceRoot,'tunnel-health.url'),'http://127.0.0.1:32124');
   const state = await connection.status();
   assert.equal(state.phase,'relay-ready');

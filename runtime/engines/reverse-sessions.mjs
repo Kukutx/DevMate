@@ -53,7 +53,6 @@ export class ReverseSessionStore {
 }
 
 export function assertProcessAccess(context) {
-  context.assertOwner('Inspecting a local process');
   if (!context.settings.allowProcessAccess) throw new Error('Process access is disabled. The owner enables it with capability.configure {engine:"reverse", settings:{allowProcessAccess:true}}');
 }
 

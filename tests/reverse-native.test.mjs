@@ -14,7 +14,7 @@ const tools = new Map(), audits = [];
 const context = {
   state: createEngineState('devmate.reverse'), assertActive() {},
   settings: reverseSettingsSchema.parse({ pythonPath: python || '', allowProcessAccess: true, allowMemoryWrite: true }),
-  caller: () => 'owner', assertOwner() {}, assertCanMutate: () => {},
+  assertCanMutate: () => {},
   audit: async (action, payload) => { audits.push({ action, payload }); },
   executables: { find: () => python, assertAllowed: () => {} },
   workspace: { get: () => ws },
@@ -39,14 +39,14 @@ test('native capacity and plugin shutdown fence operations still awaiting audit'
   assert.ok(results.every(result => result.status === 'rejected' && /stopped/.test(result.reason.message)));
 });
 
-test('native execution rechecks permission after asynchronous audit', { skip: !python }, async () => {
-  let release, role = 'owner';
+test('native execution checks again after the asynchronous audit that the project is still open', { skip: !python }, async () => {
+  let release, open = true;
   const gate = new Promise(resolve => { release = resolve; });
-  const gated = { ...context, audit: () => gate, caller: () => role, assertOwner(action) { if (this.caller() !== 'owner') throw new Error(action + ' is available only to the owner'); } };
+  const gated = { ...context, audit: () => gate, assertActive() { if (!open) throw new Error('Project capability resources are closing.'); } };
   const pending = runNative(gated, 'status');
-  role = 'write';
+  open = false;
   release();
-  await assert.rejects(pending, /only to the owner/);
+  await assert.rejects(pending, /resources are closing/);
 });
 
 test('fixed helper source remains small enough for a Windows command line', () => {

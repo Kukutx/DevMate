@@ -6,8 +6,8 @@ import path from 'node:path';
 import { DevMateService } from '../runtime/service.mjs';
 
 // The owner at this computer, and the same owner reached through MCP: a connected model, or a workbench embedded in a chat app.
-const local = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
-const connected = Object.freeze({ id: 'owner', role: 'owner', projectIds: null });
+const local = Object.freeze({ id: 'owner', surface: 'local' });
+const connected = Object.freeze({ id: 'owner' });
 
 async function fixture(t) {
   const temp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-decisions-')));
@@ -124,10 +124,9 @@ test('a read-only project takes no new DevMate records, and an artifact is read 
   }
   await assert.rejects(service.call('artifact.create', { projectId: project.id, workflowId: workflow.id, path: '.env' }, local), { code: 'protected_workspace_path' });
   await service.call('project.update', { id: project.id, access: 'read' }, local);
-  const writer = { id: 'member', role: 'write', projectIds: [project.id] };
   for (const [operation, input] of [['workflow.create', { title: 'Another' }], ['task.create', { workflowId: workflow.id, title: 'T', instruction: 'do' }],
     ['reference.add', { workflowId: workflow.id, uri: 'https://example.com', name: 'ref' }], ['artifact.create', { workflowId: workflow.id, path: 'report.txt' }]]) {
-    await assert.rejects(service.call(operation, { projectId: project.id, ...input }, writer), { code: 'read_only' }, operation);
+    await assert.rejects(service.call(operation, { projectId: project.id, ...input }, connected), { code: 'read_only' }, operation);
   }
-  assert.equal((await service.call('workflow.list', { projectId: project.id }, writer)).items.length, 1, 'what exists stays readable');
+  assert.equal((await service.call('workflow.list', { projectId: project.id }, connected)).items.length, 1, 'what exists stays readable');
 });

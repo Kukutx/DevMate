@@ -2,7 +2,7 @@
 
 The `reverse` engine can hand format parsing, code analysis and decompilation to tools installed on the owner's computer. DevMate finds them, starts them with fixed arguments on a private copy of the file, bounds the result and cleans up. It does not download or install anything, never executes the analyzed file, and has no decompiler of its own.
 
-Starting an installed backend is available to the owner only. Other callers keep the built-in tools described in [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md).
+The built-in tools, which need none of this, are described in [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md).
 
 ## Which backend does what
 
@@ -46,7 +46,7 @@ The owner sets paths with `capability.configure` (or `engineSettings.reverse` in
 3. `reverse.code_analyze` with `query: "functions"`. Queries: `functions`, `xrefs`, `symbols`, `imports`, `exports`, `sections`, `disassembly`. `xrefs` and `disassembly` need a hexadecimal `address`.
 4. `reverse.decompile` with a function address.
 
-`code_analyze` and `decompile` are flagged `longRunning`: start them with `job_start` (see [CAPABILITIES.md](CAPABILITIES.md)).
+`code_analyze` and `decompile` are flagged `longRunning`: start them with the `job.start` operation (see [CAPABILITIES.md](CAPABILITIES.md)).
 
 Table queries page with `offset` and `limit` and return `nextOffset`. Disassembly pages by `nextAddress`. Integers beyond JavaScript's safe range arrive as decimal strings. There is no project cache: each call analyzes again, so narrow queries are faster. Decompiled C is an approximation, not the original source.
 

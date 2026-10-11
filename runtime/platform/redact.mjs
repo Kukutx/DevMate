@@ -1,8 +1,9 @@
-// Command lines are shown to people other than the one who typed them: in the
-// activity of a project, in process and job lists. Credentials written inline
-// are replaced before a command is displayed or recorded for display. The
-// command that runs is never changed. This is a best effort on well-known
-// shapes, not a guarantee: a secret in an unusual form is not recognised.
+// Command lines are shown and recorded beyond the moment they ran: in the
+// activity of a project, in process lists, in what a connected client is told.
+// Credentials written inline are replaced before a command is displayed or
+// recorded for display. The command that runs is never changed. This is a best
+// effort on well-known shapes, not a guarantee: a secret in an unusual form is
+// not recognised.
 const MARK = '[redacted]';
 const RULES = [
   // Authorization headers and bearer tokens.
@@ -25,18 +26,4 @@ export function redactSecrets(text) {
   let result = text;
   for (const [pattern, replacement] of RULES) result = result.replace(pattern, replacement);
   return result;
-}
-
-/** A command as stored with a job (`command` text, or `file` with `args`), made fit to show to someone else. */
-export function redactCommand(value) {
-  if (!value || typeof value !== 'object') return value;
-  const shown = { ...value };
-  if (typeof shown.command === 'string') shown.command = redactSecrets(shown.command);
-  // Arguments are judged together, so that "--token" followed by its value in the next argument is caught.
-  if (Array.isArray(shown.args) && shown.args.every(item => typeof item === 'string')) {
-    const separator = '\u0000';
-    const joined = redactSecrets(shown.args.join(separator)).split(separator);
-    shown.args = joined.length === shown.args.length ? joined : shown.args.map(redactSecrets);
-  }
-  return shown;
 }

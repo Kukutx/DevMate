@@ -3,14 +3,18 @@ import { randomBytes } from 'node:crypto';
 
 // On Windows a file that was written a moment ago is often still held open by a virus scanner or an indexer.
 // Replacing it then fails with EPERM, EBUSY or EACCES although nothing is wrong, and succeeds a few
-// milliseconds later. The replace is repeated for up to about two seconds, which is how long a scanner can keep
-// a file on a busy machine; anywhere else, and for any other error, it fails at once.
-export function replaceFile(from, to) {
+// milliseconds later. The replace is repeated for a little over five seconds: on a computer that is short of
+// memory a scanner was seen to keep a file for longer than two. Anywhere else, and for any other error, it fails
+// at once. The waiting holds this process up, which is why it is not longer.
+const REPEATS = 29;
+const sleep = ms => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+export function replaceFile(from, to, { rename = fs.renameSync, platform = process.platform, wait = sleep } = {}) {
   for (let attempt = 0; ; attempt++) {
-    try { return fs.renameSync(from, to); }
+    try { return rename(from, to); }
     catch (failure) {
-      if (process.platform !== 'win32' || attempt >= 12 || !['EPERM', 'EBUSY', 'EACCES'].includes(failure.code)) throw failure;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(200, 10 * 2 ** attempt));
+      if (platform !== 'win32' || attempt >= REPEATS || !['EPERM', 'EBUSY', 'EACCES'].includes(failure.code)) throw failure;
+      // 10, 20, 40, 80, 160, then 200 milliseconds each time.
+      wait(Math.min(200, 10 * 2 ** attempt));
     }
   }
 }

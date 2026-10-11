@@ -14,6 +14,7 @@ const clientId = 'https://client.example/metadata.json';
 const redirectUri = 'http://127.0.0.1:55123/callback';
 const verifier = 'v'.repeat(64);
 const s256 = value => createHash('sha256').update(value).digest('base64url');
+const s256Hex = value => createHash('sha256').update(value).digest('hex');
 const challenge = s256(verifier);
 const metadata = { client_id: clientId, client_name: 'Fixture Client', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
 const seconds = () => Math.floor(Date.now() / 1000);
@@ -37,8 +38,8 @@ async function fixture(t, { config = { mode: 'oauth', issuer }, client = metadat
   }
   const query = (extra = {}) => ({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', resource: issuer + '/mcp',
     code_challenge: challenge, code_challenge_method: 'S256', scope: 'devmate offline_access', state: 'state-value', ...extra });
-  async function authorize(memberId, extra = {}) {
-    const login = operation('auth.code.create', memberId ? { memberId } : {});
+  async function authorize(extra = {}) {
+    const login = operation('auth.code.create');
     const params = query({ authorization_code: login.code, ...extra });
     const response = await request('/oauth/authorize', params);
     assert.equal(response.status, 302, response.text);
@@ -51,15 +52,15 @@ async function fixture(t, { config = { mode: 'oauth', issuer }, client = metadat
     resource: issuer + '/mcp', redirect_uri: redirectUri, code_verifier: verifier, code, ...extra });
   const refresh = (token, extra = {}) => request('/oauth/token', { grant_type: 'refresh_token', client_id: clientId, resource: issuer + '/mcp', refresh_token: token, ...extra });
   const principal = token => auth.authenticate({ headers: { authorization: 'Bearer ' + token } });
-  const signIn = async (memberId, extra) => (await exchange((await authorize(memberId, extra)).code)).json;
+  const signIn = async extra => (await exchange((await authorize(extra)).code)).json;
   const loginRecord = code => store.list('auth-code').find(item => item.hash === createHash('sha256').update(code).digest('hex'));
   const reopen = (next = config) => { auth.close(); auth = createAuth({ store, instanceRoot: root, config: next, clientMetadata }); return auth; };
   return { root, store, fetched, get auth() { return auth; }, operation, request, query, authorize, exchange, refresh, principal, signIn, loginRecord, reopen };
 }
 test('none is the default, returns owner and creates no OAuth key or authorization state', async t => {
   const f = await fixture(t, { config: {} });
-  assert.deepEqual(f.auth.authenticate({ headers: {} }), { id: 'owner', role: 'owner', projectIds: null });
-  assert.deepEqual(f.auth.check({ headers: {} }), { principal: { id: 'owner', role: 'owner', projectIds: null }, reason: null });
+  assert.deepEqual(f.auth.authenticate({ headers: {} }), { id: 'owner' });
+  assert.deepEqual(f.auth.check({ headers: {} }), { principal: { id: 'owner' }, reason: null });
   assert.equal(f.auth.challenge(), null);
   assert.equal(fs.existsSync(path.join(f.root, 'oauth-signing-key')), false);
   assert.equal((await f.request('/oauth/token')).handled, false);
@@ -102,7 +103,7 @@ test('the 401 challenge names the metadata and scope, and says so when a present
   assert.deepEqual(f.auth.check({ headers: {} }), { principal: null, reason: null });
   assert.deepEqual(f.auth.check({ headers: { authorization: 'Basic abc' } }), { principal: null, reason: null });
   assert.equal(f.auth.challenge(), 'Bearer resource_metadata="' + issuer + '/.well-known/oauth-protected-resource/mcp", scope="devmate"');
-  assert.deepEqual(f.auth.check(bearer(issued.access_token)), { principal: { id: 'owner', role: 'owner', projectIds: null }, reason: null });
+  assert.deepEqual(f.auth.check(bearer(issued.access_token)), { principal: { id: 'owner' }, reason: null });
   const forged = f.auth.check(bearer(issued.access_token.slice(0, -2) + 'xx'));
   assert.equal(forged.principal, null); assert.match(forged.reason, /invalid or expired/);
   assert.match(f.auth.check({ headers: { authorization: 'Bearer two parts' } }).reason, /malformed/);
@@ -183,7 +184,7 @@ test('login and authorization codes are each consumed once; wrong PKCE cannot re
   assert.equal((await f.exchange(authorized.code, { code_verifier: 'x'.repeat(64) })).json.error, 'invalid_grant');
   const result = await f.exchange(authorized.code);
   assert.equal(result.status, 200);
-  assert.deepEqual(f.principal(result.json.access_token), { id: 'owner', role: 'owner', projectIds: null });
+  assert.deepEqual(f.principal(result.json.access_token), { id: 'owner' });
   assert.equal((await f.exchange(authorized.code)).json.error, 'invalid_grant');
 });
 test('a replayed authorization code revokes the tokens its first use issued, but a guess does not', async t => {
@@ -272,17 +273,8 @@ test('clients are public: a secret, an assertion or HTTP authentication is refus
   assert.equal((await f.refresh(issued.refresh_token)).status, 200);
   assert.equal((await f.request('/oauth/token', { grant_type: 'password', client_id: clientId })).json.error, 'unsupported_grant_type');
 });
-test('member principal preserves explicit read/write role and project scope', async t => {
-  const f = await fixture(t);
-  const project = f.store.create('project', { root: f.root, access: 'write', name: 'Fixture' });
-  const member = f.operation('auth.member.create', { name: 'Friend', role: 'read', projectIds: [project.id, project.id] });
-  const result = await f.exchange((await f.authorize(member.id)).code);
-  assert.deepEqual(f.principal(result.json.access_token), { id: member.id, role: 'read', projectIds: [project.id], authVersion: 1 });
-  assert.throws(() => f.operation('auth.member.create', { name: 'Escalate', role: 'owner', projectIds: [] }));
-  assert.throws(() => f.operation('auth.member.create', { name: 'Other', role: 'write', projectIds: ['missing'] }), { code: 'not_found' });
-});
 test('a refresh token follows the client grant types, not the offline_access scope', async t => {
-  const f = await fixture(t), plain = await f.signIn(undefined, { scope: 'devmate' });
+  const f = await fixture(t), plain = await f.signIn({ scope: 'devmate' });
   assert.equal(plain.scope, 'devmate'); assert.ok(plain.refresh_token, 'the client declares the refresh_token grant');
   const next = await f.refresh(plain.refresh_token);
   assert.equal(next.status, 200); assert.equal(next.json.scope, 'devmate'); assert.ok(f.principal(next.json.access_token));
@@ -292,17 +284,17 @@ test('a refresh token follows the client grant types, not the offline_access sco
   assert.equal((await f.exchange(new URL(implicit.headers.Location).searchParams.get('code'))).json.scope, 'devmate');
 
   const codeOnly = await fixture(t, { client: { ...metadata, grant_types: ['authorization_code'] } });
-  const short = await codeOnly.signIn(undefined, { scope: 'devmate' });
+  const short = await codeOnly.signIn({ scope: 'devmate' });
   assert.equal(short.refresh_token, undefined);
   assert.equal(codeOnly.store.list('auth-grant')[0].expiresAt - seconds() <= ACCESS_TOKEN_SECONDS, true);
   assert.ok((await codeOnly.signIn()).refresh_token, 'asking for offline_access is honoured as well');
   const undeclared = await fixture(t, { client: { client_id: clientId, client_name: 'Minimal', redirect_uris: [redirectUri] } });
-  assert.equal((await undeclared.signIn(undefined, { scope: 'devmate' })).refresh_token, undefined);
+  assert.equal((await undeclared.signIn({ scope: 'devmate' })).refresh_token, undefined);
 });
 test('each refresh extends the grant by the idle period, never past its absolute age', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const f = await fixture(t), start = seconds(), day = 86400;
-  let current = await f.signIn(undefined, { scope: 'devmate' });
+  let current = await f.signIn({ scope: 'devmate' });
   const grant = () => f.store.list('auth-grant')[0];
   assert.equal(grant().expiresAt, start + GRANT_IDLE_SECONDS); assert.equal(grant().maxExpiresAt, start + GRANT_MAX_SECONDS);
   const step = GRANT_IDLE_SECONDS - day;
@@ -345,7 +337,7 @@ test('a refresh token presented by another client revokes the family', async t =
   assert.deepEqual(f.operation('auth.grant.list').items.map(item => [item.status, item.reason]), [['revoked', 'refresh_binding_mismatch']]);
 });
 test('a refresh may omit resource and scope; a wrong value is refused without ending the grant', async t => {
-  const f = await fixture(t), first = await f.signIn(undefined, { scope: 'devmate' });
+  const f = await fixture(t), first = await f.signIn({ scope: 'devmate' });
   const target = await f.refresh(first.refresh_token, { resource: 'https://other.example/mcp' });
   assert.equal(target.json.error, 'invalid_target'); assert.match(target.json.error_description, /resource must be https:\/\/devmate\.example\/mcp \(or be omitted\)/);
   const widened = await f.refresh(first.refresh_token, { scope: 'devmate offline_access' });
@@ -355,22 +347,6 @@ test('a refresh may omit resource and scope; a wrong value is refused without en
   const bare = await f.request('/oauth/token', { grant_type: 'refresh_token', client_id: clientId, refresh_token: first.refresh_token });
   assert.equal(bare.status, 200, bare.text);
   assert.equal((await f.refresh(bare.json.refresh_token, { scope: 'devmate' })).status, 200);
-});
-test('disable and scope change immediately invalidate issued tokens and unused login codes', async t => {
-  const f = await fixture(t);
-  const member = f.operation('auth.member.create', { name: 'Friend', role: 'write', projectIds: [] });
-  const pending = f.operation('auth.code.create', { memberId: member.id });
-  const tokens = (await f.exchange((await f.authorize(member.id)).code)).json;
-  f.operation('auth.member.update', { id: member.id, disabled: true, expectedRevision: member.revision });
-  assert.equal(f.principal(tokens.access_token), null);
-  assert.equal((await f.refresh(tokens.refresh_token)).json.error, 'invalid_grant');
-  assert.throws(() => f.operation('auth.code.create', { memberId: member.id }), { code: 'identity_disabled' });
-  f.operation('auth.member.update', { id: member.id, disabled: false, role: 'read' });
-  const params = { client_id: clientId, redirect_uri: redirectUri, response_type: 'code', resource: issuer + '/mcp',
-    code_challenge: challenge, code_challenge_method: 'S256', authorization_code: pending.code };
-  assert.equal((await f.request('/oauth/authorize', params)).status, 403);
-  const fresh = (await f.exchange((await f.authorize(member.id)).code)).json;
-  assert.equal(f.principal(fresh.access_token).role, 'read');
 });
 test('credentials and token strings are never persisted in SQLite entities or events', async t => {
   const f = await fixture(t), authorized = await f.authorize(), issued = (await f.exchange(authorized.code)).json;
@@ -394,10 +370,9 @@ test('new factory instance preserves token verification and one-time code consum
   assert.equal((await f.exchange(other.code)).status, 200);
   assert.equal((await f.request('/oauth/authorize', other.params)).status, 403);
 });
-test('revocation follows RFC 7009 and member removal invalidates grants', async t => {
+test('revocation follows RFC 7009', async t => {
   const f = await fixture(t);
-  const member = f.operation('auth.member.create', { name: 'Friend', role: 'write', projectIds: [] });
-  const issued = (await f.exchange((await f.authorize(member.id)).code)).json;
+  const issued = (await f.exchange((await f.authorize()).code)).json;
   // A token another client holds is left alone, and an unknown token is not an error.
   assert.equal((await f.request('/oauth/revoke', { client_id: 'https://other.example/client.json', token: issued.refresh_token })).status, 200);
   assert.equal((await f.request('/oauth/revoke', { client_id: clientId, token: 'unknown' })).status, 200);
@@ -407,13 +382,16 @@ test('revocation follows RFC 7009 and member removal invalidates grants', async 
   const revoke = await f.request('/oauth/revoke', { client_id: clientId, token: issued.refresh_token, token_type_hint: 'refresh_token' });
   assert.equal(revoke.status, 200); assert.deepEqual(revoke.json, {}); assert.equal(f.principal(issued.access_token), null);
   assert.equal((await f.refresh(issued.refresh_token)).json.error, 'invalid_grant');
-  const byAccess = (await f.exchange((await f.authorize(member.id)).code)).json;
+  const byAccess = (await f.exchange((await f.authorize()).code)).json;
   assert.equal((await f.request('/oauth/revoke', { client_id: clientId, token: byAccess.access_token, resource: issuer + '/mcp' })).status, 200);
   assert.equal(f.principal(byAccess.access_token), null);
   assert.equal((await f.refresh(byAccess.refresh_token)).json.error, 'invalid_grant');
-  const next = (await f.exchange((await f.authorize(member.id)).code)).json;
-  f.operation('auth.member.remove', { id: member.id });
-  assert.equal(f.principal(next.access_token), null);
+});
+test('a sign-in code that names anyone but the owner signs nobody in', async t => {
+  const f = await fixture(t), code = 'dml_' + 'x'.repeat(43);
+  f.store.create('auth-code', { purpose: 'login', hash: s256Hex(code), subject: 'someone-else', authVersion: 1, expiresAt: seconds() + 600, status: 'active' });
+  assert.equal((await f.request('/oauth/authorize', f.query({ authorization_code: code }))).status, 403);
+  assert.deepEqual(f.operation('auth.grant.list'), { items: [] });
 });
 test('authorization POST rejects foreign Origin and ambiguous duplicate parameters', async t => {
   const f = await fixture(t);
@@ -476,12 +454,11 @@ test('nothing depends on used codes or ended grants still being stored', async t
   assert.deepEqual(f.operation('auth.grant.list'), { items: [] });
   assert.throws(() => f.operation('auth.grant.revoke', { id: 'auth-grant-missing' }), { code: 'not_found' });
 });
-test('grant list is bounded and newest first; revoking a member reaches every one of its grants', async t => {
+test('grant list is bounded and newest first', async t => {
   const f = await fixture(t);
-  const member = f.operation('auth.member.create', { name: 'Friend', role: 'write', projectIds: [] });
   const base = { purpose: 'client', authVersion: 1, clientId, scope: 'devmate', status: 'active', generation: 1, refreshable: false, refreshHash: 'h' };
   const ids = [];
-  f.store.transaction(() => { for (let index = 0; index < 620; index++) ids.push(f.store.create('auth-grant', { ...base, subject: index % 2 ? member.id : 'owner', expiresAt: seconds() + 600, maxExpiresAt: seconds() + 600 }).id); });
+  f.store.transaction(() => { for (let index = 0; index < 620; index++) ids.push(f.store.create('auth-grant', { ...base, subject: 'owner', expiresAt: seconds() + 600, maxExpiresAt: seconds() + 600 }).id); });
   const listed = f.operation('auth.grant.list').items;
   assert.equal(listed.length, 100);
   assert.deepEqual(listed.map(item => item.id), ids.slice(-100).reverse());
@@ -489,19 +466,15 @@ test('grant list is bounded and newest first; revoking a member reaches every on
   assert.equal(f.operation('auth.grant.list', { limit: 500 }).items.length, 500);
   assert.equal(f.operation('auth.grant.list', { limit: 3 }).items.length, 3);
   assert.throws(() => f.operation('auth.grant.list', { limit: 501 }));
-  f.operation('auth.member.update', { id: member.id, role: 'read' });
-  const after = f.store.list('auth-grant', { limit: 10000 });
-  assert.equal(after.filter(item => item.subject === member.id && item.status === 'revoked' && item.reason === 'identity_changed').length, 310);
-  assert.equal(after.filter(item => item.subject === 'owner' && item.status === 'active').length, 310);
 });
-test('a verification token is a short grant without refresh and without access to any project, listed and then removed', async t => {
+test('a verification token is a short grant without refresh that is not the owner, listed and then removed', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const f = await fixture(t), start = seconds();
   const issued = f.auth.issueVerificationToken({ ttlSeconds: 30 });
   assert.deepEqual(Object.keys(issued).sort(), ['accessToken', 'expiresAt', 'grantId']);
   assert.equal(issued.expiresAt, new Date((start + 30) * 1000).toISOString());
   // It is sent to whatever answers at the public address, so it can ask which runtime that is and nothing more.
-  assert.deepEqual(f.principal(issued.accessToken), { id: 'verification', role: 'read', projectIds: [] });
+  assert.deepEqual(f.principal(issued.accessToken), { id: 'verification' });
   const [listed] = f.operation('auth.grant.list').items;
   assert.deepEqual({ id: listed.id, purpose: listed.purpose, subject: listed.subject, scope: listed.scope, status: listed.status, clientId: listed.clientId, expiresAt: listed.expiresAt },
     { id: issued.grantId, purpose: 'verification', subject: 'devmate:verification', scope: 'devmate', status: 'active', clientId: 'devmate:route-verification', expiresAt: start + 30 });
@@ -565,10 +538,10 @@ test('a registered client signs in without a metadata document: PKCE, tokens, ro
   assert.match(page.text, /<strong>Gemini CLI<\/strong> asks to use DevMate/); assert.match(page.text, /Client: <code>gemini-cli<\/code>/);
   assert.match(page.text, /The owner of this DevMate registered this client/, 'the page says whose word the name is');
   assert.match(page.text, /<strong>127\.0\.0\.1:49152<\/strong>/); assert.match(page.text, /local application/);
-  const issued = await f.exchange((await f.authorize(undefined, asRegistered)).code, asRegistered);
+  const issued = await f.exchange((await f.authorize(asRegistered)).code, asRegistered);
   assert.equal(issued.status, 200, issued.text);
   assert.equal(issued.json.token_type, 'Bearer'); assert.equal(issued.json.scope, 'devmate offline_access'); assert.equal(issued.json.expires_in, ACCESS_TOKEN_SECONDS);
-  assert.deepEqual(f.principal(issued.json.access_token), { id: 'owner', role: 'owner', projectIds: null });
+  assert.deepEqual(f.principal(issued.json.access_token), { id: 'owner' });
   const refresh = token => f.refresh(token, { client_id: registered.clientId });
   const second = await refresh(issued.json.refresh_token);
   assert.equal(second.status, 200, second.text); assert.notEqual(second.json.refresh_token, issued.json.refresh_token); assert.ok(f.principal(second.json.access_token));
@@ -576,23 +549,19 @@ test('a registered client signs in without a metadata document: PKCE, tokens, ro
   assert.equal(f.principal(second.json.access_token), null);
   assert.deepEqual(f.operation('auth.grant.list').items.map(item => [item.clientId, item.status, item.reason]), [['gemini-cli', 'revoked', 'refresh_reuse']]);
   // Revocation is the client's own: the token is revoked for the client it was issued to.
-  const again = (await f.exchange((await f.authorize(undefined, asRegistered)).code, asRegistered)).json;
+  const again = (await f.exchange((await f.authorize(asRegistered)).code, asRegistered)).json;
   assert.equal((await f.request('/oauth/revoke', { client_id: clientId, token: again.refresh_token })).status, 200);
   assert.ok(f.principal(again.access_token));
   assert.equal((await f.request('/oauth/revoke', { client_id: registered.clientId, token: again.refresh_token })).status, 200);
   assert.equal(f.principal(again.access_token), null); assert.equal((await refresh(again.refresh_token)).json.error, 'invalid_grant');
   // The owner registered it, so it stays signed in also when it does not ask for offline_access.
-  const plain = (await f.exchange((await f.authorize(undefined, { ...asRegistered, scope: 'devmate' })).code, asRegistered)).json;
+  const plain = (await f.exchange((await f.authorize({ ...asRegistered, scope: 'devmate' })).code, asRegistered)).json;
   assert.equal(plain.scope, 'devmate'); assert.ok(plain.refresh_token); assert.ok(f.principal(plain.access_token));
-  // Identities and their grants are the same whichever kind of client signs in.
-  const member = f.operation('auth.member.create', { name: 'Friend', role: 'read', projectIds: [] });
-  const friend = (await f.exchange((await f.authorize(member.id, asRegistered)).code, asRegistered)).json;
-  assert.deepEqual(f.principal(friend.access_token), { id: member.id, role: 'read', projectIds: [], authVersion: 1 });
   assert.deepEqual(f.fetched, [], 'nothing was fetched for a registered client');
 });
 test('a client taken out of the configuration can no longer sign in, redeem a code or refresh', async t => {
   const f = await fixture(t, withClients());
-  const issued = (await f.exchange((await f.authorize(undefined, asRegistered)).code, asRegistered)).json, pending = await f.authorize(undefined, asRegistered);
+  const issued = (await f.exchange((await f.authorize(asRegistered)).code, asRegistered)).json, pending = await f.authorize(asRegistered);
   f.reopen({ mode: 'oauth', issuer });
   assert.equal((await f.request('/oauth/authorize', f.query(asRegistered), { method: 'GET' })).status, 400);
   assert.equal((await f.exchange(pending.code, asRegistered)).json.error, 'invalid_client');
@@ -635,7 +604,7 @@ test('a registered client is refused without PKCE, at a redirect that is not reg
   assert.deepEqual(f.fetched, [], 'a name that is not a URL is never looked up');
 
   // At the token endpoint the code answers only to its own client, its redirect and its PKCE verifier.
-  const { code } = await f.authorize(undefined, asRegistered);
+  const { code } = await f.authorize(asRegistered);
   for (const wrong of [{ code_verifier: 'x'.repeat(64) }, { code_verifier: challenge }, { code_verifier: '' }, { redirect_uri: 'http://127.0.0.1:49153/oauth/callback' }, { client_id: clientId }])
     assert.equal((await f.exchange(code, { ...asRegistered, ...wrong })).json.error, 'invalid_grant', JSON.stringify(wrong));
   assert.equal((await f.request('/oauth/token', { grant_type: 'authorization_code', client_id: registered.clientId, code })).json.error, 'invalid_grant', 'no verifier at all');
@@ -723,7 +692,7 @@ test('a client that publishes a metadata document signs in as before beside regi
   const page = await f.request('/oauth/authorize', f.query(), { method: 'GET' });
   assert.equal(page.status, 200); assert.match(page.text, /<strong>Fixture Client<\/strong>/); assert.equal(page.text.includes('registered this client'), false);
   const issued = await f.signIn();
-  assert.deepEqual(f.principal(issued.access_token), { id: 'owner', role: 'owner', projectIds: null });
+  assert.deepEqual(f.principal(issued.access_token), { id: 'owner' });
   assert.equal((await f.refresh(issued.refresh_token)).status, 200);
   assert.deepEqual([...new Set(f.fetched)], [clientId], 'its document is still what describes it');
   // Neither kind of client can use a redirect of the other.
@@ -741,7 +710,7 @@ test('a client that publishes a metadata document signs in as before beside regi
   // In mode none there is no sign-in for a registered client to use.
   const none = await fixture(t, { config: { mode: 'none', clients: [registered] } });
   assert.equal((await none.request('/oauth/authorize', none.query(asRegistered), { method: 'GET' })).handled, false);
-  assert.deepEqual(none.auth.authenticate({ headers: {} }), { id: 'owner', role: 'owner', projectIds: null });
+  assert.deepEqual(none.auth.authenticate({ headers: {} }), { id: 'owner' });
   // The name the owner chose is shown as text.
   const hostile = await fixture(t, withClients({ ...registered, name: '<img src=x onerror=alert(1)> & "Co"' }));
   const shown = (await hostile.request('/oauth/authorize', hostile.query(asRegistered), { method: 'GET' })).text;

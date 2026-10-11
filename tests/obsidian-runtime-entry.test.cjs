@@ -269,7 +269,7 @@ test('against a real runtime: the vault attaches, serves obsidian.*, publishes t
   const vaultRoot = path.join(temp, 'vault'); fs.mkdirSync(path.join(vaultRoot, 'Notes'), { recursive: true });
   fs.writeFileSync(path.join(vaultRoot, 'Notes', 'Active.md'), 'body');
   const service = new DevMateService({ instanceRoot: path.join(temp, 'state'), endpoint: 'http://127.0.0.1:1/api/agent', adapterFactory: () => ({}) });
-  const owner = { id: 'owner', role: 'owner', surface: 'local' };
+  const owner = { id: 'owner', surface: 'local' };
   const project = await service.call('project.create', { root: vaultRoot, name: 'Vault' }, owner);
   const client = { status: async () => ({ running: true, state: 'ready', record: { generation: 'real' } }), call: (name, input) => service.call(name, input, owner),
     operations: async () => ({ items: [] }), workbenchUrl: async () => 'http://127.0.0.1:8788/?code=single-use', mcpUrl: async () => 'http://127.0.0.1:8788/mcp',

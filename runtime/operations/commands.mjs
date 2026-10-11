@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
-import { actor, commandShape, id, jobFor, listOptions, mutation, oneCommand, projectScope, waitMs } from './shared.mjs';
+import { actor, commandShape, id, listOptions, mutation, oneCommand, projectScope, waitMs } from './shared.mjs';
 
 // Commands a caller runs and follows directly (shell.run, process.*), and durable jobs
 // that outlive the request that started them (job.*).
@@ -19,8 +19,8 @@ export function defineCommandOperations(service, add) {
   };
   add('shell.run', { ...projectScope, ...commandShape, waitMs, interactive: z.boolean().optional(), ...mutation }, false,
     'Run a command in the project: tests, builds, package managers, Git writes, dev servers. command is ' + service.processes.shell.label +
-    (service.processes.shell.noChaining ? ' text (no && or ||: chain with ";" and "if ($?) { ... }")' : ' text') + '; file+args launches one executable with exact arguments and no shell quoting (useful for a commit message). Returns when the command exits or after waitMs (default 30s, at most 50s); a still-running command, such as a dev server, keeps running until it exits or you stop it and is followed with process_read. timeoutMs ends it automatically. Output is paged by cursor; the newest 64 MiB are kept.',
-    (args, context) => observed(service.processes.run(service.project(args.projectId, { write: true }), { ...oneCommand(args), caller: context.id }, { signal: service.waitSignal(context) })),
+    (service.processes.shell.noChaining ? ' text (no && or ||: chain with ";" and "if ($?) { ... }")' : ' text') + '; file+args launches one executable with exact arguments and no shell quoting. Returns when the command exits or after waitMs (default 30s, at most 50s); a command still running then, such as a dev server, keeps running and is followed with process_read. timeoutMs ends it automatically.',
+    (args, context) => observed(service.processes.run(service.project(args.projectId, { write: true }), oneCommand(args), { signal: service.waitSignal(context) })),
     { destructive: true, openWorld: true, present: processOutput, meta: processMeta });
   add('process.list', { ...projectScope }, true, 'List commands started in this project during the current runtime session.', args => {
     service.project(args.projectId);
@@ -36,7 +36,6 @@ export function defineCommandOperations(service, add) {
   add('process.stop', { id, ...mutation }, false, 'Stop a running command and its whole process tree.',
     args => service.processes.stop(args), { projectOf, idempotent: true });
 
-  const caller = context => ({ id: context.id, role: context.role, authVersion: context.authVersion ?? null });
   add('job.start', { ...projectScope, workflowId: id.optional(), kind: z.enum(['command', 'capability']),
     input: z.record(z.string(), z.unknown()).describe('For kind command: what shell_run takes (command, or file with args; cwd; timeoutMs). For kind capability: what capability_call takes.'),
     ...mutation }, false, 'Start a durable command or capability job and return immediately.', (args, context) => {
@@ -54,14 +53,14 @@ export function defineCommandOperations(service, add) {
           '. A command job takes what shell_run takes (command, or file with args, cwd, timeoutMs); a capability job takes what capability_call takes.');
       }
       delete parsed.operationId;
-      return service.jobs.start({ projectId: args.projectId, workflowId: args.workflowId, kind: args.kind, input: { args: parsed, caller: caller(context) } });
+      return service.jobs.start({ projectId: args.projectId, workflowId: args.workflowId, kind: args.kind, input: { args: parsed } });
     }, { destructive: true, openWorld: true });
   add('job.list', listOptions, true, 'List native turns, commands and capability jobs, without their output. job.read returns one job with all of it.', (args, context) => {
     const page = service.list('job', args, context);
     // A list is for finding a job; each may hold a quarter megabyte of output.
-    return { ...page, items: page.items.map(item => { const { output, ...job } = jobFor(item, context); return { ...job, outputChars: output?.length || 0, ...(output ? { outputTail: output.slice(-400) } : {}) }; }) };
+    return { ...page, items: page.items.map(item => { const { output, ...job } = item; return { ...job, outputChars: output?.length || 0, ...(output ? { outputTail: output.slice(-400) } : {}) }; }) };
   });
-  add('job.read', { id }, true, 'Read one job including output and outcome evidence.', (args, context) => jobFor(service.store.get('job', args.id), context));
+  add('job.read', { id }, true, 'Read one job including output and outcome evidence.', args => service.store.get('job', args.id));
   add('job.cancel', { id, ...mutation }, false, 'Cancel an owned job and inspect its confirmed outcome.', args => {
     const job = service.store.get('job', args.id);
     if (job.kind !== 'agent-turn') return service.jobs.cancel(args.id);
@@ -71,9 +70,8 @@ export function defineCommandOperations(service, add) {
   add('job.retry', { id, ...mutation }, false, 'Explicitly create a new execution for a failed, cancelled or uncertain job.', (args, context) => {
     const job = service.store.get('job', args.id);
     if (job.kind !== 'agent-turn') {
-      if (context.role !== 'owner' && job.input.caller.id !== context.id) throw new DomainError('forbidden', 'Only the original caller or owner can retry this execution.');
       service.project(job.projectId, { write: job.kind === 'command' });
-      return service.jobs.retry(args.id, caller(context));
+      return service.jobs.retry(args.id);
     }
     if (!['failed', 'unknown', 'cancelled'].includes(job.status)) throw new DomainError('job_not_retryable', 'Only failed, unknown or cancelled jobs can be explicitly retried.');
     const delivery = service.store.get('delivery', job.deliveryId);

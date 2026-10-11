@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DevMate</title>
+<style>
+  :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 16%, transparent); --soft: color-mix(in srgb, currentColor 7%, transparent);
+    --accent: #1f6feb; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; }
+  @media (prefers-color-scheme: dark) { :root { --accent: #4c8dff; --good: #3fb950; --warn: #d29922; --bad: #ff7b72; } }
+  * { box-sizing: border-box; }
+  body { font: 13px/1.45 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; padding: 14px; width: 340px; }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  header h1 { font-size: 15px; margin: 0; flex: 1; }
+  header small { opacity: .6; font-size: 12px; }
+  #language { border: 0; background: none; color: inherit; opacity: .6; cursor: pointer; font: inherit; font-size: 12px; padding: 2px 4px; }
+  #language:hover { opacity: 1; }
+
+  /* One sentence that says how things stand, and under it the one thing to do about it. */
+  #now { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  #now .line { display: flex; align-items: baseline; gap: 8px; font-weight: 600; }
+  #now .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--line); transform: translateY(-1px); }
+  #now[data-level=good] .dot { background: var(--good); }
+  #now[data-level=wait] .dot { background: var(--warn); }
+  #now[data-level=bad] .dot { background: var(--bad); }
+  #now p { margin: 6px 0 0; opacity: .85; overflow-wrap: anywhere; }
+  #now ol { margin: 6px 0 0; padding-left: 18px; }
+  #now li { margin: 2px 0; }
+  #now .said { margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--soft); font-size: 12px; }
+  #now .said b { display: block; font-weight: 600; opacity: .7; }
+  code { font: 12px ui-monospace, Consolas, monospace; background: var(--soft); padding: 1px 5px; border-radius: 4px; user-select: all; }
+
+  /* A debugger on a tab is the owner's to see and to take off, here as on the bar the browser shows. */
+  #debugging { display: flex; align-items: center; gap: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; font-size: 12px; }
+  #debugging span { flex: 1; }
+  #debugging button { flex: none; padding: 4px 8px; }
+
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+  .actions .wide { grid-column: 1 / -1; }
+  button.action { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+  button.action:hover:not(:disabled) { border-color: var(--accent); }
+  button.action:disabled { opacity: .4; cursor: default; }
+  button.action.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  [hidden] { display: none !important; }
+
+  section { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+  section h2 { font-size: 12px; font-weight: 600; opacity: .6; margin: 0 0 6px; text-transform: none; }
+  .switch { display: flex; gap: 10px; align-items: flex-start; padding: 4px 0; cursor: pointer; }
+  .switch input { margin-top: 3px; flex: none; }
+  .switch b { display: block; font-weight: 600; }
+  .switch span { display: block; opacity: .75; font-size: 12px; }
+
+  #activity { list-style: none; margin: 0; padding: 0; max-height: 132px; overflow: auto; font-size: 12px; }
+  #activity li { display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; padding: 2px 0; }
+  #activity time { opacity: .55; font-variant-numeric: tabular-nums; }
+  #activity .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #activity .mark { opacity: .7; }
+  #activity .change .name::after { content: " ✎"; opacity: .6; }
+  #activity .failed .mark { color: var(--bad); opacity: 1; }
+  #none { margin: 0; opacity: .6; font-size: 12px; }
+  #note { margin: 8px 0 0; min-height: 1.3em; font-size: 12px; opacity: .85; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>DevMate</h1>
+    <small id="version"></small>
+    <button id="language" type="button" title="Language / 语言">中文</button>
+  </header>
+
+  <div id="now" data-level="wait" role="status">
+    <div class="line"><span class="dot"></span><span id="status">…</span></div>
+    <div id="detail"></div>
+  </div>
+
+  <div id="debugging" hidden>
+    <span id="debuggingText"></span>
+    <button id="debugStop" class="action" type="button"></button>
+  </div>
+
+  <div class="actions">
+    <button id="start" class="action primary wide" hidden></button>
+    <button id="again" class="action primary wide" hidden></button>
+    <button id="workbench" class="action"></button>
+    <button id="copy" class="action"></button>
+  </div>
+
+  <section>
+    <label class="switch"><input type="checkbox" id="access"><div><b id="accessTitle"></b><span id="accessText"></span></div></label>
+    <label class="switch"><input type="checkbox" id="autostart"><div><b id="autostartTitle"></b><span id="autostartText"></span></div></label>
+  </section>
+
+  <section>
+    <h2 id="activityTitle"></h2>
+    <ul id="activity"></ul>
+    <p id="none"></p>
+  </section>
+
+  <p id="note" role="status"></p>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

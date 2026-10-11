@@ -62,14 +62,13 @@ function fixture(t, options = {}) {
 
 test('one call starts an agent and returns its answer; the next call continues the same session', async t => {
   const f = fixture(t);
-  const first = await f.delegate({ provider: 'claude', prompt: 'Fix the failing test\nDetails follow', waitMs: 5000, caller: 'owner' });
+  const first = await f.delegate({ provider: 'claude', prompt: 'Fix the failing test\nDetails follow', waitMs: 5000 });
   assert.equal(first.settled, true); assert.equal(first.status, 'ready'); assert.equal(first.provider, 'claude');
   assert.equal(first.output, 'done: Fix the failing test\nDetails follow'); assert.equal(first.outputTruncated, false);
   assert.equal(first.turn.status, 'completed'); assert.equal(first.turn.jobId, first.jobId); assert.ok(first.turn.finishedAt);
   assert.deepEqual(first.approvals, []); assert.deepEqual(first.inputs, []); assert.equal(first.error, undefined);
   assert.equal(f.store.get('delivery', first.deliveryId).jobId, first.jobId);
   assert.equal(f.store.get('workflow', first.workflowId).title, 'Delegated: Fix the failing test');
-  assert.equal(f.store.get('agent', first.agentId).caller, 'owner');
   assert.equal(f.instances[0].options.cwd, f.project.root);
   const again = await f.delegate({ agentId: first.agentId, prompt: 'Now add a regression test', waitMs: 5000 });
   assert.equal(again.agentId, first.agentId); assert.equal(again.workflowId, first.workflowId);
@@ -256,7 +255,7 @@ test('a prompt given at start is a queued task from the first moment: it fails w
   const workflow = f.store.create('workflow', { projectId: f.project.id, title: 'One turn', status: 'active', turnBudget: 1, usedTurns: 0 });
   const scope = { projectId: f.project.id, workflowId: workflow.id };
   f.factory.mode = 'missing';
-  const broken = f.coordinator.start({ ...scope, provider: 'codex', prompt: 'First', caller: 'owner' });
+  const broken = f.coordinator.start({ ...scope, provider: 'codex', prompt: 'First' });
   const failed = await f.coordinator.outcome(broken.id, { waitMs: 5000 });
   assert.equal(failed.settled, true); assert.equal(failed.status, 'unavailable'); assert.equal(failed.error.code, 'agent_not_installed');
   assert.equal(f.store.get('delivery', failed.deliveryId).status, 'failed');
@@ -425,22 +424,6 @@ test('a provider with one process per turn gets a channel token per turn, valid 
   const second = agent.channel.env.DEVMATE_AGENT_TOKEN;
   assert.notEqual(second, first); assert.equal(f.coordinator.channelCall(second, 'agent_peers', {}).items.length, 1);
   agent.finish({ status: 'completed', text: 'two' });
-});
-
-test('sessions started by a principal are stopped when that principal loses access', async t => {
-  const f = fixture(t);
-  const mine = await f.delegate({ provider: 'codex', prompt: 'member task', waitMs: 5000, caller: 'member-1' }, { kind: 'user', id: 'member-1', label: 'member-1' });
-  const implied = await f.delegate({ provider: 'claude', prompt: 'no explicit caller', waitMs: 5000 }, { kind: 'user', id: 'member-1', label: 'member-1' });
-  const theirs = await f.delegate({ provider: 'codex', prompt: 'other member', waitMs: 5000, caller: 'member-2' });
-  assert.equal(f.store.get('agent', implied.agentId).caller, 'member-1');
-  const result = await f.coordinator.stopForCaller('member-1');
-  assert.deepEqual(result, { callerId: 'member-1', agentIds: [mine.agentId, implied.agentId] });
-  assert.equal(f.store.get('agent', mine.agentId).status, 'closed'); assert.equal(f.store.get('agent', implied.agentId).status, 'closed');
-  assert.equal(f.store.get('agent', theirs.agentId).status, 'ready'); assert.equal(f.instances[2].closed, false);
-  // Whoever continues an agent becomes responsible for its new session.
-  await f.delegate({ agentId: mine.agentId, prompt: 'continued', waitMs: 5000, caller: 'member-2' });
-  assert.equal(f.store.get('agent', mine.agentId).caller, 'member-2');
-  assert.deepEqual((await f.coordinator.stopForCaller('member-1')).agentIds, []);
 });
 
 test('a retried native error is not the agent\'s error, and a completed turn clears one', async t => {

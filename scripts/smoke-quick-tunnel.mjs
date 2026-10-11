@@ -26,7 +26,7 @@ const expect = (condition, what) => { say(condition ? '[ ok ]' : '[FAIL]', what)
 let failed = false;
 const runtime = await startRuntime({ instanceRoot, port: 0 });
 try {
-  await runtime.service.call('project.create', { root: projectRoot }, { id: 'owner', role: 'owner', surface: 'local' });
+  await runtime.service.call('project.create', { root: projectRoot }, { id: 'owner', surface: 'local' });
   let url = null, checked = null;
   for (let attempt = 0; attempt < 60 && !checked?.verified; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 3000));

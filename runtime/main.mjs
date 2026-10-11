@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createMcpHandler, isLegacyRequest, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.mjs';
@@ -17,6 +19,10 @@ import { createEventStreams } from './event-stream.mjs';
 import { writeAtomic } from './platform/atomic-write.mjs';
 import { hardenExecutableSearch } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
+import { createOutboundProxy } from './platform/proxy.mjs';
+import { clientSurfaceBy } from './surfaces.mjs';
+import { VERIFY_CLIENT } from './connection-verify.mjs';
+import { createChromeRegistration } from './platform/chrome-registration.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -26,7 +32,6 @@ const BODY_LIMIT = 16 * 1024 * 1024;
 const REVERIFY_MS = 10 * 60_000;
 const UPKEEP_MS = 60_000;
 const LOG_LIMIT_BYTES = 8 * 1024 * 1024;
-const OWNER = Object.freeze({ id: 'owner', role: 'owner', projectIds: null });
 const STATUS = { unauthorized: 401, forbidden: 403, scope_mismatch: 403, invalid_origin: 403, not_found: 404, unknown_operation: 404,
   conflict: 409, operation_conflict: 409, body_too_large: 413, invalid_host: 421, forwarded_request: 421,
   runtime_stopping: 503, runtime_unavailable: 503 };
@@ -102,7 +107,7 @@ function listen(listener, port, purpose) {
 }
 
 export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.devmate', 'runtime'), port = 8788, ingressPort,
-  adapterFactory, connectionFactory = createConnection, capabilitiesFactory, authOptions, onReady } = {}) {
+  adapterFactory, connectionFactory = createConnection, capabilitiesFactory, authOptions, onReady, proxy = null } = {}) {
   instanceRoot = path.resolve(instanceRoot);
   fs.mkdirSync(instanceRoot, { recursive: true, mode: 0o700 });
   // The mode applies only when the directory is created. One that already existed is made private too:
@@ -152,7 +157,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   const quickTunnel = config.connection.kind === 'cloudflare-quick';
   // A quick tunnel cannot ask for sign-in, and its host name is no secret: a name travels through DNS in the clear.
   // What keeps the endpoint the owner's is a path nobody can guess, new with every start, that travels only inside TLS.
-  const mcpPath = quickTunnel ? '/mcp/' + randomBytes(24).toString('base64url') : '/mcp';
+  // A relay of the owner's own forwards one such path as well; there it is part of the configured address and stays.
+  const mcpPath = quickTunnel ? '/mcp/' + randomBytes(24).toString('base64url') : publicUrl ? new URL(publicUrl).pathname : '/mcp';
   const currentOrigin = () => {
     if (config.auth.mode === 'oauth') return config.auth.issuer;
     const url = publicUrl || (quickTunnel ? connection?.publicUrl?.() : null);
@@ -188,7 +194,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // The control port is reachable only from this computer, so a caller that
     // presents no credentials is its owner in either auth mode. A caller that
     // does present a token is exactly who that token says, or nobody.
-    const { principal, reason } = local && !req.headers.authorization ? { principal: { ...OWNER }, reason: null } : service.auth.check(req);
+    const { principal, reason } = local && !req.headers.authorization ? { principal: { id: 'owner' }, reason: null } : service.auth.check(req);
     for (const [name, value] of Object.entries(cors)) res.setHeader(name, value);
     if (!principal) {
       // The challenge tells a client where to sign in, and whether the token it sent was the problem.
@@ -273,14 +279,14 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       if (scope && requestProject && requestProject !== scope.projectId) throw new DomainError('scope_mismatch', 'Project is outside this editor window.');
       return send(res, 200, { ok: true, result: await service.snapshot({
         projectId: scope?.projectId || requestProject, workflowId: url.searchParams.get('workflowId') || undefined
-      }, { id: 'owner', role: 'owner', ...local, ...(scope || {}) }) });
+      }, { id: 'owner', ...local, ...(scope || {}) }) });
     }
     if (url.pathname === '/api/call' && req.method === 'POST') {
       const input = await body(req);
       if (typeof input.operation !== 'string' || !input.operation) throw new DomainError('invalid_input', 'operation must name a DevMate operation.');
       if (input.input !== undefined && (!input.input || typeof input.input !== 'object' || Array.isArray(input.input))) throw new DomainError('invalid_input', 'input must be a JSON object.');
       if (stopping && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(input.operation)) return refuse(res, 'runtime_stopping', 'Runtime is stopping.');
-      const context = { id: 'owner', role: 'owner', ...local };
+      const context = { id: 'owner', ...local };
       const windowId = req.headers['x-devmate-window-id'];
       if (windowId) {
         context.windowId = windowId;
@@ -356,23 +362,51 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     } else ingressPort = null;
     service.agents.endpoint = 'http://127.0.0.1:' + port + '/api/agent';
     service.identity = { instanceId, generation };
-    connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, env: service.secrets.environment(),
+    service.proxy = proxy;
+    connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, instanceId, env: service.secrets.environment(),
       localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
     service.connection = connection;
+    // What a request says about its client and what it asks for decides which tool names it is shown (./surfaces.mjs):
+    // read from the message before the SDK takes it, and carried to the factory that serves this very request.
+    const asked = new AsyncLocalStorage();
+    // A client of the 2025 protocol names itself once, when it begins, and its later requests carry its sender line
+    // only. What a sender line last named itself is remembered, so that the tools it is shown stay those of its name.
+    const named = new Map();
+    const noting = handler => ({ close: handler.close, async fetch(request, extra = {}) {
+      // Asking which tools there are, and saying who asks, are small messages; a large one is a call and is not read twice.
+      let messages = [];
+      if (request.method === 'POST' && !(Number(request.headers.get('content-length')) > 65536)) {
+        try { messages = [extra.parsedBody ?? await request.clone().json()].flat().filter(message => message && typeof message === 'object'); } catch { /* the handler answers a malformed message */ }
+      }
+      const said = messages.map(message => message.params?._meta?.['io.modelcontextprotocol/clientInfo']?.name || message.params?.clientInfo?.name).find(Boolean);
+      // OpenAI's tunnel is the one thing that reaches the ingress port by its loopback address.
+      const sender = request.headers.get('user-agent'), tunnel = config.connection.kind === 'openai-tunnel' && Number(new URL(request.url).port) === ingressPort;
+      if (said && sender) { named.delete(sender); named.set(sender, String(said).slice(0, 200)); if (named.size > 64) named.delete(named.keys().next().value); }
+      const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said || (sender ? named.get(sender) : undefined), userAgent: sender, tunnel });
+      // Who asked last and which tool names they were given, for the doctor. What a client says of itself is its own
+      // text: kept short and printable. A client of the 2025 protocol names itself once; its later requests keep that
+      // name while the sender line stays the same. The check of the public route asks as itself and is not a client.
+      // Without sign-in that check arrives as the owner, like everything else: it is known by the name it gives itself.
+      if (messages.length && extra.authInfo?.extra?.devmatePrincipal?.id === 'owner' && said !== VERIFY_CLIENT) {
+        const plain = value => String(value || '').replace(/[^\x20-\x7e]/g, '').slice(0, 80), userAgent = plain(sender);
+        service.lastClient = { name: plain(said) || (service.lastClient?.userAgent === userAgent ? service.lastClient.name : ''), userAgent, ...decided, tunnel, at: new Date().toISOString() };
+      }
+      return asked.run({ listing: messages.length > 0 && messages.every(message => message.method === 'tools/list'), surface: decided.surface }, () => handler.fetch(request, extra));
+    } });
     const serverFor = ({ authInfo }) => {
       const principal = authInfo?.extra?.devmatePrincipal;
       if (!principal) throw new DomainError('unauthorized', 'A verified MCP identity is required.');
-      return createMcpServer(service, principal);
+      return createMcpServer(service, principal, asked.getStore());
     };
     // The SDK default also serves MCP clients that still speak a 2025 protocol
     // revision, statelessly. Which clients may connect is not DevMate's own history.
     // The largest text the file tools accept must fit in one request; the SDK's own bound is 4 MiB.
     mcpHandler = createMcpHandler(serverFor, { maxRequestBodySize: BODY_LIMIT });
     // The Node adapter reads the body first and has a bound of its own.
-    mcp = toNodeHandler(mcpHandler, { maxRequestBodySize: BODY_LIMIT });
+    mcp = toNodeHandler(noting(mcpHandler), { maxRequestBodySize: BODY_LIMIT });
     if (quickTunnel) {
       plainHandler = plainJsonHandler(serverFor, { maxRequestBodySize: BODY_LIMIT });
-      plainMcp = toNodeHandler(plainHandler, { maxRequestBodySize: BODY_LIMIT });
+      plainMcp = toNodeHandler(noting(plainHandler), { maxRequestBodySize: BODY_LIMIT });
     }
     // A connector that cannot start does not take local work down with it, but it is never silent:
     // health says so, and connection.status and the doctor carry the reason.
@@ -382,6 +416,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       health.connection = 'failed';
       process.stderr.write(new Date().toISOString() + ' connection: ' + error.message + '\n');
     }
+    // A browser the owner registered starts and loads this copy of DevMate from now on (nothing where none is registered).
+    try { createChromeRegistration({ instanceRoot, cli: fileURLToPath(new URL('./cli.mjs', import.meta.url)) }).refresh(); }
+    catch (error) { process.stderr.write(new Date().toISOString() + ' browser registration: ' + error.message + '\n'); }
     health.status = 'ready';
     if (ingressPort) health.ingressPort = ingressPort;
     publish(recordFile, JSON.stringify({ pid: process.pid, port, ...(ingressPort ? { ingressPort } : {}), instanceId, generation,
@@ -409,6 +446,12 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       try {
         if (!fs.existsSync(instanceRoot)) { process.stderr.write('DevMate: the instance directory is gone; stopping.\n'); void stop(); return; }
         if ((fs.statSync(logFile, { throwIfNoEntry: false })?.size || 0) > LOG_LIMIT_BYTES) { fs.copyFileSync(logFile, logFile + '.1'); fs.truncateSync(logFile, 0); }
+        // The system proxy is switched on and off while the runtime runs; the route is checked again when it was.
+        void proxy?.refresh().then(changed => {
+          if (!changed || stopping) return;
+          process.stderr.write(new Date().toISOString() + ' requests to the outside now go ' + (proxy.current()?.proxy ? 'through ' + proxy.current().proxy : 'directly') + '\n');
+          if (publicUrl || quickTunnel) void service.verifyConnection().catch(() => {});
+        }, () => {});
       } catch {}
     }, UPKEEP_MS);
     upkeepTimer.unref();
@@ -427,6 +470,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
  */
 export async function serve(options = {}) {
   hardenExecutableSearch();
+  // For the whole process, and before the first request to the outside.
+  const proxy = createOutboundProxy();
+  await proxy.refresh();
   const stamp = () => new Date().toISOString();
   let runtime;
   process.on('uncaughtException', error => {
@@ -438,7 +484,7 @@ export async function serve(options = {}) {
   });
   // A stray rejected promise is reported, not fatal: the request behind it has already failed on its own.
   process.on('unhandledRejection', error => { process.stderr.write(stamp() + ' unhandled rejection: ' + (error?.stack || error) + '\n'); });
-  runtime = await startRuntime({ ...options, onReady: info => process.stdout.write(JSON.stringify({ event: 'ready', ...info }) + '\n') });
+  runtime = await startRuntime({ ...options, proxy, onReady: info => process.stdout.write(JSON.stringify({ event: 'ready', ...info }) + '\n') });
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { void runtime.stop().catch(() => {}); });
   return runtime;
 }

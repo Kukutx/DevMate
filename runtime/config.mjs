@@ -72,8 +72,9 @@ export const configSchema = z.object({
     z.object({ kind: z.literal('local') }).strict(),
     z.object({ kind: z.literal('external-https'), url: z.string().url() }).strict(),
     z.object({ kind: z.literal('ssh'), publicUrl: z.string().url(), executable: z.string(), host: z.string(), user: z.string(),
-      sshPort: z.number().int().optional(), remotePort: z.number().int().optional(), identityFile: z.string().optional() }).strict(),
-    z.object({ kind: z.literal('openai-tunnel'), tunnelId: z.string(), executable: z.string(), runtimeKeyEnv: envName.optional() }).strict(),
+      sshPort: z.number().int().optional(), remotePort: z.number().int().optional(), identityFile: z.string().optional(), relay: z.boolean().optional() }).strict(),
+    z.object({ kind: z.literal('openai-tunnel'), tunnelId: z.string(), executable: z.string().optional(), runtimeKeyEnv: envName.optional(),
+      maxConcurrentRequests: z.number().int().optional(), organizationId: z.string().optional() }).strict(),
     z.object({ kind: z.literal('cloudflare'), publicUrl: z.string().url(), executable: z.string(), tokenEnv: envName.optional() }).strict(),
     z.object({ kind: z.literal('cloudflare-quick'), executable: z.string() }).strict()
   ]).default({ kind: 'local' }),
@@ -98,6 +99,11 @@ export function normalizeConfig(input = {}) {
     throw new DomainError('invalid_issuer', 'A quick tunnel gets a new address each time it starts, so nobody can sign in at it. Use it without sign-in, or use a tunnel with a hostname of your own.');
   }
   const publicUrl = publicMcpUrl(config);
+  // A relay forwards the one path its address ends in and nothing else, so the pages of a sign-in cannot be reached
+  // through it. What keeps strangers out there is the key in that path and the list of addresses the relay answers.
+  if (config.auth.mode === 'oauth' && publicUrl && new URL(publicUrl).pathname !== '/mcp') {
+    throw new DomainError('invalid_issuer', 'An address that ends in a key (a relay set up with devmate relay setup) forwards that one path only, so nobody can sign in through it. It is protected by the key and by the list of addresses the relay answers: use it without sign-in.');
+  }
   if (config.auth.mode === 'oauth' && publicUrl && new URL(publicUrl).origin !== config.auth.issuer) {
     throw new DomainError('invalid_issuer', 'The external MCP URL and OAuth issuer must use the same origin.');
   }

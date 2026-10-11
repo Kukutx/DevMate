@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { createChromeRegistration } from '../platform/chrome-registration.mjs';
 import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
+import { TUNNEL_HELP } from '../openai-tunnel.mjs';
 import { within } from './shared.mjs';
 
 /**
@@ -16,8 +19,8 @@ export async function doctor(service) {
   const shell = service.processes.shell;
   check('shell', fs.statSync(shell.file, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', shell.label + ' at ' + shell.file, 'Commands cannot run without the system shell.');
   // Models write `a && b` by habit. Windows PowerShell 5.1 does not have it; PowerShell 7 does.
-  if (shell.label === 'Windows PowerShell 5.1') check('shell.version', 'info', 'Commands run in Windows PowerShell 5.1, which has no && and ||.',
-    'Install PowerShell 7 (winget install Microsoft.PowerShell) and restart DevMate: it is used automatically and accepts what models usually write.');
+  if (shell.label === 'Windows PowerShell 5.1') check('shell.version', 'info', 'Commands run in Windows PowerShell 5.1: it has no && and ||, which models write by habit, and every command pays about a third of a second for its start.',
+    'Install PowerShell 7 with one command (winget install --id Microsoft.PowerShell --source winget) and restart DevMate: it is used automatically, accepts what models usually write and starts faster.');
   for (const [tool, purpose] of [['rg', 'file find and search'], ['git', 'Git tools']]) {
     let found = null, problem = null;
     try { found = resolveTool(tool); } catch (error) { if (error.code === 'tool_outdated') problem = error.message; }
@@ -39,25 +42,47 @@ export async function doctor(service) {
       installed ? null : absent ? 'Only needed to delegate tasks to ' + provider.id + '.' : 'Update or reinstall ' + provider.id + (provider.minimumVersion ? ' (version ' + provider.minimumVersion + ' or newer)' : '') + ' to delegate tasks to it.');
   }
   const connection = service.config.connection, url = service.publicUrl(), env = service.secrets.environment();
+  // Whether a client in the cloud could reach this computer at all without something in between. An address that is
+  // private, shared by a provider (100.64.0.0/10) or link-local is not reachable from outside, whatever is forwarded.
+  const addresses = Object.values(os.networkInterfaces()).flat().filter(item => item && !item.internal);
+  const privateV4 = address => /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(address);
+  const direct = addresses.some(item => (item.family === 'IPv4' || item.family === 4) && !privateV4(item.address));
+  if (!direct && connection.kind === 'local') check('network', 'info', 'This computer has no public IPv4 address of its own: it is behind a router or a provider\'s address translation, so a client in the cloud cannot connect to it directly.',
+    'Give it a way in that you control: a relay on a public server of yours (devmate relay setup user@host), or for ChatGPT OpenAI\'s own tunnel (devmate connect openai-tunnel).');
+  // How the runtime's own requests leave this computer: OpenAI's tunnel service, the check of the public route, a
+  // signing-in client's metadata document.
+  const proxy = service.proxy?.current();
+  if (proxy?.proxy) check('proxy', 'ok', 'Requests to the outside go through ' + proxy.proxy + ' (' + (proxy.source === 'environment' ? 'the HTTPS_PROXY / HTTP_PROXY variables' : 'the system proxy of this account') + ').');
+  else if (proxy?.script) check('proxy', 'warn', 'This account uses a proxy script, which DevMate cannot run: its requests to the outside go directly and may not get through.', 'Give the proxy\'s address in the HTTPS_PROXY variable for DevMate, then restart it (devmate restart).');
+  else if (proxy?.unsupported) check('proxy', 'warn', 'This computer is set to use a proxy that DevMate cannot use (' + proxy.unsupported + '): its requests to the outside go directly and may not get through.',
+    /Node\.js/.test(proxy.unsupported) ? 'Install Node.js 24.14 or newer, then restart DevMate (devmate restart).' : 'Give an HTTP proxy address in the HTTPS_PROXY variable, then restart DevMate (devmate restart).');
   const status = await service.connectionState();
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
-  if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'Configure an openai-tunnel or cloudflare connection to use ChatGPT or Claude.ai.');
+  if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'For ChatGPT use OpenAI\'s own tunnel (devmate connect openai-tunnel --tunnel-id <id>); for any client a relay on a server of yours (devmate relay setup user@host).');
   else {
     if (connection.executable) check('connection.executable', fs.statSync(connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', connection.executable, 'Install the connector and set its absolute path in the connection settings.');
     if (credential) check('connection.credential', env[credential] ? 'ok' : 'fail', credential + (env[credential] ? ' is set' : ' is missing'),
       'Store it with: devmate secret set ' + credential + ' (or "Configure Connection" in the editor), then restart DevMate.');
     const phase = status.phase || status.status || 'unknown', fault = status.error?.message || service.connectionFault?.message;
     check('connection.process', ['connected', 'relay-ready', 'configured', 'process-running'].includes(phase) ? 'ok' : ['connecting', 'starting'].includes(phase) ? 'warn' : 'fail',
-      connection.kind + ': ' + phase + (fault ? ' — ' + fault : ''), status.diagnostic ? String(status.diagnostic).slice(-400) : fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
+      connection.kind + ': ' + phase + (connection.kind === 'openai-tunnel' ? status.client === 'built-in' ? ' (spoken by DevMate itself, protocol ' + status.wireProtocol + ', up to ' + status.maxConcurrentRequests + ' calls at once)' : ' (OpenAI\'s tunnel-client program)' : '') +
+        (fault ? ' — ' + fault : ''), status.diagnostic ? String(status.diagnostic).slice(-400) : fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
     if (url) {
       const verification = service.verification?.url === url ? service.verification : await service.verifyConnection();
-      // What the doctor prints gets pasted into bug reports. The last part of a quick tunnel address is its key.
-      const shown = connection.kind === 'cloudflare-quick' ? new URL(url).origin + '/mcp/<key>' : url;
+      // What the doctor prints gets pasted into bug reports. The last part of a quick tunnel or relay address is its key.
+      const shown = url.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>');
       // A name this computer's own DNS has not caught up with is not a broken route.
       check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.' : 'Check the proxy route to the ingress port.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
+    // An OpenAI tunnel has no address to connect back through. What proves it is a call that arrived: the runtime counts them.
+    else if (status.client === 'built-in' && status.served > 0) check('connection.public', 'ok', 'OpenAI\'s tunnel has delivered ' + status.served + ' call(s) to this runtime, the last one at ' + status.lastCallAt + '.');
+    // Connected and never called: what is missing is on OpenAI's side, where a tunnel is tied to workspaces and roles.
+    else if (status.client === 'built-in' && phase === 'connected') check('connection.public', 'info', 'OpenAI accepts this runtime for ' + connection.tunnelId + ' and is being asked for work; no call has come through it yet.',
+      'In ChatGPT add a custom MCP server, choose Tunnel as its connection and pick or paste this tunnel id (devmate mcp-url prints it), then call any DevMate tool. ' +
+      'If ChatGPT does not offer the tunnel, the cause is in the OpenAI account and not in DevMate, which is connected: the tunnel has to include the ChatGPT workspace you use, not only a Platform organization, and your account needs the Tunnels permissions Read and Use (' +
+      TUNNEL_HELP.settings + '; "Troubleshooting" in ' + TUNNEL_HELP.guide + '). Whether your ChatGPT plan offers the Tunnel connection is decided by OpenAI.');
     else check('connection.public', 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
     if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');
@@ -66,9 +91,27 @@ export async function doctor(service) {
   // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.
   if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key, new with every start, and whoever has the whole address can read and change your projects and run commands.',
     'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
+  // A relay forwards one path and no sign-in pages. It is kept private by the key and by the addresses it answers.
+  else if (url && new URL(url).pathname !== '/mcp') check('security', 'warn', 'The relay has no sign-in and cannot have one: it forwards only the path its address ends in. That path ends in a key, and unless the relay was set up with --any-address it answers only the addresses ChatGPT and Claude connect from and this computer. Whoever has the whole address and comes from such an address can read and change your projects and run commands.',
+    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else.');
   else if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
   else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');
+  // Whether a client got through at all, and as what: the answer to "ChatGPT is connected but the tools look wrong".
+  const client = service.lastClient;
+  if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? '"' + client.name + '"' : 'nothing') + (client.userAgent ? ' (sender line "' + client.userAgent + '")' : '') + ' and was shown the tool names of ' +
+    { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself' }[client.surface] + ', ' +
+    { address: 'as the address it used says (?tools=' + client.surface + ')', name: 'going by that name', tunnel: 'because it came through OpenAI\'s tunnel', default: 'because nothing about it was recognised' }[client.by] + ', at ' + client.at + '.',
+  // The address is the owner's to add to; a tunnel id has no place for it.
+  client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
+  // The owner's browser: connected, registered and waiting for a browser to be opened, or not set up. A quick look:
+  // the system is asked about the registration only where this instance has written one.
+  const browser = service.browser.status();
+  const registration = browser.connected ? null : await (service.browserHost || createChromeRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) })).status({ ask: false }).catch(() => null);
+  if (browser.connected) check('chrome', 'ok', 'The DevMate extension' + (browser.extension ? ' ' + browser.extension : '') + ' in ' + (browser.browser || 'the browser') + ' is connected: its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).');
+  else if (registration?.stale) check('chrome', 'warn', 'The browser was registered with a Node or a copy of DevMate that is no longer there, so the DevMate extension cannot reach this runtime.', 'Register it again: devmate chrome install');
+  else if (registration?.registered) check('chrome', 'info', 'DevMate is registered with ' + registration.browsers.join(', ') + '; no browser with the DevMate extension is connected right now.', 'Open the browser. If the extension is not in it yet, devmate chrome says where to load it from.');
+  else if (registration?.supported) check('chrome', 'info', 'The browser is not connected to DevMate: its bookmarks, tabs, history and downloads are not available to your client.', 'Connect it: devmate chrome install');
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
   if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
     'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +

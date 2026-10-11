@@ -12,7 +12,7 @@ import { main as cli } from '../runtime/cli.mjs';
 
 const require = createRequire(import.meta.url);
 const { createVscodeRuntimeEntry } = require('../vscode-host/runtime-entry.cjs');
-const owner = Object.freeze({ id: 'owner', role: 'owner', surface: 'local' });
+const owner = Object.freeze({ id: 'owner', surface: 'local' });
 // The owner of the instance closes first; only then can its directory be removed.
 function temporary(t, prefix, close = () => {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -40,7 +40,7 @@ test('connection credentials live in the instance, reach only the connection and
   for (const [name, value] of [['bad name', 'x'], ['OK', 'two\nlines']]) await assert.rejects(runtime.call('secret.set', { name, value }, owner), { code: 'invalid_input' });
   // Credentials and the doctor are local-owner only: an MCP caller, even the owner, cannot reach them.
   for (const operation of ['secret.set', 'secret.list', 'secret.remove', 'runtime.doctor']) {
-    await assert.rejects(runtime.call(operation, operation === 'secret.set' ? { name: 'A', value: 'b' } : operation === 'secret.remove' ? { name: 'A' } : {}, { id: 'owner', role: 'owner' }), { code: 'forbidden' });
+    await assert.rejects(runtime.call(operation, operation === 'secret.set' ? { name: 'A', value: 'b' } : operation === 'secret.remove' ? { name: 'A' } : {}, { id: 'owner' }), { code: 'forbidden' });
   }
   assert.equal((await runtime.call('secret.remove', { name: 'CLOUDFLARE_TUNNEL_TOKEN' }, owner)).removed, true);
   assert.deepEqual(secrets.names(), []);
@@ -81,7 +81,7 @@ test('the doctor names what works, what is missing and the exact next step', asy
   const quiet = await local.service.call('runtime.doctor', {}, owner);
   const find = (report, id) => report.checks.find(item => item.id === id);
   assert.equal(find(quiet, 'node').status, 'ok'); assert.equal(find(quiet, 'shell').status, 'ok');
-  assert.equal(find(quiet, 'connection').status, 'info'); assert.match(find(quiet, 'connection').fix, /openai-tunnel or cloudflare/);
+  assert.equal(find(quiet, 'connection').status, 'info'); assert.match(find(quiet, 'connection').fix, /devmate connect openai-tunnel --tunnel-id <id>/); assert.match(find(quiet, 'connection').fix, /devmate relay setup user@host/);
   assert.equal(find(quiet, 'projects').status, 'warn'); assert.equal(find(quiet, 'security').status, 'ok');
   const exposed = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } },
     { verifier: async () => ({ verified: false, reachable: false, reason: 'ENOTFOUND' }) });
@@ -103,6 +103,55 @@ test('the doctor names what works, what is missing and the exact next step', asy
   const code = await cli(['doctor'], { stdout: { write: text => lines.push(text) }, stderr: { write() {} }, clientFactory: () => ({ call: async () => report }) });
   assert.equal(code, 1); assert.match(lines.join(''), /\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing\n\s+-> Store it with: devmate secret set CLOUDFLARE_TUNNEL_TOKEN/);
   assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => healthy }) }), 0);
+});
+
+test('the report for a bug says what happened and not who or where: no credentials, paths, account names or addresses', async t => {
+  const { anonymize } = await import('../runtime/report.mjs');
+  const home = process.platform === 'win32' ? 'C:\\Users\\Maria Example' : '/home/maria';
+  const sample = [
+    'instance at ' + path.join(home, '.devmate', 'runtime') + ' and as JSON ' + JSON.stringify(path.join(home, 'work', 'shop')),
+    'a second account: ' + (process.platform === 'win32' ? 'C:\\Users\\other\\file.txt' : '/home/other/file.txt') + ' and /Users/third/x',
+    'reached at https://calm-river.trycloudflare.com/mcp/abcdefghijklmnopqrstuvwxyz012345 and https://devmate.example.com/mcp from 203.0.113.9, locally at 127.0.0.1:8788',
+    'git push https://maria:hunter2@github.com/x/y with --token s3cr3t-value and GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 by maria@example.com',
+    'the project Acme Billing failed at 10:15:42 from 2001:db8:85a3::8a2e:370:7334 and fe80::1, std::string and a::b::c stay code'
+  ].join('\n');
+  const clean = anonymize(sample, { home, places: [[path.join(home, 'work', 'shop'), '<folder-1>']], names: [['Acme Billing', '<folder-1>'], ['app', '<folder-2>']], hosts: ['devmate.example.com'] });
+  assert.match(clean, /the project <folder-1> failed at 10:15:42 from <address> and <address>, std::string and a::b::c stay code/);
+  for (const kept of ['Maria', 'maria', 'other', 'third', 'calm-river', 'abcdefghijklmnopqrstuvwxyz012345', 'devmate.example.com', '203.0.113.9', 'hunter2', 's3cr3t-value', 'ghp_', 'shop']) assert.ok(!clean.includes(kept), kept + ' is still in: ' + clean);
+  assert.match(clean, /instance at ~[\\/]\.devmate[\\/]runtime and as JSON "<folder-1>"/); assert.match(clean, /https:\/\/<assigned>\.trycloudflare\.com\/mcp\/<key>/);
+  assert.match(clean, /https:\/\/<public-host>\/mcp from <address>, locally at 127\.0\.0\.1:8788/); assert.match(clean, /by <email>/);
+
+  // The whole report, from a runtime that shares a folder and has seen a failure.
+  const { service: runtime, temp } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } });
+  const root = path.join(temp, 'A Private Folder Name'); fs.mkdirSync(root); fs.writeFileSync(path.join(root, 'a.txt'), 'x');
+  const project = await runtime.call('project.create', { root }, owner);
+  await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, { id: 'owner' });
+  await assert.rejects(runtime.call('workspace.read', { projectId: project.id, path: 'missing-file.txt' }, { id: 'owner' }));
+  fs.writeFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-11T10:00:00.000Z connection: could not reach devmate.example.com from ' + root + '\n');
+  const { text } = await runtime.call('runtime.report', {}, owner);
+  assert.match(text, /^DevMate report\. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it\./);
+  assert.match(text, /Connection: cloudflare · sign-in: none · profile: guarded/); assert.match(text, /Shared folders: 1 \(1 read and write, 0 read only\)/);
+  assert.match(text, /\n\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing/); assert.match(text, /\nworkspace\.read {2}2 \(2\) {2}1 {2}\d+ {2}\d+ {2}\d+ {2}\w+×1\n/);
+  assert.match(text, /\n#\d+ \S+ workspace\.read \w+ \(connected, \d+ ms\): /); assert.match(text, /connection: could not reach <public-host> from <folder-1>/);
+  // A failure names its project; the report says which folder that was, not what it is called.
+  await runtime.call('project.update', { id: project.id, name: 'Client Secret Product' }, owner);
+  await assert.rejects(runtime.call('workspace.read', { projectId: 'Client Secret Product', path: 'missing-file.txt' }, { id: 'owner' }));
+  fs.appendFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-11T10:00:01.000Z agent: turn failed in Client Secret Product\n');
+  const named = (await runtime.call('runtime.report', {}, owner)).text;
+  assert.match(named, /agent: turn failed in <folder-1>/); assert.ok(!named.includes('Client Secret Product'));
+  for (const kept of ['A Private Folder Name', 'devmate.example.com', temp, path.basename(os.homedir()) + path.sep]) assert.ok(!text.includes(kept), kept + ' is still in the report');
+  // It is the owner's to make at this computer; with full access their client may read it as well.
+  await assert.rejects(runtime.call('runtime.report', {}, { id: 'owner' }), { code: 'forbidden' });
+  // The command prints exactly that, and without a runtime what can be seen from outside.
+  const printed = [];
+  assert.equal(await cli(['doctor', '--report'], { stdout: { write: value => printed.push(value) }, stderr: { write() {} }, clientFactory: () => ({ call: async name => { assert.equal(name, 'runtime.report'); return { text }; } }) }), 0);
+  assert.equal(printed.join(''), text + '\n');
+  const offline = [];
+  assert.equal(await cli(['doctor', '--report', '--instance', path.join(temp, 'instance')], { stdout: { write: value => offline.push(value) }, stderr: { write() {} },
+    clientFactory: () => ({ call: async () => { throw Object.assign(new Error('stopped'), { code: 'RUNTIME_STOPPED' }); } }) }), 0);
+  // The folders an instance shares are read from its state, so that a log line does not give their names away.
+  assert.match(offline.join(''), /the runtime is not running/); assert.match(offline.join(''), /could not reach \S+ from <folder-1>/);
+  assert.ok(!offline.join('').includes(temp) && !offline.join('').includes('A Private Folder Name'), 'neither the instance directory nor a shared folder is spelled out');
 });
 
 test('the VS Code connection wizard stores the token privately, saves a signed-in Cloudflare route and offers the URL and sign-in code', async () => {
@@ -164,6 +213,12 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   assert.equal(await commands.get('devMate.runtime.configureConnection')(), undefined);
   assert.deepEqual(named('secret.set'), []); assert.match(messages.at(-1), /^error: invalid_executable/);
   rejectSettings = false;
+  // The organization named for a tunnel on the command line stays with that tunnel, and goes with no other.
+  saved = { ...saved, connection: { kind: 'openai-tunnel', tunnelId: 'tunnel_abc', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY', organizationId: 'org-abc' } };
+  answers.picks = ['OpenAI Secure MCP Tunnel']; answers.inputs = ['tunnel_abc', '', ''];
+  assert.deepEqual((await commands.get('devMate.runtime.configureConnection')()).connection, { kind: 'openai-tunnel', tunnelId: 'tunnel_abc', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY', organizationId: 'org-abc' });
+  answers.picks = ['OpenAI Secure MCP Tunnel']; answers.inputs = ['tunnel_other', '', ''];
+  assert.deepEqual((await commands.get('devMate.runtime.configureConnection')()).connection, { kind: 'openai-tunnel', tunnelId: 'tunnel_other', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY' });
   answers.picks = ['Local only'];
   const local = await commands.get('devMate.runtime.configureConnection')();
   assert.deepEqual(local.connection, { kind: 'local' }); assert.deepEqual(local.auth, { mode: 'none' });
