@@ -181,13 +181,66 @@ test('devmate chrome install tells Chrome and Edge which program the DevMate ext
 
   // The command: the owner's to run, and it says what is left to do in the browser.
   let state = { registered: false, supported: true, browsers: [] };
-  const fake = { status: async () => state, install: async () => (state = { registered: true, supported: true, browsers: ['Chrome', 'Edge'] }), uninstall: async () => (state = { registered: false, supported: true, browsers: [] }) };
+  const kept = path.join(root, 'chrome', 'extension');
+  const fake = { status: async () => state, install: async () => (state = { registered: true, supported: true, browsers: ['Chrome', 'Edge'], folder: kept }), uninstall: async () => (state = { registered: false, supported: true, browsers: [] }) };
   const command = async (args, env = {}) => { const stdout = output(), stderr = output(); const code = await cli([...args, '--instance', root], { stdout, stderr, env, browserHost: async () => fake }); return { code, out: stdout.text, err: stderr.text }; };
   assert.match(JSON.parse((await command(['chrome'])).out).next[0], /devmate chrome install/);
   const done = JSON.parse((await command(['chrome', 'install'])).out);
-  assert.equal(done.registered, true); assert.match(done.next[0], /chrome:\/\/extensions .* "Load unpacked" and pick .*chrome-extension/);
+  assert.equal(done.registered, true); assert.match(done.next[0], /chrome:\/\/extensions .* "Load unpacked" and pick /); assert.ok(done.next[0].includes('pick ' + kept + '. Leave Developer mode on'), done.next[0]);
   for (const action of ['install', 'uninstall']) { const refused = await command(['chrome', action], { DEVMATE_CLIENT_COMMAND: '1' }); assert.notEqual(refused.code, 0); assert.match(refused.err, /run by the owner in their own terminal/); }
   assert.equal(JSON.parse((await command(['chrome', 'uninstall'])).out).registered, false);
+});
+
+test('a registered browser is given the extension in a folder that stays, and a start of the runtime makes that folder and the host the DevMate that runs', { timeout: 60000 }, async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-chrome-folder-')), root = path.join(temp, 'instance'), home = path.join(temp, 'home');
+  let runtime;
+  t.after(async () => { await runtime?.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  // Copies of DevMate as the versions of an editor's extension are: each in a folder of its own, with its own extension.
+  const copy = (name, files) => {
+    const base = path.join(temp, name); fs.mkdirSync(path.join(base, 'runtime'), { recursive: true }); fs.writeFileSync(path.join(base, 'runtime', 'cli.mjs'), '');
+    for (const [file, content] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(base, 'chrome-extension', file)), { recursive: true }); fs.writeFileSync(path.join(base, 'chrome-extension', file), content); }
+    return path.join(base, 'runtime', 'cli.mjs');
+  };
+  const first = copy('devmate-1', { 'manifest.json': '{"version":"1"}', 'background.js': 'one', 'old.js': 'not in the next version', 'icons/16.png': 'a picture' });
+  const second = copy('devmate-2', { 'manifest.json': '{"version":"2"}', 'background.js': 'two', 'icons/16.png': 'a picture' });
+  const node = path.join(temp, 'node'), editor = path.join(temp, 'Code.exe'); fs.writeFileSync(node, ''); fs.writeFileSync(editor, '');
+  const run = async () => { throw new Error('nothing is started in this test'); };
+  const registration = (cli, program = node) => createChromeRegistration({ instanceRoot: root, cli, node: program, platform: 'linux', home, run });
+  const folder = registration(first).files.extension, held = name => { try { return fs.readFileSync(path.join(folder, name), 'utf8'); } catch { return null; } };
+  assert.equal(folder, path.join(path.resolve(root), 'chrome', 'extension'));
+  // Nothing is registered: a start of the runtime writes nothing.
+  assert.deepEqual(registration(first).refresh(), { refreshed: false }); assert.equal(fs.existsSync(path.join(root, 'chrome')), false);
+  // Registering puts the extension there, and says where: that is the folder the owner gives the browser.
+  assert.equal((await registration(first).install()).folder, folder);
+  assert.deepEqual(['manifest.json', 'background.js', 'old.js', 'icons/16.png'].map(held), ['{"version":"1"}', 'one', 'not in the next version', 'a picture']);
+  assert.deepEqual(registration(first).refresh(), { refreshed: true, host: false, extension: false }, 'the same copy starting again changes nothing');
+  // DevMate is updated into another folder and its runtime starts, run by an editor's own program: the browser's
+  // folder holds the new extension and nothing of the old, and the host is the new copy, started with the Node it
+  // was registered with (the editor's program is no Node to start).
+  assert.deepEqual(registration(second, editor).refresh(), { refreshed: true, host: true, extension: true });
+  assert.deepEqual(['manifest.json', 'background.js', 'old.js', 'icons/16.png'].map(held), ['{"version":"2"}', 'two', null, 'a picture']);
+  const shim = fs.readFileSync(registration(second).files.shim, 'utf8');
+  assert.ok(shim.includes(node) && shim.includes(second) && !shim.includes(first) && !shim.includes(editor), shim);
+  fs.rmSync(path.join(temp, 'devmate-1'), { recursive: true, force: true });
+  assert.deepEqual([(await registration(second).status()).stale, (await registration(second).status()).folder], [undefined, folder], 'the old copy may go: nothing names it any more');
+  // The Node it was registered with is gone: no other program is put in its place (the doctor says to register again).
+  const third = copy('devmate-3', { 'manifest.json': '{"version":"3"}', 'background.js': 'three' });
+  fs.rmSync(node);
+  assert.deepEqual(registration(third, editor).refresh(), { refreshed: true, host: false, extension: true });
+  assert.equal(fs.readFileSync(registration(third).files.shim, 'utf8'), shim); assert.equal((await registration(third).status()).stale, true); assert.equal(held('manifest.json'), '{"version":"3"}');
+  // An older DevMate that starts leaves a newer extension alone; the same version with other content is its own to set.
+  assert.deepEqual(registration(second, editor).refresh(), { refreshed: true, host: false, extension: false }); assert.deepEqual([held('manifest.json'), held('background.js')], ['{"version":"3"}', 'three']);
+  const rebuilt = copy('devmate-3b', { 'manifest.json': '{"version":"3"}', 'background.js': 'three, built again' });
+  assert.deepEqual(registration(rebuilt, editor).refresh(), { refreshed: true, host: false, extension: true }); assert.equal(held('background.js'), 'three, built again');
+  // The runtime itself does this when it starts: here the one of this repository, with the extension it carries.
+  fs.writeFileSync(node, '');
+  runtime = await startRuntime({ instanceRoot: root, port: 0, connectionFactory: () => ({ async start() {}, async stop() {}, status() { return { kind: 'local', status: 'ready' }; } }) });
+  assert.equal(JSON.parse(held('manifest.json')).name, 'DevMate'); assert.equal(held('background.js'), fs.readFileSync(new URL('../chrome-extension/background.js', import.meta.url), 'utf8'));
+  const started = fs.readFileSync(path.join(root, 'chrome', process.platform === 'win32' ? 'devmate-chrome-host.cmd' : 'devmate-chrome-host'), 'utf8');
+  assert.ok(started.includes(fileURLToPath(new URL('../runtime/cli.mjs', import.meta.url))) && started.includes(node), started);
+  await runtime.stop(); runtime = null;
+  // Taking the registration away takes the folder with it.
+  await registration(third).uninstall(); assert.equal(fs.existsSync(folder), false);
 });
 
 test('the browser host is the link, end to end: started as a browser starts it, it serves the extension as an entry and carries the runtime\'s calls to the browser', { timeout: 120000 }, async t => {

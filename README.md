@@ -149,12 +149,12 @@ The plugin has been loaded and driven in a real Obsidian 1.12.7 on Windows: load
 DevMate can drive a browser of its own (the browser control engine), but that browser is not yours: it has none of your bookmarks, tabs, history or sign-ins. The extension gives your client the browser you actually use.
 
 ```powershell
-devmate chrome install        # tell Chrome and Edge which program the extension may talk to (your account only)
+devmate chrome install        # tell Chrome and Edge which program the extension may talk to (your account only), and put the extension where the browser loads it from
 ```
 
-Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge), switch on **Developer mode**, choose **Load unpacked** and pick the `chrome-extension` folder of DevMate. `devmate chrome` says whether the browser is registered and connected, and so does `devmate doctor`.
+Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge), switch on **Developer mode**, choose **Load unpacked** and pick the folder `devmate chrome` names: `chrome/extension` in DevMate's instance directory (`~/.devmate/runtime/chrome/extension` unless you chose another). `devmate chrome` says whether the browser is registered and connected, and so does `devmate doctor`.
 
-Leave **Developer mode** on. The browser runs the copy it loaded from that folder: when an update of DevMate changes the files there, the extension notices within about two minutes and loads itself again, with nothing to click, and with Developer mode off Chrome switches an unpacked extension off at that moment. An update that puts DevMate into another folder (every version of the VS Code extension has its own) needs **Load unpacked** once more, for the new folder.
+Leave **Developer mode** on, and that is all there is to do, updates included. The folder stays where it is and DevMate keeps it current: every start of the runtime makes it the extension of the DevMate that runs (a newer one that is already there is left alone), whichever entry was updated, and makes the program the browser starts that same DevMate. The extension notices within about two minutes that its files changed and loads itself again, with nothing to click. With Developer mode off, Chrome switches an unpacked extension off at that moment.
 
 - **An entry like the editors.** The extension's panel says in one sentence how things stand and the one thing to do about it, with the browser's own words when it cannot reach DevMate. It starts DevMate, opens the workbench, copies the address a client in the cloud needs (the public one where you have a route, otherwise this computer's) and counts what waits for your answer.
 - **Two switches, both yours.** **Let DevMate use this browser**: switched off, every request is refused and your client is told that you paused it. **Start DevMate with the browser**: off until you turn it on; like an editor it starts the runtime and never stops it.

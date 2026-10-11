@@ -52,15 +52,42 @@ function windowsRegistry({ env, run }) {
 
 /**
  * The registration of one instance's browser host. cli is the DevMate command line it starts, node the program that
- * runs it; registry reads and writes the registry of the owner's account (Windows only).
+ * runs it; registry reads and writes the registry of the owner's account (Windows only). extension is the browser
+ * extension this copy of DevMate carries (the folder beside its runtime).
  */
-export function createChromeRegistration({ instanceRoot, cli, node = process.execPath, platform = process.platform, env = process.env, home = os.homedir(), run = execute, registry = windowsRegistry({ env, run }) } = {}) {
+export function createChromeRegistration({ instanceRoot, cli, node = process.execPath, platform = process.platform, env = process.env, home = os.homedir(), run = execute, registry = windowsRegistry({ env, run }),
+  extension = path.join(path.dirname(cli), '..', 'chrome-extension') } = {}) {
   const root = instanceDirectory(instanceRoot), directory = path.join(root, 'chrome'), windows = platform === 'win32';
   const shim = path.join(directory, windows ? 'devmate-chrome-host.cmd' : 'devmate-chrome-host'), manifest = path.join(directory, NATIVE_HOST + '.json'), note = path.join(directory, 'registration.json');
-  // What the browser starts: this Node with this copy of DevMate, for this instance. The browser adds who is asking.
-  const program = windows
-    ? '@echo off\r\n"' + node.replace(/%/g, '%%') + '" "' + cli.replace(/%/g, '%%') + '" chrome-host --instance "' + root.replace(/%/g, '%%') + '" %*\r\n'
-    : '#!/bin/sh\nexec \'' + [node, cli, 'chrome-host', '--instance', root].map(word => word.replace(/'/g, '\'\\\'\'')).join('\' \'') + '\' "$@"\n';
+  // What the browser starts: a Node with a copy of DevMate, for this instance. The browser adds who is asking.
+  const starts = (withNode, withCli) => windows
+    ? '@echo off\r\n"' + withNode.replace(/%/g, '%%') + '" "' + withCli.replace(/%/g, '%%') + '" chrome-host --instance "' + root.replace(/%/g, '%%') + '" %*\r\n'
+    : '#!/bin/sh\nexec \'' + [withNode, withCli, 'chrome-host', '--instance', root].map(word => word.replace(/'/g, '\'\\\'\'')).join('\' \'') + '\' "$@"\n';
+  // What the browser loads. A browser remembers the folder it was given, so it is given one that stays where it is:
+  // a copy in the instance directory, made the same as the extension this DevMate carries. An update through any
+  // entry then reaches the browser, where the extension sees its files change and loads itself again. A newer
+  // extension is never replaced by an older one: a runtime older than what the browser runs leaves it alone (the
+  // extension's panel says that the runtime is the older of the two). The same version is this runtime's to set.
+  const folder = path.join(directory, 'extension');
+  const filesOf = (base, inside = '') => { try { return fs.readdirSync(path.join(base, inside), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? filesOf(base, path.join(inside, entry.name)) : entry.isFile() ? [path.join(inside, entry.name)] : []); } catch { return []; } };
+  const versionOf = file => { try { return String(JSON.parse(fs.readFileSync(file, 'utf8')).version ?? ''); } catch { return ''; } };
+  const newer = (one, other) => { const left = one.split('.').map(Number), right = other.split('.').map(Number); for (let index = 0; index < Math.max(left.length, right.length); index++) { const gap = (left[index] || 0) - (right[index] || 0); if (gap) return gap > 0; } return false; };
+  function carry() {
+    const wanted = filesOf(extension);
+    if (!wanted.includes('manifest.json') || newer(versionOf(path.join(folder, 'manifest.json')), versionOf(path.join(extension, 'manifest.json')))) return false;
+    let changed = false;
+    // The manifest last: until it is there, a browser that looks sees the extension it already runs.
+    for (const name of [...wanted.filter(one => one !== 'manifest.json'), 'manifest.json']) {
+      const content = fs.readFileSync(path.join(extension, name)), target = path.join(folder, name);
+      let same = false; try { same = fs.readFileSync(target).equals(content); } catch { same = false; }
+      if (same) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(target, content, { mode: 0o644 });
+      changed = true;
+    }
+    for (const name of filesOf(folder)) if (!wanted.includes(name)) { fs.rmSync(path.join(folder, name), { force: true }); changed = true; }
+    return changed;
+  }
   const description = JSON.stringify({ name: NATIVE_HOST, description: 'DevMate: the runtime on this computer, for the DevMate browser extension.', path: shim, type: 'stdio', allowed_origins: [EXTENSION_ORIGIN] }, null, 2) + '\n';
   const supported = windows || !!FOLDERS[platform];
   const browsers = Object.keys(WINDOWS_KEYS), keys = Object.values(WINDOWS_KEYS).map(key => key + NATIVE_HOST);
@@ -93,14 +120,31 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
     if (windows && !found.length && written && ask && (await apart()).length) return { registered: false, supported: true, browsers: [], host: NATIVE_HOST, extension: EXTENSION_ORIGIN, unseen: true };
     // Registered with a Node or a copy of DevMate that is no longer there: the browser would start nothing.
     const stale = found.length > 0 && (!written || (programs !== null && (!fs.existsSync(programs.node) || !fs.existsSync(programs.cli))));
-    return { registered: found.length > 0, supported: true, browsers: found, host: NATIVE_HOST, extension: EXTENSION_ORIGIN, ...(stale ? { stale: true } : {}) };
+    return { registered: found.length > 0, supported: true, browsers: found, host: NATIVE_HOST, extension: EXTENSION_ORIGIN, ...(stale ? { stale: true } : {}), ...(fs.existsSync(path.join(folder, 'manifest.json')) ? { folder } : {}) };
+  }
+  /**
+   * At a start of the runtime: what a registered browser starts and loads is made this copy of DevMate, so that an
+   * update of DevMate needs nothing done in the browser. Only where the owner registered it; the system is asked nothing.
+   * The Node it was registered with is kept (a runtime may itself be run by an editor's program, which is no Node to start).
+   */
+  function refresh() {
+    if (!supported || read(manifest) === null) return { refreshed: false };
+    const programs = noted(), kept = programs && fs.existsSync(programs.node) ? programs.node : null;
+    let host = false;
+    if (kept && read(shim) !== starts(kept, cli)) {
+      fs.writeFileSync(shim, starts(kept, cli), { mode: 0o755 });
+      fs.writeFileSync(note, JSON.stringify({ node: kept, cli }, null, 2) + '\n', { mode: 0o600 });
+      host = true;
+    }
+    return { refreshed: true, host, extension: carry() };
   }
   async function install() {
     if (!supported) throw unsupported();
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(shim, program, { mode: 0o755 });
+    fs.writeFileSync(shim, starts(node, cli), { mode: 0o755 });
     fs.writeFileSync(manifest, description, { mode: 0o644 });
     fs.writeFileSync(note, JSON.stringify({ node, cli }, null, 2) + '\n', { mode: 0o600 });
+    carry();
     if (windows) {
       const outcome = await registry.write(keys, manifest), failed = browsers.filter((browser, index) => outcome[index] !== 0);
       if (failed.length) throw fault('registration_failed', 'Windows did not take the registration for ' + failed.join(', ') + '.');
@@ -127,5 +171,5 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
     fs.rmSync(directory, { recursive: true, force: true });
     return status();
   }
-  return { status, install, uninstall, files: { shim, manifest } };
+  return { status, install, uninstall, refresh, files: { shim, manifest, extension: folder } };
 }

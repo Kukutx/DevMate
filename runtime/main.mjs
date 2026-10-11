@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createMcpHandler, isLegacyRequest, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
@@ -21,6 +22,7 @@ import { isProgram } from './platform/entry.mjs';
 import { createOutboundProxy } from './platform/proxy.mjs';
 import { clientSurfaceBy } from './surfaces.mjs';
 import { VERIFY_CLIENT } from './connection-verify.mjs';
+import { createChromeRegistration } from './platform/chrome-registration.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -410,6 +412,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       health.connection = 'failed';
       process.stderr.write(new Date().toISOString() + ' connection: ' + error.message + '\n');
     }
+    // A browser the owner registered starts and loads this copy of DevMate from now on (nothing where none is registered).
+    try { createChromeRegistration({ instanceRoot, cli: fileURLToPath(new URL('./cli.mjs', import.meta.url)) }).refresh(); }
+    catch (error) { process.stderr.write(new Date().toISOString() + ' browser registration: ' + error.message + '\n'); }
     health.status = 'ready';
     if (ingressPort) health.ingressPort = ingressPort;
     publish(recordFile, JSON.stringify({ pid: process.pid, port, ...(ingressPort ? { ingressPort } : {}), instanceId, generation,

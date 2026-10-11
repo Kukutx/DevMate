@@ -302,8 +302,9 @@ export async function main(argv = process.argv.slice(2), {
       if (viaClient && action !== 'status') throw new Error('devmate chrome ' + action + ' is run by the owner in their own terminal, not through a connected client');
       const registration = await browserHost({ instanceRoot, cli: fileURLToPath(import.meta.url), env });
       const state = action === 'install' ? await registration.install() : action === 'uninstall' ? await registration.uninstall() : await registration.status();
-      // Where the extension is, for a browser that does not have it yet: the folder beside the runtime.
-      const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'chrome-extension');
+      // Where the extension is, for a browser that does not have it yet: the copy the registration keeps in the
+      // instance directory, which stays where it is when DevMate is updated.
+      const folder = state.folder || null;
       let connected = null;
       if (action !== 'uninstall') { try { connected = await clientFactory(runtimeOptions).call('chrome.status', {}, { timeoutMs: 5000 }); } catch { connected = null; } }
       print({ ...state, ...(connected ? { browser: connected } : {}),
@@ -311,8 +312,8 @@ export async function main(argv = process.argv.slice(2), {
           : [state.unseen ? 'A registration is there that no browser can see: it was written from inside an app that Windows gives a registry of its own. Register again, which now writes where browsers read: devmate chrome install'
             : !state.registered ? 'Register DevMate with Chrome and Edge: devmate chrome install' : null,
             state.stale ? 'It was registered with a Node or a copy of DevMate that is gone. Register again: devmate chrome install' : null,
-            state.registered && !connected?.connected ? 'In the browser open chrome://extensions (Edge: edge://extensions), switch on "Developer mode", choose "Load unpacked" and pick ' + (fs.existsSync(folder) ? path.resolve(folder) : 'the chrome-extension folder of DevMate') +
-              '. With the extension already there, reload it or restart the browser.' : null,
+            state.registered && !connected?.connected ? 'In the browser open chrome://extensions (Edge: edge://extensions), switch on "Developer mode", choose "Load unpacked" and pick ' + (folder || 'the chrome-extension folder of DevMate') +
+              '. Leave Developer mode on: the extension loads itself again when DevMate is updated.' : null,
             connected?.connected ? 'Connected. A model reaches the browser through capability_list {engine:"chrome"}.' : null].filter(Boolean) });
       return 0;
     }
