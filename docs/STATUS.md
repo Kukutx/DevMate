@@ -89,6 +89,7 @@
 - ChatGPT 对非只读工具是否每次都要求确认。
 - Gemini 和 Grok 的命令行；Codex 与 DevMate 的实际连接。
 - 隔离副本只用模拟的 Agent 加真实的 Git 测过（Windows 和 Linux）：真实的 Codex、Claude Code 在副本目录里工作没有验证。
+- Windows 上替换一个刚写出的文件，可能被杀毒或索引程序占着而被系统拒绝。DevMate 会重试大约 5 秒（期间运行时不处理别的请求），超过了就把系统的错误原样报出，这一次写入失败、原文件不变。在一台内存紧张的电脑上同时跑 6 个大量写盘的测试文件时，见过占用超过 5 秒的情况（16 遍里 1 到 2 遍）；按测试通常的并发跑全套时没有出现过。
 - macOS：测试和打包在 CI 上通过，没有人实际使用过。
 - Linux：只在 Ubuntu 24.04（WSL 2）上实跑过。
 - Obsidian：当前版本的插件（含“随 Obsidian 启动”和“配置连接”）没有在真实的 Obsidian 里运行；macOS 和 Linux 上的 Obsidian 没有试过。
