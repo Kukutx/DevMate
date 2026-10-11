@@ -41,7 +41,7 @@
 ### 模型一侧
 
 - 工具清单按客户端分三份（实测，`tests/runtime-surfaces.test.mjs`）：GPT 面 18 项 18,551 字节，Claude 面 19 项 18,325 字节，通用面 21 项 21,033 字节；分面之前是一份 39 项 40,135 字节。每个工具约 500 字节是协议要求的结构（输入模式、四个提示、状态文字），再小就要减少工具数。
-- 按客户端选工具面还没有用真实的 ChatGPT 或 Claude.ai 验证过：识别靠客户端自报的名字（`openai`、`chatgpt`、`codex`、`gpt` 归 GPT 面，`claude`、`anthropic` 归 Claude 面）、请求的 User-Agent，以及“经 OpenAI 隧道进来的就是 ChatGPT”。说 2025 协议的客户端只在握手时报一次名字，之后的请求只能靠 User-Agent 识别；认错时在 MCP 地址后加 `?tools=gpt|claude|generic` 指定。`devmate mcp`（标准输入输出）会把客户端的名字带给运行时。
+- 按客户端选工具面还没有用真实的 ChatGPT 或 Claude.ai 验证过：识别靠客户端自报的名字（`openai`、`chatgpt`、`codex`、`gpt` 归 GPT 面，`claude`、`anthropic` 归 Claude 面）、请求的 User-Agent，以及“经 OpenAI 隧道进来的就是 ChatGPT”。说 2025 协议的客户端只在握手时报一次名字，之后的请求只能靠 User-Agent 识别；认错时在 MCP 地址后加 `?tools=gpt|claude|generic` 指定；`devmate doctor` 会显示最近一个客户端自报的名字、User-Agent、分到的工具面和依据，真实的 ChatGPT 和 Claude.ai 报什么名字要到那里看。`devmate mcp`（标准输入输出）会把客户端的名字带给运行时。
 - 审阅改动（`show_changes` / `workspace_changes`）只在 Git 仓库里可用：它对比的是上一次提交，“已审阅”按每个文件当前内容的哈希记。不是 Git 仓库的项目只能用改动历史（`workspace.history`）。它只给按文件的汇总，不带差异正文，也还没有可在界面里审阅的差异卡片。
 - 命令和委派的默认等待从 30 秒改成了 10 秒（上限仍是 50 秒）。依据是同类项目记录的“ChatGPT 宿主在约 12 秒处结束调用”，这一点没有用真实的 ChatGPT 实测过。
 - `capability_list` 的 `summary:false` 会一次返回全部结构，体积很大。

@@ -256,4 +256,6 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   await until(() => runtime.connection.status().served >= 2, 'the calls to be counted');
   checks = await doctor();
   assert.equal(checks['connection.public'].status, 'ok'); assert.match(checks['connection.public'].detail, /OpenAI's tunnel has delivered 2 call\(s\) to this runtime/);
+  // Who that was and why it saw a GPT model's tool names; a tunnel id has no place for "?tools=", so none is advised.
+  assert.match(checks.client.detail, /^The last MCP client called itself nothing \(sender line "[^"]+"\) and was shown the tool names of ChatGPT and Codex, because it came through OpenAI's tunnel, at /); assert.equal(checks.client.fix, undefined);
 });

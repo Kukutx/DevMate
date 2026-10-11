@@ -19,7 +19,7 @@ import { writeAtomic } from './platform/atomic-write.mjs';
 import { hardenExecutableSearch } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
 import { createOutboundProxy } from './platform/proxy.mjs';
-import { clientSurface } from './surfaces.mjs';
+import { clientSurfaceBy } from './surfaces.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -373,10 +373,17 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
         try { messages = [extra.parsedBody ?? await request.clone().json()].flat().filter(message => message && typeof message === 'object'); } catch { /* the handler answers a malformed message */ }
       }
       const said = messages.map(message => message.params?._meta?.['io.modelcontextprotocol/clientInfo']?.name || message.params?.clientInfo?.name).find(Boolean);
-      return asked.run({ listing: messages.length > 0 && messages.every(message => message.method === 'tools/list'),
-        surface: clientSurface({ chosen: new URL(request.url).searchParams.get('tools'), name: said, userAgent: request.headers.get('user-agent'),
-          // OpenAI's tunnel is the one thing that reaches the ingress port by its loopback address.
-          tunnel: config.connection.kind === 'openai-tunnel' && Number(new URL(request.url).port) === ingressPort }) }, () => handler.fetch(request, extra));
+      // OpenAI's tunnel is the one thing that reaches the ingress port by its loopback address.
+      const sender = request.headers.get('user-agent'), tunnel = config.connection.kind === 'openai-tunnel' && Number(new URL(request.url).port) === ingressPort;
+      const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said, userAgent: sender, tunnel });
+      // Who asked last and which tool names they were given, for the doctor. What a client says of itself is its own
+      // text: kept short and printable. A client of the 2025 protocol names itself once; its later requests keep that
+      // name while the sender line stays the same. The check of the public route asks as itself and is not a client.
+      if (messages.length && extra.authInfo?.extra?.devmatePrincipal?.id === 'owner') {
+        const plain = value => String(value || '').replace(/[^\x20-\x7e]/g, '').slice(0, 80), userAgent = plain(sender);
+        service.lastClient = { name: plain(said) || (service.lastClient?.userAgent === userAgent ? service.lastClient.name : ''), userAgent, ...decided, tunnel, at: new Date().toISOString() };
+      }
+      return asked.run({ listing: messages.length > 0 && messages.every(message => message.method === 'tools/list'), surface: decided.surface }, () => handler.fetch(request, extra));
     } });
     const serverFor = ({ authInfo }) => {
       const principal = authInfo?.extra?.devmatePrincipal;

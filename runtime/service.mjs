@@ -83,6 +83,8 @@ export class DevMateService {
     this.verification = null;
     // How requests to the outside leave this computer (runtime/platform/proxy.mjs); set by the process that serves.
     this.proxy = null;
+    // The MCP client that asked last: what it called itself and which tool names it was shown (set where requests arrive).
+    this.lastClient = null;
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
     this.config = normalizeConfig(config);

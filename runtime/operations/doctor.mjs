@@ -95,6 +95,13 @@ export async function doctor(service) {
   else if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
   else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');
+  // Whether a client got through at all, and as what: the answer to "ChatGPT is connected but the tools look wrong".
+  const client = service.lastClient;
+  if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? '"' + client.name + '"' : 'nothing') + (client.userAgent ? ' (sender line "' + client.userAgent + '")' : '') + ' and was shown the tool names of ' +
+    { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself' }[client.surface] + ', ' +
+    { address: 'as the address it used says (?tools=' + client.surface + ')', name: 'going by that name', tunnel: 'because it came through OpenAI\'s tunnel', default: 'because nothing about it was recognised' }[client.by] + ', at ' + client.at + '.',
+  // The address is the owner's to add to; a tunnel id has no place for it.
+  client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
   if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
     'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +

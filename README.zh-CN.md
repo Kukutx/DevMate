@@ -302,7 +302,7 @@ OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答
 | 委派 | 把整件任务交给本机上的编码 Agent |
 | 其余 | 都是按名字调用的操作，只读的走 `operations_query`，其余走 `operations_call`：列目录、移动、删除、改动历史与撤销（`workspace.history`、`workspace.restore`，默认保留 30 天）、更多 Git（`git.log`、`git.show`、`git.blame`、`git.branches`；只读，绝不运行仓库自己配置的程序）、编辑器打开的文件、浏览器控制与 QA、Godot、逆向工程、Obsidian 和外部 MCP 服务器（`capability.*`）、工作流、任务、作业、产物 |
 
-- 每份清单里的每个工具，任何客户端都能调用：清单只决定事先告诉模型哪些。想自己指定清单，就在给客户端的 MCP 地址后面加 `?tools=gpt`、`?tools=claude` 或 `?tools=generic`。
+- 每份清单里的每个工具，任何客户端都能调用：清单只决定事先告诉模型哪些。想自己指定清单，就在给客户端的 MCP 地址后面加 `?tools=gpt`、`?tools=claude` 或 `?tools=generic`。`devmate doctor` 会显示最近一个客户端自报的名字、它拿到的是哪份清单，以及依据是什么。
 - `projectId` 可以是项目 ID、项目根目录或唯一的项目名；只共享了一个项目时可以省略。有多个项目时，只读工具跟随你正在使用的编辑器窗口，写操作必须写明项目。
 - 没有“共享文件夹”这个工具。那是你自己的事；模型会被告知请你去做。
 - 一份工具清单有 18 到 21 项，18 到 21 KB，大约是原先“全部列出”那一份的一半。其余操作经 `operations_query` 和 `operations_call` 调用，用到之前不占对话上下文。

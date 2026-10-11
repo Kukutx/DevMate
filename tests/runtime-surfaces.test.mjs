@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { DevMateService } from '../runtime/service.mjs';
 import { createMcpServer, serverInstructions } from '../runtime/mcp.mjs';
-import { clientSurface, surfaceFor } from '../runtime/surfaces.mjs';
+import { clientSurfaceBy, surfaceFor } from '../runtime/surfaces.mjs';
 import { startRuntime } from '../runtime/main.mjs';
 
 const owner = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
@@ -44,7 +44,9 @@ test('a client gets the tools of the model it is: by its name, by how it reached
     [{ tunnel: true }, 'gpt'], [{ tunnel: true, name: 'claude-ai' }, 'claude'],
     // The owner's word in the address (…/mcp?tools=claude) settles it.
     [{ chosen: 'claude', name: 'openai-mcp' }, 'claude'], [{ chosen: 'generic', tunnel: true }, 'generic'], [{ chosen: 'nonsense', name: 'openai-mcp' }, 'gpt']])
-    assert.equal(clientSurface(said), surface, JSON.stringify(said));
+    assert.equal(clientSurfaceBy(said).surface, surface, JSON.stringify(said));
+  // What decided it is kept, so that the doctor can say why a client sees the names it sees.
+  assert.deepEqual([{ chosen: 'claude', name: 'openai-mcp' }, { name: 'ChatGPT' }, { userAgent: 'Claude-User' }, { tunnel: true }, { name: 'my-script' }].map(said => clientSurfaceBy(said).by), ['address', 'name', 'name', 'tunnel', 'default']);
 });
 
 test('each surface lists a handful of tools under the names its model knows, and the list is a fraction of what it was', async t => {
@@ -121,6 +123,18 @@ test('the tools a GPT model knows work as it expects: read, apply_patch, exec_co
   assert.match(await call('write_stdin', { session_id: sessionId, chars: 'quit\n', yield_time_ms: 3000 }), /^Process exited with code 3\nOutput:/);
   const gone = await client.callTool({ name: 'write_stdin', arguments: { session_id: 'process-none' } });
   assert.equal(gone.isError, true); assert.match(gone.content[0].text, /not_found/);
+  // A session of an earlier runtime is said to be that: nothing of what it once printed comes back.
+  assert.match(gone.content[0].text, /It may belong to an earlier runtime session/);
+  // A session whose place is not remembered (the runtime's memory of it is gone, or it was started under another
+  // name) is read from its end and within the budget: a look at it never brings back the megabyte it printed before.
+  fs.writeFileSync(path.join(f.root, 'flood.js'), "const line='x'.repeat(99)+'\\n';for(let i=0;i<8000;i++)process.stdout.write(line);process.stdout.write('the end\\n');process.stdin.resume()");
+  const flood = await f.service.call('shell.run', { command: run('flood.js'), interactive: true, waitMs: 3000 }, connected);
+  assert.equal(flood.status, 'running');
+  const looked = await call('write_stdin', { session_id: flood.id, yield_time_ms: 300 });
+  assert.ok(looked.length < 42000, looked.length + ' characters of 800,000 printed');
+  assert.match(looked, /^Process running with session ID \S+\n\[\d{6,} bytes of earlier output are not shown\]\nOutput:\n/); assert.match(looked, /the end\s*$/);
+  assert.match(await call('write_stdin', { session_id: flood.id, yield_time_ms: 200 }), /^Process running with session ID \S+\nOutput:\n\s*$/, 'the next look starts where this one ended');
+  await call('process_stop', { id: flood.id });
 });
 
 test('the tools a Claude model knows work as it expects: read, write, edit and the shell of this computer', { timeout: 60000 }, async t => {
@@ -167,16 +181,27 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   // Not on its list, and still its to call.
   assert.match((await gpt.callTool({ name: 'workspace_read', arguments: { path: 'a.txt' } })).content[0].text, /1\talpha/);
   assert.match((await gpt.callTool({ name: 'read', arguments: { path: 'a.txt' } })).content[0].text, /1\talpha/);
+  // The runtime remembers who asked last and what it took them for, so that the doctor can say it.
+  const last = () => { const { name, surface, by } = runtime.service.lastClient; return [name, surface, by]; };
+  assert.deepEqual(last(), ['openai-mcp', 'gpt', 'name']);
   const claude = await names(await connect('claude-ai'));
   assert.ok(has(claude, 'edit') && has(claude, SHELL_TOOL) && !has(claude, OTHER_SHELL_TOOL) && has(claude, 'process_read') && !has(claude, 'apply_patch'), claude.join());
-  const other = await names(await connect('some-editor'));
+  const other = await names(await connect('some-editor\u001b[31m' + 'x'.repeat(200)));
   assert.ok(has(other, 'workspace_edit') && has(other, 'shell_run') && !has(other, 'bash') && !has(other, 'powershell') && !has(other, 'apply_patch'), other.join());
+  // What a client says of itself is its own text: it is kept short and printable.
+  assert.deepEqual(last(), ['some-editor[31m' + 'x'.repeat(65), 'generic', 'default']);
+  const unknown = (await runtime.service.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'client');
+  assert.equal(unknown.status, 'info'); assert.match(unknown.detail, /^The last MCP client called itself "some-editor\[31mx+" \(sender line "[^"]*"\) and was shown the tool names of DevMate itself, because nothing about it was recognised, at 20\d\d-/);
+  assert.match(unknown.fix, /add \?tools=gpt, \?tools=claude or \?tools=generic to the MCP address it uses/);
   // A client of the 2025 protocol names itself once, at the start; after that its requests are told apart by their sender line.
   const older = await connect('whatever', { negotiation: {}, headers: { 'user-agent': 'openai-mcp/1.0.0' } });
   assert.ok(has(await names(older), 'exec_command'));
+  assert.deepEqual([...last(), runtime.service.lastClient.userAgent], ['whatever', 'gpt', 'name', 'openai-mcp/1.0.0'], 'the name it gave at the start stays with its later requests');
   // The owner's word in the address wins over all of it.
   const chosen = await names(await connect('openai-mcp', { query: '?tools=claude' }));
   assert.ok(has(chosen, SHELL_TOOL) && !has(chosen, 'exec_command'), chosen.join());
+  const told = (await runtime.service.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'client');
+  assert.match(told.detail, /called itself "openai-mcp" .* and was shown the tool names of Claude, as the address it used says \(\?tools=claude\), at /); assert.equal(told.fix, undefined);
 });
 
 test('show_changes says what is uncommitted, whoever changed it, and after a review only what is new', { timeout: 60000 }, async t => {

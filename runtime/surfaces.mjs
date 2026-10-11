@@ -7,14 +7,17 @@ import { fileText, line, projectPath, projectReference } from './operations/shar
 // and the service authorizes that call like any other; every tool of every surface can be called by anyone who
 // may call its operation, whatever list they were shown.
 
-/** Which surface a client gets: by what it says it is, by how it reached the runtime, or as the owner chose in the address. */
-export function clientSurface({ chosen, name, userAgent, tunnel } = {}) {
-  if (['gpt', 'claude', 'generic'].includes(chosen)) return chosen;
+/**
+ * Which surface a client gets, and what decided it: the owner's word in the address, what the client says it is, how
+ * it reached the runtime, or nothing of these.
+ */
+export function clientSurfaceBy({ chosen, name, userAgent, tunnel } = {}) {
+  if (['gpt', 'claude', 'generic'].includes(chosen)) return { surface: chosen, by: 'address' };
   const said = String(name || '') + ' ' + String(userAgent || '');
-  if (/openai|chatgpt|codex|\bgpt\b/i.test(said)) return 'gpt';
-  if (/claude|anthropic/i.test(said)) return 'claude';
+  if (/openai|chatgpt|codex|\bgpt\b/i.test(said)) return { surface: 'gpt', by: 'name' };
+  if (/claude|anthropic/i.test(said)) return { surface: 'claude', by: 'name' };
   // OpenAI's tunnel carries ChatGPT and nothing else.
-  return tunnel ? 'gpt' : 'generic';
+  return tunnel ? { surface: 'gpt', by: 'tunnel' } : { surface: 'generic', by: 'default' };
 }
 
 // What stays a tool of its own on every surface; everything else is an operation, one generic call away.
