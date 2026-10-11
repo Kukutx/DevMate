@@ -121,7 +121,14 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
         return answer(true, running);
       }
       if (message.action === 'workbench') return answer(true, { url: await client.workbenchUrl() });
-      if (message.action === 'mcpUrl') return answer(true, { url: await client.mcpUrl() });
+      if (message.action === 'mcpUrl') {
+        // The address the owner pastes into a client in the cloud, as "devmate mcp-url" prints it: the public route
+        // where there is one, and only otherwise the address that works on this computer alone. scope says which.
+        const connection = await client.call('connection.status', {}), local = await client.mcpUrl();
+        const remote = connection.tunnelId || connection.publicUrl || connection.url;
+        return answer(true, remote ? { url: remote, scope: connection.tunnelId ? 'tunnel' : 'public', local, ...(connection.temporaryAddress ? { temporary: true } : {}), ...(connection.remoteMcpVerified === false ? { verified: false } : {}) }
+          : { url: local, scope: 'local', ...(connection.kind && connection.kind !== 'local' ? { waiting: connection.kind } : {}) });
+      }
       return answer(true, await pending());
     } catch (error) {
       const stopped = error?.code === 'RUNTIME_STOPPED';

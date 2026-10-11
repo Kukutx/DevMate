@@ -67,7 +67,9 @@ const BY_NAME = new Map(BROWSER_CAPABILITIES.map(item => [item.name, item]));
 export const isBrowserCapability = name => typeof name === 'string' && name.startsWith(BROWSER_ENGINE + '.');
 
 const HOW_TO_CONNECT = 'Open Chrome or Edge with the DevMate extension on the owner\'s computer. If it is installed and still not connected, the owner runs: devmate chrome install';
-const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error']);
+const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused']);
+// The owner's own switch in the extension. It is a decision, not a fault, and a model is told so.
+const PAUSED = 'The owner has paused DevMate\'s use of this browser, in the DevMate extension. That is their decision, not a fault: do not try again or work around it. Say so; they switch it back on when they want.';
 // A browser host asks again at least this often; one that has not asked for longer is gone.
 const ALIVE_MS = 45000, CALL_TIMEOUT_MS = 30000;
 
@@ -115,6 +117,7 @@ export function createBrowserLink({ now = Date.now, aliveMs = ALIVE_MS, callTime
     if (!call) return { accepted: false };
     link.pending.delete(id); clearTimeout(call.timer);
     if (ok === true) call.resolve(value);
+    else if (error?.code === 'paused') call.reject(fault('paused', PAUSED, { notStarted: true }));
     else call.reject(fault(ERROR_CODES.has(error?.code) ? error.code : 'browser_error', String(error?.message || 'The browser could not do this.').slice(0, 1000)));
     return { accepted: true };
   }

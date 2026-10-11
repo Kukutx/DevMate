@@ -308,7 +308,8 @@ export async function main(argv = process.argv.slice(2), {
       if (action !== 'uninstall') { try { connected = await clientFactory(runtimeOptions).call('chrome.status', {}, { timeoutMs: 5000 }); } catch { connected = null; } }
       print({ ...state, ...(connected ? { browser: connected } : {}),
         next: action === 'uninstall' ? ['Remove the DevMate extension in the browser too (chrome://extensions).']
-          : [!state.registered ? 'Register DevMate with Chrome and Edge: devmate chrome install' : null,
+          : [state.unseen ? 'A registration is there that no browser can see: it was written from inside an app that Windows gives a registry of its own. Register again, which now writes where browsers read: devmate chrome install'
+            : !state.registered ? 'Register DevMate with Chrome and Edge: devmate chrome install' : null,
             state.stale ? 'It was registered with a Node or a copy of DevMate that is gone. Register again: devmate chrome install' : null,
             state.registered && !connected?.connected ? 'In the browser open chrome://extensions (Edge: edge://extensions), switch on "Developer mode", choose "Load unpacked" and pick ' + (fs.existsSync(folder) ? path.resolve(folder) : 'the chrome-extension folder of DevMate') +
               '. With the extension already there, reload it or restart the browser.' : null,

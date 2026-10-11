@@ -76,11 +76,21 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
     const values = await registry.read(keys);
     return browsers.filter((browser, index) => typeof values[index] === 'string' && values[index].toLowerCase() === manifest.toLowerCase());
   }
+  // A registration that only this program's own view of the registry holds: written with reg.exe from inside a packaged
+  // app, where no browser reads it. Asked of reg.exe, which answers from that view.
+  const reg = path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'reg.exe');
+  async function apart() {
+    const tail = manifest.split(/[^\x20-\x7e]/).pop().toLowerCase(), held = [];
+    for (const key of keys) { const answer = await run(reg, ['query', 'HKCU\\' + key, '/ve']).catch(() => ({ code: -1, stdout: '' })); if (answer.code === 0 && answer.stdout.toLowerCase().includes(tail)) held.push(key); }
+    return held;
+  }
   /** ask:false is a quick look (the doctor's): the system is asked only where this instance has the files of a registration. */
   async function status({ ask = true } = {}) {
     if (!supported) return { registered: false, supported: false };
     const written = read(manifest) !== null && read(shim) !== null, programs = noted();
     const found = written || ask ? await registered() : [];
+    // Written, and no browser can see it: said as what it is, because "registered" would be believed.
+    if (windows && !found.length && written && ask && (await apart()).length) return { registered: false, supported: true, browsers: [], host: NATIVE_HOST, extension: EXTENSION_ORIGIN, unseen: true };
     // Registered with a Node or a copy of DevMate that is no longer there: the browser would start nothing.
     const stale = found.length > 0 && (!written || (programs !== null && (!fs.existsSync(programs.node) || !fs.existsSync(programs.cli))));
     return { registered: found.length > 0, supported: true, browsers: found, host: NATIVE_HOST, extension: EXTENSION_ORIGIN, ...(stale ? { stale: true } : {}) };
@@ -110,6 +120,8 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
     if (windows) {
       const values = await registry.read(keys), mine = keys.filter((key, index) => typeof values[index] === 'string' && values[index].toLowerCase() === manifest.toLowerCase());
       if (mine.length) await registry.remove(mine);
+      // And what an earlier registration left in this program's own view of the registry, where there is such a view.
+      for (const key of await apart()) await run(reg, ['delete', 'HKCU\\' + key, '/f']).catch(() => {});
     }
     else for (const place of places()) if (read(place.file) === description || read(place.file)?.includes('"' + NATIVE_HOST + '"')) fs.rmSync(place.file, { force: true });
     fs.rmSync(directory, { recursive: true, force: true });

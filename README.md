@@ -154,7 +154,9 @@ devmate chrome install        # tell Chrome and Edge which program the extension
 
 Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge), switch on **Developer mode**, choose **Load unpacked** and pick the `chrome-extension` folder of DevMate. `devmate chrome` says whether the browser is registered and connected, and so does `devmate doctor`.
 
-- **An entry like the editors.** The extension's popup shows whether DevMate runs, starts it, opens the workbench, copies the MCP address and counts what waits for your approval. **Start DevMate with the browser** is a switch in the popup, off until you turn it on; like an editor it starts the runtime and never stops it.
+- **An entry like the editors.** The extension's panel says in one sentence how things stand and the one thing to do about it, with the browser's own words when it cannot reach DevMate. It starts DevMate, opens the workbench, copies the address a client in the cloud needs (the public one where you have a route, otherwise this computer's) and counts what waits for your answer.
+- **Two switches, both yours.** **Let DevMate use this browser**: switched off, every request is refused and your client is told that you paused it. **Start DevMate with the browser**: off until you turn it on; like an editor it starts the runtime and never stops it.
+- **What DevMate did in this browser** is listed in the panel: the last calls with their time and outcome, never their content. The panel is in English and Chinese.
 - **What your client can do with the browser** (through `capability_list {engine:"chrome"}`, `capability_query` for what only reads and `capability_call` for changes; no project is needed):
 
   | | Read | Change |
@@ -169,6 +171,7 @@ Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge
 
 - Text read from a web page is marked as untrusted: it is data for the model, never instructions.
 - The browser talks to DevMate through a native messaging host, a small program the browser itself starts for this one extension. Nothing listens for it and it works with no public connection. `devmate chrome uninstall` takes the registration away.
+- On Windows the registration is written through the system's own management service, so that it lands where browsers read it whichever terminal the command is run from. A terminal inside a packaged app has a registry of its own that no browser sees; `devmate chrome` says so when it finds a registration only there.
 
 The runtime's side has been run end to end with the browser's own message framing against a real runtime. [STATUS](docs/STATUS.md) says what has been tried in a real browser.
 

@@ -47,6 +47,10 @@ test('a browser link hands a call to the browser that asks for work and brings i
   const refused = link.call({ capability: 'chrome.tabs.close', input: { tabIds: [99] } }), second = await link.next({ linkId, waitMs: 1000 });
   link.result({ linkId, id: second.calls[0].id, ok: false, error: { code: 'not_found', message: 'One of these tabs does not exist: 99.' } });
   await assert.rejects(refused, { code: 'not_found', message: /99/ });
+  // The owner paused the browser in the extension: a decision, said as one, and nothing a model should try again.
+  const paused = link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), held = await link.next({ linkId, waitMs: 1000 });
+  link.result({ linkId, id: held.calls[0].id, ok: false, error: { code: 'paused', message: 'whatever the extension says' } });
+  await assert.rejects(paused, { code: 'paused', notStarted: true, message: /^The owner has paused DevMate's use of this browser, in the DevMate extension\. That is their decision, not a fault: do not try again/ });
   const picture = link.call({ capability: 'chrome.page.screenshot' }, { readOnly: true }), third = await link.next({ linkId, waitMs: 1000 });
   link.result({ linkId, id: third.calls[0].id, ok: true, result: { tabId: 7, mimeType: 'image/png', base64: 'aGk=' } });
   assert.deepEqual((await picture).content[0], { type: 'image', data: 'aGk=', mimeType: 'image/png' });
@@ -90,12 +94,23 @@ test('devmate chrome install tells Chrome and Edge which program the DevMate ext
   assert.match(scripts[0][2], /Invoke-CimMethod -Namespace root\\default -ClassName StdRegProv/); assert.match(scripts[0][2], /hDefKey = \[uint32\]2147483649/); assert.match(scripts[0][2], /GetStringValue/);
   assert.ok(scripts[0][2].includes("'Software\\Google\\Chrome\\NativeMessagingHosts\\" + NATIVE_HOST + "'"));
   await assert.rejects(createChromeRegistration({ instanceRoot: root, cli: program, platform: 'win32', env: {}, run: async () => ({ code: 1, stdout: '', stderr: 'denied' }) }).status(), { code: 'registration_failed' });
+  // Written from inside an app that Windows gives a registry of its own: this program reads its registration back, and
+  // no browser can. That is said as what it is, never as "registered", and taking it away clears that copy too.
+  const own = new Map(windows.files ? [['HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\' + NATIVE_HOST, windows.files.manifest]] : []), ownCalls = [];
+  const apartRun = async (tool, args) => { ownCalls.push(args.slice(0, 2).join(' ')); if (args[0] === 'query') return own.has(args[1]) ? { code: 0, stdout: '    (Default)    REG_SZ    ' + own.get(args[1]) + '\r\n', stderr: '' } : { code: 1, stdout: '', stderr: '' };
+    if (args[0] === 'delete') { own.delete(args[1]); return { code: 0, stdout: '', stderr: '' }; } throw new Error('unexpected ' + args.join(' ')); };
+  const nothing = { read: async names => names.map(() => null), write: async names => names.map(() => 0), remove: async names => names.map(() => 2) };
+  const apart = createChromeRegistration({ instanceRoot: root, cli: program, node: process.execPath, platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, registry: nothing, run: apartRun });
+  assert.deepEqual(await apart.status(), { registered: false, supported: true, browsers: [], host: NATIVE_HOST, extension: EXTENSION_ORIGIN, unseen: true });
+  assert.equal((await apart.status({ ask: false })).unseen, undefined, 'a quick look does not go asking');
   // The file names the program and the one extension that may start it; the program is this Node with this DevMate.
   assert.deepEqual(JSON.parse(fs.readFileSync(windows.files.manifest, 'utf8')), { name: NATIVE_HOST, description: 'DevMate: the runtime on this computer, for the DevMate browser extension.', path: windows.files.shim, type: 'stdio', allowed_origins: [EXTENSION_ORIGIN] });
   assert.equal(fs.readFileSync(windows.files.shim, 'utf8'), '@echo off\r\n"' + process.execPath + '" "' + program + '" chrome-host --instance "' + path.resolve(root).replace(/%/g, '%%') + '" %*\r\n');
   // The copy of DevMate it names is gone: said, with nothing else changed.
   fs.rmSync(program); assert.equal((await windows.status()).stale, true); fs.writeFileSync(program, '');
   assert.deepEqual([(await windows.uninstall()).registered, [...keys.values()], fs.existsSync(path.dirname(windows.files.manifest))], [false, ['C:\\elsewhere\\' + NATIVE_HOST + '.json'], false], 'a key that names another instance\'s file is left where it is');
+  fs.mkdirSync(path.dirname(windows.files.manifest), { recursive: true }); fs.writeFileSync(windows.files.manifest, '{}'); fs.writeFileSync(windows.files.shim, '');
+  assert.equal((await apart.uninstall()).unseen, undefined); assert.equal(own.size, 0, 'the copy only this program could see is gone as well'); assert.ok(ownCalls.some(call => call.startsWith('delete HKCU\\Software\\Google\\Chrome')));
 
   // Elsewhere the same file lies in the folder of each browser that is installed, and the program is a shell script.
   fs.mkdirSync(path.join(home, '.config', 'microsoft-edge'), { recursive: true });
@@ -155,7 +170,9 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   assert.deepEqual([runtime.service.browser.status().browser, runtime.service.browser.status().extension], ['Google Chrome', '4.0.5']);
   // As an entry: the status, the workbench, the MCP address, what waits; and a start that joins what already runs.
   assert.equal((await ask('start')).result.running, true);
-  assert.match((await ask('workbench')).result.url, /^http:\/\/127\.0\.0\.1:\d+\/\?code=/); assert.match((await ask('mcpUrl')).result.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  assert.match((await ask('workbench')).result.url, /^http:\/\/127\.0\.0\.1:\d+\/\?code=/); const address = (await ask('mcpUrl')).result;
+  // No public route is configured here: the address is this computer's own, and says so.
+  assert.match(address.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/); assert.equal(address.scope, 'local');
   assert.deepEqual((await ask('pending')).result, { count: 0, items: [] });
 
   // A model's client asks for the browser through the capability tools, with no project shared at all.
