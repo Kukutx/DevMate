@@ -1,4 +1,4 @@
-import { activityLine, describe, languageFor } from './panel.js';
+import { activityLine, copiedNote, describe, languageFor } from './panel.js';
 
 // The panel: how DevMate and this browser stand, the one thing to do when something is in the way, the two switches
 // that are the owner's, and what DevMate has been doing here. Everything that decides something about projects (what
@@ -37,6 +37,9 @@ function render({ state, settings, version }) {
     said.append(Object.assign(document.createElement('b'), { textContent: t.browserSaid }), view.said);
     detail.append(said);
   }
+  element('debugging').hidden = !view.debugging;
+  element('debuggingText').textContent = view.debugging || '';
+  element('debugStop').textContent = view.labels.debugStop;
   for (const id of ['start', 'again']) { element(id).hidden = view.primary !== id; element(id).textContent = view.labels[id]; element(id).disabled = busy; }
   element('workbench').textContent = view.labels.workbench;
   element('workbench').disabled = !view.canOpen;
@@ -76,8 +79,9 @@ element('workbench').addEventListener('click', async () => {
   try { const result = await request('workbench'); await chrome.tabs.create({ url: result.url }); window.close(); } catch (error) { note(error.message); }
 });
 element('copy').addEventListener('click', async () => {
-  try { const result = await request('mcpUrl'); await navigator.clipboard.writeText(result.url); note(texts().copied); } catch (error) { note(error.message); }
+  try { const result = await request('mcpUrl'); await navigator.clipboard.writeText(result.url); note(copiedNote(result, language)); } catch (error) { note(error.message); }
 });
+element('debugStop').addEventListener('click', async () => render(await ask({ ask: 'debugStop' })));
 element('access').addEventListener('change', async event => render(await ask({ ask: 'pause', paused: !event.target.checked })));
 element('autostart').addEventListener('change', async event => render(await ask({ ask: 'settings', startWithBrowser: event.target.checked })));
 element('language').addEventListener('click', async () => render(await ask({ ask: 'settings', language: language === 'zh' ? 'en' : 'zh' })));

@@ -167,9 +167,12 @@ Then load the extension: open `chrome://extensions` (`edge://extensions` in Edge
   | Downloads | list | start a download |
   | Recently closed | list | bring back |
   | Reading list, most visited | list | add, remove |
-  | The page in front | title, address and text; a picture of it | |
+  | A tab's page | title, address and text; a picture of what it shows or of the whole page | go back, go forward |
+  | Debugging a page | the console and uncaught errors, the network requests and one of them in full, the page as its elements, one element in detail (attributes, box, styles), what the page stores, wait for an element or a text | click, type, press a key, choose from a list, hover, scroll, run a script, answer a dialog, reload, emulate a screen, a color scheme or being offline |
 
-- Text read from a web page is marked as untrusted: it is data for the model, never instructions.
+- **Debugging works like DevTools, on the tab you name or the one in front.** The first call puts Chrome's debugger on that tab; Chrome shows its own bar on the tab while it is there, and it comes off after five minutes without a call or with `chrome.page.debugStop`. The console and the network are recorded from that moment: `chrome.page.reload` shows a page loading from the start. `chrome.page.snapshot` gives every element a number, and click, type, hover, scroll and inspect take that number, a CSS selector, or the text the element shows.
+- The values a page stores (its cookies among them) are credentials. `chrome.page.storage` gives names only; the values come only with `includeValues` through `capability_call`, which your client asks you about.
+- Text read from a web page (its text, its console, its requests, its elements, what a script returns) is marked as untrusted: it is data for the model, never instructions.
 - The browser talks to DevMate through a native messaging host, a small program the browser itself starts for this one extension. Nothing listens for it and it works with no public connection. `devmate chrome uninstall` takes the registration away.
 - On Windows the registration is written through the system's own management service, so that it lands where browsers read it whichever terminal the command is run from. A terminal inside a packaged app has a registry of its own that no browser sees; `devmate chrome` says so when it finds a registration only there.
 

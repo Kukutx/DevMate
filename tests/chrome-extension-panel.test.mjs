@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LANGUAGES, activityLine, describe, languageFor } from '../chrome-extension/panel.js';
+import { LANGUAGES, activityLine, copiedNote, describe, languageFor } from '../chrome-extension/panel.js';
 
 const state = values => ({ host: 'connected', said: null, attempts: 0, runtime: { running: true, version: '4.0.5' }, pending: 0, paused: false, activity: [], ...values });
 
@@ -62,6 +62,27 @@ test('paused comes before ready, and what waits for the owner is counted on the 
   assert.match(waiting.text, /3 waiting/);
   assert.match(waiting.labels.workbench, /\(3\)/);
   assert.equal(describe(state({})).labels.workbench, 'Open the workbench');
+});
+
+test('a debugger on a tab is said in every state, with the way to take it off, and not said when there is none', () => {
+  assert.equal(describe(state({})).debugging, null);
+  assert.equal(describe(state({ debugging: 0 })).debugging, null);
+  for (const one of [state({ debugging: 2 }), state({ debugging: 2, paused: true }), state({ debugging: 2, host: 'closed', said: 'x', attempts: 5, runtime: null })]) {
+    assert.match(describe(one, 'en').debugging, /debugger is on 2 tab/);
+    assert.match(describe(one, 'zh').debugging, /2 个标签页/);
+    assert.ok(describe(one, 'zh').labels.debugStop);
+  }
+});
+
+test('after copying, the panel says how far the address reaches and that a public one is to be kept', () => {
+  assert.match(copiedNote({ url: 'http://127.0.0.1:8788/mcp', scope: 'local' }), /this computer only/);
+  assert.match(copiedNote({ url: 'http://127.0.0.1:8788/mcp', scope: 'local', waiting: 'tunnel' }), /no address yet/);
+  assert.match(copiedNote({ url: 'https://x.example/mcp/key', scope: 'public', temporary: true }), /temporary.*keep it to yourself/i);
+  assert.match(copiedNote({ url: 'https://own.example/mcp', scope: 'public' }), /keep it to yourself/);
+  assert.doesNotMatch(copiedNote({ url: 'https://own.example/mcp', scope: 'public' }), /temporary/i);
+  assert.match(copiedNote({ url: 'tunnel_123', scope: 'tunnel' }), /tunnel id/);
+  assert.match(copiedNote({ url: 'https://x.example/mcp/key', scope: 'public', temporary: true }, 'zh'), /临时.*不要外传/);
+  assert.match(copiedNote(undefined), /Copied/);
 });
 
 test('a line of the activity says the time, what it was, whether it changed something and how it went', () => {

@@ -92,7 +92,7 @@ test('each surface lists its tools under the names its model knows: everything t
   assert.match(serverInstructions(f.service, 'generic'), /read with workspace_read, change with workspace_edit .*, then verify with shell_run/);
   assert.match(serverInstructions(f.service, 'gpt'), /follow it with write_stdin and stop servers with process_stop/);
   assert.match(serverInstructions(f.service, 'claude'), /Changed files stay restorable \(workspace_history, workspace_restore\)/);
-  assert.match(serverInstructions(f.service, 'gpt'), /capability_list shows the engines: the owner's own browser \(engine "chrome"/);
+  assert.match(serverInstructions(f.service, 'gpt'), /capability_list lists engines: the owner's browser \(engine "chrome": bookmarks, tabs, history; chrome\.page\.\* debugs pages/);
 });
 
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {

@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { BROWSER_CAPABILITIES, EXTENSION_ORIGIN, NATIVE_HOST, createBrowserLink } from '../runtime/chrome.mjs';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { BROWSER_CAPABILITIES, BROWSER_TEXT, EXTENSION_ORIGIN, NATIVE_HOST, createBrowserLink } from '../runtime/chrome.mjs';
 import { frame, frames } from '../runtime/chrome-host.mjs';
 import { createChromeRegistration } from '../runtime/platform/chrome-registration.mjs';
 import { READ_ONLY, createCapabilities } from '../chrome-extension/capabilities.js';
@@ -60,6 +61,51 @@ test('a browser link hands a call to the browser that asks for work and brings i
   clock += 60000;
   assert.deepEqual(link.status(), { connected: false });
   await assert.rejects(async () => link.next({ linkId }), { code: 'not_found' });
+});
+
+test('what a developer debugs a page with: answers read as lines, a wait that is given its time, and cookie values only as a change', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 300 });
+  const { linkId } = link.attach({ browser: 'Google Chrome', extension: '4.0.5', methods: BROWSER_CAPABILITIES.map(item => item.method) });
+  const answering = async (result, after = 0) => { const { calls } = await link.next({ linkId, waitMs: 2000 }); if (after) await new Promise(resolve => setTimeout(resolve, after)); link.result({ linkId, id: calls[0].id, ok: true, result }); return calls[0]; };
+  // A console is read as its lines, followed by what is needed to go on; the data itself is unchanged for other callers.
+  const printed = link.call({ capability: 'chrome.page.console', input: { level: 'warn' } }, { readOnly: true });
+  const asked = await answering({ tabId: 7, items: [{ seq: 1, level: 'error', text: 'boom', where: 'https://x.test/app.js:12' }, { seq: 2, level: 'warn', text: 'careful' }], cursor: 2, untrusted: true });
+  assert.deepEqual([asked.method, asked.params], ['page.console', { level: 'warn' }]);
+  const consoleAnswer = await printed;
+  assert.equal(consoleAnswer[BROWSER_TEXT], '[error] boom  (https://x.test/app.js:12)\n[warn] careful\n{"tabId":7,"cursor":2,"untrusted":true}');
+  assert.deepEqual(JSON.parse(JSON.stringify(consoleAnswer)).items.length, 2);
+  const requests = link.call({ capability: 'chrome.page.network', input: { failedOnly: true } }, { readOnly: true });
+  await answering({ tabId: 7, items: [{ requestId: '9.1', method: 'GET', url: 'https://x.test/api', type: 'Fetch', status: 500, ms: 31 }, { requestId: '9.2', method: 'POST', url: 'https://x.test/save', type: 'XHR', failed: 'net::ERR_FAILED' }], cursor: 9, untrusted: true });
+  assert.equal((await requests)[BROWSER_TEXT], '500  GET  https://x.test/api  Fetch  31 ms  requestId=9.1\nFAILED  POST  https://x.test/save  XHR  (net::ERR_FAILED)  requestId=9.2\n{"tabId":7,"cursor":9,"untrusted":true}');
+  const elements = link.call({ capability: 'chrome.page.snapshot', input: { interactiveOnly: true } }, { readOnly: true });
+  await answering({ tabId: 7, title: 'App', url: 'https://x.test/', text: '[12] button "Save"\n[15] textbox "Name" value="Ann"', nodes: 2, untrusted: true });
+  assert.equal((await elements)[BROWSER_TEXT], '[12] button "Save"\n[15] textbox "Name" value="Ann"\n{"tabId":7,"title":"App","url":"https://x.test/","nodes":2,"untrusted":true}');
+  // A picture of a whole page stays a picture, and says how large it is.
+  const whole = link.call({ capability: 'chrome.page.screenshot', input: { fullPage: true } }, { readOnly: true });
+  await answering({ tabId: 7, mimeType: 'image/png', base64: 'aGk=', fullPage: true, width: 1280, height: 4000 });
+  assert.deepEqual((await whole).content, [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }, { type: 'text', text: '{"tabId":7,"fullPage":true,"width":1280,"height":4000}' }]);
+  // Waiting for something to appear is given its own time plus a margin, not the usual limit of a call.
+  const waited = link.call({ capability: 'chrome.page.waitFor', input: { text: 'Saved', timeoutMs: 400 } }, { readOnly: true });
+  await answering({ tabId: 7, found: true, ms: 380 }, 450);
+  assert.deepEqual(await waited, { tabId: 7, found: true, ms: 380 });
+  // The names of what a page stores are a look; the values are credentials and are asked for like a change.
+  await assert.rejects(link.call({ capability: 'chrome.page.storage', input: { includeValues: true } }, { readOnly: true }), { code: 'forbidden', notStarted: true, message: /hands out credentials \(the values a page stores, its cookies among them\): call it with capability_call/ });
+  const names = link.call({ capability: 'chrome.page.storage' }, { readOnly: true });
+  await answering({ tabId: 7, origin: 'https://x.test', cookies: [{ name: 'sid', chars: 40 }], untrusted: true });
+  assert.equal((await names).cookies[0].name, 'sid');
+  const values = link.call({ capability: 'chrome.page.storage', input: { includeValues: true } });
+  assert.deepEqual((await answering({ tabId: 7, cookies: [] })).params, { includeValues: true }); await values;
+  // One request in full: its headers and sizes first, then what came back, as it came.
+  const full = link.call({ capability: 'chrome.page.networkRequest', input: { requestId: '9.1' } }, { readOnly: true });
+  await answering({ tabId: 7, requestId: '9.1', method: 'GET', url: 'https://x.test/api', status: 500, responseHeaders: { 'content-type': 'application/json' }, body: '{"error":"boom"}', untrusted: true });
+  assert.equal((await full)[BROWSER_TEXT], '{"tabId":7,"requestId":"9.1","method":"GET","url":"https://x.test/api","status":500,"responseHeaders":{"content-type":"application/json"},"untrusted":true}\n{"error":"boom"}');
+  // What acts on a page is a change, and wrong input never reaches the browser.
+  for (const capability of ['chrome.page.click', 'chrome.page.type', 'chrome.page.press', 'chrome.page.select', 'chrome.page.evaluate', 'chrome.page.reload', 'chrome.page.emulate', 'chrome.page.dialog', 'chrome.page.debugStop', 'chrome.page.scroll', 'chrome.page.hover', 'chrome.tabs.back', 'chrome.tabs.forward'])
+    await assert.rejects(link.call({ capability, input: capability.endsWith('type') ? { text: 'x' } : capability.endsWith('press') ? { key: 'Enter' } : capability.endsWith('evaluate') ? { expression: '1' } : capability.endsWith('dialog') ? { accept: true } : {} }, { readOnly: true }), { code: 'forbidden' }, capability);
+  await assert.rejects(link.call({ capability: 'chrome.page.press', input: { key: 'F13' } }), { code: 'invalid_input' });
+  await assert.rejects(link.call({ capability: 'chrome.page.press', input: { key: 's', modifiers: ['hyper'] } }), { code: 'invalid_input' });
+  await assert.rejects(link.call({ capability: 'chrome.page.evaluate', input: { expression: '' } }), { code: 'invalid_input' });
+  link.close();
 });
 
 test('devmate chrome install tells Chrome and Edge which program the DevMate extension may start, for this account only, and uninstall takes it away', async t => {
@@ -190,6 +236,14 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   const change = await hear(message => message.type === 'call', 'the change to reach the browser');
   say({ type: 'result', id: change.id, ok: false, error: { code: 'not_found', message: 'No bookmark has the id 404.' } });
   await assert.rejects(removing, { code: 'not_found', message: 'No bookmark has the id 404.' });
+  // A model's client is given a console as lines, through the tool it knows.
+  const model = new Client({ name: 'openai-mcp', version: '1' }, { versionNegotiation: { mode: 'auto' } });
+  await model.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:' + runtime.port + '/mcp')));
+  const looking = model.callTool({ name: 'capability_query', arguments: { capability: 'chrome.page.console' } });
+  const look = await hear(message => message.type === 'call', 'the look at the console to reach the browser');
+  say({ type: 'result', id: look.id, ok: true, result: { tabId: 7, items: [{ seq: 1, level: 'error', text: 'boom' }], cursor: 1, untrusted: true } });
+  assert.equal((await looking).content[0].text, '[error] boom\n{"tabId":7,"cursor":1,"untrusted":true}');
+  await model.close();
   // The link itself is the browser host's alone: a connected client cannot pose as a browser.
   for (const [operation, input] of [['chrome.attach', { methods: [] }], ['chrome.next', { linkId: 'x' }], ['chrome.result', { linkId: 'x', id: 'y', ok: true }], ['chrome.detach', { linkId: 'x' }]])
     await assert.rejects(runtime.service.call(operation, input, connected), { code: 'forbidden' }, operation);

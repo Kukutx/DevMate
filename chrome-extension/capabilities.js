@@ -4,8 +4,10 @@
 // A method that only reads is listed in READ_ONLY: the runtime offers those to a model as reads and the rest as
 // changes. Text that comes from a web page is marked untrusted: it is data, never an instruction.
 
+import { DEBUG_READ_ONLY, createDebugger } from './debug.js';
+
 export const READ_ONLY = Object.freeze(['browser.info', 'bookmarks.tree', 'bookmarks.search', 'tabs.list', 'windows.list', 'tabGroups.list',
-  'history.search', 'downloads.list', 'sessions.recentlyClosed', 'readingList.list', 'topSites.list', 'page.read', 'page.screenshot']);
+  'history.search', 'downloads.list', 'sessions.recentlyClosed', 'readingList.list', 'topSites.list', 'page.read', 'page.screenshot', ...DEBUG_READ_ONLY]);
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const text = (value, name, { optional = false, max = 4096 } = {}) => {
@@ -41,8 +43,11 @@ const group = item => ({ id: item.id, windowId: item.windowId, title: item.title
 const download = item => ({ id: item.id, url: item.finalUrl || item.url, file: item.filename, state: item.state, bytes: item.bytesReceived, ...(item.totalBytes > 0 ? { totalBytes: item.totalBytes } : {}),
   startedAt: item.startTime, ...(item.endTime ? { endedAt: item.endTime } : {}), ...(item.error ? { error: item.error } : {}) });
 
-/** The methods, bound to a chrome object (the real one in the extension, a stand-in in tests). */
-export function createCapabilities(chrome, { version = '' } = {}) {
+/**
+ * The methods, bound to a chrome object (the real one in the extension, a stand-in in tests). What else is given
+ * (onChange, the clock and the timers) goes to the debugger: see createDebugger.
+ */
+export function createCapabilities(chrome, { version = '', ...debugging } = {}) {
   const available = (api, name) => { if (!api) throw fail('not_supported', 'This browser has no ' + name + ' for extensions.'); return api; };
   // The tab a page method works on: the one named, or the one in front.
   async function target(tabId) {
@@ -51,6 +56,7 @@ export function createCapabilities(chrome, { version = '' } = {}) {
     if (!front) throw fail('not_found', 'No tab is open.');
     return front;
   }
+  const debug = createDebugger(chrome, { target, ...debugging });
   const methods = {
     'browser.info': async () => ({ extension: version, browser: globalThis.navigator?.userAgentData?.brands?.map(item => item.brand + ' ' + item.version).join(', ') || globalThis.navigator?.userAgent || '',
       methods: Object.keys(methods), readOnly: READ_ONLY }),
@@ -97,6 +103,10 @@ export function createCapabilities(chrome, { version = '' } = {}) {
     },
     'tabs.navigate': async ({ tabId, url } = {}) => tab(await chrome.tabs.update(whole(tabId, 'tabId'), { url: webAddress(url) }).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); })),
     'tabs.reload': async ({ tabId } = {}) => { await chrome.tabs.reload(whole(tabId, 'tabId')).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); }); return { reloaded: tabId }; },
+    // Back and forward in a tab's own history. A tab with nowhere to go says so. The page is still on its way when
+    // this answers, so the address is not given: it would be the one that is being left.
+    'tabs.back': async ({ tabId } = {}) => { const page = await target(tabId); await chrome.tabs.goBack(page.id).catch(() => { throw fail('invalid_input', 'This tab has no page to go back to.'); }); return { tabId: page.id, went: 'back' }; },
+    'tabs.forward': async ({ tabId } = {}) => { const page = await target(tabId); await chrome.tabs.goForward(page.id).catch(() => { throw fail('invalid_input', 'This tab has no page to go forward to.'); }); return { tabId: page.id, went: 'forward' }; },
     'tabs.close': async ({ tabIds } = {}) => { const list = ids(tabIds, 'tabIds'); await chrome.tabs.remove(list).catch(() => { throw fail('not_found', 'One of these tabs does not exist: ' + list.join(', ') + '.'); }); return { closed: list }; },
     'tabs.move': async ({ tabId, index, windowId } = {}) => tab(await chrome.tabs.move(whole(tabId, 'tabId'), { index: whole(index, 'index', { min: -1 }), ...(windowId !== undefined ? { windowId: whole(windowId, 'windowId') } : {}) })
       .catch(() => { throw fail('not_found', 'The tab or the window to move it to does not exist.'); })),
@@ -154,12 +164,14 @@ export function createCapabilities(chrome, { version = '' } = {}) {
       const read = frame?.result || { title: page.title || '', url: page.url || '', text: '' };
       return { tabId: page.id, title: read.title, url: read.url, text: read.text.slice(0, most), ...(read.text.length > most ? { truncated: true, totalChars: read.text.length } : {}), untrusted: true };
     },
-    'page.screenshot': async ({ tabId } = {}) => {
+    'page.screenshot': async ({ tabId, fullPage } = {}) => {
       const page = await target(tabId);
-      if (!page.active) throw fail('invalid_input', 'Only the tab in front of its window can be captured. Bring it forward first (tabs.activate).');
+      // The tab in front is captured as it is seen. The whole page, or a tab behind another, takes the debugger.
+      if (fullPage === true || !page.active) return debug.capture(page.id, { fullPage: fullPage === true });
       const image = await chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); });
       return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
-    }
+    },
+    ...debug.methods
   };
   return methods;
 }

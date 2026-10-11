@@ -3,6 +3,7 @@ import { McpServer, ResourceNotFoundError, ResourceTemplate } from '@modelcontex
 import { registerWorkbench } from './workbench.mjs';
 import { FOLLOWED_PROJECT } from './operations/shared.mjs';
 import { NATIVE_TOOLS, respell, surfaceFor } from './surfaces.mjs';
+import { BROWSER_TEXT } from './chrome.mjs';
 import { VERSION } from './version.mjs';
 
 // The operations that can be called as tools of their own, each with the title a
@@ -77,8 +78,8 @@ export function serverInstructions(service, surface = 'generic') {
     'shell_run executes ' + service.processes.shell.label + ' on ' + process.platform + ': tests, builds, package managers and every Git write. A command still running when the call returns keeps running; follow it with process_read and stop servers with process_stop.',
     surface === 'gpt' ? null : 'workspace_patch changes several places or files in one call, all of it or none: a "*** Begin Patch" envelope or a unified diff.',
     'editor_diagnostics lists the errors the user\'s editor already reports.',
-    'agents_delegate hands a whole task to a coding agent installed here and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation or parallel work.',
-    'capability_list shows the engines: the owner\'s own browser (engine "chrome": bookmarks, tabs, history, downloads, the open page), browser automation, Godot, Obsidian. capability_query reads, capability_call changes.',
+    'agents_delegate hands a whole task to a coding agent installed here and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation.',
+    'capability_list lists engines: the owner\'s browser (engine "chrome": bookmarks, tabs, history; chrome.page.* debugs pages: console, network, elements, script), browser automation, Godot, Obsidian. capability_query reads, capability_call changes.',
     'A name with a dot is an operation: operations_query runs those that only read, operations_call the others, operations_list {summary:true} lists them all.',
     // The owner's own choice (access.update, at their computer). Without it these stay the owner's to do there.
     full ? 'The owner switched on full access: through operations_call, project.create shares another folder and input.respond answers a question a delegated agent asks; operations_query runtime.doctor says what is wrong with this installation.' : null,
@@ -217,6 +218,8 @@ export function createMcpServer(service, context, { surface = 'generic', listing
         const result = await service.call(operation.name, input, request?.signal ? { ...context, signal: request.signal } : context);
         const nativeTool = ['capability.call', 'capability.query'].includes(operation.name) && (!input.capability.startsWith('mcp.') || input.capability.endsWith('.tools.call'));
         if (nativeTool && Array.isArray(result?.content)) return boundedNative(result);
+        // What the browser answered in lines (a console, requests, the elements of a page) is given as those lines.
+        if (nativeTool && typeof result?.[BROWSER_TEXT] === 'string') return { content: [{ type: 'text', text: boundedText(result[BROWSER_TEXT]) }] };
         return present(operation.name, result);
       } catch (error) { return failed(error); }
       finally { done(); }

@@ -1,5 +1,6 @@
 import { createCapabilities } from './capabilities.js';
 import { createBridge } from './bridge.js';
+import { createRenewal } from './renew.js';
 
 // The extension's background: it keeps the connection to DevMate open for as long as the browser runs, answers what
 // the runtime asks of the browser, and tells the panel how things stand. Chrome keeps this worker alive while the
@@ -22,6 +23,11 @@ function show(state) {
   chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {});
 }
 
+// The tabs that have the debugger on them right now, for the panel.
+let debugging = [];
+const methods = createCapabilities(chrome, { version, onChange: tabs => { debugging = tabs; chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {}); } });
+const letGo = () => methods['page.debugStop']({}).catch(() => {});
+
 const bridge = createBridge({
   // Chrome reports why a connection ended in runtime.lastError, readable only inside the disconnect listener.
   connect: name => {
@@ -29,22 +35,36 @@ const bridge = createBridge({
     return { postMessage: message => port.postMessage(message), onMessage: port.onMessage,
       onDisconnect: { addListener: listener => port.onDisconnect.addListener(() => listener(chrome.runtime.lastError?.message || '')) } };
   },
-  methods: createCapabilities(chrome, { version }), version, browser, settings, onChange: show
+  methods, version, browser, settings, onChange: show
 });
 
-chrome.runtime.onStartup.addListener(() => bridge.open());
-chrome.runtime.onInstalled.addListener(() => bridge.open());
+// After an update of DevMate the files on disk are newer than what the browser runs: see renew.js.
+const renewal = createRenewal({ read: name => fetch(chrome.runtime.getURL(name), { cache: 'no-store' }).then(response => response.text()), storage: chrome.storage.local, reload: () => chrome.runtime.reload() });
+
+// A debugger left on a tab by a worker that was put to sleep is taken off: nothing here remembers it any more. That
+// comes first, so that it cannot take off one DevMate has just asked for.
+const tidy = Promise.resolve().then(() => chrome.debugger.getTargets()).then(targets => Promise.all(targets.filter(one => one.attached && one.tabId !== undefined).map(one => chrome.debugger.detach({ tabId: one.tabId }).catch(() => {})))).catch(() => {});
+const open = () => tidy.then(() => bridge.open());
+
+chrome.runtime.onStartup.addListener(open);
+chrome.runtime.onInstalled.addListener(() => { void open(); void renewal.loaded(); });
 chrome.alarms.create('devmate-connection', { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'devmate-connection' && !bridge.connected()) bridge.again(); });
-bridge.open();
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== 'devmate-connection') return;
+  void tidy.then(() => { if (!bridge.connected()) bridge.again(); });
+  void renewal.look();
+});
+void open();
 
 // The panel asks; these questions are answered and no others.
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !message || typeof message !== 'object') return false;
-  const whole = async () => ({ state: bridge.state(), settings: await settings.get(), version, browser });
+  const whole = async () => ({ state: { ...bridge.state(), debugging: debugging.length }, settings: await settings.get(), version, browser });
   if (message.ask === 'state') { whole().then(respond); return true; }
   if (message.ask === 'again') { bridge.again(); whole().then(respond); return true; }
-  if (message.ask === 'pause') { bridge.pause(message.paused === true).then(whole).then(respond); return true; }
+  // A browser the owner wants to themselves has no debugger left on its tabs either.
+  if (message.ask === 'pause') { bridge.pause(message.paused === true).then(() => message.paused === true ? letGo() : null).then(whole).then(respond); return true; }
+  if (message.ask === 'debugStop') { letGo().then(whole).then(respond); return true; }
   if (message.ask === 'settings') {
     const wanted = {};
     if (typeof message.startWithBrowser === 'boolean') wanted.startWithBrowser = message.startWithBrowser;

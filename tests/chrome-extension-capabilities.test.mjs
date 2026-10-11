@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { READ_ONLY, createCapabilities, answer } from '../chrome-extension/capabilities.js';
+import { DEBUG_READ_ONLY } from '../chrome-extension/debug.js';
 
 // A stand-in for the browser's extension API. Each function named in `replies` ('bookmarks.search', 'tabs.query', ...)
 // returns a promise and writes down how it was called. A reply is a value, or a function of the arguments; a reply
@@ -85,7 +86,8 @@ test('a method offered as a read asks the browser only for what changes nothing'
     return action === 'captureVisibleTab' ? 'data:image/png;base64,AAAA' : [{ id: 1, windowId: 7, active: true, title: 'Front', url: 'https://front.example/' }];
   } }) });
   const methods = createCapabilities(chrome);
-  for (const name of READ_ONLY) {
+  // The reads that go through the debugger are held to the same in chrome-extension-debug.test.mjs.
+  for (const name of READ_ONLY.filter(name => !DEBUG_READ_ONLY.includes(name))) {
     const before = asked.length;
     await methods[name]({ query: 'front' });
     for (const call of asked.slice(before)) assert.ok(reads.has(call), name + ' is offered as a read but asked the browser for ' + call);
@@ -402,15 +404,17 @@ test('what page.read sends into the page stands on its own there and takes the t
   assert.deepEqual(inPage({ title: 'Frames', body: null }, { href: 'https://frames.example/' }), { title: 'Frames', url: 'https://frames.example/', text: '' }, 'a page without a body has no text');
 });
 
-test('page.screenshot captures only a tab in front of its window, as a PNG without the data URL prefix', async () => {
+test('page.screenshot captures a tab in front of its window as it is seen, as a PNG without the data URL prefix', async () => {
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   const { methods, asked } = withTabs({ 'tabs.captureVisibleTab': windowId => { if (windowId === 8) throw new Error('Failed to capture tab: image readback failed'); return 'data:image/png;base64,' + png; } });
   assert.deepEqual(await methods['page.screenshot'](), { tabId: 1, mimeType: 'image/png', base64: png });
   assert.deepEqual(asked('tabs.captureVisibleTab'), [[7, { format: 'png' }]]);
   assert.deepEqual(await methods['page.screenshot']({ tabId: 1 }), { tabId: 1, mimeType: 'image/png', base64: png });
-  // Tab 2 is behind tab 1 in the same window: capturing would give a picture of tab 1 under the name of tab 2.
-  await refuses(methods['page.screenshot']({ tabId: 2 }), 'invalid_input', /tabs\.activate/);
-  assert.equal(asked('tabs.captureVisibleTab').length, 2, 'nothing was captured for it');
+  // Tab 2 is behind tab 1 in the same window: capturing the window would give a picture of tab 1 under the name of
+  // tab 2, so it goes through the debugger instead, and so does a whole page. This stand-in has no debugger.
+  await refuses(methods['page.screenshot']({ tabId: 2 }), 'not_supported', /debugger/);
+  await refuses(methods['page.screenshot']({ tabId: 1, fullPage: true }), 'not_supported', /debugger/);
+  assert.equal(asked('tabs.captureVisibleTab').length, 2, 'the window was not captured for either');
   // Tab 3 is in front of the other window, and that window is the one captured.
   await refuses(methods['page.screenshot']({ tabId: 3 }), 'browser_error', /image readback failed/);
   assert.deepEqual(asked('tabs.captureVisibleTab').at(-1), [8, { format: 'png' }]);
