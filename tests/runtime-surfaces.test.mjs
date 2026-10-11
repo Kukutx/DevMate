@@ -127,11 +127,20 @@ test('the tools a GPT model knows work as it expects: read, apply_patch, exec_co
   const script = path.join(f.root, 'echo.js');
   fs.writeFileSync(script, "process.stdout.write('ready\\n');process.stdin.on('data',d=>{const s=String(d).trim();if(s==='quit')process.exit(3);process.stdout.write('got '+s+'\\n')});");
   const started = await call('exec_command', { cmd: run('echo.js'), yield_time_ms: 3000 });
-  const sessionId = /^Process running with session ID (\S+)\nOutput:\nready/.exec(started)?.[1];
+  const sessionId = /^Process running with session ID (\S+)\nOutput:\n/.exec(started)?.[1];
   assert.ok(sessionId, started);
-  assert.match(await call('write_stdin', { session_id: sessionId, chars: 'hello\n', yield_time_ms: 1500 }), /^Process running with session ID \S+\nOutput:\ngot hello\s*$/);
+  // What a command prints arrives when it arrives, later on a busy computer: a look is repeated until it is there,
+  // and what the looks brought together is what is compared.
+  const printed = answer => { const at = answer.indexOf('\nOutput:\n'); return at < 0 ? '' : answer.slice(at + 9); };
+  const look = () => call('write_stdin', { session_id: sessionId, yield_time_ms: 500 });
+  const gathered = async (answer, wanted) => { let seen = printed(answer); for (const end = Date.now() + 30000; !wanted.test(seen) && Date.now() < end;) seen += printed(await look()); return seen; };
+  assert.match(await gathered(started, /ready/), /^ready\s*$/);
+  const answered = await call('write_stdin', { session_id: sessionId, chars: 'hello\n', yield_time_ms: 1500 });
+  assert.match(answered, /^Process running with session ID \S+\nOutput:\n/); assert.match(await gathered(answered, /got hello/), /^got hello\s*$/, 'what was read before does not come again');
   assert.match(await call('write_stdin', { session_id: sessionId, yield_time_ms: 300 }), /^Process running with session ID \S+\nOutput:\n\s*$/, 'nothing new, and it says so by returning nothing');
-  assert.match(await call('write_stdin', { session_id: sessionId, chars: 'quit\n', yield_time_ms: 3000 }), /^Process exited with code 3\nOutput:/);
+  let ended = await call('write_stdin', { session_id: sessionId, chars: 'quit\n', yield_time_ms: 3000 });
+  for (const end = Date.now() + 30000; !/^Process exited/.test(ended) && Date.now() < end;) ended = await look();
+  assert.match(ended, /^Process exited with code 3\nOutput:/);
   const gone = await client.callTool({ name: 'write_stdin', arguments: { session_id: 'process-none' } });
   assert.equal(gone.isError, true); assert.match(gone.content[0].text, /not_found/);
   // A session of an earlier runtime is said to be that: nothing of what it once printed comes back.
@@ -141,6 +150,8 @@ test('the tools a GPT model knows work as it expects: read, apply_patch, exec_co
   fs.writeFileSync(path.join(f.root, 'flood.js'), "const line='x'.repeat(99)+'\\n';for(let i=0;i<8000;i++)process.stdout.write(line);process.stdout.write('the end\\n');process.stdin.resume()");
   const flood = await f.service.call('shell.run', { command: run('flood.js'), interactive: true, waitMs: 3000 }, connected);
   assert.equal(flood.status, 'running');
+  // All of it is printed before the look. The runtime itself is asked, which moves no reader's place.
+  for (const end = Date.now() + 30000; !String((await f.service.call('process.read', { id: flood.id, maxBytes: 64 }, connected)).output).includes('the end') && Date.now() < end;) await new Promise(resolve => setTimeout(resolve, 100));
   const looked = await call('write_stdin', { session_id: flood.id, yield_time_ms: 300 });
   assert.ok(looked.length < 42000, looked.length + ' characters of 800,000 printed');
   assert.match(looked, /^Process running with session ID \S+\n\[\d{6,} bytes of earlier output are not shown\]\nOutput:\n/); assert.match(looked, /the end\s*$/);

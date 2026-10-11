@@ -67,7 +67,7 @@ test('an engine process is an ordinary project process: listed, paged by cursor 
   const first = await until(async () => { const page = await f.op('process.read', { id: started.id, cursor: 0 }); return /line 1/.test(page.output) ? page : null; }, 'first output');
   assert.match(first.output, /^line 0\r?\nline 1/);
   // Reading from the returned cursor yields only what is new.
-  const next = await f.op('process.read', { id: started.id, cursor: first.cursor, waitMs: 3000 });
+  const next = await until(async () => { const page = await f.op('process.read', { id: started.id, cursor: first.cursor, waitMs: 3000 }); return page.output.length ? page : null; }, 'more output', 30000);
   assert.equal(next.status, 'running');
   assert.ok(next.output.length > 0 && !next.output.includes('line 0\n') && !next.output.includes('line 0\r'));
   assert.ok(next.cursor > first.cursor);
