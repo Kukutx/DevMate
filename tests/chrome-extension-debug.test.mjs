@@ -977,11 +977,11 @@ test('capture takes a picture of what the tab shows as a PNG, and of the whole p
   let size = { width: 1280, height: 2400 };
   const { capture, names, sent, replies } = harness({ 'Page.captureScreenshot': ({ format }) => ({ data: format === 'png' ? 'UE5H' : 'SlBFRw==' }), 'Page.getLayoutMetrics': () => ({ cssContentSize: size }) });
   assert.deepEqual(await capture(4), { tabId: 4, mimeType: 'image/png', base64: 'UE5H' });
-  assert.deepEqual(names(5), ['Page.captureScreenshot'], 'what is seen needs no measuring');
+  assert.deepEqual(names(5), ['Runtime.evaluate', 'Page.captureScreenshot'], 'what is seen needs no measuring: only whether the tab is shown is asked first');
   assert.deepEqual(await capture(4, { fullPage: false }), { tabId: 4, mimeType: 'image/png', base64: 'UE5H' });
   assert.deepEqual(sent('Page.captureScreenshot'), [{ format: 'png' }, { format: 'png' }]);
   assert.deepEqual(await capture(4, { fullPage: true }), { tabId: 4, mimeType: 'image/jpeg', base64: 'SlBFRw==', fullPage: true, width: 1280, height: 2400 });
-  assert.deepEqual(names(7), ['Page.getLayoutMetrics', 'Page.captureScreenshot']);
+  assert.deepEqual(names(9), ['Runtime.evaluate', 'Page.getLayoutMetrics', 'Page.captureScreenshot']);
   assert.deepEqual(sent('Page.captureScreenshot')[2], { format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width: 1280, height: 2400, scale: 1 }, captureBeyondViewport: true });
   // A page longer than eight thousand pixels is cut there, and the answer says how long the page is.
   size = { width: 1280.4, height: 12000.2 };
@@ -996,6 +996,24 @@ test('capture takes a picture of what the tab shows as a PNG, and of the whole p
   assert.deepEqual([unknown.tabId, unknown.width, unknown.height], [1, 1280, 800]);
   replies['Page.captureScreenshot'] = () => no('Unable to capture screenshot');
   await refuses(capture(4), 'browser_error', /^Page\.captureScreenshot failed: Unable to capture screenshot$/);
+});
+
+test('a tab that is not shown is pictured where the browser still has it drawn, and otherwise it is said within seconds what to do', async () => {
+  // A browser with a window never answers for a tab it has not shown yet: that is not waited for to the end.
+  const hidden = { result: { type: 'string', value: 'hidden' } };
+  const stand = harness({ 'Runtime.evaluate': hidden, 'Page.captureScreenshot': () => new Promise(() => {}), 'Page.getLayoutMetrics': { cssContentSize: { width: 1000, height: 3000 } } });
+  await refuses(stand.capture(1), 'invalid_input', /behind another.*tabs\.activate/);
+  assert.deepEqual(stand.pauses, [10000], 'after ten seconds');
+  await refuses(stand.capture(1, { fullPage: true }), 'invalid_input', /tabs\.activate/);
+  assert.deepEqual(stand.debugging(), [1], 'the tab stays debugged: its console and its requests are still read');
+  // Where the browser has the tab drawn (it was shown before), the picture comes and is given.
+  const drawn = standIn({ 'Runtime.evaluate': hidden, 'Page.captureScreenshot': { data: 'UE5H' } });
+  const debug = createDebugger(drawn.chrome, { target: async tabId => ({ id: tabId ?? 1 }), ...drawn.fakes, pause: () => new Promise(() => {}) });
+  assert.deepEqual(await debug.capture(1), { tabId: 1, mimeType: 'image/png', base64: 'UE5H' });
+  // A tab that is shown is waited for as long as its picture takes: nothing is timed.
+  const shownTab = harness({ 'Runtime.evaluate': { result: { type: 'string', value: 'visible' } }, 'Page.captureScreenshot': { data: 'UE5H' } });
+  assert.deepEqual(await shownTab.capture(1), { tabId: 1, mimeType: 'image/png', base64: 'UE5H' });
+  assert.deepEqual(shownTab.pauses, []);
 });
 
 test('the extension offers each read of the debugger as a read and the rest of it as changes, and hands it the clock and the timers it was given', async () => {

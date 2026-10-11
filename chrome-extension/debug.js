@@ -9,6 +9,9 @@
 
 export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor']);
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
+// How long a picture of a tab that is not shown is waited for (see capture()). In a real Chrome one was seen to
+// come after four seconds, and another never.
+const HIDDEN_PICTURE_MS = 10000;
 const LEVELS = { verbose: 0, debug: 0, log: 1, info: 1, navigation: 1, warning: 2, warn: 2, dialog: 2, error: 3, exception: 3, assert: 3 };
 const ASKED = { debug: 0, info: 1, warn: 2, error: 3 };
 const INTERACTIVE = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'listbox', 'treeitem']);
@@ -421,10 +424,19 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   /** A picture of a tab through the debugger: the whole page, or a tab that is not in front. */
   async function capture(tabId, { fullPage = false } = {}) {
     const { id } = await page(tabId);
-    if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await command(id, 'Page.captureScreenshot', { format: 'png' })).data };
+    // The browser draws only what it shows. Of a tab behind another it still has a picture where it drew it before;
+    // of one that was never shown it never answers. That is waited for briefly and then said, with what to do.
+    const hidden = (await run(id, 'document.visibilityState'))?.value === 'hidden';
+    const pictured = params => {
+      const asked = command(id, 'Page.captureScreenshot', params);
+      if (!hidden) return asked;
+      asked.catch(() => {});
+      return Promise.race([asked, pause(HIDDEN_PICTURE_MS).then(() => { throw fail('invalid_input', 'The browser gives no picture of this tab while it is behind another: it draws only what it shows. Bring it forward (tabs.activate) and ask again.'); })]);
+    };
+    if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' })).data };
     // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
     const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
-    const shot = await command(id, 'Page.captureScreenshot', { format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: true });
+    const shot = await pictured({ format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: true });
     return { tabId: id, mimeType: 'image/jpeg', base64: shot.data, fullPage: true, width, height, ...(tall > height ? { truncated: true, pageHeight: tall } : {}) };
   }
 
