@@ -11,7 +11,13 @@ import { VERSION } from './version.mjs';
 // downloaded, started and kept current, and it serves as many calls at once as the owner allows.
 
 export const WIRE_PROTOCOL_VERSION = '2026-08-25';
+// Where the owner looks things up: the settings a tunnel is created in, and OpenAI's guide, whose "Troubleshooting"
+// says why a tunnel is not offered in ChatGPT.
+export const TUNNEL_HELP = Object.freeze({ settings: 'https://platform.openai.com/settings/organization/tunnels', guide: 'https://developers.openai.com/api/docs/guides/secure-mcp-tunnels' });
 const CONTROL_PLANE = 'https://api.openai.com';
+// OpenAI's interface has no code for a protocol version it has stopped taking, so that is told by what the answer says
+// about the version or about the client, and by nothing vaguer: "upgrade your plan" is not it.
+const OUTDATED = /(wire|protocol|client)[ _-]*version|(upgrade|update)[^.]{0,30}client|client[^.]{0,30}(too old|outdated|deprecated)/i;
 // A Streamable HTTP endpoint behind the tunnel declares itself exactly like this.
 const SERVER_INFO = JSON.stringify({ version: 1, channels: [{ name: 'main' }] });
 // What of the endpoint's answer the protocol carries back.
@@ -55,7 +61,7 @@ async function* streamEvents(body) {
   yield* events(true);
 }
 
-export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', localMcpUrl, instanceId = '', env = process.env, maxConcurrentRequests = 32,
+export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, instanceId = '', env = process.env, maxConcurrentRequests = 32,
   fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
   now = () => performance.now(), random = Math.random } = {}) {
   if (!/^tunnel_[A-Za-z0-9_]+$/.test(tunnelId || '')) throw fault('invalid_connection', 'A valid OpenAI tunnel id is required.');
@@ -66,10 +72,34 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   const active = new Set(), waiting = [];
   const key = () => String(env[runtimeKeyEnv] || '').trim();
   const common = () => ({ Authorization: 'Bearer ' + key(), 'X-Tunnel-Client-Name': 'devmate', 'X-Tunnel-Client-Version': VERSION,
-    'X-Tunnel-Client-Wire-Protocol-Version': WIRE_PROTOCOL_VERSION, 'X-Tunnel-MCP-Server-Info': SERVER_INFO, ...(instanceId ? { 'X-Tunnel-Client-Instance-Id': instanceId } : {}) });
+    'X-Tunnel-Client-Wire-Protocol-Version': WIRE_PROTOCOL_VERSION, 'X-Tunnel-MCP-Server-Info': SERVER_INFO, ...(instanceId ? { 'X-Tunnel-Client-Instance-Id': instanceId } : {}),
+    // The organization a tunnel belongs to, where OpenAI asks for it: the header its own client sends.
+    ...(organizationId ? { 'OpenAI-Organization': organizationId } : {}) });
   const jitter = ms => ms / 2 + random() * ms / 2;
   const stamp = () => new Date().toISOString();
-  const said = async response => { try { return String((await response.json())?.error?.message || '').slice(0, 300); } catch { return ''; } };
+  // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence.
+  const said = async response => {
+    try {
+      const body = await response.json(), error = body?.error && typeof body.error === 'object' ? body.error : body;
+      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: String(error?.message || (typeof body?.error === 'string' ? body.error : '')).slice(0, 300) };
+    } catch { return { code: '', message: '' }; }
+  };
+  // What a refusal means for the owner, as a code and a sentence. The codes are the stable ones OpenAI publishes for its
+  // tunnel service (x-tunnel-error-codes in docs/openapi.json of github.com/openai/tunnel-client). The tunnel id is
+  // named as the cause only where OpenAI names it, and an answer that interface does not know is passed on as it is.
+  function refusal(status, { code, message }) {
+    const answer = 'HTTP ' + status + (code ? ' ' + code : '') + (message ? ': ' + message : ''), again = 'devmate connect openai-tunnel --tunnel-id ' + tunnelId;
+    const official = 'OpenAI\'s own tunnel-client can carry the tunnel (' + again + ' --executable <path of tunnel-client>)';
+    if (code === 'invalid_tunnel_id_format') return ['tunnel_id', 'OpenAI does not take ' + tunnelId + ' for a tunnel id (' + answer + '). Copy the id from ' + TUNNEL_HELP.settings + ' and set it: devmate connect openai-tunnel --tunnel-id <id>'];
+    if (code === 'tunnel_active_organization_required') return ['organization_required', 'OpenAI has to be told which organization ' + tunnelId + ' belongs to (' + answer + '). ' +
+      (organizationId ? 'It was told ' + organizationId + ' and does not take that. ' : '') + 'Name the organization of the tunnel: ' + again + ' --organization <organization id>'];
+    if (code === 'tunnel_use_forbidden' || code === 'tunnel_missing_principals') return ['not_permitted', 'This runtime key may not use ' + tunnelId + ' (' + answer + '). The key has to come from the organization or workspace the tunnel belongs to: create it for this tunnel at ' +
+      TUNNEL_HELP.settings + ' and store it with devmate secret set ' + runtimeKeyEnv];
+    if (status === 401 || status === 403) return ['not_authorized', 'OpenAI refused the runtime key for ' + tunnelId + ' (' + answer + '). Store the key of this tunnel again: devmate secret set ' + runtimeKeyEnv];
+    if (status === 426 || OUTDATED.test(code + ' ' + message)) return ['protocol_outdated', 'OpenAI no longer takes version ' + WIRE_PROTOCOL_VERSION + ' of the tunnel protocol, the one this DevMate speaks (' + answer + '). Update DevMate. Until then ' + official + '.'];
+    if (status === 404) return ['refused_404', 'OpenAI finds no tunnel ' + tunnelId + ' (' + answer + '). Compare the id with the one at ' + TUNNEL_HELP.settings + '.'];
+    return ['refused_' + status, 'OpenAI hands out no work for ' + tunnelId + ' (' + answer + '). Its published interface names no such answer, so the cause cannot be told from here. If it stays so with the newest DevMate, ' + official + '.'];
+  }
 
   // One answer back to the control plane. A final answer is tried again where the protocol allows it, until the
   // command's deadline; a progress message is sent once.
@@ -181,16 +211,15 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
         admit(signal);
         continue;
       }
-      const detail = await said(response), wait = retryAfterMs(response);
-      if (response.status === 401 || response.status === 403) {
-        // The key is wrong or is not this tunnel's. Asking again at once changes nothing: wait for the owner.
-        phase = 'failed'; problem = { code: 'not_authorized', message: 'OpenAI refused the runtime key for ' + tunnelId + ' (HTTP ' + response.status + (detail ? ': ' + detail : '') + '). Store the key of this tunnel again: devmate secret set ' + runtimeKeyEnv, at: stamp() };
-        await pause(60000, signal);
-      } else if (response.status === 429 || response.status >= 500) {
+      const told = await said(response), wait = retryAfterMs(response);
+      if (response.status === 429 || response.status >= 500) {
+        const detail = [told.code, told.message].filter(Boolean).join(': ');
         phase = 'connecting'; problem = { code: 'control_plane_' + response.status, message: 'OpenAI answered HTTP ' + response.status + (detail ? ': ' + detail : '') + '; trying again.', at: stamp() };
         await pause(Math.max(wait, jitter(delay)), signal); delay = Math.min(delay * 2, 30000);
       } else {
-        phase = 'failed'; problem = { code: 'refused_' + response.status, message: 'OpenAI answered HTTP ' + response.status + ' for ' + tunnelId + (detail ? ': ' + detail : '') + '. Check the tunnel id in the OpenAI Platform settings.', at: stamp() };
+        // The key, the tunnel or this client is refused. Asking again at once changes nothing: wait for the owner.
+        const [code, message] = refusal(response.status, told);
+        phase = 'failed'; problem = { code, message, at: stamp() };
         await pause(60000, signal);
       }
     }

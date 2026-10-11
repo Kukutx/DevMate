@@ -20,8 +20,9 @@ function controlPlane(local) {
     if (url.origin !== 'https://api.openai.com') { plane.local.push({ url: url.href, headers: new Headers(init.headers), body: init.body }); return local(url, init); }
     if (url.pathname.endsWith('/poll')) {
       plane.polls.push({ query: url.searchParams, headers: new Headers(init.headers), path: url.pathname });
+      // A refusal is a status, or a status with the error OpenAI's interface names for it.
       const refused = plane.pollStatus.shift();
-      if (refused) return new Response(JSON.stringify({ error: { message: 'said by the control plane', type: 'invalid_request_error' } }), { status: refused });
+      if (refused) return new Response(JSON.stringify({ error: { message: 'said by the control plane', type: 'invalid_request_error', ...refused.error } }), { status: refused.status || refused });
       if (plane.queue.length) return Response.json({ commands: plane.queue.splice(0) });
       // Nothing to do: the long poll ends empty, or is given up when the client stops.
       await new Promise((resolve, reject) => { const timer = setTimeout(resolve, 20); init.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }, { once: true }); });
@@ -64,7 +65,7 @@ test('the runtime speaks OpenAI\'s tunnel itself: it asks for work, hands each c
   assert.equal(poll.path, '/v1/tunnels/tunnel_abc123/poll'); assert.equal(poll.headers.get('authorization'), 'Bearer the-runtime-key');
   assert.deepEqual([poll.headers.get('x-tunnel-client-name'), poll.headers.get('x-tunnel-client-version'), poll.headers.get('x-tunnel-client-wire-protocol-version'), poll.headers.get('x-tunnel-client-instance-id')],
     ['devmate', VERSION, WIRE_PROTOCOL_VERSION, 'instance-1']);
-  assert.equal(poll.headers.get('x-tunnel-mcp-server-info'), '{"version":1,"channels":[{"name":"main"}]}');
+  assert.equal(poll.headers.get('x-tunnel-mcp-server-info'), '{"version":1,"channels":[{"name":"main"}]}'); assert.equal(poll.headers.get('openai-organization'), null);
   assert.ok(Number(poll.query.get('limit')) >= 1 && Number(poll.query.get('limit')) <= 25); assert.equal(poll.query.get('timeout_ms'), '30000');
 
   // A call with a plain answer.
@@ -132,6 +133,48 @@ test('the runtime speaks OpenAI\'s tunnel itself: it asks for work, hands each c
   const polled = plane.polls.length; await new Promise(resolve => setTimeout(resolve, 80)); assert.equal(plane.polls.length, polled, 'a stopped tunnel asks for nothing');
 });
 
+test('a refusal says what OpenAI said and what to do about that, and blames the tunnel id only where OpenAI does', async t => {
+  const plane = controlPlane(async () => { throw new Error('no call is expected'); }), seen = [];
+  // Every refusal is followed by a wait: what the owner is told is read there, before the next poll clears it.
+  const noted = tunnel => async (ms, signal) => { const error = tunnel().status().error; if (error) seen.push({ ...error, phase: tunnel().status().phase, waited: ms }); await quick(ms, signal); };
+  let tunnel = createOpenAiTunnel({ tunnelId: 'tunnel_abc', localMcpUrl: 'http://127.0.0.1:8789/mcp', env: { CONTROL_PLANE_API_KEY: 'k' }, fetchImpl: plane.fetch, pause: noted(() => tunnel) });
+  t.after(() => tunnel.stop());
+  const refusals = [
+    { status: 400, error: { code: 'invalid_tunnel_id_format', message: 'Invalid tunnel id.' } },
+    { status: 401, error: { code: 'tunnel_active_organization_required', message: 'An organization is required.' } },
+    { status: 401, error: { code: 'tunnel_use_forbidden', message: 'No tunnel use permission.' } },
+    { status: 401, error: { code: 'tunnel_missing_principals', message: 'No principals.' } },
+    { status: 426, error: { message: 'Upgrade Required' } },
+    { status: 400, error: { code: 'unsupported_client', message: 'Unsupported wire protocol version 2026-08-25.' } },
+    { status: 400, error: { message: 'Upgrade your plan to use tunnels.' } },
+    { status: 404, error: { message: 'Not found.' } },
+    { status: 503, error: { code: 'tunnel_transport_unavailable', message: 'Try again.' } }];
+  plane.pollStatus.push(...refusals);
+  await tunnel.start();
+  await until(() => seen.length >= refusals.length && tunnel.status().phase === 'connected', 'every refusal to be met and polling to resume');
+  assert.deepEqual(seen.map(item => [item.code, item.phase, item.waited === 60000]), [['tunnel_id', 'failed', true], ['organization_required', 'failed', true], ['not_permitted', 'failed', true], ['not_permitted', 'failed', true],
+    ['protocol_outdated', 'failed', true], ['protocol_outdated', 'failed', true], ['refused_400', 'failed', true], ['refused_404', 'failed', true], ['control_plane_503', 'connecting', false]]);
+  const [id, organization, forbidden, , upgrade, version, plan, missing, busy] = seen.map(item => item.message);
+  assert.equal(id, 'OpenAI does not take tunnel_abc for a tunnel id (HTTP 400 invalid_tunnel_id_format: Invalid tunnel id.). Copy the id from https://platform.openai.com/settings/organization/tunnels and set it: devmate connect openai-tunnel --tunnel-id <id>');
+  assert.match(organization, /which organization tunnel_abc belongs to \(HTTP 401 tunnel_active_organization_required: An organization is required\.\)\. Name the organization of the tunnel: devmate connect openai-tunnel --tunnel-id tunnel_abc --organization <organization id>$/);
+  assert.match(forbidden, /This runtime key may not use tunnel_abc \(HTTP 401 tunnel_use_forbidden: No tunnel use permission\.\)\. The key has to come from the organization or workspace the tunnel belongs to: .* devmate secret set CONTROL_PLANE_API_KEY$/);
+  for (const outdated of [upgrade, version]) assert.match(outdated, /^OpenAI no longer takes version 2026-08-25 of the tunnel protocol, the one this DevMate speaks \(HTTP 4\d\d.*\)\. Update DevMate\. Until then OpenAI's own tunnel-client can carry the tunnel \(devmate connect openai-tunnel --tunnel-id tunnel_abc --executable <path of tunnel-client>\)\.$/);
+  // An answer nobody has named is passed on as it is: neither the tunnel id nor the protocol is blamed for it.
+  assert.match(plan, /^OpenAI hands out no work for tunnel_abc \(HTTP 400: Upgrade your plan to use tunnels\.\)\. Its published interface names no such answer, so the cause cannot be told from here\./); assert.doesNotMatch(plan, /tunnel id|no longer takes/);
+  assert.match(missing, /^OpenAI finds no tunnel tunnel_abc \(HTTP 404: Not found\.\)\. Compare the id with the one at https:\/\/platform\.openai\.com\/settings\/organization\/tunnels\.$/);
+  assert.equal(busy, 'OpenAI answered HTTP 503: tunnel_transport_unavailable: Try again.; trying again.');
+  for (const message of seen.slice(1).map(item => item.message)) assert.doesNotMatch(message, /Check the tunnel id/);
+  await tunnel.stop();
+
+  // An organization that was named travels in the header OpenAI's own client uses, and a refusal of it says so.
+  seen.length = 0; plane.polls.length = 0;
+  tunnel = createOpenAiTunnel({ tunnelId: 'tunnel_abc', organizationId: 'org-abc', localMcpUrl: 'http://127.0.0.1:8789/mcp', env: { CONTROL_PLANE_API_KEY: 'k' }, fetchImpl: plane.fetch, pause: noted(() => tunnel) });
+  plane.pollStatus.push({ status: 401, error: { code: 'tunnel_active_organization_required', message: 'An organization is required.' } });
+  await tunnel.start();
+  await until(() => seen.length === 1, 'the refused organization');
+  assert.equal(plane.polls[0].headers.get('openai-organization'), 'org-abc'); assert.match(seen[0].message, /It was told org-abc and does not take that\. Name the organization of the tunnel: /);
+});
+
 test('no more calls are in flight than allowed, a missing key is said before anything is asked, and an endpoint that is gone is reported', async t => {
   let inFlight = 0, most = 0; const release = [];
   const plane = controlPlane(async (url, init) => {
@@ -169,9 +212,11 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   assert.deepEqual(settings, { kind: 'openai-tunnel', tunnelId: 'tunnel_abc123', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY', maxConcurrentRequests: 32 });
   // OpenAI's own program is still used where its path is given, and is told how many calls to hold.
   assert.equal(normalizeConnectionConfig({ kind: 'openai-tunnel', tunnelId: 'tunnel_abc123', executable: process.execPath, maxConcurrentRequests: 64 }).executable, process.execPath);
-  for (const bad of [{ tunnelId: 'abc' }, { tunnelId: 'tunnel_abc', executable: 'tunnel-client' }, { tunnelId: 'tunnel_abc', maxConcurrentRequests: 0 }, { tunnelId: 'tunnel_abc', maxConcurrentRequests: 1000 }]) {
+  for (const bad of [{ tunnelId: 'abc' }, { tunnelId: 'tunnel_abc', executable: 'tunnel-client' }, { tunnelId: 'tunnel_abc', maxConcurrentRequests: 0 }, { tunnelId: 'tunnel_abc', maxConcurrentRequests: 1000 },
+    { tunnelId: 'tunnel_abc', organizationId: 'org abc\r\nX-Injected: 1' }]) {
     assert.throws(() => normalizeConnectionConfig({ kind: 'openai-tunnel', ...bad }), Error, JSON.stringify(bad));
   }
+  assert.equal(normalizeConnectionConfig({ kind: 'openai-tunnel', tunnelId: 'tunnel_abc123', organizationId: ' org-abc ' }).organizationId, 'org-abc');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-openai-tunnel-')), instanceRoot = path.join(temp, 'instance'), projectRoot = path.join(temp, 'project');
   let runtime;
   t.after(async () => { await runtime?.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -180,6 +225,10 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   const out = { text: '', write(value) { out.text += value; } };
   assert.equal(await cli(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123', '--instance', instanceRoot], { stdout: out, stderr: { write() {} }, env: {} }), 0, out.text);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(instanceRoot, 'config.json'), 'utf8')).connection, settings);
+  // The organization of the tunnel is named the same way, and kept with it.
+  const named = path.join(temp, 'with-organization');
+  assert.equal(await cli(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123', '--organization', 'org-abc', '--instance', named], { stdout: { write() {} }, stderr: { write() {} }, env: {} }), 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(named, 'config.json'), 'utf8')).connection, { ...settings, organizationId: 'org-abc' });
   createSecretStore(instanceRoot).set('CONTROL_PLANE_API_KEY', 'the-runtime-key');
   const plane = controlPlane((url, init) => fetch(url, init));
   runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: options => createConnection({ ...options, fetchImpl: plane.fetch }) });
@@ -190,6 +239,9 @@ test('a tunnel without a program is spoken by the runtime, end to end: a call fr
   let checks = await doctor();
   assert.match(checks['connection.process'].detail, /^openai-tunnel: connected \(spoken by DevMate itself, protocol 2026-08-25, up to 32 calls at once\)$/); assert.equal(checks['connection.executable'], undefined);
   assert.equal(checks['connection.public'].status, 'info'); assert.match(checks['connection.public'].detail, /no call has come through it yet/);
+  // Connected and not offered in ChatGPT is a matter of the OpenAI account: the doctor says so, and where OpenAI explains it.
+  assert.match(checks['connection.public'].fix, /If ChatGPT does not offer the tunnel, the cause is in the OpenAI account and not in DevMate, which is connected: the tunnel has to include the ChatGPT workspace you use/);
+  assert.match(checks['connection.public'].fix, /https:\/\/platform\.openai\.com\/settings\/organization\/tunnels; "Troubleshooting" in https:\/\/developers\.openai\.com\/api\/docs\/guides\/secure-mcp-tunnels/);
   // What ChatGPT sends: the tool list, then a tool call. The answers are this runtime's own.
   plane.queue.push(command(1, { jsonrpc: '2.0', id: 'rpc_1', method: 'tools/list', params: {} }, { headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
   await until(() => plane.posts.some(post => post.body.request_id === 'req_1' && post.body.resp_type === 'jsonrpc_response'), 'the tool list');

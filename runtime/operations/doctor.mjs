@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
+import { TUNNEL_HELP } from '../openai-tunnel.mjs';
 import { within } from './shared.mjs';
 
 /**
@@ -75,8 +76,11 @@ export async function doctor(service) {
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
     // An OpenAI tunnel has no address to connect back through. What proves it is a call that arrived: the runtime counts them.
     else if (status.client === 'built-in' && status.served > 0) check('connection.public', 'ok', 'OpenAI\'s tunnel has delivered ' + status.served + ' call(s) to this runtime, the last one at ' + status.lastCallAt + '.');
+    // Connected and never called: what is missing is on OpenAI's side, where a tunnel is tied to workspaces and roles.
     else if (status.client === 'built-in' && phase === 'connected') check('connection.public', 'info', 'OpenAI accepts this runtime for ' + connection.tunnelId + ' and is being asked for work; no call has come through it yet.',
-      'In ChatGPT add a connector of the type Tunnel with this tunnel id (devmate mcp-url prints it) and call any DevMate tool. Whether your ChatGPT plan offers the Tunnel type is decided by OpenAI.');
+      'In ChatGPT add a custom MCP server, choose Tunnel as its connection and pick or paste this tunnel id (devmate mcp-url prints it), then call any DevMate tool. ' +
+      'If ChatGPT does not offer the tunnel, the cause is in the OpenAI account and not in DevMate, which is connected: the tunnel has to include the ChatGPT workspace you use, not only a Platform organization, and your account needs the Tunnels permissions Read and Use (' +
+      TUNNEL_HELP.settings + '; "Troubleshooting" in ' + TUNNEL_HELP.guide + '). Whether your ChatGPT plan offers the Tunnel connection is decided by OpenAI.');
     else check('connection.public', 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
     if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');

@@ -39,10 +39,11 @@ Connecting an AI client
   devmate connect quick             a Cloudflare quick tunnel: no account, no domain, nothing to set up;
                                     the address changes whenever it starts again
   devmate connect cloudflare --url https://<host>/mcp --executable <cloudflared> [--auth oauth]
-  devmate connect openai-tunnel --tunnel-id <tunnel_…>
+  devmate connect openai-tunnel --tunnel-id <tunnel_…> [--organization <org-…>]
                                     OpenAI's own tunnel, for ChatGPT: outbound only, no public address, an id
                                     that stays. DevMate speaks it itself; --executable <tunnel-client> uses
-                                    OpenAI's program instead
+                                    OpenAI's program instead. --organization names the tunnel's organization,
+                                    for a key OpenAI wants it named with (the doctor says when)
   devmate connect https --url https://<host>/mcp [--auth oauth]
   devmate connect ssh --url https://<host>/mcp --host <server> --user <name> --executable <ssh>
   devmate relay setup <user@host> [--domain <name>] [--ssh-port <n>] [--identity <key file>] [--any-address]
@@ -67,7 +68,7 @@ Everything the runtime can do
 Options: --instance <directory> selects another runtime instance, --timeout <ms>.
 `;
 
-const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'auth', 'lines',
+const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'organization', 'auth', 'lines',
   'host', 'user', 'domain', 'ssh-port', 'identity']);
 const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version', 'report', 'any-address']);
 
@@ -200,7 +201,7 @@ async function configureConnection(kind, options, instanceRoot) {
   const connection = kind === 'local' ? { kind: 'local' }
     : kind === 'quick' ? { kind: 'cloudflare-quick', executable: cloudflared() }
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
-    : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), ...(options.executable ? { executable: executable() } : {}) }
+    : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), ...(options.executable ? { executable: executable() } : {}), ...(options.organization ? { organizationId: options.organization } : {}) }
     : kind === 'https' ? { kind: 'external-https', url: need('url') }
     : kind === 'ssh' ? { kind, publicUrl: need('url'), executable: executable(), host: need('host'), user: need('user') }
     : null;

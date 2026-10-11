@@ -237,7 +237,9 @@ devmate restart
 
 本机只向外连 `api.openai.com` 去取任务：不对外监听任何端口，不用改路由器，也不需要服务器，能限制这条通路的只有 OpenAI。DevMate 自己实现了这条隧道[公开的协议](https://github.com/openai/tunnel-client/blob/master/docs/protocol.md)，所以不用另外下载和更新一个程序，最多同时处理 32 个调用（连接设置里的 `maxConcurrentRequests`，1 到 256）。要改用 OpenAI 自己的 `tunnel-client` 程序，加上 `--executable <它的路径>`。`devmate doctor` 会显示当前用的是哪一种，并统计已经到达的调用数：有调用到达，就是通路可用的证明。
 
-你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；这一步还没有用真实账号试过。
+OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答复，并说明该怎么办。如果 OpenAI 要求指明隧道所属的组织，就在 `connect` 命令上加 `--organization <org-…>`。
+
+如果体检显示隧道已连上，ChatGPT 里却选不到它，原因在 OpenAI 账号一侧，不在 DevMate：隧道必须包含你正在用的 ChatGPT 工作区，而不只是 Platform 组织，你的账号还需要 Tunnels 的 Read 和 Use 权限（见 [OpenAI 的指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)里的“Troubleshooting”一节）。你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；这一步还没有用真实账号试过。
 
 **真的连通了吗**
 

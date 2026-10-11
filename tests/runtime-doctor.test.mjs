@@ -213,6 +213,12 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   assert.equal(await commands.get('devMate.runtime.configureConnection')(), undefined);
   assert.deepEqual(named('secret.set'), []); assert.match(messages.at(-1), /^error: invalid_executable/);
   rejectSettings = false;
+  // The organization named for a tunnel on the command line stays with that tunnel, and goes with no other.
+  saved = { ...saved, connection: { kind: 'openai-tunnel', tunnelId: 'tunnel_abc', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY', organizationId: 'org-abc' } };
+  answers.picks = ['OpenAI Secure MCP Tunnel']; answers.inputs = ['tunnel_abc', '', ''];
+  assert.deepEqual((await commands.get('devMate.runtime.configureConnection')()).connection, { kind: 'openai-tunnel', tunnelId: 'tunnel_abc', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY', organizationId: 'org-abc' });
+  answers.picks = ['OpenAI Secure MCP Tunnel']; answers.inputs = ['tunnel_other', '', ''];
+  assert.deepEqual((await commands.get('devMate.runtime.configureConnection')()).connection, { kind: 'openai-tunnel', tunnelId: 'tunnel_other', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY' });
   answers.picks = ['Local only'];
   const local = await commands.get('devMate.runtime.configureConnection')();
   assert.deepEqual(local.connection, { kind: 'local' }); assert.deepEqual(local.auth, { mode: 'none' });

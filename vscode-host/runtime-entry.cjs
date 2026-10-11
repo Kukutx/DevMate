@@ -546,7 +546,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       if (executable === undefined) return;
       const key = await ask('Runtime API key of the tunnel. Stored privately; leave empty to keep the stored one', { password: true });
       if (key === undefined) return;
-      config.connection = { kind: 'openai-tunnel', tunnelId: tunnelId.trim(), ...(executable.trim() ? { executable: executable.trim() } : {}), runtimeKeyEnv: 'CONTROL_PLANE_API_KEY' };
+      // The organization named for this tunnel on the command line stays with it.
+      config.connection = { kind: 'openai-tunnel', tunnelId: tunnelId.trim(), ...(executable.trim() ? { executable: executable.trim() } : {}), runtimeKeyEnv: 'CONTROL_PLANE_API_KEY',
+        ...(was('openai-tunnel', 'organizationId') && current.tunnelId === tunnelId.trim() ? { organizationId: current.organizationId } : {}) };
       if (key.trim()) secret = ['CONTROL_PLANE_API_KEY', key];
     } else if (choice.kind === 'cloudflare') {
       const host = await ask('Public hostname of your Cloudflare tunnel', { value: current.kind === 'cloudflare' ? new URL(current.publicUrl).host : '', placeHolder: 'devmate.example.com', validateInput: hostName });

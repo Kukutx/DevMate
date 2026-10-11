@@ -236,7 +236,9 @@ devmate restart
 
 This computer only reaches out, to `api.openai.com`, and asks for work: nothing listens for the outside, no router setting and no server are needed, and the only party that can limit the route is OpenAI. DevMate speaks the tunnel's [published protocol](https://github.com/openai/tunnel-client/blob/master/docs/protocol.md) itself, so there is no second program to download and keep current, and it serves up to 32 calls at once (`maxConcurrentRequests` in the connection settings, 1 to 256). To use OpenAI's own `tunnel-client` program instead, add `--executable <its path>`. `devmate doctor` says which of the two is in use, and counts the calls that have arrived: a call that came through is the proof that the route works.
 
-Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
+When OpenAI refuses the key or the tunnel, `devmate doctor` repeats OpenAI's answer and says what to do about it. For a key OpenAI wants the tunnel's organisation named with, that is `--organization <org-…>` on the `connect` command.
+
+If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
 
 **Is it really connected?**
 

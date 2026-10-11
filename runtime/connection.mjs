@@ -36,7 +36,7 @@ export function normalizeConnectionConfig(value = {}) {
   const allowed = {
     local: new Set(['kind']),
     'external-https': new Set(['kind', 'url']),
-    'openai-tunnel': new Set(['kind', 'tunnelId', 'executable', 'runtimeKeyEnv', 'maxConcurrentRequests'])
+    'openai-tunnel': new Set(['kind', 'tunnelId', 'executable', 'runtimeKeyEnv', 'maxConcurrentRequests', 'organizationId'])
   }[kind];
   if (!allowed) throw new Error('Connection kind must be local, openai-tunnel, cloudflare, cloudflare-quick, external-https, or ssh');
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unsupported connection setting: ${key}`);
@@ -52,7 +52,10 @@ export function normalizeConnectionConfig(value = {}) {
   // How many calls from OpenAI are served at once. OpenAI's own client defaults to ten.
   const maxConcurrentRequests = value.maxConcurrentRequests ?? 32;
   if (!Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 1 || maxConcurrentRequests > 256) throw new Error('maxConcurrentRequests is a whole number from 1 to 256');
-  return { kind, tunnelId, ...(executable ? { executable } : {}), runtimeKeyEnv, maxConcurrentRequests };
+  // The organization the tunnel belongs to, for a key OpenAI wants it named with. It is an id, not a credential.
+  const organizationId = String(value.organizationId || '').trim();
+  if (organizationId && !/^[A-Za-z0-9_-]{1,100}$/.test(organizationId)) throw new Error('organizationId is the id of the OpenAI organization the tunnel belongs to, such as org-…');
+  return { kind, tunnelId, ...(executable ? { executable } : {}), runtimeKeyEnv, maxConcurrentRequests, ...(organizationId ? { organizationId } : {}) };
 }
 
 export async function inspectTunnelClient({ executable, execFileImpl = executeFile } = {}) {
@@ -79,7 +82,8 @@ export function createConnection({
   if (settings.kind === 'ssh') return createSshConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl });
   if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
   if (settings.kind === 'openai-tunnel' && !settings.executable) {
-    const tunnel = createOpenAiTunnel({ tunnelId: settings.tunnelId, runtimeKeyEnv: settings.runtimeKeyEnv, maxConcurrentRequests: settings.maxConcurrentRequests, localMcpUrl: httpTarget(localMcpUrl), instanceId, env, fetchImpl });
+    const tunnel = createOpenAiTunnel({ tunnelId: settings.tunnelId, runtimeKeyEnv: settings.runtimeKeyEnv, organizationId: settings.organizationId, maxConcurrentRequests: settings.maxConcurrentRequests,
+      localMcpUrl: httpTarget(localMcpUrl), instanceId, env, fetchImpl });
     return { ...tunnel, config: settings };
   }
   const localUrl = httpTarget(localMcpUrl);
@@ -153,7 +157,8 @@ export function createConnection({
         '--mcp.server-url', localUrl,
         '--mcp.max-concurrent-requests', String(settings.maxConcurrentRequests),
         '--health.listen-addr', '127.0.0.1:0',
-        '--health.url-file', healthFile
+        '--health.url-file', healthFile,
+        ...(settings.organizationId ? ['--control-plane.organization-id', settings.organizationId] : [])
       ];
       phase = 'connecting';
       const inherited = new Set(['path','pathext','systemroot','windir','temp','tmp','home','userprofile',
