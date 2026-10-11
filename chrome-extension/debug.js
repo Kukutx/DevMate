@@ -106,22 +106,24 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   const command = (tabId, method, params) => raw(tabId, method, params).catch(error => { throw fail('browser_error', method + ' failed: ' + said(error)); });
   const dialogOf = session => session.dialog.type + ': ' + JSON.stringify(cut(session.dialog.message, 300));
 
-  function note(session, list, entry) {
-    list.push({ seq: ++session.seq, at: clock(), ...entry });
-    if (list.length > KEPT) { list.shift(); session.dropped++; }
+  // stamp is the time the browser gives for what happened (milliseconds), where it gives one: a line it kept from
+  // before the tab was looked at is then dated when it was printed, not when it was handed over.
+  function note(session, list, entry, stamp) {
+    list.push({ seq: ++session.seq, at: Number.isFinite(stamp) ? Math.round(stamp) : clock(), ...entry });
+    if (list.length > KEPT) { list.shift(); list.dropped++; }
   }
   function heard(source, method, params) {
     const session = sessions.get(source.tabId);
     if (!session) return;
     if (method === 'Runtime.consoleAPICalled') {
       const frame = params.stackTrace?.callFrames?.[0];
-      note(session, session.console, { level: params.type === 'warning' ? 'warn' : params.type, text: cut((params.args || []).map(printed).join(' '), 2000), ...(frame?.url ? { where: cut(frame.url, 200) + ':' + (frame.lineNumber + 1) } : {}) });
+      note(session, session.console, { level: params.type === 'warning' ? 'warn' : params.type, text: cut((params.args || []).map(printed).join(' '), 2000), ...(frame?.url ? { where: cut(frame.url, 200) + ':' + (frame.lineNumber + 1) } : {}) }, params.timestamp);
     } else if (method === 'Runtime.exceptionThrown') {
       const details = params.exceptionDetails || {};
-      note(session, session.console, { level: 'exception', text: cut(details.exception?.description || details.text, 2000), ...(details.url ? { where: cut(details.url, 200) + ':' + ((details.lineNumber ?? 0) + 1) } : {}) });
+      note(session, session.console, { level: 'exception', text: cut(details.exception?.description || details.text, 2000), ...(details.url ? { where: cut(details.url, 200) + ':' + ((details.lineNumber ?? 0) + 1) } : {}) }, params.timestamp);
     } else if (method === 'Log.entryAdded') {
       const entry = params.entry || {};
-      note(session, session.console, { level: entry.level === 'warning' ? 'warn' : entry.level, text: cut(entry.text, 2000), from: entry.source, ...(entry.url ? { where: cut(entry.url, 200) + (entry.lineNumber !== undefined ? ':' + (entry.lineNumber + 1) : '') } : {}) });
+      note(session, session.console, { level: entry.level === 'warning' ? 'warn' : entry.level, text: cut(entry.text, 2000), from: entry.source, ...(entry.url ? { where: cut(entry.url, 200) + (entry.lineNumber !== undefined ? ':' + (entry.lineNumber + 1) : '') } : {}) }, entry.timestamp);
     } else if (method === 'Page.javascriptDialogOpening') {
       session.dialog = { type: params.type, message: String(params.message ?? '') };
       note(session, session.console, { level: 'dialog', text: dialogOf(session) });
@@ -167,7 +169,8 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     await attach().catch(async error => { if (!/already attached/i.test(said(error))) throw error; await chrome.debugger.detach({ tabId }).catch(() => {}); return attach(); }).catch(error => {
       throw fail('browser_error', /cannot access|chrome:|chrome-extension:|web store/i.test(said(error)) ? 'The browser does not let a page of its own, or of the Web Store, be debugged.' : 'The browser did not attach the debugger to this tab (' + said(error) + ').');
     });
-    const session = { tabId, seq: 0, dropped: 0, since: clock(), console: [], requests: [], byId: new Map(), waiters: new Set(), dialog: null, timer: null };
+    // Each of the two lists counts what it lost itself, once it is full.
+    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null };
     sessions.set(tabId, session);
     try { for (const domain of ['Runtime', 'Log', 'Network', 'Page']) await command(tabId, domain + '.enable'); }
     catch (error) { await release(tabId); throw error; }
@@ -176,7 +179,8 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   }
   // The debugger on a tab, attached at the first call for it. started says that the watching begins only now.
   async function attached(tabId) {
-    let session = sessions.get(tabId), started = false;
+    // A tab that is still being switched on is waited for, by whoever asks in the meantime too.
+    let session = opening.has(tabId) ? null : sessions.get(tabId), started = false;
     if (!session) {
       if (!opening.has(tabId)) opening.set(tabId, open(tabId).finally(() => opening.delete(tabId)));
       session = await opening.get(tabId);
@@ -192,14 +196,18 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     if (held.session.dialog && !whileDialog) throw fail('dialog_open', 'The page is showing a dialog (' + dialogOf(held.session) + '). Nothing else works on this tab until it is answered: page.dialog with accept true or false.');
     return { tab, id: tab.id, ...held };
   };
-  // Something done to the page, given up waiting for when the page opens a dialog in answer to it.
+  // Something done to the page. When the page opens a dialog in answer to it, it is not waited for any longer, and
+  // what is left of it is not done (work is told by halted()). When the tab is let go in the middle, it has failed.
   function unlessDialog(session, work) {
-    let wake;
-    const dialog = new Promise(resolve => { wake = () => resolve(DIALOG); session.waiters.add(wake); });
-    work.catch(() => {});
-    return Promise.race([work, dialog]).finally(() => session.waiters.delete(wake));
+    let wake, over = false;
+    const dialog = new Promise(resolve => { wake = () => resolve(DIALOG); session.waiters.add(wake); }), doing = work(() => over);
+    doing.catch(() => {});
+    return Promise.race([doing, dialog]).then(result => {
+      if (result === DIALOG && sessions.get(session.tabId) !== session) throw fail('browser_error', 'The debugger was taken off this tab before this was done: the owner took it off, or the tab was closed.');
+      return result;
+    }).finally(() => { over = true; session.waiters.delete(wake); });
   }
-  const withDialog = (session, result) => session.dialog ? { ...result, dialog: dialogOf(session), note: 'The page opened a dialog and waits for it. Answer it with page.dialog.' } : result;
+  const withDialog = (session, result) => session.dialog ? { ...result, dialog: dialogOf(session), note: 'The page opened a dialog and waits for it. Answer it with page.dialog.', untrusted: true } : result;
   const run = async (id, expression, { awaitPromise = false } = {}) => {
     const answer = await command(id, 'Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: true, timeout: 15000 });
     if (answer.exceptionDetails) throw fail('page_error', cut(answer.exceptionDetails.exception?.description || answer.exceptionDetails.text, 1000));
@@ -246,7 +254,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   }
   const listed = (session, list, since, keep, limit) => {
     const after = whole(since, 'since', { optional: true }) ?? 0, most = Math.min(KEPT, whole(limit, 'limit', { optional: true, min: 1 }) ?? 100), items = list.filter(item => item.seq > after && keep(item));
-    return { items: items.slice(-most), ...(items.length > most ? { earlierLeftOut: items.length - most } : {}), cursor: session.seq, watchingSince: new Date(session.since).toISOString(), ...(session.dropped ? { dropped: session.dropped } : {}) };
+    return { items: items.slice(-most), ...(items.length > most ? { earlierLeftOut: items.length - most } : {}), cursor: session.seq, watchingSince: new Date(session.since).toISOString(), ...(list.dropped ? { dropped: list.dropped } : {}) };
   };
   const fresh = started => started ? { note: 'The tab is watched from now on. The requests it made before are not here (page.reload shows a page loading from the start); what it printed before is, as far as the browser kept it.' } : {};
   const brief = item => ({ ...Object.fromEntries(['seq', 'requestId', 'method', 'url', 'type', 'status', 'mime', 'ms', 'bytes', 'failed', 'cached'].filter(name => item[name] !== undefined).map(name => [name, item[name]])), at: new Date(item.at).toISOString() });
@@ -258,7 +266,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       return { tabId: id, ...view, items: view.items.map(item => ({ ...item, at: new Date(item.at).toISOString() })), ...fresh(started), untrusted: true };
     },
     'page.network': async ({ tabId, since, failedOnly, query, limit } = {}) => {
-      const wanted = text(query, 'query', { optional: true, max: 500 })?.toLowerCase(), { id, session, started } = await page(tabId, { whileDialog: true });
+      const wanted = query === '' ? undefined : text(query, 'query', { optional: true, max: 500 })?.toLowerCase(), { id, session, started } = await page(tabId, { whileDialog: true });
       const view = listed(session, session.requests, since, item => (failedOnly !== true || item.failed !== undefined || item.status >= 400) && (!wanted || item.url.toLowerCase().includes(wanted)), limit);
       return { tabId: id, ...view, items: view.items.map(brief), ...fresh(started), untrusted: true };
     },
@@ -307,24 +315,29 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       if ((selector === undefined) === (shown === undefined)) throw fail('invalid_input', 'Say what to wait for: selector, or text.');
       const limit = whole(timeoutMs, 'timeoutMs', { optional: true, min: 100, max: 30000 }) ?? 10000, began = clock();
       const expression = selector !== undefined ? '!!document.querySelector(' + JSON.stringify(text(selector, 'selector', { max: 1000 })) + ')' : '!!document.body && document.body.innerText.includes(' + JSON.stringify(text(shown, 'text', { max: 500 })) + ')';
+      // The tab is the one that was in front when this was asked, whatever the owner turns to while it waits.
+      const { id } = await page(tabId);
       for (;;) {
         // A page that is between two addresses has nothing to ask yet: that is a "not yet", not a failure.
-        const { id } = await page(tabId), found = await run(id, expression).then(result => result.value === true, error => { if (error.code === 'page_error' && selector !== undefined) throw fail('invalid_input', 'The selector is not valid: ' + error.message); return false; });
+        const found = await run(id, expression).then(result => result.value === true, error => { if (error.code === 'page_error' && selector !== undefined) throw fail('invalid_input', 'The selector is not valid: ' + error.message); return false; });
         if (found) return { tabId: id, found: true, ms: clock() - began };
         if (clock() - began >= limit) throw fail('timeout', (selector !== undefined ? 'Nothing matches ' + selector : 'The text "' + shown + '" is not on the page') + ' after ' + limit + ' ms.');
         await pause(250);
+        // Still there, still debugged, and no dialog in the way.
+        await page(id);
       }
     },
 
     'page.click': async ({ tabId, ref, selector, text: shown, double } = {}) => {
       const { id, session } = await page(tabId), at = await point(id, { ref, selector, text: shown }), button = { x: at.x, y: at.y, button: 'left' };
-      await unlessDialog(session, (async () => {
+      await unlessDialog(session, async halted => {
         await command(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
-        for (let count = 1; count <= (double === true ? 2 : 1); count++) {
+        // A button that was pressed is let go whatever happens; a second click is not begun once the first was answered with a dialog.
+        for (let count = 1; count <= (double === true ? 2 : 1) && !halted(); count++) {
           await command(id, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...button, buttons: 1, clickCount: count });
           await command(id, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...button, clickCount: count });
         }
-      })());
+      });
       return withDialog(session, { tabId: id, clicked: at });
     },
     'page.hover': async ({ tabId, ref, selector, text: shown } = {}) => {
@@ -338,19 +351,19 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       if (ref !== undefined || selector !== undefined) await raw(id, 'DOM.focus', { objectId: await element(id, { ref, selector }) }).catch(error => { throw error.code ? error : fail('invalid_input', 'This element cannot take the keyboard: it is not something to type into.'); });
       const into = (await run(id, inPage(keyboard, clear === true))).value;
       if (!into) throw fail('invalid_input', 'Nothing on the page has the keyboard. Say where to type: ref or selector.');
-      await unlessDialog(session, (async () => {
+      await unlessDialog(session, async halted => {
         // Emptied the way a person empties a field: everything selected, then deleted.
         if (clear === true) await press(id, 'Delete');
-        if (typed) await command(id, 'Input.insertText', { text: typed });
-      })());
-      return withDialog(session, { tabId: id, typed: typed.length, into });
+        if (typed && !halted()) await command(id, 'Input.insertText', { text: typed });
+      });
+      return withDialog(session, { tabId: id, typed: typed.length, into, untrusted: true });
     },
     'page.press': async ({ tabId, key: name, modifiers } = {}) => {
       const held = modifiers === undefined ? [] : modifiers;
       if (!Array.isArray(held) || held.some(one => !Object.hasOwn(MODIFIERS, one))) throw fail('invalid_input', 'modifiers is a list of: ' + Object.keys(MODIFIERS).join(', ') + '.');
       if (typeof name !== 'string' || (!/^[a-z0-9]$/i.test(name) && !Object.hasOwn(KEYS, name))) throw fail('invalid_input', 'key is one letter or digit, or one of: ' + Object.keys(KEYS).join(', ') + '.');
       const { id, session } = await page(tabId);
-      await unlessDialog(session, press(id, name, held));
+      await unlessDialog(session, () => press(id, name, held));
       return withDialog(session, { tabId: id, pressed: [...held, name].join('+') });
     },
     'page.select': async ({ tabId, ref, selector, value, label } = {}) => {
@@ -359,7 +372,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       const chosen = await onElement(id, await element(id, { ref, selector }), choose, wanted, named);
       if (chosen?.problem === 'not a list') throw fail('invalid_input', 'This element is not a <select>. A list built from other elements is opened with page.click and chosen from the same way.');
       if (chosen?.problem) throw fail('not_found', 'The list has no such choice. It offers: ' + (chosen.choices || []).join(' | '));
-      return { tabId: id, selected: chosen };
+      return { tabId: id, selected: chosen, untrusted: true };
     },
     'page.scroll': async ({ tabId, ref, selector, deltaY } = {}) => {
       const { id } = await page(tabId);
@@ -369,7 +382,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       return { tabId: id, scrolledBy: by };
     },
     'page.evaluate': async ({ tabId, expression, awaitPromise } = {}) => {
-      const source = text(expression, 'expression', { max: 100000 }), { id, session } = await page(tabId), result = await unlessDialog(session, run(id, source, { awaitPromise: awaitPromise !== false }));
+      const source = text(expression, 'expression', { max: 100000 }), { id, session } = await page(tabId), result = await unlessDialog(session, () => run(id, source, { awaitPromise: awaitPromise !== false }));
       if (result === DIALOG) return withDialog(session, { tabId: id });
       const shown = String(result.value === undefined ? (result.description ?? result.unserializableValue ?? result.type) : typeof result.value === 'string' ? result.value : JSON.stringify(result.value, null, 1));
       return { tabId: id, type: result.subtype || result.type, text: shown.slice(0, 20000), ...(shown.length > 20000 ? { truncated: true, totalChars: shown.length } : {}), untrusted: true };
