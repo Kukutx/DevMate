@@ -116,7 +116,9 @@ function readable(method, answer) {
 }
 
 const HOW_TO_CONNECT = 'Open Chrome or Edge with the DevMate extension on the owner\'s computer. If it is installed and still not connected, the owner runs: devmate chrome install';
-const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused']);
+// The extension's own refusals, handed on with their code: a model is told whether the browser failed, the page's
+// script threw, a dialog or another element is in the way, or a wait ended. Any other code is a browser error.
+const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused', 'page_error', 'dialog_open', 'covered', 'timeout']);
 // The owner's own switch in the extension. It is a decision, not a fault, and a model is told so.
 const PAUSED = 'The owner has paused DevMate\'s use of this browser, in the DevMate extension. That is their decision, not a fault: do not try again or work around it. Say so; they switch it back on when they want.';
 // A browser host asks again at least this often; one that has not asked for longer is gone.

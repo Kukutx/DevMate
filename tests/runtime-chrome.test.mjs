@@ -48,6 +48,16 @@ test('a browser link hands a call to the browser that asks for work and brings i
   const refused = link.call({ capability: 'chrome.tabs.close', input: { tabIds: [99] } }), second = await link.next({ linkId, waitMs: 1000 });
   link.result({ linkId, id: second.calls[0].id, ok: false, error: { code: 'not_found', message: 'One of these tabs does not exist: 99.' } });
   await assert.rejects(refused, { code: 'not_found', message: /99/ });
+  // So does every code the extension refuses with (read from its files): a script that threw, a dialog in the way and
+  // a wait that ended are not faults of the browser. A code it never uses is one.
+  const codes = new Set(fs.readdirSync(new URL('../chrome-extension/', import.meta.url)).filter(name => name.endsWith('.js'))
+    .flatMap(name => [...fs.readFileSync(new URL('../chrome-extension/' + name, import.meta.url), 'utf8').matchAll(/fail\('([a-z_]+)'/g)].map(match => match[1])));
+  assert.ok(['page_error', 'dialog_open', 'covered', 'timeout'].every(code => codes.has(code)), [...codes].join(', '));
+  for (const code of [...codes, 'made_up']) {
+    const failing = link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), handed = await link.next({ linkId, waitMs: 1000 });
+    link.result({ linkId, id: handed.calls[0].id, ok: false, error: { code, message: 'as the extension says it' } });
+    await assert.rejects(failing, { code: code === 'made_up' ? 'browser_error' : code, message: 'as the extension says it' });
+  }
   // The owner paused the browser in the extension: a decision, said as one, and nothing a model should try again.
   const paused = link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), held = await link.next({ linkId, waitMs: 1000 });
   link.result({ linkId, id: held.calls[0].id, ok: false, error: { code: 'paused', message: 'whatever the extension says' } });
