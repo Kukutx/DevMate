@@ -7,6 +7,7 @@ import { defineCapabilityOperations } from './capability.mjs';
 import { defineChromeOperations } from './chrome.mjs';
 import { defineCollaborationOperations } from './collaboration.mjs';
 import { defineRuntimeOperations } from './runtime.mjs';
+import { defineNowOperations } from './now.mjs';
 
 /**
  * Every DevMate operation, defined once and registered with the service's
@@ -24,4 +25,5 @@ export function defineOperations(service, add) {
   defineChromeOperations(service, add);
   defineCollaborationOperations(service, add);
   defineRuntimeOperations(service, add);
+  defineNowOperations(service, add);
 }

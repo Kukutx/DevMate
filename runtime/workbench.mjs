@@ -18,7 +18,7 @@ export const WORKBENCH_OPERATIONS = Object.freeze([
   'shell.run', 'process.list', 'process.read', 'process.stop',
   'agents.list', 'agents.start', 'agents.stop', 'agents.resume', 'agents.send', 'agents.steer',
   'agents.cancel', 'agents.delegate', 'agents.result',
-  'event.list', 'job.list', 'job.read', 'message.list', 'message.send',
+  'event.list', 'job.list', 'job.read', 'job.cancel', 'message.list', 'message.send',
   'task.list', 'task.create', 'task.update',
   'approval.list', 'approval.resolve', 'approval.cancel', 'input.list', 'input.respond',
   'artifact.list', 'artifact.read', 'artifact.create',

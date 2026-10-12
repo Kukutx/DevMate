@@ -3,11 +3,13 @@
 const $ = id => document.getElementById(id);
 const root = document.documentElement;
 const PAGE = 50;
-const TABS = ['Overview', 'Approvals', 'Agents', 'Activity', 'Messages', 'Tasks', 'Files', 'Changes', 'Commands', 'Problems', 'Artifacts'];
+const TABS = ['Overview', 'Now', 'Approvals', 'Agents', 'Activity', 'Messages', 'Tasks', 'Files', 'Changes', 'Commands', 'Problems', 'Artifacts'];
 // views holds one state object per tab: its loaded data and everything the person typed there.
 const state = {snapshot: {}, projectId: '', workflowId: '', tab: 'Overview', generation: 0, views: {}, references: [],
   projectResults: null, query: '', disposed: false, expired: false};
 const views = {};
+// The pages that are about the whole of DevMate and need no project chosen.
+const WHOLE = ['Overview', 'Now'];
 let bridge, feed = null, feedLost = false, refreshTimer = null, lastRefresh = 0, referenceQueue = Promise.resolve();
 
 // ---------- DOM ----------
@@ -365,6 +367,65 @@ function editorWindows() {
     windows.map(window => el('div', {class: 'item', 'data-key': window.windowId}, el('div', {class: 'row-head'}, el('strong', {text: window.title || 'VS Code'}), badge(window.trusted ? 'Trusted' : 'Untrusted')),
       (window.roots || []).map(folder => el('div', {class: 'row-head'}, opButton(folder.name, 'project.list', () => changeScope(folder.projectId, ''), {disabled: !folder.projectId}),
         caption(folder.projectId === window.selectedProjectId ? 'Selected in this editor window' : folder.root))))));
+}
+// ---------- now ----------
+// Everything that is going on across all projects, with the way to stop each thing. It is the owner's view at this
+// computer: a workbench inside a client's conversation is not offered it.
+const nowOffered = () => !bridge.embedded && can('runtime.now');
+views.Now = {
+  create: () => ({now: source(() => call('runtime.now', {}))}),
+  load: v => pull(v.now),
+  render: nowView
+};
+function nowView(v) {
+  const answer = v.now.data, waitingFor = pending(v.now, 'what is going on');
+  if (!answer) return [heading('Now'), waitingFor];
+  // Whatever of it is not there is shown as nothing, not as a fault of the page.
+  const none = {items: [], total: 0}, listOf = value => Array.isArray(value?.items) ? {items: value.items, total: Number(value.total) || value.items.length} : none;
+  const data = {...answer, runtime: answer.runtime || {}, waiting: listOf(answer.waiting), commands: listOf(answer.commands), agents: listOf(answer.agents), jobs: listOf(answer.jobs)};
+  const projectName = id => name((data.projects || []).find(project => project.id === id)) || id;
+  const open = (projectId, tab) => changeScope(projectId, '').then(() => changeTab(tab));
+  const row = (item, title, note, ...actions) => el('div', {class: 'item', 'data-key': item.id},
+    el('div', {class: 'row-head'}, el('strong', {text: title}), actions.length ? el('div', {class: 'actions'}, ...actions) : null), caption(note));
+  const section = (title, list, each, nothing) => el('section', {class: 'panel'}, el('h3', {text: title + (list.total ? ' (' + list.total + ')' : '')}),
+    list.items.map(each), list.items.length ? null : caption(nothing),
+    list.total > list.items.length ? caption('The newest ' + list.items.length + ' of ' + list.total + ' are shown.') : null);
+  const count = (title, value) => el('div', {class: 'card'}, el('span', {class: 'card-title', text: title}), el('span', {class: 'metric', text: String(value)}));
+  const stopCommand = item => mutate('process.stop', {id: item.id}, 'The command was stopped.');
+  const stopAgent = async item => {
+    if (!await confirmAction('Stop ' + (item.label || 'this agent') + '?', 'Its session in ' + projectName(item.projectId) + ' is ended. What it has changed so far stays as it is.', 'Stop agent')) return;
+    await mutate('agents.stop', {id: item.id}, 'The agent was stopped.');
+  };
+  // A job that runs a command is that command; a turn of an agent is cancelled with its agent.
+  const cancelWith = item => item.processId ? 'process.stop' : item.agentId ? 'agents.cancel' : 'job.cancel';
+  const cancelJob = item => item.processId ? mutate('process.stop', {id: item.processId}, 'The command was stopped.')
+    : item.agentId ? mutate('agents.cancel', {id: item.agentId}, 'The turn was cancelled.') : mutate('job.cancel', {id: item.id}, 'The job was cancelled.');
+  const status = data.connection || {}, browser = data.browser || {}, client = data.client, windows = Array.isArray(data.windows) ? data.windows : [];
+  const route = status.kind === 'local' || !status.kind ? 'Local only: apps on this computer' : status.kind + ', ' + (str(status.phase) || str(status.status) || 'unknown') +
+    (status.remoteMcpVerified ? ', reached from outside' : ', not verified from outside') + (status.openaiTunnel ? '; the tunnel of OpenAI beside it: ' + (str(status.openaiTunnel.phase) || 'unknown') : '');
+  const delegation = {ask: 'asks you first', allow: 'runs without asking', off: 'is not offered'}[data.runtime.delegation] || str(data.runtime.delegation);
+  return [
+    heading('Now', button('Refresh', () => pull(v.now).then(repaint))),
+    el('div', {class: 'cards'}, count('Waiting for you', data.waiting.total), count('Commands running', data.commands.total), count('Agents at work', data.agents.total),
+      count('Jobs', data.jobs.total), count('Editor windows', windows.length), count('Browsers', browser.connected ? browser.browsers || 1 : 0)),
+    waitingFor,
+    section('Waiting for your answer', data.waiting, item => row(item, item.summary || (item.asks === 'approval' ? 'An approval' : 'A question'),
+      [projectName(item.projectId), str(item.agent), date(item.createdAt)].filter(Boolean).join(' · '),
+      button('Answer', () => open(item.projectId, 'Approvals'), {class: 'primary'})), 'Nothing waits for you.'),
+    section('Running commands', data.commands, item => row(item, item.command || 'A command', [projectName(item.projectId), 'since ' + time(item.startedAt)].join(' · '),
+      button('Open', () => open(item.projectId, 'Commands')), opButton('Stop', 'process.stop', () => stopCommand(item), {class: 'danger'})), 'No command is running.'),
+    section('Agents at work', data.agents, item => row(item, item.label || item.provider, [projectName(item.projectId), item.provider, item.client ? 'started by a connected client' : ''].filter(Boolean).join(' · '),
+      badge(item.status), button('Open', () => open(item.projectId, 'Agents')), opButton('Stop', 'agents.stop', () => stopAgent(item), {class: 'danger'})), 'No agent is at work.'),
+    section('Jobs', data.jobs, item => row(item, item.what || item.kind, [projectName(item.projectId), item.kind, item.startedAt ? 'since ' + time(item.startedAt) : ''].filter(Boolean).join(' · '),
+      badge(item.status), opButton('Cancel', cancelWith(item), () => cancelJob(item), {class: 'danger', disabled: item.status === 'cancelling'})), 'No job is queued or running.'),
+    el('section', {class: 'panel'}, el('h3', {text: 'Who is attached'}),
+      el('dl', {class: 'facts'},
+        fact('Route from outside', route),
+        fact('Browser', browser.connected ? [browser.browser, 'extension ' + browser.extension, browser.browsers > 1 ? browser.browsers + ' are connected' : ''].filter(Boolean).join(' · ') : 'None connected'),
+        fact('Editor windows', windows.length ? windows.map(window => (window.title || 'Editor') + ((window.folders || []).length ? ' (' + window.folders.map(folder => folder.name).join(', ') + ')' : '')).join('; ') : 'None attached'),
+        fact('Last client', client ? [client.name || client.userAgent || 'a client that gave no name', client.tunnel ? 'through the tunnel of OpenAI' : '', date(client.at)].filter(Boolean).join(' · ') : 'None since DevMate started'),
+        fact('Profile', (data.runtime.access === 'full' ? 'Full access' : 'Guarded') + ' · a task a client hands to an agent ' + delegation)))
+  ];
 }
 function createProject() {
   const draft = {name: '', root: ''};
@@ -1123,7 +1184,7 @@ function buildTabs() {
 }
 // Arrow keys move between tabs; Enter or Space opens the focused one.
 function tabKey(event) {
-  const tabs = [...$('tabs').children], index = tabs.indexOf(event.currentTarget);
+  const tabs = [...$('tabs').children].filter(node => !node.hidden), index = tabs.indexOf(event.currentTarget);
   const target = {ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1}[event.key];
   if (target === undefined) return;
   event.preventDefault(); tabs[(target + tabs.length) % tabs.length].focus();
@@ -1132,6 +1193,7 @@ function renderTabs() {
   const waiting = state.snapshot.counts?.pendingReviews || 0;
   for (const node of $('tabs').children) {
     const selected = node.dataset.tab === state.tab;
+    if (node.dataset.tab === 'Now') node.hidden = !nowOffered();
     node.setAttribute('aria-selected', String(selected)); node.tabIndex = selected ? 0 : -1;
     if (node.dataset.tab !== 'Approvals') continue;
     node.lastChild.hidden = !waiting; node.lastChild.textContent = waiting ? String(waiting) : '';
@@ -1143,7 +1205,7 @@ function renderTabs() {
 // every other render patches the nodes on screen and so never destroys what the person is using.
 function renderMain() {
   renderTabs();
-  const ready = state.projectId || state.tab === 'Overview', definition = views[state.tab];
+  const ready = state.projectId || WHOLE.includes(state.tab), definition = views[state.tab];
   const body = ready ? definition.render(view()) : [empty('Choose a project', 'Select a project above to see its ' + state.tab.toLowerCase() + '.')];
   morphChildren($('panel'), el('div', {}, el('div', {'data-key': state.tab + '\n' + state.projectId}, body)));
   if (ready) definition.after?.(view());
@@ -1160,7 +1222,7 @@ function renderTheme() {
   return dark;
 }
 async function loadView() {
-  if (!state.projectId && state.tab !== 'Overview') return;
+  if (!state.projectId && !WHOLE.includes(state.tab)) return;
   try { await views[state.tab].load(view()); } catch (error) { fail(error); }
 }
 async function changeTab(tab) {
@@ -1218,6 +1280,8 @@ function tick() {
   // Command output is not announced by events, so the newest page of a running command is read on a timer.
   if (commands?.selected && commands.tail && commands.page?.status === 'running' && Date.now() - commands.readAt >= pace) void readOutput(commands).then(repaint);
   if (bridge.embedded && watching() && Date.now() - lastRefresh >= 10000) void refresh();
+  // A command that starts or ends is not announced by an event either: the page that shows them all asks again.
+  if (state.tab === 'Now' && Date.now() - lastRefresh >= 3000) void refresh();
 }
 // An event only says that something changed; what changed is always fetched again.
 function scheduleRefresh() {

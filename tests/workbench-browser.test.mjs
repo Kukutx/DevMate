@@ -422,6 +422,11 @@ test('finding 4: inside a sandboxed host the app asks in the page, requests full
   const frame=page.frameLocator('#app');
   await frame.getByRole('heading',{name:'Workflow One',exact:true}).waitFor();
   const inner=page.frames().find(item=>item.url().endsWith('/iframe'));
+  // The page of everything that is going on is the owner's at the computer: inside a host it is not among the tabs,
+  // and the keys that move between tabs pass over it.
+  assert.equal(await frame.getByRole('tab',{name:'Now',exact:true}).count(),0);
+  await frame.getByRole('tab',{name:'Overview',exact:true}).focus();await inner.press('body','ArrowRight');
+  assert.equal(await inner.evaluate(()=>document.activeElement.textContent),'Approvals');
   // The premise of the finding: this frame cannot show a browser confirmation at all.
   assert.equal(await inner.evaluate(()=>window.confirm('blocked by the sandbox')),false);
   assert.deepEqual(errors,[],'no browser dialog was shown');
@@ -561,7 +566,7 @@ test('finding 5: tabs, dialogs and errors are operable by keyboard and exposed t
   const {page,errors}=await open(t,server);
   await selectScope(page);
   const tablist=page.getByRole('tablist',{name:'Workspace sections'});
-  assert.deepEqual(await tablist.getByRole('tab').allTextContents(),['Overview','Approvals','Agents','Activity','Messages','Tasks','Files','Changes','Commands','Problems','Artifacts']);
+  assert.deepEqual(await tablist.getByRole('tab').allTextContents(),['Overview','Now','Approvals','Agents','Activity','Messages','Tasks','Files','Changes','Commands','Problems','Artifacts']);
   const tabState=()=>page.evaluate(()=>({selected:[...document.querySelectorAll('[role=tab][aria-selected=true]')].map(node=>node.textContent),
     reachable:[...document.querySelectorAll('[role=tab]')].filter(node=>node.tabIndex===0).map(node=>node.textContent),
     controls:[...new Set([...document.querySelectorAll('[role=tab]')].map(node=>node.getAttribute('aria-controls')))],
@@ -571,7 +576,7 @@ test('finding 5: tabs, dialogs and errors are operable by keyboard and exposed t
   // Arrow keys move through the tabs, Home and End jump, Enter opens the focused one.
   await page.getByRole('tab',{name:'Overview',exact:true}).focus();
   await page.keyboard.press('ArrowRight');
-  assert.equal((await focused(page)).text,'Approvals');
+  assert.equal((await focused(page)).text,'Now');
   assert.deepEqual((await tabState()).selected,['Overview'],'moving the focus does not load another view');
   const ring=await page.evaluate(()=>{const style=getComputedStyle(document.activeElement);return{style:style.outlineStyle,width:style.outlineWidth,visible:document.activeElement.matches(':focus-visible')};});
   assert.deepEqual(ring,{style:'solid',width:'3px',visible:true});
@@ -579,7 +584,7 @@ test('finding 5: tabs, dialogs and errors are operable by keyboard and exposed t
   assert.equal((await focused(page)).text,'Artifacts');
   await page.keyboard.press('Home');assert.equal((await focused(page)).text,'Overview');
   await page.keyboard.press('End');assert.equal((await focused(page)).text,'Artifacts');
-  await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');
+  for(let press=0;press<7;press++)await page.keyboard.press('ArrowRight');
   assert.equal((await focused(page)).text,'Tasks');
   await page.keyboard.press('Enter');
   await page.getByRole('heading',{name:'Tasks',exact:true}).waitFor();
@@ -942,5 +947,41 @@ test('finding 6: commands, changes, files, problems, delegation, activity, conne
   assert.deepEqual(errors,[]);
   mkdirSync('tmp/workbench-validation',{recursive:true});
   for(const name of ['Overview','Changes','Commands','Activity']){await tab(name);await page.locator('#panel h2').first().waitFor();await delay(400);await page.screenshot({path:'tmp/workbench-validation/view-'+name.toLowerCase()+'.png',fullPage:true});}
+});
+test('the page of everything that is going on: what runs in any project is listed without choosing one, stopped from there, and what waits is one press away',{skip,timeout:90000},async t=>{
+  const {root,directory,service,f}=realService(t);
+  const other=path.join(directory,'another');mkdirSync(other);
+  const project=await ownerCall(service,'project.create',{root,name:'First project'}),second=await ownerCall(service,'project.create',{root:other,name:'Second project'});
+  const command=await ownerCall(service,'shell.run',{projectId:second.id,file:process.execPath,args:['-e','setInterval(()=>{},1000)'],waitMs:0});
+  const agent=service.store.create('agent',{projectId:project.id,provider:'codex',label:'A helper',status:'unstarted',capabilities:{},error:null});
+  service.store.create('approval',{projectId:project.id,agentId:agent.id,kind:'delegation',status:'pending',summary:'A connected client asks for a task '+'whose words go on and on '.repeat(12),options:[{optionId:'deny',name:'Do not run it'}]});
+  const server=await serverFixture(f);t.after(server.close);
+  service.store.on('event',event=>server.push(event));
+  const {page,errors}=await open(t,server,{viewport:{width:1380,height:1000}});
+  await page.getByRole('heading',{name:'Your projects, together'}).waitFor();
+  // No project is chosen, and the page is there all the same.
+  await page.getByRole('tab',{name:'Now',exact:true}).click();
+  await page.getByRole('heading',{name:'Now',exact:true}).waitFor();
+  const part=title=>page.locator('section.panel').filter({has:page.getByRole('heading',{name:new RegExp('^'+title)})});
+  await part('Running commands').getByText('Second project').waitFor();
+  assert.match(await part('Running commands').locator('.item strong').textContent(),/setInterval/);
+  assert.equal(await part('Waiting for your answer').locator('.item').count(),1);
+  assert.match(await part('Waiting for your answer').locator('.item').textContent(),/A connected client asks for a task[\s\S]*First project · A helper/);
+  assert.equal(await part('Agents at work').getByText('No agent is at work.').count(),1,'an agent that was written down and not started is not at work');
+  const counts=await page.locator('.cards .card').evaluateAll(cards=>Object.fromEntries(cards.map(card=>[card.querySelector('.card-title').textContent,card.querySelector('.metric').textContent])));
+  assert.deepEqual(counts,{'Waiting for you':'1','Commands running':'1','Agents at work':'0','Jobs':'0','Editor windows':'0','Browsers':'0'});
+  // The row's actions keep their width beside a long title: a button is one line, not a column of letters.
+  const stop=part('Running commands').getByRole('button',{name:'Stop',exact:true});
+  for(const name of ['Stop','Open','Answer']){const box=await page.locator('#panel .item').getByRole('button',{name,exact:true}).boundingBox();assert.ok(box.width>box.height&&box.height<48,'the '+name+' button is one line: '+JSON.stringify(box));}
+  // Stopped from here, with the operation that stops a command anywhere.
+  await stop.click();
+  await part('Running commands').getByText('No command is running.').waitFor();
+  await until(()=>service.processes.list(second.id).items.find(item=>item.id===command.id).status!=='running','the command to have ended');
+  // What waits is answered where it always is: one press chooses its project and opens that page.
+  await part('Waiting for your answer').getByRole('button',{name:'Answer',exact:true}).click();
+  await page.getByRole('heading',{name:'Approvals and questions'}).waitFor();
+  assert.equal(await page.locator('#project').inputValue(),project.id);
+  await page.getByText('A connected client asks for a task').first().waitFor();
+  assert.deepEqual(errors,[]);
 });
 });

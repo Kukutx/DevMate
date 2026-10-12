@@ -20,6 +20,7 @@
 - VS Code and Obsidian no longer take a runtime that is busy for one that stopped. A runtime that holds its instance and does not answer within a moment kept its process, and the editor let go of its folders (and of the endpoint its own tools use) until the next look; now it stays as it is and says "busy". A runtime that ended by itself is shown as "stopped unexpectedly", not as stopped.
 - The program a browser starts for the extension ends when an update of DevMate replaced it, so that the browser starts the new one. Before, it lived as long as the browser and went on speaking for the DevMate that was installed when the browser was opened.
 - A relay that does not answer holds the start of the runtime up for five seconds, not for the fifteen to twenty that cost local use its start as well.
+- **The workbench has a page for everything that is going on (Now):** running commands, agents at work, queued and running jobs and what waits for you, across all projects and without choosing one, each with the way to stop it; and who is attached (editor windows, the browser, the route from outside, the client that asked last). It is the owner's page at the computer: a workbench inside a client's conversation does not have it, and a connected client cannot call `runtime.now`, in either access profile.
 - The workbench and the panel of the browser extension have a neutral look: near-black on white (and the reverse in the dark theme), thin borders, a quiet shadow, and colour only where it says something (good, warning, danger). What they do and what they say is unchanged.
 - The workbench served on this computer cannot be held in a frame by another page.
 - A notification in VS Code cannot hold a link that DevMate did not write. VS Code makes a link of a label in square brackets that is followed by an address in round brackets, in the text of a notification, and a link that names a command runs it when it is clicked; what an agent asks was shown there as it came, so a repository an agent read could put such a link before you. No text DevMate hands to a notification can form one now.
@@ -39,6 +40,7 @@
   - `operations_list` with `names` answers `unknown` for a name that is no operation;
   - where OpenAI's tunnel runs beside an address that requires sign-in, what comes through the tunnel is not asked to sign in: who may use the tunnel is decided in the OpenAI account it belongs to;
   - `devmate relay remove` makes a tunnel that ran beside the relay the connection; `devmate connect ssh` keeps `--ssh-port` and `--identity`, and every `connect` refuses an option that names something another kind of connection has;
+  - `workbench_call` also takes `job.cancel`;
   - the state carries the format number 1 (see "Update every entry").
 
 ## 4.0.5

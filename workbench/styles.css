@@ -91,6 +91,8 @@ footer{display:flex;gap:12px;justify-content:space-between;color:var(--muted);bo
 /* Labels that come from the project (paths, option texts, names) wrap; they never widen the page. */
 .problem button,.item .actions button,.entry .actions button{white-space:normal;text-align:left;overflow-wrap:anywhere;min-width:0}
 .row-head strong,.row-head h3,.row-head h4{min-width:0;overflow-wrap:anywhere}
+/* Actions that stand beside a title in its row (the page of everything that is going on) keep their width; the title wraps. */
+.row-head>.actions{flex:none;margin-top:0}.row-head>.actions button{white-space:nowrap}
 .provider-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
 .provider{padding:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow)}.provider p{color:var(--muted);font-size:12px;margin:10px 0}.provider button{width:100%}
 .split{display:grid;grid-template-columns:240px minmax(0,1fr);gap:16px}

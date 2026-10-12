@@ -607,6 +607,7 @@
     "reference.remove",
     "runtime.doctor",
     "runtime.metrics",
+    "runtime.now",
     "runtime.report",
     "runtime.stop",
     "secret.list",
