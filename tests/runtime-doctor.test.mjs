@@ -296,23 +296,9 @@ test('what the command line writes for the owner to read holds no character a te
   assert.ok(report.text.includes('Unknown DevMate operation: no\\u001b[2Ksuch [ ok ] forged: line'));
   assert.equal(report.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false);
   assert.ok(report.text.includes('; "p q" at ') && !report.text.split('\n').some(line => line.startsWith('q" at ')), 'an entry of the report stays on its one line');
-  // A report is made to be shared: the name of a project is taken out of it, also as the doctor says it (the two
-  // at the end of this test). A name that holds one of the report's own marks, as this one does, or is a part of
-  // one, is not taken out anywhere: taken out everywhere it would take the report's marks with it. It may hold more
-  // than the mark (a line end before it, the id of an entry after it) or be a part of a heading. And of two names
-  // the longer goes first, so that one is not left as a part of the other.
-  assert.ok(report.text.includes('is not there: "' + given + '" at <folder-1>'), report.text);
-  const before = (await run(['doctor', '--report'])).text.split('\n'), marks = lines => lines.filter(line => /^\[( ok |info|warn|FAIL)\] /.test(line)).length;
-  for (const [folder, name] of [['marked', '[ ok ]'], ['ended', '\n[warn]'], ['with-id', '[info] connection'], ['heading', 'Checks\n'], ['part', 'Recent failures'], ['acme', 'Acme'], ['acme-shop', 'Acme Shop']]) {
-    const root = path.join(temp, folder); fs.mkdirSync(root);
-    await runtime.call('project.create', { root, name }, owner);
-    if (folder.startsWith('acme')) fs.rmSync(root, { recursive: true });
-  }
-  const again = (await run(['doctor', '--report'])).text.split('\n');
-  assert.ok(again.some(line => line.startsWith('[ ok ] node: ')), 'the marks of the report are its own');
-  assert.ok(marks(again) >= marks(before) && again.includes('Checks') && again.includes('Recent failures, newest first'), 'no mark and no heading was taken out');
-  const missing = again.find(line => line.startsWith('[warn] projects.missing: '));
-  assert.ok(/"<folder-\d+>" at <folder-\d+>; "<folder-\d+>" at <folder-\d+>$/.test(missing) && !missing.includes('Acme') && !missing.includes('Shop'), missing);
+  // A report is made to be shared: the name of a project is taken out of it, also as the doctor says it. (What a name
+  // may hold and still leave the report its own words is a test of its own below.)
+  assert.ok(/\[warn\] projects\.missing: The folder of 2 project\(s\) is not there: "<folder-\d>" at <folder-\d>; "p q" at <folder-\d>\n/.test(report.text), report.text);
   // What is printed as JSON says the same characters by their numbers, and reads back as the name it is.
   const listed = await run(['project', 'list']);
   none(listed.text, 'the list');
@@ -388,6 +374,63 @@ test('the report for a bug says what happened and not who or where: no credentia
   // The folders an instance shares are read from its state, so that a log line does not give their names away.
   assert.match(offline.join(''), /the runtime is not running/); assert.match(offline.join(''), /could not reach \S+ from <folder-1>/);
   assert.ok(!offline.join('').includes(temp) && !offline.join('').includes('A Private Folder Name'), 'neither the instance directory nor a shared folder is spelled out');
+});
+
+test('a report keeps its own words and gives nothing away, whatever a project is called', async t => {
+  const { anonymize } = await import('../runtime/report.mjs');
+  // What gives somebody away is taken out before a name is: a name may be a part of it, and may not keep the rest.
+  assert.equal(anonymize('from bob@acme.com', { names: [['acme', '<folder-1>']] }), 'from <email>');
+  // A name finds nothing in what was put in: not in what a rule put in, and not in what stands for another name.
+  assert.equal(anonymize('mail of maria@example.com for Acme Shop, folder and address', { names: [['Acme Shop', '<folder-1>'], ['folder', '<folder-2>'], ['email', '<folder-3>'], ['address', '<folder-4>']] }),
+    'mail of <email> for <folder-1>, <folder-2> and <folder-4>');
+  // A name is a word where it begins or ends with a letter, and stands anywhere where it does not.
+  assert.equal(anonymize('AcmeCorp, Acme-Corp, x[beta]y and a/shop/b', { names: [['Acme', '<folder-1>'], ['[beta]', '<folder-2>'], ['/shop', '<folder-3>']] }), 'AcmeCorp, <folder-1>-Corp, x<folder-2>y and a<folder-3>/b');
+  assert.equal(anonymize('five     blanks', { names: [['     ', '<folder-1>']] }), 'five     blanks');
+
+  const { service: runtime, temp } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } });
+  const connected = { id: 'owner' }, key = 'abcdefghijklmnopqrstuvwxyz012345', special = 'a.b*c(d)[e]+?';
+  const make = async folder => { const root = path.join(temp, folder); fs.mkdirSync(root); const project = await runtime.call('project.create', { root, name: 'zz' }, owner); fs.rmSync(root, { recursive: true }); return project; };
+  const first = await make('one'), second = await make('two');
+  fs.writeFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-12T10:00:00.000Z connection: mail from bob@acme.com and carol@gmail.com at 203.0.113.9, https://devmate.example.com/mcp and https://calm-river.trycloudflare.com/mcp/' + key + ' in ' + first.root +
+    '\n2026-10-12T10:00:01.000Z agent: axbcde and ' + special + ' are two\n');
+  const HEADINGS = ['DevMate report. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it.', 'Checks',
+    'Operations since the start: name, calls (through MCP), failed, ms for half of the calls, for 19 in 20, slowest', 'Recent failures, newest first', 'Runtime log, last lines'];
+  const ENTRY = /^\[( ok |info|warn|FAIL)\] [a-z][\w.-]*: /;
+  // The report's own words: its first lines (about the computer and the settings), its headings, and the mark and the
+  // id of every entry, with the arrow of what is to be done about it.
+  const own = text => { const lines = text.split('\n'); return [...lines.slice(0, 5).map(line => line.replace(/ · up \d+ min$/, '')), ...lines.slice(5).map(line => HEADINGS.includes(line) ? line : ENTRY.exec(line)?.[0] ?? (line.startsWith('       -> ') ? '->' : null)).filter(Boolean)]; };
+  // And all the rest: what an entry says, a failure after the operation it was a failure of, a line of the log.
+  const content = text => text.split('\n').slice(5).filter(line => !HEADINGS.includes(line)).map(line => line.replace(ENTRY, '').replace(/^#\d+ \S+ \S+ /, '')).join('\n');
+  const report = async (name, other = 'zz') => {
+    await runtime.call('project.update', { id: first.id, name }, connected);
+    await runtime.call('project.update', { id: second.id, name: other }, connected);
+    await runtime.call('operations.call', { operation: name, input: {} }, connected).catch(() => {});
+    return (await runtime.call('runtime.report', {}, owner)).text;
+  };
+  const plain = await report('zz'), words = own(plain), logged = text => { const lines = text.split('\n'); return lines.slice(lines.indexOf('Runtime log, last lines') + 1); };
+  const [, where] = /in (<folder-\d>)$/m.exec(plain);
+  assert.deepEqual(logged(plain), ['2026-10-12T10:00:00.000Z connection: mail from <email> and <email> at <address>, https://<public-host>/mcp and https://<assigned>.trycloudflare.com/mcp/<key> in ' + where,
+    '2026-10-12T10:00:01.000Z agent: axbcde and ' + special + ' are two']);
+  assert.ok(words.includes('Checks') && words.includes('[ ok ] node: ') && words.includes('[warn] projects.missing: ') && words.includes('->'), words.join('\n'));
+
+  const long = name => name.trim().length > 3, said = name => name.replace(/\s+/g, ' '), shown = name => '"' + (long(name) ? said(name).replace(said(name).trim(), '<f>') : said(name)) + '" at <f>';
+  const account = os.userInfo().username, segment = path.basename(path.dirname(os.homedir()));
+  for (const [name, other = 'zz'] of [['[FAIL]'], ['\n[FAIL]'], ['[FAIL] connection.public'], ['ok ] node'], ['FAIL] connection.public'], ['(none)\n\nRuntime log'], ['Checks'], [' Checks\n'], ['DevMate'], ['ok'], ['a'],
+    ['Acme', 'Acme Shop'], ['folder', 'Acme Shop'], [special], [account], [segment], ['acme'], ['gmail'], ['/mcp'], ['     '], ['my-app']].filter(([name]) => name)) {
+    const text = await report(name, other), what = JSON.stringify(name), lines = text.split('\n');
+    assert.deepEqual(own(text), words, what + ': the report\'s own words are as they were');
+    for (const kept of ['bob', 'carol', 'acme.com', 'gmail.com', '203.0.113.9', key, 'calm-river', 'devmate.example.com', temp, path.basename(os.homedir()) + path.sep]) assert.ok(!text.includes(kept), what + ': ' + kept + ' is in the report: ' + text);
+    assert.equal(/<folder-\d+>-\d/.test(text), false, what + ': a name was found in what stands for another: ' + text);
+    assert.deepEqual(logged(text), logged(plain).map(line => name === '/mcp' ? line.replaceAll('/mcp', where) : name === special ? line.replace(special, where) : line), what);
+    const missing = lines.find(line => line.startsWith('[warn] projects.missing: ')).split('is not there: ')[1].replace(/<folder-\d>/g, '<f>').split('; ').sort();
+    assert.deepEqual(missing, [shown(name), shown(other)].sort(), what);
+    if (!long(name)) continue;
+    // The name itself is nowhere in what the report says: the folder it is the name of stands there.
+    // (As a word, where it begins or ends as one: "folders" is not the project "folder".)
+    const stands = (one, text) => new RegExp((/\w/.test(one[0]) ? '(?<!\\w)' : '') + one.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + (/\w/.test(one.at(-1)) ? '(?!\\w)' : '')).test(text);
+    for (const one of [name, other].filter(long)) assert.ok(!stands(said(one).trim(), content(text).replace(/<folder-\d>/g, '')), what + ': ' + JSON.stringify(one) + ' is in the report: ' + content(text));
+    assert.ok(lines.some(line => /^#\d+ \S+ \S+ \w+ \(connected, \d+ ms\): Unknown .* operation: +<folder-\d> ?$/.test(line)), what + ': the failure says which folder, not what it is called: ' + text);
+  }
 });
 
 test('the VS Code connection wizard stores the token privately, saves a signed-in Cloudflare route and offers the URL and sign-in code', async () => {

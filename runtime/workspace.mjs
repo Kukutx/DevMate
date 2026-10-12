@@ -1172,6 +1172,9 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
   async function removeCopy(project, copy, { leaving = false } = {}) {
     let root = null;
     try { root = projectRoot(project); } catch (failure) { if (!leaving || failure.code !== 'project_missing') throw failure; }
+    // Before Git or anything else is asked to remove it: only a folder that is one of this runtime's own copies. (A
+    // record that names another folder, another worktree of the same repository among them, is not acted on.)
+    inCopy(project, copy);
     if (fs.existsSync(copy.root)) {
       // Where the owner has switched on Git's own file watcher (core.fsmonitor), the agent's Git starts one in the
       // copy, and it stays when the agent has gone, with the folder open (seen with the real Codex on Windows, where
@@ -1181,8 +1184,6 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
       const removed = root ? await gitChange(root, ['worktree', 'remove', '--force', copy.root]) : null;
       // Whatever Git would not remove (a file held open by a program that is still running) must not be reported as gone.
       if (removed?.exitCode !== 0 && fs.existsSync(copy.root)) {
-        // (Without Git's word for it, only a folder that is one of this runtime's own copies is removed.)
-        inCopy(project, copy);
         try { fs.rmSync(copy.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
         catch { throw error('copy_in_use', 'The working copy is still in use and could not be removed. Stop the agent (agents.stop) and try again.'); }
       }

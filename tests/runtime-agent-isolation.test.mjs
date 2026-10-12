@@ -153,19 +153,35 @@ test('a copy that was made for a task the owner then does not allow goes with it
   assert.deepEqual([asked.error.code, asked.copyNote], ['delegation_declined', left]);
   const told = presentResult(service.operations.get('agents.result'), asked).content[0].text;
   assert.ok(told.startsWith('[The owner did not allow this task.]\n') && told.includes('\n[' + left + ']\n'), told);
+  // A task that ended without a reason of its own (the client took it back) has the agent's words for its reason:
+  // they are said once, not once more beside themselves.
+  const third = await hand();
+  await service.call('agents.cancel', { id: third.agentId }, connected);
+  await until(() => tried === 2 && !service.store.get('agent', third.agentId).isolated.settled, 'the copy of the task that was taken back');
+  const taken = await service.call('agents.result', { agentId: third.agentId, deliveryId: third.deliveryId }, connected);
+  assert.ok(taken.error.message.endsWith(left)); assert.equal(taken.copyNote, undefined);
+  assert.equal(presentResult(service.operations.get('agents.result'), taken).content[0].text.split(left).length, 2 + 1, 'once in the words, once in what is given beside them as data');
   service.workspace.discardProposal = remove;
+  await service.call('agents.discard', { agentId: third.agentId }, owner);
   assert.equal((await service.call('agents.discard', { agentId: second.agentId }, owner)).discarded, true);
   assert.deepEqual([fs.existsSync(second.copy.root), branches(), service.store.get('agent', second.agentId).isolated.settled], [false, [], 'discarded']);
   // Thrown away, the agent no longer says that its copy could not be removed, wherever its state is read.
   assert.deepEqual(service.store.get('agent', second.agentId).error, { code: 'agent_never_ran', message: 'No task of this agent ran: what it was written down for ended before it began (the task says why), and the agent was closed with that. Start a new agent for the next task.' });
   assert.equal((await service.call('agents.result', { agentId: second.agentId, deliveryId: second.deliveryId }, connected)).copyNote, undefined);
   assert.equal(instances.length, 0, 'nothing was started for either');
-  // A record that names a folder which is no copy of this runtime's (a state somebody changed by hand): with the
-  // project's folder there, too, such a folder is not removed where Git does not say that it is a worktree of it.
+  // A record that names a folder which is no copy of this runtime's (a state somebody changed by hand) is not acted
+  // on, also with the project's folder there: not a plain folder, and not another worktree of the same repository,
+  // which Git would remove with everything in it that is not committed.
   const other = path.join(temp, 'not-a-copy'); fs.mkdirSync(other); fs.writeFileSync(path.join(other, 'kept.txt'), 'kept');
-  const stray = service.store.create('agent', { projectId: project.id, workflowId: second.workflowId, provider: 'codex', label: 'elsewhere', status: 'closed', isolated: { root: other, branch: 'devmate/elsewhere', base: 'c0ffee' } });
-  await assert.rejects(service.call('agents.discard', { agentId: stray.id }, owner), { code: 'invalid_input' });
+  const mine = path.join(temp, 'my-own-worktree');
+  git(root, 'worktree', 'add', '--quiet', '-b', 'mine', mine); fs.writeFileSync(path.join(mine, 'not-committed.txt'), 'mine');
+  for (const [folder, branch] of [[other, 'devmate/elsewhere'], [mine, 'mine']]) {
+    const stray = service.store.create('agent', { projectId: project.id, workflowId: second.workflowId, provider: 'codex', label: 'elsewhere', status: 'closed', isolated: { root: folder, branch, base: 'c0ffee' } });
+    await assert.rejects(service.call('agents.discard', { agentId: stray.id }, owner), { code: 'invalid_input' }, folder);
+  }
   assert.equal(fs.readFileSync(path.join(other, 'kept.txt'), 'utf8'), 'kept');
+  assert.equal(fs.readFileSync(path.join(mine, 'not-committed.txt'), 'utf8'), 'mine');
+  assert.ok(git(root, 'worktree', 'list').includes('my-own-worktree') && git(root, 'branch', '--list', 'mine').includes('mine'));
 });
 
 // A project whose folder was moved is taken off the list, and the words that say so name what goes with it: the

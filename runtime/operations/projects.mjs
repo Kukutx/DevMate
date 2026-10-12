@@ -133,8 +133,8 @@ export function defineProjectOperations(service, add) {
       { code: 'project_removed', message: 'The project was taken out of sharing before the owner allowed this task.' }));
     // A copy that could not be removed (a program still has its folder) is named with the answer, with what is left
     // of it in the repository and how that goes: its record goes with the project, and nothing here would speak of
-    // it again. (A record that names a folder which is no copy of this runtime's is passed over: that folder is not
-    // DevMate's to have removed.)
+    // it again. (A record that names a folder which is no copy of this runtime's is passed over, before Git or
+    // anything else is asked about it: that folder is not DevMate's to have removed.)
     const left = [];
     for (const agent of service.store.list('agent', { projectId: args.id, limit: 10000 })) {
       if (agent.isolated && !agent.isolated.settled) await service.workspace.discardProposal(service.project(args.id), agent.isolated, { leaving: true })

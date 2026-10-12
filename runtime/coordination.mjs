@@ -1241,7 +1241,8 @@ export class AgentCoordinator {
       inputs: pending('input').map(({ id, summary }) => ({ id, summary })),
       // (A task says why it ended; that the copy made for it is still there, and what removes it, is the agent's to
       // say, and is what the caller does next.)
-      ...(error ? { error } : {}), ...(this.copyLeft(agent) ? { copyNote: this.copyLeft(agent) } : {}) };
+      // (Where the task ended without a reason of its own, the agent's words are the reason, and are not said twice.)
+      ...(error ? { error } : {}), ...(this.copyLeft(agent) && !String(error?.message || '').endsWith(this.copyLeft(agent)) ? { copyNote: this.copyLeft(agent) } : {}) };
   }
 
   principal(token) {
