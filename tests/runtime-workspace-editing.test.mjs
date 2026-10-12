@@ -240,6 +240,20 @@ test('reads page large files by line, find matches globs and search takes regex,
   assert.equal(literal.items.length, 3); assert.ok(literal.items.every(item => item.path.endsWith('.ts') && item.line === 1));
   assert.equal((await service.search(project, { query: 'needle', ignoreCase: true, glob: 'src/main.ts' })).items.length, 2);
   assert.equal((await service.search(project, { query: 'Need[a-z]+ = \\d', regex: true, path: 'src/util' })).items.length, 2);
+  // What is found comes folder by folder and name by name, and the lines of a file in their own order, every time:
+  // ripgrep reads the tree on several threads and is not asked to sort, so the order is made here.
+  fs.mkdirSync(file('src-old')); fs.writeFileSync(file('src-old/a.ts'), 'const Needle = 0;\n'); fs.writeFileSync(file('src/Zed.ts'), 'x\nNeedle\nNeedle again\n');
+  const ordered = ['src/Zed.ts', 'src/main.ts', 'src/util/math.test.ts', 'src/util/math.ts', 'src-old/a.ts'];
+  for (let round = 0; round < 5; round++) {
+    assert.deepEqual((await service.find(project, { pattern: '*.ts' })).items.map(item => item.path), ordered);
+    assert.deepEqual((await service.search(project, { query: 'Needle', glob: '*.ts' })).items.map(item => item.path + ':' + item.line),
+      ['src/Zed.ts:2', 'src/Zed.ts:3', 'src/main.ts:1', 'src/util/math.test.ts:1', 'src/util/math.ts:1', 'src-old/a.ts:1']);
+  }
+  // A list that is cut holds the first of them in that order.
+  const cut = await service.find(project, { pattern: '*.ts', limit: 2 });
+  assert.deepEqual([cut.items.map(item => item.path), cut.truncated], [ordered.slice(0, 2), true]);
+  const few = await service.search(project, { query: 'Needle', glob: '*.ts', limit: 3 });
+  assert.deepEqual([few.items.map(item => item.path + ':' + item.line), few.truncated], [['src/Zed.ts:2', 'src/Zed.ts:3', 'src/main.ts:1'], true]);
 });
 
 test('read-only Git history tools report log, show, blame and branches without exposing protected files', async t => {

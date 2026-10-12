@@ -32,7 +32,7 @@ import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.m
 // is sent to whatever answers at that address, so it may ask which runtime that is, and nothing else.
 const PROBE_ID = 'verification', PROBE_OPERATION = 'connection.status';
 const storedKinds = ['agent', 'workflow', 'task', 'job', 'approval', 'input', 'reference', 'artifact'];
-const MAINTENANCE_INTERVAL_MS = 6 * 3600000;
+const MAINTENANCE_INTERVAL_MS = 6 * 3600000, FIRST_MAINTENANCE_MS = 15000;
 const LOCAL_OWNER = Object.freeze({ id: 'owner', surface: 'local' });
 const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root;
 // What a project command inherits: the owner's environment without DevMate's own
@@ -99,8 +99,13 @@ export class DevMateService {
     this.workspace = createWorkspaceService({ store: this.store });
     this.processes = createProcessManager({ instanceRoot: this.instanceRoot, store: this.store, env: commandEnvironment(this.config) });
     this.secrets = createSecretStore(this.instanceRoot);
-    try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); }
-    this.maintenanceTimer = setInterval(() => { try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); } }, MAINTENANCE_INTERVAL_MS);
+    // Not while the runtime starts: with thousands of kept file versions the first tidying took up to three quarters
+    // of a second, which every entry that starts DevMate waited for. It comes a little after the start, when the
+    // records of unfinished jobs are known as well.
+    const tidy = () => { if (this.closing) return; try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); } };
+    this.firstMaintenance = setTimeout(tidy, FIRST_MAINTENANCE_MS);
+    this.firstMaintenance.unref();
+    this.maintenanceTimer = setInterval(tidy, MAINTENANCE_INTERVAL_MS);
     this.maintenanceTimer.unref();
     this.accessProfile = this.store.setting('access.profile') === 'full' ? 'full' : 'guarded';
     // Whether a connected client may have a coding agent run a task. That is spent on the owner's account with the
@@ -464,6 +469,7 @@ export class DevMateService {
     if (this.closed) return;
     this.closing = true;
     await this.ready.catch(() => {});
+    clearTimeout(this.firstMaintenance);
     clearInterval(this.maintenanceTimer);
     this.execution.abort(new DomainError('runtime_stopping', 'Runtime is stopping.'));
     this.inputs.close();

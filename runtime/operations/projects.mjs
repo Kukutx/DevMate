@@ -16,8 +16,10 @@ export async function projectOverview(service, projectId) {
     catch (error) { if (['not_found', 'binary_file', 'file_too_large', 'unsafe_path', 'unsafe_file'].includes(error.code)) return null; throw error; }
   };
   let git = null, gitError = null, changes = [];
-  // Both commands are awaited to completion: no Git process may outlive this call.
-  const [branches, status] = await Promise.allSettled([service.workspace.gitBranches(project), service.workspace.gitStatus(project)]);
+  // The commands do not wait for one another, and all are awaited to completion: no process may outlive this call.
+  // (The third looks for instruction files further down, see below.)
+  const [branches, status, nested] = await Promise.allSettled([service.workspace.gitBranches(project), service.workspace.gitStatus(project),
+    service.workspace.find(project, { pattern: '**/{AGENTS,CLAUDE,GEMINI}.md', limit: 40 })]);
   const failed = [branches, status].find(outcome => outcome.status === 'rejected')?.reason;
   if (!failed) {
     git = { branch: branches.value.current, changedFiles: status.value.items.length };
@@ -39,11 +41,8 @@ export async function projectOverview(service, projectId) {
   const editor = service.windows.editorState(projectId);
   // Parts of a larger repository often carry their own rules. They are named here, not read:
   // they apply when working inside that folder.
-  let nestedInstructions = [];
-  try {
-    const found = await service.workspace.find(project, { pattern: '**/{AGENTS,CLAUDE,GEMINI}.md', limit: 40 });
-    nestedInstructions = found.items.map(item => item.path).filter(file => file.includes('/')).sort().slice(0, 30);
-  } catch (error) { if (!['tool_missing', 'command_failed'].includes(error.code)) throw error; }
+  if (nested.status === 'rejected' && !['tool_missing', 'command_failed'].includes(nested.reason.code)) throw nested.reason;
+  const nestedInstructions = nested.status === 'rejected' ? [] : nested.value.items.map(item => item.path).filter(file => file.includes('/')).sort().slice(0, 30);
   return { id: project.id, name: project.name, root, access: project.access, git, ...(gitError ? { gitError } : {}), changes, markers: [...new Set(markers)], scripts, scriptRunner,
     entries: listing.items.map(item => item.name + (item.type === 'directory' ? '/' : '')),
     instructions: INSTRUCTION_FILES.map(file => readText(file, 12000)).filter(Boolean), nestedInstructions,

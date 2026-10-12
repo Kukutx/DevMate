@@ -143,7 +143,10 @@ export async function executeCommand(command, args = [], {
   maxOutputChars = 120000,
   shell = false,
   environment,
-  signal = null
+  signal = null,
+  // The caller wants the beginning of the output and no more than maxOutputChars of it: the command is ended as soon
+  // as it has written that much, instead of running on while what it writes is thrown away (endedFull in the result).
+  enough = false
 } = {}) {
   if (signal?.aborted) { const error = cancellationError(signal); error.notStarted = true; throw error; }
   const child = spawn(command, args, {
@@ -162,7 +165,10 @@ export async function executeCommand(command, args = [], {
   // One decoder per stream: a multi-byte character split across chunks must not become U+FFFD.
   child.stdout?.setEncoding('utf8');
   child.stderr?.setEncoding('utf8');
-  child.stdout?.on('data', chunk => { stdout = appendBounded(stdout, chunk, captureLimit); });
+  let full = () => {};
+  child.stdout?.on('data', enough
+    ? chunk => { if (stdout.length <= maxOutputChars) { stdout += chunk; if (stdout.length > maxOutputChars) full(); } }
+    : chunk => { stdout = appendBounded(stdout, chunk, captureLimit); });
   child.stderr?.on('data', chunk => { stderr = appendBounded(stderr, chunk, captureLimit); });
 
   let cleanupPending = false;
@@ -184,12 +190,14 @@ export async function executeCommand(command, args = [], {
       signal.addEventListener('abort', abortListener, { once: true });
       if (signal.aborted) abortListener();
     }
+    full = () => finish({ type: 'full' });
+    if (enough && stdout.length > maxOutputChars) full();
     exitPromise.then(exit => finish({ type: 'exit', exit }));
   });
 
   let exit = winner.exit || null;
   let termination = { terminated: false, forced: false, exitConfirmed: true };
-  if (winner.type === 'timeout' || winner.type === 'aborted') {
+  if (winner.type === 'timeout' || winner.type === 'aborted' || winner.type === 'full') {
     cleanupPending = true;
     termination = await terminateProcessTree(child);
     exit = await waitWithTimeout(exitPromise, 100);
@@ -204,8 +212,9 @@ export async function executeCommand(command, args = [], {
     signal: exit?.signal || child.signalCode || null,
     error: exit?.error,
     timedOut: winner.type === 'timeout',
+    ...(winner.type === 'full' ? { endedFull: true } : {}),
     ...termination,
-    stdout: stdout.slice(-maxOutputChars),
+    stdout: enough ? stdout.slice(0, maxOutputChars) : stdout.slice(-maxOutputChars),
     stderr: stderr.slice(-maxOutputChars),
     stdoutTruncated: stdout.length > maxOutputChars,
     stderrTruncated: stderr.length > maxOutputChars

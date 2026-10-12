@@ -127,14 +127,15 @@ function relativeInput(value = '.') {
 // an allowed file under an otherwise protected directory stays reachable.
 // Like Node's ordinary filesystem APIs this is not an OS sandbox against a
 // hostile process replacing directory entries concurrently.
-// `verified` lets one listing check each folder once instead of once per file in it: a find over two thousand
-// files would otherwise ask the file system the same questions about the same few folders thousands of times.
-// It is a Map that lives for a single call.
+// `verified` lets one listing check the project's root and each folder once instead of once per file in it: a find
+// over two thousand files would otherwise ask the file system the same questions about the same few folders
+// thousands of times. It is a Map that lives for a single call, of one project, with one answer to `links`.
 // links: reading may go through a link or junction whose target is still inside the project (a package manager's
 // node_modules is made of them). The canonical target is what is judged, so a link is never a way out of the project
 // or around the credential protection. Everything that changes a file leaves links alone, as before.
 export function resolveProjectPath(project, value = '.', { mustExist = true, policy = true, verified = null, links = false } = {}) {
-  const root = projectRoot(project);
+  let root = verified?.get('\0root');
+  if (root === undefined) { root = projectRoot(project); verified?.set('\0root', root); }
   const rel = relativeInput(value);
   let controlRoot = verified?.get('\0control');
   if (controlRoot === undefined) { controlRoot = project.controlRoot ? fs.realpathSync.native(project.controlRoot) : null; verified?.set('\0control', controlRoot); }
@@ -283,7 +284,7 @@ export function createWorkspaceService({ store } = {}) {
     catch (failure) { return 'The change was made, but recording it in history failed: ' + failure.message; }
   };
   const invoke = (file, args, cwd, input = {}, environment = toolEnvironment()) => executeCommand(resolveTool(file), args, {
-    cwd, shell: false, environment, signal: input.signal || null,
+    cwd, shell: false, environment, signal: input.signal || null, enough: input.enough === true,
     timeoutMs: bounded(input.timeoutMs, 30000, 300000), maxOutputChars: bounded(input.maxOutputChars, 120000, 2000000)
   });
   // Read-only Git that cannot run anything the repository itself configures:
@@ -320,13 +321,13 @@ export function createWorkspaceService({ store } = {}) {
     const entries = fs.readdirSync(full, { withFileTypes: true });
     if (entries.length > MAX_DIRECTORY_ENTRIES) throw error('scan_limit', 'Directory has too many entries; use workspace_find with a pattern.');
     const limit = bounded(input.limit, 200, 1000);
-    const items = [];
+    const items = [], verified = new Map();
     let withheld = 0;
     for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
       if (entry.name <= after || entry.name.startsWith('.devmate-write-') || entry.name === '.git') continue;
       const childRel = path.posix.join(rel, entry.name);
       // What cannot be read is not listed either, but it is counted: an entry that silently is not there sends a model looking for it.
-      if (hidden(project, childRel) || !listable(project, childRel, { links: true })) { withheld++; continue; }
+      if (hidden(project, childRel) || !listable(project, childRel, { links: true, verified })) { withheld++; continue; }
       const stat = fs.statSync(path.join(full, entry.name), { throwIfNoEntry: false });
       if (!stat || (!stat.isFile() && !stat.isDirectory())) { withheld++; continue; }
       items.push({ name: entry.name, path: slash(childRel), type: stat.isDirectory() ? 'directory' : 'file', size: stat.size });
@@ -816,14 +817,16 @@ export function createWorkspaceService({ store } = {}) {
     return { ...(rel ? { path: rel } : {}), items };
   }
 
-  function restore(project, input = {}) {
+  // recorded: the version was just read from this project's own history (takeBack), so the history is not searched
+  // for it again. That search reads every entry of the project, once for each file that is taken back.
+  function restore(project, input = {}, { recorded = false } = {}) {
     writable(project);
     if (input.since !== undefined) return takeBack(project, input);
     if (input.path === undefined) throw error('invalid_input', 'Give path and sha256 of one version from workspace_history, or since to take back every change after one history entry.');
     if (typeof input.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(input.sha256)) throw error('invalid_input', 'sha256 must identify a version from workspace_history.');
     const stored = snapshotPath(project, input.sha256);
     // The store is shared by content hash; a version is restorable only where this project recorded it.
-    if (!stored || !fs.existsSync(stored) || !store?.hasFileVersion?.(project.id, HISTORY_EVENTS, input.sha256)) throw error('not_found', 'That version is not kept in this project\'s DevMate history.');
+    if (!stored || !fs.existsSync(stored) || !(recorded || store?.hasFileVersion?.(project.id, HISTORY_EVENTS, input.sha256))) throw error('not_found', 'That version is not kept in this project\'s DevMate history.');
     const bytes = fs.readFileSync(stored);
     if (hash(bytes) !== input.sha256) throw error('history_corrupt', 'Stored history does not match its hash.');
     const rel = relativeInput(input.path);
@@ -854,14 +857,14 @@ export function createWorkspaceService({ store } = {}) {
           // A rename that only changed the case of the name is the same entry under both names.
           if (present(item.from) && at(item.from) !== at(item.path)) throw leave('something is at ' + item.from + ' now');
           move(project, { from: item.path, to: item.from });
-          if (item.previousSha256) restore(project, { path: item.path, sha256: item.previousSha256 });
+          if (item.previousSha256) restore(project, { path: item.path, sha256: item.previousSha256 }, { recorded: true });
           restored.push({ ...step, action: 'moved back', to: item.from });
         } else if (item.type === 'workspace.file.removed') {
           // The files of a deleted folder are entries of their own; bringing them back brings the folders back.
           if (item.entry === 'directory') continue;
           if (present(item.path)) throw leave('something is at this path now');
           if (!item.previousSha256) throw leave('no copy was kept when it was deleted');
-          restore(project, { path: item.path, sha256: item.previousSha256 });
+          restore(project, { path: item.path, sha256: item.previousSha256 }, { recorded: true });
           restored.push({ ...step, action: 'brought back' });
         } else {
           const stat = present(item.path);
@@ -871,7 +874,7 @@ export function createWorkspaceService({ store } = {}) {
           // not made anew on the ground that nothing matches nothing.
           if (!item.sha256) throw leave('what this change wrote was not recorded (it was too large, or could not be read back), so it cannot be told whether it was changed since');
           if ((stat?.isFile() ? contentHash(at(item.path), stat.size) : null) !== item.sha256) throw leave('it was changed again by something else');
-          if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }); restored.push({ ...step, action: 'restored' }); }
+          if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }, { recorded: true }); restored.push({ ...step, action: 'restored' }); }
           else { remove(project, { path: item.path }); restored.push({ ...step, action: 'removed again (this change created it)' }); }
         }
       } catch (failure) { left.push({ ...step, reason: failure.left ? failure.message : (failure.code ? failure.code + ': ' : '') + failure.message }); }
@@ -885,7 +888,9 @@ export function createWorkspaceService({ store } = {}) {
   function scanArguments(input) {
     const glob = input.glob;
     if (glob !== undefined && (typeof glob !== 'string' || !glob || glob.length > 500 || /[\0\r\n]/.test(glob))) throw error('invalid_input', 'A glob pattern of up to 500 characters is required.');
-    const args = ['--no-config', '--color', 'never', '--hidden', '--no-require-git', '--sort', 'path',
+    // ripgrep is not asked to sort: sorted, it reads the tree on one thread, several times slower on a large one
+    // (measured on eleven thousand files: 6 seconds against 0.7). What it reports is put in order here (inOrder).
+    const args = ['--no-config', '--color', 'never', '--hidden', '--no-require-git',
       ...(WINDOWS ? ['--glob-case-insensitive'] : [])];
     if (input.includeIgnored) args.push('--no-ignore');
     if (glob) args.push('--glob', slash(glob).replace(/^\.\//, ''));
@@ -893,6 +898,10 @@ export function createWorkspaceService({ store } = {}) {
     for (const name of input.includeIgnored ? ['.git'] : skippedDirectories) args.push('--glob', '!' + name);
     return args;
   }
+  // By path, folder by folder and name by name, as ripgrep's own sorting gave them: the separator counts as less than
+  // any letter. What the order is made of is worked out once for each entry.
+  const inOrder = (entries, pathOf) => entries.map(entry => [pathOf(entry).replaceAll('/', '\0'), entry])
+    .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(pair => pair[1]);
   // Null when the file may not be shown; otherwise what one look at it told (its size).
   function visibleFile(project, file, cache) {
     if (!cache.has(file)) {
@@ -905,7 +914,13 @@ export function createWorkspaceService({ store } = {}) {
     }
     return cache.get(file);
   }
+  // What a scan is run with: ripgrep is ended once it has reported more than is ever shown. A search for a common word
+  // in a large tree otherwise goes on to write a hundred megabytes that are read and thrown away (measured: over ten
+  // seconds for an answer that was complete after a twentieth of one). What is shown then is a part of what matches,
+  // not the same part every time, and marked as cut.
+  const scanned = input => ({ ...input, maxOutputChars: 2000000, enough: true });
   function scanFailure(result, produced) {
+    if (result.endedFull) return;
     // ripgrep exits 1 for "no matches" and 2 when some path could not be read.
     if (result.error || result.timedOut || ![0, 1, 2].includes(result.exitCode) || (result.exitCode === 2 && !produced)) {
       throw error('command_failed', 'The search did not finish successfully.' + (result.stderr ? ' ' + result.stderr.trim().split(/\r?\n/)[0].slice(0, 300) : ''),
@@ -918,12 +933,13 @@ export function createWorkspaceService({ store } = {}) {
     if (!fs.statSync(resolveProjectPath(project, base)).isDirectory()) throw error('not_directory', 'Find requires a directory.');
     const limit = bounded(input.limit, 200, 2000), items = [], cache = new Map();
     let withheld = 0;
-    const result = await invoke('rg', ['--files', ...scanArguments({ ...input, glob: input.pattern }), '--', base], projectRoot(project), { ...input, maxOutputChars: 2000000 });
+    const result = await invoke('rg', ['--files', ...scanArguments({ ...input, glob: input.pattern }), '--', base], projectRoot(project), scanned(input));
     scanFailure(result, !!result.stdout);
     let truncated = result.stdoutTruncated;
-    for (const line of result.stdout.split(/\r?\n/)) {
-      const file = slash(line).replace(/^\.\//, '');
-      if (!file) continue;
+    const lines = result.stdout.split(/\r?\n/);
+    // Where the list was cut, its last line is a piece of a path.
+    if (truncated) lines.pop();
+    for (const file of inOrder(lines.map(line => slash(line).replace(/^\.\//, '')).filter(Boolean), file => file)) {
       const seen = visibleFile(project, file, cache);
       if (!seen) { withheld++; continue; }
       if (items.length >= limit) { truncated = true; break; }
@@ -940,18 +956,21 @@ export function createWorkspaceService({ store } = {}) {
     const args = ['--json', '--max-filesize', String(READ_FILE_BYTES), '--max-count', String(limit), ...scanArguments(input)];
     if (!input.regex) args.push('--fixed-strings');
     if (input.ignoreCase) args.push('--ignore-case');
-    const result = await invoke('rg', [...args, '-e', input.query, '--', base], projectRoot(project), { ...input, maxOutputChars: 2000000 });
+    const result = await invoke('rg', [...args, '-e', input.query, '--', base], projectRoot(project), scanned(input));
     scanFailure(result, result.stdout.includes('"type":"match"'));
     let truncated = result.stdoutTruncated;
+    const hits = [];
     for (const line of result.stdout.split(/\r?\n/)) {
       if (!line) continue;
       let record; try { record = JSON.parse(line); } catch { truncated = true; continue; }
       if (record.type !== 'match' || !record.data.path.text || typeof record.data.lines.text !== 'string') continue;
-      const file = slash(record.data.path.text).replace(/^\.\//, '');
-      if (!visibleFile(project, file, cache)) continue;
+      hits.push({ path: slash(record.data.path.text).replace(/^\.\//, ''), line: record.data.line_number, text: record.data.lines.text.replace(/\r?\n$/, '') });
+    }
+    // The hits of a file come together and in the order of its lines; the files are put in order here.
+    for (const hit of inOrder(hits, hit => hit.path)) {
+      if (!visibleFile(project, hit.path, cache)) continue;
       if (items.length === limit) { truncated = true; break; }
-      const hit = record.data.lines.text.replace(/\r?\n$/, '');
-      items.push({ path: file, line: record.data.line_number, text: hit.length > 2000 ? hit.slice(0, 2000) + ' [line cut; ' + hit.length + ' characters]' : hit });
+      items.push({ path: hit.path, line: hit.line, text: hit.text.length > 2000 ? hit.text.slice(0, 2000) + ' [line cut; ' + hit.text.length + ' characters]' : hit.text });
     }
     return { items, truncated };
   }
@@ -960,13 +979,13 @@ export function createWorkspaceService({ store } = {}) {
   async function gitStatus(project, input = {}) {
     const result = checkedCommand(await git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=normal'], input));
     if (result.stdoutTruncated) throw error('output_limit', 'Git status exceeds the output bound.');
-    const records = result.stdout.split('\0'), items = [];
+    const records = result.stdout.split('\0'), items = [], verified = new Map();
     for (let i = 0; i < records.length; i++) {
       const record = records[i]; if (!record) continue;
       const status = record.slice(0, 2), file = slash(record.slice(3)).replace(/\/$/, '');
       const originalPath = /[RC]/.test(status) ? slash(records[++i] || '') : null;
       // Entries Git reports but DevMate cannot address (links, instance storage, device names) are left out, not fatal.
-      if (!listable({ ...project, protectSecrets: false }, file, { mustExist: false })) continue;
+      if (!listable({ ...project, protectSecrets: false }, file, { mustExist: false, verified })) continue;
       const guarded = hidden(project, file) || (originalPath ? hidden(project, originalPath) : false);
       items.push({ path: file, status, ...(originalPath ? { originalPath } : {}), ...(guarded ? { protected: true } : {}) });
     }
@@ -977,8 +996,8 @@ export function createWorkspaceService({ store } = {}) {
   async function changedPaths(project, args, input, scopes = []) {
     const names = checkedCommand(await git(project, [...args, '--name-only', '-z', ...(scopes.length ? ['--', ...scopes] : [])], { ...input, maxOutputChars: 2000000 }));
     if (names.stdoutTruncated) throw error('output_limit', 'The changed-file list exceeds the output bound; name the paths you need.');
-    const all = names.stdout.split('\0').map(item => item.trim()).filter(Boolean);
-    const shown = all.filter(item => !hidden(project, item) && listable(project, item, { mustExist: false }));
+    const all = names.stdout.split('\0').map(item => item.trim()).filter(Boolean), verified = new Map();
+    const shown = all.filter(item => !hidden(project, item) && listable(project, item, { mustExist: false, verified }));
     return { shown, omitted: all.length - shown.length };
   }
   // A diff is read from the top, so an oversized one keeps its beginning and says what is missing.
@@ -1004,19 +1023,22 @@ export function createWorkspaceService({ store } = {}) {
   // the last commit. A new file that Git does not ignore counts as added. With since:'last_review' what was already
   // shown and marked (markReviewed) is left out, judged by each file's content now: nothing new, nothing shown.
   async function changes(project, input = {}) {
-    if ((await git(project, ['rev-parse', '--is-inside-work-tree'], input)).exitCode !== 0)
+    // Three questions that do not wait for one another; each is a process of its own.
+    const [inside, head, listed] = await Promise.all([git(project, ['rev-parse', '--is-inside-work-tree'], input), git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], input),
+      git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { ...input, maxOutputChars: 2000000 })]);
+    if (inside.exitCode !== 0)
       throw error('not_a_repository', 'This project is not a Git repository, so there is no commit to compare it with. workspace_history lists what DevMate\'s own tools changed here, and workspace_restore takes it back.');
-    const base = (await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], input)).exitCode === 0 ? 'HEAD' : EMPTY_TREE;
-    const status = checkedCommand(await git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { ...input, maxOutputChars: 2000000 }));
+    const base = head.exitCode === 0 ? 'HEAD' : EMPTY_TREE;
+    const status = checkedCommand(listed);
     if (status.stdoutTruncated) throw error('output_limit', 'Too many files changed to list them here; look at them with git_status and git_diff.');
-    const files = new Map(), untracked = new Set();
+    const files = new Map(), untracked = new Set(), verified = new Map(), root = projectRoot(project);
     let omittedProtected = 0;
     const records = status.stdout.split('\0');
     for (let index = 0; index < records.length; index++) {
       const record = records[index]; if (!record) continue;
       const code = record.slice(0, 2), file = slash(record.slice(3)), previousPath = /[RC]/.test(code) ? slash(records[++index] || '') : null;
       if (hidden(project, file) || (previousPath && hidden(project, previousPath))) { omittedProtected++; continue; }
-      if (!listable(project, file, { mustExist: false })) continue;
+      if (!listable(project, file, { mustExist: false, verified })) continue;
       if (code === '??') untracked.add(file);
       files.set(file, { path: file, ...(previousPath ? { previousPath } : {}), type: code === '??' || code.includes('A') ? 'added' : code.includes('D') ? 'deleted' : previousPath ? 'renamed' : 'modified', additions: 0, removals: 0 });
     }
@@ -1032,15 +1054,15 @@ export function createWorkspaceService({ store } = {}) {
     }
     // What a file holds now, in a form that is cheap to compare later.
     const state = item => {
-      const stat = item.type === 'deleted' ? null : fs.lstatSync(path.join(projectRoot(project), item.path), { throwIfNoEntry: false });
+      const stat = item.type === 'deleted' ? null : fs.lstatSync(path.join(root, item.path), { throwIfNoEntry: false });
       if (!stat?.isFile()) return 'absent';
-      return stat.size <= MAX_FILE_BYTES ? hash(readRegular(path.join(projectRoot(project), item.path), { linked: true })) : stat.size + ':' + stat.mtimeMs;
+      return stat.size <= MAX_FILE_BYTES ? hash(readRegular(path.join(root, item.path), { linked: true })) : stat.size + ':' + stat.mtimeMs;
     };
     for (const item of files.values()) {
       item.state = state(item);
       // Git counts no lines for a file it does not track yet.
       if (untracked.has(item.path) && item.state.length === 64) {
-        const bytes = readRegular(path.join(projectRoot(project), item.path), { linked: true });
+        const bytes = readRegular(path.join(root, item.path), { linked: true });
         if (bytes.includes(0)) item.binary = true; else if (bytes.length) item.additions = bytes.toString('utf8').split('\n').length - (bytes.at(-1) === 10 ? 1 : 0);
       }
     }
