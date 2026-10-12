@@ -32,10 +32,17 @@ test('a change to a file another program holds is made again until it is let go,
   assert.equal((await writing).written, true);
   assert.equal(tries, 4); assert.ok(Date.now() - started >= 600, 'it waited between the tries: ' + (Date.now() - started) + ' ms');
   assert.equal(read('a.txt'), 'two\n');
-  // Held for longer than it is waited for: said as what it is, and nothing is changed.
+  // Held for longer than it is waited for: said as what it is, and nothing is changed. What refuses for that long is
+  // not a scanner's moment: a program that keeps the file open, or permissions, for which Windows answers the same.
   service.fileBusyPatienceMs = 350; refusals = Infinity; tries = 0;
-  await assert.rejects(call('workspace.write', { path: 'a.txt', text: 'three\n', overwrite: true }), { code: 'file_busy' });
+  service.workspace.write = () => { tries++; throw new DomainError('file_busy', 'Windows does not let a.txt be changed right now. It was left as it is. Try again in a moment.'); };
+  await assert.rejects(call('workspace.write', { path: 'a.txt', text: 'three\n', overwrite: true }), { code: 'file_busy',
+    message: 'Windows does not let a.txt be changed right now. It was left as it is. It stayed so for 1 second(s) of trying again: a program keeps it open, or this account is not allowed to change it (its permissions).' });
   assert.equal(tries, 3, 'tried again after 100 and 200 ms, and not once more'); assert.equal(read('a.txt'), 'two\n');
+  // A file that was moved out of the way and could be neither replaced nor put back is said as that, with where what it
+  // held lies, and is not made again by itself.
+  tries = 0; service.workspace.write = () => { tries++; throw Object.assign(new DomainError('file_displaced', 'no file under that name'), { incomplete: true }); };
+  await assert.rejects(call('workspace.write', { path: 'a.txt', text: 'three\n', overwrite: true }), { code: 'file_displaced' }); assert.equal(tries, 1);
   // A patch of which something is still there no longer fits and is not made again; another refusal is not waited for.
   service.fileBusyPatienceMs = 20000;
   for (const [failure, code] of [[Object.assign(new DomainError('file_busy', 'held'), { incomplete: true }), 'file_busy'], [new DomainError('conflict', 'changed'), 'conflict']]) {

@@ -22,7 +22,15 @@ export function defineFileOperations(service, add) {
       try { return await change(); }
       catch (failure) {
         const pause = Math.min(1000, 100 * 2 ** attempt);
-        if (failure?.code !== 'file_busy' || failure.incomplete || waited + pause > (service.fileBusyPatienceMs ?? FILE_BUSY_PATIENCE_MS)) throw failure;
+        if (failure?.code !== 'file_busy' || failure.incomplete) throw failure;
+        if (waited + pause > (service.fileBusyPatienceMs ?? FILE_BUSY_PATIENCE_MS)) {
+          // A program that holds a file for a moment has let go long before this. What refuses for this long is a
+          // program that keeps the file open, or permissions that do not let this account change it: Windows gives
+          // the same answer for both.
+          failure.message = failure.message.replace(/ Try again in a moment\.$/, '') + ' It stayed so for ' + Math.max(1, Math.round(waited / 1000)) +
+            ' second(s) of trying again: a program keeps it open, or this account is not allowed to change it (its permissions).';
+          throw failure;
+        }
         await new Promise(resolve => setTimeout(resolve, pause));
         waited += pause;
       }

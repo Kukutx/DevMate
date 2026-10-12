@@ -41,6 +41,11 @@ test('a file Windows holds for a moment is replaced once it is let go, within ab
   assert.throws(() => replaceFile('from', 'to', { aside: 'old', repeats: 0, platform: 'win32', wait: () => {}, remove: () => back.push('remove'),
     rename: (from, to) => { back.push(from + ' -> ' + to); if (from === 'from') throw Object.assign(new Error('refused'), { code: 'EACCES' }); } }), { code: 'EACCES' });
   assert.deepEqual(back, ['from -> to', 'to -> old', 'from -> to', 'old -> to']);
+  // And it cannot be put back either: nothing is under the name now, and the error says where what it held lies.
+  const lost = [];
+  assert.throws(() => replaceFile('from', 'to', { aside: 'old', repeats: 0, platform: 'win32', wait: () => {}, remove: () => lost.push('remove'),
+    rename: (from, to) => { lost.push(from + ' -> ' + to); if (from !== 'to') throw Object.assign(new Error('refused'), { code: 'EACCES' }); } }), { code: 'EACCES', displaced: 'old' });
+  assert.deepEqual(lost, ['from -> to', 'to -> old', 'from -> to', 'old -> to']);
   // Another fault, or another system, is no such moment: it fails at once.
   for (const [platform, code] of [['win32', 'ENOENT'], ['linux', 'EPERM'], ['darwin', 'EBUSY']]) {
     const other = held(Infinity, code);

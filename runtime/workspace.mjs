@@ -54,10 +54,23 @@ const writableFile = full => { try { fs.accessSync(full, fs.constants.W_OK); ret
 // that is renamed over it. Moved aside it could be: it is refused before that is tried.
 const readOnlyFile = rel => error('read_only_file', rel + ' is marked read-only and was left as it is. Take the mark off, with a command, to change it.');
 const keptReadOnly = (rel, full) => { if (WINDOWS && fs.existsSync(full) && !writableFile(full)) throw readOnlyFile(rel); };
+// A file that was moved out of the way and could be neither replaced nor put back: nothing is under its name, and
+// what it held is beside it under a working copy's name, which no listing shows. Said with that name, so that it is found.
+const displaced = (rel, aside) => Object.assign(error('file_displaced', rel + ' could not be replaced, and could not be put back where it was: there is no file under that name now. What it held is in ' +
+  path.basename(aside) + ' in the same folder, a name the file tools do not list. Move it back with a command (for example: mv), then try the change again.', { heldIn: path.basename(aside) }), { incomplete: true });
 function unheld(quick, rel, full, work) {
-  if (!quick) return work();
   try { return work(); }
-  catch (failure) { throw WINDOWS && HELD.includes(failure?.code) && writableFile(full) ? busy(rel) : failure; }
+  catch (failure) {
+    if (failure?.displaced) throw displaced(rel, failure.displaced);
+    throw quick && WINDOWS && HELD.includes(failure?.code) && writableFile(full) ? busy(rel) : failure;
+  }
+}
+// What was moved out of the way and could not be removed at once (a program had it mapped) is removed later: tried
+// again with every change that follows, for as long as this runtime runs.
+const leftAside = new Set();
+function removeAside(file) {
+  for (const earlier of [...leftAside]) { try { fs.rmSync(earlier, { force: true }); leftAside.delete(earlier); } catch { /* still held */ } }
+  try { fs.rmSync(file, { force: true, maxRetries: 5, retryDelay: 20 }); } catch { if (leftAside.size < 1000) leftAside.add(file); }
 }
 const bounded = (value, fallback, max) => Number.isInteger(value) && value > 0 ? Math.min(value, max) : fallback;
 const inside = (root, target) => {
@@ -524,7 +537,7 @@ export function createWorkspaceService({ store } = {}) {
       if ((latest === null ? null : hash(latest)) !== currentSha256) throw error('conflict', 'File changed before publication.');
       // A file that is in the way and open in another program is moved aside under a working copy's name (never
       // listed), see replaceFile.
-      if (current !== null) unheld(quick, rel, full, () => replaceFile(temp, full, { aside: path.join(parent, '.devmate-write-' + randomUUID()), ...(quick ? { repeats: QUICK_REPEATS } : {}) }));
+      if (current !== null) unheld(quick, rel, full, () => replaceFile(temp, full, { aside: path.join(parent, '.devmate-write-' + randomUUID()), remove: removeAside, ...(quick ? { repeats: QUICK_REPEATS } : {}) }));
       else {
         // Create must never replace a file that appeared meanwhile. A second name for the working copy does that at
         // once and whole. Not on Windows: the new file would be the very file a scanner has opened as the working
@@ -535,6 +548,8 @@ export function createWorkspaceService({ store } = {}) {
         const copied = () => {
           try { fs.copyFileSync(temp, full, fs.constants.COPYFILE_EXCL); }
           catch (failure) { throw failure.code === 'EEXIST' ? error('conflict', 'File changed before publication.') : failure; }
+          // The working copy was written through to the disk; its copy is too, where the system lets it be.
+          try { const made = fs.openSync(full, 'r+'); try { fs.fsyncSync(made); } finally { fs.closeSync(made); } } catch { /* written, and flushed by the system in its own time */ }
         };
         if (WINDOWS) copied();
         else try { fs.linkSync(temp, full); }
@@ -706,8 +721,9 @@ export function createWorkspaceService({ store } = {}) {
       keptReadOnly(to, target);
       replacedSha256 = snapshot(project, readBytes(target));
     }
-    unheld(quick, from, source, () => replaceFile(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target,
-      { repeats: quick ? QUICK_REPEATS : 0, ...(targetStat ? { aside: path.join(parent, '.devmate-write-' + randomUUID()) } : {}) }));
+    // With a file in the way either of the two may be the one a program holds: the refusal names both.
+    unheld(quick, targetStat ? from + ' or ' + to : from, source, () => replaceFile(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target,
+      { repeats: quick ? QUICK_REPEATS : 0, ...(targetStat ? { aside: path.join(parent, '.devmate-write-' + randomUUID()), remove: removeAside } : {}) }));
     const result = { from, to, type: sourceStat.isDirectory() ? 'directory' : 'file' };
     const warning = event(project, 'workspace.file.moved', { from, path: to, entry: result.type, ...(replacedSha256 ? { previousSha256: replacedSha256 } : {}) });
     return warning ? { ...result, warning } : result;

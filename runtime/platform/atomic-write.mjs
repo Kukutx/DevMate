@@ -26,8 +26,9 @@ export function replaceFile(from, to, { repeats = REPEATS, aside = null, rename 
         let moved = false;
         try { rename(to, aside); moved = true; rename(from, to); remove(aside); return; }
         catch (second) {
-          // The new file did not get the place: the old one goes back, so that nothing is missing.
-          if (moved) { try { rename(aside, to); } catch { throw second; } }
+          // The new file did not get the place: the old one goes back, so that nothing is missing. Where even that
+          // is refused, there is no file under the name and what it held lies where it was moved to: said with the error.
+          if (moved) { try { rename(aside, to); } catch { throw Object.assign(second, { displaced: aside }); } }
           if (!HELD.includes(second.code)) throw second;
         }
       }
