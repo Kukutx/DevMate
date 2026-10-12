@@ -2051,7 +2051,8 @@ test('where the browser cannot say what is at the point, the tree the element is
     page.elementFromPoint = () => element('X-ICON', page);
     assert.equal(at(field, page), '<x-icon>');
   }
-});test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {
+});
+test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {
   // Seen in a real Chrome: a frame without a name was left out altogether, so a page whose content is in one looked empty.
   const told = { 3: { node: { attributes: ['title', 'Pay', 'src', '/pay/form'], contentDocument: { documentURL: 'https://app.example/pay/form?step=1' } } }, 4: { node: { attributes: ['width', '300', 'src', 'https://ads.example/slot'] } },
     5: { node: { attributes: ['src', '../help'] } }, 6: { node: { attributes: ['title', 'Empty'], contentDocument: { documentURL: 'about:blank' } } },
