@@ -485,8 +485,9 @@ test('an element is found by its ref from the snapshot, by a selector, or by the
   await refuses(methods['page.inspect']({ ref: 99 }), 'not_found', /^No element has the ref 99 any more\. Take a new page\.snapshot\.$/);
   await refuses(methods['page.inspect']({ ref: 14 }), 'not_found', /ref 14 any more/);
   await refuses(methods['page.inspect']({ selector: '##' }), 'invalid_input', /^The selector is not valid: SyntaxError: .* is not a valid selector\.$/);
-  await refuses(methods['page.inspect']({ selector: '#nothing' }), 'not_found', /^No element on the page matches the selector #nothing\.$/);
-  await refuses(methods['page.inspect']({ text: 'nothing like it' }), 'not_found', /^No element on the page matches the text "nothing like it"\.$/);
+  const WAY_OUT = ' page\\.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself\\. What is inside a frame \\(iframe\\) is not reached\\.$';
+  await refuses(methods['page.inspect']({ selector: '#nothing' }), 'not_found', new RegExp('^No element on the page matches the selector #nothing\\.' + WAY_OUT));
+  await refuses(methods['page.inspect']({ text: 'nothing like it' }), 'not_found', new RegExp('^No element on the page matches the text "nothing like it"\\.' + WAY_OUT));
   await refuses(methods['page.inspect'](), 'invalid_input', /^Say which element: ref \(its number in page\.snapshot\), selector, or the text it shows\.$/);
   for (const ref of [0, -1, 1.5, '13']) await refuses(methods['page.inspect']({ ref }), 'invalid_input', /ref must be a whole number/);
   for (const selector of ['', 5, 's'.repeat(1001)]) await refuses(methods['page.inspect']({ selector }), 'invalid_input', /selector/);
@@ -1154,7 +1155,7 @@ test('tabs.back and tabs.forward go through the tab\'s own history, and say so w
 });
 
 test('a method offered as a read sends the page only what changes nothing, and runs no script but its own', async () => {
-  const reads = new Set(['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable', 'Accessibility.enable', 'Accessibility.getFullAXTree', 'Runtime.evaluate', 'Runtime.callFunctionOn', 'DOM.resolveNode',
+  const reads = new Set(['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable', 'Accessibility.enable', 'Accessibility.getFullAXTree', 'Runtime.evaluate', 'Runtime.callFunctionOn', 'DOM.resolveNode', 'DOM.describeNode',
     'Network.getCookies', 'Network.getResponseBody', 'Network.getRequestPostData']);
   // What a read may have the page work out: these, with what the caller gave carried in as data.
   const scripts = [/^document\.querySelector\("#buy"\)$/, /^!!document\.querySelector\("#buy"\)$/, /^\(function shows\(wanted\) \{[^]*\}\)\("Buy"\)$/, /^\(function byText\(wanted\) \{[^]*\}\)\("Buy"\)$/,
@@ -1227,7 +1228,7 @@ test('what page.waitFor asks the page about a text stands on its own there: writ
   const page = (innerText, items = [], byId = {}) => inPage(expression, { document: { body: { innerText }, getElementById: id => byId[id] ?? null, querySelectorAll: selector => { asked.push(selector); return items; } } });
   assert.equal(page('Press Send to go on'), true); assert.deepEqual(asked, [], 'what is written is enough');
   assert.equal(page('Nothing of the kind'), false);
-  assert.deepEqual(asked, ['[aria-label], [aria-labelledby], [title], [alt], [placeholder], input, textarea']);
+  assert.deepEqual(asked, ['*', '[aria-label], [aria-labelledby], [title], [alt], [placeholder], input, textarea'], 'then the components of the page are looked for, and what is named without words');
   // A button drawn as a picture is known by what a screen reader says of it, a field by what it holds or asks for.
   for (const attribute of ['aria-label', 'title', 'alt', 'placeholder']) assert.equal(page('', [item(), named(attribute, 'Send message')]), true, attribute);
   assert.equal(page('', [named('aria-labelledby', 'a  b')], { a: { innerText: 'Send' }, b: { innerText: 'message now' } }), true, 'named by other elements');
@@ -1295,7 +1296,8 @@ test('what finds an element by its text stands on its own in the page: the short
   const icon = item('', { getAttribute: name => name === 'aria-label' ? 'Save' : null });
   const find = (controls, all, byId = {}) => inPage(expression, { document: { getElementById: id => byId[id] ?? null, querySelectorAll: selector => { asked.push(selector); return selector === 'body *' ? all : controls; } } });
   assert.equal(find([both, save, hidden], [words]), save);
-  assert.match(asked[0], /^button, a, /); assert.equal(asked.length, 1, 'the rest of the page is not searched when something to press was found');
+  assert.equal(asked[0], '*', 'first the components of the page are looked for');
+  assert.match(asked[1], /^button, a, /); assert.equal(asked.length, 2, 'the rest of the page is not searched when something to press was found');
   assert.equal(find([both, field], []), field, 'what a field holds counts as its text');
   assert.equal(find([both, icon], []), icon, 'and so does the label of a button that shows only a picture');
   assert.equal(find([hidden, item('Cancel')], [words]), words, 'what is not shown is not found');
@@ -1820,4 +1822,93 @@ test('a tab that is being debugged and goes to the workbench is let go as soon a
   goes(2, { status: 'complete', url: 'http://127.0.0.1:8788/', pendingUrl: undefined, title: 'DevMate Workbench' });
   await settle();
   assert.deepEqual(names(before), ['detach', 'detach']);
+});
+// Components of a page (shadow trees). Seen in a real Chrome: a button inside one was refused as covered by its own
+// component, and no text inside one led to an element or ended a wait.
+test('an element inside a component of the page is found by its text like any other: something to press there before words on the page', async () => {
+  const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node' } }, 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } });
+  await methods['page.inspect']({ text: 'Save' });
+  const [{ expression }] = sent('Runtime.evaluate');
+  const item = (innerText, more = {}) => ({ tagName: 'DIV', innerText, getAttribute: () => null, getClientRects: () => [{}], ...more }), piece = (data, holder) => ({ data, parentElement: holder });
+  // A tree: everything in it, what of it can be pressed, and its pieces of text. A component is an element that has one of its own.
+  const tree = ({ all = [], controls = [], texts = [], byId = {} } = {}) => ({ texts, getElementById: id => byId[id] ?? null, querySelectorAll: selector => /^button, a, /.test(selector) ? controls : all });
+  const find = light => { const page = tree(light); return inPage(expression, { document: Object.assign(page, { body: page, createTreeWalker: top => { let at = -1; return { nextNode: () => top.texts[++at] ?? null }; } }) }); };
+  const component = (inside, more = {}) => item('', { tagName: 'X-CARD', shadowRoot: tree(inside), ...more });
+  const button = item('Save', { tagName: 'BUTTON' }), words = item('Press Save to go on');
+  assert.equal(find({ all: [component({ all: [button], controls: [button] }), words], texts: [piece('Press Save to go on', words)] }), button, 'the button in the component, not the sentence on the page');
+  const long = item('Save and close', { tagName: 'BUTTON' });
+  assert.equal(find({ all: [long, component({ all: [button], controls: [button] })], controls: [long] }), button, 'the shortest name wins wherever it is');
+  assert.equal(find({ all: [component({ all: [component({ all: [button], controls: [button] })] })] }), button, 'a component inside a component');
+  const cell = item('Save');
+  assert.equal(find({ all: [component({ all: [cell], texts: [piece(' Save ', cell)] })] }), cell, 'a piece of text in a component');
+  const spread = item('Save now');
+  assert.equal(inPage(expression.replace(/\("Save"\)$/, '("Save now")'), { document: Object.assign(tree({ all: [component({ all: [spread], texts: [piece('Save ', spread), piece('now', spread)] })] }), { body: { texts: [] }, createTreeWalker: top => { let at = -1; return { nextNode: () => top.texts[++at] ?? null }; } }) }),
+    spread, 'words spread over several elements of a component');
+  // Named by another element: of the tree it is in itself, not of the page.
+  const inside = tree({ byId: { title: { innerText: 'Save' } } }), named = item('', { tagName: 'BUTTON', getAttribute: name => name === 'aria-labelledby' ? 'title' : null, getRootNode: () => inside });
+  Object.assign(inside, { querySelectorAll: selector => /^button, a, /.test(selector) ? [named] : [named] });
+  assert.equal(find({ all: [item('', { tagName: 'X-FORM', shadowRoot: inside })], byId: { title: { innerText: 'Something else' } } }), named);
+  // A component that does not show its inside has only its outside to be found by.
+  assert.equal(find({ all: [item('', { tagName: 'X-CLOSED', shadowRoot: null })] }), null);
+});
+test('page.waitFor finds a text that only a component of the page shows, and not what a part of it that is not drawn holds', async () => {
+  const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'boolean', value: true } } });
+  await methods['page.waitFor']({ text: 'Arrived' });
+  const [{ expression }] = sent('Runtime.evaluate');
+  const part = (innerText, drawn = true) => ({ innerText, getClientRects: () => drawn ? [{}] : [] });
+  const page = (parts, items = []) => inPage(expression, { document: { body: { innerText: 'Nothing of it here' }, querySelectorAll: selector => selector === '*' ? [{ shadowRoot: { children: parts, querySelectorAll: inner => inner === '*' ? [] : items } }] : [] } });
+  assert.equal(page([part('Your order has\n  Arrived')]), true);
+  assert.equal(page([part('button { content: "Arrived" }', false)]), false, 'a style sheet, or a part that is hidden, shows no words');
+  assert.equal(page([part('Still on its way')]), false);
+  const field = more => ({ tagName: 'INPUT', type: 'text', value: '', getAttribute: () => null, getClientRects: () => [{}], ...more });
+  assert.equal(page([], [field({ getAttribute: name => name === 'placeholder' ? 'Arrived when?' : null })]), true, 'what a field of a component asks for');
+  assert.equal(page([], [field({ type: 'password', value: 'Arrived' })]), false, 'what a password field holds is not looked at there either');
+});
+test('what is in a component is not in the way of itself: the point is looked at inside the component, and inside is told through slots and hosts', async () => {
+  const { methods, sent } = harness(shown());
+  await methods['page.click']({ ref: 13 });
+  const [{ functionDeclaration, arguments: given }] = sent('Runtime.callFunctionOn');
+  const element = (tagName, more = {}) => ({ tagName, id: '', className: '', contains: () => false, closest: () => null, ...more });
+  const at = (target, hit) => onElement(functionDeclaration, { document: { elementFromPoint: () => hit } })(target, ...given.map(item => item.value));
+  // The page names the component; the button is what is there, two components deep.
+  const root = {}, button = element('BUTTON', { parentNode: root }), veil = element('DIV', { id: 'veil', parentNode: root });
+  const card = element('X-CARD', { shadowRoot: { elementFromPoint: () => button } }), outer = element('X-OUTER', { shadowRoot: { elementFromPoint: () => card } });
+  root.host = card;
+  assert.equal(at(button, card), null); assert.equal(at(button, outer), null);
+  // Something else of the same component that lies over it is in its way, and is named.
+  assert.equal(at(button, element('X-CARD', { shadowRoot: { elementFromPoint: () => veil } })), '<div#veil>');
+  // A component that does not show its inside: the button is known to be in it by where it hangs.
+  const sealed = element('X-CLOSED', { shadowRoot: null }), hidden = element('BUTTON', { parentNode: { host: sealed } });
+  assert.equal(at(hidden, sealed), null);
+  // What the page put into a component's slot lies inside the part of the component that holds the slot.
+  const slot = element('SLOT'), holder = element('BUTTON', { contains: inner => inner === slot }), given2 = element('SPAN', { assignedSlot: slot });
+  assert.equal(at(holder, given2), null);
+  assert.equal(at(holder, element('SPAN', { assignedSlot: element('SLOT') })), '<span>', 'in another slot it is something else');
+  // page.inspect tells what covers an element in the same way.
+  const { methods: more, sent: asked } = harness(shown({ 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } }));
+  await more['page.inspect']({ ref: 13, styles: ['color'] });
+  const [look] = asked('Runtime.callFunctionOn'), styles = { visibility: 'visible', display: 'block', opacity: '1', getPropertyValue: () => '' };
+  const seen = (target, hit) => onElement(look.functionDeclaration, { document: { elementFromPoint: () => hit }, getComputedStyle: () => styles })({ outerHTML: '<button>', getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }), ...target }, ...look.arguments.map(item => item.value));
+  const inner = element('BUTTON', { parentNode: root });
+  assert.equal('coveredBy' in seen(inner, element('X-CARD', { shadowRoot: { elementFromPoint: () => null }, id: 'card' })), true, 'a component that says nothing of the point is what is there');
+  const itself = element('BUTTON', { parentNode: root });
+  assert.equal('coveredBy' in onElement(look.functionDeclaration, { document: { elementFromPoint: () => card }, getComputedStyle: () => styles })(Object.assign(button, { outerHTML: '<button>', getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }) }), ...look.arguments.map(item => item.value)), false);
+  assert.equal(seen(itself, element('X-CARD', { shadowRoot: { elementFromPoint: () => veil } })).coveredBy, '<div#veil>');
+});
+test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {
+  // Seen in a real Chrome: a frame without a name was left out altogether, so a page whose content is in one looked empty.
+  const told = { 3: { node: { attributes: ['title', 'Pay', 'src', '/pay/form'], contentDocument: { documentURL: 'https://app.example/pay/form?step=1' } } }, 4: { node: { attributes: ['width', '300', 'src', 'https://ads.example/slot'] } },
+    5: { node: { attributes: ['src', '../help'] } }, 6: { node: { attributes: ['title', 'Empty'], contentDocument: { documentURL: 'about:blank' } } } };
+  const { methods, sent } = harness({ 'DOM.describeNode': ({ backendNodeId }) => told[backendNodeId] ?? no('No node with given id found'),
+    'Accessibility.getFullAXTree': tree([1, 'RootWebArea', 'Shop', {}, [[2, 'heading', 'Pay', { level: 1 }], [3, 'Iframe', 'Pay'], [4, 'Iframe', ''], [5, 'IframePresentational', ''], [6, 'Iframe', 'Empty'], [7, 'Iframe', ''], [8, 'Iframe', 'Hidden', { ignored: true }]]]) });
+  const NOTE = ' (another page inside this one: what it holds is not listed here)';
+  // The page inside by its own address where the browser knows it, else by what the frame was told to load; none where there is none.
+  const frames = ['[3] frame "Pay" → https://app.example/pay/form?step=1' + NOTE, '[4] frame → https://ads.example/slot' + NOTE, '[5] frame → https://app.example/help' + NOTE, '[6] frame "Empty"' + NOTE, '[7] frame' + NOTE];
+  assert.deepEqual((await methods['page.snapshot']()).text.split('\n'), ['[2] heading "Pay" (level=1)', ...frames]);
+  assert.deepEqual(sent('DOM.describeNode'), [3, 4, 5, 6, 7].map(backendNodeId => ({ backendNodeId })), 'each frame that is shown is asked about once');
+  assert.deepEqual((await methods['page.snapshot']({ interactiveOnly: true })).text.split('\n'), frames, 'a frame is kept where only what can be worked is asked for');
+  // A page without frames is asked nothing more.
+  const plain = harness({ 'Accessibility.getFullAXTree': shop() });
+  await plain.methods['page.snapshot']();
+  assert.deepEqual(plain.sent('DOM.describeNode'), []);
 });
