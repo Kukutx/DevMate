@@ -1182,7 +1182,7 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
       // Whatever Git would not remove (a file held open by a program that is still running) must not be reported as gone.
       if (removed?.exitCode !== 0 && fs.existsSync(copy.root)) {
         // (Without Git's word for it, only a folder that is one of this runtime's own copies is removed.)
-        if (!root) inCopy(project, copy);
+        inCopy(project, copy);
         try { fs.rmSync(copy.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
         catch { throw error('copy_in_use', 'The working copy is still in use and could not be removed. Stop the agent (agents.stop) and try again.'); }
       }

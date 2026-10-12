@@ -397,6 +397,15 @@ export class AgentCoordinator {
     if (workflow?.delegated && workflow.status === 'active' && [...this.store.scan('agent', { projectId: agent.projectId, workflowId: agent.workflowId })]
       .every(item => item.status === 'closed' && item.error?.code === NEVER_RAN.code)) this.store.update('workflow', workflow.id, { status: 'completed' });
   }
+  // What such an agent says of a copy that could not be removed, where it says it (see neverRan): the words after
+  // those every agent that never ran has. Whoever asks after its task is given them beside why the task ended.
+  copyLeft(agent) {
+    return agent?.error?.code === NEVER_RAN.code && agent.error.message.length > NEVER_RAN.message.length ? agent.error.message.slice(NEVER_RAN.message.length).trim() : null;
+  }
+  // The copy is gone after all (somebody threw it away): the agent no longer says that it could not be removed.
+  copyCleared(agentId) {
+    if (this.copyLeft(this.find('agent', agentId))) this.store.update('agent', agentId, { error: NEVER_RAN });
+  }
 
   abandonQueued(agent, status, error) {
     for (let delivery; (delivery = this.store.nextQueuedDelivery(agent.projectId, agent.workflowId, agent.id));) this.abandon(delivery, status, error);
@@ -1230,7 +1239,9 @@ export class AgentCoordinator {
       approvals: pending('approval').map(({ id, summary, options, kind, waits }) => ({ id, summary, options: options.map(option => option.name || option.optionId),
         ...(kind === 'delegation' ? { delegation: true, ...(waits ? { waits } : {}) } : {}) })),
       inputs: pending('input').map(({ id, summary }) => ({ id, summary })),
-      ...(error ? { error } : {}) };
+      // (A task says why it ended; that the copy made for it is still there, and what removes it, is the agent's to
+      // say, and is what the caller does next.)
+      ...(error ? { error } : {}), ...(this.copyLeft(agent) ? { copyNote: this.copyLeft(agent) } : {}) };
   }
 
   principal(token) {

@@ -28,9 +28,8 @@ export function anonymize(text, { home = os.homedir(), places = [], names = [], 
   result = result.replace(/((?:\\{1,2}|\/)(?:Users|home)(?:\\{1,2}|\/))[^\\/\s"'<>:|]+/gi, '$1<user>');
   for (const host of hosts) if (typeof host === 'string' && host.length > 3) result = result.replace(new RegExp(literal(host), 'gi'), '<public-host>');
   // A project's name is often the name of a client or a product. Short names are left: replacing "app" everywhere would say less, not more.
-  // So is a name that is one of the report's own words (a client may name a project "[FAIL]"): taken out everywhere,
-  // it would take the report's own marks and headings with it.
-  for (const [name, label] of names) if (typeof name === 'string' && name.length > 3 && !OWN_WORDS.some(words => words.includes(name))) result = result.replace(new RegExp('(?<![A-Za-z0-9_])' + literal(name) + '(?![A-Za-z0-9_])', 'g'), label);
+  // The longest first, so that "Acme Shop" is taken out as itself and not as "Acme" with a word left over.
+  for (const [name, label] of names.filter(([name]) => typeof name === 'string' && name.length > 3).sort((a, b) => b[0].length - a[0].length)) result = result.replace(new RegExp('(?<![A-Za-z0-9_])' + literal(name) + '(?![A-Za-z0-9_])', 'g'), label);
   return result.replace(/[a-z0-9-]+\.trycloudflare\.com/gi, '<assigned>.trycloudflare.com').replace(/\/mcp\/[A-Za-z0-9_-]{20,}/g, '/mcp/<key>')
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '<email>')
     .replace(/\b(?!127\.0\.0\.1\b)(?:\d{1,3}\.){3}\d{1,3}\b/g, '<address>')
@@ -86,7 +85,13 @@ export async function report(service) {
   const clean = text => anonymize(text, {
     places: [...folderPlaces(projects.map(project => project.root)), [service.instanceRoot, '<instance>']],
     // A name is taken out as it is, and as the doctor says it (on one line, without the characters it leaves out).
-    names: projects.flatMap((project, index) => [...new Set([project.name, oneLine(project.name), plainName(project.name)])].map(name => [name, '<folder-' + (index + 1) + '>'])),
+    // One that holds a word of the report's own, or is a part of one (a client may call a project "[FAIL]", or that
+    // with a line end before it), is not taken out at all: taken out everywhere, it would take the report's marks
+    // and headings with it, and a name made for that is not one to keep from a reader.
+    names: projects.flatMap((project, index) => {
+      const ways = [...new Set([project.name, oneLine(project.name), plainName(project.name)].flatMap(name => [name, name.trim()]))];
+      return ways.some(name => name && OWN_WORDS.some(words => words.includes(name) || name.includes(words))) ? [] : ways.map(name => [name, '<folder-' + (index + 1) + '>']);
+    }),
     hosts: [service.publicUrl(), config.auth?.issuer, config.connection?.host].filter(Boolean).map(hostOf) });
   const access = level => projects.filter(project => project.access === level).length;
   const failures = usage.recentFailures.slice(0, 20);

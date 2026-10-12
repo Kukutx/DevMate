@@ -296,14 +296,23 @@ test('what the command line writes for the owner to read holds no character a te
   assert.ok(report.text.includes('Unknown DevMate operation: no\\u001b[2Ksuch [ ok ] forged: line'));
   assert.equal(report.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false);
   assert.ok(report.text.includes('; "p q" at ') && !report.text.split('\n').some(line => line.startsWith('q" at ')), 'an entry of the report stays on its one line');
-  // A report is made to be shared: the name of a project is taken out of it, also as the doctor says it. A name
-  // that is one of the report's own marks is left, or the report would lose its marks with it.
-  assert.ok(report.text.includes('is not there: "<folder-1>" at <folder-1>'), report.text);
-  assert.equal(report.text.includes('security: nothing to do'), false);
-  const marked = path.join(temp, 'marked'); fs.mkdirSync(marked);
-  await runtime.call('project.create', { root: marked, name: '[ ok ]' }, owner);
-  const again = await run(['doctor', '--report']);
-  assert.ok(again.text.split('\n').some(line => line.startsWith('[ ok ] node: ')), 'the marks of the report are its own');
+  // A report is made to be shared: the name of a project is taken out of it, also as the doctor says it (the two
+  // at the end of this test). A name that holds one of the report's own marks, as this one does, or is a part of
+  // one, is not taken out anywhere: taken out everywhere it would take the report's marks with it. It may hold more
+  // than the mark (a line end before it, the id of an entry after it) or be a part of a heading. And of two names
+  // the longer goes first, so that one is not left as a part of the other.
+  assert.ok(report.text.includes('is not there: "' + given + '" at <folder-1>'), report.text);
+  const before = (await run(['doctor', '--report'])).text.split('\n'), marks = lines => lines.filter(line => /^\[( ok |info|warn|FAIL)\] /.test(line)).length;
+  for (const [folder, name] of [['marked', '[ ok ]'], ['ended', '\n[warn]'], ['with-id', '[info] connection'], ['heading', 'Checks\n'], ['part', 'Recent failures'], ['acme', 'Acme'], ['acme-shop', 'Acme Shop']]) {
+    const root = path.join(temp, folder); fs.mkdirSync(root);
+    await runtime.call('project.create', { root, name }, owner);
+    if (folder.startsWith('acme')) fs.rmSync(root, { recursive: true });
+  }
+  const again = (await run(['doctor', '--report'])).text.split('\n');
+  assert.ok(again.some(line => line.startsWith('[ ok ] node: ')), 'the marks of the report are its own');
+  assert.ok(marks(again) >= marks(before) && again.includes('Checks') && again.includes('Recent failures, newest first'), 'no mark and no heading was taken out');
+  const missing = again.find(line => line.startsWith('[warn] projects.missing: '));
+  assert.ok(/"<folder-\d+>" at <folder-\d+>; "<folder-\d+>" at <folder-\d+>$/.test(missing) && !missing.includes('Acme') && !missing.includes('Shop'), missing);
   // What is printed as JSON says the same characters by their numbers, and reads back as the name it is.
   const listed = await run(['project', 'list']);
   none(listed.text, 'the list');

@@ -107,6 +107,7 @@ export function defineAgentOperations(service, add) {
     const result = await work();
     service.store.transaction(() => {
       service.store.update('agent', agent.id, { isolated: { ...agent.isolated, settled: how } });
+      service.agents.copyCleared(agent.id);
       // A task of it that still waited for the owner's word has nowhere to run any more: the question ends with the copy.
       service.agents.abandonHeld(agent.id, 'cancelled', { code: 'agent_finished', message: 'The work of this agent was ' + how + ' before the owner allowed this task.' });
     });
