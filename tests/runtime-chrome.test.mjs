@@ -153,6 +153,54 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   taker.close(); alone.close(); steady.close(); link.close();
 });
 
+// With Chrome and Edge both connected, a model holds ids it got from one of them. When that one goes, a call that
+// waited for it went to the other, where tab 57 and bookmark 57 are other things, and was answered as done.
+test('a call that names something of one browser is not passed on to another, and a call is listened for only until it is answered', async () => {
+  const link = createBrowserLink({ idleMs: 250, unheardMs: 40, callTimeoutMs: 10000 });
+  const methods = ['tabs.list', 'tabs.close', 'tabs.open', 'bookmarks.remove', 'bookmarks.tree', 'page.read', 'page.console', 'page.storage'];
+  // The browser that stays answers whatever it is asked, and writes down what that was.
+  const stays = link.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, asked = [];
+  void (async () => { for (;;) { let work; try { work = await link.next({ linkId: stays, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { asked.push(call.method); link.result({ linkId: stays, id: call.id, ok: true, result: { by: 'the browser that stays' } }); } } })();
+  // The one that connected after it asked for work once and is not heard of again: what is asked now waits for it.
+  const goes = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
+  assert.deepEqual(await link.next({ linkId: goes, waitMs: 10 }), { calls: [] });
+  const calls = {
+    list: link.call({ capability: 'chrome.tabs.list', input: { query: 'docs' } }, { readOnly: true }),
+    tree: link.call({ capability: 'chrome.bookmarks.tree', input: { folderId: '57' } }, { readOnly: true }),
+    read: link.call({ capability: 'chrome.page.read', input: { tabId: 57 } }, { readOnly: true }),
+    console: link.call({ capability: 'chrome.page.console', input: { since: 12 } }, { readOnly: true }),
+    values: link.call({ capability: 'chrome.page.storage', input: { includeValues: true } }),
+    close: link.call({ capability: 'chrome.tabs.close', input: { tabIds: [57] } }),
+    remove: link.call({ capability: 'chrome.bookmarks.remove', input: { id: '57' } }),
+    open: link.call({ capability: 'chrome.tabs.open', input: { url: 'https://example.com/' } })
+  };
+  const settled = Object.fromEntries(await Promise.all(Object.entries(calls).map(async ([name, call]) => [name, await call.then(value => value, failure => failure)])));
+  // A look that names nothing of that browser is answered by the one that is there.
+  assert.deepEqual(settled.list, { by: 'the browser that stays' });
+  // Whatever names a tab, a folder, a place in a console by its id is that browser's, and a change is made where it
+  // was asked: neither was begun, and each says what to do.
+  for (const name of ['tree', 'read', 'console']) {
+    assert.deepEqual([settled[name].code, settled[name].notStarted], ['browser_unavailable', true], name);
+    assert.match(settled[name].message, /before it was asked \(it stopped asking for work\)\. Another browser is connected, and this call was not passed on to it: what it names by its id \(a tab, a window, a bookmark, an element\) is the other browser's own\. Ask the browser that is there what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/, name);
+  }
+  for (const name of ['close', 'remove', 'open']) {
+    assert.deepEqual([settled[name].code, settled[name].notStarted], ['browser_unavailable', true], name);
+    assert.match(settled[name].message, /this call was not passed on to it: a change is made in the browser it was asked of, and ids are each browser's own\./, name);
+  }
+  // Values a page stores are credentials: not handed out by another browser than the one that was asked.
+  assert.deepEqual([settled.values.code, settled.values.notStarted], ['browser_unavailable', true]);
+  assert.deepEqual(asked, ['tabs.list'], 'nothing else reached the other browser');
+
+  // Whoever asks may give a call up, and is listened to for as long as the call is open, not longer: a caller at this
+  // computer gives one signal for as long as the runtime runs.
+  let listening = 0, most = 0;
+  const signal = { aborted: false, addEventListener() { most = Math.max(most, ++listening); }, removeEventListener() { listening--; } };
+  for (let round = 0; round < 12; round++) assert.deepEqual(await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, signal }), { by: 'the browser that stays' });
+  assert.deepEqual([most, listening], [1, 0]);
+  link.close();
+});
+
 test('what a developer debugs a page with: answers read as lines, a wait that is given its time, and cookie values only as a change', async () => {
   const link = createBrowserLink({ callTimeoutMs: 300 });
   const { linkId } = link.attach({ browser: 'Google Chrome', extension: '4.0.5', methods: BROWSER_CAPABILITIES.map(item => item.method) });
