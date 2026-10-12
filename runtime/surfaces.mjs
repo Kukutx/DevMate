@@ -113,7 +113,7 @@ export const NATIVE_TOOLS = Object.freeze({
     // A command has no standard input unless it is asked for, as on the other surfaces: with one that nobody closes,
     // everything that reads its input when it is given no file (rg, findstr, sort, python) waits for it without end.
     shape: { cmd: z.string().min(1).max(100000).describe('The command line.'), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
-      tty: z.boolean().optional().describe('true keeps the command\'s standard input open, for a program that asks questions: write_stdin answers it. Left out, the command has none.'),
+      tty: z.boolean().optional().describe('true keeps the command\'s standard input open, for a program that reads it: write_stdin writes to it. A prompt of the shell itself (PowerShell\'s Read-Host) is not answered this way. Left out, the command has none.'),
       yield_time_ms: yieldMs(YIELD_MS), max_output_tokens: tokens, env: commandShape.env, ...project },
     run: async ({ call }, input) => session(await call('shell.run', { projectId: input.projectId, command: input.cmd, cwd: input.working_directory, env: input.env, interactive: input.tty === true,
       waitMs: input.yield_time_ms ?? YIELD_MS }), input.max_output_tokens) },

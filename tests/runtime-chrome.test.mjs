@@ -328,7 +328,7 @@ test('devmate chrome install tells Chrome and Edge which program the DevMate ext
   assert.equal((await apart.status({ ask: false })).unseen, undefined, 'a quick look does not go asking');
   // The file names the program and the one extension that may start it; the program is this Node with this DevMate.
   assert.deepEqual(JSON.parse(fs.readFileSync(windows.files.manifest, 'utf8')), { name: NATIVE_HOST, description: 'DevMate: the runtime on this computer, for the DevMate browser extension.', path: windows.files.shim, type: 'stdio', allowed_origins: [EXTENSION_ORIGIN] });
-  assert.equal(fs.readFileSync(windows.files.shim, 'utf8'), '@echo off\r\n"' + process.execPath + '" "' + program + '" chrome-host --instance "' + path.resolve(root).replace(/%/g, '%%') + '" %*\r\n');
+  assert.equal(fs.readFileSync(windows.files.shim, 'utf8'), '@echo off\r\nchcp 65001 >nul 2>&1\r\n"' + process.execPath + '" "' + program + '" chrome-host --instance "' + path.resolve(root).replace(/%/g, '%%') + '" %*\r\n');
   // The copy of DevMate it names is gone: said, with nothing else changed.
   fs.rmSync(program); assert.equal((await windows.status()).stale, true); fs.writeFileSync(program, '');
   assert.deepEqual([(await windows.uninstall()).registered, [...keys.values()], fs.existsSync(path.dirname(windows.files.manifest))], [false, ['C:\\elsewhere\\' + NATIVE_HOST + '.json'], false], 'a key that names another instance\'s file is left where it is');
@@ -361,6 +361,28 @@ test('devmate chrome install tells Chrome and Edge which program the DevMate ext
   assert.equal(done.registered, true); assert.match(done.next[0], /chrome:\/\/extensions .* "Load unpacked" and pick /); assert.ok(done.next[0].includes('pick ' + kept + '. Leave Developer mode on'), done.next[0]);
   for (const action of ['install', 'uninstall']) { const refused = await command(['chrome', action], { DEVMATE_CLIENT_COMMAND: '1' }); assert.notEqual(refused.code, 0); assert.match(refused.err, /run by the owner in their own terminal/); }
   assert.equal(JSON.parse((await command(['chrome', 'uninstall'])).out).registered, false);
+});
+
+test('what the browser starts on Windows starts where the home directory is not written in ASCII', { skip: process.platform !== 'win32' && 'a command file is what Windows starts', timeout: 60000 }, async t => {
+  // A command file is read by cmd.exe in the code page of the system, not as the UTF-8 it is written in. With the
+  // owner's home, the instance or DevMate itself under a name in Chinese, the paths in it came out as other
+  // characters: the browser started nothing, and the extension could only say that DevMate was not there.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-chrome-')), home = path.join(temp, '用户 张三'), root = path.join(home, '.devmate', 'runtime'), tools = path.join(home, 'tools & more');
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  fs.mkdirSync(root, { recursive: true }); fs.mkdirSync(tools, { recursive: true });
+  // (A stand-in for the command line: it writes down what it was started with.)
+  const program = path.join(tools, 'cli.mjs'), seen = path.join(temp, 'seen.json');
+  fs.writeFileSync(program, 'import fs from "node:fs"; fs.writeFileSync(' + JSON.stringify(seen) + ', JSON.stringify(process.argv.slice(2)));\n');
+  const registry = { read: async names => names.map(() => null), write: async names => names.map(() => 0), remove: async names => names.map(() => 0) };
+  const registration = createChromeRegistration({ instanceRoot: root, cli: program, node: process.execPath, registry, home });
+  await registration.install();
+  // As a browser starts a host: through cmd.exe, with who is asking after it.
+  const ended = await new Promise(resolve => { const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/c', registration.files.shim, EXTENSION_ORIGIN, '--parent-window=0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let said = ''; child.stdout.on('data', chunk => { said += chunk; }); child.stderr.on('data', chunk => { said += chunk; }); child.on('close', code => resolve({ code, said })); });
+  assert.equal(ended.code, 0, ended.said);
+  // Nothing but the host itself writes to the browser: what it reads there is the protocol.
+  assert.equal(ended.said, '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(seen, 'utf8')), ['chrome-host', '--instance', root, EXTENSION_ORIGIN, '--parent-window=0']);
 });
 
 test('a registered browser is given the extension in a folder that stays, and a start of the runtime makes that folder and the host the DevMate that runs', { timeout: 60000 }, async t => {

@@ -19,7 +19,8 @@ const POWERSHELL_SUFFIX = "\n\n$devmateOk = $?\nif ($devmateOk) { exit 0 }\nif (
 // itself; a runtime that was started from such a PowerShell finds that folder first on PATH, and would have no shell
 // left after the update until it is started again. The name Windows keeps for the package stays, so that is used.
 function lasting(file, env) {
-  if (!/[\\/]WindowsApps[\\/]Microsoft\.PowerShell[^\\/]*[\\/]pwsh\.exe$/i.test(file) || !env.LOCALAPPDATA) return file;
+  // (The stable release only: a preview has a package and a name of its own, and is found on PATH as itself.)
+  if (!/[\\/]WindowsApps[\\/]Microsoft\.PowerShell_[^\\/]*[\\/]pwsh\.exe$/i.test(file) || !env.LOCALAPPDATA) return file;
   const alias = path.join(env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'pwsh.exe');
   return startable(alias) ? alias : file;
 }

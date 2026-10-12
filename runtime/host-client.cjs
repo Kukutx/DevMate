@@ -39,6 +39,16 @@ function createHostClient(options = {}) {
   const factory = () => import('./client.mjs').then(module => overrides => module.createRuntimeClient({ ...settings, ...overrides }));
   const client = () => clientPromise ||= factory().then(create => create());
   const version = () => versionPromise ||= import('./version.mjs');
+  // The port a start from this entry asks for. One the owner set in this entry, other than the usual one, is their
+  // word. Otherwise the port the runtime ran on when this entry stopped it is taken again: the runtime may have been
+  // started elsewhere (a terminal, another entry) on a port this entry's settings do not name, and a restart from
+  // here moved it, away from the clients on this computer and the route of a tunnel that were set to it. Where
+  // nothing is remembered the launcher decides (the port of a runtime that ended unexpectedly, else the usual one).
+  let ran;
+  const startPort = async () => {
+    const usual = (await import('./client.mjs')).DEFAULT_RUNTIME_PORT;
+    return options.port !== undefined && Number(options.port) !== usual ? options.port : ran;
+  };
   return {
     async start() {
       // An editor's own executable is Electron, not Node: use the configured Node, else the one on PATH.
@@ -54,10 +64,12 @@ function createHostClient(options = {}) {
         throw error;
       }
       const launcher = await import('./launcher.mjs');
-      return launcher.startRuntime({ ...options, nodePath: node.executable, clientFactory: await factory() });
+      return launcher.startRuntime({ ...options, port: await startPort(), nodePath: node.executable, clientFactory: await factory() });
     },
     async stop() {
       const launcher = await import('./launcher.mjs');
+      const before = await launcher.runtimeStatus({ ...options, clientFactory: await factory() }).catch(() => null);
+      if (before?.running && Number.isInteger(before.record?.port)) ran = before.record.port;
       return launcher.stopRuntime({ ...options, clientFactory: await factory() });
     },
     async status() {

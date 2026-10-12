@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackHostname } from '../platform/http-host-policy.mjs';
 import { sensitiveWorkspacePathReason } from '../platform/sensitive-path-policy.mjs';
+import { startable } from '../platform/tools.mjs';
 
 function isInside(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -83,7 +84,7 @@ export function browserQaStatus(workspaceRoot, settings = {}) {
   catch (cause) { error = cause.message; }
   const executablePath = String(settings.chromiumExecutablePath || '').trim();
   const executableAllowed = browserExecutableAllowed(executablePath);
-  const executableExists = !executablePath || !!fs.statSync(executablePath, { throwIfNoEntry: false })?.isFile();
+  const executableExists = !executablePath || startable(executablePath);
   return {
     available: !!modulePath && executableExists && executableAllowed,
     modulePath,

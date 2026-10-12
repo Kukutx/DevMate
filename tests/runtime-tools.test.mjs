@@ -102,6 +102,11 @@ test('a program Windows keeps on PATH as an app execution alias is found and sta
     fs.writeFileSync(path.join(kept, 'pwsh.exe'), '');
     assert.equal(detectShell(started, 'win32').file, path.join(kept, 'pwsh.exe'));
     assert.equal(detectShell({ PATH: bin }, 'win32').file, later, 'a PowerShell that is no package is started where it is');
+    // A preview is a package of its own with a name of its own: found on PATH, it is started as itself, not by the
+    // name that belongs to the stable release.
+    const preview = path.join(temp, 'WindowsApps', 'Microsoft.PowerShellPreview_7.7.1.0_x64__8wekyb3d8bbwe');
+    fs.mkdirSync(preview, { recursive: true }); fs.writeFileSync(path.join(preview, 'pwsh.exe'), '');
+    assert.equal(detectShell({ PATH: [preview, kept].join(path.delimiter), LOCALAPPDATA: temp }, 'win32').file, path.join(preview, 'pwsh.exe'));
   }
   // Where this computer has such names for real: the PowerShell 7 that winget installed is a program, and the
   // python.exe Windows keeps where the Store's installer is all there is behind it is none.

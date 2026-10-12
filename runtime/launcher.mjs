@@ -95,7 +95,7 @@ export async function startRuntime({
   probe = probeInstanceLock
 } = {}) {
   const files = instanceFiles(instanceRoot);
-  const selectedPort = runtimePort(port);
+  if (port !== undefined) runtimePort(port);
   const deadline = Date.now() + timeout(timeoutMs);
   const status = () => runtimeStatus({ instanceRoot: files.directory, clientFactory, probe });
   const remaining = () => Math.min(100, Math.max(1, deadline - Date.now()));
@@ -111,6 +111,11 @@ export async function startRuntime({
   }
   if (!path.isAbsolute(nodePath) || !fs.statSync(nodePath, { throwIfNoEntry: false })?.isFile()) throw new Error('An existing absolute Node executable is required');
   if (!path.isAbsolute(entryPath) || !fs.statSync(entryPath, { throwIfNoEntry: false })?.isFile()) throw new Error('DevMate runtime entry is missing');
+  // Where no port is named, a runtime that ended unexpectedly is followed on the port it ran on (its record is still
+  // there): what was set to that port, a client on this computer and the route of a tunnel, reaches the next one too.
+  let left;
+  if (port === undefined && current.crashed) { try { left = readRuntimeRecord(files.directory)?.port; } catch {} }
+  const selectedPort = runtimePort(Number.isInteger(left) && left >= 1 && left <= 65535 ? left : port);
   fs.mkdirSync(files.directory, { recursive: true, mode: 0o700 });
   if ((fs.statSync(files.log, { throwIfNoEntry: false })?.size || 0) > LOG_ROTATE_BYTES) fs.renameSync(files.log, files.log + '.1');
   const logStart = fs.statSync(files.log, { throwIfNoEntry: false })?.size || 0;

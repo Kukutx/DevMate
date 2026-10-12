@@ -351,7 +351,10 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     refuse(res, 'not_found', 'Route not found.');
   }));
 
-  const stop = (input = {}) => {
+  // crashed: this runtime ends because something went wrong in it, not because it was told to. What it owns is
+  // released all the same, and its record is left where it is: a record nobody holds is how every entry knows that a
+  // runtime ended unexpectedly, and an editor that keeps one running starts another.
+  const stop = (input = {}, { crashed = false } = {}) => {
     if (input.expectedGeneration && input.expectedGeneration !== generation) throw new DomainError('generation_mismatch', 'Runtime ownership changed.');
     if (stopPromise) return stopPromise;
     stopping = true; health.status = 'stopping';
@@ -371,7 +374,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       });
       await Promise.all(closing);
       // Remove only what this runtime published; a successor's files are not ours to touch.
-      try { if (JSON.parse(fs.readFileSync(recordFile, 'utf8')).generation === generation) fs.rmSync(recordFile, { force: true }); } catch {}
+      try { if (!crashed && JSON.parse(fs.readFileSync(recordFile, 'utf8')).generation === generation) fs.rmSync(recordFile, { force: true }); } catch {}
       try { if (fs.readFileSync(tokenFile, 'utf8') === token) fs.rmSync(tokenFile, { force: true }); } catch {}
       health.status = 'stopped';
       await lock.close();
@@ -524,10 +527,12 @@ export async function serve(options = {}) {
   let runtime;
   process.on('uncaughtException', error => {
     process.stderr.write(stamp() + ' uncaught exception: ' + (error?.stack || error) + '\n');
-    // State may be inconsistent now. Release what this runtime owns and exit; an editor host restarts it.
+    // State may be inconsistent now. Release what this runtime owns and exit, as one that ended unexpectedly: its
+    // record stays, which is what an editor host reads before it starts another. (Stopped the usual way the record
+    // went with it, the status was a plain "stopped", and nothing started it again.)
     const exit = () => process.exit(1);
     setTimeout(exit, 10000).unref();
-    Promise.resolve().then(() => runtime?.stop()).then(exit, exit);
+    Promise.resolve().then(() => runtime?.stop({}, { crashed: true })).then(exit, exit);
   });
   // A stray rejected promise is reported, not fatal: the request behind it has already failed on its own.
   process.on('unhandledRejection', error => { process.stderr.write(stamp() + ' unhandled rejection: ' + (error?.stack || error) + '\n'); });
