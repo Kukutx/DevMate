@@ -221,16 +221,18 @@ test('a runtime that starts while a shared folder is gone says so from its first
   // A folder on a share that does not answer: whoever lists the projects waits for it up to a bound, once, and is
   // given it as it was last seen; the doctor names it instead of waiting for the system to give up.
   const look = fs.promises.lstat;
-  runtime.folderWaitMs = 300;
+  // (The bound is a second here, and what must not happen again is a wait of that length: a computer that is busy
+  // with other tests has room on both sides.)
+  runtime.folderWaitMs = 1000;
   fs.promises.lstat = target => target === projects.slow.root ? new Promise(() => {}) : look(target);
   try {
     let began = Date.now();
     assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
-    assert.ok(Date.now() - began >= 250 && Date.now() - began < 5000, 'waited for the bound: ' + (Date.now() - began) + ' ms');
+    assert.ok(Date.now() - began >= 900 && Date.now() - began < 10000, 'waited for the bound: ' + (Date.now() - began) + ' ms');
     await new Promise(resolve => setTimeout(resolve, 100));
     began = Date.now();
     assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
-    assert.ok(Date.now() - began < 200, 'a look that has not answered for longer than the bound is not waited for again: ' + (Date.now() - began) + ' ms');
+    assert.ok(Date.now() - began < 600, 'a look that has not answered for longer than the bound is not waited for again: ' + (Date.now() - began) + ' ms');
     const checks = (await runtime.call('runtime.doctor', {}, owner)).checks, unanswered = checks.find(item => item.id === 'projects.unanswered');
     assert.deepEqual([unanswered.status, unanswered.detail], ['warn', 'The folder of 1 project(s) has not answered when it was looked for: slow at ' + projects.slow.root]);
     assert.match(unanswered.fix, /^That is a share or a drive that hangs\./);
