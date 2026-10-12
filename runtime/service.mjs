@@ -103,9 +103,12 @@ export class DevMateService {
     this.maintenanceTimer = setInterval(() => { try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); } }, MAINTENANCE_INTERVAL_MS);
     this.maintenanceTimer.unref();
     this.accessProfile = this.store.setting('access.profile') === 'full' ? 'full' : 'guarded';
+    // Whether a connected client may have a coding agent run a task. That is spent on the owner's account with the
+    // provider, so it is a choice of its own beside the access profile, which is about this computer.
+    this.delegation = ['allow', 'off'].includes(this.store.setting('delegation.mode')) ? this.store.setting('delegation.mode') : 'ask';
     this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers,
       // Full access is the owner's standing answer to what an agent asks.
-      grantsApprovals: () => this.fullAccess() });
+      grantsApprovals: () => this.fullAccess(), delegation: () => this.delegation });
     // What the owner changed about the coding agents while the runtime ran lies on top of the configuration.
     if (!providerSettings) for (const name of Object.keys(this.store.setting('providers.live') || {})) {
       try { this.applyProviderSettings(name); } catch (error) { this.store.recordNotificationFailure(error); }
@@ -217,6 +220,13 @@ export class DevMateService {
     if (profile === 'full') this.agents.grantWaiting();
     return { profile };
   }
+  setDelegation(mode) {
+    this.store.setting('delegation.mode', mode);
+    this.delegation = mode;
+    // Tasks that already wait for the owner's word are covered by "do not ask".
+    if (mode === 'allow') this.agents.allowWaiting();
+    return { mode };
+  }
   // Folders the owner took out of sharing. They come back only by the owner's own choice, and not through a
   // folder above or below them either: an editor's default never shares what would bring one back.
   isDeclined(root) {
@@ -306,7 +316,9 @@ export class DevMateService {
     this.admit(context);
     return [...this.operations.values()].filter(operation =>
       (!operation.localOnly || this.reachesLocal(operation, context)) &&
-      (!(operation.humanOnly || operation.ownerDecision) || this.ownerDecides(context)));
+      (!(operation.humanOnly || operation.ownerDecision) || this.ownerDecides(context)) &&
+      // With delegation off a connected client is not offered what hands a task to an agent.
+      !(operation.delegates && this.delegation === 'off' && context?.surface !== 'local'));
   }
 
   async invoke(operation, args, context) {

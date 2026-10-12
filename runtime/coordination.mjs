@@ -25,11 +25,18 @@ const minutes = ms => ms >= 60000 ? Math.round(ms / 60000) + ' min' : Math.round
 // The choice that grants what was asked, this once. ACP agents say which of their options that is; Codex and Claude name it.
 const grantOnce = options => (options.find(option => option.kind === 'allow_once') ||
   options.find(option => ['allow', 'accept'].includes(option.optionId)) || options.find(option => option.kind === 'allow_always'))?.optionId;
+// What the owner may answer when a connected client hands a task to an agent.
+const CONSENT_OPTIONS = Object.freeze([{ optionId: 'allow_once', name: 'Run this task' },
+  { optionId: 'allow_agent', name: 'Run it, and later tasks for this agent without asking' }, { optionId: 'deny', name: 'Do not run it' }]);
+const delegationOff = () => new DomainError('delegation_off', 'The owner does not let connected clients hand tasks to the coding agents on this computer. ' +
+  'They can run a task themselves there, or change that at the computer: devmate delegation ask');
 
 export class AgentCoordinator {
+  // delegation: whether a task that a connected client sends is run: 'ask' (the owner allows each at the computer),
+  // 'allow' or 'off'. What the owner sends at the computer is not asked about.
   constructor({ store, adapterFactory = createAgentAdapter, endpoint, providerSettings = {}, instanceRoot = path.dirname(store.filePath), cancelGraceMs = 15000,
-    grantsApprovals = () => false }) {
-    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals });
+    grantsApprovals = () => false, delegation = () => 'ask' }) {
+    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals, delegation });
     this.sessions = new Map();
     this.decisions = new Map();
     this.tokens = new Map();
@@ -136,6 +143,11 @@ export class AgentCoordinator {
       'or allow more: providers.configure {provider:"' + provider + '", settings:{maxSessions:<more>}}.');
   }
 
+  // With delegation off, a connected client (and an agent that works for one) is refused before anything is made.
+  offered(sender) {
+    if (sender?.client && this.delegation() === 'off') throw delegationOff();
+  }
+
   budget(workflow, turns) {
     if ((workflow.usedTurns || 0) + turns > workflow.turnBudget)
       throw new DomainError('workflow_budget', 'Workflow turn budget reached (' + workflow.turnBudget + ' turns). Raise it to continue: workflow.update {id:"' + workflow.id + '", turnBudget:<more>}.');
@@ -144,12 +156,14 @@ export class AgentCoordinator {
   // isolated: the working copy this agent works in instead of the project folder ({ root, branch, base }).
   start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, isolated }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
+    this.offered(sender);
     const { project, workflow } = this.scope(projectId, workflowId);
     this.admit(project, provider, model);
     if (prompt?.trim()) this.budget(workflow, 1);
     const agent = this.store.create('agent', { projectId, workflowId, provider, model: model || null,
       label: name || title || provider, status: 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null,
-      ...(isolated ? { isolated } : {}) });
+      // client: started through a connected client, not by the owner at this computer.
+      ...(isolated ? { isolated } : {}), ...(sender.client ? { client: true } : {}) });
     this.connect(agent).catch(error => this.store.recordNotificationFailure(error));
     // Queued before the process is up: a start that fails then fails this message too.
     if (prompt?.trim()) this.send({ projectId, workflowId, recipientIds: [agent.id], body: prompt }, sender);
@@ -394,6 +408,9 @@ export class AgentCoordinator {
   }
 
   send({ projectId, workflowId, recipientIds, body, taskId, operationId }, sender) {
+    // Every way a task reaches an agent ends here (delegating, a message, a task assigned, a turn tried again, an
+    // agent writing to another): with delegation off none of them queues anything for a connected client.
+    this.offered(sender);
     if (!body?.trim()) throw new DomainError('invalid_input', 'Message text is required.');
     const recipients = [...new Set(recipientIds)];
     if (!recipients.length) throw new DomainError('invalid_input', 'Choose at least one recipient.');
@@ -470,6 +487,13 @@ export class AgentCoordinator {
       const delivery = this.store.nextQueuedDelivery(agent.projectId, agent.workflowId, agentId);
       if (!delivery) return;
       const message = this.store.get('message', delivery.messageId);
+      // A turn is what is spent on the owner's account with the provider, and this is the one place a turn begins.
+      // One that a connected client asked for waits here for the owner's word, unless they gave it for this task or
+      // for the agent, or chose not to be asked. After the answer everything is looked at again.
+      if (message.sender?.client && !delivery.allowed && !agent.delegationAllowed && this.delegation() !== 'allow') {
+        await this.consent(agent, delivery, message);
+        continue;
+      }
       const job = this.store.transaction(() => {
         const job = this.store.create('job', { projectId: agent.projectId, workflowId: agent.workflowId,
           agentId, deliveryId: delivery.id, taskId: delivery.taskId, kind: 'agent-turn', status: 'running', output: '' });
@@ -667,10 +691,57 @@ export class AgentCoordinator {
     });
   }
 
+  // The owner's word for one task that a connected client handed to an agent. It is kept as an approval, so that it
+  // shows wherever approvals do and is answered the same way. Unlike what an agent asks in a turn, the access profile
+  // never gives it: full access hands a client what the owner decides about this computer, not what is spent on
+  // their account with the provider (approval.resolve keeps the answer at the computer).
+  consent(agent, delivery, message) {
+    const project = this.find('project', agent.projectId), task = message.body.trim();
+    const record = { projectId: agent.projectId, workflowId: agent.workflowId, agentId: agent.id, jobId: null, kind: 'delegation',
+      summary: ('Run a task with ' + agent.label + (project ? ' in ' + project.name : '') + ': ' + task.split(/\r?\n/)[0]).slice(0, 500), options: CONSENT_OPTIONS,
+      details: { agent: agent.provider, project: project?.name || agent.projectId,
+        askedBy: message.sender.kind === 'agent' ? 'the agent ' + message.sender.label + ', which works for a connected client' : 'a connected client',
+        task: task.slice(0, 4000), note: 'Running it uses your account with ' + agent.provider + '. Not to be asked: devmate delegation allow' } };
+    return new Promise(resolve => {
+      let item;
+      // The session ended or the runtime is stopping: whoever ended it settles what was queued.
+      const abort = () => {
+        if (!this.decisions.has(item.id)) return;
+        this.decisions.delete(item.id);
+        try { this.store.update('approval', item.id, { status: 'expired' }); } catch (error) { this.store.recordNotificationFailure(error); }
+        resolve();
+      };
+      const answered = ({ optionId }) => {
+        this.store.transaction(() => {
+          const queued = this.store.get('delivery', delivery.id);
+          if (queued.status !== 'queued') return;
+          if (optionId === 'deny') this.abandon(queued, 'cancelled', { code: 'delegation_declined', message: 'The owner did not allow this task.' });
+          else if (optionId === 'allow_agent') this.store.update('agent', agent.id, { delegationAllowed: true });
+          else this.store.update('delivery', delivery.id, { allowed: true });
+        });
+        resolve();
+      };
+      this.store.transaction(() => {
+        item = this.store.create('approval', { ...record, status: 'pending' });
+        this.store.update('agent', agent.id, { status: 'waiting' });
+        this.decisions.set(item.id, { kind: 'approval', consent: true, agentId: agent.id, deliveryId: delivery.id, resolve: answered, abort, nativeRequest: { options: CONSENT_OPTIONS } });
+      });
+    });
+  }
+
+  // The owner chose not to be asked: what already waits for their word is covered by that.
+  allowWaiting() {
+    for (const [id, pending] of [...this.decisions]) {
+      if (!pending.consent) continue;
+      try { this.resolve('approval', { id, optionId: 'allow_once', automatic: true }); }
+      catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }
+    }
+  }
+
   // Permissions that were already waiting when the owner chose full access.
   grantWaiting() {
     for (const [id, pending] of [...this.decisions]) {
-      if (pending.kind !== 'approval' || !this.grantsApprovals()) continue;
+      if (pending.kind !== 'approval' || pending.consent || !this.grantsApprovals()) continue;
       const optionId = grantOnce(pending.nativeRequest.options || []);
       try { if (optionId) this.resolve('approval', { id, optionId, automatic: true }); }
       catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }
@@ -703,6 +774,18 @@ export class AgentCoordinator {
     const session = this.sessions.get(id);
     if (!session || session.stopped) throw new DomainError('agent_disconnected', 'Agent is not connected.');
     const current = session.current;
+    // A task that waits for the owner's word has not begun: cancelling withdraws it, and nothing is asked any more.
+    const held = current ? null : [...this.decisions.values()].find(decision => decision.agentId === id && decision.consent);
+    if (held) {
+      this.store.transaction(() => {
+        held.abort();
+        const delivery = this.store.get('delivery', held.deliveryId);
+        if (delivery.status === 'queued') this.abandon(delivery, 'cancelled', null);
+        const status = this.decisionStatusAfter(id, null);
+        if (status) this.store.update('agent', id, { status });
+      });
+      return { id, requested: true };
+    }
     if (current) this.store.update('agent', id, { status: 'cancelling' });
     const result = await session.adapter.cancel();
     if (!result.requested && session.current === current && current) {
@@ -727,6 +810,8 @@ export class AgentCoordinator {
       // retains its authority to talk to other agents.
       this.suspend(session);
       this.store.transaction(() => {
+        // A task that waited for the owner's word waits no longer: it goes with the rest that was queued.
+        for (const decision of [...this.decisions.values()]) if (decision.agentId === id && decision.consent) decision.abort();
         // Nothing queued for a stopped agent may replay when it is resumed.
         this.abandonQueued(this.store.get('agent', id), 'cancelled', { code: 'agent_stopped', message: 'The agent was stopped before this message ran.' });
         this.store.update('agent', id, { status: 'cancelling' });
@@ -758,6 +843,8 @@ export class AgentCoordinator {
   // for exactly that task. The outcome names its delivery and job for agents.result.
   async delegate({ projectId, provider, prompt, agentId, workflowId, model, waitMs = 30000, isolated } = {}, sender) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
+    // Before a workflow or an agent is made for it.
+    this.offered(sender);
     if (!prompt?.trim()) throw new DomainError('invalid_input', 'A task prompt is required.');
     let agent;
     if (agentId) {
@@ -775,7 +862,7 @@ export class AgentCoordinator {
       this.admit(project, provider, model);
       const target = workflowId || this.store.create('workflow', { projectId, status: 'active', turnBudget: 40, usedTurns: 0,
         title: 'Delegated: ' + prompt.trim().split(/\r?\n/)[0].slice(0, 80) }).id;
-      agent = this.start({ projectId, workflowId: target, provider, model, isolated });
+      agent = this.start({ projectId, workflowId: target, provider, model, isolated }, sender);
     }
     const message = this.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [agent.id], body: prompt }, sender);
     return this.outcome(agent.id, { deliveryId: message.deliveries[0].id, waitMs });
@@ -828,7 +915,8 @@ export class AgentCoordinator {
       deliveryId: delivery?.id || job?.deliveryId || null, jobId: job?.id || null,
       output: text.slice(-OUTCOME_OUTPUT_CHARS), outputTruncated: !!job?.outputTruncated || text.length > OUTCOME_OUTPUT_CHARS,
       turn: job ? { jobId: job.id, status: job.status, finishedAt: job.finishedAt || null, ...(job.error ? { error: job.error } : {}) } : null,
-      approvals: pending('approval').map(({ id, summary, options }) => ({ id, summary, options: options.map(option => option.name || option.optionId) })),
+      // delegation: not something the agent asks in its turn, but the owner's word for the task itself, which has not begun.
+      approvals: pending('approval').map(({ id, summary, options, kind }) => ({ id, summary, options: options.map(option => option.name || option.optionId), ...(kind === 'delegation' ? { delegation: true } : {}) })),
       inputs: pending('input').map(({ id, summary }) => ({ id, summary })),
       ...(error ? { error } : {}) };
   }
@@ -855,9 +943,12 @@ export class AgentCoordinator {
     if (name === 'agent_send_message') {
       if (typeof input?.operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(input.operationId))
         throw new DomainError('invalid_input', 'Agent messages require a stable operationId; reuse it only when retrying the same send.');
+      // What an agent sends while it works on a task of a connected client is sent for that client; between tasks,
+      // for whoever started it. An agent the owner set to work at the computer writes for the owner.
+      const working = this.sessions.get(scope.agentId)?.turn?.sender;
       return this.send({ ...scope, recipientIds: input.recipientIds, body: input.body,
         operationId: input.operationId },
-        { kind: 'agent', id: sender.id, label: sender.label, provider: sender.provider });
+        { kind: 'agent', id: sender.id, label: sender.label, provider: sender.provider, ...((working || sender).client ? { client: true } : {}) });
     }
     throw new DomainError('unknown_operation', 'Unknown agent communication tool.');
   }

@@ -559,6 +559,8 @@
     "connection.status",
     "connection.stop",
     "connection.verify",
+    "delegation.read",
+    "delegation.update",
     "delivery.list",
     "editor.context",
     "editor.diagnostics",

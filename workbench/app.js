@@ -418,18 +418,23 @@ function approvalsView(v) {
 }
 // Answers to an agent are the person's own and are given at their computer, never through a connected client.
 const ANSWER_LOCALLY = 'Answer this on your computer: in your editor, or in the local workbench (run “devmate ui”).';
+// Whether a task that a connected client handed to an agent is run at all. It runs on the owner's account with the
+// provider, so full access does not hand this answer to the client either.
+const ALLOW_LOCALLY = 'Whether this task runs is yours to say on your computer, in either access profile: in your editor, or in the local workbench (run “devmate ui”). Not to be asked: devmate delegation allow.';
 const requestTitle = item => str(item.prompt) || str(item.question) || str(item.details?.message) || str(item.summary) || str(item.title) || 'Request from an agent';
 function approvalCard(approval) {
   const options = Array.isArray(approval.options) ? approval.options : [];
+  // For a task that waits to be allowed there is no turn yet to cancel, and nothing to answer from inside a chat app.
+  const consent = approval.kind === 'delegation', here = !(consent && bridge.embedded);
   // Once the decision is accepted the request leaves the waiting list at once, not with the next refresh.
   const decide = async optionId => { await mutate('approval.resolve', {id: approval.id, optionId, expectedRevision: approval.revision}, 'Decision sent.'); approval.status = 'resolved'; renderMain(); };
   return el('div', {class: 'item waiting', 'data-key': approval.id}, el('div', {class: 'row-head'}, el('h3', {text: str(approval.summary) || str(approval.title) || 'Approval request'}), badge(approval.status)),
-    caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
+    caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? consent ? 'allowed without asking (devmate delegation allow)' : 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
     approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
-    el('div', {class: 'actions'}, options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))),
-      opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
+    el('div', {class: 'actions'}, here ? options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))) : null,
+      consent ? null : opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
     options.length ? null : caption('The agent did not offer any choices for this request.'),
-    can('approval.resolve') ? null : caption(ANSWER_LOCALLY));
+    here && can('approval.resolve') ? null : caption(consent ? ALLOW_LOCALLY : ANSWER_LOCALLY));
 }
 // A question is known by its id where the agent gives one (Codex), otherwise by its own text (Claude Code).
 const qid = question => str(question.id) || str(question.question) || str(question.header);

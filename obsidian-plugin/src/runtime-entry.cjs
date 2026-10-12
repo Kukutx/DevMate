@@ -470,7 +470,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
       // An agent that waits for a decision is waiting for the person; in this vault's project that person is here.
       if (['approval.created', 'input.created'].includes(data?.type) && entity?.status === 'pending' && data.projectId === vaultBridge?.projectId && !announced.has(entity.id)) {
         announced.add(entity.id);
-        new api.Notice((data.type === 'approval.created' ? 'An agent is waiting for your approval' : 'An agent is asking you a question') +
+        // A task that a connected client handed to an agent has not begun: it is the task that waits, not an agent.
+        new api.Notice((data.type !== 'approval.created' ? 'An agent is asking you a question' : entity.kind === 'delegation' ? 'A connected client asks to run a task on your account' : 'An agent is waiting for your approval') +
           (typeof entity.summary === 'string' ? ': ' + entity.summary.slice(0, 200) : '') + '. Open the DevMate workbench to answer.');
       }
       for (const view of views) view.showStatus?.();

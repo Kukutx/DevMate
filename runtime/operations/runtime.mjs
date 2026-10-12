@@ -89,6 +89,15 @@ export function defineRuntimeOperations(service, add) {
     'Choose the permission profile: guarded or full. The owner does this at their own computer (devmate access full, or "Change Permission Profile" in the editor); it takes effect immediately.',
     args => service.setAccessProfile(args.profile), { ...local, idempotent: true });
 
+  // Whether a connected client may have a coding agent run a task. A choice of its own beside the access profile:
+  // that one is about this computer, this one about what is spent on the owner's account with a provider. It is made
+  // at this computer in either profile, and "ask" is answered there too.
+  add('delegation.read', {}, true, 'Say whether a connected client may hand tasks to the coding agents on this computer (agents_delegate), which run on the owner\'s account with their provider. ask (the default): the owner allows each task at their computer before it runs. allow: tasks run without asking. off: a connected client cannot hand over tasks.',
+    () => ({ mode: service.delegation }));
+  add('delegation.update', { mode: z.enum(['ask', 'allow', 'off']) }, false,
+    'Choose whether a connected client may hand tasks to coding agents: ask, allow or off. The owner does this at their own computer (devmate delegation allow); it takes effect immediately.',
+    args => service.setDelegation(args.mode), { ...local, idempotent: true });
+
   // Which release saved the file is not a setting: it alone never calls for a restart.
   const differs = (saved, active) => JSON.stringify({ ...saved, writtenBy: undefined }) !== JSON.stringify({ ...active, writtenBy: undefined });
   add('settings.read', {}, true, 'Read active and saved runtime configuration.', () => {

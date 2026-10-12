@@ -44,7 +44,9 @@ export const hasWords = (query, ...texts) => { const where = texts.join(' ').toL
 
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
-export const actor = context => ({ id: context.id, kind: 'user', label: 'You' });
+// client: sent through a connected client, not by the owner at this computer. A task that comes that way is run
+// by a coding agent only with the owner's word (delegation.read).
+export const actor = context => ({ id: context.id, kind: 'user', label: 'You', ...(context.surface === 'local' ? {} : { client: true }) });
 export const within = (root, target) => { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)); };
 export const oneCommand = value => {
   if ((value.command === undefined) === (value.file === undefined)) throw new DomainError('invalid_command', 'Supply either command text or an executable file with args.');

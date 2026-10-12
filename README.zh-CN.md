@@ -87,6 +87,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate logs [--lines N]` | 最近的运行日志 |
 | `devmate project add [目录] [--name 名称] [--read-only]` / `list` / `remove` | 共享什么。不写目录就是当前目录 |
 | `devmate access [guarded \| full]` | 权限档：连接进来的客户端可以决定什么（见下文“谁可以做什么”） |
+| `devmate delegation [ask \| allow \| off]` | 连接进来的客户端能不能把任务派给本机的编码 Agent（花的是你在它们那边的账户）。默认 `ask`：每个任务先由你在这台电脑上点头 |
 | `devmate mcp-url` | 给客户端填的地址 |
 | `devmate mcp` | 以标准输入输出提供 MCP；运行时没启动会自动拉起 |
 | `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录；`--openai-tunnel <id>` 让 OpenAI 隧道和一条带公网地址的通路同时开；`connect beside --openai-tunnel <id> \| none` 给现有的通路加上隧道或撤掉隧道 |
@@ -331,6 +332,7 @@ devmate connect beside --openai-tunnel none
 - **可选的登录（OAuth）。** `devmate connect … --auth oauth` 要求公网地址的客户端登录：第一次连接时跳到 DevMate 的授权页，输入 `devmate login-code` 生成的一次性代码。登录证明的是“这个客户端就是你”：DevMate 只有一个所有者，没有其他账户。不公开自身说明（客户端元数据文档）的客户端，由你在配置的 `auth.clients` 里登记它的名字和回调地址。本机上的客户端始终不需要登录。
 - **审批和提问由你在自己的电脑上回答。** Agent 请求批准时，你在编辑器或本机工作台里回答。任何连接进来的客户端都不能回答，包括派发这个任务的模型。
 - **嫌这些碍事时：完全访问。** 默认的权限档是“受保护”（guarded），也就是上面这些规则。如果你主要在聊天客户端里干活、不想每次都回到电脑前，可以在自己的电脑上打开“完全访问”（full）：`devmate access full`，VS Code 里的 **DevMate: Change Permission Profile**，或 Obsidian 里的 **Permissions…**。之后，以你的身份连接进来的客户端可以共享文件夹、放宽权限、读取凭据文件、设置能力引擎、回答 Agent 的提问、运行体检；你派发的 Agent 请求的权限自动批准（每一次都留有记录）。它立即生效，只有你在自己的电脑上才能打开；`devmate access guarded` 随时收回。打开之后，能访问你 MCP 地址的人不经询问就能以你的身份做一切：请保管好地址，或者要求登录。
+- **派给编码 Agent 的任务花的是你的账户，所以先问你。** Codex、Claude Code 这些 Agent 干活，用的是你在它们那边的账户和额度。连接进来的客户端把任务交给它们时（`agents_delegate`，或者给 Agent 发消息、指派任务），在你点头之前什么都不会运行：在编辑器弹出的提醒里，或者本机工作台里（`devmate ui --open`）回答。可以只允许这一个任务，可以连同这个 Agent 之后的任务一起允许，也可以拒绝。两个权限档下都是这样：完全访问也不替你回答，否则回答的就是提出请求的那个客户端自己。你自己在电脑前交给 Agent 的任务不问。`devmate delegation allow` 之后不再问，`devmate delegation off` 让连接进来的客户端完全不能派任务，`devmate delegation ask` 是默认值；和权限档一样，只能在你自己的电脑上选。
 - **凭据类文件默认受保护。** `.env`、密钥文件、`.npmrc` 等不会被文件工具读取或列出内容；Git 状态里会列出它们的名字并标记“不要提交”。你可以在自己的电脑上对某个项目关闭这项保护。
 - **命令行里的凭据不外显。** 进程列表和活动记录里，命令行中内联的令牌、密码会被替换成 `[redacted]`；实际执行的命令不变。这只识别常见写法，不是保证。
 - **工作台的会话只留在它自己的浏览器标签页里。** 工作台通过一次性链接进入，会话从不以 cookie 形式存在，其他本机服务拿不到。
@@ -382,6 +384,7 @@ devmate connect beside --openai-tunnel none
 { "projectId": "Example", "provider": "claude", "prompt": "修复 tests/login.test.ts 里失败的用例并说明原因" }
 ```
 
+- 先问你。任务花的是你在 Agent 那边的账户，所以这次调用会立即返回“the owner has to allow this task at their computer first”，等你在电脑前点头（编辑器的提醒，或者工作台）之后任务才开始。`devmate delegation allow` 之后不再问，见上文“谁可以做什么”。
 - 任务在等待时间内完成就直接返回结果和改动的文件列表，否则返回 `agentId`，用 `agents_result` 继续等待。
 - 再次传入同一个 `agentId` 会在原会话里继续，保留上下文。
 - 加上 `"isolate": true`，Agent 就改在项目的一份副本里工作（最后一次提交的 Git worktree，放在 DevMate 自己的目录里）。在你看过它提出的改动（`agents.proposal`）并应用（`agents.apply`：全部作为未提交的改动进入项目；如果这期间项目在同样的位置改过，就一点也不应用）或丢弃（`agents.discard`）之前，项目不会变。副本里只有已提交的内容：未提交的改动和被忽略的文件（比如装好的依赖）不在里面。
@@ -408,6 +411,7 @@ devmate connect beside --openai-tunnel none
 | 模型说文件夹“由所有者在自己的电脑上共享” | 你自己来共享：在装有 DevMate 的编辑器里打开它，或运行 `devmate project add <文件夹>`。想让客户端自己能做这些事：`devmate access full` |
 | 模型说某个项目只读，或某个文件夹被取消了共享 | 这是你在本机做过的决定。要改就在本机改：编辑器里的 **Change Folder Sharing**、`devmate project add`，或本机工作台 |
 | 内嵌工作台里提示“Answer this on your computer”，或 Agent 一直在等批准 | 审批在本机回答：`devmate ui --open`，或编辑器里的提醒。打开 `devmate access full` 后会自动批准 |
+| 模型说“the owner has to allow this task at their computer first” | 它把一个任务派给了编码 Agent，那花的是你在 Agent 那边的账户。在编辑器的提醒里或本机工作台里（`devmate ui --open`）点允许。不想再被问：在自己的电脑上运行 `devmate delegation allow` |
 | `rg was not found on PATH` | 按提示安装 ripgrep，然后 `devmate restart`；或者在 VS Code 里打开一次 DevMate，之后就用编辑器自带的那一份 |
 | `The origin … is not allowed` | 这是一个浏览器端客户端：如果它是你自己运行的，把它的来源加进配置的 `allowedOrigins` |
 | 云端客户端连不上 | 看 `doctor` 的 `connection.*` 几项；`devmate logs` 查看连接器输出 |

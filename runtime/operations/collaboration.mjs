@@ -36,7 +36,7 @@ export function defineCollaborationOperations(service, add) {
     });
   add('message.list', listOptions, true, 'Read workflow messages and delivery state.', (args, context) => service.list('message', args, context));
   add('message.send', { ...workflowScope, recipientIds: z.array(id).min(1).max(16), body: text.min(1), ...mutation }, false,
-    'Queue messages for real native-agent delivery.', (args, context) => service.agents.send(args, actor(context)), { openWorld: true });
+    'Queue messages for real native-agent delivery.', (args, context) => service.agents.send(args, actor(context)), { openWorld: true, delegates: true });
   add('delivery.list', listOptions, true, 'Inspect each recipient delivery separately.', (args, context) => service.list('delivery', args, context));
 
   add('task.list', listOptions, true, 'List workflow tasks.', (args, context) => service.list('task', args, context));
@@ -90,7 +90,13 @@ export function defineCollaborationOperations(service, add) {
   // the model that delegated the work may not answer for the person.
   add('approval.list', listOptions, true, 'List native approval requests.', (args, context) => service.list('approval', args, context));
   add('approval.resolve', { id, ...revision, ...mutation, optionId: z.string().min(1).max(200) }, false,
-    'Return the user\'s decision to the exact waiting permission request: optionId is one of the options approval.list shows for it.', args => service.agents.resolve('approval', args), { destructive: true, openWorld: true, humanOnly: true });
+    'Return the user\'s decision to the exact waiting permission request: optionId is one of the options approval.list shows for it. Whether a task a connected client handed to an agent is run at all (kind delegation) is answered at the owner\'s computer alone.', (args, context) => {
+      // Full access hands the owner's client what the owner decides about this computer. Whether a task is run on
+      // their account with a provider is not among that: the client that asked would be the one to answer.
+      if (service.store.get('approval', args.id).kind === 'delegation' && context.surface !== 'local') throw new DomainError('forbidden', 'Whether this task is run is the owner\'s to say at their own computer, in either access profile: ' +
+        'in the DevMate workbench there (devmate ui) or in their editor. devmate delegation allow, run there, ends the asking.');
+      return service.agents.resolve('approval', args);
+    }, { destructive: true, openWorld: true, humanOnly: true });
   add('input.list', listOptions, true, 'List native input requests.', (args, context) => service.list('input', args, context));
   add('input.respond', { id, ...revision, ...mutation, response: z.unknown() }, false,
     'Return the user\'s answer to the exact waiting request (input.list shows it under details). For an agent\'s question: the answer as plain text when there is one question, otherwise {answers:{"<question id or text>":"<answer>"}}. For a form (details.requestedSchema): {action:"accept", content:{…}}, {action:"decline"} or {action:"cancel"}.',

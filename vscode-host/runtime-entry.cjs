@@ -162,8 +162,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (!attachment?.roots.some(folder => folder.projectId && folder.projectId === data?.projectId)) return;
     if (!['approval.created', 'input.created'].includes(data?.type) || entity?.status !== 'pending' || announced.has(entity.id)) return;
     announced.add(entity.id);
+    // A task that a connected client handed to an agent has not begun: it is the task that waits, not an agent.
     void Promise.resolve(vscode.window.showInformationMessage?.(
-      (data.type === 'approval.created' ? 'An agent is waiting for your approval' : 'An agent is asking you a question') +
+      (data.type !== 'approval.created' ? 'An agent is asking you a question' : entity.kind === 'delegation' ? 'A connected client asks to run a task on your account' : 'An agent is waiting for your approval') +
         (typeof entity.summary === 'string' ? ': ' + entity.summary.slice(0, 200) : '.'), 'Open Workbench'))
       .then(picked => picked === 'Open Workbench' ? vscode.commands.executeCommand?.('devMate.runtime.open') : undefined).catch(report);
   }

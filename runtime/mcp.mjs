@@ -78,7 +78,9 @@ export function serverInstructions(service, surface = 'generic') {
     'shell_run executes ' + service.processes.shell.label + ' on ' + process.platform + ': tests, builds, package managers and every Git write. A command still running when the call returns keeps running; follow it with process_read and stop servers with process_stop.',
     surface === 'gpt' ? null : 'workspace_patch changes several places or files in one call, all of it or none: a "*** Begin Patch" envelope or a unified diff.',
     'editor_diagnostics lists the errors the user\'s editor already reports.',
-    'agents_delegate hands a whole task to a coding agent installed here and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation.',
+    // Not offered where the owner switched delegation off. That the owner allows each task first is said by the tool
+    // itself and by its answer: these instructions have no room left for it.
+    service.delegation === 'off' ? null : 'agents_delegate hands a whole task to a coding agent installed here and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation.',
     'capability_list lists engines: the owner\'s browser (engine "chrome": bookmarks, tabs, history; chrome.page.* debugs pages: console, network, elements, script), browser automation, Godot, Obsidian. capability_query reads, capability_call changes.',
     'A name with a dot is an operation: operations_query runs those that only read, operations_call the others, operations_list {summary:true} lists them all.',
     // The owner's own choice (access.update, at their computer). Without it these stay the owner's to do there.

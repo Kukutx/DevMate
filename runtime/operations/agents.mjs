@@ -23,16 +23,20 @@ export function defineAgentOperations(service, add) {
     args => service.configureProvider(args.provider, args.settings), { ownerDecision: OWNER_SETS_AGENTS, idempotent: true });
 
   const waiting = result => [result.approvals.length ? result.approvals.length + ' approval(s)' : null, result.inputs.length ? result.inputs.length + ' question(s)' : null].filter(Boolean).join(' and ');
-  const turnText = result => (result.output || (result.error ? '[' + result.error.message + ']' : result.settled ? '[the agent produced no text]' : '[no result yet]')) +
+  const follow = result => 'call agents_result agentId:' + result.agentId + (result.jobId ? ' jobId:' + result.jobId : result.deliveryId ? ' deliveryId:' + result.deliveryId : '') + ' to wait for this task';
+  const turnText = result => (result.output ||(result.error ? '[' + result.error.message + ']' : result.settled ? '[the agent produced no text]' : '[no result yet]')) +
     (result.outputTruncated ? '\n[earlier output omitted; job.read id:' + result.jobId + ' has all of it]' : '') +
     (result.changedFiles?.length ? '\nWorking tree after this task (git status):\n' + result.changedFiles.map(entry => '  ' + entry).join('\n') : '') +
     (result.proposedFiles ? '\nThe agent worked in a copy of its own: the project is unchanged.' + (result.proposedFiles.length ? ' It proposes:\n' + result.proposedFiles.map(entry => '  ' + entry).join('\n') : ' It proposes no changes.') +
       '\nRead the diff with operations_query {operation:"agents.proposal", input:{agentId:"' + result.agentId + '"}}. Bring it into the project with operations_call {operation:"agents.apply", input:{agentId:"' + result.agentId + '"}}, or drop it with agents.discard.' : '') +
     (result.copyNote ? '\n[' + result.copyNote + ']' : '') +
-    '\n[agent ' + result.status + (result.settled ? '' : '; call agents_result agentId:' + result.agentId + (result.jobId ? ' jobId:' + result.jobId : result.deliveryId ? ' deliveryId:' + result.deliveryId : '') + ' to wait for this task') +
-    (waiting(result) ? '; ' + waiting(result) + (service.fullAccess()
+    '\n[agent ' + result.status +
+    // A task that waits for the owner's word has not begun, and is not the client's to allow in either access profile.
+    (result.approvals.some(item => item.delegation) ? '; nothing has run yet: the owner has to allow this task at their computer first, because it runs on their account with ' + result.provider +
+      '. Ask them to answer it in the DevMate workbench there (devmate ui) or in their editor; devmate delegation allow, run there, ends the asking. Then ' + follow(result)
+    : (result.settled ? '' : '; ' + follow(result)) + (waiting(result) ? '; ' + waiting(result) + (service.fullAccess()
       ? ' await an answer: from the user in the DevMate workbench, or from the owner\'s client after asking them, with operations_call (approval.resolve {id, optionId}; input.respond {id, response:"<the answer>"}); operations_query input.list shows the question'
-      : ' await the user in the DevMate workbench') : '') + ']';
+      : ' await the user in the DevMate workbench') : '')) + ']';
   const turnMeta = ['agentId', 'workflowId', 'status', 'settled', 'deliveryId', 'jobId', 'approvals', 'inputs', 'error'];
   // What the agent left behind in the project, for the model that asked for the work.
   const withChanges = async outcome => {
@@ -51,13 +55,16 @@ export function defineAgentOperations(service, add) {
   add('agents.delegate', { ...projectScope, provider: z.enum(AGENT_PROVIDERS).optional(), prompt: text.min(1), agentId: id.optional(),
     workflowId: id.optional(), model, waitMs,
     isolate: z.boolean().optional().describe('For a new agent: work in a copy of the project (a Git worktree of the last commit). Nothing in the project changes until agents.apply.'), ...mutation }, false,
-    'Hand a whole task to a coding agent installed on this computer (' + AGENT_PROVIDERS.join(', ') + '; providers_list says which are installed). Use it when the user asks for delegation or for work in parallel; otherwise do the work yourself. With isolate:true the agent works in a copy whose changes are reviewed (agents.proposal) and then applied or discarded. ' +
+    'Hand a whole task to a coding agent installed on this computer (' + AGENT_PROVIDERS.join(', ') + '; providers_list says which are installed). Use it when the user asks for delegation or for work in parallel; otherwise do the work yourself. ' +
+    'It runs on the owner\'s account with that agent\'s provider: unless they chose otherwise, the owner allows each task at their computer before it runs, and the answer says when one waits for that. With isolate:true the agent works in a copy whose changes are reviewed (agents.proposal) and then applied or discarded. ' +
     'Without agentId a new session starts; with agentId the task continues that session. Returns the result when it finishes within waitMs (default 30s, at most 50s), otherwise follow with agents_result.',
     async (args, context) => {
       const project = service.project(args.projectId, { write: true });
       const { waitMs: wait = 30000, operationId, isolate, ...task } = args;
       if (args.agentId && service.store.get('agent', args.agentId).isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + service.store.get('agent', args.agentId).isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
       if (isolate && args.agentId) throw new DomainError('invalid_input', 'isolate is chosen when an agent is started. An agent that continues keeps working where it started.');
+      // Refused before a copy is made for it.
+      service.agents.offered(actor(context));
       const isolated = isolate ? await service.workspace.isolate(project, 'copy-' + randomBytes(6).toString('hex')) : null;
       // The task is handed over first; waiting for it is separate, so giving up on the wait never withdraws the task.
       let started;
@@ -67,7 +74,7 @@ export function defineAgentOperations(service, add) {
       // What a copy lacks decides whether the agent can check its own work there: said every time one is made.
       return isolated ? { ...outcome, copyNote: 'The agent\'s copy holds what is committed' + (isolated.uncommitted ? ': ' + isolated.uncommitted + ' uncommitted change(s) of the project are not in it, and neither are' : ', not') +
         ' ignored files such as installed dependencies and build output. To run tests there the agent has to install what it needs first; say so in the task.' } : outcome;
-    }, { present: turnText, meta: turnMeta, destructive: true, openWorld: true });
+    }, { present: turnText, meta: turnMeta, destructive: true, openWorld: true, delegates: true });
   const named = args => { const agent = args.agentId || args.id; if (!agent) throw new DomainError('invalid_input', 'agentId is required: the one agents_delegate returned.'); return agent; };
   add('agents.result', { agentId: id.optional(), id: id.optional().describe('Same as agentId.'), jobId: id.optional(), deliveryId: id.optional(), waitMs }, true,
     'Read the result of a task given to an agent (agentId, as returned by agents_delegate): the task named by jobId or deliveryId, otherwise its most recent one. Waits up to waitMs for it to finish or to need a decision from the user.',
@@ -106,7 +113,7 @@ export function defineAgentOperations(service, add) {
   add('agents.list', listOptions, true, 'List native agent sessions.', (args, context) => service.list('agent', args, context));
   add('agents.start', { ...workflowScope, provider: z.enum(AGENT_PROVIDERS), model,
     name: z.string().max(200).optional(), title: z.string().max(200).optional(), prompt: text.optional(), sessionId: z.string().max(200).optional(), ...mutation }, false,
-    'Start or explicitly resume a native provider session for this workflow.', args => service.agents.start(args), { openWorld: true });
+    'Start or explicitly resume a native provider session for this workflow.', (args, context) => service.agents.start(args, actor(context)), { openWorld: true, delegates: true });
   for (const action of ['stop', 'resume', 'cancel']) add('agents.' + action, { id, ...mutation }, false,
     action + ' a native agent session.', args => service.agents[action](args.id));
   add('agents.steer', { id, body: text.min(1), ...mutation }, false, 'Steer a running turn when the provider supports it.',
@@ -114,5 +121,5 @@ export function defineAgentOperations(service, add) {
   add('agents.send', { id, body: text.min(1), ...mutation }, false, 'Queue a native turn for an agent.', (args, context) => {
     const agent = service.store.get('agent', args.id);
     return service.agents.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [args.id], body: args.body }, actor(context));
-  }, { openWorld: true });
+  }, { openWorld: true, delegates: true });
 }

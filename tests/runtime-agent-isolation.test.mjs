@@ -47,6 +47,9 @@ async function fixture(t, { repository = true, instance = 'instance', within = '
   await service.ready;
   t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const project = await service.call('project.create', { root, name: 'Isolation' }, owner);
+  // Where an agent works is the matter here. Whether a task of a connected client is run at all is another one
+  // (runtime-delegation.test.mjs): the owner chose not to be asked.
+  await service.call('delegation.update', { mode: 'allow' }, owner);
   const file = name => path.join(root, name), read = name => fs.readFileSync(file(name), 'utf8').replace(/\r\n/g, '\n');
   return { service, project, root, top, temp, factory, instances, file, read };
 }

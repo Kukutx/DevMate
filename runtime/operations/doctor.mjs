@@ -140,6 +140,10 @@ export async function doctor(service) {
       (url && service.config.auth.mode === 'none' ? ' The public URL has no sign-in, so that is anyone who learns it.' : ''),
     'Back to the default with: devmate access guarded (or "Change Permission Profile" in the editor).');
   else check('access', 'ok', 'Guarded: sharing folders, credential files and agent approvals stay with you at this computer.');
+  // What a coding agent does for a connected client is spent on the owner's account with its provider.
+  if (service.delegation === 'allow') check('delegation', 'info', 'A connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider.', 'To be asked for each task first: devmate delegation ask');
+  else check('delegation', 'ok', service.delegation === 'off' ? 'A connected client cannot hand tasks to the coding agents here.'
+    : 'A task that a connected client hands to a coding agent waits until you allow it at this computer, in either access profile.' + (service.fullAccess() ? ' Full access does not answer it for you.' : ''));
   const database = service.store.metrics();
   check('storage', database.databaseBytes > 1024 ** 3 ? 'warn' : 'ok', Math.round(database.databaseBytes / 1048576) + ' MiB state, ' + database.events + ' journal events, ' + service.config.retentionDays + '-day retention',
     database.databaseBytes > 1024 ** 3 ? 'Lower retentionDays in the settings.' : null);

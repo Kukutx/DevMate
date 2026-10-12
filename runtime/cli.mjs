@@ -38,6 +38,11 @@ Projects
   devmate access [guarded | full]   what a connected client may decide: guarded (default) keeps sharing,
                                     credential files and agent approvals with you at this computer;
                                     full hands them to your client and approves agents automatically
+  devmate delegation [ask | allow | off]
+                                    whether a connected client may hand tasks to Codex, Claude Code and the
+                                    other agents here, which run on your account with them: ask (default) has
+                                    you allow each task at this computer, in either access profile; allow
+                                    runs them without asking; off refuses them
 
 Connecting an AI client
   devmate mcp-url                   the address to enter in ChatGPT, Claude or another MCP client
@@ -457,6 +462,16 @@ export async function main(argv = process.argv.slice(2), {
       stderr.write(chosen.profile === 'full'
         ? 'Full access: a client connected as the owner can share folders, read credential files, set up engines and answer agents; what a delegated agent asks permission for is granted automatically. Back to the default: devmate access guarded\n'
         : 'Guarded: you share folders, lift credential-file protection and answer agents at this computer. To hand all of that to your connected client: devmate access full\n');
+      return 0;
+    }
+    if (command === 'delegation') {
+      const [mode] = positional;
+      if (mode !== undefined && !['ask', 'allow', 'off'].includes(mode)) throw new Error('Use delegation, delegation ask, delegation allow or delegation off');
+      const chosen = mode ? await client.call('delegation.update', { mode }, callOptions) : await client.call('delegation.read', {}, callOptions);
+      stdout.write(chosen.mode + '\n');
+      stderr.write({ ask: 'Ask: a task that a connected client hands to Codex, Claude Code or another agent here waits until you allow it at this computer, in the workbench (devmate ui) or your editor. What you start here yourself is not asked about. Not to be asked: devmate delegation allow\n',
+        allow: 'Allow: a connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider. To be asked first: devmate delegation ask\n',
+        off: 'Off: a connected client cannot hand tasks to the coding agents here; you still can, at this computer. To be asked for each task instead: devmate delegation ask\n' }[chosen.mode]);
       return 0;
     }
     if (command === 'mcp-url') {
