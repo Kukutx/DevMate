@@ -102,7 +102,16 @@ const shown = (more = {}) => ({ 'DOM.resolveNode': ({ backendNodeId }) => ({ obj
   'Runtime.callFunctionOn': { result: { type: 'object', subtype: 'null', value: null } }, ...more });
 // What the browser is asked the first time the mouse or the keys are used on a tab while it is debugged: whether it
 // shows the tab, and to treat it as looked at (see the tests of a tab that is put away). After that, nothing more.
-const WOKEN = ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled'], LOOKED = { expression: 'document.visibilityState', awaitPromise: false, returnByValue: true, userGesture: true, timeout: 15000 };
+const WOKEN = ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled'], LOOKED = { expression: 'document.visibilityState', awaitPromise: false, returnByValue: true, userGesture: false, timeout: 15000 };
+// A page that says how the browser treats it: put away until it is told that it has the focus (where `wakes` is true),
+// and again once it is told that it has not.
+const putAway = ({ wakes = true, more = {} } = {}) => {
+  const tab = { state: 'hidden' };
+  return { tab, replies: shown({ 'Emulation.setFocusEmulationEnabled': ({ enabled }) => { if (!enabled) tab.state = 'hidden'; else if (wakes) tab.state = 'visible'; },
+    'Runtime.evaluate': ({ expression, returnByValue }) => expression === 'document.visibilityState' ? { result: { type: 'string', value: tab.state } } : returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } }
+      : { result: { type: 'string', value: 'input #name' } },
+    'Page.getLayoutMetrics': { cssVisualViewport: { clientWidth: 1000, clientHeight: 700 } }, 'Accessibility.getFullAXTree': shop(), ...more }) };
+};
 
 test('the first call for a tab attaches the debugger, switches on what is watched, and says that the watching starts now', async () => {
   const { methods, log, names, changes, timers, debugging } = harness();
@@ -497,12 +506,13 @@ test('a selector or a text goes into the page as data: whatever it says, none of
 test('page.click scrolls the element into view and clicks the middle of it: the mouse moves there, goes down and comes up', async () => {
   const { methods, names, sent, replies } = harness(shown({ 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } }));
   assert.deepEqual(await methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
-  assert.deepEqual(names(5), [...WOKEN, 'DOM.resolveNode', 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent']);
+  // The element is found first; then the tab is woken; then it is pointed at.
+  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent']);
   assert.deepEqual([...sent('DOM.scrollIntoViewIfNeeded'), ...sent('DOM.getContentQuads')], [{ objectId: 'node-13' }, { objectId: 'node-13' }]);
   // Before the mouse moves, the page is asked what lies at that point.
   const [{ functionDeclaration, ...asked }] = sent('Runtime.callFunctionOn');
   assert.match(functionDeclaration, /^function inFront\(x, y\) \{/);
-  assert.deepEqual(asked, { objectId: 'node-13', arguments: [{ value: 60 }, { value: 40 }], returnByValue: true, userGesture: true });
+  assert.deepEqual(asked, { objectId: 'node-13', arguments: [{ value: 60 }, { value: 40 }], returnByValue: true, userGesture: false });
   const at = { x: 60, y: 40, button: 'left' }, once = [{ type: 'mouseMoved', x: 60, y: 40 }, { type: 'mousePressed', ...at, buttons: 1, clickCount: 1 }, { type: 'mouseReleased', ...at, clickCount: 1 }];
   assert.deepEqual(sent('Input.dispatchMouseEvent'), once);
   // A double click goes down and up twice, the second time counted as the second.
@@ -539,13 +549,13 @@ test('page.click refuses an element that is not shown, and one with something el
 test('page.type gives the element the keyboard, empties it when asked the way a person does, and types the text', async () => {
   const { methods, names, sent } = harness(shown({ 'Runtime.evaluate': ({ returnByValue }) => returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } : { result: { type: 'string', value: 'input[text] name' } } }));
   assert.deepEqual(await methods['page.type']({ ref: 13, text: 'Ada', clear: true }), { tabId: 1, typed: 3, into: 'input[text] name', untrusted: true });
-  assert.deepEqual(names(5), [...WOKEN, 'DOM.resolveNode', 'DOM.focus', 'Runtime.evaluate', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent', 'Input.insertText']);
+  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.focus', 'Runtime.evaluate', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent', 'Input.insertText']);
   assert.deepEqual(sent('DOM.focus'), [{ objectId: 'node-13' }]);
   // The page is asked what has the keyboard and, to empty it, to select what is in it. Then Delete is pressed.
   const [looked, { expression, ...asked }] = sent('Runtime.evaluate');
   assert.deepEqual(looked, LOOKED);
   assert.match(expression, /^\(function keyboard\(clear\) \{[^]*\}\)\(true\)$/);
-  assert.deepEqual(asked, { awaitPromise: false, returnByValue: true, userGesture: true, timeout: 15000 });
+  assert.deepEqual(asked, { awaitPromise: false, returnByValue: true, userGesture: false, timeout: 15000 });
   const key = { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46, modifiers: 0 };
   assert.deepEqual(sent('Input.dispatchKeyEvent'), [{ type: 'rawKeyDown', ...key }, { type: 'keyUp', ...key }]);
   assert.deepEqual(sent('Input.insertText'), [{ text: 'Ada' }]);
@@ -602,7 +612,7 @@ test('page.press presses a key by its name, a letter or a digit, alone or with o
 
 test('page.press refuses a key or a modifier it does not know, also one named like something every object has', async () => {
   const { methods, names } = harness();
-  for (const key of [undefined, 'F13', 'enter', 'ab', '', ' ', 'é', 'constructor', 'toString', '__proto__', 'hasOwnProperty', 5, ['a']]) await refuses(methods['page.press']({ key }), 'invalid_input', /^key is one letter or digit, or one of: Enter, Tab, Escape, /);
+  for (const key of [undefined, 'F13', 'entr', 'ab', '', ' ', 'é', 'constructor', 'toString', '__proto__', 'hasOwnProperty', 5, ['a']]) await refuses(methods['page.press']({ key }), 'invalid_input', /^key is one letter or digit, or one of: Enter, Tab, Escape, /);
   for (const modifiers of [['control'], ['Ctrl'], ['ctrl', 'hyper'], ['constructor'], ['toString'], ['__proto__'], 'ctrl', [5], {}]) await refuses(methods['page.press']({ key: 'a', modifiers }), 'invalid_input', /^modifiers is a list of: alt, ctrl, meta, shift\.$/);
   assert.deepEqual(names(), [], 'no tab is touched for a key that is refused');
 });
@@ -637,7 +647,7 @@ test('page.inspect asks the page how an element is laid out and styled, for the 
   assert.deepEqual(names(5), ['DOM.resolveNode', 'Runtime.callFunctionOn'], 'the element is looked at where it is: nothing is scrolled');
   const [{ functionDeclaration, arguments: [styles, most], ...asked }] = sent('Runtime.callFunctionOn');
   assert.match(functionDeclaration, /^function look\(names, most\) \{/);
-  assert.deepEqual(asked, { objectId: 'node-13', returnByValue: true, userGesture: true });
+  assert.deepEqual(asked, { objectId: 'node-13', returnByValue: true, userGesture: false });
   assert.ok(styles.value.length >= 20 && styles.value.every(name => /^[a-z-]+$/.test(name)), 'the styles that usually explain a layout');
   for (const name of ['display', 'position', 'visibility', 'z-index', 'color', 'pointer-events']) assert.ok(styles.value.includes(name), name);
   assert.deepEqual(most, { value: 4000 });
@@ -655,7 +665,7 @@ test('page.inspect asks the page how an element is laid out and styled, for the 
 test('page.hover moves the mouse over the middle of an element and presses nothing', async () => {
   const { methods, names, sent } = harness(shown());
   assert.deepEqual(await methods['page.hover']({ ref: 13 }), { tabId: 1, hovered: { x: 60, y: 40 } });
-  assert.deepEqual(names(5), [...WOKEN, 'DOM.resolveNode', 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent']);
+  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent']);
   assert.deepEqual(sent('Input.dispatchMouseEvent'), [{ type: 'mouseMoved', x: 60, y: 40 }]);
   await refuses(methods['page.hover'](), 'invalid_input', /Say which element/);
 });
@@ -777,7 +787,7 @@ test('page.storage lists what the page keeps and its cookies, and their values o
   assert.deepEqual(names(5), ['Runtime.evaluate', 'Network.getCookies']);
   const [{ expression, ...asked }] = sent('Runtime.evaluate');
   assert.match(expression, /^\(function stores\(withValues\) \{[^]*\}\)\(false\)$/, 'the page is told not to hand over the values, so they never leave it');
-  assert.deepEqual(asked, { awaitPromise: false, returnByValue: true, userGesture: true, timeout: 15000 });
+  assert.deepEqual(asked, { awaitPromise: false, returnByValue: true, userGesture: false, timeout: 15000 });
   assert.deepEqual(sent('Network.getCookies'), [{}]);
   for (const secret of [token, draft, session]) assert.equal(JSON.stringify(listed).includes(secret), false);
   for (const includeValues of [false, 'true', 1, {}]) { assert.deepEqual(await methods['page.storage']({ includeValues }), listed, 'only the value true means it'); assert.match(sent('Runtime.evaluate').at(-1).expression, /\}\)\(false\)$/); }
@@ -796,7 +806,7 @@ test('page.waitFor answers as soon as the page says yes, and asks again every qu
   let polls = 0, yes = 1;
   const { methods, sent, pauses, timers, time } = harness({ 'Runtime.evaluate': () => ({ result: { type: 'boolean', value: ++polls >= yes } }) });
   assert.deepEqual(await methods['page.waitFor']({ selector: '#done' }), { tabId: 1, found: true, ms: 0 });
-  assert.deepEqual(sent('Runtime.evaluate'), [{ expression: '!!document.querySelector("#done")', awaitPromise: false, returnByValue: true, userGesture: true, timeout: 15000 }]);
+  assert.deepEqual(sent('Runtime.evaluate'), [{ expression: '!!document.querySelector("#done")', awaitPromise: false, returnByValue: true, userGesture: false, timeout: 15000 }]);
   assert.deepEqual(pauses, [], 'there was nothing to wait for');
   polls = 0; yes = 3;
   assert.deepEqual(await methods['page.waitFor']({ tabId: 4, text: 'Saved' }), { tabId: 4, found: true, ms: 500 });
@@ -1006,7 +1016,7 @@ test('capture takes a picture of what the tab shows as a PNG, and of the whole p
   await refuses(capture(4), 'browser_error', /^Page\.captureScreenshot failed: Unable to capture screenshot$/);
 });
 
-test('a picture the browser leaves unanswered is asked for again, soon at first, the first answer is the one given, and after ten seconds it is said what to do', async () => {
+test('a picture of a tab that is put away is asked for again while the browser leaves it unanswered, the first answer is the one given, and after ten seconds it is said what to do', async () => {
   // A browser with a window may leave the picture of a tab behind another unanswered, and give it when it is asked again.
   const answers = [], stand = harness({ 'Runtime.evaluate': { result: { type: 'string', value: 'hidden' } }, 'Page.captureScreenshot': () => new Promise(resolve => answers.push(resolve)), 'Page.getLayoutMetrics': { cssContentSize: { width: 1000, height: 3000 } } });
   // The timer that asks again, where one is running (the other timer of a tab is the one that lets it go); and its time having passed.
@@ -1021,22 +1031,64 @@ test('a picture the browser leaves unanswered is asked for again, soon at first,
   assert.equal(again(), undefined, 'nothing more is asked once an answer has come');
   // The answer to the first asking, when it comes after all, changes nothing.
   answers[0]({ data: 'TEFURQ==' }); await settle();
-  // A picture that never comes is asked for five times, each asking given longer than the one before, and then given up with what to do.
+  // A picture that never comes is asked for four times, and then given up with what to do.
   const never = refuses(stand.capture(1, { fullPage: true }), 'invalid_input', /^The browser gave no picture of this tab in ten seconds\. If it is behind another tab, bring it forward \(tabs\.activate\) and ask again\.$/);
   await settle();
-  for (let asked = 1; asked <= 5; asked++) { assert.equal(answers.length, 2 + asked); await later(); }
+  for (let asked = 1; asked <= 4; asked++) { assert.equal(answers.length, 2 + asked); await later(); }
   await never;
-  assert.equal(answers.length, 7); assert.equal(again(), undefined);
-  assert.deepEqual(stand.timers.filter(timer => timer.ms < IDLE).slice(-5).map(timer => timer.ms), [500, 1000, 2000, 3000, 3500], 'ten seconds in all');
+  assert.equal(answers.length, 6); assert.equal(again(), undefined);
+  assert.deepEqual(stand.timers.filter(timer => timer.ms < IDLE).slice(-4).map(timer => timer.ms), [1500, 2500, 3000, 3000], 'ten seconds in all');
   assert.deepEqual(stand.debugging(), [1], 'the tab stays debugged: its console and its requests are still read');
-  // A picture that comes at once is asked for once, and its timer is put away.
-  const prompt = harness({ 'Runtime.evaluate': { result: { type: 'string', value: 'visible' } }, 'Page.captureScreenshot': { data: 'UE5H' } });
-  assert.deepEqual(await prompt.capture(1), { tabId: 1, mimeType: 'image/png', base64: 'UE5H' });
-  assert.equal(prompt.sent('Page.captureScreenshot').length, 1); assert.deepEqual(prompt.timers.filter(timer => timer.ms < IDLE).map(timer => timer.cancelled), [true]);
   // What the browser refuses is said at once, not asked for again.
-  prompt.replies['Page.captureScreenshot'] = () => no('Unable to capture screenshot');
-  await refuses(prompt.capture(1), 'browser_error', /Unable to capture screenshot/);
-  assert.equal(prompt.sent('Page.captureScreenshot').length, 2); assert.equal(prompt.timers.filter(timer => timer.ms < IDLE && !timer.cancelled).length, 0);
+  const refused = harness({ 'Runtime.evaluate': { result: { type: 'string', value: 'hidden' } }, 'Page.captureScreenshot': () => no('Unable to capture screenshot') });
+  await refuses(refused.capture(1), 'browser_error', /Unable to capture screenshot/);
+  assert.equal(refused.sent('Page.captureScreenshot').length, 1); assert.equal(refused.timers.filter(timer => timer.ms < IDLE && !timer.cancelled).length, 0);
+});
+
+test('a picture of a tab the browser shows is asked for once and waited for as long as it takes; one behind another is asked for again whatever the page says of itself', async () => {
+  // The whole of a long page in front may take its time: nothing is timed, and nothing is asked twice.
+  const answers = [], taking = replies => harness({ 'Page.captureScreenshot': () => new Promise(resolve => answers.push(resolve)), ...replies });
+  const again = stand => stand.timers.filter(timer => timer.ms < IDLE && !timer.cancelled);
+  const front = taking({ 'Runtime.evaluate': { result: { type: 'string', value: 'visible' } }, 'Page.getLayoutMetrics': { cssContentSize: { width: 1000, height: 3000 } } });
+  const whole = front.capture(1, { fullPage: true });
+  await settle();
+  assert.equal(answers.length, 1); assert.deepEqual(again(front), [], 'no timer runs for it');
+  answers[0]({ data: 'SlBFRw==' });
+  assert.equal((await whole).base64, 'SlBFRw==');
+  // The browser says the tab is behind another: the page was woken earlier and calls itself visible, and it is asked again all the same.
+  const stand = standIn({ 'Runtime.evaluate': { result: { type: 'string', value: 'visible' } }, 'Page.captureScreenshot': () => new Promise(resolve => answers.push(resolve)) });
+  const behind = createDebugger(stand.chrome, { target: async tabId => ({ id: tabId ?? 1, active: false }), ...stand.fakes });
+  const picture = behind.capture(1);
+  await settle();
+  assert.deepEqual(again(stand).map(timer => timer.ms), [1500]);
+  answers[1]({ data: 'UE5H' });
+  assert.equal((await picture).base64, 'UE5H'); assert.deepEqual(again(stand), []);
+});
+
+test('a page that answers being looked at with a dialog ends the call with the dialog named, instead of leaving it waiting', async () => {
+  // A page that was put away opens "Your session has expired" the moment it is told it has the focus.
+  const waiting = [], { tab, replies } = putAway({ more: { 'Page.captureScreenshot': () => new Promise(resolve => waiting.push(resolve)) } });
+  const stand = harness({ ...replies, 'Runtime.evaluate': params => params.awaitPromise ? new Promise(resolve => waiting.push(resolve)) : replies['Runtime.evaluate'](params),
+    // As a real Chrome does it: the telling itself is left unanswered while the dialog it caused is open.
+    'Emulation.setFocusEmulationEnabled': params => { replies['Emulation.setFocusEmulationEnabled'](params); if (!params.enabled) return undefined; stand.say(1, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Your session has expired' }); return new Promise(resolve => waiting.push(resolve)); } });
+  const told = /^The page is showing a dialog \(alert: "Your session has expired"\)\. Nothing else works on this tab until it is answered: page\.dialog with accept true or false\.$/;
+  await refuses(stand.methods['page.click']({ ref: 13 }), 'dialog_open', told);
+  assert.equal(stand.names().some(name => name.startsWith('Input.')), false, 'the click was not sent, then or later');
+  // Once the dialog is answered the click is asked for again, and the page is given its frames again before it.
+  assert.equal((await stand.methods['page.dialog']({ accept: true })).accepted, true);
+  stand.replies['Emulation.setFocusEmulationEnabled'] = replies['Emulation.setFocusEmulationEnabled']; stand.replies['Runtime.evaluate'] = replies['Runtime.evaluate'];
+  const from = stand.names().length;
+  assert.deepEqual(await stand.methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
+  assert.deepEqual(stand.names(from).slice(0, 5), ['DOM.resolveNode', 'Runtime.evaluate', 'Emulation.setFocusEmulationEnabled', 'Runtime.evaluate', 'Runtime.evaluate'], 'it had not been seen drawn, so it is waited for');
+  assert.equal(stand.sent('Input.dispatchMouseEvent').length, 3);
+  // A picture that makes the page open a dialog says so as well, and puts the tab away again.
+  const lent = putAway({ more: { 'Page.captureScreenshot': () => new Promise(resolve => waiting.push(resolve)) } });
+  const other = harness({ ...lent.replies, 'Emulation.setFocusEmulationEnabled': params => { lent.replies['Emulation.setFocusEmulationEnabled'](params); if (!params.enabled) return new Promise(resolve => waiting.push(resolve)); other.say(1, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Signed out' }); return new Promise(resolve => waiting.push(resolve)); } });
+  await refuses(other.capture(1), 'dialog_open', /alert: "Signed out"/);
+  assert.equal(other.sent('Page.captureScreenshot').length, 0, 'no picture is asked for under the dialog');
+  assert.deepEqual(other.sent('Emulation.setFocusEmulationEnabled').map(given => given.enabled), [true, false]); assert.equal(lent.tab.state, 'hidden');
+  assert.equal(other.timers.filter(timer => timer.ms < IDLE && !timer.cancelled && !timer.ran).length <= 1, true);
+  assert.equal(tab.state, 'visible');
 });
 
 test('the extension offers each read of the debugger as a read and the rest of it as changes, and hands it the clock and the timers it was given', async () => {
@@ -1165,16 +1217,27 @@ test('what page.waitFor asks the page about a text stands on its own there: writ
   const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'boolean', value: true } } });
   await methods['page.waitFor']({ text: 'Send' });
   const [{ expression }] = sent('Runtime.evaluate'), asked = [];
-  const item = (more = {}) => ({ getAttribute: () => null, getClientRects: () => [{}], ...more }), named = (attribute, value) => item({ getAttribute: name => name === attribute ? value : null });
-  const page = (innerText, items = []) => inPage(expression, { document: { body: { innerText }, querySelectorAll: selector => { asked.push(selector); return items; } } });
+  const item = (more = {}) => ({ tagName: 'BUTTON', getAttribute: () => null, getClientRects: () => [{}], ...more }), named = (attribute, value) => item({ getAttribute: name => name === attribute ? value : null });
+  const field = (value, type = 'text') => item({ tagName: 'INPUT', type, value });
+  const page = (innerText, items = [], byId = {}) => inPage(expression, { document: { body: { innerText }, getElementById: id => byId[id] ?? null, querySelectorAll: selector => { asked.push(selector); return items; } } });
   assert.equal(page('Press Send to go on'), true); assert.deepEqual(asked, [], 'what is written is enough');
   assert.equal(page('Nothing of the kind'), false);
-  assert.deepEqual(asked, ['[aria-label], [title], [alt], [placeholder], input, textarea']);
+  assert.deepEqual(asked, ['[aria-label], [aria-labelledby], [title], [alt], [placeholder], input, textarea']);
   // A button drawn as a picture is known by what a screen reader says of it, a field by what it holds or asks for.
   for (const attribute of ['aria-label', 'title', 'alt', 'placeholder']) assert.equal(page('', [item(), named(attribute, 'Send message')]), true, attribute);
-  assert.equal(page('', [item({ value: 'Send later' })]), true, 'what a field holds');
-  assert.equal(page('', [item({ value: 7 }), named('title', 'Other')]), false);
+  assert.equal(page('', [named('aria-labelledby', 'a  b')], { a: { innerText: 'Send' }, b: { innerText: 'message now' } }), true, 'named by other elements');
+  assert.equal(page('', [named('aria-labelledby', 'gone')]), false);
+  assert.equal(page('', [field('Send later')]), true, 'what a field for text holds');
+  assert.equal(page('', [item({ tagName: 'TEXTAREA', value: 'Please Send it' })]), true);
+  assert.equal(page('', [field('Send', 'submit')]), true, 'the words on a button that is an input');
+  // What a password field holds is never looked at: found or not found would tell what is in it. Nor the value behind a choice.
+  for (const type of ['password', 'PASSWORD', 'hidden', 'checkbox', 'radio']) assert.equal(page('', [field('Send', type)]), false, type);
+  assert.equal(page('', [item({ tagName: 'SELECT', value: 'Send' }), item({ value: 'Send' })]), false);
+  assert.equal(page('', [field(7), named('title', 'Other')]), false);
   assert.equal(page('', [{ ...named('aria-label', 'Send message'), getClientRects: () => [] }]), false, 'what is not shown is not found');
+  // A name that runs over two lines is found as page.snapshot gives it: with one blank where the line ends.
+  const spaced = inPage(sent('Runtime.evaluate')[0].expression.replace(/\("Send"\)$/, '("Send it now")'), { document: { body: { innerText: 'Send it\n   now' }, querySelectorAll: () => [] } });
+  assert.equal(spaced, true);
   assert.equal(inPage(expression, { document: { body: null } }), false, 'a page with no body yet has nothing on it');
 });
 
@@ -1222,10 +1285,10 @@ test('what finds an element by its text stands on its own in the page: the short
   const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node' } }, 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } });
   await methods['page.inspect']({ text: 'Save' });
   const [{ expression }] = sent('Runtime.evaluate'), asked = [];
-  const item = (innerText, more = {}) => ({ innerText, getAttribute: () => null, getClientRects: () => [{}], ...more });
-  const both = item('Save and close'), save = item(' Save '), hidden = item('Save', { getClientRects: () => [] }), field = item('', { value: 'Save as draft' }), words = item('Press Save to keep it');
+  const item = (innerText, more = {}) => ({ tagName: 'BUTTON', innerText, getAttribute: () => null, getClientRects: () => [{}], ...more });
+  const both = item('Save and close'), save = item(' Save '), hidden = item('Save', { getClientRects: () => [] }), field = item('', { tagName: 'INPUT', type: 'text', value: 'Save as draft' }), words = item('Press Save to keep it');
   const icon = item('', { getAttribute: name => name === 'aria-label' ? 'Save' : null });
-  const find = (controls, all) => inPage(expression, { document: { querySelectorAll: selector => { asked.push(selector); return selector === 'body *' ? all : controls; } } });
+  const find = (controls, all, byId = {}) => inPage(expression, { document: { getElementById: id => byId[id] ?? null, querySelectorAll: selector => { asked.push(selector); return selector === 'body *' ? all : controls; } } });
   assert.equal(find([both, save, hidden], [words]), save);
   assert.match(asked[0], /^button, a, /); assert.equal(asked.length, 1, 'the rest of the page is not searched when something to press was found');
   assert.equal(find([both, field], []), field, 'what a field holds counts as its text');
@@ -1239,7 +1302,17 @@ test('what finds an element by its text stands on its own in the page: the short
   assert.equal(find([both, counter], []), counter, 'a button that shows a number and is called Save');
   assert.equal(find([item('Save', { getAttribute: name => name === 'title' ? 'Save this page for later' : null }), both], []).innerText, 'Save', 'the shortest of its names that has the text is what it is measured by');
   // A bar that shows how far something is holds a number, not a text: it is passed over, not tripped on.
-  assert.equal(find([], [item('', { value: 0.5 }), words]), words);
+  assert.equal(find([], [item('', { tagName: 'PROGRESS', value: 0.5 }), words]), words);
+  // What a password field holds is never looked at, nor the value behind a choice or a button: a link that shows "1"
+  // is not passed over for a list whose chosen value happens to be 1.
+  const secret = item('', { tagName: 'INPUT', type: 'password', value: 'Save' }), choice = item('', { tagName: 'SELECT', value: 'Save' }), valued = item('', { tagName: 'BUTTON', value: 'Save' });
+  assert.equal(find([secret, choice, valued], []), null);
+  assert.equal(find([secret, choice, both], []), both);
+  // Named by other elements; and a name that runs over two lines counts with one blank where the line ends.
+  const pointed = item('', { getAttribute: name => name === 'aria-labelledby' ? 'x y' : null });
+  assert.equal(find([both, pointed], [], { x: { innerText: 'Save' }, y: { innerText: 'now' } }), pointed);
+  const split = item('Save\n   and close');
+  assert.equal(inPage(expression.replace(/\("Save"\)$/, '("Save and close")'), { document: { querySelectorAll: () => [split] } }), split);
 });
 
 // What a subagent's first reading of the debugger found to be wrong, each held to what it is now.
@@ -1350,22 +1423,14 @@ test('page.network takes an empty query as no query', async () => {
 // answered after five seconds, a turn of the wheel never. Told that it has the focus, the same page took all of them
 // at once, was drawn and pictured, and stayed behind the tab the owner was looking at.
 
-// A page that says how the browser treats it: put away until it is told that it has the focus (where `wakes` is true),
-// and again once it is told that it has not.
-const putAway = ({ wakes = true, more = {} } = {}) => {
-  const tab = { state: 'hidden' };
-  return { tab, replies: shown({ 'Emulation.setFocusEmulationEnabled': ({ enabled }) => { if (!enabled) tab.state = 'hidden'; else if (wakes) tab.state = 'visible'; },
-    'Runtime.evaluate': ({ expression, returnByValue }) => expression === 'document.visibilityState' ? { result: { type: 'string', value: tab.state } } : returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } }
-      : { result: { type: 'string', value: 'input #name' } },
-    'Page.getLayoutMetrics': { cssVisualViewport: { clientWidth: 1000, clientHeight: 700 } }, 'Accessibility.getFullAXTree': shop(), ...more }) };
-};
 
 test('what uses the mouse or the keys on a tab that is put away first has the browser treat it as looked at, once, and waits for it to be drawn', async () => {
   for (const [name, input, sends] of [['page.click', { ref: 13 }, 'Input.dispatchMouseEvent'], ['page.hover', { ref: 13 }, 'Input.dispatchMouseEvent'], ['page.press', { key: 'Enter' }, 'Input.dispatchKeyEvent'],
     ['page.type', { ref: 13, text: 'Ada', clear: true }, 'Input.insertText'], ['page.scroll', { deltaY: 400 }, 'Input.dispatchMouseEvent']]) {
     const { methods, names, sent } = harness(putAway().replies);
     assert.equal((await methods[name](input)).tabId, 1, name);
-    assert.deepEqual(names(5).slice(0, 4), ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled', 'Runtime.evaluate', 'Runtime.evaluate'], name);
+    // What the call acts on is found first (where it names something); then the tab is woken.
+    assert.deepEqual(names(5).filter(sent => sent !== 'DOM.resolveNode').slice(0, 4), ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled', 'Runtime.evaluate', 'Runtime.evaluate'], name);
     assert.deepEqual(sent('Emulation.setFocusEmulationEnabled'), [{ enabled: true }]);
     // Between the two looks the page is given two frames to be drawn in, or two seconds where it draws none.
     const [first, drawn, second] = sent('Runtime.evaluate');
@@ -1391,7 +1456,10 @@ test('where the browser cannot be made to draw a tab that is put away, the mouse
   for (const more of [{}, { 'Emulation.setFocusEmulationEnabled': () => no('\'Emulation.setFocusEmulationEnabled\' wasn\'t found') }]) {
     const { tab, replies } = putAway({ wakes: false, more }), { methods, names, sent } = harness(replies);
     for (const [name, input] of [['page.click', { ref: 13 }], ['page.click', { text: 'Buy', double: true }], ['page.hover', { ref: 13 }], ['page.press', { key: 'Enter' }], ['page.type', { ref: 13, text: 'Ada' }], ['page.scroll', { deltaY: 400 }]]) await refuses(methods[name](input), 'invalid_input', told);
-    assert.equal(names().some(name => /^(Input|DOM)\./.test(name)), false, 'the element was not looked for, and the browser was given nothing to pass on');
+    assert.equal(names().some(name => name.startsWith('Input.') || name === 'DOM.focus' || name === 'DOM.scrollIntoViewIfNeeded'), false, 'the browser was given nothing to pass on, and nothing on the page was moved');
+    // What did not help is not left switched on: a read after it finds the tab as it was.
+    if (!more['Emulation.setFocusEmulationEnabled']) assert.deepEqual(sent('Emulation.setFocusEmulationEnabled').map(given => given.enabled), Array(6).fill([true, false]).flat());
+    assert.equal(tab.state, 'hidden');
     // A call that is wrong in itself is told that, as on any tab; and what needs no drawing still works.
     await refuses(methods['page.press']({ key: 'F13' }), 'invalid_input', /^key is one letter or digit/);
     await refuses(methods['page.scroll'](), 'invalid_input', /^deltaY is required\.$/);
@@ -1408,7 +1476,7 @@ test('a tab the browser shows is treated as looked at too, so that it stays so w
   for (const answer of [{ result: { type: 'string', value: 'visible' } }, { result: { type: 'string', value: 'prerender' } }, {}]) {
     const { methods, names, sent } = harness(shown({ 'Runtime.evaluate': answer }));
     assert.deepEqual(await methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
-    assert.deepEqual(names(5).slice(0, 3), [...WOKEN, 'DOM.resolveNode']);
+    assert.deepEqual(names(5).slice(0, 3), ['DOM.resolveNode', ...WOKEN]);
     assert.deepEqual(await methods['page.press']({ key: 'Enter' }), { tabId: 1, pressed: 'Enter' });
     assert.deepEqual(await methods['page.scroll']({ deltaY: 100 }), { tabId: 1, scrolledBy: 100 });
     assert.equal(sent('Input.dispatchMouseEvent').length, 4); assert.equal(sent('Input.dispatchKeyEvent').length, 2); assert.equal(sent('Emulation.setFocusEmulationEnabled').length, 1);
@@ -1465,4 +1533,71 @@ test('a tab is not put away under a picture that is still being taken, nor under
   assert.deepEqual(switched(busy), [true, true], 'never told that it is not looked at');
   assert.deepEqual(await busy.methods['page.press']({ key: 'Enter' }), { tabId: 1, pressed: 'Enter' });
   assert.equal(busy.sent('Input.dispatchKeyEvent').length, 2);
+});
+
+// What a second, independent reading of the debugger found (2026-10-12), each held to what it is now.
+
+test('page.waitFor does not put the debugger back on a tab the owner took it off while it waited', async () => {
+  const stand = harness({ 'Runtime.evaluate': () => { if (stand.sent('Runtime.evaluate').length === 2) stand.drop(1, 'canceled_by_user'); return { result: { type: 'boolean', value: false } }; } });
+  await refuses(stand.methods['page.waitFor']({ text: 'Saved' }), 'browser_error', /^The debugger was taken off this tab before this was done: the owner took it off, or the tab was closed\.$/);
+  assert.deepEqual(stand.log.filter(call => call.method === 'attach').length, 1, 'attached once, and not again');
+  assert.deepEqual(stand.debugging(), []); assert.deepEqual(stand.pauses, [250, 250]);
+  // The same when the tab is let go with page.debugStop from another call.
+  const other = harness({ 'Runtime.evaluate': () => { if (other.sent('Runtime.evaluate').length === 3) void other.methods['page.debugStop'](); return { result: { type: 'boolean', value: false } }; } });
+  await refuses(other.methods['page.waitFor']({ selector: '#never', timeoutMs: 30000 }), 'browser_error', /taken off this tab/);
+  assert.equal(other.log.filter(call => call.method === 'attach').length, 1); assert.deepEqual(other.pauses, [250, 250, 250]);
+});
+
+test('page.press takes a named key however it is written, and says it as it is known', async () => {
+  const { methods, sent } = harness();
+  for (const [given, known] of [['enter', 'Enter'], ['ESCAPE', 'Escape'], ['arrowdown', 'ArrowDown'], ['pageUp', 'PageUp']]) assert.equal((await methods['page.press']({ key: given })).pressed, known);
+  assert.deepEqual(sent('Input.dispatchKeyEvent').filter(event => event.type !== 'keyUp').map(event => event.key), ['Enter', 'Escape', 'ArrowDown', 'PageUp']);
+  // A letter keeps the case it was given in: it is a letter, not a name.
+  assert.equal((await methods['page.press']({ key: 'E' })).pressed, 'E');
+});
+
+test('a call that names nothing, or something that is gone, does not bring a tab that is put away to life', async () => {
+  const { tab, replies } = putAway({ more: { 'DOM.resolveNode': ({ backendNodeId }) => backendNodeId === 13 ? { object: { type: 'object', objectId: 'node-13' } } : no('No node with given id found') } });
+  const { methods, names } = harness({ ...replies, 'Runtime.evaluate': params => params.returnByValue === false ? { result: { type: 'object', subtype: 'null', value: null } } : replies['Runtime.evaluate'](params) });
+  await refuses(methods['page.click'](), 'invalid_input', /Say which element/);
+  await refuses(methods['page.click']({ ref: 99 }), 'not_found', /ref 99 any more/);
+  await refuses(methods['page.hover']({ selector: '#gone' }), 'not_found', /#gone/);
+  await refuses(methods['page.type']({ ref: 99, text: 'Ada' }), 'not_found', /page\.snapshot/);
+  assert.equal(names().includes('Emulation.setFocusEmulationEnabled'), false); assert.equal(tab.state, 'hidden');
+});
+
+test('two calls that use the mouse on a tab that is put away wake it once, and neither goes ahead before it was given its frames', async () => {
+  let drawn;
+  const { replies } = putAway(), stand = harness({ ...replies, 'Runtime.evaluate': params => params.awaitPromise ? new Promise(resolve => { drawn = () => resolve({ result: { type: 'undefined' } }); }) : replies['Runtime.evaluate'](params) });
+  const first = stand.methods['page.click']({ ref: 13 }), second = stand.methods['page.press']({ key: 'Enter' });
+  await settle();
+  assert.deepEqual(stand.sent('Emulation.setFocusEmulationEnabled'), [{ enabled: true }]);
+  assert.equal(stand.names().some(name => name.startsWith('Input.')), false, 'both wait: the page has not been drawn yet');
+  drawn();
+  assert.deepEqual(await first, { tabId: 1, clicked: { x: 60, y: 40 } }); assert.deepEqual(await second, { tabId: 1, pressed: 'Enter' });
+  assert.equal(stand.sent('Emulation.setFocusEmulationEnabled').length, 1);
+  // A click that comes while a picture has the tab on loan waits for its frames too: shown for a picture is not yet drawn.
+  let frames = 0;
+  const held = [], lent = putAway({ more: { 'Page.captureScreenshot': () => new Promise(resolve => held.push(resolve)) } });
+  const busy = harness({ ...lent.replies, 'Runtime.evaluate': params => { if (params.awaitPromise) frames++; return lent.replies['Runtime.evaluate'](params); } });
+  const taking = busy.capture(1);
+  await settle();
+  await busy.methods['page.click']({ ref: 13 });
+  assert.equal(frames, 1);
+  held[0]({ data: 'QQ==' }); await taking;
+});
+
+test('page.screenshot of the tab in front goes through the debugger when the page says it is not shown: its window is minimized or covered', async () => {
+  const { chrome, methods, asked, sent } = extension({ 'Page.captureScreenshot': { data: 'UE5H' } });
+  const said = []; let state = 'hidden';
+  chrome.scripting = { executeScript: async given => { said.push(given.target); if (state === 'refused') throw new Error('Cannot access a chrome:// URL'); return [{ result: state }]; } };
+  assert.deepEqual(await methods['page.screenshot'](), { tabId: 1, mimeType: 'image/png', base64: 'UE5H' });
+  assert.deepEqual(said, [{ tabId: 1 }]); assert.equal(sent('Page.captureScreenshot').length, 1); assert.equal(asked.some(([name]) => name === 'captureVisibleTab'), false);
+  // A page that is shown, and one that cannot be asked, are captured as they are seen.
+  for (state of ['visible', 'refused']) assert.deepEqual(await methods['page.screenshot']({ tabId: 1 }), { tabId: 1, mimeType: 'image/png', base64: 'AAAA' });
+  assert.equal(asked.filter(([name]) => name === 'captureVisibleTab').length, 2); assert.equal(sent('Page.captureScreenshot').length, 1);
+  // A tab behind another, and a whole page, are not asked: they take the debugger anyway.
+  said.length = 0;
+  await methods['page.screenshot']({ tabId: 2 }); await methods['page.screenshot']({ fullPage: true });
+  assert.deepEqual(said, []);
 });

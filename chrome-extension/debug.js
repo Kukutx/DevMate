@@ -9,9 +9,9 @@
 
 export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor']);
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
-// How long each asking for a picture of a tab is given before it is asked for again, and at last given up: ten
-// seconds in all (see capture()).
-const PICTURE_AGAIN_MS = [500, 1000, 2000, 3000, 3500];
+// How long each asking for a picture of a tab that is put away is given before it is asked for again, and at last
+// given up: ten seconds in all (see capture()).
+const PICTURE_AGAIN_MS = [1500, 2500, 3000, 3000];
 const LEVELS = { verbose: 0, debug: 0, log: 1, info: 1, navigation: 1, warning: 2, warn: 2, dialog: 2, error: 3, exception: 3, assert: 3 };
 const ASKED = { debug: 0, info: 1, warn: 2, error: 3 };
 const INTERACTIVE = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'listbox', 'treeitem']);
@@ -51,10 +51,18 @@ const printed = item => {
 
 // What follows runs in the page, not here: each is sent there as text, so it may use nothing else from this file.
 function byText(wanted) {
-  // What an element shows, what a field holds, and what it is called where it shows other words or none (a button
-  // drawn as a picture, an empty field): the names page.snapshot gives. The length of the shortest that has the text.
-  const least = item => Math.min(...[item.innerText, item.value, item.getAttribute('aria-label'), item.getAttribute('title'), item.getAttribute('alt'), item.getAttribute('placeholder')]
-    .map(name => typeof name === 'string' ? name.trim() : '').filter(name => name.includes(wanted)).map(name => name.length));
+  // What an element is found by: the words it shows; what a field for text holds or asks for; and what it is called
+  // where it shows other words or none (aria-label, aria-labelledby, title, alt). Runs of blanks count as one blank.
+  // What a password field holds is never looked at, nor the value behind a choice. Of these, the length of the
+  // shortest that has the text.
+  const plain = name => typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '', sought = plain(wanted);
+  if (!sought) return null;
+  const least = item => {
+    const typed = item.tagName === 'TEXTAREA' || (item.tagName === 'INPUT' && !/^(password|hidden|checkbox|radio|file|range|color)$/i.test(item.type || ''));
+    const labelled = (item.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.innerText || '').join(' ');
+    return Math.min(...[item.innerText, typed ? item.value : '', item.getAttribute('aria-label'), labelled, item.getAttribute('title'), item.getAttribute('alt'), item.getAttribute('placeholder')]
+      .map(plain).filter(name => name.includes(sought)).map(name => name.length));
+  };
   const hit = list => [...list].slice(0, 5000).filter(item => item.getClientRects().length).map(item => [item, least(item)]).filter(([, length]) => length < Infinity).sort((a, b) => a[1] - b[1])[0]?.[0];
   return hit(document.querySelectorAll('button, a, [role=button], [role=link], [role=tab], [role=menuitem], input, select, textarea, summary, label')) || hit(document.querySelectorAll('body *')) || null;
 }
@@ -63,13 +71,20 @@ function inFront(x, y) {
   if (!hit || hit === this || this.contains(hit) || hit.contains(this) || hit.closest('label')?.control === this) return null;
   return '<' + hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') + (typeof hit.className === 'string' && hit.className.trim() ? '.' + hit.className.trim().split(/\s+/).slice(0, 3).join('.') : '') + '>';
 }
-// Whether the page shows a text: written on it, or as the name of something that shows no words (what a screen reader
-// says of a button drawn as a picture, what a field holds or asks for). page.snapshot gives these names too.
+// Whether the page shows a text: written on it, or as what byText above finds an element by (what a field for text
+// holds or asks for, a label, a title). What a password field holds is never looked at.
 function shows(wanted) {
   if (!document.body) return false;
   if (document.body.innerText.includes(wanted)) return true;
-  return [...document.querySelectorAll('[aria-label], [title], [alt], [placeholder], input, textarea')].slice(0, 5000).some(item => item.getClientRects().length &&
-    [item.getAttribute('aria-label'), item.getAttribute('title'), item.getAttribute('alt'), item.getAttribute('placeholder'), item.value].some(named => typeof named === 'string' && named.includes(wanted)));
+  const plain = name => typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '', sought = plain(wanted);
+  if (!sought) return false;
+  if (plain(document.body.innerText).includes(sought)) return true;
+  return [...document.querySelectorAll('[aria-label], [aria-labelledby], [title], [alt], [placeholder], input, textarea')].slice(0, 5000).some(item => {
+    if (!item.getClientRects().length) return false;
+    const typed = item.tagName === 'TEXTAREA' || (item.tagName === 'INPUT' && !/^(password|hidden|checkbox|radio|file|range|color)$/i.test(item.type || ''));
+    const labelled = (item.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.innerText || '').join(' ');
+    return [typed ? item.value : '', item.getAttribute('aria-label'), labelled, item.getAttribute('title'), item.getAttribute('alt'), item.getAttribute('placeholder')].some(name => plain(name).includes(sought));
+  });
 }
 function keyboard(clear) {
   let field = document.activeElement;
@@ -186,7 +201,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       throw fail('browser_error', /cannot access|chrome:|chrome-extension:|web store/i.test(said(error)) ? 'The browser does not let a page of its own, or of the Web Store, be debugged.' : 'The browser did not attach the debugger to this tab (' + said(error) + ').');
     });
     // Each of the two lists counts what it lost itself, once it is full.
-    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: 0, lent: 0 };
+    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: null, put: false, undrawn: false, lent: 0 };
     sessions.set(tabId, session);
     try { for (const domain of ['Runtime', 'Log', 'Network', 'Page']) await command(tabId, domain + '.enable'); }
     catch (error) { await release(tabId); throw error; }
@@ -202,35 +217,43 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       session = await opening.get(tabId);
       started = true;
     }
-    cancel(session.timer);
-    session.timer = schedule(() => { void release(tabId); }, IDLE_MS);
+    touch(session);
     return { session, started };
   }
+  // Every use of a tab starts its five minutes again.
+  const touch = session => { cancel(session.timer); session.timer = schedule(() => { void release(session.tabId); }, IDLE_MS); };
   // A page that shows alert() or confirm() answers nothing else until the dialog is answered: say so instead of waiting.
+  const inDialog = session => fail('dialog_open', 'The page is showing a dialog (' + dialogOf(session) + '). Nothing else works on this tab until it is answered: page.dialog with accept true or false.');
+  const letGo = () => fail('browser_error', 'The debugger was taken off this tab before this was done: the owner took it off, or the tab was closed.');
   const page = async (tabId, { whileDialog = false } = {}) => {
     const tab = await target(tabId), held = await attached(tab.id);
-    if (held.session.dialog && !whileDialog) throw fail('dialog_open', 'The page is showing a dialog (' + dialogOf(held.session) + '). Nothing else works on this tab until it is answered: page.dialog with accept true or false.');
+    if (held.session.dialog && !whileDialog) throw inDialog(held.session);
     return { tab, id: tab.id, ...held };
   };
   // Something done to the page. When the page opens a dialog in answer to it, it is not waited for any longer, and
   // what is left of it is not done (work is told by halted()). When the tab is let go in the middle, it has failed.
   function unlessDialog(session, work) {
+    // A dialog that opened since the call began (the page was brought to life, an element was scrolled to) is in the
+    // way already: nothing is begun under it.
+    if (session.dialog) return Promise.reject(inDialog(session));
     let wake, over = false;
     const dialog = new Promise(resolve => { wake = () => resolve(DIALOG); session.waiters.add(wake); }), doing = work(() => over);
     doing.catch(() => {});
     return Promise.race([doing, dialog]).then(result => {
-      if (result === DIALOG && sessions.get(session.tabId) !== session) throw fail('browser_error', 'The debugger was taken off this tab before this was done: the owner took it off, or the tab was closed.');
+      if (result === DIALOG && sessions.get(session.tabId) !== session) throw letGo();
       return result;
     }).finally(() => { over = true; session.waiters.delete(wake); });
   }
   const withDialog = (session, result) => session.dialog ? { ...result, dialog: dialogOf(session), note: 'The page opened a dialog and waits for it. Answer it with page.dialog.', untrusted: true } : result;
-  const run = async (id, expression, { awaitPromise = false } = {}) => {
-    const answer = await command(id, 'Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: true, timeout: 15000 });
+  // gesture: the page takes what is run as done by its user, and may then open windows, play sound or write to the
+  // clipboard. Only what the caller has the page do is run that way; what this file asks the page about itself is not.
+  const run = async (id, expression, { awaitPromise = false, gesture = false } = {}) => {
+    const answer = await command(id, 'Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: gesture, timeout: 15000 });
     if (answer.exceptionDetails) throw fail('page_error', cut(answer.exceptionDetails.exception?.description || answer.exceptionDetails.text, 1000));
     return answer.result;
   };
   const onElement = async (id, objectId, work, ...given) => {
-    const answer = await command(id, 'Runtime.callFunctionOn', { objectId, functionDeclaration: String(work), arguments: given.map(value => value === undefined ? {} : { value }), returnByValue: true, userGesture: true });
+    const answer = await command(id, 'Runtime.callFunctionOn', { objectId, functionDeclaration: String(work), arguments: given.map(value => value === undefined ? {} : { value }), returnByValue: true, userGesture: work === choose });
     if (answer.exceptionDetails) throw fail('page_error', cut(answer.exceptionDetails.exception?.description || answer.exceptionDetails.text, 1000));
     return answer.result?.value;
   };
@@ -243,20 +266,34 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   // a tab that is put away as it is: a page that believes it is looked at may mark things as read, or go on playing.
   const hidden = async id => (await run(id, 'document.visibilityState'))?.value === 'hidden';
   const wake = (id, enabled = true) => raw(id, 'Emulation.setFocusEmulationEnabled', { enabled }).catch(() => {});
-  async function awake(id, session) {
-    if (session.awake) return;
-    // While this is under way, a picture that ends does not put the tab away again.
-    session.waking++;
-    try {
-      const put = await hidden(id);
-      await wake(id);
-      if (put) {
+  // One waking at a time for a tab: whoever asks meanwhile waits for the same one, and a picture that ends while it
+  // is under way does not put the tab away again.
+  function awake(id, session) {
+    if (session.awake) return Promise.resolve();
+    return session.waking ||= (async () => {
+      // Put away now, shown only for a picture that is being taken, or woken before and interrupted: in each case
+      // the page may not have been drawn yet.
+      const put = await hidden(id) || session.lent > 0 || session.undrawn;
+      if (put) session.put = session.undrawn = true;
+      // A page may answer being looked at with a dialog (seen in a real Chrome with one that says "your session has
+      // expired" when it gets the focus). The browser then answers nothing more for the tab, not even the telling
+      // itself, so all of it is done under the watch for a dialog, and one is said at once.
+      const still = await unlessDialog(session, async () => {
+        await wake(id);
+        if (!put) return false;
         // A page that was never drawn takes a click only once it has been: it is given two frames, or two seconds.
         await run(id, 'new Promise(done => { requestAnimationFrame(() => requestAnimationFrame(() => done())); setTimeout(done, 2000); })', { awaitPromise: true }).catch(() => {});
-        if (await hidden(id)) throw fail('invalid_input', 'The browser is not showing this tab and could not be made to draw it where it is, so a click, a key or the wheel may never arrive there. Bring it forward (tabs.activate) and ask again.');
+        return hidden(id);
+      });
+      if (still === DIALOG) throw inDialog(session);
+      if (still) {
+        // What did not help is not left switched on.
+        if (!session.lent) await wake(id, false);
+        throw fail('invalid_input', 'The browser is not showing this tab and could not be made to draw it where it is, so a click, a key or the wheel may never arrive there. Bring it forward (tabs.activate) and ask again.');
       }
+      session.undrawn = false;
       session.awake = true;
-    } finally { session.waking--; }
+    })().finally(() => { session.waking = null; });
   }
 
   // The element a method acts on: by its number in the last snapshot, by a CSS selector, or by the text it shows.
@@ -274,8 +311,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     return answer.result.objectId;
   }
   // Where to point at an element: the middle of it, once it is scrolled into view. Refused when something else is there.
-  async function point(id, which) {
-    const objectId = await element(id, which);
+  async function point(id, objectId) {
     await raw(id, 'DOM.scrollIntoViewIfNeeded', { objectId }).catch(() => {});
     const quad = ((await raw(id, 'DOM.getContentQuads', { objectId }).catch(() => null))?.quads || []).find(one => one.length === 8);
     if (!quad) throw fail('not_found', 'The element is not shown on the page, so it cannot be pointed at. page.inspect says how it is laid out.');
@@ -356,22 +392,26 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       const limit = whole(timeoutMs, 'timeoutMs', { optional: true, min: 100, max: 30000 }) ?? 10000, began = clock();
       const expression = selector !== undefined ? '!!document.querySelector(' + JSON.stringify(text(selector, 'selector', { max: 1000 })) + ')' : inPage(shows, text(shown, 'text', { max: 500 }));
       // The tab is the one that was in front when this was asked, whatever the owner turns to while it waits.
-      const { id } = await page(tabId);
+      const { id, session } = await page(tabId);
       for (;;) {
         // A page that is between two addresses has nothing to ask yet: that is a "not yet", not a failure.
         const found = await run(id, expression).then(result => result.value === true, error => { if (error.code === 'page_error' && selector !== undefined) throw fail('invalid_input', 'The selector is not valid: ' + error.message); return false; });
         if (found) return { tabId: id, found: true, ms: clock() - began };
         if (clock() - began >= limit) throw fail('timeout', (selector !== undefined ? 'Nothing matches ' + selector : 'The text "' + shown + '" is not on the page') + ' after ' + limit + ' ms.');
         await pause(250);
-        // Still there, still debugged, and no dialog in the way.
-        await page(id);
+        // Still debugged, and no dialog in the way. A tab the owner has let go of meanwhile is not taken again.
+        if (sessions.get(id) !== session) throw letGo();
+        if (session.dialog) throw inDialog(session);
+        touch(session);
       }
     },
 
+    // What a call acts on is found before the tab is brought to life: one that names nothing, or something that is
+    // gone, wakes nothing.
     'page.click': async ({ tabId, ref, selector, text: shown, double } = {}) => {
-      const { id, session } = await page(tabId);
+      const { id, session } = await page(tabId), objectId = await element(id, { ref, selector, text: shown });
       await awake(id, session);
-      const at = await point(id, { ref, selector, text: shown }), button = { x: at.x, y: at.y, button: 'left' };
+      const at = await point(id, objectId), button = { x: at.x, y: at.y, button: 'left' };
       await unlessDialog(session, async halted => {
         await command(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
         // A button that was pressed is let go whatever happens; a second click is not begun once the first was answered with a dialog.
@@ -383,17 +423,17 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       return withDialog(session, { tabId: id, clicked: at });
     },
     'page.hover': async ({ tabId, ref, selector, text: shown } = {}) => {
-      const { id, session } = await page(tabId);
+      const { id, session } = await page(tabId), objectId = await element(id, { ref, selector, text: shown });
       await awake(id, session);
-      const at = await point(id, { ref, selector, text: shown });
+      const at = await point(id, objectId);
       await command(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
       return { tabId: id, hovered: at };
     },
     'page.type': async ({ tabId, ref, selector, text: typed, clear } = {}) => {
       if (typeof typed !== 'string' || typed.length > 100000) throw fail('invalid_input', 'text is what to type, at most 100000 characters.');
-      const { id, session } = await page(tabId);
+      const { id, session } = await page(tabId), objectId = ref !== undefined || selector !== undefined ? await element(id, { ref, selector }) : null;
       await awake(id, session);
-      if (ref !== undefined || selector !== undefined) await raw(id, 'DOM.focus', { objectId: await element(id, { ref, selector }) }).catch(error => { throw error.code ? error : fail('invalid_input', 'This element cannot take the keyboard: it is not something to type into.'); });
+      if (objectId) await raw(id, 'DOM.focus', { objectId }).catch(() => { throw fail('invalid_input', 'This element cannot take the keyboard: it is not something to type into.'); });
       const into = (await run(id, inPage(keyboard, clear === true))).value;
       if (!into) throw fail('invalid_input', 'Nothing on the page has the keyboard. Say where to type: ref or selector.');
       await unlessDialog(session, async halted => {
@@ -406,11 +446,13 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     'page.press': async ({ tabId, key: name, modifiers } = {}) => {
       const held = modifiers === undefined ? [] : modifiers;
       if (!Array.isArray(held) || held.some(one => !Object.hasOwn(MODIFIERS, one))) throw fail('invalid_input', 'modifiers is a list of: ' + Object.keys(MODIFIERS).join(', ') + '.');
-      if (typeof name !== 'string' || (!/^[a-z0-9]$/i.test(name) && !Object.hasOwn(KEYS, name))) throw fail('invalid_input', 'key is one letter or digit, or one of: ' + Object.keys(KEYS).join(', ') + '.');
+      // A named key is taken however it is written (enter, ENTER); a letter keeps the case it was given in.
+      const known = typeof name !== 'string' ? null : /^[a-z0-9]$/i.test(name) ? name : Object.keys(KEYS).find(one => one.toLowerCase() === name.toLowerCase());
+      if (!known) throw fail('invalid_input', 'key is one letter or digit, or one of: ' + Object.keys(KEYS).join(', ') + '.');
       const { id, session } = await page(tabId);
       await awake(id, session);
-      await unlessDialog(session, () => press(id, name, held));
-      return withDialog(session, { tabId: id, pressed: [...held, name].join('+') });
+      await unlessDialog(session, () => press(id, known, held));
+      return withDialog(session, { tabId: id, pressed: [...held, known].join('+') });
     },
     'page.select': async ({ tabId, ref, selector, value, label } = {}) => {
       if ((value === undefined) === (label === undefined)) throw fail('invalid_input', 'Say which choice: value, or label (the text it shows).');
@@ -430,7 +472,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       return { tabId: id, scrolledBy: by };
     },
     'page.evaluate': async ({ tabId, expression, awaitPromise } = {}) => {
-      const source = text(expression, 'expression', { max: 100000 }), { id, session } = await page(tabId), result = await unlessDialog(session, () => run(id, source, { awaitPromise: awaitPromise !== false }));
+      const source = text(expression, 'expression', { max: 100000 }), { id, session } = await page(tabId), result = await unlessDialog(session, () => run(id, source, { awaitPromise: awaitPromise !== false, gesture: true }));
       if (result === DIALOG) return withDialog(session, { tabId: id });
       const shown = String(result.value === undefined ? (result.description ?? result.unserializableValue ?? result.type) : typeof result.value === 'string' ? result.value : JSON.stringify(result.value, null, 1));
       return { tabId: id, type: result.subtype || result.type, text: shown.slice(0, 20000), ...(shown.length > 20000 ? { truncated: true, totalChars: shown.length } : {}), untrusted: true };
@@ -468,33 +510,43 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
 
   /** A picture of a tab through the debugger: the whole page, or a tab that is not in front. */
   async function capture(tabId, { fullPage = false } = {}) {
-    const { id, session } = await page(tabId);
+    const { id, tab, session } = await page(tabId);
     // The browser draws only what it shows, so a tab that is put away is first told that it is looked at (see awake).
     // A picture is a read, so it is lent only: for as long as pictures of the tab are being taken, and no longer,
     // unless the mouse or the keys have woken the tab meanwhile, or are about to.
-    const lent = !session.awake && (session.lent > 0 || await hidden(id));
-    if (lent && session.lent++ === 0) await wake(id);
-    // Of a tab behind another the browser may still leave a picture unanswered, and gives it when it is asked again
-    // (seen in a real Chrome: each one came by the third asking). So it is asked again, soon at first, until one
-    // answer has come, and after ten seconds it is said what to do.
-    const pictured = params => new Promise((resolve, reject) => {
+    const lent = !session.awake && (session.lent > 0 || await hidden(id)), first = lent && session.lent++ === 0;
+    // Of a tab that is put away the browser may still leave a picture unanswered, and gives it when it is asked again
+    // (seen in a real Chrome: each one came by the third asking). So of such a tab it is asked again until one answer
+    // has come, and after ten seconds it is said what to do. A tab the browser shows is asked once and waited for as
+    // long as its picture takes. halted: a dialog has opened, and nothing more is asked.
+    const again = lent || session.put || tab.active === false;
+    const pictured = (params, halted) => new Promise((resolve, reject) => {
       let asks = 0, timer;
       const ended = settle => given => { cancel(timer); settle(given); };
       const ask = () => {
+        if (halted()) return;
         if (asks === PICTURE_AGAIN_MS.length) return reject(fail('invalid_input', 'The browser gave no picture of this tab in ten seconds. If it is behind another tab, bring it forward (tabs.activate) and ask again.'));
         command(id, 'Page.captureScreenshot', params).then(ended(resolve), ended(reject));
-        timer = schedule(ask, PICTURE_AGAIN_MS[asks++]);
+        if (again) timer = schedule(ask, PICTURE_AGAIN_MS[asks++]);
       };
       ask();
     });
     try {
-      if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' })).data };
-      // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
-      const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
-      const shot = await pictured({ format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: true });
-      return { tabId: id, mimeType: 'image/jpeg', base64: shot.data, fullPage: true, width, height, ...(tall > height ? { truncated: true, pageHeight: tall } : {}) };
+      // A page may answer being looked at with a dialog. Then it gives no picture until that is answered, and the
+      // telling itself is not answered either: both are done under the watch for a dialog.
+      const taken = await unlessDialog(session, async halted => {
+        if (first) await wake(id);
+        if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' }, halted)).data };
+        // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
+        const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
+        const shot = await pictured({ format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: true }, halted);
+        return { tabId: id, mimeType: 'image/jpeg', base64: shot.data, fullPage: true, width, height, ...(tall > height ? { truncated: true, pageHeight: tall } : {}) };
+      });
+      if (taken === DIALOG) throw inDialog(session);
+      return taken;
     } finally {
-      if (lent && --session.lent === 0 && !session.awake && !session.waking) await wake(id, false);
+      // Under a dialog the browser answers this only once the dialog is answered: it is sent, and not waited for.
+      if (lent && --session.lent === 0 && !session.awake && !session.waking) { const back = wake(id, false); if (!session.dialog) await back; }
     }
   }
 

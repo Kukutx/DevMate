@@ -166,8 +166,11 @@ export function createCapabilities(chrome, { version = '', ...debugging } = {}) 
     },
     'page.screenshot': async ({ tabId, fullPage } = {}) => {
       const page = await target(tabId);
-      // The tab in front is captured as it is seen. The whole page, or a tab behind another, takes the debugger.
-      if (fullPage === true || !page.active) return debug.capture(page.id, { fullPage: fullPage === true });
+      // The tab in front is captured as it is seen. The whole page, a tab behind another, and a tab in front of a
+      // window that is itself put away (the page says so; one that cannot be asked is taken as shown) take the debugger.
+      const seen = fullPage !== true && page.active && (await chrome.scripting?.executeScript({ target: { tabId: page.id }, func: () => document.visibilityState })
+        .then(([frame]) => frame?.result !== 'hidden', () => true) ?? true);
+      if (!seen) return debug.capture(page.id, { fullPage: fullPage === true });
       const image = await chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); });
       return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
     },
