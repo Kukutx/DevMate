@@ -368,6 +368,22 @@ test('a window with several shared folders hears about every shared folder befor
   store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:question});
   await until(()=>window.asked.includes('A connected client asks to run a task on your account: '+question),'the task is announced with its whole question');
   assert.ok(question.length>200&&window.asked.includes('An agent is waiting for your approval: '+'y'.repeat(200)));
+  // VS Code makes a link of "[label](address)" in the text of a notification, and a link that names a command runs
+  // it when it is clicked. What a notification says is not all DevMate's: the first line of a client's task, a name,
+  // what an agent asks (which it may have read in the repository). None of it can form a link, whoever wrote it.
+  const command='command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22devmate%20delegation%20allow%5Cr%22%7D';
+  const lure='A connected client asks codex (named "[x]('+command+')") to run a task in the project "[y](https://example.com/)": [Open Workbench]('+command+')';
+  store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:lure});
+  store.create('approval',{projectId:mine.projectId,status:'pending',summary:'Run [this](command:workbench.action.reloadWindow)'});
+  store.create('input',{projectId:mine.projectId,status:'pending',summary:'Which [branch](file:///c:/x)?'});
+  await until(()=>window.asked.filter(message=>/\[Open Workbench\]|\[this\]|\[branch\]/.test(message)).length===3,'the three are announced');
+  assert.ok(window.asked.includes('A connected client asks to run a task on your account: '+lure.replaceAll('](','] (')));
+  assert.ok(window.asked.includes('An agent is waiting for your approval: Run [this] (command:workbench.action.reloadWindow)'));
+  assert.ok(window.asked.includes('An agent is asking you a question: Which [branch] (file:///c:/x)?'));
+  for(const message of window.asked)assert.ok(!message.includes(']('),message);
+  // (As VS Code 1.101 reads it: its own pattern for a link in a notification finds none in any of them.)
+  const link=/\[([^\]]+)\]\(((?:https?:\/\/|command:|file:)[^)\s]+)(?: (["'])(.+?)(\3))?\)/i;
+  assert.ok(link.test(lure));for(const message of window.asked)assert.equal(link.test(message),false,message);
   // Sharing changed from elsewhere reaches the window at once.
   await f.call('project.update',{id:window.entry.attachment.roots[0].projectId,access:'read'});
   await until(()=>window.entry.attachment.roots[0].access==='read','the window shows the new access');
