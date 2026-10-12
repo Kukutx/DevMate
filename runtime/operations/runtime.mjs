@@ -35,12 +35,16 @@ export function defineRuntimeOperations(service, add) {
     const keyless = value => typeof value === 'string' ? value.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : value;
     return { ...answer, ...(answer.publicUrl ? { publicUrl: keyless(answer.publicUrl) } : {}), ...(answer.verification?.url ? { verification: { ...answer.verification, url: keyless(answer.verification.url) } } : {}) };
   });
-  add('operations.list', { name: z.string().max(100).optional(), query: keywords, summary: z.boolean().optional() }, true,
-    'Discover every available operation: names and descriptions. query keeps those that have its words; name returns one operation with its exact input schema; summary:false returns every schema at once (large).', (args, context) => {
+  add('operations.list', { name: z.string().max(100).optional(), names: z.array(z.string().min(1).max(100)).min(1).max(20).optional(), query: keywords, summary: z.boolean().optional() }, true,
+    'Discover every available operation: names and descriptions. query keeps those that have its words; name returns one operation with its exact input schema, names several of them in one call; summary:false returns every schema at once (large).', (args, context) => {
       // Without a name the answer is the short list. Through MCP it holds only what operations.call accepts.
-      const summary = args.summary ?? !args.name, local = context.surface === 'local', answers = service.ownerDecides(context);
-      return { items: service.visibleOperations(context).filter(op => (!args.name || op.name === args.name) && (!args.query || hasWords(args.query, op.name, op.description)) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
-        .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) })) };
+      const wanted = args.names || (args.name ? [args.name] : null);
+      const summary = args.summary ?? !wanted, local = context.surface === 'local', answers = service.ownerDecides(context);
+      const items = service.visibleOperations(context).filter(op => (!wanted || wanted.includes(op.name)) && (!args.query || hasWords(args.query, op.name, op.description)) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
+        .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) }));
+      // Of several asked for by name, the ones there is no such operation for are said, so that a wrong name is not taken for an empty schema.
+      const unknown = args.names ? args.names.filter(name => !items.some(item => item.name === name)) : [];
+      return { items, ...(unknown.length ? { unknown } : {}) };
     });
   add('operations.call', { operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }, false,
     'Invoke any operation from operations_list by name: workflows, tasks and messages between several agents, jobs, artifacts, references. The everyday file, shell, Git and delegation tools are available directly and do not need this.',

@@ -47,6 +47,13 @@ test('real OAuth HTTP authenticates every MCP request: the signed-in owner gets 
   }
   const opened = await f.tool('open_devmate_workbench', { projectId: a.project.id }, owner);
   assert.deepEqual(Object.keys(opened.structuredContent).sort(), ['counts', 'selection'], 'opening does not put the workspace into the conversation');
+  // The model is told what was opened and where the user sees it: "ready" left a real one unsure that anything had happened.
+  assert.equal(opened.content[0].text, 'The DevMate Workbench was opened on the project ' + a.project.name + '. A client that shows MCP Apps (ChatGPT, Claude) displays it to the user with this answer; nothing was started by opening it.');
+  // A project is named here as in every other tool: by its id, its unique name or its folder.
+  for (const named of [a.project.name, a.project.root]) assert.equal((await f.tool('open_devmate_workbench', { projectId: named }, owner)).structuredContent.selection.projectId, a.project.id, named);
+  assert.match((await f.tool('open_devmate_workbench', {}, owner)).content[0].text, /^The DevMate Workbench was opened, with no project selected \(2 shared\)\./);
+  const nowhere = await f.tool('open_devmate_workbench', { projectId: 'no such project' }, owner);
+  assert.equal(nowhere.isError, true); assert.equal(nowhere.structuredContent.error.code, 'not_found');
   const snapshot = input => f.tool('workbench_call', { operation: 'workbench.snapshot', input }, owner);
   const global = await snapshot({});
   assert.deepEqual(global.structuredContent.projects.map(item => item.id).sort(), [a.project.id, b.project.id].sort());

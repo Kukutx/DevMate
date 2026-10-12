@@ -245,7 +245,8 @@ export function createMcpServer(service, context, { surface = 'generic', listing
   // shared, and the person decides both at their computer.
   registerWorkbench(server, {
     call: (name, input) => service.call(name, input, context),
-    snapshot: input => service.snapshot(input, context)
+    snapshot: input => service.snapshot(input, context),
+    resolveProjectReference: value => service.resolveProjectReference(value, context)
   });
   server.registerResource('project-file', new ResourceTemplate('devmate://project/{projectId}/file/{+path}', { list: undefined }),
     { title: 'DevMate project file', mimeType: 'text/plain' }, async uri => {
