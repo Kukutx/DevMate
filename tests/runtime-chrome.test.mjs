@@ -468,11 +468,19 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   let strangerOut = Buffer.alloc(0); stranger.stdout.on('data', chunk => { strangerOut = Buffer.concat([strangerOut, chunk]); });
   assert.equal(await new Promise(resolve => stranger.once('exit', resolve)), 2); assert.equal(strangerOut.length, 0);
   // Nor is a command that a connected client started (its shell tool, or an agent it delegated to), whatever
-  // extension it names: a browser never carries that mark, and what the host is answered is the owner's.
+  // extension it names: what the host is answered is the owner's. A browser that such a command opened carries the
+  // mark too, with every host it starts, and that may be the owner's own browser: so the host says why, in the one
+  // message the extension shows as it is, where the browser would only say that the host has ended. It answers
+  // nothing that is asked of it (a sign-in link to the workbench least of all), and ends.
   const theirs = spawn(process.execPath, [program, 'chrome-host', EXTENSION_ORIGIN, '--parent-window=0', '--instance', instanceRoot], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, DEVMATE_CLIENT_COMMAND: '1' } });
-  let theirsOut = Buffer.alloc(0), theirsSaid = ''; theirs.stdout.on('data', chunk => { theirsOut = Buffer.concat([theirsOut, chunk]); }); theirs.stderr.on('data', chunk => { theirsSaid += chunk; });
-  theirs.stdin.on('error', () => {}); theirs.stdin.end(frame({ type: 'hello', protocol: 1, extension: '4.0.5', browser: 'Google Chrome', methods: [] }));
-  assert.equal(await new Promise(resolve => theirs.once('exit', resolve)), 2); assert.equal(theirsOut.length, 0);
+  const theirsHeard = []; let theirsSaid = ''; theirs.stdout.on('data', frames(message => theirsHeard.push(message))); theirs.stderr.on('data', chunk => { theirsSaid += chunk; });
+  theirs.stdin.on('error', () => {});
+  theirs.stdin.write(frame({ type: 'hello', protocol: 1, extension: '4.0.5', browser: 'Google Chrome', methods: [] }));
+  theirs.stdin.end(frame({ type: 'request', id: 1, action: 'workbench' }));
+  assert.equal(await new Promise(resolve => theirs.once('close', resolve)), 2);
+  assert.deepEqual(theirsHeard, [{ type: 'refused', message: 'DevMate does not serve this browser: it was opened by a command that a connected client or a coding agent ran, and carries that command\'s mark, so what it asks is not taken as yours. ' +
+    'Close the browser completely (every window, and its icon beside the clock if it keeps one) and open it yourself: the extension then connects again.' }]);
+  assert.ok(theirsHeard[0].message.length <= 600, 'the extension shows it whole');
   assert.equal(theirsSaid, 'devmate chrome-host is started by the browser for the DevMate extension, not through a connected client\n');
 
   // The extension's side of the conversation, as the browser would carry it: frames on the program's standard streams.

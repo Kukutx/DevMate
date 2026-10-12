@@ -335,6 +335,10 @@ async function configureConnection(kind, options, instanceRoot) {
         '. To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>' : null].filter(Boolean) };
 }
 
+// What the extension shows in place of "connection lost" where the host turns its browser away (see main).
+const BROWSER_OF_A_CLIENT = 'DevMate does not serve this browser: it was opened by a command that a connected client or a coding agent ran, and carries that command\'s mark, so what it asks is not taken as yours. ' +
+  'Close the browser completely (every window, and its icon beside the clock if it keeps one) and open it yourself: the extension then connects again.';
+
 export async function main(argv = process.argv.slice(2), {
   stdout = process.stdout, stderr = process.stderr, stdin = process.stdin,
   clientFactory = createRuntimeClient,
@@ -348,8 +352,13 @@ export async function main(argv = process.argv.slice(2), {
   // else, and its arguments are the browser's (the extension that asks, a window handle), not this command line's.
   // What it is answered is the owner's at this computer. A browser never carries the mark of a command that a
   // connected client started (its shell tool, or an agent it delegated to); one that does is that client's.
+  // A browser that such a command opened carries the mark too, and so does every host it starts: the owner's own
+  // browser would then be turned away without a word, since a browser throws away what a host writes to its error
+  // output and says only that the host has ended. So the host says why in the one message the extension shows as it
+  // is, answers nothing else, and ends.
   if (argv[0] === 'chrome-host' && env[CLIENT_COMMAND_ENV] === '1') {
     stderr.write('devmate chrome-host is started by the browser for the DevMate extension, not through a connected client\n');
+    stdout.write((await import('./chrome-host.mjs')).frame({ type: 'refused', message: BROWSER_OF_A_CLIENT }));
     return 2;
   }
   if (argv[0] === 'chrome-host') return (await import('./chrome-host.mjs')).chromeHostMain(argv.slice(1), { stdin, stdout, stderr });

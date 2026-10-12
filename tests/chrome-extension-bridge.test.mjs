@@ -151,6 +151,32 @@ test('a host that ends for another reason is a lost connection, not a missing re
   assert.equal(bridge.state().said, 'Native host has exited.');
 });
 
+test('a host that says why it will not serve this browser is shown in its own words, and asked again every half minute', async () => {
+  // A browser that was opened by a command a connected client started carries that command's mark, and the host
+  // does not serve it. The browser itself would only say that the host has ended.
+  const { bridge, ports, timers } = harness();
+  bridge.open();
+  const why = 'DevMate does not serve this browser: it was opened by a command of a connected client. Close the browser completely and open it yourself.';
+  await ports[0].say({ type: 'refused', message: why });
+  assert.equal(bridge.state().host, 'connecting', 'the words alone end nothing');
+  ports[0].drop('Native host has exited.');
+  assert.equal(bridge.state().host, 'closed');
+  assert.equal(bridge.state().said, why);
+  assert.equal(timers.findLast(timer => !timer.cancelled).ms, 30000, 'what it named does not change by trying fast');
+  // The words are for that one connection: the next one that ends says what the browser says of it.
+  timers.findLast(timer => !timer.cancelled).run();
+  ports[1].drop('Native host has exited.');
+  assert.equal(bridge.state().said, 'Native host has exited.');
+  // Words that are no text, or far too many, are not shown as they come.
+  timers.findLast(timer => !timer.cancelled).run();
+  await ports[2].say({ type: 'refused', message: 'x'.repeat(5000) });
+  ports[2].drop('');
+  assert.equal(bridge.state().said.length, 600);
+  timers.findLast(timer => !timer.cancelled).run();
+  await ports[3].say({ type: 'refused' });
+  ports[3].drop('');
+  assert.equal(bridge.state().said, 'The connection to DevMate was closed.');
+});
 test('every call is noted without what it carried: what, when, whether it worked', async () => {
   const { bridge, ports } = harness({ methods: { 'tabs.list': async () => ({ items: [] }), 'tabs.close': async () => { throw Object.assign(new Error('No tab.'), { code: 'not_found' }); } } });
   bridge.open();
