@@ -394,6 +394,8 @@ test('a report keeps its own words and gives nothing away, whatever a project is
   // Nor does a host find anything in what was put in, for an address or for another host; and of two hosts the longer
   // goes first, so that one is not left as a part of the other.
   assert.equal(anonymize('carol@example.org, mail, host and relay.host', { hosts: ['mail', 'host', 'relay', 'relay.host'] }), '<email>, <public-host>, <public-host> and <public-host>');
+  // The address a quick tunnel was given is put in whole, the part that every such address has with it.
+  assert.equal(anonymize('at calm-river.trycloudflare.com for trycloudflare', { names: [['trycloudflare', '<folder-1>']] }), 'at <assigned>.trycloudflare.com for <folder-1>');
   // What stands for a credential is put in as well, and no name is found in it.
   assert.equal(anonymize('Authorization: Bearer abcdefghijklmnop for redacted', { names: [['redacted', '<folder-1>']] }), 'Authorization: Bearer [redacted] for <folder-1>');
 
@@ -441,6 +443,12 @@ test('a report keeps its own words and gives nothing away, whatever a project is
     for (const one of [name, other].filter(long)) assert.ok(!stands(said(one).trim(), content(text).replace(/<folder-\d>/g, '')), what + ': ' + JSON.stringify(one) + ' is in the report: ' + content(text));
     assert.ok(lines.some(line => /^#\d+ \S+ \S+ \w+ \(connected, \d+ ms\): Unknown .* operation: +<folder-\d> ?$/.test(line)), what + ': the failure says which folder, not what it is called: ' + text);
   }
+
+  // A public address that names a port: its host is taken out as it is written with the port and without it.
+  const { service: ported, temp: other } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com:8443/mcp', executable: process.execPath } });
+  fs.writeFileSync(path.join(other, 'instance', 'runtime.log'), 'connection: getaddrinfo ENOTFOUND devmate.example.com, asked for https://devmate.example.com:8443/mcp\n');
+  const both = (await ported.call('runtime.report', {}, owner)).text;
+  assert.ok(both.endsWith('\nconnection: getaddrinfo ENOTFOUND <public-host>, asked for https://<public-host>/mcp') && !both.includes('devmate.example'), both);
 });
 
 test('what a report cuts short it has cleaned first: half of an address, a path or a name is not recognised as what it was', async t => {

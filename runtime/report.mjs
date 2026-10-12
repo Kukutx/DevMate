@@ -16,7 +16,7 @@ const literal = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const spelled = value => new RegExp(value.split(/[\\/]+/).map(literal).join('(?:\\\\{1,2}|/)'), process.platform === 'win32' ? 'gi' : 'g');
 // Everything that is put in for something taken out. What is looked for by a word somebody chose (a host, the name of
 // a project) is looked for outside of these only: a project called "redacted" or "email" finds nothing in them.
-const PUT_IN = new RegExp('(<(?:folder-\\d+|user|public-host|assigned|instance|key|email|address)>|' + literal(REDACTED) + ')');
+const PUT_IN = new RegExp('(<assigned>\\.trycloudflare\\.com|<(?:folder-\\d+|user|public-host|assigned|instance|key|email|address)>|' + literal(REDACTED) + ')');
 const outside = (text, change) => text.split(PUT_IN).map((part, index) => index % 2 ? part : change(part)).join('');
 
 /**
@@ -106,9 +106,11 @@ export function offlineReport(instanceRoot, doctor) {
 export async function report(service) {
   const doctor = await service.doctor(), usage = service.usage.snapshot({ whole: true }), config = service.config;
   const projects = service.store.list('project', { limit: 10000 });
-  const hostOf = value => { try { return new URL(value).host; } catch { return value; } };
+  // A host as it is written with its port and without: an address that names a port (https://home.example.com:8443)
+  // is said without it wherever the name alone is looked up ("getaddrinfo ENOTFOUND home.example.com").
+  const hostsOf = value => { try { const url = new URL(value); return [url.host, url.hostname]; } catch { return [value]; } };
   const places = [...folderPlaces(projects.map(project => project.root)), [service.instanceRoot, '<instance>']];
-  const hosts = [service.publicUrl(), config.auth?.issuer, config.connection?.host].filter(Boolean).map(hostOf);
+  const hosts = [service.publicUrl(), config.auth?.issuer, config.connection?.host].filter(Boolean).flatMap(hostsOf);
   // A name is taken out as it is written in a line (on one line), and as the doctor says it (without the characters
   // it leaves out, cut short).
   const names = projects.flatMap((project, index) => [...new Set([oneLine(project.name).trim(), plainName(project.name).trim()])].map(name => [name, '<folder-' + (index + 1) + '>']));
