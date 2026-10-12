@@ -16,16 +16,20 @@ export function defineRuntimeOperations(service, add) {
   const local = { localOnly: true };
   // Local, and with full access also readable by the owner's connected client: what tells it why something does not work.
   const diagnostic = { localOnly: true, fullAccessRead: true };
-  add('connection.status', {}, true, 'Say how clients reach this DevMate: local only or through a public route, and whether that route was verified end to end. Useful when the user asks why a cloud client cannot connect; not needed for ordinary work.', async (_args, context) => {
-    const status = await service.connectionState();
+  add('connection.status', {}, true, 'Say how clients reach this DevMate: local only or through a public route, whether that route was verified end to end, whether OpenAI\'s tunnel runs beside it (openaiTunnel), and which way this request itself came (via: local, address or openai-tunnel). Useful when the user asks why a cloud client cannot connect; not needed for ordinary work.', async (_args, context) => {
+    const status = await service.connectionState(), tunnel = await service.tunnelState();
     const verified = service.verification?.verified === true;
+    // Which of the ways in this request took. A caller that came through the tunnel and is told of the address alone
+    // would look for a fault of its own way in the other one.
+    const via = context.via ? { via: context.via } : {};
     // Connector output, process ids and host names describe the owner's machine and network: for the owner at this
-    // computer, and for the owner's connected client when the owner chose full access.
+    // computer, and for the owner's connected client when the owner chose full access. That a second way in is there,
+    // and whether it is open, is no such detail.
     if (!service.ownerDecides(context)) {
-      return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified };
+      return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified,
+        ...(tunnel ? { openaiTunnel: { phase: tunnel.phase } } : {}), ...via };
     }
-    const tunnel = await service.tunnelState();
-    const answer = { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}),
+    const answer = { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}), ...via,
       ...(service.connectionFault ? { startError: service.connectionFault } : {}),
       // OpenAI's tunnel where it runs beside this connection: a second way in, with a state of its own.
       ...(tunnel ? { openaiTunnel: { ...tunnel, ...(service.tunnelFault ? { startError: service.tunnelFault } : {}) } } : {}) };
@@ -40,10 +44,12 @@ export function defineRuntimeOperations(service, add) {
       // Without a name the answer is the short list. Through MCP it holds only what operations.call accepts.
       const wanted = args.names || (args.name ? [args.name] : null);
       const summary = args.summary ?? !wanted, local = context.surface === 'local', answers = service.ownerDecides(context);
-      const items = service.visibleOperations(context).filter(op => (!wanted || wanted.includes(op.name)) && (!args.query || hasWords(args.query, op.name, op.description)) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
+      const callable = service.visibleOperations(context).filter(op => local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name)));
+      const items = callable.filter(op => (!wanted || wanted.includes(op.name)) && (!args.query || hasWords(args.query, op.name, op.description)))
         .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) }));
-      // Of several asked for by name, the ones there is no such operation for are said, so that a wrong name is not taken for an empty schema.
-      const unknown = args.names ? args.names.filter(name => !items.some(item => item.name === name)) : [];
+      // Of several asked for by name, the ones there is no such operation for are said, so that a wrong name is not taken
+      // for an empty schema. One that is there and only lacks the words of query is not among them.
+      const unknown = args.names ? args.names.filter(name => !callable.some(op => op.name === name)) : [];
       return { items, ...(unknown.length ? { unknown } : {}) };
     });
   add('operations.call', { operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }, false,
@@ -108,6 +114,9 @@ export function defineRuntimeOperations(service, add) {
       service.verification = null;
       const apply = async connection => {
         if (action === 'restart') { await connection.stop(); connection.refresh?.(service.secrets.environment()); }
+        // A runtime that began to stop while this was under way has stopped its connectors, or is about to: none is
+        // started behind its back, where nothing would stop it again.
+        if (action !== 'stop' && service.closing) throw new DomainError('runtime_stopping', 'The runtime is stopping: the connection is not started again.');
         return connection[action === 'restart' ? 'start' : action]();
       };
       const settle = (result, fault) => {

@@ -90,7 +90,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate access [guarded \| full]` | The permission profile: what a connected client may decide (see [Who may do what](#who-may-do-what)) |
 | `devmate mcp-url` | The address for a client |
 | `devmate mcp` | MCP over standard input and output; starts the runtime when needed |
-| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in; `--openai-tunnel <id>` runs OpenAI's tunnel beside a route that has an address |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in; `--openai-tunnel <id>` runs OpenAI's tunnel beside a route that has an address; `connect beside --openai-tunnel <id> \| none` adds it to the route there is, or takes it away |
 | `devmate secret set <NAME>` / `list` / `remove <NAME>` | Connection credentials. The value is read from standard input and never appears in shell history |
 | `devmate login-code` | A one-time sign-in code (when sign-in is on) |
 | `devmate ui [--open]` | A single-use link to the workbench |
@@ -288,9 +288,18 @@ devmate secret set CONTROL_PLANE_API_KEY      # the runtime key of the tunnel
 devmate restart
 ```
 
-ChatGPT of the account the tunnel belongs to then comes through the tunnel, and every other client (a second account, Claude) through the address. `devmate mcp-url` prints the address and names the tunnel ID with it; `devmate doctor` shows the two separately, as `connection.*` and `tunnel.*`. Beside an address the tunnel is always spoken by DevMate itself. A `connect` command that does not name the tunnel sets the connection up alone, and says how to keep the tunnel.
+ChatGPT of the account the tunnel belongs to then comes through the tunnel, and every other client (a second account, Claude) through the address. `devmate mcp-url` prints the address and names the tunnel ID with it; `devmate doctor` shows the two separately, as `connection.*` and `tunnel.*`; and a client that asks (`connection_status`) is told that the tunnel runs beside the address and which of the two it came through itself (`via`). Beside an address the tunnel is always spoken by DevMate itself. A `connect` command that does not name the tunnel sets the connection up alone, and says how to have the tunnel again.
 
-With an address this computer can be reached from outside again, whether the tunnel runs or not. Sign-in belongs to the address: what comes through the tunnel is served without it, because OpenAI decides who may use a tunnel ([SECURITY.md](SECURITY.md)). The two together have been tried against a stand-in for OpenAI's service only, not yet with two real accounts.
+The tunnel is put beside the connection there is, or taken away, without that connection being named again. That is the way for a relay, whose address you never typed:
+
+```powershell
+devmate connect beside --openai-tunnel tunnel_xxxxxxxx
+devmate connect beside --openai-tunnel none
+```
+
+`devmate relay setup` leaves a tunnel that runs beside the connection beside the relay. Where the tunnel was the connection itself, the relay takes its place, and the command says how to put the tunnel beside it.
+
+With an address this computer can be reached from outside again, whether the tunnel runs or not. Sign-in belongs to the address: what comes through the tunnel is served without it, because OpenAI decides who may use a tunnel ([SECURITY.md](SECURITY.md)); the doctor says so in a line of its own, `security.tunnel`. A quick tunnel and OpenAI's tunnel together were tried in October 2026 with two real accounts, each account's ChatGPT through its own way into the same runtime. An address that asks for sign-in beside the tunnel, and a relay beside it, have been tried against a stand-in for OpenAI's service only.
 
 **Is it really connected?**
 

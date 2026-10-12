@@ -199,10 +199,27 @@ test('devmate relay setup makes that server how this computer is reached, keeps 
   // Through a connected client the command is refused: it changes how this computer is reached.
   const refused = await cli(['relay', 'setup', 'deploy@203.0.113.7'], { stdout: output(), stderr: output(), env: { DEVMATE_CLIENT_COMMAND: '1' } });
   assert.notEqual(refused, 0); assert.equal(saved().connection.publicUrl, address);
+  // An option of another command is not passed over in silence, and nothing is done on the server for it.
+  const optioned = await run(['relay', 'setup', 'deploy@203.0.113.7', '--openai-tunnel', 'tunnel_abc123']);
+  assert.notEqual(optioned.code, 0); assert.match(optioned.stderr, /relay setup does not take --openai-tunnel\..* then: devmate connect beside --openai-tunnel tunnel_abc123/); assert.equal(asked.length, 2);
+  // OpenAI's tunnel is put beside the relay without the relay being named again, and nothing of its address is printed.
+  const beside = await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123']);
+  assert.equal(beside.code, 0, beside.stderr); assert.equal(saved().connection.publicUrl, address); assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123');
+  assert.deepEqual(JSON.parse(beside.stdout).saved.connection, { kind: 'ssh', relay: true }); assert.ok(!beside.stdout.includes(address.split('/').pop()) && !beside.stdout.includes('devmate.example.com'));
+  // It stays beside the relay when the relay is set up again, which is said.
+  const again = await run(['relay', 'setup', 'deploy@203.0.113.7', '--domain', 'devmate.example.com']);
+  assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123'); assert.match(again.stdout, /"openaiTunnel": "tunnel_abc123 stays beside it"/); assert.doesNotMatch(again.stdout, /no longer used/);
+  assert.equal((await run(['connect', 'beside', '--openai-tunnel', 'none'])).code, 0); assert.equal(saved().openaiTunnel, undefined); assert.equal(saved().connection.publicUrl, address);
   // Taking the relay away takes it out of this computer's settings as well.
   const removed = await run(['relay', 'remove', 'deploy@203.0.113.7']);
   assert.equal(removed.code, 0, removed.stderr); assert.deepEqual(saved().connection, { kind: 'local' });
   assert.notEqual((await run(['relay', 'setup'])).code, 0);
+  // A relay set up where OpenAI's tunnel was the connection takes its place. That the tunnel is no longer used is said,
+  // with the one command that puts it beside the relay.
+  assert.equal(await cli(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123', '--organization', 'org-abc', '--instance', instance], { stdout: output(), stderr: output(), env: {} }), 0);
+  const over = await run(['relay', 'setup', 'deploy@203.0.113.7']);
+  assert.equal(saved().connection.kind, 'ssh'); assert.equal(saved().openaiTunnel, undefined);
+  assert.match(over.stdout, /"OpenAI's tunnel tunnel_abc123 is no longer used\. To run it beside the relay: devmate connect beside --openai-tunnel tunnel_abc123 --organization org-abc"/);
 });
 
 test('the SSH route carries the relay\'s path, tells the relay this computer\'s address first, and the ingress answers only under that path', async t => {

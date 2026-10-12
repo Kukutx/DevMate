@@ -9,7 +9,7 @@
 - 快速隧道的地址在每次启动后都会变，客户端要换成新地址。地址固定的通路里，OpenAI 隧道只需要所有者在 OpenAI Platform 上建一条隧道（给 ChatGPT 用）；其余几种（自己的中继、Cloudflare 命名隧道、HTTPS 代理、SSH）需要所有者自己的服务器或域名。
 - 运行时自己发出的请求（对接 OpenAI 隧道、通路自检、OAuth 客户端信息获取、外部 MCP 服务器）走这台电脑的代理：`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 变量，Windows 上没有这些变量时用当前账户的系统代理（开关变化在一分钟内跟上）。还不支持的：代理脚本（PAC）、只有 SOCKS 的系统代理、macOS 和 Linux 桌面的系统代理设置；这几种情况请设置 `HTTPS_PROXY`，体检会指出。连接器子进程（`cloudflared`、`ssh`）和委派的 Agent 只继承环境变量里的代理，不继承 Windows 系统代理。经代理验证过的只有本机替身代理，没有经过真实的 Clash 或公司代理。Node.js 低于 24.14 时运行时照常启动，但它自己的请求不走代理，体检会指出并提示升级。代理工具用 TUN 加虚假地址（域名解析成 198.18.x.x）时，启用了登录（OAuth）的公网地址无法完成登录：登录要核对客户端的真实地址，这道校验不为这种模式放宽，报错里会说明改用系统代理模式或设置 `HTTPS_PROXY`。
 - 内置的 OpenAI 隧道客户端不实现“集群纠正”这项可选能力（`wrong-cluster-v1`），也不启动 Cloudflare 托管伴随进程；它只实现文档规定的两种命令，其余种类会被跳过并在体检里指出。
-- OpenAI 隧道可以和一条带公网地址的通路同时开（`devmate connect … --openai-tunnel <id>`），只在命令行里配置：VS Code 和 Obsidian 的向导里还没有这一项。在向导里改连接会保留已经配好的那条隧道，改成“仅本机”或“OpenAI 隧道”时除外。同时开的时候隧道一律由运行时自己对接，不能用 OpenAI 的 `tunnel-client` 程序。这种组合只对 OpenAI 服务的替身验证过：两条入口各按各的规矩应答，从外面冒充隧道那一路会被拒，公网一侧要求登录时隧道一路不要求，和快速隧道同开时隧道一路仍然是事件流。还没有用两个真实账号各走一次。
+- OpenAI 隧道可以和一条带公网地址的通路同时开（`devmate connect … --openai-tunnel <id>`，或者给现有的通路加上：`devmate connect beside --openai-tunnel <id>`），只在命令行里配置：VS Code 和 Obsidian 的向导里还没有这一项。在向导里改连接会保留已经配好的那条隧道，改成“仅本机”或“OpenAI 隧道”时除外。同时开的时候隧道一律由运行时自己对接，不能用 OpenAI 的 `tunnel-client` 程序。用真实账号试过的只有一种组合：2026 年 10 月，快速隧道加 OpenAI 隧道，两个账号的 ChatGPT 各走一条，进同一个运行时，用的是发布前的构建。其余只对 OpenAI 服务的替身验证过：从外面冒充隧道那一路会被拒，公网一侧要求登录时隧道一路不要求，和快速隧道同开时隧道一路仍然是事件流；中继加隧道、`connect beside` 只在测试里走过，没有对着真实的中继服务器试。
 - 自己的中继（`devmate relay setup`）在命令行里配置；VS Code 和 Obsidian 的向导里还没有这一项。中继的服务器脚本支持有 `apt-get`、`dnf` 或 `apk` 的系统，或者已经装了 Caddy 的系统。
 - 快速隧道是 Cloudflare 提供给测试和开发用的：不保证可用性，最多同时 200 个请求，不支持事件流。DevMate 经它只回普通 JSON，调用进行中不发进度消息。它适合试用，不适合当日常通路。
 - 更换连接方式或地址后要重启运行时。只是保存了新凭据的话，重启连接器就够了（`connection.restart`）。
@@ -42,7 +42,7 @@
 
 ### 模型一侧
 
-- 工具清单按客户端分三份（实测，`tests/runtime-surfaces.test.mjs`）：GPT 面 34 项 32,986 字节，Claude 面 36 项 33,438 字节，通用面 37 项 35,588 字节；分面之前是一份 39 项 40,135 字节。只读的工具、能力三件套（`capability_list`、`capability_query`、`capability_call`）和撤回改动都在每一份清单里：曾经为了把清单压到 18 到 21 KB 而把它们挪到 `operations_query` / `operations_call` 后面，那是做差了（模型看不到就不用；只读工具不触发客户端的确认，改走命令行反而每次都要确认），已经改回。每个工具约 500 字节是协议要求的结构（输入模式、四个提示、状态文字）；还想更小只能靠压短描述，这一步没有做。
+- 工具清单按客户端分三份（实测，`tests/runtime-surfaces.test.mjs`）：GPT 面 34 项 33,116 字节，Claude 面 36 项 33,568 字节，通用面 37 项 35,882 字节；分面之前是一份 39 项 40,135 字节。只读的工具、能力三件套（`capability_list`、`capability_query`、`capability_call`）和撤回改动都在每一份清单里：曾经为了把清单压到 18 到 21 KB 而把它们挪到 `operations_query` / `operations_call` 后面，那是做差了（模型看不到就不用；只读工具不触发客户端的确认，改走命令行反而每次都要确认），已经改回。每个工具约 500 字节是协议要求的结构（输入模式、四个提示、状态文字）；还想更小只能靠压短描述，这一步没有做。
 - 按客户端选工具面还没有用真实的 ChatGPT 或 Claude.ai 验证过：识别靠客户端自报的名字（`openai`、`chatgpt`、`codex`、`gpt` 归 GPT 面，`claude`、`anthropic` 归 Claude 面）、请求的 User-Agent，以及“经 OpenAI 隧道进来的就是 ChatGPT”。说 2025 协议的客户端只在握手时报一次名字，之后的请求只能靠 User-Agent 识别；认错时在 MCP 地址后加 `?tools=gpt|claude|generic` 指定；`devmate doctor` 会显示最近一个客户端自报的名字、User-Agent、分到的工具面和依据，真实的 ChatGPT 和 Claude.ai 报什么名字要到那里看。`devmate mcp`（标准输入输出）会把客户端的名字带给运行时。
 - 审阅改动（`show_changes` / `workspace_changes`）只在 Git 仓库里可用：它对比的是上一次提交，“已审阅”按每个文件当前内容的哈希记。不是 Git 仓库的项目只能用改动历史（`workspace.history`）。它只给按文件的汇总，不带差异正文，也还没有可在界面里审阅的差异卡片。
 - 命令和委派的默认等待是 30 秒，上限 50 秒，三个工具面一致（`exec_command` 的让出时间也是这两个数）。同类项目记录过“ChatGPT 宿主在约 12 秒处结束调用”，这一点没有用真实的 ChatGPT 实测过；如果实测属实，调用方可以用 `waitMs` 或 `yield_time_ms` 给更短的等待。

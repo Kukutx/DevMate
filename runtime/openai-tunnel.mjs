@@ -69,10 +69,26 @@ async function* streamEvents(body) {
   yield* events(true);
 }
 
+// A wait that ends when its time is over or when the client is stopped, whichever comes first: one that is asked for
+// after the stop is no wait at all, and none leaves anything listening to the stop once it has ended. (A wait that
+// did not look whether the client was stopped already held a stop up for as long as it lasted, up to a minute after
+// a refusal; and each one that ran its time left a listener behind, one a minute for a tunnel that was refused.)
+function rest(ms, signal) {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
+    const timer = setTimeout(done, ms);
+    timer.unref?.();
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+export const __test = { rest };
+
 // localHeaders: what this client itself says to the endpoint with every call it hands over, which no command can say.
 // beside: the tunnel runs beside a connection that has a public address, and is set up on that connection's command.
 export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, localHeaders = {}, beside = false, instanceId = '', env = process.env, maxConcurrentRequests = 32,
-  fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
+  fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = rest,
   now = () => performance.now(), random = Math.random, limit = ms => AbortSignal.timeout(ms) } = {}) {
   if (!/^tunnel_[A-Za-z0-9_]+$/.test(tunnelId || '')) throw fault('invalid_connection', 'A valid OpenAI tunnel id is required.');
   const base = CONTROL_PLANE + '/v1/tunnels/' + encodeURIComponent(tunnelId);
@@ -91,11 +107,20 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   // anything else, which once left every call that had a deadline unserved and unanswered.
   const within = ms => limit(Math.max(1, Math.ceil(ms)));
   const stamp = () => new Date().toISOString();
+  // What OpenAI says goes into the status, the doctor and the report. Its API answers a wrong key by repeating a part
+  // of it ("sk-abc***wxyz"), so nothing that could be the key or a piece of it is kept: the key itself, anything with
+  // stars in it, and any long run of the characters keys are made of. Left as they are: the tunnel id, which is no
+  // secret, and a name written in small letters and underscores alone, which is how OpenAI names its errors.
+  const withoutKey = text => {
+    const secret = key();
+    return (secret ? text.split(secret).join('[key]') : text).replace(/[A-Za-z0-9_-]*\*{2,}[A-Za-z0-9_*-]*/g, '[key]')
+      .replace(/[A-Za-z0-9_-]{20,}/g, word => word === tunnelId || /^[a-z_]+$/.test(word) ? word : '[key]');
+  };
   // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence.
   const said = async response => {
     try {
       const body = await response.json(), error = body?.error && typeof body.error === 'object' ? body.error : body;
-      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: String(error?.message || (typeof body?.error === 'string' ? body.error : '')).slice(0, 300) };
+      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: withoutKey(String(error?.message || (typeof body?.error === 'string' ? body.error : ''))).slice(0, 300) };
     } catch { return { code: '', message: '' }; }
   };
   // What a refusal means for the owner, as a code and a sentence. The codes are the stable ones OpenAI publishes for its
@@ -164,6 +189,9 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       if (signal.aborted || (deadline !== null && now() >= deadline)) return false;
       return post(command, failure(message, 'connect', false), { ...scope, terminal: true });
     }
+    // Delivered is a call the endpoint took: not a session that was closed, a kind of command that was skipped, a call
+    // that never reached the endpoint or one it refused (not signed in, not allowed).
+    if (response.ok) { served++; lastCallAt = stamp(); }
     const kept = {};
     for (const [name, label] of Object.entries(RESPONSE_HEADERS)) { const value = response.headers.get(name); if (value) kept[label] = [value]; }
     const answered = payload => post(command, { ...payload, resp_headers: kept, resp_code: response.status }, { ...scope, terminal: true });
@@ -195,7 +223,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       const { command, deadline } = waiting.shift();
       // Too late by now: neither run nor answered.
       if (deadline !== null && now() >= deadline) continue;
-      const work = serve(command, deadline, signal).then(() => { served++; lastCallAt = stamp(); }, () => {}).finally(() => { active.delete(work); admit(signal); });
+      const work = serve(command, deadline, signal).then(() => {}, () => {}).finally(() => { active.delete(work); admit(signal); });
       active.add(work);
     }
   }
@@ -253,22 +281,31 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   const status = () => ({ kind: 'openai-tunnel', phase, tunnelId, client: 'built-in', wireProtocol: WIRE_PROTOCOL_VERSION, maxConcurrentRequests, polls, served, inFlight: active.size, waiting: waiting.length,
     ...(startedAt ? { startedAt } : {}), ...(lastPollAt ? { lastPollAt } : {}), ...(lastCallAt ? { lastCallAt } : {}), ...(problem ? { error: problem } : {}),
     remoteMcpVerified: false, autoReconnect: running !== null, retryScheduled: false });
-  async function start() {
+  // A start and a stop are done one after the other, in the order they were asked for. Side by side, a stop that
+  // was waiting for the loop to end would call the client stopped after a start had begun a new loop: one that goes
+  // on asking OpenAI for work, that nothing knows of and nothing can stop.
+  let turn = Promise.resolve();
+  const inTurn = work => { const done = turn.then(work); turn = done.catch(() => {}); return done; };
+  const start = () => inTurn(() => {
     if (running) return status();
     if (!key()) throw fault('missing_credential', 'Missing runtime key environment variable: ' + runtimeKeyEnv);
     stopper = new AbortController(); phase = 'connecting'; problem = null; startedAt = stamp();
     const signal = stopper.signal;
     running = loop(signal).catch(error => { phase = 'failed'; problem = { code: 'client_error', message: String(error?.message || error).slice(0, 300), at: stamp() }; }).finally(() => { if (stopper?.signal === signal) running = null; });
     return status();
-  }
-  async function stop() {
-    const loopDone = running;
+  });
+  function stop() {
+    // What is under way is told at once, before this stop has its turn.
     stopper?.abort();
-    // Calls in flight are given up: what they started in the runtime keeps running there, as with any caller that leaves.
-    waiting.length = 0;
-    await Promise.allSettled([loopDone, ...active]);
-    running = null; phase = 'stopped';
-    return status();
+    return inTurn(async () => {
+      const loopDone = running;
+      stopper?.abort();
+      // Calls in flight are given up: what they started in the runtime keeps running there, as with any caller that leaves.
+      waiting.length = 0;
+      await Promise.allSettled([loopDone, ...active]);
+      running = null; phase = 'stopped';
+      return status();
+    });
   }
   return { start, stop, status, refresh(next) { env = next; } };
 }

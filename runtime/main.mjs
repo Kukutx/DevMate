@@ -183,7 +183,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     try { await handler(req, res); }
     catch (error) {
       const { status, body: content } = failure(error);
-      if (status === 500) process.stderr.write(new Date().toISOString() + ' ' + req.method + ' ' + req.url.split('?')[0] + ': ' + (error.stack || error) + '\n');
+      // The log is read by devmate logs and goes into the report for a bug report: the path of an address that ends in
+      // its key (a quick tunnel, a relay) is written without the key, in the request line and in what the fault says.
+      if (status === 500) process.stderr.write((new Date().toISOString() + ' ' + req.method + ' ' + req.url.split('?')[0] + ': ' + (error.stack || error) + '\n').replace(/\/mcp\/[A-Za-z0-9_-]{20,}/g, '/mcp/<key>'));
       if (res.headersSent) { res.end(); return; }
       send(res, status, content);
     }
@@ -213,7 +215,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       return refuse(res, 'unauthorized', reason || 'MCP authorization required.');
     }
     // The official Node adapter passes this verified identity to its per-request factory.
-    req.auth = { clientId: principal.id, scopes: ['devmate'], extra: { devmatePrincipal: principal, ...(tunnel ? { tunnel: true } : {}) } };
+    // via: the way this request came, which connection_status tells the caller back.
+    req.auth = { clientId: principal.id, scopes: ['devmate'], extra: { devmatePrincipal: principal, via: local ? 'local' : tunnel ? 'openai-tunnel' : 'address', ...(tunnel ? { tunnel: true } : {}) } };
     // The tunnel carries event streams; only the quick tunnel's own address does not.
     return await (plainMcp && !local && !tunnel ? plainMcp : mcp)(req, res);
   }
@@ -421,7 +424,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     const serverFor = ({ authInfo }) => {
       const principal = authInfo?.extra?.devmatePrincipal;
       if (!principal) throw new DomainError('unauthorized', 'A verified MCP identity is required.');
-      return createMcpServer(service, principal, asked.getStore());
+      return createMcpServer(service, authInfo.extra.via ? { ...principal, via: authInfo.extra.via } : principal, asked.getStore());
     };
     // The SDK default also serves MCP clients that still speak a 2025 protocol
     // revision, statelessly. Which clients may connect is not DevMate's own history.

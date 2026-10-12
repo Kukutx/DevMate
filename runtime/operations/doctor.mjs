@@ -59,7 +59,9 @@ export async function doctor(service) {
   const status = await service.connectionState();
   // An OpenAI tunnel has no address to connect back through. What proves it is a call that arrived: the runtime counts them.
   const tunnelProof = (id, state, tunnelId) => {
-    if (state.client === 'built-in' && state.served > 0) check(id, 'ok', 'OpenAI\'s tunnel has delivered ' + state.served + ' call(s) to this runtime, the last one at ' + state.lastCallAt + '.');
+    // Calls that came through prove the way as long as it is open: of a tunnel that is not connected now they are history.
+    if (state.client === 'built-in' && state.served > 0) check(id, state.phase === 'connected' ? 'ok' : 'warn', 'OpenAI\'s tunnel has delivered ' + state.served + ' call(s) to this runtime, the last one at ' + state.lastCallAt +
+      (state.phase === 'connected' ? '.' : '. It is not connected now (' + (state.phase || 'unknown') + '): nothing comes through it until it is.'));
     // Connected and never called: what is missing is on OpenAI's side, where a tunnel is tied to workspaces and roles.
     else if (state.client === 'built-in' && state.phase === 'connected') check(id, 'info', 'OpenAI accepts this runtime for ' + tunnelId + ' and is being asked for work; no call has come through it yet.',
       'In ChatGPT add a custom MCP server, choose Tunnel as its connection and pick or paste this tunnel id (devmate mcp-url prints it), then call any DevMate tool. ' +
@@ -101,6 +103,8 @@ export async function doctor(service) {
       fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
     tunnelProof('tunnel.public', tunnel, beside.tunnelId);
   }
+  // What the runtime's own tunnel client hands over is served as the owner without sign-in, in either auth mode.
+  const tunnelled = [status, tunnel].find(state => state?.kind === 'openai-tunnel' && state.client === 'built-in');
   // A quick tunnel cannot ask for sign-in. Its address ends in a key that is new with every start, and that key is what
   // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.
   if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key, new with every start, and whoever has the whole address can read and change your projects and run commands.',
@@ -110,7 +114,11 @@ export async function doctor(service) {
     'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else.');
   else if (url && service.config.auth.mode === 'none') check('security', 'warn', 'The public URL has no sign-in: anyone who learns it can read and change your projects and run commands.',
     'Require sign-in (auth mode oauth, issuer ' + new URL(url).origin + '): add --auth oauth to devmate connect, or use "Configure Connection" in the editor. Each client then signs in once with a code from devmate login-code.');
-  else check('security', 'ok', service.config.auth.mode === 'oauth' ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');
+  else check('security', 'ok', service.config.auth.mode === 'oauth' && (url || !tunnelled) ? 'OAuth sign-in is required on the public route.' : 'No public URL is exposed.');
+  // Said on its own, so that "sign-in is required" is not read as holding for the tunnel's way too.
+  if (tunnelled) check('security.tunnel', 'info', 'What comes through OpenAI\'s tunnel ' + tunnelled.tunnelId + ' is taken as yours without sign-in' + (url && service.config.auth.mode === 'oauth' ? ': the sign-in is asked at the address only' : '') +
+    '. Who may use the tunnel is decided in the OpenAI account it belongs to, not here: whoever uses that account, or was given the tunnel there, works on this computer as you.',
+  'Keep the account and the tunnel (' + TUNNEL_HELP.settings + ') to people you would let work on this computer.');
   // Whether a client got through at all, and as what: the answer to "ChatGPT is connected but the tools look wrong".
   const client = service.lastClient;
   if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? '"' + client.name + '"' : 'nothing') + (client.userAgent ? ' (sender line "' + client.userAgent + '")' : '') + ' and was shown the tool names of ' +

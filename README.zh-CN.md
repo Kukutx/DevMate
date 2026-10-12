@@ -89,7 +89,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate access [guarded \| full]` | 权限档：连接进来的客户端可以决定什么（见下文“谁可以做什么”） |
 | `devmate mcp-url` | 给客户端填的地址 |
 | `devmate mcp` | 以标准输入输出提供 MCP；运行时没启动会自动拉起 |
-| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录；`--openai-tunnel <id>` 让 OpenAI 隧道和一条带公网地址的通路同时开 |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录；`--openai-tunnel <id>` 让 OpenAI 隧道和一条带公网地址的通路同时开；`connect beside --openai-tunnel <id> \| none` 给现有的通路加上隧道或撤掉隧道 |
 | `devmate secret set <名称>` / `list` / `remove <名称>` | 连接凭据。值从标准输入读取，不会出现在命令行历史里 |
 | `devmate login-code` | 一次性登录码（启用登录时） |
 | `devmate ui [--open]` | 工作台的一次性链接 |
@@ -289,9 +289,18 @@ devmate secret set CONTROL_PLANE_API_KEY      # 隧道的运行密钥
 devmate restart
 ```
 
-这样，隧道所属账号的 ChatGPT 走隧道，其他客户端（第二个账号、Claude）走公网地址。`devmate mcp-url` 输出公网地址，并同时给出隧道 ID；`devmate doctor` 把两条分开显示，分别是 `connection.*` 和 `tunnel.*`。和公网地址同时开时，隧道一律由 DevMate 自己对接。`connect` 命令上不写隧道，就只配置那条通路，并提示怎样保留隧道。
+这样，隧道所属账号的 ChatGPT 走隧道，其他客户端（第二个账号、Claude）走公网地址。`devmate mcp-url` 输出公网地址，并同时给出隧道 ID；`devmate doctor` 把两条分开显示，分别是 `connection.*` 和 `tunnel.*`；客户端自己问（`connection_status`）时，会被告知公网地址旁边还开着隧道，以及它这次是从哪一条进来的（`via`）。和公网地址同时开时，隧道一律由 DevMate 自己对接。`connect` 命令上不写隧道，就只配置那条通路，并提示怎样把隧道加回来。
 
-有了公网地址，本机就又能从外面访问到，开不开隧道都一样。登录是公网地址那一侧的事：从隧道进来的请求不需要登录，因为谁能用这条隧道由 OpenAI 决定（见 [SECURITY.md](SECURITY.md)）。两条同时开目前只对 OpenAI 服务的替身验证过，还没有用两个真实账号试过。
+给现有的通路加上隧道或撤掉隧道，不用把那条通路重新写一遍。中继就得这样加，因为它的地址从来不是你手敲的：
+
+```powershell
+devmate connect beside --openai-tunnel tunnel_xxxxxxxx
+devmate connect beside --openai-tunnel none
+```
+
+`devmate relay setup` 不动原来和通路同时开着的隧道，它接着和中继同时开。如果原来的通路就是这条隧道，中继会取代它，命令会提示怎样把隧道加到中继旁边。
+
+有了公网地址，本机就又能从外面访问到，开不开隧道都一样。登录是公网地址那一侧的事：从隧道进来的请求不需要登录，因为谁能用这条隧道由 OpenAI 决定（见 [SECURITY.md](SECURITY.md)）；体检单独用 `security.tunnel` 一项说明这一点。快速隧道和 OpenAI 隧道同时开，已在 2026 年 10 月用两个真实账号试过：两个账号的 ChatGPT 各走各的一条，进的是同一个运行时。公网一侧要求登录时和隧道同时开，以及中继和隧道同时开，只对 OpenAI 服务的替身验证过。
 
 **真的连通了吗**
 
