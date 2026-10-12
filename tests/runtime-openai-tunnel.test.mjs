@@ -558,11 +558,12 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
 
   // A relay is not changed by naming its address on another connection: it is replaced, which is said with what is
   // lost by it and with the command that adds a tunnel to a relay.
-  const relayConfig = { connection: { kind: 'ssh', publicUrl: publicAddress + '/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true, sshPort: 2222, identityFile: 'C:/keys/relay' } };
+  const keyFile = path.join(temp, 'relay-key');
+  const relayConfig = { connection: { kind: 'ssh', publicUrl: publicAddress + '/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true, sshPort: 2222, identityFile: keyFile } };
   const replaced = path.join(temp, 'replaced'); fs.mkdirSync(replaced);
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
   const plain = await run(['connect', 'ssh', '--url', relayConfig.connection.publicUrl, '--host', '203.0.113.7', '--user', 'deploy', '--executable', process.execPath, '--openai-tunnel', 'tunnel_abc123'], replaced);
-  assert.equal(saved(replaced).connection.relay, undefined);
+  assert.equal(plain.code, 0, plain.stderr); assert.equal(saved(replaced).connection.relay, undefined);
   assert.match(plain.stdout, /"The relay on 203\.0\.113\.7 was the connection until now, and this command put another in its place: a plain SSH connection, without the relay's own ports and key file and without telling the relay the address of this computer\. The relay stays installed on that server\. To make it the connection again: devmate relay setup deploy@203\.0\.113\.7; to take it off the server: devmate relay remove deploy@203\.0\.113\.7\. To put OpenAI's tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>"/);
   assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress], replaced)).stdout, /The relay on/, 'said once, where the relay was replaced');
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
@@ -570,7 +571,7 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   assert.match(other2.stdout, /"The relay on 203\.0\.113\.7 was the connection until now, and this command put another in its place\. The relay stays installed/);
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
   assert.doesNotMatch((await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123'], replaced)).stdout, /The relay on/, 'the command that leaves the relay as it is');
-  assert.deepEqual([saved(replaced).connection.relay, saved(replaced).connection.sshPort, saved(replaced).connection.identityFile], [true, 2222, 'C:/keys/relay']);
+  assert.deepEqual([saved(replaced).connection.relay, saved(replaced).connection.sshPort, saved(replaced).connection.identityFile], [true, 2222, keyFile]);
 
   // A relay that is taken away leaves the tunnel that ran beside it, as the connection from then on.
   const relayed = path.join(temp, 'relayed'); fs.mkdirSync(relayed);
