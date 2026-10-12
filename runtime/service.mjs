@@ -39,7 +39,7 @@ const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root
 // connection credentials and without the variables an editor host injects for itself.
 function commandEnvironment(config, env = process.env) {
   const withheld = new Set(['TUNNEL_TOKEN', 'CONTROL_PLANE_API_KEY', 'CLOUDFLARE_TUNNEL_TOKEN', 'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE',
-    config.connection?.tokenEnv, config.connection?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
+    config.connection?.tokenEnv, config.connection?.runtimeKeyEnv, config.openaiTunnel?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
   // The marker tells the devmate command line that a connected client started it: it then acts with that
   // client's authority, not as the owner at this computer (CLIENT_COMMAND_ENV in runtime/client.mjs).
   // A command started here has no terminal: nothing may wait in a pager or at a prompt, and colour codes are noise
@@ -393,6 +393,12 @@ export class DevMateService {
     if (!this.connection) return { kind: 'local', status: 'ready' };
     try { return await this.connection.status(); }
     catch (error) { return { kind: this.config.connection.kind, phase: 'unknown', error: { code: error.code || 'status_failed', message: error.message } }; }
+  }
+  // The same for OpenAI's tunnel where it runs beside the connection (set where the runtime starts); null where it does not.
+  async tunnelState() {
+    if (!this.tunnel) return null;
+    try { return await this.tunnel.status(); }
+    catch (error) { return { kind: 'openai-tunnel', phase: 'unknown', error: { code: error.code || 'status_failed', message: error.message } }; }
   }
 
   // How one coding agent is run: its configuration, then what was changed while the runtime ran.

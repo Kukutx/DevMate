@@ -89,7 +89,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate access [guarded \| full]` | 权限档：连接进来的客户端可以决定什么（见下文“谁可以做什么”） |
 | `devmate mcp-url` | 给客户端填的地址 |
 | `devmate mcp` | 以标准输入输出提供 MCP；运行时没启动会自动拉起 |
-| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录 |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | 云端客户端到本机的通路。`--auth oauth` 要求登录；`--openai-tunnel <id>` 让 OpenAI 隧道和一条带公网地址的通路同时开 |
 | `devmate secret set <名称>` / `list` / `remove <名称>` | 连接凭据。值从标准输入读取，不会出现在命令行历史里 |
 | `devmate login-code` | 一次性登录码（启用登录时） |
 | `devmate ui [--open]` | 工作台的一次性链接 |
@@ -277,9 +277,21 @@ devmate restart
 
 OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答复，并说明该怎么办。如果 OpenAI 要求指明隧道所属的组织，就在 `connect` 命令上加 `--organization <org-…>`。
 
-如果体检显示隧道已连上，ChatGPT 里却选不到它，原因在 OpenAI 账号一侧，不在 DevMate：隧道必须包含你正在用的 ChatGPT 工作区，而不只是 Platform 组织，你的账号还需要 Tunnels 的 Read 和 Use 权限（见 [OpenAI 的指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)里的“Troubleshooting”一节）。你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；这一步还没有用真实账号试过。
+如果体检显示隧道已连上，ChatGPT 里却选不到它，原因在 OpenAI 账号一侧，不在 DevMate：隧道必须包含你正在用的 ChatGPT 工作区，而不只是 Platform 组织，你的账号还需要 Tunnels 的 Read 和 Use 权限（见 [OpenAI 的指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)里的“Troubleshooting”一节）。你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；2026 年 10 月实测时，个人账号的免费版提供。
 
 个人账号的隧道只能给同一个账号的 ChatGPT 用。OpenAI 不接受把另一个个人账号的工作区加进来（设置页提示无法验证该工作区与组织的关联），那个账号的 ChatGPT 选这条隧道会被 OpenAI 拒绝，请求到不了 DevMate。第二个账号要用带公网地址的通路。
+
+隧道可以和一条带公网地址的通路同时开：在那条通路的 `connect` 命令上写明隧道。
+
+```powershell
+devmate connect quick --openai-tunnel tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # 隧道的运行密钥
+devmate restart
+```
+
+这样，隧道所属账号的 ChatGPT 走隧道，其他客户端（第二个账号、Claude）走公网地址。`devmate mcp-url` 输出公网地址，并同时给出隧道 ID；`devmate doctor` 把两条分开显示，分别是 `connection.*` 和 `tunnel.*`。和公网地址同时开时，隧道一律由 DevMate 自己对接。`connect` 命令上不写隧道，就只配置那条通路，并提示怎样保留隧道。
+
+有了公网地址，本机就又能从外面访问到，开不开隧道都一样。登录是公网地址那一侧的事：从隧道进来的请求不需要登录，因为谁能用这条隧道由 OpenAI 决定（见 [SECURITY.md](SECURITY.md)）。两条同时开目前只对 OpenAI 服务的替身验证过，还没有用两个真实账号试过。
 
 **真的连通了吗**
 

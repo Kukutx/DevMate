@@ -78,6 +78,9 @@ export const configSchema = z.object({
     z.object({ kind: z.literal('cloudflare'), publicUrl: z.string().url(), executable: z.string(), tokenEnv: envName.optional() }).strict(),
     z.object({ kind: z.literal('cloudflare-quick'), executable: z.string() }).strict()
   ]).default({ kind: 'local' }),
+  // OpenAI's tunnel beside a connection that has a public address: ChatGPT of the account the tunnel belongs to comes
+  // through the tunnel, every other client through the address. Here the runtime always speaks the tunnel itself.
+  openaiTunnel: z.object({ tunnelId: z.string(), runtimeKeyEnv: envName.optional(), maxConcurrentRequests: z.number().int().optional(), organizationId: z.string().optional() }).strict().optional(),
   // Loopback port that tunnels and reverse proxies target. It serves only MCP and OAuth.
   ingressPort: z.number().int().min(1024).max(65535).optional(),
   // Days of event journal, idempotency receipts and restorable file versions to keep.
@@ -93,6 +96,12 @@ export const configSchema = z.object({
 export function normalizeConfig(input = {}) {
   const config = configSchema.parse(input);
   config.connection = normalizeConnectionConfig(config.connection);
+  // Beside nothing, or beside itself, the tunnel is the connection and is chosen as that. The setting does not outlive
+  // the connection it stood beside: an editor that changes the connection saves the rest of the file as it found it.
+  if (config.openaiTunnel && !['local', 'openai-tunnel'].includes(config.connection.kind)) {
+    config.openaiTunnel = normalizeConnectionConfig({ kind: 'openai-tunnel', ...config.openaiTunnel });
+    delete config.openaiTunnel.kind;
+  } else delete config.openaiTunnel;
   config.externalServers = normalizeExternalServers(config.externalServers);
   for (const [name, settings] of Object.entries(config.providers)) checkProviderSettings(name, settings);
   if (config.connection.kind === 'cloudflare-quick' && config.auth.mode === 'oauth') {

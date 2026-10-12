@@ -57,6 +57,16 @@ export async function doctor(service) {
   else if (proxy?.unsupported) check('proxy', 'warn', 'This computer is set to use a proxy that DevMate cannot use (' + proxy.unsupported + '): its requests to the outside go directly and may not get through.',
     /Node\.js/.test(proxy.unsupported) ? 'Install Node.js 24.14 or newer, then restart DevMate (devmate restart).' : 'Give an HTTP proxy address in the HTTPS_PROXY variable, then restart DevMate (devmate restart).');
   const status = await service.connectionState();
+  // An OpenAI tunnel has no address to connect back through. What proves it is a call that arrived: the runtime counts them.
+  const tunnelProof = (id, state, tunnelId) => {
+    if (state.client === 'built-in' && state.served > 0) check(id, 'ok', 'OpenAI\'s tunnel has delivered ' + state.served + ' call(s) to this runtime, the last one at ' + state.lastCallAt + '.');
+    // Connected and never called: what is missing is on OpenAI's side, where a tunnel is tied to workspaces and roles.
+    else if (state.client === 'built-in' && state.phase === 'connected') check(id, 'info', 'OpenAI accepts this runtime for ' + tunnelId + ' and is being asked for work; no call has come through it yet.',
+      'In ChatGPT add a custom MCP server, choose Tunnel as its connection and pick or paste this tunnel id (devmate mcp-url prints it), then call any DevMate tool. ' +
+      'If ChatGPT does not offer the tunnel, the cause is in the OpenAI account and not in DevMate, which is connected: the tunnel has to include the ChatGPT workspace you use, not only a Platform organization, and your account needs the Tunnels permissions Read and Use (' +
+      TUNNEL_HELP.settings + '; "Troubleshooting" in ' + TUNNEL_HELP.guide + '). Whether your ChatGPT plan offers the Tunnel connection is decided by OpenAI.');
+    else check(id, 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
+  };
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'For ChatGPT use OpenAI\'s own tunnel (devmate connect openai-tunnel --tunnel-id <id>); for any client a relay on a server of yours (devmate relay setup user@host).');
   else {
@@ -76,16 +86,20 @@ export async function doctor(service) {
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.' : 'Check the proxy route to the ingress port.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
-    // An OpenAI tunnel has no address to connect back through. What proves it is a call that arrived: the runtime counts them.
-    else if (status.client === 'built-in' && status.served > 0) check('connection.public', 'ok', 'OpenAI\'s tunnel has delivered ' + status.served + ' call(s) to this runtime, the last one at ' + status.lastCallAt + '.');
-    // Connected and never called: what is missing is on OpenAI's side, where a tunnel is tied to workspaces and roles.
-    else if (status.client === 'built-in' && phase === 'connected') check('connection.public', 'info', 'OpenAI accepts this runtime for ' + connection.tunnelId + ' and is being asked for work; no call has come through it yet.',
-      'In ChatGPT add a custom MCP server, choose Tunnel as its connection and pick or paste this tunnel id (devmate mcp-url prints it), then call any DevMate tool. ' +
-      'If ChatGPT does not offer the tunnel, the cause is in the OpenAI account and not in DevMate, which is connected: the tunnel has to include the ChatGPT workspace you use, not only a Platform organization, and your account needs the Tunnels permissions Read and Use (' +
-      TUNNEL_HELP.settings + '; "Troubleshooting" in ' + TUNNEL_HELP.guide + '). Whether your ChatGPT plan offers the Tunnel connection is decided by OpenAI.');
-    else check('connection.public', 'info', 'An OpenAI tunnel cannot be probed from here.', 'Call any DevMate tool from ChatGPT to confirm it.');
+    else tunnelProof('connection.public', status, connection.tunnelId);
     if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');
+  }
+  // OpenAI's tunnel beside that connection: a second way in, with a key and a state of its own.
+  const beside = service.config.openaiTunnel, tunnel = beside ? await service.tunnelState() : null;
+  if (tunnel) {
+    check('tunnel.credential', env[beside.runtimeKeyEnv] ? 'ok' : 'fail', beside.runtimeKeyEnv + (env[beside.runtimeKeyEnv] ? ' is set' : ' is missing'),
+      'Store it with: devmate secret set ' + beside.runtimeKeyEnv + ', then restart DevMate.');
+    const phase = tunnel.phase || 'unknown', fault = tunnel.error?.message || service.tunnelFault?.message;
+    check('tunnel.process', phase === 'connected' ? 'ok' : phase === 'connecting' ? 'warn' : 'fail',
+      'OpenAI\'s tunnel beside it: ' + phase + (tunnel.client === 'built-in' ? ' (spoken by DevMate itself, protocol ' + tunnel.wireProtocol + ', up to ' + tunnel.maxConcurrentRequests + ' calls at once)' : '') + (fault ? ' — ' + fault : ''),
+      fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
+    tunnelProof('tunnel.public', tunnel, beside.tunnelId);
   }
   // A quick tunnel cannot ask for sign-in. Its address ends in a key that is new with every start, and that key is what
   // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.

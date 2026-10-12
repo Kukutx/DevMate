@@ -90,7 +90,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate access [guarded \| full]` | The permission profile: what a connected client may decide (see [Who may do what](#who-may-do-what)) |
 | `devmate mcp-url` | The address for a client |
 | `devmate mcp` | MCP over standard input and output; starts the runtime when needed |
-| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in; `--openai-tunnel <id>` runs OpenAI's tunnel beside a route that has an address |
 | `devmate secret set <NAME>` / `list` / `remove <NAME>` | Connection credentials. The value is read from standard input and never appears in shell history |
 | `devmate login-code` | A one-time sign-in code (when sign-in is on) |
 | `devmate ui [--open]` | A single-use link to the workbench |
@@ -276,9 +276,21 @@ This computer only reaches out, to `api.openai.com`, and asks for work: nothing 
 
 When OpenAI refuses the key or the tunnel, `devmate doctor` repeats OpenAI's answer and says what to do about it. For a key OpenAI wants the tunnel's organisation named with, that is `--organization <org-…>` on the `connect` command.
 
-If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
+If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; the free plan of a personal account did when it was tried in October 2026.
 
 A tunnel of a personal account serves the ChatGPT of that same account. OpenAI does not take the workspace of another personal account into it (its settings page cannot verify that the workspace belongs to the organisation), and that account's ChatGPT is refused by OpenAI before a request reaches DevMate. A second account needs one of the routes with a public address.
+
+The tunnel and a route with a public address can run at once: name the tunnel on that route's `connect` command.
+
+```powershell
+devmate connect quick --openai-tunnel tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # the runtime key of the tunnel
+devmate restart
+```
+
+ChatGPT of the account the tunnel belongs to then comes through the tunnel, and every other client (a second account, Claude) through the address. `devmate mcp-url` prints the address and names the tunnel ID with it; `devmate doctor` shows the two separately, as `connection.*` and `tunnel.*`. Beside an address the tunnel is always spoken by DevMate itself. A `connect` command that does not name the tunnel sets the connection up alone, and says how to keep the tunnel.
+
+With an address this computer can be reached from outside again, whether the tunnel runs or not. Sign-in belongs to the address: what comes through the tunnel is served without it, because OpenAI decides who may use a tunnel ([SECURITY.md](SECURITY.md)). The two together have been tried against a stand-in for OpenAI's service only, not yet with two real accounts.
 
 **Is it really connected?**
 

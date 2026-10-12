@@ -119,6 +119,9 @@ test('the commands people copy from print just the value: MCP address, sign-in c
   assert.equal((await run(['mcp-url'],{kind:'cloudflare',publicUrl:'https://devmate.example.com/mcp'})).stdout,'https://devmate.example.com/mcp\n');
   const tunnel=await run(['mcp-url'],{kind:'openai-tunnel',tunnelId:'tunnel_abc'});
   assert.equal(tunnel.stdout,'tunnel_abc\n');assert.match(tunnel.stderr,/Tunnel connection type/);
+  // With OpenAI's tunnel beside an address, the address is what is printed (it serves every client) and the tunnel is named with it.
+  const both=await run(['mcp-url'],{kind:'cloudflare',publicUrl:'https://devmate.example.com/mcp',openaiTunnel:{tunnelId:'tunnel_abc'}});
+  assert.equal(both.stdout,'https://devmate.example.com/mcp\n');assert.match(both.stderr,/Tunnel connection type instead, with the tunnel ID tunnel_abc\. /);
   // A quick tunnel that has no address yet prints none: the local address is not what a client in the cloud needs.
   const early=await run(['mcp-url'],{kind:'cloudflare-quick',phase:'connecting',temporaryAddress:true,remoteMcpVerified:false});
   assert.deepEqual([early.code,early.stdout],[1,'']);assert.match(early.stderr,/has not been given its address yet/);

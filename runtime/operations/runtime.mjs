@@ -24,8 +24,11 @@ export function defineRuntimeOperations(service, add) {
     if (!service.ownerDecides(context)) {
       return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified };
     }
+    const tunnel = await service.tunnelState();
     const answer = { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}),
-      ...(service.connectionFault ? { startError: service.connectionFault } : {}) };
+      ...(service.connectionFault ? { startError: service.connectionFault } : {}),
+      // OpenAI's tunnel where it runs beside this connection: a second way in, with a state of its own.
+      ...(tunnel ? { openaiTunnel: { ...tunnel, ...(service.tunnelFault ? { startError: service.tunnelFault } : {}) } } : {}) };
     if (context.surface === 'local') return answer;
     // What a connected client is told ends up in a conversation, and conversations get shared. The address of a quick
     // tunnel ends in its key; the client already has the address it came through and is not told the key again.
@@ -99,15 +102,22 @@ export function defineRuntimeOperations(service, add) {
       : 'Explicitly ' + action + ' the configured connection while keeping local work running.', async () => {
       // Whatever was verified or failed before says nothing about the connection after this.
       service.verification = null;
-      try {
-        if (action === 'restart') { await service.connection.stop(); service.connection.refresh?.(service.secrets.environment()); }
-        const status = await service.connection[action === 'restart' ? 'start' : action]();
-        service.connectionFault = null;
-        return status;
-      } catch (error) {
-        if (action !== 'stop') service.connectionFault = { code: error.code || 'connection_error', message: error.message, at: now() };
-        throw error;
-      }
+      const apply = async connection => {
+        if (action === 'restart') { await connection.stop(); connection.refresh?.(service.secrets.environment()); }
+        return connection[action === 'restart' ? 'start' : action]();
+      };
+      const settle = (result, fault) => {
+        if (result.status === 'fulfilled') service[fault] = null;
+        else if (action !== 'stop') service[fault] = { code: result.reason.code || 'connection_error', message: result.reason.message, at: now() };
+      };
+      // OpenAI's tunnel beside the connection is stopped and started with it: its key is stored and applied the same
+      // way. One that fails does not keep the other from starting.
+      const [main, beside] = await Promise.allSettled([apply(service.connection), ...(service.tunnel ? [apply(service.tunnel)] : [])]);
+      settle(main, 'connectionFault');
+      if (beside) settle(beside, 'tunnelFault');
+      const failed = [main, beside].find(result => result?.status === 'rejected');
+      if (failed) throw failed.reason;
+      return beside ? { ...main.value, openaiTunnel: beside.value } : main.value;
     }, local);
   }
 

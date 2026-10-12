@@ -32,7 +32,7 @@ const SERVER_INFO = JSON.stringify({ version: 1, channels: [{ name: 'main' }] })
 const RESPONSE_HEADERS = { 'content-type': 'Content-Type', 'mcp-session-id': 'Mcp-Session-Id', 'mcp-protocol-version': 'Mcp-Protocol-Version',
   'last-event-id': 'Last-Event-ID', 'access-control-expose-headers': 'Access-Control-Expose-Headers', 'www-authenticate': 'WWW-Authenticate' };
 // What a command may not set on the request to the endpoint: hop-by-hop fields, and whatever claims where it came from.
-const WITHHELD = /^(host|connection|keep-alive|proxy-.*|transfer-encoding|upgrade|te|trailer|content-length|content-type|accept|forwarded|x-forwarded-.*|x-real-ip|true-client-ip|cf-.*|x-openai-.*|openai-.*)$/i;
+const WITHHELD = /^(host|connection|keep-alive|proxy-.*|transfer-encoding|upgrade|te|trailer|content-length|content-type|accept|forwarded|x-forwarded-.*|x-real-ip|true-client-ip|cf-.*|x-openai-.*|openai-.*|x-devmate-.*)$/i;
 const RETRY_TERMINAL = new Set([408, 429, 502, 503, 504]);
 const UNITS = { ns: 1e-6, us: 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };
 
@@ -69,7 +69,9 @@ async function* streamEvents(body) {
   yield* events(true);
 }
 
-export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, instanceId = '', env = process.env, maxConcurrentRequests = 32,
+// localHeaders: what this client itself says to the endpoint with every call it hands over, which no command can say.
+// beside: the tunnel runs beside a connection that has a public address, and is set up on that connection's command.
+export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, localHeaders = {}, beside = false, instanceId = '', env = process.env, maxConcurrentRequests = 32,
   fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
   now = () => performance.now(), random = Math.random, limit = ms => AbortSignal.timeout(ms) } = {}) {
   if (!/^tunnel_[A-Za-z0-9_]+$/.test(tunnelId || '')) throw fault('invalid_connection', 'A valid OpenAI tunnel id is required.');
@@ -100,9 +102,11 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   // tunnel service (x-tunnel-error-codes in docs/openapi.json of github.com/openai/tunnel-client). The tunnel id is
   // named as the cause only where OpenAI names it, and an answer that interface does not know is passed on as it is.
   function refusal(status, { code, message }) {
-    const answer = 'HTTP ' + status + (code ? ' ' + code : '') + (message ? ': ' + message : ''), again = 'devmate connect openai-tunnel --tunnel-id ' + tunnelId;
-    const official = 'OpenAI\'s own tunnel-client can carry the tunnel (' + again + ' --executable <path of tunnel-client>)';
-    if (code === 'invalid_tunnel_id_format') return ['tunnel_id', 'OpenAI does not take ' + tunnelId + ' for a tunnel id (' + answer + '). Copy the id from ' + TUNNEL_HELP.settings + ' and set it: devmate connect openai-tunnel --tunnel-id <id>'];
+    const answer = 'HTTP ' + status + (code ? ' ' + code : '') + (message ? ': ' + message : '');
+    // The command that names this tunnel: on its own, or on the connection it runs beside.
+    const named = id => beside ? 'devmate connect … --openai-tunnel ' + id : 'devmate connect openai-tunnel --tunnel-id ' + id, again = named(tunnelId);
+    const official = 'OpenAI\'s own tunnel-client can carry the tunnel' + (beside ? ' where it is the only connection' : '') + ' (devmate connect openai-tunnel --tunnel-id ' + tunnelId + ' --executable <path of tunnel-client>)';
+    if (code === 'invalid_tunnel_id_format') return ['tunnel_id', 'OpenAI does not take ' + tunnelId + ' for a tunnel id (' + answer + '). Copy the id from ' + TUNNEL_HELP.settings + ' and set it: ' + named('<id>')];
     if (code === 'tunnel_active_organization_required') return ['organization_required', 'OpenAI has to be told which organization ' + tunnelId + ' belongs to (' + answer + '). ' +
       (organizationId ? 'It was told ' + organizationId + ' and does not take that. ' : '') + 'Name the organization of the tunnel: ' + again + ' --organization <organization id>'];
     if (code === 'tunnel_use_forbidden' || code === 'tunnel_missing_principals') return ['not_permitted', 'This runtime key may not use ' + tunnelId + ' (' + answer + '). The key has to come from the organization or workspace the tunnel belongs to: create it for this tunnel at ' +
@@ -150,6 +154,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       if (WITHHELD.test(name)) continue;
       for (const value of [].concat(values)) if (typeof value === 'string') headers.append(name, value);
     }
+    for (const [name, value] of Object.entries(localHeaders)) headers.set(name, value);
     let response;
     try {
       response = await fetchImpl(localMcpUrl, { method: 'POST', headers, body: JSON.stringify(message), redirect: 'error',

@@ -35,6 +35,8 @@ const LOG_LIMIT_BYTES = 8 * 1024 * 1024;
 const STATUS = { unauthorized: 401, forbidden: 403, scope_mismatch: 403, invalid_origin: 403, not_found: 404, unknown_operation: 404,
   conflict: 409, operation_conflict: 409, body_too_large: 413, invalid_host: 421, forwarded_request: 421,
   runtime_stopping: 503, runtime_unavailable: 503 };
+// What the runtime's own client of OpenAI's tunnel says with every call it hands to the ingress port.
+const TUNNEL_HEADER = 'x-devmate-tunnel';
 // Request headers an MCP client may send from a browser. Mcp-Param-* carries tool arguments by name.
 const MCP_REQUEST_HEADER = /^(authorization|content-type|accept|last-event-id|mcp-[a-z0-9-]+)$/i;
 
@@ -133,7 +135,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     config = readConfig(instanceRoot);
     publish(tokenFile, token);
   } catch (error) { await lock.close(); throw error; }
-  let stopping = false, stopPromise, connection, service, mcp, mcpHandler, plainMcp, plainHandler, streams, verifyTimer, upkeepTimer;
+  let stopping = false, stopPromise, connection, tunnelBeside, service, mcp, mcpHandler, plainMcp, plainHandler, streams, verifyTimer, upkeepTimer;
   // A browser tab gets a session of its own, bought with a single-use code that only
   // the holder of the owner token can mint. The owner token never leaves the
   // instance directory and is never handed to a browser. The session is no cookie:
@@ -165,6 +167,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     return url ? new URL(url).origin : null;
   };
   const hasIngress = currentOrigin() !== null || quickTunnel || config.connection.kind === 'openai-tunnel';
+  // The runtime's own client of OpenAI's tunnel is known at the ingress port by a secret of this start, which nothing
+  // outside this process learns. Its loopback name alone says too little once a public route leads to the same port:
+  // a proxy that rewrites Host to that name (nginx does unless told otherwise) would make every request from outside
+  // the tunnel's.
+  const tunnelSecret = randomBytes(32).toString('base64url');
   // The control port answers to this computer under any local port number: an editor that forwards it from a remote
   // machine reaches it as localhost:<another port>. Against DNS rebinding it is the name that counts, never the number.
   const localName = host => /^(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(host || '');
@@ -181,7 +188,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       send(res, status, content);
     }
   };
-  async function serveMcp(req, res, local) {
+  // tunnel: the request came through OpenAI's tunnel; proven where the runtime's own tunnel client handed it over.
+  async function serveMcp(req, res, local, tunnel = null) {
     if (!mcp || stopping) return refuse(res, 'runtime_unavailable', 'Runtime is starting or stopping.');
     const cors = req.headers.origin ? { 'Access-Control-Allow-Origin': req.headers.origin, Vary: 'Origin',
       'Access-Control-Expose-Headers': 'WWW-Authenticate' } : {};
@@ -193,8 +201,10 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     }
     // The control port is reachable only from this computer, so a caller that
     // presents no credentials is its owner in either auth mode. A caller that
-    // does present a token is exactly who that token says, or nobody.
-    const { principal, reason } = local && !req.headers.authorization ? { principal: { id: 'owner' }, reason: null } : service.auth.check(req);
+    // does present a token is exactly who that token says, or nobody. What the runtime's own tunnel client hands over
+    // is the owner's in the same way: OpenAI lets a tunnel be used by the account it belongs to and by nobody else, and
+    // no sign-in page can be reached through it.
+    const { principal, reason } = (local || tunnel?.proven) && !req.headers.authorization ? { principal: { id: 'owner' }, reason: null } : service.auth.check(req);
     for (const [name, value] of Object.entries(cors)) res.setHeader(name, value);
     if (!principal) {
       // The challenge tells a client where to sign in, and whether the token it sent was the problem.
@@ -203,20 +213,26 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       return refuse(res, 'unauthorized', reason || 'MCP authorization required.');
     }
     // The official Node adapter passes this verified identity to its per-request factory.
-    req.auth = { clientId: principal.id, scopes: ['devmate'], extra: { devmatePrincipal: principal } };
-    return await (plainMcp && !local ? plainMcp : mcp)(req, res);
+    req.auth = { clientId: principal.id, scopes: ['devmate'], extra: { devmatePrincipal: principal, ...(tunnel ? { tunnel: true } : {}) } };
+    // The tunnel carries event streams; only the quick tunnel's own address does not.
+    return await (plainMcp && !local && !tunnel ? plainMcp : mcp)(req, res);
   }
   const ingress = http.createServer(guarded(async (req, res) => {
     // An OpenAI tunnel client forwards to this loopback port itself; every other
     // route arrives through a proxy that preserves the configured public host.
-    const tunnelLocal = config.connection.kind === 'openai-tunnel' && loopbackHost(ingress, req.headers.host);
+    const loopback = loopbackHost(ingress, req.headers.host);
+    const proven = loopback && equalSecret(req.headers[TUNNEL_HEADER], tunnelSecret);
+    // OpenAI's own tunnel-client program cannot be told the secret. It is taken by the loopback name where the tunnel
+    // is the only connection, and what it hands over is checked like every request from outside.
+    const tunnelLocal = proven || (config.connection.kind === 'openai-tunnel' && loopback);
     const publicOrigin = currentOrigin();
     if (!tunnelLocal && (!publicOrigin || req.headers.host !== new URL(publicOrigin).host)) return refuse(res, 'invalid_host', 'Unexpected host.');
     const requestOrigin = tunnelLocal ? 'http://' + req.headers.host : publicOrigin;
     const url = new URL(req.url, requestOrigin);
     if (service?.auth && await service.auth.handle(req, res, url)) return;
     if (req.headers.origin && !new Set([requestOrigin, ...(config.allowedOrigins || [])]).has(req.headers.origin)) return refuse(res, 'invalid_origin', 'The origin ' + req.headers.origin + ' is not allowed. A browser-based client you run yourself is allowed by adding its origin to "allowedOrigins" in the DevMate configuration; on the local port such an origin acts as the owner.');
-    if (equalSecret(url.pathname, mcpPath)) return serveMcp(req, res, false);
+    // The key in a public address belongs to that address; the tunnel comes by the plain path.
+    if (equalSecret(url.pathname, tunnelLocal ? '/mcp' : mcpPath)) return serveMcp(req, res, false, tunnelLocal ? { proven } : null);
     return refuse(res, 'not_found', 'Only MCP and OAuth routes are exposed through the public ingress.');
   }));
   function windowProject(req) {
@@ -329,7 +345,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     stopPromise = new Promise(resolve => setTimeout(resolve, 20)).then(async () => {
       clearTimeout(verifyTimer); clearInterval(upkeepTimer);
       streams?.close();
-      const results = await Promise.allSettled([service?.close(), connection?.stop(), mcpHandler?.close(), plainHandler?.close()]);
+      const results = await Promise.allSettled([service?.close(), connection?.stop(), tunnelBeside?.stop(), mcpHandler?.close(), plainHandler?.close()]);
       const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
       if (errors.length) throw new AggregateError(errors, 'Owned processes have not all confirmed shutdown; runtime ownership is retained.');
       const closing = [server, ingress].map(listener => {
@@ -370,9 +386,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     service.agents.endpoint = 'http://127.0.0.1:' + port + '/api/agent';
     service.identity = { instanceId, generation };
     service.proxy = proxy;
-    connection = connectionFactory({ config: config.connection || { kind: 'local' }, instanceRoot, instanceId, env: service.secrets.environment(),
-      localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
+    const reach = { instanceRoot, instanceId, env: service.secrets.environment(), localHeaders: { [TUNNEL_HEADER]: tunnelSecret } };
+    connection = connectionFactory({ ...reach, config: config.connection || { kind: 'local' }, localMcpUrl: 'http://127.0.0.1:' + (ingressPort ?? port) + mcpPath });
     service.connection = connection;
+    // OpenAI's tunnel beside the public route: a second way in to the same port, under the plain path.
+    if (config.openaiTunnel) tunnelBeside = service.tunnel = connectionFactory({ ...reach, beside: true, config: { kind: 'openai-tunnel', ...config.openaiTunnel }, localMcpUrl: 'http://127.0.0.1:' + ingressPort + '/mcp' });
     // What a request says about its client and what it asks for decides which tool names it is shown (./surfaces.mjs):
     // read from the message before the SDK takes it, and carried to the factory that serves this very request.
     const asked = new AsyncLocalStorage();
@@ -386,8 +404,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
         try { messages = [extra.parsedBody ?? await request.clone().json()].flat().filter(message => message && typeof message === 'object'); } catch { /* the handler answers a malformed message */ }
       }
       const said = messages.map(message => message.params?._meta?.['io.modelcontextprotocol/clientInfo']?.name || message.params?.clientInfo?.name).find(Boolean);
-      // OpenAI's tunnel is the one thing that reaches the ingress port by its loopback address.
-      const sender = request.headers.get('user-agent'), tunnel = config.connection.kind === 'openai-tunnel' && Number(new URL(request.url).port) === ingressPort;
+      // Whether it came through OpenAI's tunnel was decided where it arrived (the ingress port).
+      const sender = request.headers.get('user-agent'), tunnel = extra.authInfo?.extra?.tunnel === true;
       if (said && sender) { named.delete(sender); named.set(sender, String(said).slice(0, 200)); if (named.size > 64) named.delete(named.keys().next().value); }
       const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said || (sender ? named.get(sender) : undefined), userAgent: sender, tunnel });
       // Who asked last and which tool names they were given, for the doctor. What a client says of itself is its own
@@ -422,6 +440,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       service.connectionFault = { code: error.code || 'connection_error', message: error.message, at: new Date().toISOString() };
       health.connection = 'failed';
       process.stderr.write(new Date().toISOString() + ' connection: ' + error.message + '\n');
+    }
+    try { await tunnelBeside?.start(); }
+    catch (error) {
+      service.tunnelFault = { code: error.code || 'connection_error', message: error.message, at: new Date().toISOString() };
+      process.stderr.write(new Date().toISOString() + ' OpenAI tunnel: ' + error.message + '\n');
     }
     // A browser the owner registered starts and loads this copy of DevMate from now on (nothing where none is registered).
     try { createChromeRegistration({ instanceRoot, cli: fileURLToPath(new URL('./cli.mjs', import.meta.url)) }).refresh(); }

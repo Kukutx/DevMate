@@ -83,7 +83,7 @@ export async function report(service) {
   const failures = usage.recentFailures.slice(0, 20);
   const lines = [HEADING, '',
     'DevMate ' + VERSION + ' · ' + process.platform + ' ' + process.arch + ' ' + os.release() + ' · Node ' + process.versions.node + ' · ' + service.processes.shell.label,
-    'Connection: ' + config.connection.kind + ' · sign-in: ' + config.auth.mode + ' · profile: ' + service.accessProfile + ' · up ' + Math.round(process.uptime() / 60) + ' min',
+    'Connection: ' + config.connection.kind + (config.openaiTunnel ? ' with openai-tunnel beside it' : '') + ' · sign-in: ' + config.auth.mode + ' · profile: ' + service.accessProfile + ' · up ' + Math.round(process.uptime() / 60) + ' min',
     'Shared folders: ' + projects.length + ' (' + access('write') + ' read and write, ' + access('read') + ' read only) · editor windows: ' + service.windows.list().length,
     '', 'Checks', ...checkLines(doctor.checks),
     '', 'Operations since the start: name, calls (through MCP), failed, ms for half of the calls, for 19 in 20, slowest',

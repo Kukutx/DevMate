@@ -74,7 +74,7 @@ export async function inspectTunnelClient({ executable, execFileImpl = executeFi
 }
 
 export function createConnection({
-  config = { kind: 'local' }, localMcpUrl, instanceRoot, instanceId,
+  config = { kind: 'local' }, localMcpUrl, localHeaders, beside = false, instanceRoot, instanceId,
   env = process.env, spawnImpl = spawn, fetchImpl = globalThis.fetch,
   terminateImpl = terminateProcessTree
 } = {}) {
@@ -83,7 +83,7 @@ export function createConnection({
   if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
   if (settings.kind === 'openai-tunnel' && !settings.executable) {
     const tunnel = createOpenAiTunnel({ tunnelId: settings.tunnelId, runtimeKeyEnv: settings.runtimeKeyEnv, organizationId: settings.organizationId, maxConcurrentRequests: settings.maxConcurrentRequests,
-      localMcpUrl: httpTarget(localMcpUrl), instanceId, env, fetchImpl });
+      localMcpUrl: httpTarget(localMcpUrl), localHeaders, beside, instanceId, env, fetchImpl });
     return { ...tunnel, config: settings };
   }
   const localUrl = httpTarget(localMcpUrl);
