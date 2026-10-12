@@ -140,7 +140,11 @@ export async function handleWorkbench(req, res) {
     res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Method not allowed'); return true;
   }
   const html = await workbenchHtml();
+  // The page served here is the owner's, signed in at the computer: no other page may hold it in a frame (another
+  // local port could, and what is clicked in a frame is clicked in the page), nor keep a hand on its window. An
+  // embedded workbench is not served from here: a chat app reads it as a resource.
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': 'frame-ancestors \'none\'', 'X-Frame-Options': 'DENY', 'Cross-Origin-Opener-Policy': 'same-origin' });
   res.end(req.method === 'HEAD' ? undefined : html); return true;
 }

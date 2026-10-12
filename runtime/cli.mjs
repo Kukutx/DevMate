@@ -41,8 +41,9 @@ Projects
   devmate delegation [ask | allow | off]
                                     whether a connected client may hand tasks to Codex, Claude Code and the
                                     other agents here, which run on your account with them: ask (default) has
-                                    you allow each task at this computer, in either access profile; allow
-                                    runs them without asking; off refuses them
+                                    you allow each task at this computer, in either access profile, and starts
+                                    nothing for a task before that; allow runs them without asking, those that
+                                    wait included; off refuses them and ends what waits
 
 Connecting an AI client
   devmate mcp-url                   the address to enter in ChatGPT, Claude or another MCP client
@@ -492,8 +493,8 @@ export async function main(argv = process.argv.slice(2), {
       if (mode !== undefined && !['ask', 'allow', 'off'].includes(mode)) throw new Error('Use delegation, delegation ask, delegation allow or delegation off');
       const chosen = mode ? await client.call('delegation.update', { mode }, callOptions) : await client.call('delegation.read', {}, callOptions);
       stdout.write(chosen.mode + '\n');
-      stderr.write({ ask: 'Ask: a task that a connected client hands to Codex, Claude Code or another agent here waits until you allow it at this computer, in the workbench (devmate ui) or your editor. What you start here yourself is not asked about. Not to be asked: devmate delegation allow\n',
-        allow: 'Allow: a connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider. To be asked first: devmate delegation ask\n',
+      stderr.write({ ask: 'Ask: a task that a connected client hands to Codex, Claude Code or another agent here waits until you allow it at this computer, in the workbench (devmate ui) or your editor. What you start here yourself is not asked about, and an agent whose later tasks you had let through is asked about again from now on. Not to be asked: devmate delegation allow\n',
+        allow: 'Allow: a connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider. Tasks that waited for your answer when you chose this were let through. To be asked first: devmate delegation ask\n',
         off: 'Off: a connected client cannot hand tasks to the coding agents here; you still can, at this computer. To be asked for each task instead: devmate delegation ask\n' }[chosen.mode]);
       return 0;
     }

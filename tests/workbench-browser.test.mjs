@@ -31,9 +31,9 @@ after(async()=>{await browser?.close();});
 
 /** An in-memory stand-in for the service that answers like it: lists honour status, newestFirst, limit and cursor. */
 // What the owner is asked when a connected client hands a task to an agent (runtime/coordination.mjs, consent).
-const delegationRequest=()=>({id:'approval-delegation',kind:'delegation',projectId:'p-one',agentId:'a-one',summary:'Run a task with codex in Project One: Fix it',status:'pending',revision:1,
-  options:[{optionId:'allow_once',name:'Run this task'},{optionId:'allow_agent',name:'Run it, and later tasks for this agent without asking'},{optionId:'deny',name:'Do not run it'}],
-  details:{agent:'codex',project:'Project One',askedBy:'a connected client',task:'Fix it'}});
+const delegationRequest=()=>({id:'approval-delegation',kind:'delegation',projectId:'p-one',agentId:'a-one',deliveryId:'delivery-001',summary:'A connected client asks codex to run a task in Project One: Fix it',status:'pending',revision:1,
+  options:[{optionId:'allow_once',name:'Run this task'},{optionId:'allow_agent',name:'Run it, and later tasks for this agent while it stays connected'},{optionId:'deny',name:'Do not run it'}],
+  details:{agent:'codex',project:'Project One',askedBy:'A connected client',characters:6,task:'Fix it'}});
 function fixture() {
   const calls=[],refs=[],failures=new Map();
   const projects=[{id:'p-one',name:'Project One',root:'C:/fixture-one',access:'write',revision:1},{id:'p-two',name:'Project Two',root:'C:/fixture-two',access:'write',revision:1}];
@@ -195,7 +195,7 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   assert.equal(await page.getByRole('button',{name:'Approve',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Allow once from provider',exact:true}).count(),0,'an answered request offers no decision any more');
   // Whether a task of a connected client runs at all is answered here, at the computer, like any other request.
-  await page.getByRole('heading',{name:'Run a task with codex in Project One: Fix it',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'A connected client asks codex to run a task in Project One: Fix it',exact:true}).waitFor();
   await page.getByRole('button',{name:'Do not run it',exact:true}).click();
   await until(()=>f.count('approval.resolve')===2,'the owner\'s answer');
   const answered=f.calls.filter(x=>x.operation==='approval.resolve')[1].input;
@@ -248,7 +248,7 @@ test('official MCP Apps SDK runs in iframe and attaches real saved references wi
   // Inside a chat app nothing offers to allow a task a connected client handed over: that is said at the computer.
   f.approvals.push(delegationRequest());
   await frame.getByRole('tab',{name:'Approvals',exact:true}).click();
-  await frame.getByRole('heading',{name:'Run a task with codex in Project One: Fix it',exact:true}).waitFor();
+  await frame.getByRole('heading',{name:'A connected client asks codex to run a task in Project One: Fix it',exact:true}).waitFor();
   await frame.getByText('Whether this task runs is yours to say on your computer, in either access profile',{exact:false}).waitFor();
   assert.equal(await frame.getByRole('button',{name:'Run this task',exact:true}).count(),0);
   assert.equal(await frame.getByRole('button',{name:'Allow once from provider',exact:true}).count(),1,'what an agent asks in its turn is offered as before');

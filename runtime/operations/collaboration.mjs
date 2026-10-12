@@ -61,9 +61,13 @@ export function defineCollaborationOperations(service, add) {
         if (args.instruction !== undefined || args.assigneeId !== undefined) throw new DomainError('invalid_input', 'Cancel execution before changing its instruction or assignment.');
         const active = deliveries.filter(item => item.status === 'running');
         service.store.transaction(() => {
-          for (const delivery of deliveries.filter(item => item.status === 'queued')) service.agents.cancelQueued(delivery.id);
+          // Taking back what has not begun (queued, or still waiting for the owner to allow it) settles the task with
+          // it, which is a change of the task: the revision the caller named was compared above, and is not compared
+          // again with the one that change made. (Compared again, a task that only waited could not be cancelled where
+          // a revision is named, which is how the workbench does it.)
+          for (const delivery of deliveries.filter(item => item.status !== 'running')) service.agents.cancelQueued(delivery.id);
           service.store.update('task', args.id, { status: active.length ? 'cancelling' : 'cancelled',
-            ...(args.title !== undefined ? { title: args.title } : {}) }, args.expectedRevision);
+            ...(args.title !== undefined ? { title: args.title } : {}) });
         });
         await Promise.all([...new Set(active.map(item => item.agentId))].map(agentId => service.agents.cancel(agentId)));
         return service.store.get('task', args.id);
@@ -101,7 +105,11 @@ export function defineCollaborationOperations(service, add) {
   add('input.respond', { id, ...revision, ...mutation, response: z.unknown() }, false,
     'Return the user\'s answer to the exact waiting request (input.list shows it under details). For an agent\'s question: the answer as plain text when there is one question, otherwise {answers:{"<question id or text>":"<answer>"}}. For a form (details.requestedSchema): {action:"accept", content:{…}}, {action:"decline"} or {action:"cancel"}.',
     args => service.store.get('input', args.id).source === 'mcp' ? service.inputs.respond(args) : service.agents.resolve('input', args), { humanOnly: true });
-  add('approval.cancel', { id, ...mutation }, false, 'Cancel the native turn that is awaiting this approval.', args => service.agents.cancel(service.store.get('approval', args.id).agentId));
+  add('approval.cancel', { id, ...mutation }, false, 'Cancel the native turn that is awaiting this approval. Of a task that waits for the owner to allow it (kind delegation) there is no turn yet: that task is taken back.', args => {
+    const approval = service.store.get('approval', args.id);
+    if (approval.kind !== 'delegation') return service.agents.cancel(approval.agentId);
+    return { id: approval.agentId, requested: ['queued', 'held'].includes(service.store.get('delivery', approval.deliveryId).status) && service.agents.cancelQueued(approval.deliveryId).status === 'cancelled' };
+  });
 
   add('reference.list', listOptions, true, 'List project and workflow references.', (args, context) => service.list('reference', args, context));
   add('reference.add', { ...workflowScope, uri: z.string().min(1).max(2000), name: z.string().min(1).max(200),

@@ -246,7 +246,7 @@ export class Store extends EventEmitter {
 
   activeDeliveriesForTask(taskId) {
     return this.db.prepare("SELECT data FROM entities WHERE kind='delivery' " +
-      "AND json_extract(data,'$.taskId')=? AND json_extract(data,'$.status') IN ('queued','running') " +
+      "AND json_extract(data,'$.taskId')=? AND json_extract(data,'$.status') IN ('held','queued','running') " +
       "ORDER BY id").all(taskId).map(row=>JSON.parse(row.data));
   }
 
@@ -269,13 +269,19 @@ export class Store extends EventEmitter {
       } catch { throw new DomainError('invalid_cursor','Invalid agent inbox cursor.'); }
     }
     const pageSize=Math.min(Math.max(Number(limit)||100,1),500);
+    // What a connected client sent this agent is not its to read before it was given it: not while the owner is
+    // still asked about it (held), and not once it was refused or taken back without having run (cancelled). Read from
+    // the inbox it would be a task all the same, and one the owner did not allow.
     const sql="SELECT data FROM entities WHERE kind='message' AND project_id=? AND workflow_id=? " +
       "AND (json_extract(data,'$.sender.id')=? OR EXISTS " +
       "(SELECT 1 FROM json_each(entities.data,'$.recipientIds') WHERE value=?)) " +
+      "AND NOT (json_extract(data,'$.sender.client') IS 1 AND EXISTS (SELECT 1 FROM entities held WHERE held.kind='delivery' " +
+      "AND held.project_id=entities.project_id AND held.workflow_id=entities.workflow_id AND json_extract(held.data,'$.messageId')=entities.id " +
+      "AND json_extract(held.data,'$.agentId')=? AND json_extract(held.data,'$.status') IN ('held','cancelled'))) " +
       (older ? "AND (json_extract(data,'$.createdAt')<? OR " +
         "(json_extract(data,'$.createdAt')=? AND id<?)) " : '') +
       "ORDER BY json_extract(data,'$.createdAt') DESC,id DESC LIMIT ?";
-    const args=[projectId,workflowId,agentId,agentId,...(older?[older.createdAt,older.createdAt,older.id]:[]),pageSize+1];
+    const args=[projectId,workflowId,agentId,agentId,agentId,...(older?[older.createdAt,older.createdAt,older.id]:[]),pageSize+1];
     const rows=this.db.prepare(sql).all(...args);
     const items=rows.slice(0,pageSize).map(row=>JSON.parse(row.data));
     const oldest=items.at(-1);

@@ -30,7 +30,8 @@ export function defineAgentOperations(service, add) {
     (result.proposedFiles ? '\nThe agent worked in a copy of its own: the project is unchanged.' + (result.proposedFiles.length ? ' It proposes:\n' + result.proposedFiles.map(entry => '  ' + entry).join('\n') : ' It proposes no changes.') +
       '\nRead the diff with operations_query {operation:"agents.proposal", input:{agentId:"' + result.agentId + '"}}. Bring it into the project with operations_call {operation:"agents.apply", input:{agentId:"' + result.agentId + '"}}, or drop it with agents.discard.' : '') +
     (result.copyNote ? '\n[' + result.copyNote + ']' : '') +
-    '\n[agent ' + result.status +
+    // An agent that a connected client had written down, and that no allowed task has started yet, is said as that.
+    '\n[agent ' + (result.status === 'unstarted' ? 'not started (it starts when the owner allows a task of it)' : result.status) +
     // A task that waits for the owner's word has not begun, and is not the client's to allow in either access profile.
     (result.approvals.some(item => item.delegation) ? '; nothing has run yet: the owner has to allow this task at their computer first, because it runs on their account with ' + result.provider +
       '. Ask them to answer it in the DevMate workbench there (devmate ui) or in their editor; devmate delegation allow, run there, ends the asking. Then ' + follow(result)
@@ -70,7 +71,7 @@ export function defineAgentOperations(service, add) {
       let started;
       try { started = await service.agents.delegate({ ...task, waitMs: 0, ...(isolated ? { isolated: { root: isolated.root, branch: isolated.branch, base: isolated.base } } : {}) }, actor(context)); }
       catch (error) { if (isolated) await service.workspace.discardProposal(project, isolated).catch(() => {}); throw error; }
-      const outcome = await withChanges(await service.agents.outcome(started.agentId, { deliveryId: started.deliveryId, waitMs: wait, signal: service.waitSignal(context) }));
+      const outcome = await withChanges(await service.agents.outcome(started.agentId, { deliveryId: started.deliveryId, waitMs: wait, signal: service.waitSignal(context), announce: true }));
       // What a copy lacks decides whether the agent can check its own work there: said every time one is made.
       return isolated ? { ...outcome, copyNote: 'The agent\'s copy holds what is committed' + (isolated.uncommitted ? ': ' + isolated.uncommitted + ' uncommitted change(s) of the project are not in it, and neither are' : ', not') +
         ' ignored files such as installed dependencies and build output. To run tests there the agent has to install what it needs first; say so in the task.' } : outcome;
@@ -113,11 +114,19 @@ export function defineAgentOperations(service, add) {
   add('agents.list', listOptions, true, 'List native agent sessions.', (args, context) => service.list('agent', args, context));
   add('agents.start', { ...workflowScope, provider: z.enum(AGENT_PROVIDERS), model,
     name: z.string().max(200).optional(), title: z.string().max(200).optional(), prompt: text.optional(), sessionId: z.string().max(200).optional(), ...mutation }, false,
-    'Start or explicitly resume a native provider session for this workflow.', (args, context) => service.agents.start(args, actor(context)), { openWorld: true, delegates: true });
-  for (const action of ['stop', 'resume', 'cancel']) add('agents.' + action, { id, ...mutation }, false,
-    action + ' a native agent session.', args => service.agents[action](args.id));
-  add('agents.steer', { id, body: text.min(1), ...mutation }, false, 'Steer a running turn when the provider supports it.',
-    args => service.agents.steer(args.id, args.body), { openWorld: true });
+    'Start or explicitly resume a native provider session for this workflow. Where the owner is asked about a connected client\'s tasks (delegation.read), a client\'s agent is only written down: its process starts with the first task the owner allows.',
+    (args, context) => {
+      const agent = service.agents.start(args, actor(context));
+      // Said with the answer too, where nothing was started: its status alone is a word.
+      return agent.status === 'unstarted' ? { ...agent, note: 'This agent is written down and not started. Its process starts when the owner allows the first task that is handed to it (agents_delegate with agentId, or agents.send): they are asked at their computer.' } : agent;
+    }, { openWorld: true, delegates: true });
+  for (const action of ['stop', 'cancel']) add('agents.' + action, { id, ...mutation }, false,
+    action + ' a native agent session.' + (action === 'cancel' ? ' Where no task runs, the tasks of it that still wait for the owner to allow them are taken back.' : ''), args => service.agents[action](args.id));
+  // Starting a process again, and putting more into a task that runs, are a connected client's to do only where its
+  // tasks for that agent need no asking (delegation.read): both are otherwise done by handing the agent a task.
+  add('agents.resume', { id, ...mutation }, false, 'resume a native agent session.', (args, context) => service.agents.resume(args.id, actor(context)), { delegates: true });
+  add('agents.steer', { id, body: text.min(1), ...mutation }, false, 'Steer a running turn when the provider supports it. It adds to the task without the owner being asked: where they are asked about a connected client\'s tasks, a client steers only an agent whose later tasks the owner allowed.',
+    (args, context) => service.agents.steer(args.id, args.body, actor(context)), { openWorld: true, delegates: true });
   add('agents.send', { id, body: text.min(1), ...mutation }, false, 'Queue a native turn for an agent.', (args, context) => {
     const agent = service.store.get('agent', args.id);
     return service.agents.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [args.id], body: args.body }, actor(context));

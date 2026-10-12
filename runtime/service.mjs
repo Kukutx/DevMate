@@ -223,8 +223,11 @@ export class DevMateService {
   setDelegation(mode) {
     this.store.setting('delegation.mode', mode);
     this.delegation = mode;
-    // Tasks that already wait for the owner's word are covered by "do not ask".
+    // Tasks that already wait for the owner's word are covered by "do not ask". Choosing to be asked means of every
+    // agent again, also one whose later tasks had been let through; and with off nothing of a connected client's is
+    // left to run.
     if (mode === 'allow') this.agents.allowWaiting();
+    else this.agents.askAgain(mode === 'off');
     return { mode };
   }
   // Folders the owner took out of sharing. They come back only by the owner's own choice, and not through a

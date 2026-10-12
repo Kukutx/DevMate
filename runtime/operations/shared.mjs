@@ -46,7 +46,8 @@ export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
 // client: sent through a connected client, not by the owner at this computer. A task that comes that way is run
 // by a coding agent only with the owner's word (delegation.read).
-export const actor = context => ({ id: context.id, kind: 'user', label: 'You', ...(context.surface === 'local' ? {} : { client: true }) });
+// It is named as that too: an agent that reads who wrote to it is not told "You", which is the owner at the computer.
+export const actor = context => context.surface === 'local' ? { id: context.id, kind: 'user', label: 'You' } : { id: context.id, kind: 'user', label: 'Connected client', client: true };
 export const within = (root, target) => { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)); };
 export const oneCommand = value => {
   if ((value.command === undefined) === (value.file === undefined)) throw new DomainError('invalid_command', 'Supply either command text or an executable file with args.');

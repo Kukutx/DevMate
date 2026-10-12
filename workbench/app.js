@@ -567,15 +567,18 @@ function agentCard(v, agent) {
   };
   return el('div', {class: 'item', 'data-key': agent.id}, el('div', {class: 'row-head'}, el('h3', {text: name(agent)}), badge(agent.status)),
     caption([agent.provider, agent.model, agent.nativeSessionId].filter(Boolean).join(' · ')),
+    // The owner said so when they were asked about one of its tasks. It ends with the agent's connection: stopping it ends it now.
+    agent.delegationAllowed ? caption('A connected client hands this agent tasks, and adds to a task that runs (yours among them), without asking you, for as long as the agent stays connected. Stop it to be asked again.') : null,
+    agent.status === 'unstarted' ? caption('Written down by a connected client and not started: it starts when you allow a task of it, or resume it.') : null,
     str(agent.summary) ? el('p', {text: agent.summary}) : null, agent.error?.message ? el('p', {class: 'error-text', text: agent.error.message}) : null,
     el('div', {class: 'actions'},
       opButton('Send', 'agents.send', say('send', 'Send', 'Message queued.'), {disabled: !on('send', ['ready', 'running', 'waiting'])}),
       opButton('Steer', 'agents.steer', say('steer', 'Steer', 'Steering sent.'), {disabled: !on('steer', ['running', 'waiting'])}),
-      opButton('Resume', 'agents.resume', () => mutate('agents.resume', {id: agent.id}, 'Resuming.'), {disabled: !on('resume', ['closed', 'disconnected', 'unavailable'])}),
+      opButton('Resume', 'agents.resume', () => mutate('agents.resume', {id: agent.id}, 'Resuming.'), {disabled: !on('resume', ['closed', 'disconnected', 'unavailable', 'unstarted'])}),
       opButton('Show result', 'agents.result', async () => { await readResult(v, agent.id); v.shown = agent.id; renderMain(); }),
       button('Transcript', () => showTranscript(agent.id)),
       opButton('Cancel turn', 'agents.cancel', () => mutate('agents.cancel', {id: agent.id}, 'Cancellation requested.'), {class: 'danger', disabled: !on('cancel', ['running', 'waiting', 'cancelling'])}),
-      opButton('Stop', 'agents.stop', () => mutate('agents.stop', {id: agent.id}, 'Agent stopped.'), {class: 'danger', disabled: !on('stop', ['starting', 'ready', 'running', 'waiting', 'cancelling', 'disconnected', 'unavailable'])})));
+      opButton('Stop', 'agents.stop', () => mutate('agents.stop', {id: agent.id}, 'Agent stopped.'), {class: 'danger', disabled: !on('stop', ['starting', 'ready', 'running', 'waiting', 'cancelling', 'disconnected', 'unavailable', 'unstarted'])})));
 }
 function startAgent(provider) {
   const draft = {title: '', model: '', sessionId: '', prompt: ''};
