@@ -1350,10 +1350,11 @@ test('page.network takes an empty query as no query', async () => {
 // answered after five seconds, a turn of the wheel never. Told that it has the focus, the same page took all of them
 // at once, was drawn and pictured, and stayed behind the tab the owner was looking at.
 
-// A page that says how the browser treats it: put away until it is told that it has the focus, where `wakes` is true.
+// A page that says how the browser treats it: put away until it is told that it has the focus (where `wakes` is true),
+// and again once it is told that it has not.
 const putAway = ({ wakes = true, more = {} } = {}) => {
   const tab = { state: 'hidden' };
-  return { tab, replies: shown({ 'Emulation.setFocusEmulationEnabled': ({ enabled }) => { if (enabled && wakes) tab.state = 'visible'; },
+  return { tab, replies: shown({ 'Emulation.setFocusEmulationEnabled': ({ enabled }) => { if (!enabled) tab.state = 'hidden'; else if (wakes) tab.state = 'visible'; },
     'Runtime.evaluate': ({ expression, returnByValue }) => expression === 'document.visibilityState' ? { result: { type: 'string', value: tab.state } } : returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } }
       : { result: { type: 'string', value: 'input #name' } },
     'Page.getLayoutMetrics': { cssVisualViewport: { clientWidth: 1000, clientHeight: 700 } }, 'Accessibility.getFullAXTree': shop(), ...more }) };
@@ -1417,17 +1418,51 @@ test('a tab the browser shows is treated as looked at too, so that it stays so w
   assert.deepEqual(await methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
 });
 
-test('a tab that is put away is treated as looked at for its picture, which then comes at once; and for the tab that is debugged again', async () => {
-  const { tab, replies } = putAway({ more: { 'Page.captureScreenshot': { data: 'UE5H' } } }), stand = harness(replies);
+test('a picture is a read: a tab that is put away is treated as looked at for as long as its picture takes, and put away again', async () => {
+  const seen = [], { tab, replies } = putAway({ more: { 'Page.captureScreenshot': () => { seen.push(tab.state); return { data: 'UE5H' }; }, 'Page.getLayoutMetrics': { cssContentSize: { width: 1000, height: 3000 } } } }), stand = harness(replies);
+  const switched = () => stand.sent('Emulation.setFocusEmulationEnabled').map(given => given.enabled);
   assert.deepEqual(await stand.capture(1), { tabId: 1, mimeType: 'image/png', base64: 'UE5H' });
-  assert.deepEqual(stand.names(5), ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled', 'Runtime.evaluate', 'Page.captureScreenshot']); assert.deepEqual(stand.pauses, [], 'nothing was timed');
-  // A click after it finds the tab looked at already.
-  let from = stand.names().length;
-  await stand.methods['page.click']({ ref: 13 }); await stand.capture(1);
-  assert.equal(stand.names(from).some(name => name === 'Emulation.setFocusEmulationEnabled' || name === 'Runtime.evaluate'), false);
-  // When the tab is let go, the browser puts it away again: the next time it is debugged, it is looked at again.
+  assert.deepEqual(stand.names(5), ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled', 'Page.captureScreenshot', 'Emulation.setFocusEmulationEnabled']);
+  assert.deepEqual(switched(), [true, false]); assert.deepEqual(seen, ['visible'], 'drawn while it was pictured'); assert.equal(tab.state, 'hidden', 'and as it was before, after');
+  assert.deepEqual(stand.pauses, [], 'nothing was timed');
+  // The whole page the same way, and a picture the browser refuses as well.
+  assert.equal((await stand.capture(1, { fullPage: true })).fullPage, true);
+  assert.deepEqual(switched(), [true, false, true, false]);
+  stand.replies['Page.captureScreenshot'] = () => no('Unable to capture screenshot');
+  await refuses(stand.capture(1), 'browser_error', /Unable to capture screenshot/);
+  assert.deepEqual(switched().slice(4), [true, false]); assert.equal(tab.state, 'hidden');
+  // Once the mouse has woken the tab it stays awake: a picture then neither asks nor switches anything.
+  stand.replies['Page.captureScreenshot'] = { data: 'UE5H' };
+  await stand.methods['page.click']({ ref: 13 });
+  const from = stand.names().length;
+  await stand.capture(1);
+  assert.deepEqual(stand.names(from), ['Page.captureScreenshot']); assert.equal(tab.state, 'visible');
+  // When the tab is let go, the browser puts it away again: the next time it is debugged, it is woken again.
   await stand.methods['page.debugStop'](); tab.state = 'hidden';
-  from = stand.names().length;
   await stand.methods['page.press']({ key: 'Enter' });
-  assert.deepEqual(stand.names(from).filter(name => name === 'Emulation.setFocusEmulationEnabled'), ['Emulation.setFocusEmulationEnabled']);
+  assert.equal(switched().at(-1), true); assert.equal(tab.state, 'visible');
+});
+
+test('a tab is not put away under a picture that is still being taken, nor under a click that came meanwhile', async () => {
+  // Two pictures at once: told that it is looked at once, and that it is not after the second.
+  const answers = [], both = harness(putAway({ more: { 'Page.captureScreenshot': () => new Promise(resolve => answers.push(resolve)) } }).replies);
+  const switched = stand => stand.sent('Emulation.setFocusEmulationEnabled').map(given => given.enabled);
+  const first = both.capture(1), second = both.capture(1);
+  await settle();
+  assert.equal(answers.length, 2); assert.deepEqual(switched(both), [true]);
+  // Whichever of the two is answered first.
+  answers[0]({ data: 'QQ==' });
+  assert.equal((await Promise.race([first, second])).base64, 'QQ=='); await settle();
+  assert.deepEqual(switched(both), [true], 'the other picture is still being taken');
+  answers[1]({ data: 'Qg==' });
+  assert.deepEqual((await Promise.all([first, second])).map(shot => shot.base64).sort(), ['QQ==', 'Qg==']); assert.deepEqual(switched(both), [true, false]);
+  // A click while a picture is being taken wakes the tab for good: the picture's end leaves it awake.
+  const held = [], busy = harness(putAway({ more: { 'Page.captureScreenshot': () => new Promise(resolve => held.push(resolve)) } }).replies);
+  const taking = busy.capture(1);
+  await settle();
+  assert.deepEqual(await busy.methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
+  held[0]({ data: 'QQ==' }); await taking;
+  assert.deepEqual(switched(busy), [true, true], 'never told that it is not looked at');
+  assert.deepEqual(await busy.methods['page.press']({ key: 'Enter' }), { tabId: 1, pressed: 'Enter' });
+  assert.equal(busy.sent('Input.dispatchKeyEvent').length, 2);
 });

@@ -186,7 +186,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       throw fail('browser_error', /cannot access|chrome:|chrome-extension:|web store/i.test(said(error)) ? 'The browser does not let a page of its own, or of the Web Store, be debugged.' : 'The browser did not attach the debugger to this tab (' + said(error) + ').');
     });
     // Each of the two lists counts what it lost itself, once it is full.
-    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false };
+    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: 0, lent: 0 };
     sessions.set(tabId, session);
     try { for (const domain of ['Runtime', 'Log', 'Network', 'Page']) await command(tabId, domain + '.enable'); }
     catch (error) { await release(tabId); throw error; }
@@ -238,20 +238,25 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   // page it has never drawn it gives no click and no key, while answering that they were given; a pointer moved there
   // is answered after five seconds, a turn of the wheel never (all seen in a real Chrome). Told that it has the focus,
   // the page is drawn and given all of that where it is, so nothing is brought forward on the owner's screen: what
-  // DevTools calls "Emulate a focused page". It lasts while the tab is debugged. Only what uses the mouse or the keys
-  // on a page, or pictures it, does this: a read leaves a tab that is put away as it is.
+  // DevTools calls "Emulate a focused page". What uses the mouse or the keys on a page does this, and it then lasts
+  // while the tab is debugged. A picture does it for as long as the picture takes (see capture). Any other read leaves
+  // a tab that is put away as it is: a page that believes it is looked at may mark things as read, or go on playing.
   const hidden = async id => (await run(id, 'document.visibilityState'))?.value === 'hidden';
-  const wake = id => raw(id, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  const wake = (id, enabled = true) => raw(id, 'Emulation.setFocusEmulationEnabled', { enabled }).catch(() => {});
   async function awake(id, session) {
     if (session.awake) return;
-    const put = await hidden(id);
-    await wake(id);
-    if (put) {
-      // A page that was never drawn takes a click only once it has been: it is given two frames, or two seconds.
-      await run(id, 'new Promise(done => { requestAnimationFrame(() => requestAnimationFrame(() => done())); setTimeout(done, 2000); })', { awaitPromise: true }).catch(() => {});
-      if (await hidden(id)) throw fail('invalid_input', 'The browser is not showing this tab and could not be made to draw it where it is, so a click, a key or the wheel may never arrive there. Bring it forward (tabs.activate) and ask again.');
-    }
-    session.awake = true;
+    // While this is under way, a picture that ends does not put the tab away again.
+    session.waking++;
+    try {
+      const put = await hidden(id);
+      await wake(id);
+      if (put) {
+        // A page that was never drawn takes a click only once it has been: it is given two frames, or two seconds.
+        await run(id, 'new Promise(done => { requestAnimationFrame(() => requestAnimationFrame(() => done())); setTimeout(done, 2000); })', { awaitPromise: true }).catch(() => {});
+        if (await hidden(id)) throw fail('invalid_input', 'The browser is not showing this tab and could not be made to draw it where it is, so a click, a key or the wheel may never arrive there. Bring it forward (tabs.activate) and ask again.');
+      }
+      session.awake = true;
+    } finally { session.waking--; }
   }
 
   // The element a method acts on: by its number in the last snapshot, by a CSS selector, or by the text it shows.
@@ -465,7 +470,10 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   async function capture(tabId, { fullPage = false } = {}) {
     const { id, session } = await page(tabId);
     // The browser draws only what it shows, so a tab that is put away is first told that it is looked at (see awake).
-    if (!session.awake && await hidden(id)) { await wake(id); session.awake = !await hidden(id); }
+    // A picture is a read, so it is lent only: for as long as pictures of the tab are being taken, and no longer,
+    // unless the mouse or the keys have woken the tab meanwhile, or are about to.
+    const lent = !session.awake && (session.lent > 0 || await hidden(id));
+    if (lent && session.lent++ === 0) await wake(id);
     // Of a tab behind another the browser may still leave a picture unanswered, and gives it when it is asked again
     // (seen in a real Chrome: each one came by the third asking). So it is asked again, soon at first, until one
     // answer has come, and after ten seconds it is said what to do.
@@ -479,11 +487,15 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       };
       ask();
     });
-    if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' })).data };
-    // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
-    const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
-    const shot = await pictured({ format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: true });
-    return { tabId: id, mimeType: 'image/jpeg', base64: shot.data, fullPage: true, width, height, ...(tall > height ? { truncated: true, pageHeight: tall } : {}) };
+    try {
+      if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' })).data };
+      // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
+      const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
+      const shot = await pictured({ format: 'jpeg', quality: 85, clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: true });
+      return { tabId: id, mimeType: 'image/jpeg', base64: shot.data, fullPage: true, width, height, ...(tall > height ? { truncated: true, pageHeight: tall } : {}) };
+    } finally {
+      if (lent && --session.lent === 0 && !session.awake && !session.waking) await wake(id, false);
+    }
   }
 
   return { methods, capture, release, debugging: () => [...sessions.keys()] };
