@@ -279,6 +279,8 @@ OpenAI 拒绝密钥或隧道时，`devmate doctor` 会原样给出 OpenAI 的答
 
 如果体检显示隧道已连上，ChatGPT 里却选不到它，原因在 OpenAI 账号一侧，不在 DevMate：隧道必须包含你正在用的 ChatGPT 工作区，而不只是 Platform 组织，你的账号还需要 Tunnels 的 Read 和 Use 权限（见 [OpenAI 的指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)里的“Troubleshooting”一节）。你的 ChatGPT 套餐是否提供“隧道”这种连接类型，由 OpenAI 决定；这一步还没有用真实账号试过。
 
+个人账号的隧道只能给同一个账号的 ChatGPT 用。OpenAI 不接受把另一个个人账号的工作区加进来（设置页提示无法验证该工作区与组织的关联），那个账号的 ChatGPT 选这条隧道会被 OpenAI 拒绝，请求到不了 DevMate。第二个账号要用带公网地址的通路。
+
 **真的连通了吗**
 
 隧道进程活着不等于通路可用。DevMate 会作为真正的 MCP 客户端从公网地址连回来，列出工具并调用一次，而且应答必须来自当前这个运行时；之后定期复查，断了就如实显示。`devmate doctor` 里 `connection.public` 一项为 `ok` 才算通。OpenAI 隧道没有可以连回来的公网地址：体检在那里显示 OpenAI 是否接受运行密钥，以及已经到达了多少次调用。

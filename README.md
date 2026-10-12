@@ -278,6 +278,8 @@ When OpenAI refuses the key or the tunnel, `devmate doctor` repeats OpenAI's ans
 
 If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
 
+A tunnel of a personal account serves the ChatGPT of that same account. OpenAI does not take the workspace of another personal account into it (its settings page cannot verify that the workspace belongs to the organisation), and that account's ChatGPT is refused by OpenAI before a request reaches DevMate. A second account needs one of the routes with a public address.
+
 **Is it really connected?**
 
 A running tunnel process is not a working route. DevMate connects back through the public address as a real MCP client, lists the tools and calls one, and the answer must come from this very runtime; it repeats the check periodically and says so when the route breaks. The route works when `connection.public` is `ok` in `devmate doctor`. The OpenAI tunnel has no public address to connect back through: there the doctor shows that OpenAI accepts the runtime key, and how many calls have arrived.
