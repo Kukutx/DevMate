@@ -1100,6 +1100,18 @@ export function createWorkspaceService({ store } = {}) {
     await gitChange(root, ['branch', '-D', copy.branch]);
   }
 
+  // One file as it was before something was applied to it (was: whether it existed, and the hash it was kept under).
+  // False where that cannot be done: it existed and was not kept (a link, a file with a second name, a very large one).
+  function putBack(project, file, was) {
+    const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
+    if (!was.existed) { if (stat) fs.rmSync(full, { force: true }); return true; }
+    if (!was.sha256) return false;
+    if (stat?.isFile() && contentHash(full, stat.size) === was.sha256) return true;
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.copyFileSync(snapshotPath(project, was.sha256), full);
+    return true;
+  }
+
   // The agent's work arrives in the project as changes in the working tree, not as a commit: the person reviews and
   // commits it like their own. All of it or none of it; on success the copy has done its job and is removed.
   async function applyProposal(project, copy) {
@@ -1131,7 +1143,18 @@ export function createWorkspaceService({ store } = {}) {
         throw error('conflict', 'The project changed in the same places since the agent started, so its work does not apply cleanly. Nothing was applied. It is kept on the branch ' + copy.branch +
           ' (merge it with Git, or discard it with agents.discard). Git says: ' + String(fits.stderr || '').trim().split(/\r?\n/).slice(0, 3).join(' | ').slice(0, 400));
       }
-      checkedCommand(await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]));
+      const brought = await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]);
+      if (brought.exitCode !== 0) {
+        // Git had checked the patch and then could not write all of it: on Windows a file another program has open
+        // is neither replaced nor removed, and by then the files before it are written. All of it or none: what was
+        // written or removed is put back from what was kept above, so that the project is as it was and the work,
+        // which is still in the copy, can be applied again.
+        const stuck = files.filter(file => { try { return !putBack(project, file, before.get(file)); } catch { return true; } });
+        const said = String(brought.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(0, 3).join(' | ').slice(0, 400);
+        if (stuck.length) throw Object.assign(error('apply_incomplete', 'The agent\'s work could not be brought into the project whole, and part of it could not be taken out again: ' + stuck.slice(0, 10).join(', ') + (stuck.length > 10 ? ', …' : '') +
+          '. Look at these files (git diff). The work is still in the agent\'s copy. Git says: ' + said, { files: stuck }), { incomplete: true });
+        throw error('apply_failed', 'The agent\'s work could not be brought into the project: Git could not write all of it. On Windows that is a file another program has open. What had been written by then was put back: the project is as it was, and the work is still in the agent\'s copy. Apply it again when the file is let go. Git says: ' + said);
+      }
     } finally { fs.rmSync(patchFile, { force: true }); }
     let warning = null;
     // What is applied and cannot be recorded: a link (never followed, so never read) and anything else that is no

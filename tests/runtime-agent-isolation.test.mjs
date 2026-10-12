@@ -179,6 +179,37 @@ test('a copy that Git itself still watches is applied and removed all the same',
   } finally { if (fs.existsSync(copy)) said(copy, 'fsmonitor--daemon', 'stop'); }
 });
 
+// Git checks a patch and then writes it file by file. On Windows a file another program has open is not replaced: by
+// then the files before it are written, and the answer was a failure with nothing in the history; applying again
+// said that the project had changed and that nothing was applied.
+test('work of which Git could write only a part is taken out again: the project is as it was, and the work applies when the file is let go', { skip: process.platform !== 'win32' && 'only Windows keeps a file that is open from being replaced', timeout: 120000 }, async t => {
+  const { service, project, root, factory, instances, read, file } = await fixture(t);
+  fs.writeFileSync(file('z-held.txt'), 'one\n'); git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
+  factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, 'z-held.txt'), 'one\ntwo\n'); };
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const copy = instances[0].options.cwd;
+  const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$f=[IO.File]::Open($env:DEVMATE_HELD,'Open','Read','Read');[Console]::Out.WriteLine('held');[Console]::In.ReadLine() | Out-Null;$f.Close()"],
+    { env: { ...process.env, DEVMATE_HELD: file('z-held.txt') }, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+  t.after(() => { holder.kill(); });
+  await new Promise((resolve, reject) => { holder.once('error', reject); holder.stdout.once('data', resolve); });
+  const asItWas = () => { assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n'); assert.equal(fs.existsSync(file('src/new.js')), false); assert.equal(read('old.txt'), 'to be deleted\n'); assert.equal(read('z-held.txt'), 'one\n'); };
+  await assert.rejects(service.call('agents.apply', { agentId: done.agentId }, connected), error => {
+    assert.equal(error.code, 'apply_failed');
+    assert.match(error.message, /^The agent's work could not be brought into the project: Git could not write all of it\. On Windows that is a file another program has open\. What had been written by then was put back: the project is as it was, and the work is still in the agent's copy\. Apply it again when the file is let go\. Git says: /);
+    return true;
+  });
+  // All of it or none: what Git had written and removed before it stopped is as it was, and nothing claims otherwise.
+  asItWas();
+  assert.equal(git(root, 'status', '--porcelain').trim(), ''); assert.equal(fs.existsSync(copy), true);
+  assert.equal(service.store.get('agent', done.agentId).isolated.settled, undefined);
+  // The file is let go: the same work applies, whole, and is in the history.
+  holder.stdin.write('\n'); await new Promise(resolve => holder.once('exit', resolve));
+  const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+  assert.deepEqual(applied.files.sort(), ['old.txt', 'src/a.js', 'src/new.js', 'z-held.txt']);
+  assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n'); assert.equal(read('z-held.txt'), 'one\ntwo\n'); assert.equal(fs.existsSync(file('old.txt')), false);
+  assert.equal((await service.call('workspace.history', { projectId: project.id }, connected)).items.length, 4);
+});
+
 // Whatever else still stands in the copy when its work is applied: the work is in the project all the same, and the
 // answer is not that it failed.
 test('work is applied also where its copy cannot be removed yet, and what is left is said', { skip: process.platform !== 'win32' && 'a folder a program stands in can be removed here', timeout: 120000 }, async t => {
