@@ -94,7 +94,8 @@ function byText(wanted) {
       let holder = node.parentElement || node.parentNode?.host;
       for (let step = 0; holder && step < 5 && !holder.getClientRects().length && !holder.assignedNodes?.().length && typeof getComputedStyle === 'function' && getComputedStyle(holder).display === 'contents'; step++) holder = holder.parentElement || holder.parentNode?.host;
       // (What is laid out but hidden shows no words either.)
-      if (holder?.getClientRects().length && holder !== document.body && holder !== document.documentElement && !(typeof getComputedStyle === 'function' && getComputedStyle(holder).visibility === 'hidden')) { inner = holder; shortest = words.length; }
+      if (holder?.getClientRects().length && holder !== document.body && holder !== document.documentElement && !(holder.tagName === 'SLOT' && holder.assignedNodes?.().length)
+        && !(typeof getComputedStyle === 'function' && getComputedStyle(holder).visibility === 'hidden')) { inner = holder; shortest = words.length; }
     }
   }
   // Last, words that are spread over several elements ("Save <b>now</b>").
@@ -106,8 +107,13 @@ function inFront(x, y, real) {
   // its inside to itself too). It is not in the element's way where it is the element, inside it or around it, also
   // through components: going up from the one by what it is in and by the component its tree belongs to, and
   // counting what the page gave to a slot inside the other as inside that. Nor where it is the element's own label.
-  if (real) {
-    const hit = real.nodeType === 1 ? real : real.parentElement || real.parentNode?.host;
+  // Words that stand in a component directly are handed over as the component's tree, which stands for the component.
+  // A part of an element that the page draws without an element of its own (::before, ::after) is handed over as
+  // something that is no node (all seen in a real Chrome): the page is then asked, below, and such a part of
+  // something around the element is in its way, where the thing itself would not be.
+  const drawn = real && real.nodeType === undefined;
+  if (real && !drawn) {
+    const hit = real.nodeType === 1 ? real : real.nodeType === 11 ? real.host : real.nodeType === 9 ? real.documentElement : real.parentElement || real.parentNode?.host;
     const holds = (outer, inner) => {
       const given = (outer.tagName === 'SLOT' ? [outer] : [...(outer.querySelectorAll?.('slot') || [])]).flatMap(slot => [...(slot.assignedNodes?.({ flatten: true }) || [])]);
       for (let node = inner, depth = 0; node && depth < 500; node = node.parentNode || node.host, depth++) if (node === outer || (node.nodeType === 1 && outer.contains(node)) || given.includes(node)) return true;
@@ -129,7 +135,7 @@ function inFront(x, y, real) {
   // What stands for the element in the tree of what was named: itself, or the component it is in, from there.
   let mine = this;
   for (let depth = 0; mine && treeOf(mine) !== treeOf(hit) && depth < 50; depth++) mine = treeOf(mine).host;
-  if (!mine || (hit !== mine && !hit.contains(mine))) return named(hit);
+  if (!mine || (hit !== mine && !hit.contains(mine)) || drawn) return named(hit);
   // What was named is around the element. Where it is a component, the page has named it for something inside it:
   // that is in the element's way unless it is around the place the component shows the element in.
   if (hit !== mine && hit.shadowRoot) {
@@ -158,17 +164,19 @@ function shows(wanted) {
   // by what that is. Anything else is not drawn. Pieces that stand side by side are read both with a blank between
   // them and without one, since which it is on the page cannot be told from here ("<b>Total</b>: 5").
   const styled = part => typeof getComputedStyle === 'function' ? getComputedStyle(part) : {}, passes = part => styled(part).display === 'contents';
-  const said = (part, glue) => part.nodeType === 3 ? part.data : part.nodeType !== 1 ? '' : part.getClientRects().length ? part.innerText : passes(part) && !part.assignedNodes?.().length ? [...part.childNodes].map(piece => said(piece, glue)).join(glue) : '';
-  // A component is displayed where it is drawn itself, or passes its content on to something that is, and is not
-  // hidden: its own words are read only then.
+  // Words that stand in something hidden are not shown; an element that is drawn says by itself what of it is hidden
+  // (a part of a hidden component may be shown again), so only words without an element of their own are told here.
+  const said = (part, glue, hidden) => part.nodeType === 3 ? (hidden ? '' : part.data) : part.nodeType !== 1 ? '' : part.getClientRects().length ? part.innerText
+    : passes(part) && !part.assignedNodes?.().length ? [...part.childNodes].map(piece => said(piece, glue, styled(part).visibility === 'hidden')).join(glue) : '';
+  // A component is displayed where it is drawn itself, or passes its content on to something that is.
   const displayed = part => {
-    if (styled(part).visibility === 'hidden') return false;
     for (let at = part, step = 0; at && step < 50; at = at.parentElement || at.parentNode?.host, step++) { if (at.getClientRects().length) return true; if (!passes(at)) return false; }
     return false;
   };
   for (const tree of trees.slice(1)) {
     if (!tree.host || !displayed(tree.host)) continue;
-    for (const glue of [' ', '']) { const words = [...tree.childNodes].map(piece => said(piece, glue)).join(glue); if (words.includes(wanted) || plain(words).includes(sought)) return true; }
+    const hidden = styled(tree.host).visibility === 'hidden';
+    for (const glue of [' ', '']) { const words = [...tree.childNodes].map(piece => said(piece, glue, hidden)).join(glue); if (words.includes(wanted) || plain(words).includes(sought)) return true; }
   }
   const named = trees.flatMap(tree => [...tree.querySelectorAll('[aria-label], [aria-labelledby], [title], [alt], [placeholder], input, textarea')]).slice(0, 5000).some(item => {
     if (!item.getClientRects().length) return false;
@@ -206,8 +214,9 @@ function look(names, most, real) {
   // What is at its middle and is neither the element, nor inside it, nor around it: told as inFront above tells it.
   const x = box.x + box.width / 2, y = box.y + box.height / 2, treeOf = node => node.getRootNode ? node.getRootNode() : document, own = treeOf(this);
   const covering = () => {
-    if (real) {
-      const found = real.nodeType === 1 ? real : real.parentElement || real.parentNode?.host;
+    const drawn = real && real.nodeType === undefined;
+    if (real && !drawn) {
+      const found = real.nodeType === 1 ? real : real.nodeType === 11 ? real.host : real.nodeType === 9 ? real.documentElement : real.parentElement || real.parentNode?.host;
       const holds = (outer, inner) => {
         const given = (outer.tagName === 'SLOT' ? [outer] : [...(outer.querySelectorAll?.('slot') || [])]).flatMap(slot => [...(slot.assignedNodes?.({ flatten: true }) || [])]);
         for (let node = inner, depth = 0; node && depth < 500; node = node.parentNode || node.host, depth++) if (node === outer || (node.nodeType === 1 && outer.contains(node)) || given.includes(node)) return true;
@@ -221,7 +230,7 @@ function look(names, most, real) {
     if (slots.some(slot => (slot.assignedNodes?.({ flatten: true }) || []).some(given => given === hit || given.contains?.(hit)))) return null;
     let mine = this;
     for (let depth = 0; mine && treeOf(mine) !== treeOf(hit) && depth < 50; depth++) mine = treeOf(mine).host;
-    if (!mine || (hit !== mine && !hit.contains(mine))) return hit;
+    if (!mine || (hit !== mine && !hit.contains(mine)) || drawn) return hit;
     if (hit !== mine && hit.shadowRoot) {
       const inside = hit.shadowRoot.elementFromPoint(x, y);
       let branch = mine;
@@ -473,11 +482,25 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   // What the browser itself finds at a point of the page, as a node handed to the page's own functions. The browser
   // sees through components of every kind, also into one that keeps its inside to itself, where the page is told
   // only its outside (seen in a real Chrome). Nothing where it cannot say: a point that is not shown.
-  const atPoint = (id, x, y) => raw(id, 'DOM.getNodeForLocation', { x, y, includeUserAgentShadowDOM: false })
-    .then(found => found?.backendNodeId ? raw(id, 'DOM.resolveNode', { backendNodeId: found.backendNodeId }) : null).then(found => found?.object?.objectId ? { handle: found.object.objectId } : undefined, () => undefined);
+  // The browser takes the point as a point of the document, where everything else here (the boxes of an element, the
+  // mouse) is told in points of what the window shows: asked at those, on a page that is scrolled it found nothing,
+  // or something else (seen in a real Chrome). So where the page is scrolled to is added.
+  const atPoint = async (id, x, y) => {
+    try {
+      const metrics = await raw(id, 'Page.getLayoutMetrics'), shown = metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
+      const found = await raw(id, 'DOM.getNodeForLocation', { x: Math.round(x + (shown.pageX || 0)), y: Math.round(y + (shown.pageY || 0)), includeUserAgentShadowDOM: false });
+      const node = found?.backendNodeId ? await raw(id, 'DOM.resolveNode', { backendNodeId: found.backendNodeId }) : null;
+      return node?.object?.objectId ? { handle: node.object.objectId } : undefined;
+    } catch { return undefined; }
+  };
   // A function that is told what is at the point. A node of another page inside this one (a frame) cannot be handed
-  // over: the function is then asked without it, and judges by what the page itself names there.
-  const told = (id, objectId, work, given, real) => real ? onElement(id, objectId, work, ...given, real).catch(() => onElement(id, objectId, work, ...given)) : onElement(id, objectId, work, ...given);
+  // over: the function is then asked without it, and judges by what the page itself names there. The node is given
+  // back to the browser afterwards, so that it does not keep a part of the page alive that the page has let go of.
+  const told = async (id, objectId, work, given, real) => {
+    if (!real) return onElement(id, objectId, work, ...given);
+    try { return await onElement(id, objectId, work, ...given, real).catch(() => onElement(id, objectId, work, ...given)); }
+    finally { void raw(id, 'Runtime.releaseObject', { objectId: real.handle }).catch(() => {}); }
+  };
   // Where to point at an element: the middle of it, once it is scrolled into view. Refused when something else is there.
   async function point(id, objectId) {
     await raw(id, 'DOM.scrollIntoViewIfNeeded', { objectId }).catch(() => {});

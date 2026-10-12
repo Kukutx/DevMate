@@ -513,7 +513,7 @@ test('page.click scrolls the element into view and clicks the middle of it: the 
   const { methods, names, sent, replies } = harness(shown({ 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } }));
   assert.deepEqual(await methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
   // The element is found first; then the tab is woken; then it is pointed at.
-  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'DOM.getNodeForLocation', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent']);
+  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'Page.getLayoutMetrics', 'DOM.getNodeForLocation', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent']);
   assert.deepEqual([...sent('DOM.scrollIntoViewIfNeeded'), ...sent('DOM.getContentQuads')], [{ objectId: 'node-13' }, { objectId: 'node-13' }]);
   // Before the mouse moves, the browser is asked what is at that point, and the page how that stands to the element.
   assert.deepEqual(sent('DOM.getNodeForLocation'), [{ x: 60, y: 40, includeUserAgentShadowDOM: false }]);
@@ -651,7 +651,7 @@ test('page.inspect asks the page how an element is laid out and styled, for the 
   const seen = { tag: 'button', id: 'buy', box: { x: 10, y: 20, width: 100, height: 40 }, visible: true, styles: { display: 'block' }, html: '<button id="buy">Buy</button>' };
   const { methods, names, sent, replies } = harness(shown({ 'Runtime.callFunctionOn': { result: { type: 'object', value: seen } } }));
   assert.deepEqual(await methods['page.inspect']({ ref: 13 }), { tabId: 1, ...seen, untrusted: true });
-  assert.deepEqual(names(5), ['DOM.resolveNode', 'DOM.getContentQuads', 'DOM.getNodeForLocation', 'Runtime.callFunctionOn'], 'the element is looked at where it is: nothing is scrolled');
+  assert.deepEqual(names(5), ['DOM.resolveNode', 'DOM.getContentQuads', 'Page.getLayoutMetrics', 'DOM.getNodeForLocation', 'Runtime.callFunctionOn'], 'the element is looked at where it is: nothing is scrolled');
   const [{ functionDeclaration, arguments: [styles, most], ...asked }] = sent('Runtime.callFunctionOn');
   assert.match(functionDeclaration, /^function look\(names, most, real\) \{/);
   assert.deepEqual(asked, { objectId: 'node-13', returnByValue: true, userGesture: false });
@@ -672,7 +672,7 @@ test('page.inspect asks the page how an element is laid out and styled, for the 
 test('page.hover moves the mouse over the middle of an element and presses nothing', async () => {
   const { methods, names, sent } = harness(shown());
   assert.deepEqual(await methods['page.hover']({ ref: 13 }), { tabId: 1, hovered: { x: 60, y: 40 } });
-  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'DOM.getNodeForLocation', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent']);
+  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.scrollIntoViewIfNeeded', 'DOM.getContentQuads', 'Page.getLayoutMetrics', 'DOM.getNodeForLocation', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent']);
   assert.deepEqual(sent('Input.dispatchMouseEvent'), [{ type: 'mouseMoved', x: 60, y: 40 }]);
   await refuses(methods['page.hover'](), 'invalid_input', /Say which element/);
 });
@@ -1158,7 +1158,7 @@ test('tabs.back and tabs.forward go through the tab\'s own history, and say so w
 });
 
 test('a method offered as a read sends the page only what changes nothing, and runs no script but its own', async () => {
-  const reads = new Set(['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable', 'Accessibility.enable', 'Accessibility.getFullAXTree', 'Runtime.evaluate', 'Runtime.callFunctionOn', 'DOM.resolveNode', 'DOM.describeNode', 'DOM.getContentQuads', 'DOM.getNodeForLocation',
+  const reads = new Set(['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable', 'Accessibility.enable', 'Accessibility.getFullAXTree', 'Runtime.evaluate', 'Runtime.callFunctionOn', 'DOM.resolveNode', 'DOM.describeNode', 'DOM.getContentQuads', 'DOM.getNodeForLocation', 'Page.getLayoutMetrics', 'Runtime.releaseObject',
     'Network.getCookies', 'Network.getResponseBody', 'Network.getRequestPostData']);
   // What a read may have the page work out: these, with what the caller gave carried in as data.
   const scripts = [/^document\.querySelector\("#buy"\)$/, /^!!document\.querySelector\("#buy"\)$/, /^\(function shows\(wanted\) \{[^]*\}\)\("Buy"\)$/, /^\(function byText\(wanted\) \{[^]*\}\)\("Buy"\)$/,
@@ -1882,6 +1882,9 @@ test('page.waitFor finds a text that only a component of the page shows, and not
   // A component that is not displayed shows nothing: not drawn; hidden; or passing its content on to something that is not drawn.
   assert.equal(page([words('Arrived')], { host: part('', false) }), false);
   assert.equal(page([words('Arrived')], { host: part('', true, { hidden: true }) }), false, 'laid out but hidden');
+  // A drawn part says by itself what of it is hidden: a part of a hidden component that is shown again is read.
+  assert.equal(page([part('Arrived')], { host: part('', true, { hidden: true }) }), true);
+  assert.equal(page([part('', false, { passes: true, hidden: true, childNodes: [words('Arrived')] })]), false, 'words in a hidden part that only passes them on');
   assert.equal(page([words('Arrived')], { host: part('', false, { passes: true, parentElement: part('', true) }) }), true, 'a component that only passes its content on, inside something drawn');
   assert.equal(page([words('Arrived')], { host: part('', false, { passes: true, parentElement: part('', false) }) }), false, 'the same inside something that is not displayed (a tab of the page that is not open)');
   const field = more => ({ tagName: 'INPUT', type: 'text', value: '', getAttribute: () => null, getClientRects: () => [{}], ...more });
@@ -1914,6 +1917,8 @@ test('a text that stands in a component directly, or in something that only pass
   const button = item({ tagName: 'BUTTON' }), slot = (given = []) => item({ tagName: 'SLOT', passes: true, getClientRects: () => [], parentElement: button, assignedNodes: () => given });
   assert.equal(find([{ data: 'Save', parentElement: slot() }]), button, 'what is drawn around a slot that shows words of its own');
   assert.equal(find([{ data: 'Save', parentElement: slot([{}]) }]), null, 'a slot that was given content shows none of its own words');
+  assert.equal(find([{ data: 'Save', parentElement: item({ tagName: 'SLOT', assignedNodes: () => [{}] }) }]), null, 'also where the slot has a box of its own');
+  assert.equal(find([{ data: 'Save', parentElement: item({ tagName: 'SLOT', assignedNodes: () => [] }) }]).tagName, 'SLOT');
   assert.equal(find([{ data: 'Save', parentElement: item({ getClientRects: () => [] }) }]), null, 'what is simply not drawn is still not found');
   assert.equal(find([{ data: 'Save', parentElement: item({ hidden: true }) }]), null, 'nor what is laid out but hidden');
   // What only passes its content on is followed a few steps, and never to the page as a whole: a click in the middle of that would land anywhere.
@@ -1925,16 +1930,31 @@ test('a text that stands in a component directly, or in something that only pass
 test('what is in front of an element is told from what the browser finds at the point, through components of every kind', async () => {
   // DOM.getNodeForLocation was seen in a real Chrome to name the very node at a point, also inside a component that
   // keeps its inside to itself, where the page is told only the outside of the component.
-  const { methods, sent, replies } = harness(shown({ 'DOM.getNodeForLocation': { backendNodeId: 77, frameId: 'F' } }));
+  const { methods, sent, replies, names } = harness(shown({ 'DOM.getNodeForLocation': { backendNodeId: 77, frameId: 'F' }, 'Page.getLayoutMetrics': { cssLayoutViewport: { pageX: 12.4, pageY: 1300.36 } } }));
   await methods['page.click']({ ref: 13 });
+  // The browser takes the point as a point of the document, the mouse as a point of what the window shows: seen in a
+  // real Chrome, where a page that was scrolled gave "No node found" for the point the mouse then went to.
+  assert.deepEqual(sent('DOM.getNodeForLocation'), [{ x: 72, y: 1340, includeUserAgentShadowDOM: false }], 'where the page is scrolled to is added, in whole numbers');
+  assert.deepEqual(sent('Input.dispatchMouseEvent').map(event => [event.x, event.y]), [[60, 40], [60, 40], [60, 40]], 'the mouse goes to the point in the window');
   assert.deepEqual(sent('DOM.resolveNode'), [{ backendNodeId: 13 }, { backendNodeId: 77 }]);
   const [{ functionDeclaration, arguments: given }] = sent('Runtime.callFunctionOn');
   assert.deepEqual(given, [{ value: 60 }, { value: 40 }, { objectId: 'node-77' }], 'the node is handed to the page as a node');
+  assert.deepEqual(sent('Runtime.releaseObject'), [{ objectId: 'node-77' }], 'and given back afterwards');
+  assert.ok(names().indexOf('Runtime.releaseObject') > names().indexOf('Runtime.callFunctionOn'));
   // A node of another page inside this one cannot be handed over: the page is then asked without it.
   let tried = 0;
   replies['Runtime.callFunctionOn'] = ({ arguments: args }) => { tried++; if (args.length === 3) no('Argument should belong to the same JavaScript world as target object'); return { result: { type: 'object', subtype: 'null', value: null } }; };
   assert.deepEqual(await methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
   assert.equal(tried, 2);
+  assert.equal(sent('Runtime.releaseObject').length, 2, 'the node is given back then too');
+  // Where the browser finds nothing at the point (it refuses, as for a point that is not shown), or cannot hand the
+  // node over, the page is asked alone and the click goes on.
+  for (const refusing of ['DOM.getNodeForLocation', 'DOM.resolveNode', 'Page.getLayoutMetrics']) {
+    const alone = harness(shown({ 'DOM.getNodeForLocation': { backendNodeId: 77 }, [refusing]: refusing === 'DOM.resolveNode' ? ({ backendNodeId }) => backendNodeId === 77 ? no('No node with given id found') : { object: { type: 'object', objectId: 'node-' + backendNodeId } } : () => no('No node found at given location') }));
+    assert.deepEqual(await alone.methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } }, refusing);
+    assert.equal(alone.sent('Runtime.callFunctionOn')[0].arguments.length, 2, refusing);
+    assert.deepEqual(alone.sent('Runtime.releaseObject'), [], refusing);
+  }
   const node = (tagName, parentNode, more = {}) => ({ nodeType: 1, tagName, id: '', className: '', parentNode, contains: () => false, querySelectorAll: () => [], ...more });
   const at = (target, real) => onElement(functionDeclaration, { document: {} })(target, 60, 40, real);
   const page = {}, inside = host => ({ host });
@@ -1944,6 +1964,12 @@ test('what is in front of an element is told from what the browser finds at the 
     button.contains = inner => inner === icon;
     assert.equal(at(button, button), null); assert.equal(at(button, icon), null);
     assert.equal(at(button, { nodeType: 3, parentElement: icon }), null);
+    // What the browser hands over for words that stand in a component directly is the component's tree: seen in a
+    // real Chrome. It stands for the component, which is then in the way like any element (it was taken as nothing).
+    const toast = node('X-TOAST', page);
+    assert.equal(at(button, { nodeType: 11, host: toast }), '<x-toast>');
+    assert.equal(at(toast, { nodeType: 11, host: toast }), null, 'the component itself is clicked through its own words');
+    assert.equal(at(button, { nodeType: 9, documentElement: node('HTML', null, { contains: inner => inner === button }) }), null);
     assert.equal(at(button, node('DIV', page, { id: 'overlay', className: 'modal open' })), '<div#overlay.modal.open>');
     // Something around it (the button of a label that takes no clicks itself) is not in its way.
     assert.equal(at(icon, button), null);
@@ -1980,6 +2006,19 @@ test('what is in front of an element is told from what the browser finds at the 
     label.control = node('INPUT', page);
     assert.equal(at(field, drawn), '<span>', 'the label of another field is');
   }
+  {
+    // A part of an element that the page draws without an element of its own (::before, ::after) is handed over as
+    // something that is no node: seen in a real Chrome. The page is then asked, and names the element the part
+    // belongs to. Of the element itself such a part is not in its way; of something around it (a veil a wrapper
+    // draws over what it holds while it is busy) it is, where the wrapper's own box would not be.
+    const drawn = {}, tree = { elementFromPoint: () => null }, element = (tagName, more = {}) => ({ tagName, id: '', className: '', contains: () => false, closest: () => null, getRootNode: () => tree, querySelectorAll: () => [], ...more });
+    const button = element('BUTTON'), wrapper = element('SPAN', { id: 'busy', contains: inner => inner === button });
+    const asked = (target, hit, real) => { tree.elementFromPoint = () => hit; return onElement(functionDeclaration, { document: tree })(target, 60, 40, real); };
+    assert.equal(asked(button, button, drawn), null);
+    assert.equal(asked(button, wrapper, drawn), '<span#busy>');
+    assert.equal(asked(button, wrapper), null, 'the wrapper itself, where the browser could not say what is there, is around the button');
+    assert.equal(asked(button, element('DIV', { id: 'other' }), drawn), '<div#other>');
+  }
   // page.inspect tells what covers an element in the same way, at the same point.
   const seen = harness(shown({ 'DOM.getNodeForLocation': { backendNodeId: 77 }, 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } }));
   await seen.methods['page.inspect']({ ref: 13, styles: ['color'] });
@@ -1990,6 +2029,8 @@ test('what is in front of an element is told from what the browser finds at the 
   const busy = node('X-BUSY', page), veil = node('DIV', inside(busy), { id: 'veil' }), button = node('BUTTON', busy);
   assert.equal(inspected(button, veil).coveredBy, '<div#veil>');
   assert.equal('coveredBy' in inspected(button, button), false);
+  assert.equal(inspected(button, { nodeType: 11, host: node('X-TOAST', page) }).coveredBy, '<x-toast>');
+  assert.deepEqual(seen.sent('Runtime.releaseObject'), [{ objectId: 'node-77' }]);
 });
 test('where the browser cannot say what is at the point, the tree the element is in is asked, and a component that shows its inside is looked into', async () => {
   // As a real Chrome was seen to answer: a component's own tree names what is in it at the point, also one that keeps
