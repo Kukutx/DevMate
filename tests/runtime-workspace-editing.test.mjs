@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { Store } from '../runtime/store.mjs';
 import { createWorkspaceService } from '../runtime/workspace.mjs';
+import { activeCommandProcessCount } from '../runtime/platform/command-process.mjs';
 
 function fixture(t) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-editing-'));
@@ -243,7 +244,11 @@ test('reads page large files by line, find matches globs and search takes regex,
   // What is found comes folder by folder and name by name, and the lines of a file in their own order, every time:
   // ripgrep reads the tree on several threads and is not asked to sort, so the order is made here.
   fs.mkdirSync(file('src-old')); fs.writeFileSync(file('src-old/a.ts'), 'const Needle = 0;\n'); fs.writeFileSync(file('src/Zed.ts'), 'x\nNeedle\nNeedle again\n');
-  const ordered = ['src/Zed.ts', 'src/main.ts', 'src/util/math.test.ts', 'src/util/math.ts', 'src-old/a.ts'];
+  // Names are compared by their characters' numbers, as ripgrep does: a full-width letter (U+FF21) comes before an
+  // emoji (U+1F600), which a comparison of 16-bit units would put first.
+  const wide = 'src/' + String.fromCharCode(0xff21) + '.ts', emoji = 'src/' + String.fromCodePoint(0x1f600) + '.ts';
+  for (const name of [emoji, wide]) fs.writeFileSync(file(name), 'nothing to find\n');
+  const ordered = ['src/Zed.ts', 'src/main.ts', 'src/util/math.test.ts', 'src/util/math.ts', wide, emoji, 'src-old/a.ts'];
   for (let round = 0; round < 5; round++) {
     assert.deepEqual((await service.find(project, { pattern: '*.ts' })).items.map(item => item.path), ordered);
     assert.deepEqual((await service.search(project, { query: 'Needle', glob: '*.ts' })).items.map(item => item.path + ':' + item.line),
@@ -254,6 +259,35 @@ test('reads page large files by line, find matches globs and search takes regex,
   assert.deepEqual([cut.items.map(item => item.path), cut.truncated], [ordered.slice(0, 2), true]);
   const few = await service.search(project, { query: 'Needle', glob: '*.ts', limit: 3 });
   assert.deepEqual([few.items.map(item => item.path + ':' + item.line), few.truncated], [['src/Zed.ts:2', 'src/Zed.ts:3', 'src/main.ts:1'], true]);
+});
+
+test('a find or a search that is given more than it takes ends ripgrep, shows whole entries of a part, and leaves no process behind', { timeout: 180000 }, async t => {
+  const { project, service, store, file } = fixture(t);
+  // The same tools with a small bound, so that a few hundred files cross it: with the real one it takes tens of thousands.
+  const small = createWorkspaceService({ store, scanChars: 3000 });
+  fs.mkdirSync(file('many'));
+  const names = Array.from({ length: 400 }, (_, index) => 'many/file-' + String(index).padStart(4, '0') + '.txt');
+  for (const [index, name] of names.entries()) fs.writeFileSync(file(name), 'needle ' + index + '\n');
+  // Several times over: whether ripgrep has ended by itself when it is to be ended differs from one run to the next,
+  // and both ways have to leave nothing behind (on Windows a process that had ended was once counted for good as not
+  // known to have ended).
+  for (let round = 0; round < 10; round++) {
+    const found = await small.find(project, { pattern: '*.txt', limit: 2000 });
+    assert.deepEqual([found.truncated, found.withheld], [true, undefined], 'what was cut is said, and the piece of a path at the cut is not taken for a file that is kept back');
+    assert.ok(found.items.length >= 20 && found.items.length < 400, found.items.length + ' of 400');
+    assert.ok(found.items.every(item => names.includes(item.path) && item.size > 0), 'whole paths only');
+    assert.deepEqual(found.items.map(item => item.path), found.items.map(item => item.path).sort(), 'in order');
+    const hits = await small.search(project, { query: 'needle', limit: 1000 });
+    assert.equal(hits.truncated, true);
+    assert.ok(hits.items.length >= 2 && hits.items.length < 400, hits.items.length + ' of 400');
+    assert.ok(hits.items.every(item => names.includes(item.path) && item.line === 1 && item.text === 'needle ' + Number(item.path.slice(10, 14))), 'whole hits only');
+    assert.equal(activeCommandProcessCount(), 0, 'no process is left counted after round ' + round);
+  }
+  // Within the bound nothing is cut, and it is all there.
+  const all = await service.find(project, { pattern: '*.txt', limit: 2000 });
+  assert.deepEqual([all.truncated, all.items.map(item => item.path)], [false, names]);
+  assert.equal((await service.search(project, { query: 'needle', limit: 1000 })).items.length, 400);
+  assert.equal(activeCommandProcessCount(), 0);
 });
 
 test('read-only Git history tools report log, show, blame and branches without exposing protected files', async t => {

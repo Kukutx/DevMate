@@ -281,7 +281,8 @@ function checkedCommand(result, accepted = [0]) {
 }
 function emptyCommand() { return { exitCode: 0, stdout: '', stderr: '', timedOut: false, exitConfirmed: true, stdoutTruncated: false, stderrTruncated: false }; }
 
-export function createWorkspaceService({ store } = {}) {
+// scanChars: how much a find or a search takes from ripgrep before it ends it (see scanned).
+export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
   // True while a change is made for a caller that tries again by itself (see unheld above). The changes are made in
   // one go, without a pause in which another could begin, so one flag is enough.
   let quick = false;
@@ -907,8 +908,14 @@ export function createWorkspaceService({ store } = {}) {
     return args;
   }
   // By path, folder by folder and name by name, as ripgrep's own sorting gave them: the separator counts as less than
-  // any letter. What the order is made of is worked out once for each entry.
-  const inOrder = (entries, pathOf) => entries.map(entry => [pathOf(entry).replaceAll('/', '\0'), entry])
+  // any letter, and letters are compared as ripgrep compares them, by their number among all characters. (A string
+  // here is compared by its 16-bit units, which puts a character beyond the first 65536, an emoji for one, before
+  // some that come earlier: where a name holds such units they are moved to where they belong for the comparison.)
+  // What the order is made of is worked out once for each entry.
+  // (The units from 0xD800 up: the halves of such a character, and the characters that come after the halves.)
+  const HIGH = new RegExp('[' + String.fromCharCode(0xd800) + '-' + String.fromCharCode(0xffff) + ']', 'g');
+  const ranked = unit => String.fromCharCode(unit.charCodeAt(0) + (unit.charCodeAt(0) >= 0xe000 ? -0x800 : 0x2000));
+  const inOrder = (entries, pathOf) => entries.map(entry => [pathOf(entry).replaceAll('/', '\0').replace(HIGH, ranked), entry])
     .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(pair => pair[1]);
   // Null when the file may not be shown; otherwise what one look at it told (its size).
   function visibleFile(project, file, cache) {
@@ -926,7 +933,7 @@ export function createWorkspaceService({ store } = {}) {
   // in a large tree otherwise goes on to write a hundred megabytes that are read and thrown away (measured: over ten
   // seconds for an answer that was complete after a twentieth of one). What is shown then is a part of what matches,
   // not the same part every time, and marked as cut.
-  const scanned = input => ({ ...input, maxOutputChars: 2000000, enough: true });
+  const scanned = input => ({ ...input, maxOutputChars: scanChars, enough: true });
   function scanFailure(result, produced) {
     if (result.endedFull) return;
     // ripgrep exits 1 for "no matches" and 2 when some path could not be read.
@@ -1039,7 +1046,7 @@ export function createWorkspaceService({ store } = {}) {
     const base = head.exitCode === 0 ? 'HEAD' : EMPTY_TREE;
     const status = checkedCommand(listed);
     if (status.stdoutTruncated) throw error('output_limit', 'Too many files changed to list them here; look at them with git_status and git_diff.');
-    const files = new Map(), untracked = new Set(), verified = new Map(), root = projectRoot(project);
+    const files = new Map(), untracked = new Set(), verified = new Map();
     let omittedProtected = 0;
     const records = status.stdout.split('\0');
     for (let index = 0; index < records.length; index++) {
@@ -1060,6 +1067,9 @@ export function createWorkspaceService({ store } = {}) {
         if (file) Object.assign(file, added === '-' ? { binary: true } : { additions: Number(added), removals: Number(removed) });
       }
     }
+    // Looked at once more now that nothing is waited for any longer: the files are read from where the project is at
+    // this moment, not from where it was before Git was asked.
+    const root = projectRoot(project);
     // What a file holds now, in a form that is cheap to compare later.
     const state = item => {
       const stat = item.type === 'deleted' ? null : fs.lstatSync(path.join(root, item.path), { throwIfNoEntry: false });

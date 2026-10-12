@@ -197,10 +197,19 @@ export async function executeCommand(command, args = [], {
 
   let exit = winner.exit || null;
   let termination = { terminated: false, forced: false, exitConfirmed: true };
-  if (winner.type === 'timeout' || winner.type === 'aborted' || winner.type === 'full') {
+  const gone = () => child.exitCode != null || child.signalCode != null;
+  if (winner.type === 'full' && gone()) {
+    // It wrote enough and ended by itself: an end like any other, with nothing left to end. (A process that is gone is
+    // not asked to end again: on Windows its number may be another program's by then, and the asking fails and would
+    // leave this one counted as not known to have ended, for good.)
+    exit = await waitWithTimeout(exitPromise, 1000);
+  } else if (winner.type === 'timeout' || winner.type === 'aborted' || winner.type === 'full') {
     cleanupPending = true;
     termination = await terminateProcessTree(child);
     exit = await waitWithTimeout(exitPromise, 100);
+    // The same where it ended by itself while it was being ended: what `enough` is used for is one process, and its
+    // own end is known.
+    if (winner.type === 'full' && !termination.exitConfirmed && gone()) termination = { ...termination, exitConfirmed: true };
   }
 
   if (termination.exitConfirmed) activeProcesses.delete(child);
