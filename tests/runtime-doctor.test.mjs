@@ -152,15 +152,18 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.equal(missing.detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
   assert.equal(missing.fix, 'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
     '(devmate project remove <id, name or folder>, which also removes the workflows, tasks and agent records kept for it) and share the folder where it is now (devmate project add <folder>).');
-  // Put back where it was (a drive that is connected again), the project works with everything it had, and is listed
-  // as there again once it was looked at.
+  // A call for the project that goes through without its folder (it reads what DevMate keeps) does not take the mark
+  // off: the folder is looked at, and it is still not there.
+  await runtime.call('workspace.history', { projectId: project.id }, connected);
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  // Put back where it was (a drive that is connected again), the project works with everything it had, and the first
+  // call for it that goes through takes the mark off at once: a model that has just read a file there is not told by
+  // the list that the folder is not there.
   fs.renameSync(path.join(temp, 'elsewhere'), moved);
   assert.equal((await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, connected)).text, 'a');
-  assert.equal(await find('projects.missing'), undefined);
-  runtime.folders.clear();
-  await listed();
-  await new Promise(resolve => setTimeout(resolve, 200));
   assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.equal(await find('projects.missing'), undefined);
   fs.renameSync(moved, path.join(temp, 'elsewhere'));
   // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
   assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);

@@ -353,6 +353,16 @@ export class DevMateService {
     }
   }
 
+  // The other way round from a call that met a folder gone: a call for a project went through while its folder was
+  // marked as not there. Most such calls need the folder (reading a file in it), some only what DevMate keeps (its
+  // history), so the folder is looked at, now: what is said of the project is then not behind what was just done in
+  // it. Only for a project that is marked, which is rare, and whose folder a call has most likely just used.
+  folderBack(projectId) {
+    const seen = projectId ? this.folders.get(projectId) : null;
+    if (!seen?.missing || !seen.root) return;
+    try { fs.lstatSync(seen.root); this.folders.set(projectId, { root: seen.root, at: Date.now(), missing: false }); } catch { /* not there, or not to be seen: it stays as it was */ }
+  }
+
   // Whether the folder of a project is known not to be there: moved, renamed or deleted, or on a drive that is not
   // connected. It is said where projects are named for a model, which is on every request, so the file system is not
   // asked there: what was seen last is answered at once, and it is looked at again in the background once in a while.
@@ -393,6 +403,7 @@ export class DevMateService {
     if (context.windowId && !context.projectId && executionProject && !name.startsWith('window.')) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
     if (operation.readOnly || !args.operationId) {
       const result = await this.invoke(operation, args, context);
+      this.folderBack(executionProject);
       // Which project that was is part of the answer when the caller did not say and there were several.
       if (chosen.followed && result && typeof result === 'object' && Object.isExtensible(result)) Object.defineProperty(result, FOLLOWED_PROJECT, { value: { id: chosen.followed.id, name: chosen.followed.name } });
       return result;
@@ -410,6 +421,7 @@ export class DevMateService {
     this.store.saveOperation(operationKey, name, fingerprint, { pending: true });
     const work = this.invoke(operation, args, context).then(result => {
       this.store.db.prepare('UPDATE operations SET result=? WHERE id=?').run(JSON.stringify({ value: result }), operationKey);
+      this.folderBack(executionProject);
       return result;
     }, error => {
       // A failure is not a result to replay: forget the receipt so the same request can be tried again.
