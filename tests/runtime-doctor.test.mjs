@@ -143,10 +143,11 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   // Each call that needs the folder says what happened to it and what is done about it, instead of a bare ENOENT.
   // What is done differs: a drive is connected again and nothing is lost; taking the project off the list takes what
   // is kept for it as well, and is said to, in full.
-  const keptFor = 'everything DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, and the copies agents worked in that were not applied';
+  const takingOff = 'Taking a project off the list also removes what DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, ' +
+    'and the copies agents worked in that were not applied (of such a copy the branch devmate/copy-… stays in the repository, wherever that is now). An editor then no longer shares the folder at the old place by itself.';
   const said = 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
-    'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes ' + keptFor + ') ' +
-    'and shares the folder where it is now (devmate project add <folder>).';
+    'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ') ' +
+    'and shares the folder where it is now (devmate project add <folder>). ' + takingOff;
   for (const [operation, input] of [['workspace.read', { path: 'a.txt' }], ['workspace.files', {}], ['workspace.write', { path: 'b.txt', text: 'b' }], ['git.status', {}], ['project.overview', {}], ['shell.run', { file: process.execPath, args: ['-v'] }],
     // A coding agent and an engine start their programs in that folder: refused the same way, before anything is made
     // for the task (started all the same, the program fails for want of a folder, which reads as if it were not installed).
@@ -169,7 +170,11 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.equal(missing.status, 'warn');
   assert.equal(missing.detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
   assert.equal(missing.fix, 'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
-    '(devmate project remove <id, name or folder>, which also removes ' + keptFor + ') and share the folder where it is now (devmate project add <folder>).');
+    '(devmate project remove <id, name or folder>) and share the folder where it is now (devmate project add <folder>). ' + takingOff);
+  // At the computer the command line lists it marked as well.
+  const printed = [];
+  assert.equal(await cli(['project', 'list'], { stdout: { write: text => printed.push(text) }, stderr: { write() {} }, clientFactory: () => ({ call: (name, input) => runtime.call(name, input, owner) }) }), 0);
+  assert.deepEqual(JSON.parse(printed.join('')).map(item => [item.name, item.missing]), [['kept', undefined], ['moved', true]]);
   // A call for the project that goes through without its folder (it reads what DevMate keeps) does not take the mark
   // off: the folder is looked at, and it is still not there.
   await runtime.call('workspace.history', { projectId: project.id }, connected);
@@ -235,7 +240,8 @@ test('a runtime that starts while a shared folder is gone says so from its first
     assert.ok(Date.now() - began < 600, 'a look that has not answered for longer than the bound is not waited for again: ' + (Date.now() - began) + ' ms');
     const checks = (await runtime.call('runtime.doctor', {}, owner)).checks, unanswered = checks.find(item => item.id === 'projects.unanswered');
     assert.deepEqual([unanswered.status, unanswered.detail], ['warn', 'The folder of 1 project(s) has not answered when it was looked for: slow at ' + projects.slow.root]);
-    assert.match(unanswered.fix, /^That is a share or a drive that hangs\./);
+    // Nothing is to be removed for it: a project that is taken off the list does not come back with the share.
+    assert.equal(unanswered.fix, 'That is a share or a drive that hangs. Connect it again, or wait for it: nothing has to be removed. Until it answers, calls for such a project wait for it as long as the system does.');
     assert.equal(checks.find(item => item.id === 'projects.missing').detail, 'The folder of 1 project(s) is not there: away at ' + projects.away.root);
   } finally { fs.promises.lstat = look; }
 

@@ -5,7 +5,7 @@ import { createChromeRegistration } from '../platform/chrome-registration.mjs';
 import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
-import { KEPT_FOR_A_PROJECT } from '../workspace.mjs';
+import { TAKING_OFF_THE_LIST } from '../workspace.mjs';
 import { within } from './shared.mjs';
 
 /**
@@ -53,9 +53,10 @@ export async function doctor(service) {
   const silent = await service.lookAtFolders(listed), gone = listed.filter(project => service.folders.get(project.id)?.missing && !silent.includes(project));
   if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there: ' + places(gone),
     'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
-    '(devmate project remove <id, name or folder>, which also removes ' + KEPT_FOR_A_PROJECT + ') and share the folder where it is now (devmate project add <folder>).');
+    '(devmate project remove <id, name or folder>) and share the folder where it is now (devmate project add <folder>). ' + TAKING_OFF_THE_LIST);
+  // (Nothing is to be removed for it: a project that is taken off the list does not come back with the share.)
   if (silent.length) check('projects.unanswered', 'warn', 'The folder of ' + silent.length + ' project(s) has not answered when it was looked for: ' + places(silent),
-    'That is a share or a drive that hangs. Calls for such a project wait for it as long as the system does; connect it again, or take the project off the list until it is back (devmate project remove <id, name or folder>).');
+    'That is a share or a drive that hangs. Connect it again, or wait for it: nothing has to be removed. Until it answers, calls for such a project wait for it as long as the system does.');
   const windows = service.windows.list().length;
   check('editor', windows ? 'ok' : 'info', windows + ' editor window(s) attached', windows ? null : 'Editor context needs VS Code or Obsidian with DevMate running; diagnostics come from VS Code.');
   for (const provider of (await service.discoverProviders()).items) {

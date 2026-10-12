@@ -150,6 +150,29 @@ test('a copy that was made for a task the owner then does not allow goes with it
   assert.equal(instances.length, 0, 'nothing was started for either');
 });
 
+// A project whose folder was moved is taken off the list, and the words that say so name what goes with it: the
+// copies agents worked in among it. The copy stands beside the instance, not in the folder that is gone.
+test('taking a project off the list whose folder was moved removes the copy an agent worked in all the same; its branch stays in the repository, wherever that is now', async t => {
+  const { service, project, top, temp, factory, instances } = await fixture(t);
+  factory.work = work;
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const copy = instances[0].options.cwd, { branch } = service.store.get('agent', done.agentId).isolated;
+  await service.call('agents.stop', { id: done.agentId }, owner);
+  // (A record that names a folder which is no copy of this runtime's: without Git to say that it is a worktree of
+  // the project, such a folder is not removed.)
+  const other = path.join(temp, 'not-a-copy'); fs.mkdirSync(other); fs.writeFileSync(path.join(other, 'kept.txt'), 'kept');
+  service.store.create('agent', { projectId: project.id, workflowId: done.workflowId, provider: 'codex', label: 'elsewhere', status: 'closed', isolated: { root: other, branch: 'devmate/elsewhere', base: 'c0ffee' } });
+  const elsewhere = path.join(temp, 'moved');
+  fs.renameSync(top, elsewhere);
+  assert.equal(fs.existsSync(path.join(copy, 'src', 'new.js')), true);
+  assert.equal((await service.call('project.remove', { id: project.id }, owner)).removed, true);
+  assert.equal(fs.existsSync(copy), false, 'nothing would remove it afterwards: the record that named it is gone with the project');
+  assert.deepEqual(fs.readdirSync(path.join(temp, 'instance-copies')), []);
+  assert.equal(fs.readFileSync(path.join(other, 'kept.txt'), 'utf8'), 'kept');
+  // The repository keeps the branch: only Git there can remove it, which the words that sent the owner here say.
+  assert.ok(git(elsewhere, 'branch', '--list', 'devmate/*').includes(branch));
+});
+
 // Where DevMate is installed without being told otherwise, its instance is ~/.devmate/runtime, and the copies are
 // beside it, in a folder named .devmate: a name no shared folder may have above it.
 test('a copy beside an instance that lives in a folder named .devmate is read, applied and discarded like any other', async t => {

@@ -60,7 +60,7 @@ export function validateVersions(directory){
   // before it can be committed, tagged or published.
   const approved=/^- Owner-approved version: (\d+\.\d+\.\d+)\./m.exec(fs.readFileSync(path.join(directory,'AGENTS.md'),'utf8'))?.[1];
   assert.ok(approved,'AGENTS.md must state the version the owner approved, as a line "- Owner-approved version: <number>."');
-  assert.equal(VERSION,approved,'The version is '+VERSION+', but the owner approved '+approved+' (AGENTS.md). Only the owner changes it: set the version back (npm run version:set -- '+approved+', which also puts the changelog section and versions.json back), do not edit that line.');
+  assert.equal(VERSION,approved,'The version is '+VERSION+', but the owner approved '+approved+' (AGENTS.md). Only the owner changes it: state the approved version in every file (npm run version:set -- '+approved+', which makes or takes back the changelog section and the entry in versions.json as that needs), do not edit that line.');
 }
 // Every action a workflow runs is named by its commit, so a moved tag cannot change what runs with this repository's permissions.
 export function validateWorkflows(directory){

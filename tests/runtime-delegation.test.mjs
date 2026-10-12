@@ -894,11 +894,32 @@ test('a task that reaches an agent whose folder went while it was connected ends
   // A yes for the client's task is not used up on it either: it is refused with the same words, and the question stays.
   await assert.rejects(answer(service, waiting.approvals[0].id, 'allow_once'), { code: 'project_missing', message: /^The folder of this project is not there: .* This task keeps waiting for your answer: allow it once that is out of the way, or refuse it\.$/ });
   assert.deepEqual([service.store.get('approval', waiting.approvals[0].id).status, service.store.get('delivery', waiting.deliveryId).status], ['pending', 'held']);
-  // With the folder back (a drive that is connected again) the agent works on, with no start in between.
+  // Where the owner chose not to be asked it waits, and says for what; and it goes by itself once the folder is back
+  // (a drive that is connected again) and has been looked at, here by a list of the projects: nothing else changed.
+  // The agent works on, with no start in between.
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', waiting: 1 });
+  assert.match(service.store.get('approval', waiting.approvals[0].id).waits, /^The folder of this project is not there: /);
   fs.renameSync(away, project.root);
-  await answer(service, waiting.approvals[0].id, 'allow_once');
+  assert.equal((await service.call('project.list', {}, connected)).items[0].missing, undefined);
   assert.equal((await service.call('agents.result', { agentId: agent.id, deliveryId: waiting.deliveryId, waitMs: 5000 }, connected)).output, 'done: A client\'s');
-  assert.equal(instances.length, 1);
+  assert.deepEqual([service.store.get('approval', waiting.approvals[0].id).automatic, instances.length], [true, 1]);
+  await service.call('delegation.update', { mode: 'ask' }, local);
+  // Where the owner is asked, a folder that is back lets nothing through: the task is theirs to answer. And where
+  // they are not, a call that goes through in the project is enough for the folder to be seen as back.
+  const second = await service.call('agents.delegate', { agentId: agent.id, prompt: 'A second of the client\'s', waitMs: 0 }, connected);
+  const still = () => [service.store.get('approval', second.approvals[0].id).status, service.store.get('delivery', second.deliveryId).status];
+  fs.renameSync(project.root, away);
+  await assert.rejects(answer(service, second.approvals[0].id, 'allow_once'), { code: 'project_missing' });
+  fs.renameSync(away, project.root);
+  await service.call('workspace.files', { projectId: project.id }, local);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(still(), ['pending', 'held']);
+  fs.renameSync(project.root, away);
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', waiting: 1 });
+  fs.renameSync(away, project.root);
+  await service.call('workspace.files', { projectId: project.id }, local);
+  assert.equal((await service.call('agents.result', { agentId: agent.id, deliveryId: second.deliveryId, waitMs: 5000 }, connected)).output, 'done: A second of the client\'s');
+  await service.call('delegation.update', { mode: 'ask' }, local);
 
   // An agent with a copy of its own works there. A copy that was deleted by hand is said as that, and what to do.
   service.workspace.isolate = async (_project, name) => { const root = path.join(path.dirname(project.root), name); fs.mkdirSync(root); return { root, branch: 'devmate/' + name, base: 'c0ffee', uncommitted: 0 }; };
@@ -908,7 +929,14 @@ test('a task that reaches an agent whose folder went while it was connected ends
   const copy = service.store.get('agent', worker.agentId).isolated.root;
   fs.rmSync(copy, { recursive: true });
   const lost = await service.agents.delegate({ agentId: worker.agentId, prompt: 'More, in the copy', waitMs: 5000 }, { kind: 'user', id: 'owner', label: 'You' });
-  assert.deepEqual([lost.settled, lost.error.code, lost.error.message], [true, 'copy_missing', 'The copy of the project this agent works in is not there any more: ' + copy +
-    '. It was removed outside DevMate, and what the agent did in it went with it. Throw away what is left of it (agents.discard) and start a new agent for the next task.']);
-  assert.deepEqual(turns(instances), ['A client\'s', 'In a copy']);
+  // What it had committed is on the copy's branch in the repository, which discarding would delete: said, not hidden.
+  const gone = 'The copy of the project this agent works in is not there any more: ' + copy + '. It was removed outside DevMate. What the agent had committed there is still on the branch ' +
+    service.store.get('agent', worker.agentId).isolated.branch + ' of the project\'s repository; what it had not committed went with the folder. ' +
+    'This agent cannot go on: start a new one for the next task. agents.discard takes its branch away as well, so look at the branch first if the work matters.';
+  assert.deepEqual([lost.settled, lost.error.code, lost.error.message], [true, 'copy_missing', gone]);
+  // A yes for a client's task for it is refused with that, and is not told to wait for what will not come.
+  const late = await service.call('agents.delegate', { agentId: worker.agentId, prompt: 'A client\'s, in the copy', waitMs: 0 }, connected);
+  await assert.rejects(answer(service, late.approvals[0].id, 'allow_once'), { code: 'copy_missing', message: gone + ' This task cannot begin with this agent any more: refuse it.' });
+  await answer(service, late.approvals[0].id, 'deny');
+  assert.deepEqual(turns(instances), ['A client\'s', 'A second of the client\'s', 'In a copy']);
 });

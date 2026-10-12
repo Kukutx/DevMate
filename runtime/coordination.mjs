@@ -50,9 +50,10 @@ export class AgentCoordinator {
   // delegation: whether a task that a connected client sends is run: 'ask' (the owner allows each at the computer),
   // 'allow' or 'off'. What the owner sends at the computer is not asked about.
   // discardCopy(agent): removes the copy of the project that was made for an agent which then never ran.
+  // folderGone(project): the folder of a project was looked for, for an agent, and is not there.
   constructor({ store, adapterFactory = createAgentAdapter, endpoint, providerSettings = {}, instanceRoot = path.dirname(store.filePath), cancelGraceMs = 15000,
-    grantsApprovals = () => false, delegation = () => 'ask', discardCopy = null }) {
-    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals, delegation, discardCopy });
+    grantsApprovals = () => false, delegation = () => 'ask', discardCopy = null, folderGone = null }) {
+    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals, delegation, discardCopy, folderGone });
     this.sessions = new Map();
     this.decisions = new Map();
     this.tokens = new Map();
@@ -255,9 +256,16 @@ export class AgentCoordinator {
   // all the same, the program fails for want of a folder to start in, which reads as if it were not installed.
   place(agent) {
     const project = this.store.get('project', agent.projectId);
-    if (!agent.isolated) { resolveProjectPath(project); return project.root; }
+    if (!agent.isolated) {
+      // (Whoever keeps what was seen of the folders is told: it is then looked for again, and its return is noticed.)
+      try { resolveProjectPath(project); } catch (error) { if (error.code === 'project_missing') this.folderGone?.(project); throw error; }
+      return project.root;
+    }
+    // (What the agent committed in its copy is on the copy's branch in the project's repository, and outlasts the
+    // folder; agents.discard deletes that branch, so it is not offered here without saying so.)
     if (!fs.statSync(agent.isolated.root, { throwIfNoEntry: false })?.isDirectory()) throw new DomainError('copy_missing', 'The copy of the project this agent works in is not there any more: ' + agent.isolated.root +
-      '. It was removed outside DevMate, and what the agent did in it went with it. Throw away what is left of it (agents.discard) and start a new agent for the next task.');
+      '. It was removed outside DevMate. What the agent had committed there is still on the branch ' + agent.isolated.branch + ' of the project\'s repository; what it had not committed went with the folder. ' +
+      'This agent cannot go on: start a new one for the next task. agents.discard takes its branch away as well, so look at the branch first if the work matters.');
     return agent.isolated.root;
   }
 
@@ -898,9 +906,11 @@ export class AgentCoordinator {
     // Before an answer is taken: a yes for such a task is not used up on it. The answer is refused with what is in
     // the way, and the question stays as it is, instead of the task failing and being asked again. What the answer
     // then does (answered) starts and queues with the same checks, in the same breath.
+    // (A copy that was deleted does not come back: of that the answer says so, and not that it will be out of the way.)
     const ready = optionId => {
       const error = optionId === 'deny' ? null : blocked();
-      if (error) throw new DomainError(error.code, error.message + ' This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.');
+      if (error) throw new DomainError(error.code, error.message + (error.code === 'copy_missing' ? ' This task cannot begin with this agent any more: refuse it.'
+        : ' This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.'));
     };
     const answered = ({ optionId }) => {
       const delivery = this.find('delivery', deliveryId);

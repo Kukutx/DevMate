@@ -87,9 +87,12 @@ const hidden = (project, rel) => protects(project) && isSensitiveWorkspacePath(r
 
 // Marks the view of a project that stands in a working copy this runtime made (see inCopy). Not a name data can carry.
 const OWN_COPY = Symbol('own copy');
-// What goes with a project that is taken off the list (the store removes every record of the project with it, and
-// project.remove the copies): said wherever taking it off is the remedy, so that it is not taken for a small step.
-export const KEPT_FOR_A_PROJECT = 'everything DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, and the copies agents worked in that were not applied';
+// What goes with a project that is taken off the list because its folder was moved (the store removes the records of
+// the project with it, and project.remove the copies): said wherever taking it off is the remedy, so that it is not
+// taken for a small step. What it leaves is said too: kept versions of files and the log go when their time is up,
+// and of a copy the repository keeps the branch.
+export const TAKING_OFF_THE_LIST = 'Taking a project off the list also removes what DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, ' +
+  'and the copies agents worked in that were not applied (of such a copy the branch devmate/copy-… stays in the repository, wherever that is now). An editor then no longer shares the folder at the old place by itself.';
 function projectRoot(project) {
   if (!project || typeof project.id !== 'string' || !path.isAbsolute(project.root || '') || !['read', 'write'].includes(project.access)) {
     throw error('invalid_project', 'A project with an absolute root and read/write access is required.');
@@ -110,8 +113,8 @@ function projectRoot(project) {
     throw error('project_missing', away
       ? 'The folder of this project is on a drive that is not connected: ' + project.root + '. Connect the drive and call again; nothing has to be removed for that.'
       : 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
-        'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes ' + KEPT_FOR_A_PROJECT + ') ' +
-        'and shares the folder where it is now (devmate project add <folder>).', { projectId: project.id, ...(away ? { driveMissing: true } : {}) });
+        'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ') ' +
+        'and shares the folder where it is now (devmate project add <folder>). ' + TAKING_OFF_THE_LIST, { projectId: project.id, ...(away ? { driveMissing: true } : {}) });
   }
   // A registered directory that has since been swapped for a link would silently redirect every file tool.
   if (stat.isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
@@ -1158,21 +1161,29 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
     } finally { for (const file of [scratch, scratch + '.lock']) fs.rmSync(file, { force: true }); }
   }
 
+  // The copy stands beside the instance directory and does not need the project's folder. Where that folder is gone
+  // (a project is taken off the list because it was moved), the copy is removed all the same: nothing would ever
+  // remove it afterwards. What stays is in the repository, wherever it is now: its note of this worktree and the
+  // branch, which only Git there can remove.
   async function removeCopy(project, copy) {
-    const root = projectRoot(project);
+    let root = null;
+    try { root = projectRoot(project); } catch (failure) { if (failure.code !== 'project_missing') throw failure; }
     if (fs.existsSync(copy.root)) {
       // Where the owner has switched on Git's own file watcher (core.fsmonitor), the agent's Git starts one in the
       // copy, and it stays when the agent has gone, with the folder open (seen with the real Codex on Windows, where
       // such a folder cannot be removed). It is told to end first. A Git that has none, and a copy nobody watches,
       // answer with an error that says nothing here.
       await gitChange(copy.root, ['fsmonitor--daemon', 'stop'], { timeoutMs: 15000 }).catch(() => {});
-      const removed = await gitChange(root, ['worktree', 'remove', '--force', copy.root]);
+      const removed = root ? await gitChange(root, ['worktree', 'remove', '--force', copy.root]) : null;
       // Whatever Git would not remove (a file held open by a program that is still running) must not be reported as gone.
-      if (removed.exitCode !== 0 && fs.existsSync(copy.root)) {
+      if (removed?.exitCode !== 0 && fs.existsSync(copy.root)) {
+        // (Without Git's word for it, only a folder that is one of this runtime's own copies is removed.)
+        if (!root) inCopy(project, copy);
         try { fs.rmSync(copy.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
         catch { throw error('copy_in_use', 'The working copy is still in use and could not be removed. Stop the agent (agents.stop) and try again.'); }
       }
     }
+    if (!root) return;
     await gitChange(root, ['worktree', 'prune']);
     await gitChange(root, ['branch', '-D', copy.branch]);
   }

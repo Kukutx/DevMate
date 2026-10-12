@@ -119,7 +119,10 @@ export class DevMateService {
       // Full access is the owner's standing answer to what an agent asks.
       grantsApprovals: () => this.fullAccess(), delegation: () => this.delegation,
       // The copy of the project that was made for a connected client's agent whose task the owner then did not allow.
-      discardCopy: agent => this.workspace.discardProposal(this.project(agent.projectId), agent.isolated) });
+      discardCopy: agent => this.workspace.discardProposal(this.project(agent.projectId), agent.isolated),
+      // A task found the folder of its project gone: it is marked like after a call that met it gone, so that it is
+      // looked for again and a task that waits for it goes on when it is back (folderReturned).
+      folderGone: project => { this.folders.set(project.id, { root: project.root, at: Date.now(), missing: true }); } });
     // What the owner changed about the coding agents while the runtime ran lies on top of the configuration.
     if (!providerSettings) for (const name of Object.keys(this.store.setting('providers.live') || {})) {
       try { this.applyProviderSettings(name); } catch (error) { this.store.recordNotificationFailure(error); }
@@ -152,8 +155,9 @@ export class DevMateService {
         catch (error) {
           // The capability registry owns its client/process lifetime separately from this request.
           error.executionSettled = true;
-          // (project_missing: the folder was looked for before anything was started in it.)
-          if (['forbidden', 'read_only', 'scope_mismatch', 'unknown_capability', 'invalid_input', 'missing_credential', 'not_found', 'project_missing'].includes(error.code) || error.name === 'ZodError') error.notStarted = true;
+          // (A folder that is not there is one of these only where it was found so before anything was begun: the
+          // registry says that itself. Met later, by an engine that is already at work, it is an outcome nobody knows.)
+          if (['forbidden', 'read_only', 'scope_mismatch', 'unknown_capability', 'invalid_input', 'missing_credential', 'not_found'].includes(error.code) || error.name === 'ZodError') error.notStarted = true;
           throw error;
         }
       } });
@@ -367,7 +371,15 @@ export class DevMateService {
   folderBack(projectId) {
     const seen = projectId ? this.folders.get(projectId) : null;
     if (!seen?.missing || !seen.root) return;
-    try { fs.lstatSync(seen.root); this.folders.set(projectId, { root: seen.root, at: Date.now(), missing: false }); } catch { /* not there, or not to be seen: it stays as it was */ }
+    try { fs.lstatSync(seen.root); } catch { return; /* not there, or not to be seen: it stays as it was */ }
+    this.folders.set(projectId, { root: seen.root, at: Date.now(), missing: false });
+    this.folderReturned();
+  }
+  // A folder that was gone is there again. Where the owner chose not to be asked, a task of a connected client that
+  // waited for it is tried again now: nothing else would, until something unrelated changed.
+  folderReturned() {
+    if (this.closing || this.delegation !== 'allow') return;
+    try { this.agents.allowWaiting(); } catch (error) { this.store.recordNotificationFailure(error); }
   }
 
   // One look at the folder of a project, and one at a time: what it finds is kept for whoever asks next. Only
@@ -375,9 +387,9 @@ export class DevMateService {
   lookAtFolder(project) {
     const seen = this.folders.get(project.id), same = seen?.root === project.root;
     if (same && seen.looking) return seen.looking;
-    const entry = { root: project.root, at: Date.now(), since: Date.now(), missing: same ? seen.missing : false, looking: null };
+    const entry = { root: project.root, at: Date.now(), since: Date.now(), missing: same ? seen.missing : false, looking: null }, was = entry.missing;
     entry.looking = fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))
-      .then(missing => { Object.assign(entry, { missing, at: Date.now(), looking: null }); return missing; });
+      .then(missing => { Object.assign(entry, { missing, at: Date.now(), looking: null }); if (was && !missing && this.folders.get(project.id) === entry) this.folderReturned(); return missing; });
     this.folders.set(project.id, entry);
     return entry.looking;
   }

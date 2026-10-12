@@ -526,7 +526,7 @@ export async function main(argv = process.argv.slice(2), {
     }
     if (command === 'project') {
       const [action, target] = positional;
-      if (action === 'list') { print((await client.call('project.list', {}, callOptions)).items.map(({ id, name, root, access }) => ({ id, name, root, access }))); return 0; }
+      if (action === 'list') { print((await client.call('project.list', {}, callOptions)).items.map(({ id, name, root, access, missing }) => ({ id, name, root, access, ...(missing ? { missing: true } : {}) }))); return 0; }
       if (action === 'add') {
         print(await client.call('project.create', { root: path.resolve(target || '.'), ...(options.name ? { name: options.name } : {}),
           ...(options['read-only'] ? { access: 'read' } : {}) }, callOptions));
