@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { Store } from '../runtime/store.mjs';
 import { createWorkspaceService } from '../runtime/workspace.mjs';
 
@@ -47,6 +48,43 @@ test('text is added to the end of a file with append: what was there is kept, an
   fs.writeFileSync(file('big.txt'), 'a'.repeat(8 * 1024 * 1024 - 2));
   assert.throws(() => service.write(project, { path: 'big.txt', text: 'more', append: true }), { code: 'invalid_input', message: /beyond 8 MiB/ });
   assert.equal(fs.statSync(file('big.txt')).size, 8 * 1024 * 1024 - 2);
+  // What is added is UTF-8. A text file in another encoding (GBK here, as on a Chinese Windows) would hold two
+  // encodings afterwards: it is refused as workspace_edit refuses it, and is as it was.
+  const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x0a]);
+  fs.writeFileSync(file('gbk.txt'), gbk);
+  assert.throws(() => service.write(project, { path: 'gbk.txt', text: '中文\n', append: true }), { code: 'binary_file', message: /an encoding other than UTF-8/ });
+  assert.throws(() => service.edit(project, { path: 'gbk.txt', edits: [{ oldText: 'x', newText: 'y' }] }), { code: 'binary_file' });
+  assert.deepEqual(fs.readFileSync(file('gbk.txt')), gbk);
+});
+
+test('append adds to the file itself: a program that is writing to it goes on writing to the same file', async t => {
+  const { project, service, file } = fixture(t);
+  fs.writeFileSync(file('server.log'), 'started\n');
+  // The way a server has its log: open, to be written to for as long as it runs.
+  const log = fs.openSync(file('server.log'), 'a');
+  t.after(() => { try { fs.closeSync(log); } catch { /* closed below */ } });
+  const before = fs.statSync(file('server.log'), { bigint: true }).ino;
+  const added = service.write(project, { path: 'server.log', text: 'a note from the model\n', append: true });
+  fs.writeSync(log, 'the server goes on\n');
+  // The same file as before, with both in it; replaced, the server's line would have gone into the file that was moved away.
+  assert.equal(fs.statSync(file('server.log'), { bigint: true }).ino, before);
+  assert.equal(fs.readFileSync(file('server.log'), 'utf8'), 'started\na note from the model\nthe server goes on\n');
+  // The answer names what the file held when it was added to, and the change can be taken back like any other.
+  assert.equal(added.written, true); assert.equal(added.sha256, createHash('sha256').update('started\na note from the model\n').digest('hex'));
+  const entry = service.history(project, { path: 'server.log' }).items[0];
+  assert.equal(entry.action, 'written'); assert.equal(entry.previousRestorable, true);
+  // What the server wrote while the model added its line is in the file and in what is said of it.
+  fs.writeSync(log, 'once more\n');
+  const again = service.write(project, { path: 'server.log', text: 'second note\n', append: true });
+  assert.equal(again.sha256, service.read(project, { path: 'server.log' }).sha256);
+  fs.closeSync(log);
+  // A file marked read-only is not added to.
+  if (process.getuid?.() !== 0) {
+    fs.chmodSync(file('server.log'), 0o444);
+    t.after(() => { try { fs.chmodSync(file('server.log'), 0o666); } catch { /* gone */ } });
+    assert.throws(() => service.write(project, { path: 'server.log', text: 'x\n', append: true }), { code: 'read_only_file', message: /^server\.log is marked read-only and was left as it is\./ });
+    fs.chmodSync(file('server.log'), 0o666);
+  }
 });
 
 test('exact-replacement edits are atomic, unambiguous and keep CRLF files intact', async t => {

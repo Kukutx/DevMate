@@ -66,6 +66,55 @@ test('on Windows a file that is open in a program that lets it be moved is repla
   assert.deepEqual(history.map(item => item.action), ['written', 'written', 'written']);
 });
 
+test('on Windows a file marked read-only is left as it is by every change, and says so', { skip: process.platform !== 'win32' && 'the mark means this on Windows', timeout: 60000 }, async t => {
+  const { call, root, file, read } = await fixture(t);
+  await call('workspace.write', { path: 'fixed.txt', text: 'as it is\n' });
+  await call('workspace.write', { path: 'other.txt', text: 'other\n' });
+  fs.chmodSync(file('fixed.txt'), 0o444);
+  t.after(() => { try { fs.chmodSync(file('fixed.txt'), 0o666); } catch { /* gone */ } });
+  // Windows replaces no read-only file by one renamed over it. Moved aside it could be, and it is not.
+  for (const [operation, input] of [['workspace.write', { path: 'fixed.txt', text: 'new\n', overwrite: true }], ['workspace.edit', { path: 'fixed.txt', edits: [{ oldText: 'as it is', newText: 'changed' }] }],
+    ['workspace.write', { path: 'fixed.txt', text: 'more\n', append: true }], ['workspace.move', { from: 'other.txt', to: 'fixed.txt', overwrite: true }], ['workspace.delete', { path: 'fixed.txt' }]])
+    await assert.rejects(call(operation, input), { code: 'read_only_file', message: /^fixed\.txt is marked read-only and was left as it is\. Take the mark off, with a command, to change it\.$/ }, operation + (input.append ? ' append' : ''));
+  // A patch says the same, as the reason it was not applied.
+  await assert.rejects(call('workspace.patch', { patch: '*** Begin Patch\n*** Update File: fixed.txt\n-as it is\n+patched\n*** End Patch\n' }),
+    /^DomainError: The patch was not applied: fixed\.txt is marked read-only and was left as it is\./);
+  assert.equal(read('fixed.txt'), 'as it is\n'); assert.equal(read('other.txt'), 'other\n');
+  assert.deepEqual(fs.readdirSync(root).filter(name => name.startsWith('.devmate-write-')), [], 'no working copy is left behind');
+  // With the mark off it is a file like any other.
+  fs.chmodSync(file('fixed.txt'), 0o666);
+  assert.equal((await call('workspace.write', { path: 'fixed.txt', text: 'new\n', overwrite: true })).written, true);
+});
+
+test('a folder of which only part could be deleted says how much is gone, and the rest goes with the next call', { skip: process.platform !== 'win32' && 'only Windows keeps a file that is open from being deleted', timeout: 90000 }, async t => {
+  const { call, file, read } = await fixture(t);
+  for (const name of ['a.txt', 'b.txt', 'z-held.txt']) await call('workspace.write', { path: 'out/' + name, text: name + '\n' });
+  // The last file of the folder is open in a program that lets nobody delete it.
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    "$f=[IO.File]::Open($env:DEVMATE_HELD,'Open','Read','Read');[Console]::Out.WriteLine('held');[Console]::In.ReadLine() | Out-Null;$f.Close()"],
+  { env: { ...process.env, DEVMATE_HELD: file('out/z-held.txt') }, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+  t.after(() => { child.kill(); });
+  await new Promise((resolve, reject) => { child.once('error', reject); child.stdout.once('data', resolve); });
+  const point = (await call('workspace.history', {})).items[0].sequence;
+  await assert.rejects(call('workspace.delete', { path: 'out', recursive: true }), error => {
+    assert.equal(error.code, 'delete_incomplete');
+    assert.equal(error.message, 'Only part of out was deleted: 2 of the 3 file(s) in it are gone and can be brought back (workspace_history lists them). Then this stopped it: another program has a file in it open. The rest is still there; the same call again deletes it once that is out of the way.');
+    assert.deepEqual(error.details, { deleted: 2, restorable: 2, remaining: 1 });
+    return true;
+  });
+  assert.equal(fs.existsSync(file('out/a.txt')), false); assert.equal(read('out/z-held.txt'), 'z-held.txt\n');
+  // What is gone is in the history, each file under its own path.
+  const gone = (await call('workspace.history', {})).items.filter(item => item.sequence > point);
+  assert.deepEqual(gone.map(item => item.action + ' ' + item.path).sort(), ['removed out/a.txt', 'removed out/b.txt']);
+  // Deleted with force, what is gone is gone for good, and that is said.
+  for (const name of ['c.txt', 'd.txt']) await call('workspace.write', { path: 'out/' + name, text: name + '\n' });
+  await assert.rejects(call('workspace.delete', { path: 'out', recursive: true, force: true }), { code: 'delete_incomplete', message: /2 of the 3 file\(s\) in it are gone and can be brought back/ });
+  // The program lets go: the same call deletes what was left, and counts what it deleted itself.
+  child.stdin.write('\n'); await new Promise(resolve => child.once('exit', resolve));
+  const rest = await call('workspace.delete', { path: 'out', recursive: true });
+  assert.equal(rest.removed, true); assert.equal(rest.files, 1); assert.equal(fs.existsSync(file('out')), false);
+});
+
 test('on Windows a file a program really holds is replaced when it lets go, and the runtime is not held up while it waits', { skip: process.platform !== 'win32' && 'only Windows refuses to replace a file another program has open', timeout: 90000 }, async t => {
   const { service, call, root, file, read } = await fixture(t);
   await call('workspace.write', { path: 'held.txt', text: 'before\n' });

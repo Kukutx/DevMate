@@ -47,9 +47,13 @@ const error = (code, message, details) => new DomainError(code, message, details
 // the caller makes the whole change again with the runtime free in between. Any other caller gets the long wait of
 // replaceFile and the system's own error.
 const HELD = ['EPERM', 'EBUSY', 'EACCES'], QUICK_REPEATS = 4;
-const busy = rel => error('file_busy', 'Windows does not let ' + rel + ' be changed right now: another program has it open (a virus scanner or an indexer does that for a moment after a file is written). Nothing was changed. Try again in a moment.');
+const busy = rel => error('file_busy', 'Windows does not let ' + rel + ' be changed right now: another program has it open (a virus scanner or an indexer does that for a moment after a file is written). It was left as it is. Try again in a moment.');
 // A file marked read-only is refused for good, not for a moment.
 const writableFile = full => { try { fs.accessSync(full, fs.constants.W_OK); return true; } catch { return false; } };
+// On Windows that mark means the file is not to be changed, and Windows itself replaces no such file by another
+// that is renamed over it. Moved aside it could be: it is refused before that is tried.
+const readOnlyFile = rel => error('read_only_file', rel + ' is marked read-only and was left as it is. Take the mark off, with a command, to change it.');
+const keptReadOnly = (rel, full) => { if (WINDOWS && fs.existsSync(full) && !writableFile(full)) throw readOnlyFile(rel); };
 function unheld(quick, rel, full, work) {
   if (!quick) return work();
   try { return work(); }
@@ -456,11 +460,29 @@ export function createWorkspaceService({ store } = {}) {
     // there is created. It says nothing about what the file holds, so it takes no expectedSha256 and no overwrite.
     if (input.append) {
       if (expected !== null || input.overwrite) throw error('invalid_input', 'append adds to what the file holds: it takes neither expectedSha256 nor overwrite.');
-      const full = resolveProjectPath(project, input.path, { mustExist: false }), current = fs.existsSync(full) ? readBytes(full) : null;
+      const rel = relativeInput(input.path), full = resolveProjectPath(project, rel, { mustExist: false });
+      // (A file with a second name is refused here as by every write: its bytes are shared with a path that may lie
+      // outside the project.)
+      const current = fs.existsSync(full) ? readBytes(full) : null;
       if (current?.includes(0)) throw error('invalid_input', 'append is for text files; this one holds binary data.');
-      const whole = current ? Buffer.concat([current, Buffer.from(input.text)]) : Buffer.from(input.text);
-      if (whole.length > MAX_FILE_BYTES) throw error('invalid_input', 'The file would grow beyond 8 MiB.');
-      return publish(project, input.path, whole, current ? hash(current) : null);
+      // What is added is UTF-8. A file in another encoding would hold two after it, which nothing reads: refused in
+      // the words workspace_edit refuses it with.
+      if (current) textBytes(current);
+      const added = Buffer.from(input.text);
+      if ((current?.length || 0) + added.length > MAX_FILE_BYTES) throw error('invalid_input', 'The file would grow beyond 8 MiB.');
+      // A file that is not there is made as every new file is.
+      if (!current) return publish(project, rel, added, null);
+      if (!added.length) return { path: rel, sha256: hash(current), written: false };
+      if (!writableFile(full)) throw readOnlyFile(rel);
+      const previousSha256 = snapshot(project, current);
+      // The text goes to the end of the file itself, where it is. A program that has the file open to write to it (a
+      // server and its log) goes on writing to the same file; replaced, as every other write replaces a file, that
+      // program would be left writing to the one that was moved away, and nothing it wrote would be seen again.
+      unheld(quick, rel, full, () => fs.appendFileSync(full, added));
+      // What the file holds now, which is more than was added here when that program wrote meanwhile.
+      const result = { path: rel, sha256: hash(readBytes(full)), written: true };
+      const warning = event(project, 'workspace.file.written', { ...result, previousSha256 });
+      return warning ? { ...result, warning } : result;
     }
     // overwrite: the caller means to replace whatever is there. What is there is still kept, like before any change.
     if (input.overwrite && expected === null) {
@@ -488,6 +510,7 @@ export function createWorkspaceService({ store } = {}) {
         : 'The file changed since it was read; read it again before writing.');
     }
     if (current?.equals(bytes)) return { path: rel, sha256: currentSha256, written: false };
+    keptReadOnly(rel, full);
     snapshot(project, current);
     const temp = path.join(parent, '.devmate-write-' + randomUUID());
     let fd;
@@ -680,6 +703,7 @@ export function createWorkspaceService({ store } = {}) {
     let replacedSha256 = null;
     if (targetStat) {
       if (!input.overwrite || !sourceStat.isFile() || !targetStat.isFile()) throw error('already_exists', 'Destination exists. Only a file can replace a file, with overwrite:true.');
+      keptReadOnly(to, target);
       replacedSha256 = snapshot(project, readBytes(target));
     }
     unheld(quick, from, source, () => replaceFile(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target,
@@ -707,6 +731,7 @@ export function createWorkspaceService({ store } = {}) {
       if (stat.nlink === 1 && stat.size > DELETE_SNAPSHOT_BYTES && !input.force) {
         throw error('too_large_to_keep', 'This file is ' + Math.round(stat.size / 1048576) + ' MiB, more than DevMate keeps for undo. Pass force:true to delete it without a restorable copy.');
       }
+      keptReadOnly(rel, full);
       const previousSha256 = keep(full);
       unheld(quick, rel, full, () => fs.unlinkSync(full));
       const warning = event(project, 'workspace.file.removed', { path: rel, entry: 'file', previousSha256 });
@@ -729,8 +754,17 @@ export function createWorkspaceService({ store } = {}) {
       if (!failure) warning ||= event(project, 'workspace.file.removed', { path: rel, entry: 'directory', files: contents.length });
     };
     if (store?.transaction) store.transaction(record); else record();
-    // What is left of it is removed by the same call made again: what is gone is recorded already.
-    if (failure) throw quick && WINDOWS && HELD.includes(failure.code) ? busy(rel) : failure;
+    if (failure) {
+      const gone = contents.filter(item => !fs.existsSync(item.full)), back = kept.filter(item => !fs.existsSync(item.full)).length;
+      // Nothing of it is gone: where it is Windows not letting go of a file, that is a thing to try again.
+      if (!gone.length) throw quick && WINDOWS && HELD.includes(failure.code) ? busy(rel) : failure;
+      // Part of it is gone, and is said with its number and with whether it can be brought back: files deleted with
+      // force are not kept. It is not made again by itself, so that no later answer counts only what was left by then.
+      throw Object.assign(error('delete_incomplete', 'Only part of ' + rel + ' was deleted: ' + gone.length + ' of the ' + contents.length + ' file(s) in it are gone' +
+        (back === gone.length ? ' and can be brought back (workspace_history lists them)' : back ? ', ' + back + ' of which can be brought back (workspace_history lists them)' : ', and none of them was kept') +
+        '. Then this stopped it: ' + (WINDOWS && HELD.includes(failure.code) ? 'another program has a file in it open' : failure.message) + '. The rest is still there; the same call again deletes it once that is out of the way.',
+      { deleted: gone.length, restorable: back, remaining: contents.length - gone.length }), { incomplete: true });
+    }
     return { path: rel, removed: true, type: 'directory', files: contents.length, restorableFiles: kept.length,
       restorable: kept.length === contents.length, ...(warning ? { warning } : {}) };
   }
