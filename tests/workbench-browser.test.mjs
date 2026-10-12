@@ -465,7 +465,9 @@ test('finding 4: inside a sandboxed host the app asks in the page, requests full
   await frame.locator('#project').selectOption('p-two');
   const question=frame.getByRole('alertdialog',{name:'Discard unsaved changes?'});
   await question.getByRole('button',{name:'Cancel',exact:true}).click();
-  assert.equal(await frame.locator('#project').inputValue(),'p-one');
+  // (The choice goes back when the answer has been taken, a moment after the click: read at once, it was now and
+  // then still the project that had been picked, and a whole run ended red for it.)
+  await until(async()=>await frame.locator('#project').inputValue()==='p-one','the choice of project to go back');
   assert.equal(await editor.inputValue(),'unsaved inside the sandbox');
   await frame.locator('#project').selectOption('p-two');
   await question.getByRole('button',{name:'Discard changes',exact:true}).click();
