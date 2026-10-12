@@ -164,23 +164,34 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     link.unheardTimer = later(unheardMs, () => { if (links.get(link.id) === link && !link.waiter && link.handed.size) lose(link); });
     waiter({ calls: items.map(({ id, method, params }) => ({ id, method, params })) });
   }
-  const drop = (link, why) => {
+  // stopping: the runtime itself is ending, and takes every browser's calls with it.
+  const drop = (link, why, { stopping = false } = {}) => {
     if (links.get(link.id) !== link) return;
     links.delete(link.id);
     clearTimeout(link.timer); clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.waiter?.({ calls: [] }); link.waiter = null;
-    reroute(link);
+    if (!stopping) reroute(link);
     // What is left has nowhere to go. What was never handed on was never begun; of what was handed on nothing is known.
     const never = new Set(link.queue.map(item => item.id));
     link.queue.length = 0;
-    // With another browser there, a call that stayed behind was not for it: said, with what to do, instead of how to connect one.
+    // With a browser there, a call that stayed behind is told why it was not passed on, and what to do, instead of how
+    // to connect one. Whether that browser is another one or the same one connected anew cannot be told from here (a
+    // link is one connection of a browser's host, and says nothing that lasts beyond it), so neither is claimed.
     const there = [...links.values()].some(other => !other.lost);
-    const advice = entry => !there ? HOW_TO_CONNECT : 'Another browser is connected, and this call was not passed on to it: ' +
-      (entry.readOnly ? 'what it names by its id (a tab, a window, a bookmark, an element) is the other browser\'s own' : 'a change is made in the browser it was asked of, and ids are each browser\'s own') +
-      '. Ask the browser that is there what it has (tabs.list, bookmarks.tree), then call again.';
+    const advice = entry => !there ? HOW_TO_CONNECT
+      : entry.anywhere ? 'A browser is connected, but this call could not be passed on to it: it has not asked for work yet, or its extension has no such method. Call again.'
+      : 'A browser is connected now, and this call was not passed on to it: ' +
+        (!entry.readOnly ? 'it changes something, and it cannot be told from here that this is the browser it was meant for'
+          : entry.names ? 'it names something by an id (a tab, a window, a bookmark, an element), and it cannot be told from here that this is the browser the id came from'
+          : 'it hands out what a page stores, and it cannot be told from here that this is the browser it was meant for') +
+        '. Ask the browser that is there what it has (tabs.list, bookmarks.tree), then call again.';
     for (const [id, entry] of link.pending) {
       clearTimeout(entry.timer);
-      entry.reject(never.has(id) ? fault('browser_unavailable', 'The browser was closed or disconnected before it was asked (' + why + '). ' + advice(entry), { notStarted: true })
-        : fault('browser_unavailable', 'The browser was closed or disconnected before it answered (' + why + ').' + (entry.readOnly ? '' : ' Whether it was done is not known: look before repeating it.') + ' ' + advice(entry)));
+      const unknown = entry.readOnly ? '' : ' Whether it was done is not known: look before repeating it.';
+      // The runtime ending is said as that: no browser went away, and there is none to turn to.
+      if (stopping) entry.reject(never.has(id) ? fault('browser_unavailable', 'DevMate is stopping: the browser was not asked.', { notStarted: true })
+        : fault('browser_unavailable', 'DevMate is stopping, and the browser had not answered.' + unknown));
+      else entry.reject(never.has(id) ? fault('browser_unavailable', 'The browser was closed or disconnected before it was asked (' + why + '). ' + advice(entry), { notStarted: true })
+        : fault('browser_unavailable', 'The browser was closed or disconnected before it answered (' + why + ').' + unknown + ' ' + advice(entry)));
     }
     link.pending.clear(); link.handed.clear();
   };
@@ -267,8 +278,9 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       const over = settle => value => { signal?.removeEventListener('abort', cancelled); settle(value); };
       // The link is the one the call waits on now: another one, when the first went away and the call could go elsewhere
       // (anywhere: it only looks, hands out no credentials, and names nothing that is one browser's own).
-      const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, readOnly: definition.readOnly,
-        anywhere: definition.readOnly && !definition.changesWhen?.(params) && !OWN.some(key => params[key] !== undefined) };
+      const names = OWN.some(key => params[key] !== undefined);
+      const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, readOnly: definition.readOnly, names,
+        anywhere: definition.readOnly && !definition.changesWhen?.(params) && !names };
       const give = failure => { const on = entry.link; on.pending.delete(id); on.handed.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); entry.reject(failure(queued >= 0)); };
       const patience = Math.max(callTimeoutMs, definition.waitMs?.(params) ?? 0);
       entry.timer = setTimeout(() => give(waiting => fault('browser_timeout', 'The browser did not answer ' + capability + ' within ' + Math.round(patience / 1000) + ' seconds.' +
@@ -304,6 +316,6 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       status: link ? 'connected' : 'not connected', ...(link ? { browser: link.browser, extension: link.extension } : { hint: HOW_TO_CONNECT }),
       capabilities: BROWSER_CAPABILITIES.filter(item => !link || link.methods.has(item.method)).map(item => view(item, full)) };
   }
-  function close() { for (const link of [...links.values()]) drop(link, 'the runtime is stopping'); }
+  function close() { for (const link of [...links.values()]) drop(link, 'the runtime is stopping', { stopping: true }); }
   return { attach, next, result, detach, status, call, list, close };
 }

@@ -266,11 +266,98 @@ test('a link an agent\'s work brought is applied and said not to be in the histo
   const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'link', isolate: true, waitMs: 20000 }, connected);
   const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
   assert.deepEqual([applied.applied, applied.files.sort(), applied.notInHistory], [true, ['plain.txt', 'shortcut'], ['shortcut']]);
-  assert.match(applied.note, /not in the history \(links and other entries that are no plain files\): workspace_restore does not take these back\. Use Git for them: shortcut$/);
+  assert.match(applied.note, /not in the history \(links, other entries that are no plain files, and files that were there and could not be kept\): workspace_restore does not take these back\. Use Git for them: shortcut$/);
   assert.equal(fs.lstatSync(file('shortcut')).isSymbolicLink(), true);
   // Taking the work back takes the file and leaves the link, as it was told.
   const taken = await service.call('workspace.restore', { projectId: project.id, since: point }, connected);
   assert.deepEqual(taken.restored.map(item => item.path), ['plain.txt']); assert.equal(fs.lstatSync(file('shortcut')).isSymbolicLink(), true);
+});
+
+// What is about to change is kept first. Where that fails (here: nothing can be kept at all, a file is in the way
+// where the history is kept) a file was taken for one that had not been there: recorded as created by the work, it
+// was deleted when the work was taken back, and where Git stopped half-way it was deleted at once.
+const noHistory = temp => { const history = path.join(temp, 'instance', 'history'); fs.rmSync(history, { recursive: true, force: true }); fs.writeFileSync(history, 'in the way'); return () => fs.rmSync(history); };
+test('a file that could not be kept before an agent\'s work was applied is not taken for one the work created', { timeout: 60000 }, async t => {
+  const { service, project, temp, factory, file, read } = await fixture(t);
+  factory.work = work;
+  const point = (await service.call('workspace.history', { projectId: project.id }, connected)).items[0]?.sequence ?? 0;
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const again = noHistory(temp);
+  const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+  again();
+  // The work is in the project, and the file that was there and could not be kept is named: it is not in the history.
+  assert.deepEqual([applied.applied, applied.files.sort(), applied.notInHistory], [true, ['old.txt', 'src/a.js', 'src/new.js'], ['src/a.js']]);
+  assert.match(applied.note, /files that were there and could not be kept\): workspace_restore does not take these back\. Use Git for them: src\/a\.js$/);
+  // Taking the work back removes what the work created, and nothing that was there before it.
+  const taken = await service.call('workspace.restore', { projectId: project.id, since: point }, connected);
+  assert.deepEqual(taken.restored.map(item => [item.path, item.action]), [['src/new.js', 'removed again (this change created it)']]);
+  assert.deepEqual(taken.left.map(item => [item.path, item.reason]), [['old.txt', 'no copy was kept when it was deleted']]);
+  assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n', 'the file that was there before the work is still there');
+  assert.equal(fs.existsSync(file('src/new.js')), false);
+});
+
+test('where Git stops half-way, a file that could not be kept is named and never deleted', { skip: process.platform !== 'win32' && 'only Windows keeps a file that is open from being replaced', timeout: 120000 }, async t => {
+  const { service, project, root, temp, factory, read, file } = await fixture(t);
+  fs.writeFileSync(file('z-held.txt'), 'one\n'); git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
+  factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, 'z-held.txt'), 'one\ntwo\n'); };
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$f=[IO.File]::Open($env:DEVMATE_HELD,'Open','Read','Read');[Console]::Out.WriteLine('held');[Console]::In.ReadLine() | Out-Null;$f.Close()"],
+    { env: { ...process.env, DEVMATE_HELD: file('z-held.txt') }, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+  t.after(() => { holder.kill(); });
+  await new Promise((resolve, reject) => { holder.once('error', reject); holder.stdout.once('data', resolve); });
+  const again = noHistory(temp);
+  let failure = null;
+  // The file is let go before anything is asserted, so that nothing is left holding it whatever comes of this.
+  try { await service.call('agents.apply', { agentId: done.agentId }, connected); } catch (caught) { failure = caught; }
+  finally { again(); holder.stdin.write('\n'); await new Promise(resolve => holder.once('exit', resolve)); }
+  assert.equal(failure?.code, 'apply_incomplete', String(failure?.message));
+  // Everything that was there and was not kept is named, also what Git did not get to: it cannot be told apart.
+  assert.match(failure.message, /^The agent's work could not be brought into the project whole, and part of it could not be taken out again: old\.txt, src\/a\.js, z-held\.txt\. Look at these files \(git diff\)\. The work is still in the agent's copy\. Git says: /);
+  // The file Git had already written is still there, as Git left it: nothing of it was kept, so nothing is put back,
+  // and it is not removed as if the work had created it. What the work did create is gone again.
+  assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n'); assert.equal(fs.existsSync(file('src/new.js')), false); assert.equal(read('z-held.txt'), 'one\n');
+  assert.equal(service.store.get('agent', done.agentId).isolated.settled, undefined);
+});
+
+// What is kept of a file is kept for the owner alone, and a copy takes that mode with it: put back from there, a
+// script was no longer one, and Git showed a change where "the project is as it was" had been said.
+test('work that is taken out again leaves a file the mode it had', { skip: (process.platform === 'win32' && 'Windows has no such modes') || (process.getuid?.() === 0 && 'nothing is refused to root'), timeout: 60000 }, async t => {
+  const { service, project, root, factory, file, read } = await fixture(t);
+  fs.chmodSync(file('src/a.js'), 0o755); fs.mkdirSync(file('z')); fs.writeFileSync(file('z/held.txt'), 'one\n'); git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
+  factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, 'z', 'held.txt'), 'one\ntwo\n'); };
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  // Git can write the first file and not the one in a folder nothing may be changed in.
+  fs.chmodSync(file('z'), 0o555); t.after(() => { try { fs.chmodSync(file('z'), 0o755); } catch { /* gone with the fixture */ } });
+  await assert.rejects(service.call('agents.apply', { agentId: done.agentId }, connected), { code: 'apply_failed' });
+  assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n'); assert.equal(fs.statSync(file('src/a.js')).mode & 0o777, 0o755);
+  assert.equal(git(root, 'status', '--porcelain').trim(), '', 'Git sees the project as it was, modes included');
+  fs.chmodSync(file('z'), 0o755);
+  assert.equal((await service.call('agents.apply', { agentId: done.agentId }, connected)).applied, true);
+  assert.equal(fs.statSync(file('src/a.js')).mode & 0o777, 0o755);
+});
+
+// A copy that was made for a project that is one folder of a repository, before such a project was refused one, is
+// still there for an agent that was never settled. Applied, what lay outside the folder was lost with the copy.
+test('a copy that was made of a whole repository for a project inside it is not shown or applied, and can be discarded', { timeout: 60000 }, async t => {
+  const { service, project, root, top, temp, read } = await fixture(t, { within: 'pkg' });
+  const copy = path.join(temp, 'instance-copies', 'copy-earlier'), branch = 'devmate/copy-earlier', base = git(top, 'rev-parse', 'HEAD').trim();
+  fs.mkdirSync(path.dirname(copy), { recursive: true }); git(top, 'worktree', 'add', '--quiet', '-b', branch, copy, base);
+  fs.writeFileSync(path.join(copy, 'pkg', 'old.txt'), 'changed in the project\n'); fs.writeFileSync(path.join(copy, 'other', 'b.txt'), 'changed beside the project\n');
+  const workflow = await service.call('workflow.create', { projectId: project.id, title: 'Earlier' }, owner);
+  const agent = service.store.create('agent', { projectId: project.id, workflowId: workflow.id, provider: 'codex', model: null, label: 'codex', status: 'disconnected', nativeSessionId: null, capabilities: {}, error: null,
+    isolated: { root: copy, branch, base } });
+  const refused = error => {
+    assert.equal(error.code, 'not_repository_root');
+    assert.match(error.message, /^This agent's copy is of a whole Git repository, of which the project is only the folder pkg: what the agent did cannot be shown or applied rightly from here\. Its work is in .+copy-earlier \(branch devmate\/copy-earlier\): commit it there and merge it with Git yourself, or drop it with agents\.discard\.$/);
+    return true;
+  };
+  await assert.rejects(service.call('agents.proposal', { agentId: agent.id }, connected), refused);
+  await assert.rejects(service.call('agents.apply', { agentId: agent.id }, connected), refused);
+  // Nothing was applied in part, and the work is where it was.
+  assert.equal(read('old.txt'), 'to be deleted\n'); assert.equal(fs.readFileSync(path.join(top, 'other', 'b.txt'), 'utf8'), 'beside the project\n');
+  assert.equal(fs.readFileSync(path.join(copy, 'other', 'b.txt'), 'utf8'), 'changed beside the project\n'); assert.match(git(root, 'branch', '--list', 'devmate/*').trim(), /^\+? ?devmate\/copy-earlier$/);
+  assert.deepEqual(await service.call('agents.discard', { agentId: agent.id }, connected), { agentId: agent.id, discarded: true, branch });
+  assert.equal(fs.existsSync(copy), false); assert.equal(git(root, 'branch', '--list', 'devmate/*').trim(), '');
 });
 
 test('work that no longer fits is not applied in part, stays on its branch, and can be discarded', async t => {

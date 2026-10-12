@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DevMateService } from '../runtime/service.mjs';
 import { DomainError } from '../runtime/store.mjs';
+import { __test as workspaceTest } from '../runtime/workspace.mjs';
 
 const owner = Object.freeze({ id: 'owner', surface: 'local' });
 async function fixture(t) {
@@ -39,6 +40,10 @@ test('a change to a file another program holds is made again until it is let go,
   await assert.rejects(call('workspace.write', { path: 'a.txt', text: 'three\n', overwrite: true }), { code: 'file_busy',
     message: 'Windows does not let a.txt be changed right now. It was left as it is. It stayed so for 1 second(s) of trying again: a program keeps it open, or this account is not allowed to change it (its permissions).' });
   assert.equal(tries, 3, 'tried again after 100 and 200 ms, and not once more'); assert.equal(read('a.txt'), 'two\n');
+  // The same where the refusal is not the end of what is said: workspace.patch says after it what became of the rest.
+  service.workspace.write = () => { throw new DomainError('file_busy', 'The patch was not applied: Windows does not let a.txt be changed right now. It was left as it is. Try again in a moment. Nothing of it was kept.'); };
+  await assert.rejects(call('workspace.write', { path: 'a.txt', text: 'three\n', overwrite: true }), { code: 'file_busy',
+    message: 'The patch was not applied: Windows does not let a.txt be changed right now. It was left as it is. Nothing of it was kept. It stayed so for 1 second(s) of trying again: a program keeps it open, or this account is not allowed to change it (its permissions).' });
   // A file that was moved out of the way and could be neither replaced nor put back is said as that, with where what it
   // held lies, and is not made again by itself.
   tries = 0; service.workspace.write = () => { tries++; throw Object.assign(new DomainError('file_displaced', 'no file under that name'), { incomplete: true }); };
@@ -50,6 +55,42 @@ test('a change to a file another program holds is made again until it is let go,
     await assert.rejects(call('workspace.write', { path: 'a.txt', text: 'four\n', overwrite: true }), { code });
     assert.equal(tries, 1);
   }
+});
+
+// The text goes to the end of the file itself, and what the file holds then is read back for its hash. A program
+// that writes to the same file can push it past what is read whole in between: the call failed, with the text in the
+// file and nothing in the history, and a model added it a second time.
+test('text that was added to a file is said as added also where the file cannot be read back', async t => {
+  const { call, file } = await fixture(t);
+  await call('workspace.write', { path: 'server.log', text: 'started\n' });
+  const real = fs.appendFileSync;
+  fs.appendFileSync = (target, data, ...rest) => { real(target, data, ...rest); if (path.basename(String(target)) === 'server.log') real(target, Buffer.alloc(8 * 1024 * 1024 + 1, 0x61)); };
+  let added;
+  try { added = await call('workspace.write', { path: 'server.log', text: 'noted\n', append: true }); } finally { fs.appendFileSync = real; }
+  assert.deepEqual([added.path, added.written, added.sha256], ['server.log', true, undefined]);
+  assert.equal(added.note, 'The text was added. What the file holds now could not be read back, because another program is writing to it: no sha256 is given. Read the file again before changing it.');
+  const held = fs.readFileSync(file('server.log'));
+  assert.equal(held.subarray(0, 14).toString(), 'started\nnoted\n'); assert.equal(held.length, 14 + 8 * 1024 * 1024 + 1, 'added once');
+  // It is in the history as a change, and what it left is not known: taking it back leaves the file alone and says why.
+  const entry = (await call('workspace.history', {})).items[0];
+  assert.deepEqual([entry.path, entry.sha256 ?? null], ['server.log', null]);
+  const taken = await call('workspace.restore', { since: entry.sequence - 1 });
+  assert.deepEqual(taken.left.map(item => [item.path, item.reason]), [['server.log', 'what this change wrote was not recorded (it was too large, or another program was writing to the file), so it cannot be told whether it was changed since']]);
+});
+
+// What was moved out of the way and could not be removed at once is removed with a later change to any file, and a
+// file that is missing after a move is named as the one that is missing.
+test('a working copy that was left behind goes with the next change, and a move names the file that is gone', async t => {
+  const { call, root, file } = await fixture(t);
+  const left = path.join(root, '.devmate-write-left-behind'); fs.writeFileSync(left, 'what a file held');
+  workspaceTest.leftAside.add(left);
+  await call('workspace.write', { path: 'a.txt', text: 'one\n' });
+  assert.equal(fs.existsSync(left), true, 'a new file replaces nothing, and nothing is tried');
+  await call('workspace.write', { path: 'a.txt', text: 'two\n', overwrite: true });
+  assert.equal(fs.existsSync(left), false); assert.equal(workspaceTest.leftAside.size, 0);
+  // Of the two files of a move the one that was to be replaced is the one that is gone; the other is where it was.
+  assert.throws(() => workspaceTest.unheld(true, 'from.txt or to.txt', file('from.txt'), () => { throw Object.assign(new Error('refused'), { displaced: path.join(root, '.devmate-write-1') }); }, 'to.txt'),
+    { code: 'file_displaced', message: /^to\.txt could not be replaced, and could not be put back where it was: there is no file under that name now\. What it held is in \.devmate-write-1 in the same folder/ });
 });
 
 test('on Windows a file that is open in a program that lets it be moved is replaced at once, with nothing waited for', { skip: process.platform !== 'win32' && 'only Windows refuses to replace a file another program has open', timeout: 60000 }, async t => {

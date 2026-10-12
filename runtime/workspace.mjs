@@ -58,20 +58,24 @@ const keptReadOnly = (rel, full) => { if (WINDOWS && fs.existsSync(full) && !wri
 // what it held is beside it under a working copy's name, which no listing shows. Said with that name, so that it is found.
 const displaced = (rel, aside) => Object.assign(error('file_displaced', rel + ' could not be replaced, and could not be put back where it was: there is no file under that name now. What it held is in ' +
   path.basename(aside) + ' in the same folder, a name the file tools do not list. Move it back with a command (for example: mv), then try the change again.', { heldIn: path.basename(aside) }), { incomplete: true });
-function unheld(quick, rel, full, work) {
+// What was moved out of the way and could not be removed at once (a program had it mapped) is removed later: tried
+// again with every file that is replaced, added to, moved or deleted after it, for as long as this runtime runs.
+const leftAside = new Set();
+const retryAside = () => { for (const earlier of [...leftAside]) { try { fs.rmSync(earlier, { force: true }); leftAside.delete(earlier); } catch { /* still held */ } } };
+function removeAside(file) {
+  try { fs.rmSync(file, { force: true, maxRetries: 5, retryDelay: 20 }); } catch { if (leftAside.size < 1000) leftAside.add(file); }
+}
+// rel: the name the refusal is said with. gone: the name of the file that is missing where one was moved out of the
+// way and could not be put back (of two files of a move, the one that was to be replaced).
+function unheld(quick, rel, full, work, gone = rel) {
+  retryAside();
   try { return work(); }
   catch (failure) {
-    if (failure?.displaced) throw displaced(rel, failure.displaced);
+    if (failure?.displaced) throw displaced(gone, failure.displaced);
     throw quick && WINDOWS && HELD.includes(failure?.code) && writableFile(full) ? busy(rel) : failure;
   }
 }
-// What was moved out of the way and could not be removed at once (a program had it mapped) is removed later: tried
-// again with every change that follows, for as long as this runtime runs.
-const leftAside = new Set();
-function removeAside(file) {
-  for (const earlier of [...leftAside]) { try { fs.rmSync(earlier, { force: true }); leftAside.delete(earlier); } catch { /* still held */ } }
-  try { fs.rmSync(file, { force: true, maxRetries: 5, retryDelay: 20 }); } catch { if (leftAside.size < 1000) leftAside.add(file); }
-}
+export const __test = { leftAside, unheld };
 const bounded = (value, fallback, max) => Number.isInteger(value) && value > 0 ? Math.min(value, max) : fallback;
 const inside = (root, target) => {
   const rel = path.relative(root, target);
@@ -492,10 +496,16 @@ export function createWorkspaceService({ store } = {}) {
       // server and its log) goes on writing to the same file; replaced, as every other write replaces a file, that
       // program would be left writing to the one that was moved away, and nothing it wrote would be seen again.
       unheld(quick, rel, full, () => fs.appendFileSync(full, added));
-      // What the file holds now, which is more than was added here when that program wrote meanwhile.
-      const result = { path: rel, sha256: hash(readBytes(full)), written: true };
-      const warning = event(project, 'workspace.file.written', { ...result, previousSha256 });
-      return warning ? { ...result, warning } : result;
+      // What the file holds now, which is more than was added here when that program wrote meanwhile. From here on
+      // the text is in the file: where it cannot be read back (that program has pushed it past what is read, or holds
+      // it this moment) the call still says "written", without a hash, and never fails after the fact, which would
+      // have the text added a second time.
+      let sha256 = null;
+      try { sha256 = hash(readBytes(full)); } catch { /* said below */ }
+      const result = { path: rel, ...(sha256 ? { sha256 } : {}), written: true };
+      const warning = event(project, 'workspace.file.written', { ...result, sha256, previousSha256 });
+      const note = sha256 ? null : 'The text was added. What the file holds now could not be read back, because another program is writing to it: no sha256 is given. Read the file again before changing it.';
+      return { ...result, ...(note ? { note } : {}), ...(warning ? { warning } : {}) };
     }
     // overwrite: the caller means to replace whatever is there. What is there is still kept, like before any change.
     if (input.overwrite && expected === null) {
@@ -723,7 +733,7 @@ export function createWorkspaceService({ store } = {}) {
     }
     // With a file in the way either of the two may be the one a program holds: the refusal names both.
     unheld(quick, targetStat ? from + ' or ' + to : from, source, () => replaceFile(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target,
-      { repeats: quick ? QUICK_REPEATS : 0, ...(targetStat ? { aside: path.join(parent, '.devmate-write-' + randomUUID()), remove: removeAside } : {}) }));
+      { repeats: quick ? QUICK_REPEATS : 0, ...(targetStat ? { aside: path.join(parent, '.devmate-write-' + randomUUID()), remove: removeAside } : {}) }), to);
     const result = { from, to, type: sourceStat.isDirectory() ? 'directory' : 'file' };
     const warning = event(project, 'workspace.file.moved', { from, path: to, entry: result.type, ...(replacedSha256 ? { previousSha256: replacedSha256 } : {}) });
     return warning ? { ...result, warning } : result;
@@ -847,9 +857,10 @@ export function createWorkspaceService({ store } = {}) {
           restored.push({ ...step, action: 'brought back' });
         } else {
           const stat = present(item.path);
-          // A file whose content after the change is not known (too large to have been read) cannot be told from one
-          // that was changed since: it is left alone, never taken for unchanged.
-          if (stat?.isFile() && !item.sha256) throw leave('what this change wrote was too large to be recorded, so it cannot be told whether it was changed since');
+          // A file whose content after the change is not known (too large to have been read, or another program was
+          // writing to it at that moment) cannot be told from one that was changed since: it is left alone, never
+          // taken for unchanged.
+          if (stat?.isFile() && !item.sha256) throw leave('what this change wrote was not recorded (it was too large, or another program was writing to the file), so it cannot be told whether it was changed since');
           if ((stat?.isFile() ? contentHash(at(item.path), stat.size) : null) !== item.sha256) throw leave('it was changed again by something else');
           if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }); restored.push({ ...step, action: 'restored' }); }
           else { remove(project, { path: item.path }); restored.push({ ...step, action: 'removed again (this change created it)' }); }
@@ -1059,11 +1070,8 @@ export function createWorkspaceService({ store } = {}) {
     if (!/^[A-Za-z0-9-]{1,80}$/.test(name) || !project.controlRoot) throw error('invalid_input', 'A working copy needs a plain name.');
     const head = await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']), base = head.stdout.trim();
     if (head.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(base)) throw error('not_a_repository', 'A copy of its own needs a Git repository with at least one commit: what the agent proposes is what differs from that commit.');
-    // A copy is a worktree, which is the whole repository. Of a project that is one folder of a repository nothing
-    // here would be right: the agent would stand in the repository's top folder, Git applies a patch from inside a
-    // folder to that folder only and is silent about the rest, and what was applied would be looked for one folder
-    // too deep. So such a project gets no copy.
-    const within = (await git(project, ['rev-parse', '--show-prefix'])).stdout.trim().replace(/\/$/, '');
+    // A project that is one folder of a larger repository gets no copy (folderInRepository says why).
+    const within = await folderInRepository(project);
     if (within) throw error('not_repository_root', 'A copy of its own needs the project to be the top folder of its Git repository: this project is the folder ' + within + ' inside one. Delegate without isolate, or share the repository\'s top folder as the project.');
     const root = path.join(copiesRoot(project), name), branch = 'devmate/' + name;
     fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
@@ -1075,6 +1083,7 @@ export function createWorkspaceService({ store } = {}) {
   // What the copy holds that the commit it started from does not, files the agent created included.
   async function proposal(project, copy, input = {}) {
     copyExists(copy);
+    await ofWholeProject(project, copy);
     const view = inCopy(project, copy), base = ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', copy.base];
     // The copy's index is the agent's, and the agent may be running Git this very moment: what it proposes is worked
     // out in an index of its own, started from the copy's so that only what changed is read again.
@@ -1116,8 +1125,9 @@ export function createWorkspaceService({ store } = {}) {
     await gitChange(root, ['branch', '-D', copy.branch]);
   }
 
-  // One file as it was before something was applied to it (was: whether it existed, and the hash it was kept under).
-  // False where that cannot be done: it existed and was not kept (a link, a file with a second name, a very large one).
+  // One file as it was before something was applied to it (was: whether it existed, the hash it was kept under and
+  // its mode). False where that cannot be done: it existed and was not kept (a link, a file with a second name, one
+  // that could not be looked at). Only a file that was seen not to be there is removed.
   function putBack(project, file, was) {
     const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
     if (!was.existed) { if (stat) fs.rmSync(full, { force: true }); return true; }
@@ -1125,13 +1135,30 @@ export function createWorkspaceService({ store } = {}) {
     if (stat?.isFile() && contentHash(full, stat.size) === was.sha256) return true;
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.copyFileSync(snapshotPath(project, was.sha256), full);
+    // What is kept is kept for the owner alone (0600), and a copy takes that mode with it: the file gets back the one
+    // it had, or a script would no longer run and Git would show a change of mode where "as it was" was said.
+    if (!WINDOWS) fs.chmodSync(full, was.mode);
     return true;
   }
+  // A copy is a worktree, which is the whole repository. Of a project that is one folder of a repository nothing here
+  // would be right: the agent would stand in the repository's top folder, Git applies a patch from inside a folder
+  // to that folder only and is silent about the rest, and what was applied would be looked for one folder too deep.
+  // The folder such a project is inside its repository, or '' where it is the top.
+  const folderInRepository = async project => (await git(project, ['rev-parse', '--show-prefix'])).stdout.trim().replace(/\/$/, '');
+  // A copy that was made for such a project before that was refused may still be there, for an agent that was never
+  // settled. It is neither shown nor applied (what lies outside the folder would be lost, and the copy removed with
+  // it); it can be discarded.
+  const ofWholeProject = async (project, copy) => {
+    const within = await folderInRepository(project);
+    if (within) throw error('not_repository_root', 'This agent\'s copy is of a whole Git repository, of which the project is only the folder ' + within + ': what the agent did cannot be shown or applied rightly from here. ' +
+      'Its work is in ' + copy.root + ' (branch ' + copy.branch + '): commit it there and merge it with Git yourself, or drop it with agents.discard.');
+  };
 
   // The agent's work arrives in the project as changes in the working tree, not as a commit: the person reviews and
   // commits it like their own. All of it or none of it; on success the copy has done its job and is removed.
   async function applyProposal(project, copy) {
     writable(project); copyExists(copy);
+    await ofWholeProject(project, copy);
     const view = inCopy(project, copy);
     checkedCommand(await gitChange(copy.root, ['add', '--all', '.']));
     const names = checkedCommand(await git(view, ['diff', '--cached', '--no-renames', '--name-only', '-z', copy.base], { maxOutputChars: 2000000 }));
@@ -1146,8 +1173,11 @@ export function createWorkspaceService({ store } = {}) {
         const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
         if (!stat) return [file, { existed: false, sha256: null }];
         // A file with a second name shares its bytes with a path that may lie outside the project: never copied into history.
-        return [file, { existed: true, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
-      } catch { return [file, { existed: false, sha256: null }]; }
+        return [file, { existed: true, mode: stat.mode & 0o777, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
+      // What could not be looked at (a link in the way, a file a program holds for a moment, no room left to keep it)
+      // is not taken for a file that was not there: on that ground it would be deleted when the work is taken out
+      // again. It is there and not kept, and is named where that matters.
+      } catch { return [file, { existed: true, sha256: null }]; }
     }));
     const patchFile = copy.root + '.patch';
     try {
@@ -1173,15 +1203,18 @@ export function createWorkspaceService({ store } = {}) {
       }
     } finally { fs.rmSync(patchFile, { force: true }); }
     let warning = null;
-    // What is applied and cannot be recorded: a link (never followed, so never read) and anything else that is no
-    // plain file. It is in the project like the rest, and taking the work back does not reach it: that is said.
+    // What is applied and cannot be recorded: a link (never followed, so never read), anything else that is no plain
+    // file, and a file that was there and was not kept (recorded as written, with nothing before it, it would be
+    // deleted when the work is taken back). It is in the project like the rest, and taking the work back does not
+    // reach it: that is said.
     const unrecorded = [];
     const record = () => {
       for (const file of files) {
         const was = before.get(file);
         let stat = null, full = null;
         try { full = resolveProjectPath(project, file, { mustExist: false }); stat = fs.lstatSync(full, { throwIfNoEntry: false }); } catch { unrecorded.push(file); continue; }
-        if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: contentHash(full, stat.size), written: true, previousSha256: was.sha256, proposal: copy.branch });
+        if (stat?.isFile() && was.existed && !was.sha256) unrecorded.push(file);
+        else if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: contentHash(full, stat.size), written: true, previousSha256: was.sha256, proposal: copy.branch });
         else if (!stat && was.existed) warning ||= event(project, 'workspace.file.removed', { path: file, entry: 'file', previousSha256: was.sha256, proposal: copy.branch });
         else if (stat) unrecorded.push(file);
       }
@@ -1192,7 +1225,7 @@ export function createWorkspaceService({ store } = {}) {
     let left = null;
     try { await removeCopy(project, copy); }
     catch (failure) { if (failure.code !== 'copy_in_use') throw failure; left = 'The copy it came from could not be removed, because a program still uses its folder: ' + copy.root + '. When nothing uses it any more, delete that folder and run "git worktree prune" and "git branch -D ' + copy.branch + '" in the project.'; }
-    const notes = [unrecorded.length ? 'Applied, but not in the history (links and other entries that are no plain files): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') : null, left].filter(Boolean);
+    const notes = [unrecorded.length ? 'Applied, but not in the history (links, other entries that are no plain files, and files that were there and could not be kept): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') : null, left].filter(Boolean);
     return { applied: true, files, ...(warning ? { warning } : {}), ...(unrecorded.length ? { notInHistory: unrecorded } : {}), ...(left ? { copyLeft: true } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) };
   }
   async function discardProposal(project, copy) {

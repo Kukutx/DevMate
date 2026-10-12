@@ -110,23 +110,26 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   // What OpenAI says goes into the status, the doctor and the report. Its API answers a wrong key by repeating a part
   // of it ("sk-abc***wxyz"), so nothing that could be the key or a piece of it is kept: the key itself, anything with
   // stars in it, and any long run of the characters keys are made of. Left as they are: the tunnel id, which is no
-  // secret, and a name written in small letters and underscores alone, which is how OpenAI names its errors.
+  // secret; a name written in small letters and underscores alone, which is how OpenAI names its errors; and words
+  // of letters joined by hyphens, which is how headers are named (X-Tunnel-Client-Wire-Protocol-Version).
   const withoutKey = text => {
     const secret = key();
     return (secret ? text.split(secret).join('[key]') : text).replace(/[A-Za-z0-9_-]*\*{2,}[A-Za-z0-9_*-]*/g, '[key]')
-      .replace(/[A-Za-z0-9_-]{20,}/g, word => word === tunnelId || /^[a-z_]+$/.test(word) ? word : '[key]');
+      .replace(/[A-Za-z0-9_-]{20,}/g, word => word === tunnelId || /^[a-z_]+$/.test(word) || /^[A-Za-z]+(?:-[A-Za-z]+)+$/.test(word) ? word : '[key]');
   };
-  // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence.
+  // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence. message is
+  // what is kept and shown; raw is the sentence as it came, by which the kind of answer is told and which goes nowhere.
   const said = async response => {
     try {
       const body = await response.json(), error = body?.error && typeof body.error === 'object' ? body.error : body;
-      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: withoutKey(String(error?.message || (typeof body?.error === 'string' ? body.error : ''))).slice(0, 300) };
-    } catch { return { code: '', message: '' }; }
+      const raw = String(error?.message || (typeof body?.error === 'string' ? body.error : ''));
+      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: withoutKey(raw).slice(0, 300), raw };
+    } catch { return { code: '', message: '', raw: '' }; }
   };
   // What a refusal means for the owner, as a code and a sentence. The codes are the stable ones OpenAI publishes for its
   // tunnel service (x-tunnel-error-codes in docs/openapi.json of github.com/openai/tunnel-client). The tunnel id is
   // named as the cause only where OpenAI names it, and an answer that interface does not know is passed on as it is.
-  function refusal(status, { code, message }) {
+  function refusal(status, { code, message, raw = message }) {
     const answer = 'HTTP ' + status + (code ? ' ' + code : '') + (message ? ': ' + message : '');
     // The command that names this tunnel: on its own, or on the connection it runs beside.
     const named = id => beside ? 'devmate connect … --openai-tunnel ' + id : 'devmate connect openai-tunnel --tunnel-id ' + id, again = named(tunnelId);
@@ -137,7 +140,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
     if (code === 'tunnel_use_forbidden' || code === 'tunnel_missing_principals') return ['not_permitted', 'This runtime key may not use ' + tunnelId + ' (' + answer + '). The key has to come from the organization or workspace the tunnel belongs to: create it for this tunnel at ' +
       TUNNEL_HELP.settings + ' and store it with devmate secret set ' + runtimeKeyEnv];
     if (status === 401 || status === 403) return ['not_authorized', 'OpenAI refused the runtime key for ' + tunnelId + ' (' + answer + '). Store the key of this tunnel again: devmate secret set ' + runtimeKeyEnv];
-    if (status === 426 || OUTDATED.test(code + ' ' + message)) return ['protocol_outdated', 'OpenAI no longer takes version ' + WIRE_PROTOCOL_VERSION + ' of the tunnel protocol, the one this DevMate speaks (' + answer + '). Update DevMate. Until then ' + official + '.'];
+    if (status === 426 || OUTDATED.test(code + ' ' + raw)) return ['protocol_outdated', 'OpenAI no longer takes version ' + WIRE_PROTOCOL_VERSION + ' of the tunnel protocol, the one this DevMate speaks (' + answer + '). Update DevMate. Until then ' + official + '.'];
     if (status === 404) return ['refused_404', 'OpenAI finds no tunnel ' + tunnelId + ' (' + answer + '). Compare the id with the one at ' + TUNNEL_HELP.settings + '.'];
     return ['refused_' + status, 'OpenAI hands out no work for ' + tunnelId + ' (' + answer + '). Its published interface names no such answer, so the cause cannot be told from here. If it stays so with the newest DevMate, ' + official + '.'];
   }

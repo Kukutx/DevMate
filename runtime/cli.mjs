@@ -66,7 +66,7 @@ Connecting an AI client
   devmate connect beside --openai-tunnel <tunnel_…> | none [--organization <org-…>]
                                     the same for the connection there is, a relay included, which stays as it
                                     is and is not named again: puts the tunnel beside it, or with none takes
-                                    it away
+                                    it away. The tunnel that is there, named again, keeps its organization
   devmate relay setup <user@host> [--domain <name>] [--ssh-port <n>] [--identity <key file>] [--any-address]
                                     make a public Linux server of yours the way in: an address that stays,
                                     with nothing of a third party in between. Installs Caddy there over SSH
@@ -237,6 +237,11 @@ async function configureConnection(kind, options, instanceRoot) {
   if (staying) {
     if (!options['openai-tunnel']) throw new Error('connect beside needs --openai-tunnel <tunnel_…>, or --openai-tunnel none to take the tunnel away');
     if (options.auth) throw new Error('connect beside changes the tunnel alone. Sign-in belongs to the address and is chosen with it: devmate connect … --auth ' + options.auth);
+    // What names a connection says nothing here, and is not passed over in silence.
+    const stray = ['url', 'host', 'user', 'executable', 'tunnel-id'].filter(name => options[name] !== undefined);
+    if (stray.length) throw new Error('connect beside leaves the connection as it is and takes only --openai-tunnel and --organization (given: ' + stray.map(name => '--' + name).join(', ') +
+      '). To set the connection up anew: devmate connect quick | cloudflare | https | ssh …');
+    if (!beside && options.organization) throw new Error('--openai-tunnel none takes the tunnel away: --organization says nothing of a tunnel that is no longer there');
     if (connection.kind === 'openai-tunnel') throw new Error('OpenAI\'s tunnel ' + connection.tunnelId + ' is the connection itself here: there is no address for a tunnel to be beside. Set the address up with the tunnel named (devmate connect quick | cloudflare | https | ssh … --openai-tunnel ' + connection.tunnelId +
       '), or a relay first (devmate relay setup <user@host>) and the tunnel beside it after that (devmate connect beside --openai-tunnel ' + connection.tunnelId + ')');
     if (connection.kind === 'local') throw new Error(beside ? 'There is no connection with a public address to put the tunnel beside. On its own the tunnel is: devmate connect openai-tunnel --tunnel-id ' + beside : 'The connection is local: no tunnel runs beside it.');
@@ -246,7 +251,10 @@ async function configureConnection(kind, options, instanceRoot) {
   const { openaiTunnel: besideBefore, ...current } = readConfig(instanceRoot);
   // The tunnel this instance spoke until now, beside a connection or as the connection.
   const before = besideBefore || (current.connection.kind === 'openai-tunnel' && !current.connection.executable ? current.connection : null);
-  const next = { ...current, connection, ...(beside ? { openaiTunnel: { tunnelId: beside, ...(options.organization ? { organizationId: options.organization } : {}) } } : {}) };
+  // The tunnel that is named again keeps what was set for it (its organization, and what the settings file gives it:
+  // the name of its key, how many calls at once). Another tunnel starts with nothing of the one before.
+  const same = beside && before?.tunnelId === beside ? Object.fromEntries(['organizationId', 'runtimeKeyEnv', 'maxConcurrentRequests'].filter(name => before[name] !== undefined).map(name => [name, before[name]])) : {};
+  const next = { ...current, connection, ...(beside ? { openaiTunnel: { ...same, tunnelId: beside, ...(options.organization ? { organizationId: options.organization } : {}) } } : {}) };
   const url = publicMcpUrl(next);
   // Sign-in belongs to a public URL. Keep the chosen mode when the URL stays; never keep an issuer for another origin.
   if (options.auth === 'oauth') {
@@ -264,13 +272,20 @@ async function configureConnection(kind, options, instanceRoot) {
     : 'Store ' + what + ': devmate secret set ' + name;
   // A tunnel that is taken away is said, with the way to have it again.
   const lost = before && !saved.openaiTunnel && saved.connection.kind !== 'openai-tunnel' ? 'OpenAI\'s tunnel ' + before.tunnelId + ' is no longer used. ' : null;
+  // So is a relay that this command put another connection in the place of. It is not changed by naming its address
+  // on an SSH connection: that is a connection of another kind, without what makes a relay work.
+  const relay = current.connection.relay && !staying ? current.connection.user + '@' + current.connection.host : null;
   return { saved: { connection: staying ? { kind: saved.connection.kind, ...(saved.connection.relay ? { relay: true } : {}) } : saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
     next: [store(credential, 'the credential', 'the credential of another tunnel'), store(tunnelKey, 'the runtime key of the tunnel', 'the runtime key of another tunnel'), 'Apply it: devmate restart', 'Then check: devmate doctor',
       saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it changes each time DevMate or the tunnel starts again)' : null,
       // Sign-in is asked where a sign-in page can be reached: at the address. Nothing asks for it on the tunnel's way.
       saved.openaiTunnel && saved.auth.mode === 'oauth' ? 'Sign-in is asked at the address only. What comes through OpenAI\'s tunnel is taken as yours without it: who may use the tunnel is decided in the OpenAI account it belongs to.' : null,
       lost && saved.connection.kind !== 'local' ? lost + 'To run it beside this connection: devmate connect beside --openai-tunnel ' + before.tunnelId + (before.organizationId ? ' --organization ' + before.organizationId : '')
-        : lost && besideBefore ? lost + 'On its own it is: devmate connect openai-tunnel --tunnel-id ' + before.tunnelId : null].filter(Boolean) };
+        : lost && besideBefore ? lost + 'On its own it is: devmate connect openai-tunnel --tunnel-id ' + before.tunnelId : null,
+      relay ? 'The relay on ' + current.connection.host + ' was the connection until now, and this command put another in its place' +
+        (saved.connection.kind === 'ssh' ? ': a plain SSH connection, without the relay\'s own ports and key file and without telling the relay the address of this computer' : '') +
+        '. The relay stays installed on that server. To make it the connection again: devmate relay setup ' + relay + '; to take it off the server: devmate relay remove ' + relay +
+        '. To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>' : null].filter(Boolean) };
 }
 
 export async function main(argv = process.argv.slice(2), {

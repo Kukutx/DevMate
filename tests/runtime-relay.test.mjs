@@ -203,13 +203,16 @@ test('devmate relay setup makes that server how this computer is reached, keeps 
   const optioned = await run(['relay', 'setup', 'deploy@203.0.113.7', '--openai-tunnel', 'tunnel_abc123']);
   assert.notEqual(optioned.code, 0); assert.match(optioned.stderr, /relay setup does not take --openai-tunnel\..* then: devmate connect beside --openai-tunnel tunnel_abc123/); assert.equal(asked.length, 2);
   // OpenAI's tunnel is put beside the relay without the relay being named again, and nothing of its address is printed.
-  const beside = await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123']);
+  // (That command takes nothing that names a connection, the program of one included: it is run as it is written.)
+  const plainly = async args => { const stdout = output(), stderr = output(); return { code: await cli([...args, '--instance', instance], { stdout, stderr, env: {} }), stdout: stdout.text, stderr: stderr.text }; };
+  assert.match((await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123'])).stderr, /takes only --openai-tunnel and --organization \(given: --executable\)/);
+  const beside = await plainly(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123']);
   assert.equal(beside.code, 0, beside.stderr); assert.equal(saved().connection.publicUrl, address); assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123');
   assert.deepEqual(JSON.parse(beside.stdout).saved.connection, { kind: 'ssh', relay: true }); assert.ok(!beside.stdout.includes(address.split('/').pop()) && !beside.stdout.includes('devmate.example.com'));
   // It stays beside the relay when the relay is set up again, which is said.
   const again = await run(['relay', 'setup', 'deploy@203.0.113.7', '--domain', 'devmate.example.com']);
   assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123'); assert.match(again.stdout, /"openaiTunnel": "tunnel_abc123 stays beside it"/); assert.doesNotMatch(again.stdout, /no longer used/);
-  assert.equal((await run(['connect', 'beside', '--openai-tunnel', 'none'])).code, 0); assert.equal(saved().openaiTunnel, undefined); assert.equal(saved().connection.publicUrl, address);
+  assert.equal((await plainly(['connect', 'beside', '--openai-tunnel', 'none'])).code, 0); assert.equal(saved().openaiTunnel, undefined); assert.equal(saved().connection.publicUrl, address);
   // Taking the relay away takes it out of this computer's settings as well.
   const removed = await run(['relay', 'remove', 'deploy@203.0.113.7']);
   assert.equal(removed.code, 0, removed.stderr); assert.deepEqual(saved().connection, { kind: 'local' });

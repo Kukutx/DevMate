@@ -337,10 +337,18 @@ test('a refusal says what OpenAI said and what to do about that, and blames the 
   seen.length = 0;
   const secret = 'sk-proj-Abcdefghij0123456789KLMNOPqrstuv';
   tunnel = createOpenAiTunnel({ tunnelId: 'tunnel_0123456789abcdef0123456789', localMcpUrl: 'http://127.0.0.1:8789/mcp', env: { CONTROL_PLANE_API_KEY: secret }, fetchImpl: plane.fetch, pause: noted(() => tunnel) });
-  plane.pollStatus.push({ status: 401, error: { code: 'invalid_api_key', message: 'Incorrect API key provided: sk-proj-Ab**********************stuv for tunnel_0123456789abcdef0123456789. You sent ' + secret + ' and before it rk-0123456789012345678901234 (tunnel_runtime_key_rejected).' } });
+  plane.pollStatus.push({ status: 401, error: { code: 'invalid_api_key', message: 'Incorrect API key provided: sk-proj-Ab**********************stuv for tunnel_0123456789abcdef0123456789. You sent ' + secret + ' and before it rk-0123456789012345678901234 (tunnel_runtime_key_rejected).' } },
+    // A header is named in letters and hyphens and is no key. What kind of answer this is, is told by the sentence as
+    // it came, before anything is taken out of it: this one says that the protocol version is no longer taken.
+    { status: 400, error: { message: 'X-Tunnel-Client-Wire-Protocol-Version 2026-08-25 is not supported; X-Tunnel-Shard-Token was Zx9-Abcdefghij0123456789.' } },
+    { status: 400, error: { message: 'Not accepted: wire-protocol-version-2026-08-25.' } });
   await tunnel.start();
-  await until(() => seen.length === 1, 'the refused key');
+  await until(() => seen.length === 3, 'the refused key and the refused version');
+  // Also where the words that say so are in a run of characters that is taken out before it is shown.
+  assert.deepEqual([seen[2].code, /\(HTTP 400: Not accepted: \[key\]\.\)/.test(seen[2].message)], ['protocol_outdated', true]);
   assert.match(seen[0].message, /\(HTTP 401 invalid_api_key: Incorrect API key provided: \[key\] for tunnel_0123456789abcdef0123456789\. You sent \[key\] and before it \[key\] \(tunnel_runtime_key_rejected\)\.\)/);
+  assert.equal(seen[1].code, 'protocol_outdated');
+  assert.match(seen[1].message, /\(HTTP 400: X-Tunnel-Client-Wire-Protocol-Version 2026-08-25 is not supported; X-Tunnel-Shard-Token was \[key\]\.\)\. Update DevMate\./);
   assert.ok(!/sk-proj|stuv|Abcdefghij|rk-0123/.test(JSON.stringify(tunnel.status())), 'nothing of a key is in the status');
 });
 
@@ -533,6 +541,37 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   const signed = (await run(['connect', 'https', '--url', publicAddress, '--auth', 'oauth', '--openai-tunnel', 'tunnel_abc123'], path.join(temp, 'signed'))).stdout;
   assert.match(signed, /"Sign-in is asked at the address only\. What comes through OpenAI's tunnel is taken as yours without it: who may use the tunnel is decided in the OpenAI account it belongs to\."/);
   assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress, '--auth', 'oauth'], path.join(temp, 'signed'))).stdout, /Sign-in is asked at the address only/);
+  // The tunnel that is there, named again, keeps what was set for it: its organization, and what the settings file
+  // gave it. What names a connection says nothing to this command, and is not passed over in silence.
+  const kept = path.join(temp, 'kept'); fs.mkdirSync(kept);
+  fs.writeFileSync(path.join(kept, 'config.json'), JSON.stringify({ connection: { kind: 'external-https', url: publicAddress }, openaiTunnel: { tunnelId: 'tunnel_abc123', organizationId: 'org-abc', runtimeKeyEnv: 'MY_TUNNEL_KEY', maxConcurrentRequests: 8 } }));
+  const mine = { tunnelId: 'tunnel_abc123', organizationId: 'org-abc', runtimeKeyEnv: 'MY_TUNNEL_KEY', maxConcurrentRequests: 8 };
+  assert.equal((await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123'], kept)).code, 0); assert.deepEqual(saved(kept).openaiTunnel, mine);
+  await run(['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'tunnel_abc123', '--organization', 'org-other'], kept);
+  assert.deepEqual(saved(kept).openaiTunnel, { ...mine, organizationId: 'org-other' }, 'the organization that is named takes the place of the one before');
+  for (const [args, says] of [
+    [['--openai-tunnel', 'tunnel_abc123', '--url', publicAddress, '--host', 'example.com'], /leaves the connection as it is and takes only --openai-tunnel and --organization \(given: --url, --host\)/],
+    [['--openai-tunnel', 'tunnel_abc123', '--tunnel-id', 'tunnel_def456'], /\(given: --tunnel-id\)/],
+    [['--openai-tunnel', 'none', '--organization', 'org-abc'], /--organization says nothing of a tunnel that is no longer there/]
+  ]) { const answer = await run(['connect', 'beside', ...args], kept); assert.notEqual(answer.code, 0, args.join(' ')); assert.match(answer.stderr, says); }
+  assert.deepEqual(saved(kept).openaiTunnel, { ...mine, organizationId: 'org-other' }, 'a refused command wrote nothing');
+
+  // A relay is not changed by naming its address on another connection: it is replaced, which is said with what is
+  // lost by it and with the command that adds a tunnel to a relay.
+  const relayConfig = { connection: { kind: 'ssh', publicUrl: publicAddress + '/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true, sshPort: 2222, identityFile: 'C:/keys/relay' } };
+  const replaced = path.join(temp, 'replaced'); fs.mkdirSync(replaced);
+  fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
+  const plain = await run(['connect', 'ssh', '--url', relayConfig.connection.publicUrl, '--host', '203.0.113.7', '--user', 'deploy', '--executable', process.execPath, '--openai-tunnel', 'tunnel_abc123'], replaced);
+  assert.equal(saved(replaced).connection.relay, undefined);
+  assert.match(plain.stdout, /"The relay on 203\.0\.113\.7 was the connection until now, and this command put another in its place: a plain SSH connection, without the relay's own ports and key file and without telling the relay the address of this computer\. The relay stays installed on that server\. To make it the connection again: devmate relay setup deploy@203\.0\.113\.7; to take it off the server: devmate relay remove deploy@203\.0\.113\.7\. To put OpenAI's tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>"/);
+  assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress], replaced)).stdout, /The relay on/, 'said once, where the relay was replaced');
+  fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
+  const other2 = await run(['connect', 'quick', '--executable', process.execPath], replaced);
+  assert.match(other2.stdout, /"The relay on 203\.0\.113\.7 was the connection until now, and this command put another in its place\. The relay stays installed/);
+  fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
+  assert.doesNotMatch((await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123'], replaced)).stdout, /The relay on/, 'the command that leaves the relay as it is');
+  assert.deepEqual([saved(replaced).connection.relay, saved(replaced).connection.sshPort, saved(replaced).connection.identityFile], [true, 2222, 'C:/keys/relay']);
+
   // A relay that is taken away leaves the tunnel that ran beside it, as the connection from then on.
   const relayed = path.join(temp, 'relayed'); fs.mkdirSync(relayed);
   fs.writeFileSync(path.join(relayed, 'config.json'), JSON.stringify({ connection: { kind: 'ssh', publicUrl: publicAddress + '/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true }, openaiTunnel: { tunnelId: 'tunnel_abc123' } }));

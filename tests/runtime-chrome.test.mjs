@@ -163,10 +163,11 @@ test('a call that names something of one browser is not passed on to another, an
   void (async () => { for (;;) { let work; try { work = await link.next({ linkId: stays, waitMs: 300 }); } catch { return; }
     for (const call of work.calls) { asked.push(call.method); link.result({ linkId: stays, id: call.id, ok: true, result: { by: 'the browser that stays' } }); } } })();
   // The one that connected after it asked for work once and is not heard of again: what is asked now waits for it.
-  const goes = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
+  const goes = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods: [...methods, 'history.search'] }).linkId;
   assert.deepEqual(await link.next({ linkId: goes, waitMs: 10 }), { calls: [] });
   const calls = {
     list: link.call({ capability: 'chrome.tabs.list', input: { query: 'docs' } }, { readOnly: true }),
+    history: link.call({ capability: 'chrome.history.search', input: { query: 'docs' } }, { readOnly: true }),
     tree: link.call({ capability: 'chrome.bookmarks.tree', input: { folderId: '57' } }, { readOnly: true }),
     read: link.call({ capability: 'chrome.page.read', input: { tabId: 57 } }, { readOnly: true }),
     console: link.call({ capability: 'chrome.page.console', input: { since: 12 } }, { readOnly: true }),
@@ -179,17 +180,24 @@ test('a call that names something of one browser is not passed on to another, an
   // A look that names nothing of that browser is answered by the one that is there.
   assert.deepEqual(settled.list, { by: 'the browser that stays' });
   // Whatever names a tab, a folder, a place in a console by its id is that browser's, and a change is made where it
-  // was asked: neither was begun, and each says what to do.
+  // was asked: neither was begun, and each is told why it stayed behind and what to do. What is said holds whether
+  // the browser that is there is another one or the same one connected anew, which cannot be told from here.
   for (const name of ['tree', 'read', 'console']) {
     assert.deepEqual([settled[name].code, settled[name].notStarted], ['browser_unavailable', true], name);
-    assert.match(settled[name].message, /before it was asked \(it stopped asking for work\)\. Another browser is connected, and this call was not passed on to it: what it names by its id \(a tab, a window, a bookmark, an element\) is the other browser's own\. Ask the browser that is there what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/, name);
+    assert.match(settled[name].message, /before it was asked \(it stopped asking for work\)\. A browser is connected now, and this call was not passed on to it: it names something by an id \(a tab, a window, a bookmark, an element\), and it cannot be told from here that this is the browser the id came from\. Ask the browser that is there what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/, name);
   }
   for (const name of ['close', 'remove', 'open']) {
     assert.deepEqual([settled[name].code, settled[name].notStarted], ['browser_unavailable', true], name);
-    assert.match(settled[name].message, /this call was not passed on to it: a change is made in the browser it was asked of, and ids are each browser's own\./, name);
+    assert.match(settled[name].message, /this call was not passed on to it: it changes something, and it cannot be told from here that this is the browser it was meant for\./, name);
   }
-  // Values a page stores are credentials: not handed out by another browser than the one that was asked.
+  // Values a page stores are credentials: not handed out by another browser than the one that was asked, and the
+  // call is told that, not that it named an id.
   assert.deepEqual([settled.values.code, settled.values.notStarted], ['browser_unavailable', true]);
+  assert.match(settled.values.message, /this call was not passed on to it: it hands out what a page stores, and it cannot be told from here that this is the browser it was meant for\./);
+  // A look that could have gone anywhere, and that the browser that is there cannot be given (its extension has no
+  // such method), says that.
+  assert.deepEqual([settled.history.code, settled.history.notStarted], ['browser_unavailable', true]);
+  assert.match(settled.history.message, /A browser is connected, but this call could not be passed on to it: it has not asked for work yet, or its extension has no such method\. Call again\.$/);
   assert.deepEqual(asked, ['tabs.list'], 'nothing else reached the other browser');
 
   // Whoever asks may give a call up, and is listened to for as long as the call is open, not longer: a caller at this
@@ -198,7 +206,18 @@ test('a call that names something of one browser is not passed on to another, an
   const signal = { aborted: false, addEventListener() { most = Math.max(most, ++listening); }, removeEventListener() { listening--; } };
   for (let round = 0; round < 12; round++) assert.deepEqual(await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, signal }), { by: 'the browser that stays' });
   assert.deepEqual([most, listening], [1, 0]);
+
+  // The runtime stopping takes every browser's calls with it, and says that: no browser went away, and with two
+  // connected the calls of the first are not told to turn to the second.
   link.close();
+  const ending = createBrowserLink({ idleMs: 5000, unheardMs: 5000, callTimeoutMs: 10000 });
+  const first = ending.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
+  assert.deepEqual(await ending.next({ linkId: first, waitMs: 10 }), { calls: [] });
+  ending.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods });
+  const waits = ending.call({ capability: 'chrome.tabs.close', input: { tabIds: [57] } }).then(value => value, failure => failure);
+  ending.close();
+  const stopped = await waits;
+  assert.deepEqual([stopped.code, stopped.notStarted, stopped.message], ['browser_unavailable', true, 'DevMate is stopping: the browser was not asked.']);
 });
 
 test('what a developer debugs a page with: answers read as lines, a wait that is given its time, and cookie values only as a change', async () => {

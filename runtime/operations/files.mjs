@@ -27,7 +27,8 @@ export function defineFileOperations(service, add) {
           // A program that holds a file for a moment has let go long before this. What refuses for this long is a
           // program that keeps the file open, or permissions that do not let this account change it: Windows gives
           // the same answer for both.
-          failure.message = failure.message.replace(/ Try again in a moment\.$/, '') + ' It stayed so for ' + Math.max(1, Math.round(waited / 1000)) +
+          // (Not only at its end: workspace.patch says what became of the rest of the patch after it.)
+          failure.message = failure.message.replace(' Try again in a moment.', '') + ' It stayed so for ' + Math.max(1, Math.round(waited / 1000)) +
             ' second(s) of trying again: a program keeps it open, or this account is not allowed to change it (its permissions).';
           throw failure;
         }
