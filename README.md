@@ -414,7 +414,7 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 | The model says "the owner has to allow this task at their computer first" | It handed a task to a coding agent, which runs on your account with the provider. Allow it in the notification of your editor or in the local workbench (`devmate ui --open`). Not to be asked again: `devmate delegation allow`, run at your computer |
 | `rg was not found on PATH` | Install ripgrep as the message says, then `devmate restart`; or open DevMate once in VS Code, whose copy is then used |
 | `The origin … is not allowed` | A browser-based client: add its origin to `allowedOrigins` in the configuration if you run that client yourself |
-| A cloud client cannot connect | The `connection.*` items of `doctor`; `devmate logs` shows the connector's output |
+| A cloud client cannot connect | The `connection.*` items of `doctor`: the `connection.process` line carries what the connector (cloudflared, OpenSSH) said last; `devmate logs` has what the runtime itself recorded |
 | `This instance was last used by DevMate …, which stores its state in a newer format` | An entry of an older release (an extension or plugin that was not updated, an old `devmate`) tried to start the runtime. Update that entry; meanwhile it works with a runtime another entry started |
 | `DevMate … is still running, older than this command` | The runtime was started before the update: `devmate restart` |
 | Start fails | The message has the reason; the full log is `runtime.log` in the instance directory |

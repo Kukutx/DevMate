@@ -85,6 +85,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate start` / `stop` / `restart` / `status` | 后台运行时 |
 | `devmate serve` | 在前台运行，Ctrl+C 结束 |
 | `devmate doctor` | 体检。运行时没启动也能用，会告诉你下一步 |
+| 登录系统时自动启动（不依赖编辑器） | 让系统在你登录时执行 `devmate start`：Windows 用任务计划程序的任务，Linux 用 systemd 的用户单元，macOS 用 launchd 的 agent |
 | `devmate logs [--lines N]` | 最近的运行日志 |
 | `devmate project add [目录] [--name 名称] [--read-only]` / `list` / `remove` | 共享什么。不写目录就是当前目录 |
 | `devmate access [guarded \| full]` | 权限档：连接进来的客户端可以决定什么（见下文“谁可以做什么”） |
@@ -415,7 +416,7 @@ devmate connect beside --openai-tunnel none
 | 模型说“the owner has to allow this task at their computer first” | 它把一个任务派给了编码 Agent，那花的是你在 Agent 那边的账户。在编辑器的提醒里或本机工作台里（`devmate ui --open`）点允许。不想再被问：在自己的电脑上运行 `devmate delegation allow` |
 | `rg was not found on PATH` | 按提示安装 ripgrep，然后 `devmate restart`；或者在 VS Code 里打开一次 DevMate，之后就用编辑器自带的那一份 |
 | `The origin … is not allowed` | 这是一个浏览器端客户端：如果它是你自己运行的，把它的来源加进配置的 `allowedOrigins` |
-| 云端客户端连不上 | 看 `doctor` 的 `connection.*` 几项；`devmate logs` 查看连接器输出 |
+| 云端客户端连不上 | 看 `doctor` 的 `connection.*` 几项：`connection.process` 那一行带着连接器（cloudflared、OpenSSH）最后说的话；`devmate logs` 里是运行时自己记下的 |
 | `This instance was last used by DevMate …, which stores its state in a newer format` | 一个仍是旧版本的入口（没更新的扩展或插件、旧的 `devmate`）想启动运行时。更新那个入口；在那之前它可以接入别的入口启动的运行时 |
 | `DevMate … is still running, older than this command` | 运行时是更新之前启动的：`devmate restart` |
 | 启动失败 | 错误信息里带原因；完整日志在实例目录的 `runtime.log` |

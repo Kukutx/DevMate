@@ -335,7 +335,7 @@
     "package:cli": "node scripts/package-runtime.mjs cli",
     "candidate": "node scripts/release-candidate.mjs",
     "version:set": "node scripts/set-version.mjs",
-    "release:preflight": "npm audit --omit=dev --audit-level=moderate && npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate",
+    "release:preflight": "npm audit --omit=dev --audit-level=moderate && npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate -- --release",
     "devmate": "node runtime/cli.mjs",
     "lint": "eslint ."
   },

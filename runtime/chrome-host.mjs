@@ -68,8 +68,9 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
   };
   // How many things wait for the owner, and only that: what they say (the task a client handed over, a question of an
   // agent) is read in the workbench, and is not sent into the browser for a number the extension shows.
+  // (Counted up to a few hundred of each: twenty tasks of a client alone may wait at once, beside what agents ask.)
   const pending = async () => {
-    const [approvals, inputs] = await Promise.all([client.call('approval.list', { status: 'pending', limit: 20 }), client.call('input.list', { status: 'pending', limit: 20 })]);
+    const [approvals, inputs] = await Promise.all([client.call('approval.list', { status: 'pending', limit: 200 }), client.call('input.list', { status: 'pending', limit: 200 })]);
     return { count: approvals.items.length + inputs.items.length };
   };
 

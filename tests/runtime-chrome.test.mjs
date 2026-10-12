@@ -505,7 +505,12 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   const waits = runtime.service.store.create('approval', { status: 'pending', kind: 'delegation', summary: 'A connected client asks codex to run a task: the-words-of-the-task' });
   const counted = await ask('pending');
   assert.deepEqual(counted.result, { count: 1 }); assert.ok(!JSON.stringify(counted).includes('the-words-of-the-task'));
-  runtime.service.store.update('approval', waits.id, { status: 'resolved' });
+  // The number is the number: twenty tasks of a client may wait at once, beside what agents ask in their own tasks.
+  const many = Array.from({ length: 24 }, (_, index) => runtime.service.store.create('approval', { status: 'pending', summary: 'Request ' + index }));
+  const asks = Array.from({ length: 5 }, (_, index) => runtime.service.store.create('input', { status: 'pending', summary: 'Question ' + index }));
+  assert.deepEqual((await ask('pending')).result, { count: 30 });
+  for (const item of [waits, ...many]) runtime.service.store.update('approval', item.id, { status: 'resolved' });
+  for (const item of asks) runtime.service.store.update('input', item.id, { status: 'resolved' });
 
   // A model's client asks for the browser through the capability tools, with no project shared at all.
   const listed = await runtime.service.call('capability.list', { engine: 'chrome' }, connected);

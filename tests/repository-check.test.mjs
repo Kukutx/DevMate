@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { retiredWording, validateVersions } from '../scripts/check-runtime.mjs';
 import { VERSION } from '../runtime/version.mjs';
 
@@ -16,6 +17,32 @@ test('a measurement that reads like the number of an earlier version is not take
     assert.equal(retiredWording(measured), false, measured);
   for (const named of ['DevMate ' + number, 'state of ' + family, 'since ' + number + '.', 'the ' + number + ' settings', number + ' series', 'v' + number]) assert.equal(retiredWording(named), true, named);
   assert.equal(retiredWording('version 13.' + '8 and 3.' + '80'), false, 'another number that only holds these digits');
+});
+
+test('setting a version states it in every file that carries one, the browser extension among them, and makes what was collected for the next release its section', t => {
+  // On a copy of the files the script writes: nothing of the repository is changed.
+  const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-set-version-'));
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }));
+  for (const name of ['scripts/set-version.mjs', 'package.json', 'package-lock.json', 'plugin.json', 'manifest.json', 'versions.json', 'chrome-extension/manifest.json', 'runtime/version.mjs']) {
+    fs.mkdirSync(path.dirname(path.join(copy, name)), { recursive: true }); fs.copyFileSync(path.join(root, name), path.join(copy, name));
+  }
+  const changelog = path.join(copy, 'CHANGELOG.md'), headings = () => fs.readFileSync(changelog, 'utf8').split(/\r?\n/).filter(line => line.startsWith('## '));
+  const set = () => spawnSync(process.execPath, [path.join(copy, 'scripts', 'set-version.mjs'), '9.8.7'], { encoding: 'utf8', windowsHide: true });
+  const stated = file => JSON.parse(fs.readFileSync(path.join(copy, file), 'utf8')).version;
+  fs.writeFileSync(changelog, '# Changelog\n\n## Unreleased\n- something new\n\n## ' + VERSION + '\n- before\n');
+  const done = set();
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /The "## Unreleased" section of CHANGELOG\.md is now "## 9\.8\.7"/);
+  assert.deepEqual(headings(), ['## 9.8.7', '## ' + VERSION]);
+  assert.deepEqual(['package.json', 'plugin.json', 'manifest.json', 'chrome-extension/manifest.json'].map(stated), ['9.8.7', '9.8.7', '9.8.7', '9.8.7']);
+  assert.match(fs.readFileSync(path.join(copy, 'runtime', 'version.mjs'), 'utf8'), /^export const VERSION = '9\.8\.7';/);
+  // Entries written under a new "Unreleased" beside the version's own section would be left out of the release
+  // notes: refused, before anything is written.
+  fs.writeFileSync(changelog, '# Changelog\n\n## Unreleased\n- one more\n\n## 9.8.7\n- something new\n');
+  fs.writeFileSync(path.join(copy, 'plugin.json'), fs.readFileSync(path.join(copy, 'plugin.json'), 'utf8').replace('"9.8.7"', '"0.0.1"'));
+  const refused = set();
+  assert.notEqual(refused.status, 0); assert.match(refused.stderr, /CHANGELOG\.md has both "## Unreleased" and "## 9\.8\.7"/);
+  assert.equal(stated('plugin.json'), '0.0.1', 'nothing was written by the run that was refused');
 });
 
 test('the version is the one the owner approved in AGENTS.md, and any other number is stopped by the check', t => {

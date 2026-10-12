@@ -15,6 +15,12 @@ function rewrite(file, pattern, expected) {
   if (seen < expected) throw new Error(file + ' does not state a version where one is expected.');
   fs.writeFileSync(full, text);
 }
+// What was written down for the next release since the last one is that release's section from now on. Left under
+// "Unreleased" beside a new section, it would pass every check and be missing from the notes of the release. Looked
+// at before anything is written.
+const changelog = path.join(root, 'CHANGELOG.md'), lines = fs.readFileSync(changelog, 'utf8').split('\n');
+const waiting = lines.findIndex(line => line.trim() === '## Unreleased'), named = lines.some(line => line.trim() === '## ' + version);
+if (waiting >= 0 && named) throw new Error('CHANGELOG.md has both "## Unreleased" and "## ' + version + '". Put what is under Unreleased into the section of the version and remove that heading.');
 const stated = /^(\s*"version": ")[^"]*(")/gm;
 rewrite('package.json', stated, 1);
 // The lock file states it for the project and again for its root package.
@@ -29,4 +35,6 @@ rewrite('runtime/version.mjs', /^(export const VERSION = ')[^']*(')/m, 1);
 const versions = JSON.parse(fs.readFileSync(path.join(root, 'versions.json'), 'utf8'));
 versions[version] = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')).minAppVersion;
 fs.writeFileSync(path.join(root, 'versions.json'), JSON.stringify(versions, null, 2) + '\n');
-console.log('Version ' + version + ' is stated everywhere. Add a "## ' + version + '" section to CHANGELOG.md, then run npm run check.');
+if (waiting >= 0) { lines[waiting] = lines[waiting].replace('## Unreleased', '## ' + version); fs.writeFileSync(changelog, lines.join('\n')); }
+console.log('Version ' + version + ' is stated everywhere. ' + (waiting >= 0 ? 'The "## Unreleased" section of CHANGELOG.md is now "## ' + version + '": read it once more as the notes of the release'
+  : named ? 'CHANGELOG.md has its "## ' + version + '" section' : 'Add a "## ' + version + '" section to CHANGELOG.md') + ', then run npm run check.');
