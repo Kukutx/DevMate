@@ -22,7 +22,7 @@ const address = text(4096).describe('An http:// or https:// address.');
 const when = text(40).optional().describe('A date or time such as 2026-10-11 or 2026-10-11T09:00:00Z.');
 const tab = whole.optional().describe('The tab, by its id from tabs.list. Left out: the tab in front.');
 // The element a page method acts on: one of the three.
-const element = { ref: z.number().int().min(1).optional().describe('The number an element has in page.snapshot.'), selector: text(1000).min(1).optional().describe('A CSS selector. It finds what is in the page\'s own tree: an element inside a web component (a shadow tree) is named by ref, or by text where the component is an open one.'),
+const element = { ref: z.number().int().min(1).optional().describe('The number an element has in page.snapshot.'), selector: text(1000).min(1).optional().describe('A CSS selector. It finds what is in the page\'s own tree, not what is inside a web component (a shadow tree): that is named by its ref from page.snapshot.'),
   text: text(500).min(1).optional().describe('What the element shows or is called: the words on it, what a text field holds or asks for (never a password), or its aria-label, aria-labelledby, title or alt. Looked for inside open web components too.') };
 
 // Every method of the extension: name, whether it only reads, what it is for, and its input. The names and which of
@@ -79,7 +79,7 @@ const METHODS = [
     { tabId: tab, ...element, styles: z.array(z.string().regex(/^[a-z-]{1,60}$/i)).min(1).max(60).optional(), maxChars: z.number().int().min(100).max(100000).optional() }],
   ['page.storage', true, 'What the page keeps in the browser: the keys of localStorage and sessionStorage and its cookies by name and attributes. Their values are often credentials: they are given only with includeValues, and only through capability_call.',
     { tabId: tab, includeValues: z.boolean().optional() }, { changesWhen: input => input.includeValues === true }],
-  ['page.waitFor', true, 'Wait until an element (selector) or a text is on the page: written on it, held or asked for by a text field (never a password), or an aria-label, aria-labelledby, title or alt. A text is looked for inside open web components too, a selector in the page\'s own tree. Ten seconds unless timeoutMs says otherwise.', { tabId: tab, selector: text(1000).min(1).optional(), text: text(500).min(1).optional(), timeoutMs: z.number().int().min(100).max(30000).optional() },
+  ['page.waitFor', true, 'Wait until an element (selector) or a text is on the page: written on it, in a text field (never a password), or an aria-label, aria-labelledby, title or alt. A text is looked for inside open web components too, a selector in the page\'s own tree. What a frame or a closed component holds is not looked at: a timeout does not say it is absent. Ten seconds unless timeoutMs says otherwise.', { tabId: tab, selector: text(1000).min(1).optional(), text: text(500).min(1).optional(), timeoutMs: z.number().int().min(100).max(30000).optional() },
     { waitMs: input => (input.timeoutMs ?? 10000) + 10000 }],
   ['page.click', false, 'Click an element: by its ref from page.snapshot, by a CSS selector, or by its text (what it shows or is called). double:true clicks twice.', { tabId: tab, ...element, double: z.boolean().optional() }],
   ['page.hover', false, 'Move the pointer over an element.', { tabId: tab, ...element }],

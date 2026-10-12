@@ -827,9 +827,11 @@ test('page.waitFor gives up as a timeout once the time it was given has passed',
   const { methods, sent, pauses } = harness({ 'Runtime.evaluate': { result: { type: 'boolean', value: false } } });
   await refuses(methods['page.waitFor']({ selector: '#never', timeoutMs: 1000 }), 'timeout', /^Nothing matches #never after 1000 ms\.$/);
   assert.deepEqual(pauses, [250, 250, 250, 250]); assert.equal(sent('Runtime.evaluate').length, 5, 'it looked once more when the time was up');
-  await refuses(methods['page.waitFor']({ text: 'Never', timeoutMs: 100 }), 'timeout', /^The text "Never" is not on the page after 100 ms\.$/);
+  // A wait that ran out does not say the text is nowhere: it says what was not looked at.
+  await refuses(methods['page.waitFor']({ text: 'Never', timeoutMs: 100 }), 'timeout',
+    /^The text "Never" did not show on the page within 100 ms\. What a frame of the page holds is not looked at, nor what a component holds that keeps its inside to itself \(page\.snapshot lists that\)\.$/);
   assert.equal(pauses.length, 5);
-  await refuses(methods['page.waitFor']({ text: 'Never' }), 'timeout', /after 10000 ms\.$/);
+  await refuses(methods['page.waitFor']({ text: 'Never' }), 'timeout', /within 10000 ms\. /);
   assert.equal(pauses.length, 45, 'ten seconds when nothing is said');
 });
 
@@ -1855,58 +1857,120 @@ test('page.waitFor finds a text that only a component of the page shows, and not
   const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'boolean', value: true } } });
   await methods['page.waitFor']({ text: 'Arrived' });
   const [{ expression }] = sent('Runtime.evaluate');
-  const part = (innerText, drawn = true) => ({ innerText, getClientRects: () => drawn ? [{}] : [] });
-  const page = (parts, items = []) => inPage(expression, { document: { body: { innerText: 'Nothing of it here' }, querySelectorAll: selector => selector === '*' ? [{ shadowRoot: { children: parts, querySelectorAll: inner => inner === '*' ? [] : items } }] : [] } });
+  // A piece of a component: an element that is drawn or not, by what it shows; a text as it stands.
+  const part = (innerText, drawn = true, more = {}) => ({ nodeType: 1, innerText, getClientRects: () => drawn ? [{}] : [], ...more }), words = data => ({ nodeType: 3, data });
+  const page = (pieces, { items = [], host = part(''), display = () => 'block' } = {}) => inPage(expression, { getComputedStyle: item => ({ display: display(item) }),
+    document: { body: { innerText: 'Nothing of it here' }, querySelectorAll: selector => selector === '*' ? [{ shadowRoot: { host, childNodes: pieces, querySelectorAll: inner => inner === '*' ? [] : items } }] : [] } });
   assert.equal(page([part('Your order has\n  Arrived')]), true);
   assert.equal(page([part('button { content: "Arrived" }', false)]), false, 'a style sheet, or a part that is hidden, shows no words');
   assert.equal(page([part('Still on its way')]), false);
+  // Seen in a real Chrome to be missed before: words that stand in the component directly, what a slot shows when it
+  // was given no content, and what stands in a part that only passes its content on.
+  assert.equal(page([words('Arrived'), part('today')]), true, 'a text directly in the component');
+  const slot = (given, shown) => part('', false, { passes: true, assignedNodes: () => given, childNodes: shown }), passing = item => item.passes ? 'contents' : 'block';
+  assert.equal(page([slot([], [words('Arrived')])], { display: passing }), true, 'what a slot shows of its own');
+  assert.equal(page([slot([{}], [words('Arrived')])], { display: passing }), false, 'not once the page gave the slot something else to show');
+  assert.equal(page([part('', false, { passes: true, childNodes: [part('Has'), words(' Arrived')] })], { display: passing }), true, 'a part that only passes its content on');
+  assert.equal(page([words('Arrived')], { host: part('', false) }), false, 'nothing of a component that is itself not drawn');
+  assert.equal(page([words('Arrived')], { host: part('', false, { passes: true }), display: passing }), true, 'a component that only passes its content on is drawn through');
   const field = more => ({ tagName: 'INPUT', type: 'text', value: '', getAttribute: () => null, getClientRects: () => [{}], ...more });
-  assert.equal(page([], [field({ getAttribute: name => name === 'placeholder' ? 'Arrived when?' : null })]), true, 'what a field of a component asks for');
-  assert.equal(page([], [field({ type: 'password', value: 'Arrived' })]), false, 'what a password field holds is not looked at there either');
+  assert.equal(page([], { items: [field({ getAttribute: name => name === 'placeholder' ? 'Arrived when?' : null })] }), true, 'what a field of a component asks for');
+  assert.equal(page([], { items: [field({ type: 'password', value: 'Arrived' })] }), false, 'what a password field holds is not looked at there either');
+  // A page of very many components is looked into up to a bound, and no further.
+  let opened = 0;
+  const many = { get shadowRoot() { opened++; return { host: part(''), childNodes: [], querySelectorAll: () => [] }; } };
+  assert.equal(inPage(expression, { getComputedStyle: () => ({ display: 'block' }), document: { body: { innerText: '' }, querySelectorAll: selector => selector === '*' ? Array.from({ length: 5000 }, () => many) : [] } }), false);
+  assert.equal(opened, 1999 * 2, 'two thousand trees, the page among them (each component is asked twice: whether it has an inside, and for it)');
 });
-test('what is in a component is not in the way of itself: the point is looked at inside the component, and inside is told through slots and hosts', async () => {
+test('a text that stands in a component directly, or in something that only passes it on, is found by what is drawn around it', async () => {
+  const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node' } }, 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } });
+  await methods['page.inspect']({ text: 'Save' });
+  const [{ expression }] = sent('Runtime.evaluate');
+  const item = (more = {}) => ({ tagName: 'DIV', innerText: '', getAttribute: () => null, getClientRects: () => [{}], ...more });
+  const find = texts => { const inside = { texts, getElementById: () => null, querySelectorAll: () => [] }, page = { texts: [], getElementById: () => null, querySelectorAll: selector => selector === '*' ? [item({ shadowRoot: inside })] : [] };
+    return inPage(expression, { getComputedStyle: one => ({ display: one.passes ? 'contents' : 'block' }), document: Object.assign(page, { body: page, createTreeWalker: top => { let at = -1; return { nextNode: () => top.texts[++at] ?? null }; } }) }); };
+  const component = item({ tagName: 'X-NOTE' });
+  assert.equal(find([{ data: ' Save ', parentElement: null, parentNode: { host: component } }]), component, 'the component, where the words stand in it directly');
+  const button = item({ tagName: 'BUTTON' }), slot = item({ tagName: 'SLOT', passes: true, getClientRects: () => [], parentElement: button });
+  assert.equal(find([{ data: 'Save', parentElement: slot }]), button, 'what is drawn around a slot that shows words of its own');
+  assert.equal(find([{ data: 'Save', parentElement: item({ getClientRects: () => [] }) }]), null, 'what is simply not drawn is still not found');
+});
+test('what is in front of an element is asked of each tree it is in: a component answers for its inside, the page for the component', async () => {
+  // As a real Chrome was seen to answer: the page names a component by its outside; a component's own tree names what
+  // is in it at the point, also one that keeps its inside to itself, and names what is not of it where the point is
+  // on something outside it.
   const { methods, sent } = harness(shown());
   await methods['page.click']({ ref: 13 });
   const [{ functionDeclaration, arguments: given }] = sent('Runtime.callFunctionOn');
-  const element = (tagName, more = {}) => ({ tagName, id: '', className: '', contains: () => false, closest: () => null, ...more });
-  const at = (target, hit) => onElement(functionDeclaration, { document: { elementFromPoint: () => hit } })(target, ...given.map(item => item.value));
-  // The page names the component; the button is what is there, two components deep.
-  const root = {}, button = element('BUTTON', { parentNode: root }), veil = element('DIV', { id: 'veil', parentNode: root });
-  const card = element('X-CARD', { shadowRoot: { elementFromPoint: () => button } }), outer = element('X-OUTER', { shadowRoot: { elementFromPoint: () => card } });
-  root.host = card;
-  assert.equal(at(button, card), null); assert.equal(at(button, outer), null);
-  // Something else of the same component that lies over it is in its way, and is named.
-  assert.equal(at(button, element('X-CARD', { shadowRoot: { elementFromPoint: () => veil } })), '<div#veil>');
-  // A component that does not show its inside: the button is known to be in it by where it hangs.
-  const sealed = element('X-CLOSED', { shadowRoot: null }), hidden = element('BUTTON', { parentNode: { host: sealed } });
-  assert.equal(at(hidden, sealed), null);
-  // What the page put into a component's slot lies inside the part of the component that holds the slot.
-  const slot = element('SLOT'), holder = element('BUTTON', { contains: inner => inner === slot }), given2 = element('SPAN', { assignedSlot: slot });
-  assert.equal(at(holder, given2), null);
-  assert.equal(at(holder, element('SPAN', { assignedSlot: element('SLOT') })), '<span>', 'in another slot it is something else');
+  const element = (tagName, tree, more = {}) => ({ tagName, id: '', className: '', contains: () => false, closest: () => null, getRootNode: () => tree, ...more });
+  const scene = () => { const page = { elementFromPoint: () => null }; return { page, inside: host => ({ host, elementFromPoint: () => null }) }; };
+  const at = (target, page) => onElement(functionDeclaration, { document: page })(target, ...given.map(item => item.value));
+  {
+    // A button in a component: free where its own tree names it and the page names the component.
+    const { page, inside } = scene(), card = element('X-CARD', page), tree = inside(card), button = element('BUTTON', tree), veil = element('SPAN', tree, { id: 'veil', className: 'veil' });
+    tree.elementFromPoint = () => button; page.elementFromPoint = () => card;
+    assert.equal(at(button, page), null);
+    // Something else of the same component over it is in its way, whether or not the component shows its inside:
+    // before, in one that does not, the click went to what lay over it and was answered as done.
+    tree.elementFromPoint = () => veil;
+    assert.equal(at(button, page), '<span#veil.veil>');
+    // Something of the page over the component is in its way: the component's tree names it, and it is not of that tree.
+    const over = element('DIV', page, { id: 'over' });
+    tree.elementFromPoint = () => over; page.elementFromPoint = () => over;
+    assert.equal(at(button, page), '<div#over>');
+    // What the page put into the component (the words of a button that are given to its slot) is inside the component.
+    const label = element('SPAN', page);
+    card.contains = inner => inner === label;
+    tree.elementFromPoint = () => label; page.elementFromPoint = () => label;
+    assert.equal(at(button, page), null, 'also in a component that keeps its inside to itself, where it was refused before');
+  }
+  {
+    // Two components deep, each asked in turn; something of the outer one over the inner one is in the way.
+    const { page, inside } = scene(), outer = element('X-OUTER', page), outerTree = inside(outer), inner = element('X-INNER', outerTree), innerTree = inside(inner), button = element('BUTTON', innerTree);
+    innerTree.elementFromPoint = () => button; outerTree.elementFromPoint = () => inner; page.elementFromPoint = () => outer;
+    assert.equal(at(button, page), null);
+    outerTree.elementFromPoint = () => element('DIV', outerTree, { id: 'spinner' });
+    assert.equal(at(button, page), '<div#spinner>');
+  }
+  {
+    // On the page itself: a component inside a field's own label is not in the field's way (it was, for one version of this).
+    const { page } = scene(), field = element('INPUT', page), icon = element('X-ICON', page, { closest: selector => selector === 'label' ? { control: field } : null });
+    page.elementFromPoint = () => icon;
+    assert.equal(at(field, page), null);
+    page.elementFromPoint = () => element('X-ICON', page);
+    assert.equal(at(field, page), '<x-icon>');
+  }
   // page.inspect tells what covers an element in the same way.
   const { methods: more, sent: asked } = harness(shown({ 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } }));
   await more['page.inspect']({ ref: 13, styles: ['color'] });
   const [look] = asked('Runtime.callFunctionOn'), styles = { visibility: 'visible', display: 'block', opacity: '1', getPropertyValue: () => '' };
-  const seen = (target, hit) => onElement(look.functionDeclaration, { document: { elementFromPoint: () => hit }, getComputedStyle: () => styles })({ outerHTML: '<button>', getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }), ...target }, ...look.arguments.map(item => item.value));
-  const inner = element('BUTTON', { parentNode: root });
-  assert.equal('coveredBy' in seen(inner, element('X-CARD', { shadowRoot: { elementFromPoint: () => null }, id: 'card' })), true, 'a component that says nothing of the point is what is there');
-  const itself = element('BUTTON', { parentNode: root });
-  assert.equal('coveredBy' in onElement(look.functionDeclaration, { document: { elementFromPoint: () => card }, getComputedStyle: () => styles })(Object.assign(button, { outerHTML: '<button>', getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }) }), ...look.arguments.map(item => item.value)), false);
-  assert.equal(seen(itself, element('X-CARD', { shadowRoot: { elementFromPoint: () => veil } })).coveredBy, '<div#veil>');
-});
-test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {
+  const seen = (target, page) => onElement(look.functionDeclaration, { document: page, getComputedStyle: () => styles })(Object.assign(target, { outerHTML: '<button>', getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }) }), ...look.arguments.map(item => item.value));
+  const { page, inside } = scene(), card = element('X-CARD', page), tree = inside(card), button = element('BUTTON', tree), veil = element('SPAN', tree, { id: 'veil' });
+  tree.elementFromPoint = () => button; page.elementFromPoint = () => card;
+  assert.equal('coveredBy' in seen(button, page), false);
+  tree.elementFromPoint = () => veil;
+  assert.equal(seen(button, page).coveredBy, '<span#veil>');
+});test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {
   // Seen in a real Chrome: a frame without a name was left out altogether, so a page whose content is in one looked empty.
   const told = { 3: { node: { attributes: ['title', 'Pay', 'src', '/pay/form'], contentDocument: { documentURL: 'https://app.example/pay/form?step=1' } } }, 4: { node: { attributes: ['width', '300', 'src', 'https://ads.example/slot'] } },
-    5: { node: { attributes: ['src', '../help'] } }, 6: { node: { attributes: ['title', 'Empty'], contentDocument: { documentURL: 'about:blank' } } } };
+    5: { node: { attributes: ['src', '../help'] } }, 6: { node: { attributes: ['title', 'Empty'], contentDocument: { documentURL: 'about:blank' } } },
+    9: { node: { attributes: ['loading', 'lazy', 'src', 'https://later.example/'], contentDocument: { documentURL: 'about:blank' } } }, 10: { node: { attributes: ['srcdoc', '<p>written here</p>', 'src', 'https://unused.example/'], contentDocument: { documentURL: 'about:srcdoc' } } } };
   const { methods, sent } = harness({ 'DOM.describeNode': ({ backendNodeId }) => told[backendNodeId] ?? no('No node with given id found'),
-    'Accessibility.getFullAXTree': tree([1, 'RootWebArea', 'Shop', {}, [[2, 'heading', 'Pay', { level: 1 }], [3, 'Iframe', 'Pay'], [4, 'Iframe', ''], [5, 'IframePresentational', ''], [6, 'Iframe', 'Empty'], [7, 'Iframe', ''], [8, 'Iframe', 'Hidden', { ignored: true }]]]) });
+    'Accessibility.getFullAXTree': tree([1, 'RootWebArea', 'Shop', {}, [[2, 'heading', 'Pay', { level: 1 }], [3, 'Iframe', 'Pay'], [4, 'Iframe', ''], [5, 'IframePresentational', ''], [6, 'Iframe', 'Empty'], [7, 'Iframe', ''], [8, 'Iframe', 'Hidden', { ignored: true }], [9, 'Iframe', ''], [10, 'Iframe', 'Note']]]) });
   const NOTE = ' (another page inside this one: what it holds is not listed here)';
   // The page inside by its own address where the browser knows it, else by what the frame was told to load; none where there is none.
-  const frames = ['[3] frame "Pay" → https://app.example/pay/form?step=1' + NOTE, '[4] frame → https://ads.example/slot' + NOTE, '[5] frame → https://app.example/help' + NOTE, '[6] frame "Empty"' + NOTE, '[7] frame' + NOTE];
+  const frames = ['[3] frame "Pay" → https://app.example/pay/form?step=1' + NOTE, '[4] frame → https://ads.example/slot' + NOTE, '[5] frame → https://app.example/help' + NOTE, '[6] frame "Empty"' + NOTE, '[7] frame' + NOTE,
+    // A frame that has not loaded its page yet is shown by what it was told to load; one whose content is written into the page has no address a tab could open.
+    '[9] frame → https://later.example/' + NOTE, '[10] frame "Note"' + NOTE];
   assert.deepEqual((await methods['page.snapshot']()).text.split('\n'), ['[2] heading "Pay" (level=1)', ...frames]);
-  assert.deepEqual(sent('DOM.describeNode'), [3, 4, 5, 6, 7].map(backendNodeId => ({ backendNodeId })), 'each frame that is shown is asked about once');
+  assert.deepEqual(sent('DOM.describeNode'), [3, 4, 5, 6, 7, 9, 10].map(backendNodeId => ({ backendNodeId })), 'each frame that is shown is asked about once');
   assert.deepEqual((await methods['page.snapshot']({ interactiveOnly: true })).text.split('\n'), frames, 'a frame is kept where only what can be worked is asked for');
+  // A page of very many frames: every one is shown as a frame, and the address is asked for the first hundred.
+  const crowd = harness({ 'DOM.describeNode': ({ backendNodeId }) => ({ node: { attributes: ['src', 'https://ads.example/' + backendNodeId] } }),
+    'Accessibility.getFullAXTree': tree([1, 'RootWebArea', 'Ads', {}, Array.from({ length: 130 }, (_, index) => [index + 2, 'Iframe', ''])]) });
+  const listed = (await crowd.methods['page.snapshot']({ maxNodes: 200 })).text.split('\n');
+  assert.equal(listed.length, 130); assert.equal(crowd.sent('DOM.describeNode').length, 100);
+  assert.equal(listed[99], '[101] frame → https://ads.example/101' + NOTE); assert.equal(listed[100], '[102] frame' + NOTE);
   // A page without frames is asked nothing more.
   const plain = harness({ 'Accessibility.getFullAXTree': shop() });
   await plain.methods['page.snapshot']();

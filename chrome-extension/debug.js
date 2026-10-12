@@ -64,7 +64,7 @@ function byText(wanted) {
   // The page itself and every component in it that shows its inside: what a component holds (a shadow tree) is not
   // among the page's own elements, and on a page built of components no text would lead to an element.
   const trees = [document];
-  for (let at = 0; at < trees.length && trees.length < 1000; at++) for (const item of trees[at].querySelectorAll('*')) if (item.shadowRoot) trees.push(item.shadowRoot);
+  for (let at = 0; at < trees.length && trees.length < 2000; at++) for (const item of trees[at].querySelectorAll('*')) if (item.shadowRoot && trees.push(item.shadowRoot) >= 2000) break;
   const all = (selector, inside = selector) => trees.flatMap(tree => [...tree.querySelectorAll(tree === document ? selector : inside)]);
   const least = item => {
     const typed = item.tagName === 'TEXTAREA' || (item.tagName === 'INPUT' && !/^(password|hidden|checkbox|radio|file|range|color)$/i.test(item.type || ''));
@@ -86,22 +86,31 @@ function byText(wanted) {
     const texts = document.createTreeWalker(top, 4);
     for (let node = texts.nextNode(); node && looked < 200000; node = texts.nextNode(), looked++) {
       if (node.data.length < sought.length) continue;
-      const words = plain(node.data), holder = node.parentElement;
-      if (words.includes(sought) && words.length < shortest && holder?.getClientRects().length) { inner = holder; shortest = words.length; }
+      const words = plain(node.data);
+      if (!words.includes(sought) || words.length >= shortest) continue;
+      // What holds it: the element it is in, or the component where it stands in a component directly; and where that
+      // only passes its content on (display: contents, as a slot does), what is drawn around it.
+      let holder = node.parentElement || node.parentNode?.host;
+      while (holder && !holder.getClientRects().length && typeof getComputedStyle === 'function' && getComputedStyle(holder).display === 'contents') holder = holder.parentElement || holder.parentNode?.host;
+      if (holder?.getClientRects().length) { inner = holder; shortest = words.length; }
     }
   }
   // Last, words that are spread over several elements ("Save <b>now</b>").
   return inner || hit(all('body *', '*')) || null;
 }
 function inFront(x, y) {
-  // Of a component the page names only the outside: what is hit at the point is looked for inside it. And what is
-  // inside what, where components are in play, is told by going up through the place a component gives its content
-  // (assignedSlot) and through the component itself (host), not by the page's own tree alone.
-  let hit = document.elementFromPoint(x, y);
-  for (let depth = 0; hit?.shadowRoot && depth < 50; depth++) { const inner = hit.shadowRoot.elementFromPoint(x, y); if (!inner || inner === hit) break; hit = inner; }
-  const holds = (outer, inner) => { for (let node = inner; node; node = node.assignedSlot || node.parentNode || node.host) if (node === outer || outer.contains(node)) return true; return false; };
-  if (!hit || holds(this, hit) || holds(hit, this) || hit.closest('label')?.control === this) return null;
-  return '<' + hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') + (typeof hit.className === 'string' && hit.className.trim() ? '.' + hit.className.trim().split(/\s+/).slice(0, 3).join('.') : '') + '>';
+  // What is at the point is asked of each tree the element is in, its own first. A component (a shadow tree) answers
+  // for what is inside it, one that keeps its inside to itself too, while the page names a component only by its
+  // outside (all seen in a real Chrome). Something else of the same tree is in the way. What a tree names that is not
+  // of it lies outside the component: it is asked about one tree further out, where the component stands for the
+  // element, and what the page put into the component counts as inside it there.
+  for (let mine = this, depth = 0; mine && depth < 50; depth++) {
+    const tree = mine.getRootNode ? mine.getRootNode() : document, hit = tree.elementFromPoint ? tree.elementFromPoint(x, y) : null;
+    if (hit && (hit.getRootNode ? hit.getRootNode() : document) === tree && hit !== mine && !mine.contains(hit) && !hit.contains(mine) && hit.closest('label')?.control !== mine)
+      return '<' + hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') + (typeof hit.className === 'string' && hit.className.trim() ? '.' + hit.className.trim().split(/\s+/).slice(0, 3).join('.') : '') + '>';
+    mine = tree.host;
+  }
+  return null;
 }
 // Whether the page shows a text: written on it, or as what byText above finds an element by (what a field for text
 // holds or asks for, a label, a title). What a password field holds is never looked at.
@@ -113,9 +122,15 @@ function shows(wanted) {
   // What a component shows (a shadow tree) is not in the text of the page: of each, what its own parts show. A part
   // that is not drawn is passed over, since the page would give its text all the same.
   const trees = [document];
-  for (let at = 0; at < trees.length && trees.length < 1000; at++) for (const item of trees[at].querySelectorAll('*')) if (item.shadowRoot) trees.push(item.shadowRoot);
+  for (let at = 0; at < trees.length && trees.length < 2000; at++) for (const item of trees[at].querySelectorAll('*')) if (item.shadowRoot && trees.push(item.shadowRoot) >= 2000) break;
+  // What a piece of a component shows: a text as it stands, an element that is drawn by what it shows, and one that
+  // only passes on what it holds (display: contents, as a slot does with what it shows when it was given no content)
+  // by what that is. Anything else is not drawn.
+  const passes = part => typeof getComputedStyle === 'function' && getComputedStyle(part).display === 'contents';
+  const said = part => part.nodeType === 3 ? part.data : part.nodeType !== 1 ? '' : part.getClientRects().length ? part.innerText : passes(part) && !part.assignedNodes?.().length ? [...part.childNodes].map(said).join(' ') : '';
   for (const tree of trees.slice(1)) {
-    const words = [...tree.children].filter(part => part.getClientRects().length).map(part => part.innerText).join(' ');
+    if (!tree.host?.getClientRects().length && !(tree.host && passes(tree.host))) continue;
+    const words = [...tree.childNodes].map(said).join(' ');
     if (words.includes(wanted) || plain(words).includes(sought)) return true;
   }
   return trees.flatMap(tree => [...tree.querySelectorAll('[aria-label], [aria-labelledby], [title], [alt], [placeholder], input, textarea')]).slice(0, 5000).some(item => {
@@ -149,15 +164,18 @@ function choose(value, label) {
 function look(names, most) {
   // What a password field holds is not shown where a page keeps it in the markup too.
   const style = getComputedStyle(this), box = this.getBoundingClientRect(), html = this.outerHTML.replace(/(<input\b(?=[^>]*\btype\s*=\s*["']?password\b)[^>]*?\bvalue\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/gi, '$1"(hidden)"');
-  // What is at its middle, looked for inside the components there and told apart as inFront above tells it.
+  // What is at its middle, asked of each tree it is in, as inFront above asks it.
   const x = box.x + box.width / 2, y = box.y + box.height / 2;
-  let top = box.width && box.height ? document.elementFromPoint(x, y) : null;
-  for (let depth = 0; top?.shadowRoot && depth < 50; depth++) { const inner = top.shadowRoot.elementFromPoint(x, y); if (!inner || inner === top) break; top = inner; }
-  const holds = (outer, inner) => { for (let node = inner; node; node = node.assignedSlot || node.parentNode || node.host) if (node === outer || outer.contains(node)) return true; return false; };
+  let top = null;
+  for (let mine = this, depth = 0; mine && !top && box.width && box.height && depth < 50; depth++) {
+    const tree = mine.getRootNode ? mine.getRootNode() : document, hit = tree.elementFromPoint ? tree.elementFromPoint(x, y) : null;
+    if (hit && (hit.getRootNode ? hit.getRootNode() : document) === tree && hit !== mine && !mine.contains(hit) && !hit.contains(mine)) top = hit;
+    mine = tree.host;
+  }
   return { tag: this.tagName.toLowerCase(), ...(this.id ? { id: this.id } : {}), ...(typeof this.className === 'string' && this.className ? { classes: this.className } : {}),
     box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
     visible: box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0,
-    ...(top && !holds(this, top) && !holds(top, this) ? { coveredBy: '<' + top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + '>' } : {}),
+    ...(top ? { coveredBy: '<' + top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + '>' } : {}),
     styles: Object.fromEntries(names.map(name => [name, style.getPropertyValue(name)])), html: html.slice(0, most), ...(html.length > most ? { htmlTruncated: true, htmlChars: html.length } : {}) };
 }
 function stores(withValues) {
@@ -440,12 +458,17 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       const { nodes } = await command(id, 'Accessibility.getFullAXTree'), byId = new Map(nodes.map(node => [node.nodeId, node]));
       // A frame of the page (an iframe) holds another page, which is not in this list. It is shown with the address
       // of that page, named or not, so that a page whose content is in a frame does not look empty.
-      const frames = new Map(await Promise.all(nodes.filter(node => !node.ignored && FRAMES.has(node.role?.value) && node.backendDOMNodeId).slice(0, 30).map(async node => {
-        const told = (await raw(id, 'DOM.describeNode', { backendNodeId: node.backendDOMNodeId }).catch(() => null))?.node, given = told?.attributes || [], at = given.indexOf('src');
+      // The address is asked for the first hundred frames; a frame beyond those is shown without one. A frame that
+      // has no page of its own yet (about:blank) is shown with what it was told to load, and one whose content is
+      // written into the page itself (srcdoc) has no address a tab could open.
+      const framed = nodes.filter(node => !node.ignored && FRAMES.has(node.role?.value)), frames = new Map(framed.map(node => [node.nodeId, '']));
+      await Promise.all(framed.filter(node => node.backendDOMNodeId).slice(0, 100).map(async node => {
+        const told = (await raw(id, 'DOM.describeNode', { backendNodeId: node.backendDOMNodeId }).catch(() => null))?.node, given = told?.attributes || [], named = name => { const at = given.indexOf(name); return at >= 0 && at % 2 === 0 ? given[at + 1] : undefined; };
         let address = told?.contentDocument?.documentURL || '';
-        if (!address && at >= 0 && at % 2 === 0) { try { address = new URL(given[at + 1], tab.url || undefined).href; } catch { address = given[at + 1]; } }
-        return [node.nodeId, address === 'about:blank' ? '' : address];
-      })));
+        if (/^about:/i.test(address)) address = '';
+        if (!address && named('srcdoc') === undefined && named('src')) { try { address = new URL(named('src'), tab.url || undefined).href; } catch { address = named('src'); } }
+        frames.set(node.nodeId, /^about:/i.test(address) ? '' : address);
+      }));
       // The lines of a node and of what it holds.
       const walk = (node, depth, above) => {
         const role = node.role?.value || '', name = cut(node.name?.value || '', 160), value = node.value?.value, said = value !== undefined && value !== '', frame = frames.has(node.nodeId);
@@ -484,7 +507,8 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         if (found) return { tabId: id, found: true, ms: clock() - began };
         // A tab that was let go while it was asked has not been waited for to the end: said as that.
         if (sessions.get(id) !== session) throw letGo();
-        if (clock() - began >= limit) throw fail('timeout', (selector !== undefined ? 'Nothing matches ' + selector : 'The text "' + shown + '" is not on the page') + ' after ' + limit + ' ms.');
+        if (clock() - began >= limit) throw fail('timeout', (selector !== undefined ? 'Nothing matches ' + selector + ' after ' + limit + ' ms.'
+          : 'The text "' + shown + '" did not show on the page within ' + limit + ' ms. What a frame of the page holds is not looked at, nor what a component holds that keeps its inside to itself (page.snapshot lists that).'));
         await pause(250);
         // Still debugged, and no dialog in the way. A tab the owner has let go of meanwhile is not taken again.
         if (sessions.get(id) !== session) throw letGo();
