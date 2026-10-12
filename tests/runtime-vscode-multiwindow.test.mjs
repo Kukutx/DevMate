@@ -343,7 +343,8 @@ test('a window offers the ripgrep its editor ships, in either layout, so searchi
 });
 
 test('a window with several shared folders hears about every shared folder before its user has chosen one, and only about its own',async t=>{
-  const f=await fixture(t),roots=['api','web'].map(name=>{const root=path.join(f.temp,'several-'+name);fs.mkdirSync(root);return root;});
+  // (One folder has a name that would read as a link where a notification names it: see the end of this test.)
+  const f=await fixture(t),roots=['api','web [x](y)'].map(name=>{const root=path.join(f.temp,'several-'+name);fs.mkdirSync(root);return root;});
   const elsewhere=path.join(f.temp,'several-elsewhere');fs.mkdirSync(elsewhere);
   const window=fakeWindow(f.instanceRoot,'Monorepo editor',roots);
   t.after(()=>window.entry.deactivate());
@@ -384,6 +385,18 @@ test('a window with several shared folders hears about every shared folder befor
   // (As VS Code 1.101 reads it: its own pattern for a link in a notification finds none in any of them.)
   const link=/\[([^\]]+)\]\(((?:https?:\/\/|command:|file:)[^)\s]+)(?: (["'])(.+?)(\3))?\)/i;
   assert.ok(link.test(lure));for(const message of window.asked)assert.equal(link.test(message),false,message);
+  // The same for what is shown as a warning and as an error. A warning that names a folder as it is called on the
+  // disk (a repository somebody else named); an error whose words came from elsewhere.
+  const warned=[],picked=window.vscode.window.showQuickPick;
+  window.vscode.window.showWarningMessage=async message=>{warned.push(message);};
+  window.vscode.window.showQuickPick=async items=>items.find(item=>item.access==='none')||items[0];
+  await window.commands.get('devMate.runtime.registerFolder')(roots[1]);
+  assert.deepEqual(warned,['Stop sharing "several-web [x] (y)" with AI clients?']);
+  assert.ok(window.asked.some(message=>message.startsWith('DevMate shares "several-web [x] (y)"')),'the notice that it is shared named it the same way');
+  window.vscode.window.showQuickPick=async()=>{throw new Error('The server said [Open Workbench]('+command+')');};
+  await window.commands.get('devMate.runtime.accessProfile')();
+  assert.ok(window.shown.includes('error: The server said [Open Workbench] ('+command+')'),window.shown.filter(line=>line.startsWith('error')).join(' | '));
+  window.vscode.window.showQuickPick=picked;
   // Sharing changed from elsewhere reaches the window at once.
   await f.call('project.update',{id:window.entry.attachment.roots[0].projectId,access:'read'});
   await until(()=>window.entry.attachment.roots[0].access==='read','the window shows the new access');

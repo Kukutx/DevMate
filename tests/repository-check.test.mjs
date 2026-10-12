@@ -67,6 +67,23 @@ test('setting a version states it in every file that carries one, the browser ex
   assert.equal(stated('plugin.json'), '0.0.1', 'nothing was written by the run that was refused');
 });
 
+test('every notification and input box of the editor host is shown through the one place that keeps its text from forming a link', () => {
+  // VS Code makes a link of "[label](address)" in the text of a notification, and in what an input box asks or says
+  // of an input, and runs a command such a link names when it is clicked. The host shows them through `notify`,
+  // which breaks every such pair. A call that goes to VS Code past it is found here, not by a user.
+  const folder = path.join(root, 'vscode-host');
+  for (const name of fs.readdirSync(folder).filter(name => /\.[cm]?js$/.test(name))) {
+    const source = fs.readFileSync(path.join(folder, name), 'utf8');
+    // What `notify` itself is made of: the three names in one list, reached as vscode.window[name], and the one input box.
+    const own = source.split('\n').filter(line => /^\s*for \(const name of \['showInformationMessage', 'showWarningMessage', 'showErrorMessage'\]\)$/.test(line)).length;
+    const rest = source.replace(/^\s*for \(const name of \['showInformationMessage', 'showWarningMessage', 'showErrorMessage'\]\)$/m, '');
+    for (const [, before] of rest.matchAll(/(.{0,12})show(?:Information|Warning|Error)Message/g)) assert.match(before, /notify\.$/, name + ': a notification is shown past notify (' + before + ')');
+    assert.equal((source.match(/window\s*\[/g) || []).length, own ? 2 : 0, name + ': a function of the window is reached by a name that is worked out');
+    assert.equal((source.match(/(?<!notify)\.showInputBox/g) || []).length, own ? 1 : 0, name + ': an input box is shown past notify');
+    if (name === 'runtime-entry.cjs') assert.equal(own, 1, 'the place itself is there');
+  }
+});
+
 test('the version is the one the owner approved in AGENTS.md, and any other number is stopped by the check', t => {
   validateVersions(root);
   const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-version-check-'));

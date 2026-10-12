@@ -165,10 +165,20 @@ test('taking a project off the list whose folder was moved removes the copy an a
   const elsewhere = path.join(temp, 'moved');
   fs.renameSync(top, elsewhere);
   assert.equal(fs.existsSync(path.join(copy, 'src', 'new.js')), true);
-  assert.equal((await service.call('project.remove', { id: project.id }, owner)).removed, true);
-  assert.equal(fs.existsSync(copy), false, 'nothing would remove it afterwards: the record that named it is gone with the project');
+  // Throwing the copy away while the folder is not there (it may be a drive that is not connected) is refused, as
+  // every call for the project is, and leaves the copy and its record: done without Git, the branch would stay in
+  // the repository for good, with a record that says all was cleared. It is done whole once the folder is back.
+  await assert.rejects(service.call('agents.discard', { agentId: done.agentId }, owner), { code: 'project_missing' });
+  assert.deepEqual([fs.existsSync(copy), service.store.get('agent', done.agentId).isolated.settled], [true, undefined]);
+  // The project itself being taken off the list is another matter: nothing would remove the copy afterwards.
+  const removed = await service.call('project.remove', { id: project.id }, owner);
+  assert.equal(removed.removed, true);
+  assert.equal(fs.existsSync(copy), false, 'the record that named it is gone with the project');
   assert.deepEqual(fs.readdirSync(path.join(temp, 'instance-copies')), []);
+  // What could not be removed is named with the answer, since no record speaks of it afterwards.
   assert.equal(fs.readFileSync(path.join(other, 'kept.txt'), 'utf8'), 'kept');
+  assert.deepEqual(removed.copiesLeft, [other]);
+  assert.equal(removed.note, '1 copy(ies) an agent worked in could not be removed and are still on this computer: ' + other + '. Nothing of DevMate uses them any more: delete those folders when no program holds them.');
   // The repository keeps the branch: only Git there can remove it, which the words that sent the owner here say.
   assert.ok(git(elsewhere, 'branch', '--list', 'devmate/*').includes(branch));
 });

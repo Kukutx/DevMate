@@ -339,6 +339,15 @@ async function configureConnection(kind, options, instanceRoot) {
 const BROWSER_OF_A_CLIENT = 'DevMate does not serve this browser: it was opened by a command that a connected client or a coding agent ran, and carries that command\'s mark, so what it asks is not taken as yours. ' +
   'Close the browser completely (every window, and its icon beside the clock if it keeps one) and open it yourself: the extension then connects again.';
 
+// What this command line writes is read in the owner's terminal, and carries words that are not DevMate's: the name
+// a client gave a project, the operation it asked for, what a program or a server said, a line of the log. A terminal
+// acts on control characters (it moves the cursor, wipes a line, makes a link of other words), and characters that
+// turn a line around change what is read. So every such character is written as what it is called (its number),
+// except the line end and the tab: no text can take a line of this output away or put another in its place.
+export const legible = text => String(text).replace(/(?![\n\t])[\p{Cc}\p{Bidi_Control}]/gu, one => '\\u' + one.codePointAt(0).toString(16).padStart(4, '0'));
+// One entry of a list on one line: words from elsewhere do not begin a line of their own beside DevMate's.
+const oneLine = text => String(text).replace(/\s*[\r\n]+\s*/g, ' ');
+
 export async function main(argv = process.argv.slice(2), {
   stdout = process.stdout, stderr = process.stderr, stdin = process.stdin,
   clientFactory = createRuntimeClient,
@@ -362,6 +371,11 @@ export async function main(argv = process.argv.slice(2), {
     return 2;
   }
   if (argv[0] === 'chrome-host') return (await import('./chrome-host.mjs')).chromeHostMain(argv.slice(1), { stdin, stdout, stderr });
+  // From here on everything is written for a person to read (legible), also what is printed as JSON, where the
+  // characters JSON leaves as they are (DEL, the second set of control characters, those that turn a line) are
+  // written by their numbers too. The one exception is the stream a protocol is spoken on (devmate mcp).
+  const wire = stdout, read = stream => ({ write: text => stream.write(typeof text === 'string' ? legible(text) : text) });
+  stdout = read(stdout); stderr = read(stderr);
   let running = async () => null;
   try {
     const { command, positional, options } = parseCli(argv);
@@ -410,7 +424,7 @@ export async function main(argv = process.argv.slice(2), {
         return clientFactory(runtimeOptions).origin() + '/mcp';
       };
       await connect();
-      const bridge = await serveStdioBridge({ connect, stdin, stdout, log: note });
+      const bridge = await serveStdioBridge({ connect, stdin, stdout: wire, log: note });
       await bridge.closed;
       return 0;
     }
@@ -518,8 +532,8 @@ export async function main(argv = process.argv.slice(2), {
       if (stale) report = { ...report, status: report.status === 'ok' ? 'warn' : report.status, checks: [...report.checks, { id: 'runtime.version', status: 'warn', ...stale }] };
       const mark = { ok: '[ ok ]', info: '[info]', warn: '[warn]', fail: '[FAIL]' };
       for (const item of report.checks) {
-        stdout.write(`${mark[item.status]} ${item.id}: ${item.detail}\n`);
-        if (item.fix && item.status !== 'ok') stdout.write(`       -> ${item.fix}\n`);
+        stdout.write(`${mark[item.status]} ${item.id}: ${oneLine(item.detail)}\n`);
+        if (item.fix && item.status !== 'ok') stdout.write(`       -> ${oneLine(item.fix)}\n`);
       }
       stdout.write(`\nDevMate ${report.version}: ${report.status === 'ok' ? 'everything needed is in place.' : report.status === 'warn' ? 'working, with warnings above.' : 'not fully working; fix the FAIL items above.'}\n`);
       return report.status === 'fail' ? 1 : 0;

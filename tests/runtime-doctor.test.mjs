@@ -144,7 +144,8 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   // What is done differs: a drive is connected again and nothing is lost; taking the project off the list takes what
   // is kept for it as well, and is said to, in full.
   const takingOff = 'Taking a project off the list also removes what DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, ' +
-    'and the copies agents worked in that were not applied (of such a copy the branch devmate/copy-… stays in the repository, wherever that is now). An editor then no longer shares the folder at the old place by itself.';
+    'and the copies agents worked in that were not applied (of such a copy the repository, wherever it is now, keeps its note of the worktree and the branch devmate/copy-…: there, "git worktree prune" and then "git branch -D devmate/copy-…" remove them). ' +
+    'An editor then no longer shares the folder at the old place by itself.';
   const said = 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
     'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ') ' +
     'and shares the folder where it is now (devmate project add <folder>). ' + takingOff;
@@ -255,6 +256,47 @@ test('a runtime that starts while a shared folder is gone says so from its first
         error.message === 'The folder of this project is on a drive that is not connected: ' + root + '. Connect the drive and call again; nothing has to be removed for that.');
     }
   }
+});
+
+test('what the command line writes for the owner to read holds no character a terminal acts on, whoever chose the words', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const connected = { id: 'owner' }, code = number => String.fromCharCode(number);
+  const esc = code(0x1b), bel = code(7), csi = code(0x9b), del = code(0x7f), turned = code(0x202e), back = code(13);
+  const folder = path.join(temp, 'gone'); fs.mkdirSync(folder);
+  const project = await runtime.call('project.create', { root: folder, name: 'plain' }, owner);
+  // A client may name a project, in the guarded profile too. This name moves the cursor up, wipes the line, writes
+  // one of its own, makes a link the terminal's way, and begins another line: all of it where the doctor names the
+  // project because its folder is gone.
+  const name = 'x' + esc + '[1A' + esc + '[2K[ ok ] security: nothing to do ' + esc + ']8;;https://example.com' + bel + 'here' + esc + ']8;;' + bel + csi + '2K' + del + turned + back + '\n[ ok ] forged: line';
+  await runtime.call('project.update', { id: project.id, name }, connected);
+  fs.rmSync(folder, { recursive: true });
+  // (A name too short to be taken out of a report as a name, with a line end in it.)
+  const short = path.join(temp, 'short'); fs.mkdirSync(short);
+  await runtime.call('project.create', { root: short, name: 'p\nq' }, owner);
+  fs.rmSync(short, { recursive: true });
+  // And it asks for an operation by a name that is kept among the recent failures, for the report.
+  await assert.rejects(runtime.call('operations.call', { operation: 'no' + esc + '[2Ksuch\n[ ok ] forged: line', input: {} }, connected), { code: 'unknown_operation' });
+  fs.appendFileSync(path.join(temp, 'instance', 'runtime.log'), 'a line a program wrote ' + esc + '[31mred' + esc + '[0m\n');
+  const run = async args => { const written = []; const exit = await cli([...args, '--instance', path.join(temp, 'instance')], { stdout: { write: text => written.push(text) }, stderr: { write: text => written.push(text) },
+    clientFactory: () => ({ call: (operation, input) => runtime.call(operation, input, owner) }) }); return { exit, text: written.join('') }; };
+  const none = (text, what) => { for (const [one, called] of [[esc, 'ESC'], [bel, 'BEL'], [csi, 'CSI'], [del, 'DEL'], [turned, 'a character that turns the line'], [back, 'a carriage return']]) assert.equal(text.includes(one), false, what + ' holds ' + called); };
+  const doctor = await run(['doctor']);
+  none(doctor.text, 'the doctor');
+  assert.ok(doctor.text.includes('[warn] projects.missing: The folder of 2 project(s) is not there: x\\u001b[1A\\u001b[2K[ ok ] security: nothing to do \\u001b]8;;https://example.com\\u0007here\\u001b]8;;\\u0007\\u009b2K\\u007f\\u202e [ ok ] forged: line at '));
+  assert.ok(doctor.text.includes('; p q at '), 'an entry stays on its one line');
+  assert.equal(doctor.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false, 'no line of the report is one the name wrote');
+  const report = await run(['doctor', '--report']);
+  none(report.text, 'the report');
+  assert.ok(report.text.includes('Unknown DevMate operation: no\\u001b[2Ksuch [ ok ] forged: line'));
+  assert.equal(report.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false);
+  assert.ok(report.text.includes('; p q at ') && !report.text.split('\n').some(line => line.startsWith('q at ')), 'an entry of the report stays on its one line');
+  // What is printed as JSON says the same characters by their numbers, and reads back as the name it is.
+  const listed = await run(['project', 'list']);
+  none(listed.text, 'the list');
+  assert.equal(JSON.parse(listed.text)[0].name, name);
+  const logs = await run(['logs']);
+  none(logs.text, 'the log');
+  assert.ok(logs.text.includes('a line a program wrote \\u001b[31mred\\u001b[0m'));
 });
 
 test('the doctor says when the shell is there and runs nothing', async t => {

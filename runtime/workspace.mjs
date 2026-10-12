@@ -92,7 +92,8 @@ const OWN_COPY = Symbol('own copy');
 // taken for a small step. What it leaves is said too: kept versions of files and the log go when their time is up,
 // and of a copy the repository keeps the branch.
 export const TAKING_OFF_THE_LIST = 'Taking a project off the list also removes what DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, ' +
-  'and the copies agents worked in that were not applied (of such a copy the branch devmate/copy-… stays in the repository, wherever that is now). An editor then no longer shares the folder at the old place by itself.';
+  'and the copies agents worked in that were not applied (of such a copy the repository, wherever it is now, keeps its note of the worktree and the branch devmate/copy-…: there, "git worktree prune" and then "git branch -D devmate/copy-…" remove them). ' +
+  'An editor then no longer shares the folder at the old place by itself.';
 function projectRoot(project) {
   if (!project || typeof project.id !== 'string' || !path.isAbsolute(project.root || '') || !['read', 'write'].includes(project.access)) {
     throw error('invalid_project', 'A project with an absolute root and read/write access is required.');
@@ -1161,13 +1162,15 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
     } finally { for (const file of [scratch, scratch + '.lock']) fs.rmSync(file, { force: true }); }
   }
 
-  // The copy stands beside the instance directory and does not need the project's folder. Where that folder is gone
-  // (a project is taken off the list because it was moved), the copy is removed all the same: nothing would ever
-  // remove it afterwards. What stays is in the repository, wherever it is now: its note of this worktree and the
-  // branch, which only Git there can remove.
-  async function removeCopy(project, copy) {
+  // The copy stands beside the instance directory and does not need the project's folder. leaving: the project
+  // itself is being taken off the list. Where its folder is gone then (it was moved), the copy is removed all the
+  // same: nothing would ever remove it afterwards. What stays is in the repository, wherever it is now: its note of
+  // this worktree and the branch, which only Git there can remove. Anyone else who throws a copy away while the
+  // folder is not there (a drive that is not connected) is refused as before: the copy and its record stay, and the
+  // same call clears all of it once the folder is back.
+  async function removeCopy(project, copy, { leaving = false } = {}) {
     let root = null;
-    try { root = projectRoot(project); } catch (failure) { if (failure.code !== 'project_missing') throw failure; }
+    try { root = projectRoot(project); } catch (failure) { if (!leaving || failure.code !== 'project_missing') throw failure; }
     if (fs.existsSync(copy.root)) {
       // Where the owner has switched on Git's own file watcher (core.fsmonitor), the agent's Git starts one in the
       // copy, and it stays when the agent has gone, with the folder open (seen with the real Codex on Windows, where
@@ -1292,8 +1295,8 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
     const notes = [unrecorded.length ? 'Applied, but not in the history (links, other entries that are no plain files, and files that were there and could not be kept): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') : null, left].filter(Boolean);
     return { applied: true, files, ...(warning ? { warning } : {}), ...(unrecorded.length ? { notInHistory: unrecorded } : {}), ...(left ? { copyLeft: true } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) };
   }
-  async function discardProposal(project, copy) {
-    await removeCopy(project, copy);
+  async function discardProposal(project, copy, options) {
+    await removeCopy(project, copy, options);
     return { discarded: true, branch: copy.branch };
   }
 

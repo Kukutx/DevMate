@@ -86,6 +86,12 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   const notify = {};
   for (const name of ['showInformationMessage', 'showWarningMessage', 'showErrorMessage'])
     Object.defineProperty(notify, name, { get: () => typeof vscode.window[name] === 'function' ? (message, ...rest) => vscode.window[name](inert(message), ...rest) : undefined });
+  // An input box reads what it asks, and what it says of an input, the same way (seen in the code of 1.101 and
+  // 1.133): both go through here as well, whatever they are made of today. A test holds every notification and
+  // every input box of this folder to these functions (tests/repository-check.test.mjs).
+  const said = answer => typeof answer === 'string' ? inert(answer) : answer && typeof answer === 'object' ? { ...answer, message: inert(answer.message) } : answer;
+  notify.showInputBox = (options = {}) => vscode.window.showInputBox({ ...options, ...(options.prompt === undefined ? {} : { prompt: inert(options.prompt) }),
+    ...(typeof options.validateInput === 'function' ? { validateInput: async value => said(await options.validateInput(value)) } : {}) });
   async function showError(error) {
     report(error);
     const action = error?.code === 'NODE_REQUIRED' ? 'Open Settings' : error?.code === 'RUNTIME_STOPPED' ? 'Start DevMate'
@@ -469,7 +475,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (!invoke) {
       output.appendLine(JSON.stringify(selected.operation,null,2));output.show();return;
     }
-    const raw = await vscode.window.showInputBox({title:selected.label,prompt:'JSON object input',value:'{}'});
+    const raw = await notify.showInputBox({title:selected.label,prompt:'JSON object input',value:'{}'});
     if (raw === undefined) return;
     let input;
     try { input = JSON.parse(raw); } catch { throw new Error('The input is not valid JSON.'); }
@@ -530,7 +536,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     return saved;
   }
   async function connectionWizard() {
-    const ask = (prompt, options = {}) => vscode.window.showInputBox({ title: 'DevMate: Configure Connection', prompt, ignoreFocusOut: true, ...options });
+    const ask = (prompt, options = {}) => notify.showInputBox({ title: 'DevMate: Configure Connection', prompt, ignoreFocusOut: true, ...options });
     const hostName = value => /^(https?:\/\/)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d+)?(\/.*)?$/i.test(value.trim()) ? null : 'Enter a host name such as devmate.example.com';
     const httpsAddress = value => { try { return new URL(value.trim()).protocol === 'https:' ? null : 'The address starts with https://'; } catch { return 'Enter the full address, for example https://devmate.example.com/mcp'; } };
     const choice = await vscode.window.showQuickPick([

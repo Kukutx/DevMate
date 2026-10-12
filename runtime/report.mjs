@@ -67,8 +67,10 @@ export function offlineReport(instanceRoot, doctor) {
 
 const MARK = { ok: '[ ok ]', info: '[info]', warn: '[warn]', fail: '[FAIL]' };
 const HEADING = 'DevMate report. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it.';
+// One entry on one line: a name or a message from elsewhere does not begin a line of its own beside the report's.
+const oneLine = text => String(text ?? '').replace(/\s*[\r\n]+\s*/g, ' ');
 function checkLines(checks) {
-  return checks.flatMap(item => [MARK[item.status] + ' ' + item.id + ': ' + item.detail, ...(item.fix && item.status !== 'ok' ? ['       -> ' + item.fix] : [])]);
+  return checks.flatMap(item => [MARK[item.status] + ' ' + item.id + ': ' + oneLine(item.detail), ...(item.fix && item.status !== 'ok' ? ['       -> ' + oneLine(item.fix)] : [])]);
 }
 
 export async function report(service) {
@@ -90,7 +92,7 @@ export async function report(service) {
     ...(usage.operations.length ? usage.operations.map(item => item.name + '  ' + item.calls + ' (' + item.connected + ')  ' + item.failed + '  ' + (item.p50Ms ?? '>50000') + '  ' + (item.p95Ms ?? '>50000') + '  ' + item.maxMs +
       (item.failed ? '  ' + Object.entries(item.errors).map(([code, count]) => code + '×' + count).join(', ') : '')) : ['(none yet)']),
     '', 'Recent failures, newest first',
-    ...(failures.length ? failures.map(item => '#' + item.request + ' ' + item.at + ' ' + item.operation + ' ' + item.code + ' (' + item.caller + ', ' + item.ms + ' ms): ' + item.message) : ['(none)']),
+    ...(failures.length ? failures.map(item => oneLine('#' + item.request + ' ' + item.at + ' ' + item.operation + ' ' + item.code + ' (' + item.caller + ', ' + item.ms + ' ms): ' + item.message)) : ['(none)']),
     '', 'Runtime log, last lines', ...(logTail(service.instanceRoot).map(line => line.slice(0, 600)))];
   return { text: clean(lines.join('\n')) };
 }
