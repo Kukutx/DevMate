@@ -339,6 +339,12 @@ export async function main(argv = process.argv.slice(2), {
   const print = value => stdout.write(`${JSON.stringify(publicOutput(value), null, 2)}\n`);
   // Started by a browser for the DevMate extension: its standard output carries the browser's own framing and nothing
   // else, and its arguments are the browser's (the extension that asks, a window handle), not this command line's.
+  // What it is answered is the owner's at this computer. A browser never carries the mark of a command that a
+  // connected client started (its shell tool, or an agent it delegated to); one that does is that client's.
+  if (argv[0] === 'chrome-host' && env[CLIENT_COMMAND_ENV] === '1') {
+    stderr.write('devmate chrome-host is started by the browser for the DevMate extension, not through a connected client\n');
+    return 2;
+  }
   if (argv[0] === 'chrome-host') return (await import('./chrome-host.mjs')).chromeHostMain(argv.slice(1), { stdin, stdout, stderr });
   let running = async () => null;
   try {
@@ -542,9 +548,11 @@ export async function main(argv = process.argv.slice(2), {
       // at the choice changes nothing and says nothing of that.
       const tasks = count => count + (count === 1 ? ' task' : ' tasks');
       const did = !mode ? '' : chosen.mode === 'ask' ? ' From now on every agent is asked about again, also one whose later tasks you had let through' +
-          (chosen.again ? ', and ' + tasks(chosen.again) + ' of a client that had been let through and had not begun wait for your answer again.' : '.')
+          (chosen.again ? ', and ' + tasks(chosen.again) + ' of a client that had been let through and had not begun wait' + (chosen.again === 1 ? 's' : '') + ' for your answer again' : '') + '.' +
+          (chosen.ended ? ' ' + chosen.ended + ' more ' + (chosen.ended === 1 ? 'task of a client that had not begun was' : 'tasks of a client that had not begun were') + ' ended: as many as may wait for your answer at once did already.' : '')
         : chosen.mode === 'allow' ? (chosen.allowed ? ' ' + tasks(chosen.allowed) + ' that waited for your answer ' + (chosen.allowed === 1 ? 'was' : 'were') + ' let through.' : '') +
-          (chosen.waiting ? ' ' + tasks(chosen.waiting) + ' still wait' + (chosen.waiting === 1 ? 's' : '') + ': no session is free for ' + (chosen.waiting === 1 ? 'it' : 'them') + ' (or the workflow has no turns left), and ' + (chosen.waiting === 1 ? 'it is' : 'they are') + ' let through when one has ended.' : '')
+          (chosen.waiting ? ' ' + tasks(chosen.waiting) + ' still wait' + (chosen.waiting === 1 ? 's' : '') + ': something else keeps ' + (chosen.waiting === 1 ? 'it' : 'them') + ' from beginning (no session is free, or the workflow is paused or has no turns left; the workbench says which, devmate ui), and ' +
+            (chosen.waiting === 1 ? 'it is' : 'they are') + ' let through when that is out of the way.' : '')
         : ' What waited for your answer or its turn was ended.';
       stderr.write({ ask: 'Ask: a task that a connected client hands to Codex, Claude Code or another agent here waits until you allow it at this computer, in the workbench (devmate ui) or your editor. What you start here yourself is not asked about.' + did + ' Not to be asked: devmate delegation allow\n',
         allow: 'Allow: a connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider.' + did + ' To be asked first: devmate delegation ask\n',

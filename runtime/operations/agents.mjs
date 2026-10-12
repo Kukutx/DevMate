@@ -25,6 +25,7 @@ export function defineAgentOperations(service, add) {
 
   const waiting = result => [result.approvals.length ? result.approvals.length + ' approval(s)' : null, result.inputs.length ? result.inputs.length + ' question(s)' : null].filter(Boolean).join(' and ');
   const follow = result => 'call agents_result agentId:' + result.agentId + (result.jobId ? ' jobId:' + result.jobId : result.deliveryId ? ' deliveryId:' + result.deliveryId : '') + ' to wait for this task';
+  const unasked = result => result.approvals.find(item => item.delegation)?.waits;
   const turnText = result => (result.output ||(result.error ? '[' + result.error.message + ']' : result.settled ? '[the agent produced no text]' : '[no result yet]')) +
     (result.outputTruncated ? '\n[earlier output omitted; job.read id:' + result.jobId + ' has all of it]' : '') +
     (result.changedFiles?.length ? '\nWorking tree after this task (git status):\n' + result.changedFiles.map(entry => '  ' + entry).join('\n') : '') +
@@ -32,10 +33,14 @@ export function defineAgentOperations(service, add) {
       '\nRead the diff with operations_query {operation:"agents.proposal", input:{agentId:"' + result.agentId + '"}}. Bring it into the project with operations_call {operation:"agents.apply", input:{agentId:"' + result.agentId + '"}}, or drop it with agents.discard.' : '') +
     (result.copyNote ? '\n[' + result.copyNote + ']' : '') +
     // An agent that a connected client had written down, and that no allowed task has started yet, is said as that.
-    '\n[agent ' + (result.status === 'unstarted' ? 'not started (it starts when the owner allows a task of it)' : result.status) +
+    // Where the owner chose not to be asked, a task that still waits does so for something else (unasked), and
+    // that is said instead of what the owner has long done.
+    '\n[agent ' + (result.status === 'unstarted' ? 'not started (it starts ' + (unasked(result) ? 'with the first task of it that begins' : 'when the owner allows a task of it') + ')' : result.status) +
     // A task that waits for the owner's word has not begun, and is not the client's to allow in either access profile.
-    (result.approvals.some(item => item.delegation) ? '; nothing has run yet: the owner has to allow this task at their computer first, because it runs on their account with ' + result.provider +
-      '. Ask them to answer it in the DevMate workbench there (devmate ui) or in their editor; devmate delegation allow, run there, ends the asking. Then ' + follow(result)
+    (result.approvals.some(item => item.delegation) ? '; nothing has run yet: ' + (unasked(result)
+      ? 'the owner chose not to be asked about tasks, and this one has not begun because of something else. ' + unasked(result) + ' It is let through when that is out of the way. Then '
+      : 'the owner has to allow this task at their computer first, because it runs on their account with ' + result.provider +
+        '. Ask them to answer it in the DevMate workbench there (devmate ui) or in their editor; devmate delegation allow, run there, ends the asking. Then ') + follow(result)
     : (result.settled ? '' : '; ' + follow(result)) + (waiting(result) ? '; ' + waiting(result) + (service.fullAccess()
       ? ' await an answer: from the user in the DevMate workbench, or from the owner\'s client after asking them, with operations_call (approval.resolve {id, optionId}; input.respond {id, response:"<the answer>"}); operations_query input.list shows the question'
       : ' await the user in the DevMate workbench') : '')) + ']';

@@ -430,12 +430,17 @@ function approvalCard(approval) {
   // Once the decision is accepted the request leaves the waiting list at once, not with the next refresh.
   const decide = async optionId => { await mutate('approval.resolve', {id: approval.id, optionId, expectedRevision: approval.revision}, 'Decision sent.'); approval.status = 'resolved'; renderMain(); };
   return el('div', {class: 'item waiting', 'data-key': approval.id}, el('div', {class: 'row-head'}, el('h3', {text: str(approval.summary) || str(approval.title) || 'Approval request'}), badge(approval.status)),
-    caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? consent ? 'allowed without asking (devmate delegation allow)' : 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
+    // (The agent of a task that waits to be allowed may be named by the client that asks: its name stands in the
+    // question, in quotes, and nowhere on this card as words of its own.)
+    caption([consent ? '' : agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? consent ? 'allowed without asking (devmate delegation allow)' : 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
     // A task that waits to be allowed is shown as what the owner agrees to: who asks, what would run it (the model,
-    // a session of the provider that is taken up again), and the task itself as the text it is, line by line.
+    // a session of the provider that is taken up again), and the task itself as the text it is, line by line. What
+    // somebody else named comes in quotes from the runtime, and is marked where the client chose it.
     asked ? [caption([str(asked.askedBy), 'runs with ' + str(asked.agent) + ', model: ' + str(asked.model), str(asked.continues) ? 'continues ' + asked.continues : '', 'project: ' + str(asked.project), asked.characters + ' characters'].filter(Boolean).join(' · ')),
       pre(str(asked.task), {class: 'preview file-view', 'aria-label': 'The task'}), str(asked.notShown) ? el('p', {class: 'error-text', text: asked.notShown}) : null, str(asked.note) ? caption(asked.note) : null]
       : approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
+    // Where the owner chose not to be asked, a task that is still here waits for something else, and says what.
+    consent && str(approval.waits) ? el('p', {class: 'error-text', text: 'You chose not to be asked (devmate delegation allow), and this task has not begun because of something else. ' + approval.waits + ' It is let through when that is out of the way; refuse it here if it is not to run.'}) : null,
     el('div', {class: 'actions'}, here ? options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))) : null,
       consent ? null : opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
     options.length ? null : caption('The agent did not offer any choices for this request.'),

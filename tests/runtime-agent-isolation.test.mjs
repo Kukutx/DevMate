@@ -113,6 +113,43 @@ test('an agent with a copy of its own leaves the project alone until its work is
   assert.equal(instances.length, 1);
 });
 
+// Whether a task of a connected client runs at all is the owner's to say (runtime-delegation.test.mjs). The copy is
+// made before they are asked, so that what they agree to is there: this is what becomes of it when they say no.
+test('a copy that was made for a task the owner then does not allow goes with it, folder and branch; one that cannot be removed yet stays the agent\'s to throw away', async t => {
+  const { service, project, root, temp, instances } = await fixture(t);
+  await service.call('delegation.update', { mode: 'ask' }, owner);
+  const until = async (ready, what) => { for (let round = 0; round < 400; round++) { if (await ready()) return; await new Promise(resolve => setTimeout(resolve, 25)); } assert.fail('timed out waiting for ' + what); };
+  const branches = () => git(root, 'branch', '--list', 'devmate/*').split(/\r?\n/).map(line => line.replace(/^[+*]? */, '')).filter(Boolean);
+  const hand = async () => {
+    const waiting = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 0 }, connected);
+    return { ...waiting, copy: service.store.get('agent', waiting.agentId).isolated };
+  };
+  const refuse = waiting => service.call('approval.resolve', { id: waiting.approvals[0].id, optionId: 'deny' }, owner);
+  // A real working copy on a branch of its own, and nothing started in it.
+  const first = await hand();
+  assert.ok(first.copy.root.startsWith(path.join(temp, 'instance-copies') + path.sep));
+  assert.deepEqual([first.approvals.length, instances.length, fs.existsSync(path.join(first.copy.root, 'src', 'a.js')), branches()], [1, 0, true, [first.copy.branch]]);
+  await refuse(first);
+  await until(() => !fs.existsSync(first.copy.root) && !branches().length, 'the copy and its branch to be removed');
+  assert.equal(git(root, 'worktree', 'list').trim().split('\n').length, 1);
+  assert.deepEqual([service.store.get('agent', first.agentId).status, service.store.get('agent', first.agentId).error.code, service.store.get('agent', first.agentId).isolated.settled], ['closed', 'agent_never_ran', 'discarded']);
+  await assert.rejects(service.call('agents.discard', { agentId: first.agentId }, owner), { code: 'agent_finished' });
+
+  // A copy that cannot be removed when the task is refused (a program still has its folder) is not written down as
+  // gone: it is the agent's still, and is thrown away once nothing holds it.
+  const remove = service.workspace.discardProposal;
+  let tried = 0;
+  service.workspace.discardProposal = async () => { tried++; throw Object.assign(new Error('A program still uses the folder of the copy.'), { code: 'copy_in_use' }); };
+  const second = await hand();
+  await refuse(second);
+  await until(() => tried === 1 && !service.store.get('agent', second.agentId).isolated.settled, 'the copy to be the agent\'s again');
+  assert.deepEqual([service.store.get('agent', second.agentId).status, fs.existsSync(second.copy.root), branches()], ['closed', true, [second.copy.branch]]);
+  service.workspace.discardProposal = remove;
+  assert.equal((await service.call('agents.discard', { agentId: second.agentId }, owner)).discarded, true);
+  assert.deepEqual([fs.existsSync(second.copy.root), branches(), service.store.get('agent', second.agentId).isolated.settled], [false, [], 'discarded']);
+  assert.equal(instances.length, 0, 'nothing was started for either');
+});
+
 // Where DevMate is installed without being told otherwise, its instance is ~/.devmate/runtime, and the copies are
 // beside it, in a folder named .devmate: a name no shared folder may have above it.
 test('a copy beside an instance that lives in a folder named .devmate is read, applied and discarded like any other', async t => {

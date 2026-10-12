@@ -235,8 +235,9 @@ export class DevMateService {
     // Tasks that already wait for the owner's word are covered by "do not ask". Choosing to be asked means of every
     // agent again, also one whose later tasks had been let through, and of every task of a client that has not begun;
     // and with off nothing of a connected client's is left to run. What that did to the tasks there were is said
-    // with the answer, in numbers: allowed (let through now), waiting (kept for want of a free session or of turns
-    // in their workflow, and let through when there is room), again (wait for the owner's word once more).
+    // with the answer, in numbers: allowed (let through now), waiting (kept for want of a free session, of turns in
+    // their workflow or of something else that is said with each, and let through when that is out of the way), again
+    // (wait for the owner's word once more), ended (were beyond what may wait for the owner at once).
     const done = mode === 'allow' ? this.agents.allowWaiting() : this.agents.askAgain(mode === 'off');
     return { mode, ...Object.fromEntries(Object.entries(done).filter(([, count]) => count > 0)) };
   }
@@ -477,6 +478,8 @@ export class DevMateService {
     if (Object.keys(live).length) all[name] = live; else delete all[name];
     this.store.setting('providers.live', all);
     this.providerDiscovery = null;
+    // More sessions may be allowed now: a task that waited for one, where the owner is not asked, is tried again.
+    if (this.delegation === 'allow') this.agents.allowWaiting();
     return { provider: name, settings, changed: live };
   }
 

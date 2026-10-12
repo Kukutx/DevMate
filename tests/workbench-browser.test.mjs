@@ -36,8 +36,11 @@ const DELEGATION_ASKS='A connected client asks codex to run a task in the projec
 const ALLOW_AGENT='Run it, and do not ask again for this agent while it stays connected (tasks, and what is added to a task that runs)';
 const delegationRequest=()=>({id:'approval-delegation',kind:'delegation',projectId:'p-one',agentId:'a-one',deliveryId:'delivery-001',summary:DELEGATION_ASKS,status:'pending',revision:1,
   options:[{optionId:'allow_once',name:'Run this task'},{optionId:'allow_agent',name:ALLOW_AGENT},{optionId:'deny',name:'Do not run it'}],
-  details:{agent:'codex',model:'gpt-large',continues:'the codex session thread-7',project:'Project One',askedBy:'A connected client',characters:20,task:'Fix it\nand the tests',
+  details:{agent:'codex',model:'"gpt-large" (the client chose it)',continues:'the codex session "thread-7" (the client chose it)',project:'"Project One"',askedBy:'A connected client',characters:20,task:'Fix it\nand the tests',
     note:'Running it uses your account with codex. Not to be asked: devmate delegation allow'}});
+// The same where the owner chose not to be asked and something else keeps the task from beginning.
+const DELEGATION_WAITS='A connected client asks codex to run a task in the project "Project One": Later';
+const WAITS_FOR='Workflow turn budget reached (2 turns). Raise it to continue: workflow.update {id:"w-one", turnBudget:<more>}.';
 function fixture() {
   const calls=[],refs=[],failures=new Map();
   const projects=[{id:'p-one',name:'Project One',root:'C:/fixture-one',access:'write',revision:1},{id:'p-two',name:'Project Two',root:'C:/fixture-two',access:'write',revision:1}];
@@ -190,7 +193,7 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   await page.getByRole('alert').filter({hasText:'File changed'}).waitFor();
   assert.equal(await editor.inputValue(),'unsaved conflict draft');
   // Another tab does not cost the unsaved draft, and no browser dialog is involved.
-  f.approvals.push(delegationRequest());
+  f.approvals.push(delegationRequest(),{...delegationRequest(),id:'approval-waits',deliveryId:'delivery-002',summary:DELEGATION_WAITS,waits:WAITS_FOR});
   await page.getByRole('tab',{name:'Approvals',exact:true}).click();
   assert.equal(await page.getByRole('button',{name:'Cancel turn',exact:true}).count(),1,'a task that waits to be allowed has no turn to cancel: only the agent\'s own request offers that');
   await page.getByRole('button',{name:'Allow once from provider',exact:true}).click();
@@ -204,19 +207,27 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   // by line, not as one line of a record. The three answers are offered in their own words.
   const waits=page.locator('[data-key="approval-delegation"]');
   assert.equal(await waits.getByLabel('The task').textContent(),'Fix it\nand the tests');
-  assert.match(await waits.textContent(),/A connected client · runs with codex, model: gpt-large · continues the codex session thread-7 · project: Project One · 20 characters/);
+  // What somebody else named stands in the quotes the runtime gives it, and is marked where the client chose it. The
+  // agent's name, which may be the client's too, is in the question in quotes and nowhere on the card by itself.
+  assert.match(await waits.textContent(),/A connected client · runs with codex, model: "gpt-large" \(the client chose it\) · continues the codex session "thread-7" \(the client chose it\) · project: "Project One" · 20 characters/);
+  assert.doesNotMatch(await waits.textContent(),/First agent/);
   assert.match(await waits.textContent(),/Running it uses your account with codex\./);
   for(const name of ['Run this task',ALLOW_AGENT,'Do not run it'])assert.equal(await waits.getByRole('button',{name,exact:true}).count(),1,name);
   assert.equal(await waits.getByRole('button',{name:'Cancel turn',exact:true}).count(),0);
+  // Where the owner chose not to be asked, a task that is still here says what it waits for instead; one that waits
+  // for their answer says nothing of the kind.
+  const waitsFor='You chose not to be asked (devmate delegation allow), and this task has not begun because of something else. '+WAITS_FOR+' It is let through when that is out of the way; refuse it here if it is not to run.';
+  assert.ok((await page.locator('[data-key="approval-waits"]').textContent()).includes(waitsFor));
+  assert.doesNotMatch(await waits.textContent(),/You chose not to be asked/);
   // A yes for a task that cannot begin right now is refused with what is in the way. The owner reads that here, where
   // they answered, and the question stays as it was, to be answered again.
-  const inTheWay='8 codex sessions are already connected. Stop one with agents.stop. This task keeps waiting for your answer: allow it once that is out of the way.';
+  const inTheWay='8 codex sessions are already connected. Stop one with agents.stop. This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.';
   f.failNext('approval.resolve',inTheWay,'agent_limit');
   await waits.getByRole('button',{name:'Run this task',exact:true}).click();
   await page.getByRole('alert').filter({hasText:inTheWay}).waitFor();
   assert.equal(await waits.getByRole('button',{name:'Run this task',exact:true}).count(),1,'the question is still there');
   assert.equal(f.approvals.find(item=>item.id==='approval-delegation').status,'pending');
-  await page.getByRole('button',{name:'Do not run it',exact:true}).click();
+  await waits.getByRole('button',{name:'Do not run it',exact:true}).click();
   await until(()=>f.count('approval.resolve')===3,'the owner\'s answer');
   const answered=f.calls.filter(x=>x.operation==='approval.resolve')[2].input;
   assert.deepEqual([answered.id,answered.optionId],['approval-delegation','deny']);

@@ -361,6 +361,13 @@ test('a window with several shared folders hears about every shared folder befor
   await until(()=>window.asked.some(message=>/^An agent is waiting for your approval: Run the migration/.test(message)),'the approval is announced');
   assert.equal(window.asked.filter(message=>/waiting for your approval/.test(message)).length,1,'what happens in a folder of another window is not announced here');
   assert.ok(mine.id);
+  // What an agent asks is announced cut short. A task that a connected client handed over is announced with its
+  // whole question: the names in it stand in quotes the runtime closes, and a cut could leave one of them open.
+  const question='A connected client asks codex (named "'+'n'.repeat(60)+'") to run a task in the project "'+'p'.repeat(60)+'": '+'x'.repeat(160)+' [and 12 more characters]';
+  store.create('approval',{projectId:mine.projectId,status:'pending',summary:'y'.repeat(300)});
+  store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:question});
+  await until(()=>window.asked.includes('A connected client asks to run a task on your account: '+question),'the task is announced with its whole question');
+  assert.ok(question.length>200&&window.asked.includes('An agent is waiting for your approval: '+'y'.repeat(200)));
   // Sharing changed from elsewhere reaches the window at once.
   await f.call('project.update',{id:window.entry.attachment.roots[0].projectId,access:'read'});
   await until(()=>window.entry.attachment.roots[0].access==='read','the window shows the new access');

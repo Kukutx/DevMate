@@ -76,7 +76,7 @@ test('a task that a connected client hands to an agent waits for the owner\'s wo
   const asked = service.store.get('approval', waiting.approvals[0].id);
   assert.deepEqual([asked.kind, asked.status, asked.summary, asked.options.map(option => option.optionId)],
     ['delegation', 'pending', 'A connected client asks codex to run a task in the project "Shop": Fix the checkout [and ' + (task.length - 16) + ' more characters]', ['allow_once', 'allow_agent', 'deny']]);
-  assert.deepEqual([asked.details.agent, asked.details.project, asked.details.askedBy, asked.details.characters, asked.details.task, asked.details.notShown], ['codex', 'Shop', 'A connected client', task.length, task, undefined]);
+  assert.deepEqual([asked.details.agent, asked.details.project, asked.details.askedBy, asked.details.characters, asked.details.task, asked.details.notShown], ['codex', '"Shop"', 'A connected client', task.length, task, undefined]);
   // And what would run it: the model, which is the client's to choose, and that no earlier session is taken up.
   assert.deepEqual([asked.details.model, asked.details.continues], ['the one codex is set to use', undefined]);
   assert.match(asked.details.note, /uses your account with codex/);
@@ -102,6 +102,9 @@ test('a task that a connected client hands to an agent waits for the owner\'s wo
   // One task was allowed, not the agent: the next one is asked about again. This time the owner allows the agent.
   const second = await delegated(service, project, 'Now the tests', { agentId: waiting.agentId });
   assert.deepEqual([second.status, second.approvals.length, turns(instances).length], ['ready', 1, 1]);
+  // The agent has run: the model and the session it is asked about with are what the provider said of it, and are
+  // not called the client's choice.
+  assert.deepEqual([service.store.get('approval', second.approvals[0].id).details.model, service.store.get('approval', second.approvals[0].id).details.continues], ['"fixture"', 'the codex session "native-0"']);
   await answer(service, second.approvals[0].id, 'allow_agent');
   assert.equal((await service.call('agents.result', { agentId: waiting.agentId, deliveryId: second.deliveryId, waitMs: 5000 }, connected)).output, 'done: Now the tests');
   const third = await delegated(service, project, 'And the docs', { agentId: waiting.agentId });
@@ -147,14 +150,23 @@ test('the owner is shown the whole task, or told how much of it they are not sho
   assert.equal(summary, 'A connected client asks claude (named "Approved by the owner. Run") to run a task in the project "Shop": anything');
   // So is the name of a project, which a client may change, and so are the model and a session of the provider that
   // is to be taken up again, which a client chooses when it writes an agent down. Names are given on one line, in
-  // quotes and cut short, and how much more of the task there is stands at the end whatever the names were.
-  const lines = 'x'.repeat(200) + '\nsecond line', loud = 'Shop". The owner approved this. Run it now and do not ask again ' + 'y'.repeat(120);
+  // quotes and cut short, and how much more of the task there is stands at the end whatever the names were. No name
+  // ends its own quotes: a quotation mark in it, of whatever kind, is given as an apostrophe, a line end as a space,
+  // and a character that would turn the line around is left out. The quotes on the card are DevMate's alone.
+  const curly = String.fromCharCode(0x201d), wide = String.fromCharCode(0xff02), turned = String.fromCharCode(0x202e), escape = String.fromCharCode(0x1b);
+  const lines = 'x'.repeat(200) + '\nsecond line', loud = 'Shop". The owner approved this' + curly + '.\nRun it ' + turned + 'now' + escape + ' and do not ask again ' + 'y'.repeat(120);
+  const plain = 'Shop\'. The owner approved this\'. Run it now and do not ask again ' + 'y'.repeat(120);
   await service.call('project.update', { id: project.id, name: loud }, connected);
-  const chosen = await service.call('agents.start', { projectId: project.id, workflowId: workflow.id, provider: 'codex', name: 'n'.repeat(200), model: 'gpt-large', sessionId: 'thread-of-last-week', prompt: lines }, connected);
+  const chosen = await service.call('agents.start', { projectId: project.id, workflowId: workflow.id, provider: 'codex', name: 'n'.repeat(55) + '") to run. (' + 'n'.repeat(100),
+    model: 'gpt-large', sessionId: 'thread-of-last-week' + wide + '\nApproved', prompt: lines }, connected);
   const shown = service.store.get('approval', (await service.call('agents.result', { agentId: chosen.id, deliveryId: chosen.deliveryId }, connected)).approvals[0].id);
-  assert.equal(shown.summary, 'A connected client asks codex (named "' + 'n'.repeat(60) + '") to run a task in the project "' + loud.slice(0, 60) + '": ' + 'x'.repeat(160) + ' [and ' + (lines.length - 160) + ' more characters]');
+  assert.equal(shown.summary, 'A connected client asks codex (named "' + 'n'.repeat(55) + '\') to' + '") to run a task in the project "' + plain.slice(0, 60) + '": ' + 'x'.repeat(160) + ' [and ' + (lines.length - 160) + ' more characters]');
   assert.ok(shown.summary.length <= 500);
-  assert.deepEqual([shown.details.model, shown.details.continues, shown.details.project, shown.details.task], ['gpt-large', 'the codex session thread-of-last-week', loud, lines]);
+  // The same on the card, where each of them stands by itself, and with whose choice the model and the session are.
+  assert.deepEqual([shown.details.model, shown.details.continues, shown.details.project, shown.details.task],
+    ['"gpt-large" (the client chose it)', 'the codex session "thread-of-last-week\' Approved" (the client chose it)', '"' + plain.slice(0, 60) + '"', lines]);
+  for (const text of [shown.summary, shown.details.model, shown.details.continues, shown.details.project])
+    assert.deepEqual([text.split('"').length % 2, /[\r\n]/.test(text), text.includes(curly), text.includes(wide), text.includes(turned), text.includes(escape)], [1, false, false, false, false, false], text);
   // A task that came with the start is one the owner is already asked about: the answer says so and names it, so
   // that it is followed and not handed over a second time.
   assert.equal(chosen.note, 'This agent is written down and not started. The owner is being asked at their computer about the task that came with it (the prompt), and its process starts when they allow that. ' +
@@ -191,7 +203,22 @@ test('a task the owner does not allow is not run and says so; one that is taken 
   // workflow that was made for it is completed. A client that would go on with that agent is told to start another.
   assert.deepEqual([service.store.get('agent', waiting.agentId).status, service.store.get('agent', waiting.agentId).error.code, service.store.get('workflow', waiting.workflowId).status], ['closed', 'agent_never_ran', 'completed']);
   await assert.rejects(delegated(service, project, 'Rewrite half of it', { agentId: waiting.agentId }),
-    { code: 'agent_never_ran', message: 'No task of this agent ran: what it was written down for was not allowed, or was taken back, and it was closed with that. Start a new agent for the next task. (agents_delegate without agentId.)' });
+    { code: 'agent_never_ran', message: 'No task of this agent ran: what it was written down for ended before it began (the task says why), and the agent was closed with that. Start a new agent for the next task. (agents_delegate without agentId.)' });
+  // A workflow that was made for a client's task holds what the client adds to it: with two agents in it that never
+  // ran it is completed with the second, not left open by the first.
+  const pair = await delegated(service, project, 'One of two'), mate = await service.call('agents.delegate', { projectId: project.id, workflowId: pair.workflowId, provider: 'claude', prompt: 'Two of two', waitMs: 20000 }, connected);
+  await answer(service, pair.approvals[0].id, 'deny');
+  assert.deepEqual([service.store.get('agent', pair.agentId).status, service.store.get('agent', mate.agentId).status, service.store.get('workflow', pair.workflowId).status], ['closed', 'unstarted', 'active']);
+  await answer(service, mate.approvals[0].id, 'deny');
+  assert.deepEqual([service.store.get('agent', mate.agentId).error.code, service.store.get('workflow', pair.workflowId).status], ['agent_never_ran', 'completed']);
+  // One in which an agent did run is left open, also once that agent is stopped: its work can be taken up there.
+  const ran = await delegated(service, project, 'This one runs');
+  await answer(service, ran.approvals[0].id, 'allow_once');
+  await service.call('agents.result', { agentId: ran.agentId, deliveryId: ran.deliveryId, waitMs: 5000 }, connected);
+  await service.call('agents.stop', { id: ran.agentId }, local);
+  const never = await service.call('agents.delegate', { projectId: project.id, workflowId: ran.workflowId, provider: 'claude', prompt: 'This one does not', waitMs: 20000 }, connected);
+  await answer(service, never.approvals[0].id, 'deny');
+  assert.deepEqual([service.store.get('agent', ran.agentId).status, service.store.get('agent', never.agentId).error.code, service.store.get('workflow', ran.workflowId).status], ['closed', 'agent_never_ran', 'active']);
   // A workflow the owner made is not completed over a client's agent that never ran in it, and an agent of which
   // another task still waits is not closed by the refusal of one.
   const kept = await service.call('workflow.create', { projectId: project.id, title: 'The owner\'s' }, local);
@@ -221,7 +248,7 @@ test('a task the owner does not allow is not run and says so; one that is taken 
   // A task that waits holds nobody up. The agent runs what the owner sends it meanwhile, and the question stays.
   const held = await delegated(service, project, 'For later', { agentId });
   assert.equal((await service.call('agents.delegate', { agentId, prompt: 'Mine', waitMs: 20000 }, local)).output, 'done: Mine');
-  assert.deepEqual([service.store.get('approval', held.approvals[0].id).status, service.store.get('delivery', held.deliveryId).status, turns(instances)], ['pending', 'held', ['Mine first', 'Mine']]);
+  assert.deepEqual([service.store.get('approval', held.approvals[0].id).status, service.store.get('delivery', held.deliveryId).status, turns(instances)], ['pending', 'held', ['This one runs', 'Mine first', 'Mine']]);
   // Nor does the agent's going take the question with it: a session that ends (unused for a while, or its process
   // gone) leaves the task waiting, and the task starts the agent again when it is allowed.
   await service.agents.retire(agentId, service.agents.sessions.get(agentId), null);
@@ -243,7 +270,7 @@ test('a task the owner does not allow is not run and says so; one that is taken 
     const cancelled = await service.call('task.update', { id: task.id, status: 'cancelled', ...(revision ? { expectedRevision: task.revision } : {}) }, caller);
     assert.deepEqual([cancelled.status, service.store.get('approval', question.id).status, (await pending()).length, service.store.get('agent', agent.id).status], ['cancelled', 'expired', 0, 'ready']);
   }
-  assert.deepEqual(turns(instances), ['Mine first', 'Mine']);
+  assert.deepEqual(turns(instances), ['This one runs', 'Mine first', 'Mine']);
 });
 
 test('the owner chooses at the computer whether to be asked: allow runs the tasks, off refuses them, and both outlast a restart', async t => {
@@ -257,11 +284,12 @@ test('the owner chooses at the computer whether to be asked: allow runs the task
   await service.call('access.update', { profile: 'guarded' }, local);
 
   // A task that already waits is covered by "do not ask", and says that nobody answered it by hand.
-  const waiting = await delegated(service, project, 'First');
-  assert.equal(waiting.approvals.length, 1);
-  // What the choice did to the tasks there were is said with it: one was let through.
-  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', allowed: 1 });
+  const waiting = await delegated(service, project, 'First'), beside = await delegated(service, project, 'Beside the first');
+  assert.deepEqual([waiting.approvals.length, beside.approvals.length], [1, 1]);
+  // What the choice did to the tasks there were is said with it: both were let through.
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', allowed: 2 });
   assert.equal((await service.call('agents.result', { agentId: waiting.agentId, deliveryId: waiting.deliveryId, waitMs: 5000 }, connected)).output, 'done: First');
+  assert.equal((await service.call('agents.result', { agentId: beside.agentId, deliveryId: beside.deliveryId, waitMs: 5000 }, connected)).output, 'done: Beside the first');
   const record = service.store.get('approval', waiting.approvals[0].id);
   assert.deepEqual([record.status, record.automatic, record.answer.optionId], ['resolved', true, 'allow_once']);
   // From then on a client's task runs as it did before there was a question.
@@ -270,9 +298,11 @@ test('the owner chooses at the computer whether to be asked: allow runs the task
   const check = async current => (await current.call('runtime.doctor', {}, local)).checks.find(item => item.id === 'delegation');
   assert.deepEqual([(await check(service)).status, (await check(service)).fix], ['info', 'To be asked for each task first: devmate delegation ask']);
 
-  // The choice is the instance's own: it is there after a restart.
+  // The choice is the instance's own: it is there after a restart, where it is read and where it counts.
   let again = await restart();
   assert.deepEqual(await again.call('delegation.read', {}, connected), { mode: 'allow' });
+  const unasked = await again.call('agents.delegate', { projectId: project.id, provider: 'claude', prompt: 'After the restart, unasked', waitMs: 20000 }, connected);
+  assert.deepEqual([unasked.settled, unasked.output, unasked.approvals], [true, 'done: After the restart, unasked', []]);
   const mine = await again.call('agents.start', { projectId: project.id, workflowId: direct.workflowId, provider: 'codex' }, local);
   await until(() => again.store.get('agent', mine.id).status === 'ready', 'the agent the owner started');
 
@@ -323,11 +353,17 @@ test('the owner chooses at the computer whether to be asked: allow runs the task
   assert.equal(again.store.get('agent', mine.id).delegationAllowed, false);
   // What waits when the runtime stops is not carried over: nothing runs unasked after a restart.
   const held = await again.call('agents.delegate', { agentId: mine.id, prompt: 'Sixth', waitMs: 20000 }, connected);
-  assert.equal(held.approvals.length, 1);
+  const written = await again.call('agents.delegate', { projectId: project.id, provider: 'claude', prompt: 'Seventh', waitMs: 20000 }, connected);
+  assert.deepEqual([held.approvals.length, written.approvals.length, written.status], [1, 1, 'unstarted']);
   again = await restart();
   assert.deepEqual(await again.call('delegation.read', {}, local), { mode: 'ask' });
   assert.deepEqual([again.store.get('approval', held.approvals[0].id).status, again.store.get('delivery', held.deliveryId).status], ['expired', 'cancelled']);
-  assert.ok(!turns(instances).includes('Sixth') && !turns(instances).includes('Fourth'));
+  // An agent that was written down for such a task is closed with it, and what it says of that is true of a restart
+  // as well: the task says why it ended.
+  const closed = await again.call('agents.result', { agentId: written.agentId, deliveryId: written.deliveryId }, connected);
+  assert.deepEqual([closed.settled, closed.status, closed.error], [true, 'closed', { code: 'runtime_interrupted', message: 'The runtime restarted before this message was delivered.' }]);
+  assert.equal(again.store.get('agent', written.agentId).error.message, 'No task of this agent ran: what it was written down for ended before it began (the task says why), and the agent was closed with that. Start a new agent for the next task.');
+  assert.ok(!turns(instances).includes('Sixth') && !turns(instances).includes('Seventh') && !turns(instances).includes('Fourth'));
 });
 
 test('a connected client starts no process and takes no place before a task of it is allowed', async t => {
@@ -347,7 +383,7 @@ test('a connected client starts no process and takes no place before a task of i
   // is in the way, and the question stays as it was. The task does not fail, and the owner is not asked a second time.
   const state = item => [service.store.get('approval', item.approvals[0].id).status, service.store.get('delivery', item.deliveryId).status];
   await assert.rejects(answer(service, waiting[0].approvals[0].id, 'allow_once'),
-    { code: 'agent_limit', message: /^1 codex sessions are already connected\. Stop one with agents\.stop, .* This task keeps waiting for your answer: allow it once that is out of the way\.$/ });
+    { code: 'agent_limit', message: /^1 codex sessions are already connected\. Stop one with agents\.stop, .* This task keeps waiting for your answer: allow it once that is out of the way, or refuse it\.$/ });
   assert.deepEqual([state(waiting[0]), instances.length], [['pending', 'held'], 1]);
   // With room it is started, by the allowing.
   await service.call('agents.stop', { id: own.agentId }, local);
@@ -364,6 +400,107 @@ test('a connected client starts no process and takes no place before a task of i
   await service.call('agents.stop', { id: waiting[1].agentId }, local);
   assert.equal((await service.call('agents.result', { agentId: waiting[2].agentId, deliveryId: waiting[2].deliveryId, waitMs: 5000 }, connected)).output, 'done: three');
   assert.deepEqual(turns(instances), ['Mine', 'one', 'two', 'three']);
+});
+
+test('a yes is not used up on a task that cannot begin, whatever is in the way; where the owner chose not to be asked such a task says what it waits for, and goes when that is gone', async t => {
+  const { service, project, instances } = await fixture(t);
+  // A client's task waits for an agent that is not started, and its workflow is paused meanwhile (a client may: it
+  // narrows). Allowed now, the task could only fail, and the agent would be closed with it.
+  const waiting = await delegated(service, project, 'In a paused workflow'), question = waiting.approvals[0].id;
+  await service.call('workflow.update', { id: waiting.workflowId, status: 'paused' }, connected);
+  const state = () => [service.store.get('approval', question).status, service.store.get('delivery', waiting.deliveryId).status, service.store.get('agent', waiting.agentId).status, service.store.get('workflow', waiting.workflowId).usedTurns, instances.length];
+  await assert.rejects(answer(service, question, 'allow_once'),
+    { code: 'workflow_inactive', message: 'Open the workflow before starting work. This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.' });
+  assert.deepEqual(state(), ['pending', 'held', 'unstarted', 0, 0]);
+  const told = async () => said(service, 'agents.result', await service.call('agents.result', { agentId: waiting.agentId, deliveryId: waiting.deliveryId }, connected));
+  assert.match(await told(), /nothing has run yet: the owner has to allow this task at their computer first/);
+  // "Do not ask" does not call it let through: it still waits, and says for what, to the client that asks after it
+  // and on the owner's card. Neither is told any longer that the owner has to allow it: they did.
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', waiting: 1 });
+  assert.deepEqual([state(), service.store.get('approval', question).waits], [['pending', 'held', 'unstarted', 0, 0], 'Open the workflow before starting work.']);
+  assert.match(await told(), /\n\[agent not started \(it starts with the first task of it that begins\); nothing has run yet: the owner chose not to be asked about tasks, and this one has not begun because of something else\. Open the workflow before starting work\. It is let through when that is out of the way\. Then call agents_result agentId:\S+ deliveryId:\S+ to wait for this task\]\n/);
+  assert.doesNotMatch(await told(), /the owner has to allow this task|devmate delegation allow|when the owner allows/);
+  // Asked again, it is a question like any other once more.
+  assert.deepEqual(await service.call('delegation.update', { mode: 'ask' }, local), { mode: 'ask' });
+  assert.equal(service.store.get('approval', question).waits, null);
+  assert.match(await told(), /the owner has to allow this task at their computer first/);
+  // And not asked, it goes by itself when what was in the way is gone: the workflow is opened again.
+  await service.call('delegation.update', { mode: 'allow' }, local);
+  await service.call('workflow.update', { id: waiting.workflowId, status: 'active' }, local);
+  assert.equal((await service.call('agents.result', { agentId: waiting.agentId, deliveryId: waiting.deliveryId, waitMs: 5000 }, connected)).output, 'done: In a paused workflow');
+  assert.deepEqual([service.store.get('approval', question).status, service.store.get('approval', question).automatic, service.store.get('workflow', waiting.workflowId).usedTurns], ['resolved', true, 1]);
+
+  // The same with the agent connected: a task for it in a workflow that is paused is not queued behind the owner's
+  // back, and no turn is counted for it, until the workflow is open.
+  await service.call('delegation.update', { mode: 'ask' }, local);
+  const next = await delegated(service, project, 'Paused, with the agent connected', { agentId: waiting.agentId });
+  await service.call('workflow.update', { id: waiting.workflowId, status: 'paused' }, local);
+  await assert.rejects(answer(service, next.approvals[0].id, 'allow_agent'), { code: 'workflow_inactive', message: /This task keeps waiting for your answer/ });
+  assert.deepEqual([service.store.get('delivery', next.deliveryId).status, service.store.get('workflow', waiting.workflowId).usedTurns, service.store.get('agent', waiting.agentId).delegationAllowed], ['held', 1, undefined]);
+  await service.call('workflow.update', { id: waiting.workflowId, status: 'active' }, local);
+  await answer(service, next.approvals[0].id, 'allow_once');
+  assert.equal((await service.call('agents.result', { agentId: waiting.agentId, deliveryId: next.deliveryId, waitMs: 5000 }, connected)).output, 'done: Paused, with the agent connected');
+  // A project that was made read only is in the way like that.
+  await service.call('agents.stop', { id: waiting.agentId }, local);
+  const third = await delegated(service, project, 'In a project that is read only', { agentId: waiting.agentId });
+  await service.call('project.update', { id: project.id, access: 'read' }, local);
+  await assert.rejects(answer(service, third.approvals[0].id, 'allow_once'), { code: 'read_only', message: /^Native execution requires a writable project\. This task keeps waiting for your answer/ });
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', waiting: 1 });
+  await service.call('project.update', { id: project.id, access: 'write' }, local);
+  assert.equal((await service.call('agents.result', { agentId: waiting.agentId, deliveryId: third.deliveryId, waitMs: 5000 }, connected)).output, 'done: In a project that is read only');
+  // And a task that waited for a session goes when more sessions are allowed, not only when one has ended. Where the
+  // owner is asked, none of this lets a task through: it is theirs to answer, whatever changed around it.
+  await service.call('delegation.update', { mode: 'ask' }, local);
+  const fourth = await delegated(service, project, 'With no session free');
+  await service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 3 } }, local);
+  await service.call('workflow.update', { id: fourth.workflowId, turnBudget: 50 }, local);
+  assert.deepEqual([service.store.get('approval', fourth.approvals[0].id).status, service.store.get('approval', fourth.approvals[0].id).waits, service.store.get('delivery', fourth.deliveryId).status, turns(instances).length], ['pending', undefined, 'held', 3]);
+  await service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 1 } }, local);
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', waiting: 1 });
+  assert.match(service.store.get('approval', fourth.approvals[0].id).waits, /^1 codex sessions are already connected\./);
+  await service.call('providers.configure', { provider: 'codex', settings: { maxSessions: 2 } }, local);
+  assert.equal((await service.call('agents.result', { agentId: fourth.agentId, deliveryId: fourth.deliveryId, waitMs: 5000 }, connected)).output, 'done: With no session free');
+  assert.deepEqual(turns(instances), ['In a paused workflow', 'Paused, with the agent connected', 'In a project that is read only', 'With no session free']);
+  // Should a start be refused all the same once the answer is taken, the task ends with that as its error, and is
+  // not called let through.
+  await service.call('delegation.update', { mode: 'ask' }, local);
+  await service.call('agents.stop', { id: fourth.agentId }, local);
+  const again = await delegated(service, project, 'Refused at the start', { agentId: fourth.agentId });
+  const resume = service.agents.resume;
+  service.agents.resume = () => { throw Object.assign(new Error('The start was refused.'), { code: 'agent_start' }); };
+  t.after(() => { service.agents.resume = resume; });
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow' });
+  assert.deepEqual([service.store.get('delivery', again.deliveryId).status, service.store.get('delivery', again.deliveryId).error.message], ['failed', 'The start was refused.']);
+});
+
+test('choosing to be asked again keeps no more waiting than may wait: the oldest tasks that had been let through are asked about, the rest is ended and says so', async t => {
+  const { service, project, factory, instances } = await fixture(t);
+  // Two tasks wait already, and go on waiting where the owner is not asked: their workflows are paused.
+  for (const name of ['early one', 'early two']) await service.call('workflow.update', { id: (await delegated(service, project, name)).workflowId, status: 'paused' }, local);
+  assert.deepEqual(await service.call('delegation.update', { mode: 'allow' }, local), { mode: 'allow', waiting: 2 });
+  // Not asked, a client queues tasks behind one that runs: twenty-five of them.
+  let finish; factory.open = new Promise(resolve => { finish = resolve; });
+  // (Whatever becomes of this test, the task that is kept running ends with it.)
+  t.after(() => finish());
+  const workflow = await service.call('workflow.create', { projectId: project.id, title: 'Many' }, local);
+  const agent = await service.call('agents.start', { projectId: project.id, workflowId: workflow.id, provider: 'codex', prompt: 'The long one' }, connected);
+  await until(() => turns(instances).includes('The long one'), 'the first task to run');
+  const queued = [];
+  for (let count = 1; count <= 25; count++) queued.push((await service.call('agents.send', { id: agent.id, body: 'task ' + count }, connected)).deliveries[0].id);
+  assert.equal(service.store.get('workflow', workflow.id).usedTurns, 26);
+  // Asked again: with the two that waited already, the eighteen that were handed over first wait for the owner's
+  // answer, and the seven after them are ended.
+  assert.deepEqual(await service.call('delegation.update', { mode: 'ask' }, local), { mode: 'ask', again: 18, ended: 7 });
+  const statuses = queued.map(id => service.store.get('delivery', id).status);
+  assert.deepEqual([statuses.slice(0, 18).every(status => status === 'held'), statuses.slice(18)], [true, Array(7).fill('cancelled')]);
+  assert.deepEqual(service.store.get('delivery', queued[24]).error, { code: 'delegation_backlog', message: 'The owner chose to be asked about each task again, and as many as may wait for their answer at once (20) did already: this one was ended. Hand it over again once they have answered.' });
+  assert.equal((await service.call('approval.list', { projectId: project.id, status: 'pending' }, local)).items.length, 20);
+  // The turns that were counted for all of them are given back: they are counted when a task is allowed.
+  assert.equal(service.store.get('workflow', workflow.id).usedTurns, 1);
+  await assert.rejects(service.call('agents.send', { id: agent.id, body: 'one more' }, connected), { code: 'delegation_backlog' });
+  finish(); factory.open = null;
+  await until(() => service.store.get('agent', agent.id).status === 'ready', 'the long task to end');
+  assert.deepEqual(turns(instances), ['The long one']);
 });
 
 test('the owner\'s word for an agent lets its other waiting tasks through, and what may wait for the owner at once is bounded', async t => {
@@ -415,7 +552,7 @@ test('the owner\'s word for an agent lets its other waiting tasks through, and w
   // With no turn left the owner's yes is not used up either: the answer is refused with what is in the way, and the
   // question stays.
   await assert.rejects(answer(service, next.id, 'allow_once'),
-    { code: 'workflow_budget', message: 'Workflow turn budget reached (2 turns). Raise it to continue: workflow.update {id:"' + workflow.id + '", turnBudget:<more>}. This task keeps waiting for your answer: allow it once that is out of the way.' });
+    { code: 'workflow_budget', message: 'Workflow turn budget reached (2 turns). Raise it to continue: workflow.update {id:"' + workflow.id + '", turnBudget:<more>}. This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.' });
   assert.equal(service.store.get('approval', next.id).status, 'pending');
   // One that is refused, or taken back by the client the way the refusal says, counted for nothing and makes room.
   await answer(service, next.id, 'deny');
@@ -430,8 +567,9 @@ test('every way into a task is asked about: a message, an assigned task, what an
   const { service, project, factory, instances } = await fixture(t);
   const workflow = await service.call('workflow.create', { projectId: project.id, title: 'Two agents' }, local);
   const scope = { projectId: project.id, workflowId: workflow.id };
-  // Two agents the owner started at the computer.
-  const first = await service.call('agents.start', { ...scope, provider: 'codex', name: 'Builder' }, local);
+  // Two agents the owner started at the computer. (A name may hold a quotation mark: where it is shown to the owner
+  // as a name it does not end the quotes it stands in.)
+  const first = await service.call('agents.start', { ...scope, provider: 'codex', name: 'Builder "B"' }, local);
   const second = await service.call('agents.start', { ...scope, provider: 'claude', name: 'Reviewer' }, local);
   await until(() => [first, second].every(agent => service.store.get('agent', agent.id).status === 'ready'), 'both agents');
   const pending = async () => (await service.call('approval.list', { ...scope, status: 'pending' }, local)).items;
@@ -444,7 +582,10 @@ test('every way into a task is asked about: a message, an assigned task, what an
   // refused, its text is not the agent's to read either: read from the inbox it would be a task all the same.
   const message = await service.call('message.send', { ...scope, recipientIds: [first.id], body: 'Build it' }, connected);
   assert.deepEqual(inbox(builder), []);
-  assert.equal((await allow('the message to be asked about')).summary, 'A connected client asks codex (named "Builder") to run a task in the project "Shop": Build it');
+  const about = await allow('the message to be asked about');
+  assert.equal(about.summary, 'A connected client asks codex (named "Builder \'B\'") to run a task in the project "Shop": Build it');
+  // The agent is the owner's, and runs: its model and its session are not a client's choice, and are not called one.
+  assert.deepEqual([about.details.model, about.details.continues], ['"fixture"', 'the codex session "native-0"']);
   await until(() => service.store.get('message', message.id).status === 'delivered', 'the message to be run');
   // What a client wrote is named as a client's, not as the owner's "You".
   assert.deepEqual(inbox(builder).slice(0, 1), [['Connected client', 'Build it']]);
@@ -474,10 +615,10 @@ test('every way into a task is asked about: a message, an assigned task, what an
   const relaying = await service.call('message.send', { ...scope, recipientIds: [first.id], body: 'Pass it on for the client' }, connected);
   await allow('the client\'s message to the builder');
   const relayed = await allow('what the builder passed on for the client');
-  assert.deepEqual([relayed.agentId, relayed.details.askedBy, relayed.summary], [second.id, 'The agent "Builder" (' + first.id + '), which works for a connected client',
-    'The agent "Builder", which works for a connected client, asks claude (named "Reviewer") to run a task in the project "Shop": From the builder: Pass it on for the client']);
+  assert.deepEqual([relayed.agentId, relayed.details.askedBy, relayed.details.project, relayed.details.model, relayed.summary], [second.id, 'The agent "Builder \'B\'" (' + first.id + '), which works for a connected client', '"Shop"', '"fixture"',
+    'The agent "Builder \'B\'", which works for a connected client, asks claude (named "Reviewer") to run a task in the project "Shop": From the builder: Pass it on for the client']);
   // What the owner is shown is the text the reviewer is given, with the line DevMate puts before it, not a part of it.
-  const handed = body => 'Message from Builder (' + first.id + '). Use the DevMate agent_send_message tool to reply when needed.\n\n' + body;
+  const handed = body => 'Message from Builder "B" (' + first.id + '). Use the DevMate agent_send_message tool to reply when needed.\n\n' + body;
   assert.deepEqual([relayed.details.task, relayed.details.characters], [handed('From the builder: Pass it on for the client'), handed('From the builder: Pass it on for the client').length]);
   await until(() => turns(instances).includes(relayed.details.task), 'the reviewer to be given exactly what was shown');
   await until(() => service.store.get('message', relaying.id).status === 'delivered', 'the client\'s task to end');
@@ -589,8 +730,21 @@ test('with full access a client answers what an agent asks, and its answer makes
   const [relayed] = await pending('approval');
   assert.deepEqual([relayed.kind, relayed.agentId, relayed.details.task.endsWith('I was told: "whatever the client says"')], ['delegation', second.id, true]);
   assert.ok(!turns(instances).some(text => text.endsWith('I was told: "whatever the client says"')), 'and is not run before that');
-  // A permission the client grants is a choice among the agent's own options, not words of its own: it marks nothing.
   await answer(service, relayed.id, 'deny');
+  // A permission the client grants is a choice among the agent's own options, not words of its own: it marks nothing.
+  // What the agent passes on after it, in a task of the owner's, is the owner's still and is not asked about.
+  factory.during = async (instance, text) => {
+    if (instance !== builder) return;
+    const granted = await instance.options.onApproval({ id: 'permission-' + text.length, kind: 'tool', summary: 'Run the tests', options: [{ optionId: 'proceed', name: 'Proceed' }, { optionId: 'stop', name: 'Stop' }] });
+    service.agents.channelCall(token(instance), 'agent_send_message', { operationId: 'told-' + ++passed, recipientIds: [second.id], body: 'I was granted: ' + JSON.stringify(granted) });
+  };
+  await service.call('message.send', { ...scope, recipientIds: [first.id], body: 'Ask for a permission' }, local);
+  await until(async () => (await pending('approval')).length === 1, 'the permission');
+  const [permission] = await pending('approval');
+  assert.notEqual(permission.kind, 'delegation');
+  await service.call('operations.call', { operation: 'approval.resolve', input: { id: permission.id, optionId: 'proceed' } }, connected);
+  await until(() => turns(instances).some(text => text.endsWith('I was granted: {"optionId":"proceed"}')), 'what the agent passed on after a client granted a permission');
+  assert.deepEqual(await pending('approval'), [], 'a granted permission made nothing a client\'s');
 });
 
 test('devmate delegation shows and changes the choice', async () => {
@@ -608,13 +762,22 @@ test('devmate delegation shows and changes the choice', async () => {
   const allowed = await run(['delegation', 'allow']);
   assert.deepEqual([allowed.code, allowed.stdout, calls.at(-1), allowed.stderr], [0, 'allow\n', ['delegation.update', { mode: 'allow' }], ALLOW + ' To be asked first: devmate delegation ask\n']);
   did = { allowed: 2, waiting: 1 };
-  assert.equal((await run(['delegation', 'allow'])).stderr, ALLOW + ' 2 tasks that waited for your answer were let through. 1 task still waits: no session is free for it (or the workflow has no turns left), and it is let through when one has ended. To be asked first: devmate delegation ask\n');
+  assert.equal((await run(['delegation', 'allow'])).stderr, ALLOW + ' 2 tasks that waited for your answer were let through. 1 task still waits: something else keeps it from beginning (no session is free, or the workflow is paused or has no turns left; ' +
+    'the workbench says which, devmate ui), and it is let through when that is out of the way. To be asked first: devmate delegation ask\n');
   did = { allowed: 1, waiting: 3 };
-  assert.equal((await run(['delegation', 'allow'])).stderr, ALLOW + ' 1 task that waited for your answer was let through. 3 tasks still wait: no session is free for them (or the workflow has no turns left), and they are let through when one has ended. To be asked first: devmate delegation ask\n');
+  assert.equal((await run(['delegation', 'allow'])).stderr, ALLOW + ' 1 task that waited for your answer was let through. 3 tasks still wait: something else keeps them from beginning (no session is free, or the workflow is paused or has no turns left; ' +
+    'the workbench says which, devmate ui), and they are let through when that is out of the way. To be asked first: devmate delegation ask\n');
   did = {};
   assert.equal((await run(['delegation', 'ask'])).stderr, ASK + ' From now on every agent is asked about again, also one whose later tasks you had let through. Not to be asked: devmate delegation allow\n');
   did = { again: 2 };
   assert.equal((await run(['delegation', 'ask'])).stderr, ASK + ' From now on every agent is asked about again, also one whose later tasks you had let through, and 2 tasks of a client that had been let through and had not begun wait for your answer again. Not to be asked: devmate delegation allow\n');
+  // No more wait for the owner at once than may: what was beyond that is said as ended, not passed over.
+  did = { again: 1, ended: 5 };
+  assert.equal((await run(['delegation', 'ask'])).stderr, ASK + ' From now on every agent is asked about again, also one whose later tasks you had let through, and 1 task of a client that had been let through and had not begun waits for your answer again. ' +
+    '5 more tasks of a client that had not begun were ended: as many as may wait for your answer at once did already. Not to be asked: devmate delegation allow\n');
+  did = { ended: 1 };
+  assert.equal((await run(['delegation', 'ask'])).stderr, ASK + ' From now on every agent is asked about again, also one whose later tasks you had let through. ' +
+    '1 more task of a client that had not begun was ended: as many as may wait for your answer at once did already. Not to be asked: devmate delegation allow\n');
   did = {};
   assert.equal((await run(['delegation', 'off'])).stderr, 'Off: a connected client cannot hand tasks to the coding agents here; you still can, at this computer. What waited for your answer or its turn was ended. To be asked for each task instead: devmate delegation ask\n');
   assert.equal((await run(['delegation'])).stderr, 'Off: a connected client cannot hand tasks to the coding agents here; you still can, at this computer. To be asked for each task instead: devmate delegation ask\n');

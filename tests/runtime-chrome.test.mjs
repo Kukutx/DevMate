@@ -467,6 +467,13 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   const stranger = spawn(process.execPath, [program, 'chrome-host', 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/', '--instance', instanceRoot], { stdio: ['pipe', 'pipe', 'pipe'] });
   let strangerOut = Buffer.alloc(0); stranger.stdout.on('data', chunk => { strangerOut = Buffer.concat([strangerOut, chunk]); });
   assert.equal(await new Promise(resolve => stranger.once('exit', resolve)), 2); assert.equal(strangerOut.length, 0);
+  // Nor is a command that a connected client started (its shell tool, or an agent it delegated to), whatever
+  // extension it names: a browser never carries that mark, and what the host is answered is the owner's.
+  const theirs = spawn(process.execPath, [program, 'chrome-host', EXTENSION_ORIGIN, '--parent-window=0', '--instance', instanceRoot], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, DEVMATE_CLIENT_COMMAND: '1' } });
+  let theirsOut = Buffer.alloc(0), theirsSaid = ''; theirs.stdout.on('data', chunk => { theirsOut = Buffer.concat([theirsOut, chunk]); }); theirs.stderr.on('data', chunk => { theirsSaid += chunk; });
+  theirs.stdin.on('error', () => {}); theirs.stdin.end(frame({ type: 'hello', protocol: 1, extension: '4.0.5', browser: 'Google Chrome', methods: [] }));
+  assert.equal(await new Promise(resolve => theirs.once('exit', resolve)), 2); assert.equal(theirsOut.length, 0);
+  assert.equal(theirsSaid, 'devmate chrome-host is started by the browser for the DevMate extension, not through a connected client\n');
 
   // The extension's side of the conversation, as the browser would carry it: frames on the program's standard streams.
   const received = [], waiting = [];
