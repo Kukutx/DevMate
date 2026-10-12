@@ -54,6 +54,7 @@
         "engine",
         "name",
         "projectId",
+        "query",
         "serverId",
         "summary"
       ],
@@ -198,6 +199,7 @@
     "operations_list": {
       "parameters": [
         "name",
+        "query",
         "summary"
       ],
       "required": [],
@@ -306,6 +308,7 @@
         "args",
         "command",
         "cwd",
+        "env",
         "file",
         "interactive",
         "projectId",
@@ -498,6 +501,7 @@
     },
     "workspace_write": {
       "parameters": [
+        "append",
         "expectedSha256",
         "overwrite",
         "path",

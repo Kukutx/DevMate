@@ -40,7 +40,7 @@
 
 ### 模型一侧
 
-- 工具清单按客户端分三份（实测，`tests/runtime-surfaces.test.mjs`）：GPT 面 34 项 32,171 字节，Claude 面 36 项 32,623 字节，通用面 37 项 34,631 字节；分面之前是一份 39 项 40,135 字节。只读的工具、能力三件套（`capability_list`、`capability_query`、`capability_call`）和撤回改动都在每一份清单里：曾经为了把清单压到 18 到 21 KB 而把它们挪到 `operations_query` / `operations_call` 后面，那是做差了（模型看不到就不用；只读工具不触发客户端的确认，改走命令行反而每次都要确认），已经改回。每个工具约 500 字节是协议要求的结构（输入模式、四个提示、状态文字）；还想更小只能靠压短描述，这一步没有做。
+- 工具清单按客户端分三份（实测，`tests/runtime-surfaces.test.mjs`）：GPT 面 34 项 32,504 字节，Claude 面 36 项 32,956 字节，通用面 37 项 35,363 字节；分面之前是一份 39 项 40,135 字节。只读的工具、能力三件套（`capability_list`、`capability_query`、`capability_call`）和撤回改动都在每一份清单里：曾经为了把清单压到 18 到 21 KB 而把它们挪到 `operations_query` / `operations_call` 后面，那是做差了（模型看不到就不用；只读工具不触发客户端的确认，改走命令行反而每次都要确认），已经改回。每个工具约 500 字节是协议要求的结构（输入模式、四个提示、状态文字）；还想更小只能靠压短描述，这一步没有做。
 - 按客户端选工具面还没有用真实的 ChatGPT 或 Claude.ai 验证过：识别靠客户端自报的名字（`openai`、`chatgpt`、`codex`、`gpt` 归 GPT 面，`claude`、`anthropic` 归 Claude 面）、请求的 User-Agent，以及“经 OpenAI 隧道进来的就是 ChatGPT”。说 2025 协议的客户端只在握手时报一次名字，之后的请求只能靠 User-Agent 识别；认错时在 MCP 地址后加 `?tools=gpt|claude|generic` 指定；`devmate doctor` 会显示最近一个客户端自报的名字、User-Agent、分到的工具面和依据，真实的 ChatGPT 和 Claude.ai 报什么名字要到那里看。`devmate mcp`（标准输入输出）会把客户端的名字带给运行时。
 - 审阅改动（`show_changes` / `workspace_changes`）只在 Git 仓库里可用：它对比的是上一次提交，“已审阅”按每个文件当前内容的哈希记。不是 Git 仓库的项目只能用改动历史（`workspace.history`）。它只给按文件的汇总，不带差异正文，也还没有可在界面里审阅的差异卡片。
 - 命令和委派的默认等待是 30 秒，上限 50 秒，三个工具面一致（`exec_command` 的让出时间也是这两个数）。同类项目记录过“ChatGPT 宿主在约 12 秒处结束调用”，这一点没有用真实的 ChatGPT 实测过；如果实测属实，调用方可以用 `waitMs` 或 `yield_time_ms` 给更短的等待。

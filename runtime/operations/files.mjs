@@ -55,7 +55,8 @@ export function defineFileOperations(service, add) {
         result.files.map(file => '  ' + file.operation.padEnd(7) + (file.previousPath ? file.previousPath + ' → ' : '') + file.path + (file.additions !== undefined ? '  (+' + file.additions + ' −' + file.removals + ')' : '') +
           (file.lines ? '  at line ' + file.lines.join(', ') : '')).join('\n') +
         (result.since !== undefined ? '\nTake all of it back with workspace_restore {since:' + result.since + '}.' : '') }],
-    ['workspace.write', 'write', { path: projectPath, text: fileText, expectedSha256: sha.nullable().optional(), overwrite: z.boolean().optional(), ...mutation }, false,
+    ['workspace.write', 'write', { path: projectPath, text: fileText, expectedSha256: sha.nullable().optional(), overwrite: z.boolean().optional(),
+      append: z.boolean().optional().describe('Add the text to the end of the file instead of replacing it; a file that is not there is created.'), ...mutation }, false,
       'Create a new file, creating missing folders. To replace an existing file pass its sha256 from workspace_read as expectedSha256 (or overwrite:true to replace it whatever it holds); to change part of a file prefer workspace_edit. The previous version stays restorable.'],
     ['workspace.mkdir', 'mkdir', { path: projectPath, ...mutation }, false, 'Create a project directory, including missing parents.', { idempotent: true }],
     ['workspace.move', 'move', { from: projectPath, to: projectPath, overwrite: z.boolean().optional(), ...mutation }, false, 'Move or rename a project file or directory, creating missing destination folders. overwrite:true lets a file replace a file; the replaced file stays restorable.'],

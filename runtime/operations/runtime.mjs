@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { report } from '../report.mjs';
 import { DomainError } from '../store.mjs';
 import { readConfig, saveConfig } from '../config.mjs';
-import { id, mutation, now } from './shared.mjs';
+import { hasWords, id, keywords, mutation, now } from './shared.mjs';
 import { doctor } from './doctor.mjs';
 import { snapshot } from './snapshot.mjs';
 
@@ -32,11 +32,11 @@ export function defineRuntimeOperations(service, add) {
     const keyless = value => typeof value === 'string' ? value.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : value;
     return { ...answer, ...(answer.publicUrl ? { publicUrl: keyless(answer.publicUrl) } : {}), ...(answer.verification?.url ? { verification: { ...answer.verification, url: keyless(answer.verification.url) } } : {}) };
   });
-  add('operations.list', { name: z.string().max(100).optional(), summary: z.boolean().optional() }, true,
-    'Discover every available operation: names and descriptions. name returns one operation with its exact input schema; summary:false returns every schema at once (large).', (args, context) => {
+  add('operations.list', { name: z.string().max(100).optional(), query: keywords, summary: z.boolean().optional() }, true,
+    'Discover every available operation: names and descriptions. query keeps those that have its words; name returns one operation with its exact input schema; summary:false returns every schema at once (large).', (args, context) => {
       // Without a name the answer is the short list. Through MCP it holds only what operations.call accepts.
       const summary = args.summary ?? !args.name, local = context.surface === 'local', answers = service.ownerDecides(context);
-      return { items: service.visibleOperations(context).filter(op => (!args.name || op.name === args.name) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
+      return { items: service.visibleOperations(context).filter(op => (!args.name || op.name === args.name) && (!args.query || hasWords(args.query, op.name, op.description)) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
         .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) })) };
     });
   add('operations.call', { operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }, false,

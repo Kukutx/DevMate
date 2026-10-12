@@ -25,6 +25,30 @@ const git = (cwd, ...args) => {
   return result.stdout;
 };
 
+test('text is added to the end of a file with append: what was there is kept, and nothing else about the file is said', async t => {
+  const { project, service, file } = fixture(t);
+  // A file that is not there is created.
+  assert.equal(service.write(project, { path: 'notes/log.md', text: '# Log\n', append: true }).written, true);
+  const first = service.read(project, { path: 'notes/log.md' });
+  const added = service.write(project, { path: 'notes/log.md', text: 'one more line\r\n', append: true });
+  assert.equal(added.written, true); assert.equal(fs.readFileSync(file('notes/log.md'), 'utf8'), '# Log\none more line\r\n');
+  // It is a change like any other: what the file held before can be brought back.
+  const entries = service.history(project, { path: 'notes/log.md' }).items;
+  assert.deepEqual([entries.length, entries[0].previousSha256, entries[0].previousRestorable], [2, first.sha256, true]);
+  service.restore(project, { path: 'notes/log.md', sha256: first.sha256 });
+  assert.equal(fs.readFileSync(file('notes/log.md'), 'utf8'), '# Log\n');
+  // Nothing to add changes nothing. append says nothing about what the file holds, so it takes neither of the two
+  // inputs that do; it is for text; and a file does not grow beyond what these tools read.
+  assert.equal(service.write(project, { path: 'notes/log.md', text: '', append: true }).written, false);
+  assert.throws(() => service.write(project, { path: 'notes/log.md', text: 'x', append: true, overwrite: true }), { code: 'invalid_input', message: /takes neither expectedSha256 nor overwrite/ });
+  assert.throws(() => service.write(project, { path: 'notes/log.md', text: 'x', append: true, expectedSha256: first.sha256 }), { code: 'invalid_input' });
+  fs.writeFileSync(file('image.bin'), Buffer.from([1, 0, 2]));
+  assert.throws(() => service.write(project, { path: 'image.bin', text: 'x', append: true }), { code: 'invalid_input', message: /text files/ });
+  fs.writeFileSync(file('big.txt'), 'a'.repeat(8 * 1024 * 1024 - 2));
+  assert.throws(() => service.write(project, { path: 'big.txt', text: 'more', append: true }), { code: 'invalid_input', message: /beyond 8 MiB/ });
+  assert.equal(fs.statSync(file('big.txt')).size, 8 * 1024 * 1024 - 2);
+});
+
 test('exact-replacement edits are atomic, unambiguous and keep CRLF files intact', async t => {
   const { project, service, file } = fixture(t);
   fs.writeFileSync(file('app.js'), 'const a = 1;\r\nconst b = 2;\r\nconst a2 = 1;\r\n');

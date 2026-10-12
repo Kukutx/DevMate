@@ -344,6 +344,7 @@ A model is shown its tools under the names it was trained on. Which list a clien
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
 - A tool list has 34 to 37 entries and takes 32 to 35 KB. Nothing that only reads is kept off it: a tool a model cannot see is a tool it does not use, and what only reads is what a client does not ask you about.
+- A tool is found by words: `capability_list` and `operations_list` take `query` and keep what has every word in its name or its description. `shell_run` takes `env`, variables for that one command (DevMate's own, the names beginning with `DEVMATE_`, are not set this way). `workspace_write` takes `append` and then adds the text to the end of the file, which is kept restorable like before any change.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.

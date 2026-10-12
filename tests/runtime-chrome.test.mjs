@@ -369,6 +369,19 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   const listed = await runtime.service.call('capability.list', { engine: 'chrome' }, connected);
   assert.deepEqual([listed.engines[0].id, listed.engines[0].status, listed.engines[0].capabilities.length], ['chrome', 'connected', BROWSER_CAPABILITIES.length]);
   assert.equal((await runtime.service.call('capability.list', { name: 'chrome.bookmarks.create' }, connected)).capability.inputSchema.required.includes('title'), true);
+  // A capability is found by words in its name or its description; an engine that has none of them is left out.
+  const found = await runtime.service.call('capability.list', { engine: 'chrome', query: 'bookmarks search' }, connected);
+  assert.deepEqual(found.engines.map(item => [item.id, item.capabilities.map(one => one.name)]), [['chrome', ['chrome.bookmarks.search']]]);
+  // The words are looked for in the description too, and a name is found however its parts are joined.
+  const consoles = (await runtime.service.call('capability.list', { engine: 'chrome', query: 'page_console' }, connected)).engines[0].capabilities;
+  assert.ok(consoles.some(one => one.name === 'chrome.page.console') && consoles.length < 6 && consoles.every(one => /console/i.test(one.name + one.description)), consoles.map(one => one.name).join());
+  assert.deepEqual((await runtime.service.call('capability.list', { engine: 'chrome', query: 'no such thing anywhere' }, connected)).engines, []);
+  // And an operation the same way.
+  const operations = (await runtime.service.call('operations.list', { query: 'history' }, connected)).items.map(item => item.name);
+  assert.ok(operations.includes('workspace.history') && operations.length < 12 && !operations.includes('workspace.read'), operations.join());
+  const named = (await runtime.service.call('operations.list', { query: 'workspace_history' }, connected)).items;
+  assert.ok(named.some(item => item.name === 'workspace.history') && named.length < 8 && named.every(item => /workspace/i.test(item.name + item.description) && /history/i.test(item.name + item.description)), named.map(item => item.name).join());
+  assert.deepEqual((await runtime.service.call('operations.list', { query: 'no such thing anywhere' }, connected)).items, []);
   const reading = runtime.service.call('capability.query', { capability: 'chrome.bookmarks.search', input: { query: 'devmate' } }, connected);
   const call = await hear(message => message.type === 'call', 'the call to reach the browser');
   assert.deepEqual([call.method, call.params], ['bookmarks.search', { query: 'devmate' }]);

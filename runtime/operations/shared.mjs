@@ -36,7 +36,11 @@ export const listOptions = { projectId: projectReference.optional(), workflowId:
 // A command is either shell text (PowerShell on Windows, sh elsewhere) or an exact executable launch.
 export const commandShape = { command: z.string().min(1).max(100000).optional(), file: z.string().min(1).max(4096).optional(),
   args: z.array(z.string().max(100000)).max(2000).optional(), cwd: z.string().max(4096).optional(),
-  timeoutMs: z.number().int().min(1000).max(86400000).optional() };
+  timeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,199}$/), z.string().max(32768)).optional().describe('Environment variables for this command only, beside the ones every command gets.') };
+// Words to look for in a list of tools: every one of them has to be in the name or the description.
+export const keywords = z.string().min(1).max(200).optional().describe('Words to look for in names and descriptions; all of them have to be there.');
+export const hasWords = (query, ...texts) => { const where = texts.join(' ').toLowerCase().replace(/[._]/g, ' '); return String(query).toLowerCase().replace(/[._]/g, ' ').split(/\s+/).filter(Boolean).every(word => where.includes(word)); };
 
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -45,5 +49,13 @@ export const within = (root, target) => { const relative = path.relative(root, t
 export const oneCommand = value => {
   if ((value.command === undefined) === (value.file === undefined)) throw new DomainError('invalid_command', 'Supply either command text or an executable file with args.');
   if (value.command !== undefined && value.args !== undefined) throw new DomainError('invalid_command', 'args applies only to an executable file.');
-  return value;
+  // The command's own variables. DevMate's are not the caller's to set: among them is the mark by which the devmate
+  // command line knows that a connected client started it, and not the owner at this computer.
+  const { env, ...command } = value;
+  if (env === undefined) return command;
+  const names = Object.keys(env);
+  if (names.length > 64) throw new DomainError('invalid_command', 'env takes at most 64 variables.');
+  const reserved = names.find(name => name.toUpperCase().startsWith('DEVMATE_'));
+  if (reserved) throw new DomainError('invalid_command', reserved + ' is one of DevMate\'s own variables and is not set by a command.');
+  return { ...command, environment: env };
 };

@@ -448,6 +448,16 @@ export function createWorkspaceService({ store } = {}) {
     if (typeof input.text !== 'string' || Buffer.byteLength(input.text) > MAX_FILE_BYTES || input.text.includes('\0')) throw error('invalid_input', 'A UTF-8 text value up to 8 MiB is required.');
     const expected = input.expectedSha256 ?? null;
     if (expected !== null && (typeof expected !== 'string' || !/^[a-f0-9]{64}$/i.test(expected))) throw error('invalid_input', 'expectedSha256 is the sha256 returned by workspace_read.');
+    // append: the text goes to the end of what is there, which is kept like before any change. A file that is not
+    // there is created. It says nothing about what the file holds, so it takes no expectedSha256 and no overwrite.
+    if (input.append) {
+      if (expected !== null || input.overwrite) throw error('invalid_input', 'append adds to what the file holds: it takes neither expectedSha256 nor overwrite.');
+      const full = resolveProjectPath(project, input.path, { mustExist: false }), current = fs.existsSync(full) ? readBytes(full) : null;
+      if (current?.includes(0)) throw error('invalid_input', 'append is for text files; this one holds binary data.');
+      const whole = current ? Buffer.concat([current, Buffer.from(input.text)]) : Buffer.from(input.text);
+      if (whole.length > MAX_FILE_BYTES) throw error('invalid_input', 'The file would grow beyond 8 MiB.');
+      return publish(project, input.path, whole, current ? hash(current) : null);
+    }
     // overwrite: the caller means to replace whatever is there. What is there is still kept, like before any change.
     if (input.overwrite && expected === null) {
       const full = resolveProjectPath(project, input.path, { mustExist: false });
