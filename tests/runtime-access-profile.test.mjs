@@ -180,6 +180,9 @@ test('with full access what a delegated agent asks permission for is granted at 
   const { service, folder, factory, instances } = await fixture(t);
   const project = await service.call('project.create', { root: folder('project') }, local);
   await service.call('access.update', { profile: 'full' }, local);
+  // What an agent asks in its turn is the matter here. Whether the task is run at all is another one, which the
+  // access profile does not answer (runtime-delegation.test.mjs): the owner chose not to be asked.
+  await service.call('delegation.update', { mode: 'allow' }, local);
   // Claude and Codex name the granting option; ACP agents say which of theirs grants once.
   factory.asks = [
     ['approval', { kind: 'Write', options: ALLOW_DENY }],
@@ -200,6 +203,7 @@ test('a question, and a permission with nothing to grant, still wait; the owner\
   const { service, folder, factory, instances } = await fixture(t);
   const project = await service.call('project.create', { root: folder('project') }, local);
   await service.call('access.update', { profile: 'full' }, local);
+  await service.call('delegation.update', { mode: 'allow' }, local);
   factory.asks = [['approval', { kind: 'tool', options: [{ optionId: 'no', name: 'Refuse' }, { optionId: 'stop', name: 'Stop' }] }], ['input', { kind: 'question', summary: 'Which branch?' }]];
   const blocked = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Ask first', waitMs: 20000 }, connected);
   assert.equal(blocked.status, 'waiting'); assert.equal(blocked.approvals.length, 1);
@@ -223,6 +227,7 @@ test('a question, and a permission with nothing to grant, still wait; the owner\
 test('choosing full access grants the permission an agent is already waiting for', async t => {
   const { service, folder, factory } = await fixture(t);
   const project = await service.call('project.create', { root: folder('project') }, local);
+  await service.call('delegation.update', { mode: 'allow' }, local);
   factory.asks = [['approval', { kind: 'Write', options: ALLOW_DENY }]];
   const blocked = await service.call('agents.delegate', { projectId: project.id, provider: 'claude', prompt: 'Write a file', waitMs: 20000 }, connected);
   assert.equal(blocked.status, 'waiting');

@@ -15,8 +15,14 @@ export const WIRE_PROTOCOL_VERSION = '2026-08-25';
 // says why a tunnel is not offered in ChatGPT.
 export const TUNNEL_HELP = Object.freeze({ settings: 'https://platform.openai.com/settings/organization/tunnels', guide: 'https://developers.openai.com/api/docs/guides/secure-mcp-tunnels' });
 const CONTROL_PLANE = 'https://api.openai.com';
-// The wait asked for in a poll before any has come back (see loop()).
+// The wait asked for in a poll before any has come back (see loop()). The service bounds it from below: measured
+// against the real one on 2026-10-12, a poll asked to wait 1000 or 5000 ms came back after about 5.5 seconds, one
+// asked to wait 30000 ms after 30.4.
 const FIRST_POLL_MS = 1000;
+// How much longer than the wait it asked for a poll is given before it is given up. The service's own shortest wait
+// and the time it takes to connect have to fit into it with room to spare: six seconds in all cut off polls that
+// were about to be answered.
+const POLL_GRACE_MS = 15000;
 // OpenAI's interface has no code for a protocol version it has stopped taking, so that is told by what the answer says
 // about the version or about the client, and by nothing vaguer: "upgrade your plan" is not it.
 const OUTDATED = /(wire|protocol|client)[ _-]*version|(upgrade|update)[^.]{0,30}client|client[^.]{0,30}(too old|outdated|deprecated)/i;
@@ -25,8 +31,10 @@ const SERVER_INFO = JSON.stringify({ version: 1, channels: [{ name: 'main' }] })
 // What of the endpoint's answer the protocol carries back.
 const RESPONSE_HEADERS = { 'content-type': 'Content-Type', 'mcp-session-id': 'Mcp-Session-Id', 'mcp-protocol-version': 'Mcp-Protocol-Version',
   'last-event-id': 'Last-Event-ID', 'access-control-expose-headers': 'Access-Control-Expose-Headers', 'www-authenticate': 'WWW-Authenticate' };
+// The names of headers this protocol carries or is asked for: not taken for a key where OpenAI names one in a refusal.
+const HEADER_NAMES = new Set([...Object.values(RESPONSE_HEADERS), 'OpenAI-Organization', 'Authorization']);
 // What a command may not set on the request to the endpoint: hop-by-hop fields, and whatever claims where it came from.
-const WITHHELD = /^(host|connection|keep-alive|proxy-.*|transfer-encoding|upgrade|te|trailer|content-length|content-type|accept|forwarded|x-forwarded-.*|x-real-ip|true-client-ip|cf-.*|x-openai-.*|openai-.*)$/i;
+const WITHHELD = /^(host|connection|keep-alive|proxy-.*|transfer-encoding|upgrade|te|trailer|content-length|content-type|accept|forwarded|x-forwarded-.*|x-real-ip|true-client-ip|cf-.*|x-openai-.*|openai-.*|x-devmate-.*)$/i;
 const RETRY_TERMINAL = new Set([408, 429, 502, 503, 504]);
 const UNITS = { ns: 1e-6, us: 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };
 
@@ -63,9 +71,27 @@ async function* streamEvents(body) {
   yield* events(true);
 }
 
-export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, instanceId = '', env = process.env, maxConcurrentRequests = 32,
-  fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
-  now = () => performance.now(), random = Math.random } = {}) {
+// A wait that ends when its time is over or when the client is stopped, whichever comes first: one that is asked for
+// after the stop is no wait at all, and none leaves anything listening to the stop once it has ended. (A wait that
+// did not look whether the client was stopped already held a stop up for as long as it lasted, up to a minute after
+// a refusal; and each one that ran its time left a listener behind, one a minute for a tunnel that was refused.)
+function rest(ms, signal) {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
+    const timer = setTimeout(done, ms);
+    timer.unref?.();
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+export const __test = { rest };
+
+// localHeaders: what this client itself says to the endpoint with every call it hands over, which no command can say.
+// beside: the tunnel runs beside a connection that has a public address, and is set up on that connection's command.
+export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, localHeaders = {}, beside = false, instanceId = '', env = process.env, maxConcurrentRequests = 32,
+  fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = rest,
+  now = () => performance.now(), random = Math.random, limit = ms => AbortSignal.timeout(ms) } = {}) {
   if (!/^tunnel_[A-Za-z0-9_]+$/.test(tunnelId || '')) throw fault('invalid_connection', 'A valid OpenAI tunnel id is required.');
   const base = CONTROL_PLANE + '/v1/tunnels/' + encodeURIComponent(tunnelId);
   let stopper = null, running = null, phase = 'stopped', problem = null, polls = 0, served = 0, lastPollAt = null, lastCallAt = null, startedAt = null;
@@ -81,28 +107,43 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   // A request that ends after so many milliseconds. What is left until a deadline is a fraction (the clock counts in
   // fractions, and so may the time a call has), and AbortSignal.timeout takes whole milliseconds only: it throws for
   // anything else, which once left every call that had a deadline unserved and unanswered.
-  const within = ms => AbortSignal.timeout(Math.max(1, Math.ceil(ms)));
+  const within = ms => limit(Math.max(1, Math.ceil(ms)));
   const stamp = () => new Date().toISOString();
-  // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence.
+  // What OpenAI says goes into the status, the doctor and the report. Its API answers a wrong key by repeating a part
+  // of it ("sk-abc***wxyz"), so nothing that could be the key or a piece of it is kept: the key itself, anything with
+  // stars in it, and any long run of the characters keys are made of. Left as they are: the tunnel id, which is no
+  // secret; a name written in small letters and underscores alone, which is how OpenAI names its errors; and the
+  // name of a header, by which is meant one that begins with X- (X-Tunnel-Client-Wire-Protocol-Version) or one this
+  // protocol carries. Letters joined by hyphens are not enough to go by: the beginning of a key is that as well.
+  const withoutKey = text => {
+    const secret = key();
+    return (secret ? text.split(secret).join('[key]') : text).replace(/[A-Za-z0-9_-]*\*{2,}[A-Za-z0-9_*-]*/g, '[key]')
+      .replace(/[A-Za-z0-9_-]{20,}/g, word => word === tunnelId || /^[a-z_]+$/.test(word) || /^X-[A-Za-z]+(?:-[A-Za-z]+)+$/.test(word) || HEADER_NAMES.has(word) ? word : '[key]');
+  };
+  // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence. message is
+  // what is kept and shown; raw is the sentence as it came, by which the kind of answer is told and which goes nowhere.
   const said = async response => {
     try {
       const body = await response.json(), error = body?.error && typeof body.error === 'object' ? body.error : body;
-      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: String(error?.message || (typeof body?.error === 'string' ? body.error : '')).slice(0, 300) };
-    } catch { return { code: '', message: '' }; }
+      const raw = String(error?.message || (typeof body?.error === 'string' ? body.error : ''));
+      return { code: String(error?.code || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80), message: withoutKey(raw).slice(0, 300), raw };
+    } catch { return { code: '', message: '', raw: '' }; }
   };
   // What a refusal means for the owner, as a code and a sentence. The codes are the stable ones OpenAI publishes for its
   // tunnel service (x-tunnel-error-codes in docs/openapi.json of github.com/openai/tunnel-client). The tunnel id is
   // named as the cause only where OpenAI names it, and an answer that interface does not know is passed on as it is.
-  function refusal(status, { code, message }) {
-    const answer = 'HTTP ' + status + (code ? ' ' + code : '') + (message ? ': ' + message : ''), again = 'devmate connect openai-tunnel --tunnel-id ' + tunnelId;
-    const official = 'OpenAI\'s own tunnel-client can carry the tunnel (' + again + ' --executable <path of tunnel-client>)';
-    if (code === 'invalid_tunnel_id_format') return ['tunnel_id', 'OpenAI does not take ' + tunnelId + ' for a tunnel id (' + answer + '). Copy the id from ' + TUNNEL_HELP.settings + ' and set it: devmate connect openai-tunnel --tunnel-id <id>'];
+  function refusal(status, { code, message, raw = message }) {
+    const answer = 'HTTP ' + status + (code ? ' ' + code : '') + (message ? ': ' + message : '');
+    // The command that names this tunnel: on its own, or on the connection it runs beside.
+    const named = id => beside ? 'devmate connect … --openai-tunnel ' + id : 'devmate connect openai-tunnel --tunnel-id ' + id, again = named(tunnelId);
+    const official = 'OpenAI\'s own tunnel-client can carry the tunnel' + (beside ? ' where it is the only connection' : '') + ' (devmate connect openai-tunnel --tunnel-id ' + tunnelId + ' --executable <path of tunnel-client>)';
+    if (code === 'invalid_tunnel_id_format') return ['tunnel_id', 'OpenAI does not take ' + tunnelId + ' for a tunnel id (' + answer + '). Copy the id from ' + TUNNEL_HELP.settings + ' and set it: ' + named('<id>')];
     if (code === 'tunnel_active_organization_required') return ['organization_required', 'OpenAI has to be told which organization ' + tunnelId + ' belongs to (' + answer + '). ' +
       (organizationId ? 'It was told ' + organizationId + ' and does not take that. ' : '') + 'Name the organization of the tunnel: ' + again + ' --organization <organization id>'];
     if (code === 'tunnel_use_forbidden' || code === 'tunnel_missing_principals') return ['not_permitted', 'This runtime key may not use ' + tunnelId + ' (' + answer + '). The key has to come from the organization or workspace the tunnel belongs to: create it for this tunnel at ' +
       TUNNEL_HELP.settings + ' and store it with devmate secret set ' + runtimeKeyEnv];
     if (status === 401 || status === 403) return ['not_authorized', 'OpenAI refused the runtime key for ' + tunnelId + ' (' + answer + '). Store the key of this tunnel again: devmate secret set ' + runtimeKeyEnv];
-    if (status === 426 || OUTDATED.test(code + ' ' + message)) return ['protocol_outdated', 'OpenAI no longer takes version ' + WIRE_PROTOCOL_VERSION + ' of the tunnel protocol, the one this DevMate speaks (' + answer + '). Update DevMate. Until then ' + official + '.'];
+    if (status === 426 || OUTDATED.test(code + ' ' + raw)) return ['protocol_outdated', 'OpenAI no longer takes version ' + WIRE_PROTOCOL_VERSION + ' of the tunnel protocol, the one this DevMate speaks (' + answer + '). Update DevMate. Until then ' + official + '.'];
     if (status === 404) return ['refused_404', 'OpenAI finds no tunnel ' + tunnelId + ' (' + answer + '). Compare the id with the one at ' + TUNNEL_HELP.settings + '.'];
     return ['refused_' + status, 'OpenAI hands out no work for ' + tunnelId + ' (' + answer + '). Its published interface names no such answer, so the cause cannot be told from here. If it stays so with the newest DevMate, ' + official + '.'];
   }
@@ -144,6 +185,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       if (WITHHELD.test(name)) continue;
       for (const value of [].concat(values)) if (typeof value === 'string') headers.append(name, value);
     }
+    for (const [name, value] of Object.entries(localHeaders)) headers.set(name, value);
     let response;
     try {
       response = await fetchImpl(localMcpUrl, { method: 'POST', headers, body: JSON.stringify(message), redirect: 'error',
@@ -153,6 +195,9 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       if (signal.aborted || (deadline !== null && now() >= deadline)) return false;
       return post(command, failure(message, 'connect', false), { ...scope, terminal: true });
     }
+    // Delivered is a call the endpoint took: not a session that was closed, a kind of command that was skipped, a call
+    // that never reached the endpoint or one it refused (not signed in, not allowed).
+    if (response.ok) { served++; lastCallAt = stamp(); }
     const kept = {};
     for (const [name, label] of Object.entries(RESPONSE_HEADERS)) { const value = response.headers.get(name); if (value) kept[label] = [value]; }
     const answered = payload => post(command, { ...payload, resp_headers: kept, resp_code: response.status }, { ...scope, terminal: true });
@@ -184,7 +229,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       const { command, deadline } = waiting.shift();
       // Too late by now: neither run nor answered.
       if (deadline !== null && now() >= deadline) continue;
-      const work = serve(command, deadline, signal).then(() => { served++; lastCallAt = stamp(); }, () => {}).finally(() => { active.delete(work); admit(signal); });
+      const work = serve(command, deadline, signal).then(() => {}, () => {}).finally(() => { active.delete(work); admit(signal); });
       active.add(work);
     }
   }
@@ -198,13 +243,17 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       // Whether OpenAI takes this client is known when a poll comes back, and a long poll with nothing to hand out
       // comes back late. Until one has come back the wait asked for is short, so that "connected", or the refusal,
       // is there within a second or two of a start instead of half a minute.
-      const asked = phase === 'connected' ? pollTimeoutMs : Math.min(pollTimeoutMs, FIRST_POLL_MS);
+      const asked = phase === 'connected' ? pollTimeoutMs : Math.min(pollTimeoutMs, FIRST_POLL_MS), patience = within(asked + POLL_GRACE_MS);
       try {
         response = await fetchImpl(base + '/poll?limit=' + Math.min(25, room) + '&timeout_ms=' + asked, { headers: common(), redirect: 'error',
-          signal: AbortSignal.any([signal, within(asked + 5000)]) });
+          signal: AbortSignal.any([signal, patience]) });
       } catch (error) {
         if (signal.aborted) break;
-        phase = 'connecting'; problem = { code: 'unreachable', message: 'api.openai.com could not be reached: ' + String(error?.cause?.code || error?.name || error?.message || error).slice(0, 200), at: stamp() };
+        // Two different things: no way to OpenAI, and a way on which the answer did not come in the time given to it.
+        phase = 'connecting';
+        problem = patience.aborted
+          ? { code: 'no_answer', message: 'OpenAI did not answer a request for work within ' + Math.round((asked + POLL_GRACE_MS) / 1000) + ' seconds; asking again.', at: stamp() }
+          : { code: 'unreachable', message: 'api.openai.com could not be reached: ' + String(error?.cause?.code || error?.name || error?.message || error).slice(0, 200), at: stamp() };
         await pause(jitter(delay), signal); delay = Math.min(delay * 2, 30000);
         continue;
       }
@@ -238,22 +287,31 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   const status = () => ({ kind: 'openai-tunnel', phase, tunnelId, client: 'built-in', wireProtocol: WIRE_PROTOCOL_VERSION, maxConcurrentRequests, polls, served, inFlight: active.size, waiting: waiting.length,
     ...(startedAt ? { startedAt } : {}), ...(lastPollAt ? { lastPollAt } : {}), ...(lastCallAt ? { lastCallAt } : {}), ...(problem ? { error: problem } : {}),
     remoteMcpVerified: false, autoReconnect: running !== null, retryScheduled: false });
-  async function start() {
+  // A start and a stop are done one after the other, in the order they were asked for. Side by side, a stop that
+  // was waiting for the loop to end would call the client stopped after a start had begun a new loop: one that goes
+  // on asking OpenAI for work, that nothing knows of and nothing can stop.
+  let turn = Promise.resolve();
+  const inTurn = work => { const done = turn.then(work); turn = done.catch(() => {}); return done; };
+  const start = () => inTurn(() => {
     if (running) return status();
     if (!key()) throw fault('missing_credential', 'Missing runtime key environment variable: ' + runtimeKeyEnv);
     stopper = new AbortController(); phase = 'connecting'; problem = null; startedAt = stamp();
     const signal = stopper.signal;
     running = loop(signal).catch(error => { phase = 'failed'; problem = { code: 'client_error', message: String(error?.message || error).slice(0, 300), at: stamp() }; }).finally(() => { if (stopper?.signal === signal) running = null; });
     return status();
-  }
-  async function stop() {
-    const loopDone = running;
+  });
+  function stop() {
+    // What is under way is told at once, before this stop has its turn.
     stopper?.abort();
-    // Calls in flight are given up: what they started in the runtime keeps running there, as with any caller that leaves.
-    waiting.length = 0;
-    await Promise.allSettled([loopDone, ...active]);
-    running = null; phase = 'stopped';
-    return status();
+    return inTurn(async () => {
+      const loopDone = running;
+      stopper?.abort();
+      // Calls in flight are given up: what they started in the runtime keeps running there, as with any caller that leaves.
+      waiting.length = 0;
+      await Promise.allSettled([loopDone, ...active]);
+      running = null; phase = 'stopped';
+      return status();
+    });
   }
   return { start, stop, status, refresh(next) { env = next; } };
 }

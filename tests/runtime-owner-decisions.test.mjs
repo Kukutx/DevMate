@@ -100,7 +100,7 @@ test('one folder that is gone or cannot be a project does not cost an editor win
   const byName = Object.fromEntries(attached.roots.map(item => [item.name, item]));
   assert.ok(byName.good.projectId); assert.equal(attached.selectedProjectId, byName.good.projectId);
   assert.equal(byName['deleted-meanwhile'].projectId, null); assert.match(byName['deleted-meanwhile'].reason, /cannot be opened/);
-  assert.equal(byName['contains-devmate'].projectId, null); assert.match(byName['contains-devmate'].reason, /separate from the DevMate control directory/);
+  assert.equal(byName['contains-devmate'].projectId, null); assert.match(byName['contains-devmate'].reason, /^This folder holds DevMate's own directory \(.*\), where its credentials and state are kept, so it is not shared as a whole\. Share the folders inside it that you work in\.$/);
   // The owner asking for exactly that folder is told plainly instead.
   await assert.rejects(service.call('window.attach', { windowId, roots: [{ root: temp, name: 'contains-devmate', register: 'write', chosen: true }] }, local), { code: 'private_runtime' });
 });

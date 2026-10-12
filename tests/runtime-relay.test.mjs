@@ -199,10 +199,30 @@ test('devmate relay setup makes that server how this computer is reached, keeps 
   // Through a connected client the command is refused: it changes how this computer is reached.
   const refused = await cli(['relay', 'setup', 'deploy@203.0.113.7'], { stdout: output(), stderr: output(), env: { DEVMATE_CLIENT_COMMAND: '1' } });
   assert.notEqual(refused, 0); assert.equal(saved().connection.publicUrl, address);
+  // An option of another command is not passed over in silence, and nothing is done on the server for it.
+  const optioned = await run(['relay', 'setup', 'deploy@203.0.113.7', '--openai-tunnel', 'tunnel_abc123']);
+  assert.notEqual(optioned.code, 0); assert.match(optioned.stderr, /relay setup does not take --openai-tunnel\..* then: devmate connect beside --openai-tunnel tunnel_abc123/); assert.equal(asked.length, 2);
+  // OpenAI's tunnel is put beside the relay without the relay being named again, and nothing of its address is printed.
+  // (That command takes nothing that names a connection, the program of one included: it is run as it is written.)
+  const plainly = async args => { const stdout = output(), stderr = output(); return { code: await cli([...args, '--instance', instance], { stdout, stderr, env: {} }), stdout: stdout.text, stderr: stderr.text }; };
+  assert.match((await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123'])).stderr, /takes only --openai-tunnel and --organization \(given: --executable\)/);
+  const beside = await plainly(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123']);
+  assert.equal(beside.code, 0, beside.stderr); assert.equal(saved().connection.publicUrl, address); assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123');
+  assert.deepEqual(JSON.parse(beside.stdout).saved.connection, { kind: 'ssh', relay: true }); assert.ok(!beside.stdout.includes(address.split('/').pop())); assert.equal(beside.stdout.split('devmate.example.com').length, 1, 'the public host is nowhere in the answer');
+  // It stays beside the relay when the relay is set up again, which is said.
+  const again = await run(['relay', 'setup', 'deploy@203.0.113.7', '--domain', 'devmate.example.com']);
+  assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123'); assert.match(again.stdout, /"openaiTunnel": "tunnel_abc123 stays beside it"/); assert.doesNotMatch(again.stdout, /no longer used/);
+  assert.equal((await plainly(['connect', 'beside', '--openai-tunnel', 'none'])).code, 0); assert.equal(saved().openaiTunnel, undefined); assert.equal(saved().connection.publicUrl, address);
   // Taking the relay away takes it out of this computer's settings as well.
   const removed = await run(['relay', 'remove', 'deploy@203.0.113.7']);
   assert.equal(removed.code, 0, removed.stderr); assert.deepEqual(saved().connection, { kind: 'local' });
   assert.notEqual((await run(['relay', 'setup'])).code, 0);
+  // A relay set up where OpenAI's tunnel was the connection takes its place. That the tunnel is no longer used is said,
+  // with the one command that puts it beside the relay.
+  assert.equal(await cli(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123', '--organization', 'org-abc', '--instance', instance], { stdout: output(), stderr: output(), env: {} }), 0);
+  const over = await run(['relay', 'setup', 'deploy@203.0.113.7']);
+  assert.equal(saved().connection.kind, 'ssh'); assert.equal(saved().openaiTunnel, undefined);
+  assert.match(over.stdout, /"OpenAI's tunnel tunnel_abc123 is no longer used\. To run it beside the relay: devmate connect beside --openai-tunnel tunnel_abc123 --organization org-abc"/);
 });
 
 test('the SSH route carries the relay\'s path, tells the relay this computer\'s address first, and the ingress answers only under that path', async t => {
@@ -239,6 +259,38 @@ test('the SSH route carries the relay\'s path, tells the relay this computer\'s 
   spawned.length = 0;
   const plain = createSshConnection({ config: { ...config, relay: undefined, publicUrl: 'https://devmate.example.com/mcp' }, localMcpUrl: 'http://127.0.0.1:8789/mcp', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl });
   await plain.start(); assert.equal(spawned.length, 1); await plain.stop();
+  // A relay that does not answer is waited for a moment and no longer: the forward is started all the same, the log
+  // says why, and the login that is still on its way is ended at its own limit, not by the start.
+  spawned.length = 0;
+  const said = [], killed = [];
+  const silent = (file, args) => {
+    const child = new EventEmitter(); child.pid = 7100 + spawned.length; child.exitCode = null; child.signalCode = null; child.stderr = new EventEmitter(); child.kill = () => killed.push(args.at(-1));
+    spawned.push(args);
+    queueMicrotask(() => { child.emit('spawn'); });
+    return child;
+  };
+  const unanswered = createSshConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/' + key, instanceRoot: temp, env: { PATH: 'x' }, spawnImpl: silent, terminateImpl, tellWaitMs: 40, note: line => said.push(line) });
+  const began = Date.now();
+  assert.equal((await unanswered.start()).phase, 'process-running');
+  assert.ok(Date.now() - began < 5000, 'the start did not wait for the login to give up');
+  assert.deepEqual(spawned.map(args => args.at(-1)), ['/usr/local/lib/devmate/allow-owner', '203.0.113.7']);
+  assert.equal(said.length, 1); assert.match(said[0], /^the relay at 203\.0\.113\.7 has not answered for 0 seconds; the start goes on without it\./); assert.ok(!said[0].includes(key));
+  assert.deepEqual(killed, [], 'the login is left to its own limit');
+  // It stays the connection's own: a stop ends it, so that a restart leaves no login behind.
+  await unanswered.stop();
+  assert.deepEqual(killed, ['/usr/local/lib/devmate/allow-owner']);
+  // And how a late one ended is written down where its being late was.
+  for (const [ending, words] of [[child => { child.exitCode = 0; child.emit('exit', 0, null); }, /^the relay at 203\.0\.113\.7 has been told this computer's address after all\.$/],
+    [child => { child.exitCode = 255; child.emit('exit', 255, null); }, /^the relay at 203\.0\.113\.7 was not told this computer's address \(the login ended with code 255\)\.$/]]) {
+    spawned.length = 0; said.length = 0;
+    const logins = [];
+    const later = (file, args) => { const child = silent(file, args); if (args.at(-1) === '/usr/local/lib/devmate/allow-owner') logins.push(child); return child; };
+    const slow = createSshConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/' + key, instanceRoot: temp, env: { PATH: 'x' }, spawnImpl: later, terminateImpl, tellWaitMs: 40, note: line => said.push(line) });
+    await slow.start();
+    ending(logins[0]);
+    assert.equal(said.length, 2); assert.match(said[1], words);
+    await slow.stop();
+  }
 
   // The runtime behind the relay: the configured path opens it, /mcp alone does not exist.
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);

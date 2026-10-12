@@ -31,7 +31,7 @@ const launcherMeta = {
 };
 const selectionSchema = {
   type: 'object', additionalProperties: false,
-  properties: { projectId: { type: 'string', minLength: 1 }, workflowId: { type: 'string', minLength: 1 } }
+  properties: { projectId: { type: 'string', minLength: 1, description: 'The project to open it on: its id, root directory or unique name.' }, workflowId: { type: 'string', minLength: 1 } }
 };
 export function workbenchToolDescriptors() {
   return [
@@ -57,15 +57,22 @@ function object(value) { return value !== null && typeof value === 'object' && !
 
 export async function callWorkbenchTool(name, args = {}, service, context = {}) {
   if (!object(args)) throw fault('Tool arguments must be an object.', 'invalid_input');
-  let result;
+  let result, text = 'Workbench operation completed.';
   if (name === 'open_devmate_workbench') {
     if (Object.keys(args).some(key => !['projectId', 'workflowId'].includes(key)) ||
         Object.values(args).some(value => typeof value !== 'string' || !value.trim()))
       throw fault('Only explicit projectId and workflowId selectors are accepted.', 'invalid_input');
+    // A project is named here as everywhere: by its id, its root directory or its unique name.
+    const selected = { ...args, ...(args.projectId !== undefined ? { projectId: service.resolveProjectReference(args.projectId, context) } : {}) };
     // The model sees this result. It needs to know what was opened, not the whole workspace:
     // the app loads its own data through workbench_call.
-    const { selection, counts } = await service.snapshot(args, context);
+    const { selection, counts, projects } = await service.snapshot(selected, context);
     result = { selection, counts };
+    // Whether a client draws the workbench is the client's doing and is not known here: what is said is what was
+    // opened and where the user sees it, so that a model does not answer that nothing happened.
+    const project = projects.find(item => item.id === selection.projectId);
+    text = 'The DevMate Workbench was opened' + (project ? ' on the project ' + project.name : ', with no project selected (' + projects.length + ' shared)') +
+      '. A client that shows MCP Apps (ChatGPT, Claude) displays it to the user with this answer; nothing was started by opening it.';
   } else if (name === 'workbench_call') {
     if (Object.keys(args).some(key => !['operation', 'input'].includes(key)) ||
         !WORKBENCH_OPERATIONS.includes(args.operation) ||
@@ -73,7 +80,7 @@ export async function callWorkbenchTool(name, args = {}, service, context = {}) 
       throw fault('Unknown Workbench operation or invalid input.', 'invalid_input');
     result = await service.call(args.operation, args.input || {}, context);
   } else throw fault('Unknown Workbench tool.', 'tool_not_found');
-  return { content: [{ type: 'text', text: name === 'open_devmate_workbench' ? 'DevMate Workbench is ready.' : 'Workbench operation completed.' }], structuredContent: result };
+  return { content: [{ type: 'text', text }], structuredContent: result };
 }
 
 // Read once: an editor update removes the folder an already running runtime was started from, and the
@@ -118,7 +125,7 @@ export function registerWorkbench(server, service) {
     { title: 'DevMate Workbench', description: 'DevMate project and multi-agent workbench.', mimeType: WORKBENCH_MIME },
     readWorkbenchResource);
   server.registerTool(open.name, {
-    ...open, inputSchema: z.object({ projectId: z.string().trim().min(1).optional(), workflowId: z.string().trim().min(1).optional() }).strict()
+    ...open, inputSchema: z.object({ projectId: z.string().trim().min(1).optional().describe(selectionSchema.properties.projectId.description), workflowId: z.string().trim().min(1).optional() }).strict()
   }, answer(open.name));
   server.registerTool(call.name, {
     // Which operations it takes is checked when it is called: the list of them is not sent to every model with every tool list.
@@ -133,7 +140,11 @@ export async function handleWorkbench(req, res) {
     res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Method not allowed'); return true;
   }
   const html = await workbenchHtml();
+  // The page served here is the owner's, signed in at the computer: no other page may hold it in a frame (another
+  // local port could, and what is clicked in a frame is clicked in the page), nor keep a hand on its window. An
+  // embedded workbench is not served from here: a chat app reads it as a resource.
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': 'frame-ancestors \'none\'', 'X-Frame-Options': 'DENY', 'Cross-Origin-Opener-Policy': 'same-origin' });
   res.end(req.method === 'HEAD' ? undefined : html); return true;
 }

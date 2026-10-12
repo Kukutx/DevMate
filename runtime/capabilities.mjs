@@ -111,6 +111,8 @@ export async function createCapabilities({
     assertOpen(); callContext.getStore()?.signal?.throwIfAborted();
     if(closingProjects.has(id))throw fail('project_closing','Project capability resources are closing.');
     const project=service.project(id,{write});
+    // An engine starts its programs in the project's folder. One that is not there is said as that, here, for all of them.
+    resolveProjectPath(project);
     if(!projectControllers.has(id))projectControllers.set(id,new AbortController());
     return project;
   };
@@ -424,7 +426,8 @@ export async function createCapabilities({
   async function call({projectId,capability,input={}}={}, {signal,ownerDecides=false,readOnly=false}={}) {
     const changes=name=>fail('forbidden',name+' changes something: call it with capability_call.');
     return callContext.run({signal,ownerDecides},()=>tracked(projectId,async()=>{
-      checkedProject(projectId);
+      // A project that is not there (its folder among it) is found before anything is begun: a job says "not started".
+      try{checkedProject(projectId);}catch(error){if(error && typeof error==='object')error.notStarted=true;throw error;}
       if(typeof capability!=='string' || !capability)throw fail('invalid_input','capability must name a capability from capability_list.');
       if(!object(input))throw fail('invalid_input','Capability input must be an object.');
       if(capability.startsWith(HOST_ENGINE+'.')){

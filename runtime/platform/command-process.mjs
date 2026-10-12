@@ -143,7 +143,10 @@ export async function executeCommand(command, args = [], {
   maxOutputChars = 120000,
   shell = false,
   environment,
-  signal = null
+  signal = null,
+  // The caller wants the beginning of the output and no more than maxOutputChars of it: the command is ended as soon
+  // as it has written that much, instead of running on while what it writes is thrown away (endedFull in the result).
+  enough = false
 } = {}) {
   if (signal?.aborted) { const error = cancellationError(signal); error.notStarted = true; throw error; }
   const child = spawn(command, args, {
@@ -162,7 +165,10 @@ export async function executeCommand(command, args = [], {
   // One decoder per stream: a multi-byte character split across chunks must not become U+FFFD.
   child.stdout?.setEncoding('utf8');
   child.stderr?.setEncoding('utf8');
-  child.stdout?.on('data', chunk => { stdout = appendBounded(stdout, chunk, captureLimit); });
+  let full = () => {};
+  child.stdout?.on('data', enough
+    ? chunk => { if (stdout.length <= maxOutputChars) { stdout += chunk; if (stdout.length > maxOutputChars) full(); } }
+    : chunk => { stdout = appendBounded(stdout, chunk, captureLimit); });
   child.stderr?.on('data', chunk => { stderr = appendBounded(stderr, chunk, captureLimit); });
 
   let cleanupPending = false;
@@ -184,15 +190,27 @@ export async function executeCommand(command, args = [], {
       signal.addEventListener('abort', abortListener, { once: true });
       if (signal.aborted) abortListener();
     }
+    full = () => finish({ type: 'full' });
+    if (enough && stdout.length > maxOutputChars) full();
     exitPromise.then(exit => finish({ type: 'exit', exit }));
   });
 
   let exit = winner.exit || null;
   let termination = { terminated: false, forced: false, exitConfirmed: true };
-  if (winner.type === 'timeout' || winner.type === 'aborted') {
+  const gone = () => child.exitCode != null || child.signalCode != null;
+  if (winner.type === 'full' && gone()) {
+    // It wrote enough and ended by itself: an end like any other, with nothing left to end. (Handed to the ending
+    // below, it was not asked to end again either: of a process that is gone on Windows the ending only answers that
+    // its tree is not known to be gone, and that answer kept this one counted among the living for good. Where it
+    // ends while it is being ended, see below, the asking is as with any time limit or cancelling.)
+    exit = await waitWithTimeout(exitPromise, 1000);
+  } else if (winner.type === 'timeout' || winner.type === 'aborted' || winner.type === 'full') {
     cleanupPending = true;
     termination = await terminateProcessTree(child);
     exit = await waitWithTimeout(exitPromise, 100);
+    // The same where it ended by itself while it was being ended: what `enough` is used for is one process, and its
+    // own end is known.
+    if (winner.type === 'full' && !termination.exitConfirmed && gone()) termination = { ...termination, exitConfirmed: true };
   }
 
   if (termination.exitConfirmed) activeProcesses.delete(child);
@@ -204,8 +222,9 @@ export async function executeCommand(command, args = [], {
     signal: exit?.signal || child.signalCode || null,
     error: exit?.error,
     timedOut: winner.type === 'timeout',
+    ...(winner.type === 'full' ? { endedFull: true } : {}),
     ...termination,
-    stdout: stdout.slice(-maxOutputChars),
+    stdout: enough ? stdout.slice(0, maxOutputChars) : stdout.slice(-maxOutputChars),
     stderr: stderr.slice(-maxOutputChars),
     stdoutTruncated: stdout.length > maxOutputChars,
     stderrTruncated: stderr.length > maxOutputChars

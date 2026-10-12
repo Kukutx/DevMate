@@ -388,11 +388,13 @@ test('a turn is cancelled at its time limit and reported as timed out', async t 
 });
 
 test('the idle watchdog follows native progress, and time spent waiting for a person counts for neither limit', async t => {
-  const f = fixture(t, { providerSettings: { codex: { turnTimeoutMs: 60000, turnIdleTimeoutMs: 250 }, claude: { turnTimeoutMs: 200, turnIdleTimeoutMs: 100 } } });
+  // The limits leave room for a busy computer: a pause of a few hundred milliseconds between two signs of progress is
+  // not a turn that stalled. The signs go on for longer than the idle limit, which is what shows that they count.
+  const f = fixture(t, { providerSettings: { codex: { turnTimeoutMs: 60000, turnIdleTimeoutMs: 1000 }, claude: { turnTimeoutMs: 400, turnIdleTimeoutMs: 300 } } });
   f.factory.mode = 'hold';
   const working = await f.delegate({ provider: 'codex', prompt: 'slow but alive', waitMs: 0 });
   await until(() => f.instances[0].finish, 'turn running');
-  for (let i = 0; i < 12; i++) { f.instances[0].options.onEvent({ type: 'tool', nativeMethod: 'item/commandExecution/outputDelta', itemId: 'c1', text: '.', delta: true }); await delay(50); }
+  for (let i = 0; i < 15; i++) { f.instances[0].options.onEvent({ type: 'tool', nativeMethod: 'item/commandExecution/outputDelta', itemId: 'c1', text: '.', delta: true }); await delay(100); }
   assert.equal(f.store.get('agent', working.agentId).status, 'running', 'progress keeps the turn alive');
   const stalled = await f.coordinator.outcome(working.agentId, { deliveryId: working.deliveryId, waitMs: 5000 });
   assert.equal(stalled.turn.status, 'failed'); assert.equal(stalled.turn.error.code, 'turn_stalled'); assert.equal(f.instances[0].cancels, 1);

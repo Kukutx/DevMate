@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
-import { id, mutation, projectScope } from './shared.mjs';
+import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
 // Domain capabilities: the built-in engines (browser control and QA, Godot, reverse
 // engineering, Obsidian) and the owner's configured external MCP servers.
@@ -10,14 +10,18 @@ export function defineCapabilityOperations(service, add) {
   // The owner's browser belongs to no project: its capabilities (chrome.*) are answered whichever projects are shared,
   // and when none is.
   const ofBrowser = args => isBrowserCapability(args.capability), listsBrowser = args => args.engine === BROWSER_ENGINE || isBrowserCapability(args.name);
-  add('capability.list', { ...projectScope, engine: engine.optional(), name: z.string().max(200).optional(), summary: z.boolean().optional(),
+  // With words to look for, an engine keeps the capabilities that have them, and an engine that has none is left out.
+  const having = (query, listed) => query && Array.isArray(listed?.engines)
+    ? { ...listed, engines: listed.engines.map(item => Array.isArray(item.capabilities) ? { ...item, capabilities: item.capabilities.filter(one => hasWords(query, one.name, one.description || '')) } : item).filter(item => !Array.isArray(item.capabilities) || item.capabilities.length) }
+    : listed;
+  add('capability.list', { ...projectScope, engine: engine.optional(), name: z.string().max(200).optional(), query: keywords, summary: z.boolean().optional(),
     serverId: id.optional(), cursor: z.string().max(512).optional() }, true,
     'Discover the domain capabilities of this project: browser control and QA, Godot, reverse engineering, Obsidian, configured external MCP servers, and the owner\'s own browser (engine:"chrome": bookmarks, tabs, history, downloads, the page in front; no project needed). summary:true lists names and descriptions only; engine narrows to one domain; name returns one capability with its input schema.', async (args, context) => {
-      if (listsBrowser(args)) return isBrowserCapability(args.name) ? service.browser.list({ name: args.name }) : { engines: [service.browser.list({ full: args.summary !== true })] };
+      if (listsBrowser(args)) return isBrowserCapability(args.name) ? service.browser.list({ name: args.name }) : having(args.query, { engines: [service.browser.list({ full: args.summary !== true })] });
       const listed = await service.capabilities.list(args, { signal: service.waitSignal(context) });
       // The browser is listed beside the project's own engines, by name only: its capabilities are one call away.
-      return Array.isArray(listed.engines) && args.engine === undefined && args.name === undefined && args.serverId === undefined
-        ? { ...listed, engines: [...listed.engines, service.browser.list({})] } : listed;
+      return having(args.name === undefined ? args.query : undefined, Array.isArray(listed.engines) && args.engine === undefined && args.name === undefined && args.serverId === undefined
+        ? { ...listed, engines: [...listed.engines, service.browser.list({})] } : listed);
     }, { withoutProject: listsBrowser });
   add('capability.call', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}), ...mutation }, false,
     'Invoke one capability by the name capability_list gave it, with the input its schema describes (capability_list {name} returns that schema). The result is the capability\'s own. For a capability marked readOnly use capability_query.', (args, context) =>
@@ -42,7 +46,7 @@ export function defineCapabilityOperations(service, add) {
         throw new DomainError('forbidden', 'Capability engines are set up by the owner on their own computer (local workbench or the devmate command). A connected client can only switch one off.');
       // Reading and writing the memory of other processes is switched on at this computer and nowhere else, in either profile.
       if (context.surface !== 'local' && (args.settings.allowProcessAccess || args.settings.allowMemoryWrite))
-        throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: devmate capability.configure --json \'{"engine":"reverse","settings":{"allowProcessAccess":true}}\'');
+        throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: ' + ownerCommand('capability.configure', '{"engine":"reverse","settings":{"allowProcessAccess":true}}'));
       return service.capabilities.configure(args);
     });
 }

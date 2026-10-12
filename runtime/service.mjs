@@ -32,14 +32,14 @@ import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.m
 // is sent to whatever answers at that address, so it may ask which runtime that is, and nothing else.
 const PROBE_ID = 'verification', PROBE_OPERATION = 'connection.status';
 const storedKinds = ['agent', 'workflow', 'task', 'job', 'approval', 'input', 'reference', 'artifact'];
-const MAINTENANCE_INTERVAL_MS = 6 * 3600000;
+const MAINTENANCE_INTERVAL_MS = 6 * 3600000, FIRST_MAINTENANCE_MS = 15000, FOLDER_LOOK_MS = 30000, FOLDER_WAIT_MS = 2000;
 const LOCAL_OWNER = Object.freeze({ id: 'owner', surface: 'local' });
 const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root;
 // What a project command inherits: the owner's environment without DevMate's own
 // connection credentials and without the variables an editor host injects for itself.
 function commandEnvironment(config, env = process.env) {
   const withheld = new Set(['TUNNEL_TOKEN', 'CONTROL_PLANE_API_KEY', 'CLOUDFLARE_TUNNEL_TOKEN', 'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE',
-    config.connection?.tokenEnv, config.connection?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
+    config.connection?.tokenEnv, config.connection?.runtimeKeyEnv, config.openaiTunnel?.runtimeKeyEnv].filter(Boolean).map(name => name.toUpperCase()));
   // The marker tells the devmate command line that a connected client started it: it then acts with that
   // client's authority, not as the owner at this computer (CLIENT_COMMAND_ENV in runtime/client.mjs).
   // A command started here has no terminal: nothing may wait in a pager or at a prompt, and colour codes are noise
@@ -95,17 +95,34 @@ export class DevMateService {
     this.activeCalls = new Set();
     this.usage = createUsage();
     this.projectTransitions = new Set();
+    // Whether the folder of each project was there when it was last looked at (folderMissing), and how long a look
+    // that is made for an answer is waited for.
+    this.folders = new Map();
+    this.folderWaitMs = FOLDER_WAIT_MS;
     this.closing = false;
     this.workspace = createWorkspaceService({ store: this.store });
     this.processes = createProcessManager({ instanceRoot: this.instanceRoot, store: this.store, env: commandEnvironment(this.config) });
     this.secrets = createSecretStore(this.instanceRoot);
-    try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); }
-    this.maintenanceTimer = setInterval(() => { try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); } }, MAINTENANCE_INTERVAL_MS);
+    // Not while the runtime starts: with thousands of kept file versions the first tidying took up to three quarters
+    // of a second, which every entry that starts DevMate waited for. It comes a little after the start, when the
+    // records of unfinished jobs are known as well.
+    const tidy = () => { if (this.closing) return; try { this.maintain(); } catch (error) { this.store.recordNotificationFailure(error); } };
+    this.firstMaintenance = setTimeout(tidy, FIRST_MAINTENANCE_MS);
+    this.firstMaintenance.unref();
+    this.maintenanceTimer = setInterval(tidy, MAINTENANCE_INTERVAL_MS);
     this.maintenanceTimer.unref();
     this.accessProfile = this.store.setting('access.profile') === 'full' ? 'full' : 'guarded';
+    // Whether a connected client may have a coding agent run a task. That is spent on the owner's account with the
+    // provider, so it is a choice of its own beside the access profile, which is about this computer.
+    this.delegation = ['allow', 'off'].includes(this.store.setting('delegation.mode')) ? this.store.setting('delegation.mode') : 'ask';
     this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers,
       // Full access is the owner's standing answer to what an agent asks.
-      grantsApprovals: () => this.fullAccess() });
+      grantsApprovals: () => this.fullAccess(), delegation: () => this.delegation,
+      // The copy of the project that was made for a connected client's agent whose task the owner then did not allow.
+      discardCopy: agent => this.workspace.discardProposal(this.project(agent.projectId), agent.isolated),
+      // A task found the folder of its project gone: it is marked like after a call that met it gone, so that it is
+      // looked for again and a task that waits for it goes on when it is back (folderReturned).
+      folderGone: project => { this.folders.set(project.id, { root: project.root, at: Date.now(), missing: true }); } });
     // What the owner changed about the coding agents while the runtime ran lies on top of the configuration.
     if (!providerSettings) for (const name of Object.keys(this.store.setting('providers.live') || {})) {
       try { this.applyProviderSettings(name); } catch (error) { this.store.recordNotificationFailure(error); }
@@ -131,15 +148,22 @@ export class DevMateService {
         externalServers: this.config.externalServers, engineSettings: this.config.engineSettings, hostRegistry: this.hosts,
         onInputRequest: request => this.inputs.request(request), inputCapabilities: { elicitation: { form: {} } } });
       this.jobs = createJobRunner({ store: this.store, execute: async (job, { signal }) => {
-        if (job.kind === 'command') return this.processes.complete(this.project(job.projectId, { write: true }), job.input.args, { signal });
+        // The job says which process it is while it runs, so that what the command prints can be read before it ends.
+        if (job.kind === 'command') return this.processes.complete(this.project(job.projectId, { write: true }), job.input.args, { signal,
+          onStart: processId => this.store.update('job', job.id, { processId }) });
         try { return await this.capabilities.call(job.input.args, { signal }); }
         catch (error) {
           // The capability registry owns its client/process lifetime separately from this request.
           error.executionSettled = true;
+          // (A folder that is not there is one of these only where it was found so before anything was begun: the
+          // registry says that itself. Met later, by an engine that is already at work, it is an outcome nobody knows.)
           if (['forbidden', 'read_only', 'scope_mismatch', 'unknown_capability', 'invalid_input', 'missing_credential', 'not_found'].includes(error.code) || error.name === 'ZodError') error.notStarted = true;
           throw error;
         }
       } });
+      // Which folders are there is known before the first request is answered: the first thing a client is told names
+      // the projects, and a session keeps that. A share that does not answer is waited for up to the bound, no longer.
+      await this.lookAtFolders(this.store.list('project', { limit: 10000 }));
       return this;
     });
     this.ready.catch(() => {});
@@ -215,6 +239,18 @@ export class DevMateService {
     if (profile === 'full') this.agents.grantWaiting();
     return { profile };
   }
+  setDelegation(mode) {
+    this.store.setting('delegation.mode', mode);
+    this.delegation = mode;
+    // Tasks that already wait for the owner's word are covered by "do not ask". Choosing to be asked means of every
+    // agent again, also one whose later tasks had been let through, and of every task of a client that has not begun;
+    // and with off nothing of a connected client's is left to run. What that did to the tasks there were is said
+    // with the answer, in numbers: allowed (let through now), waiting (kept for want of a free session, of turns in
+    // their workflow or of something else that is said with each, and let through when that is out of the way), again
+    // (wait for the owner's word once more), ended (were beyond what may wait for the owner at once).
+    const done = mode === 'allow' ? this.agents.allowWaiting() : this.agents.askAgain(mode === 'off');
+    return { mode, ...Object.fromEntries(Object.entries(done).filter(([, count]) => count > 0)) };
+  }
   // Folders the owner took out of sharing. They come back only by the owner's own choice, and not through a
   // folder above or below them either: an editor's default never shares what would bring one back.
   isDeclined(root) {
@@ -241,7 +277,7 @@ export class DevMateService {
     const focused = operation?.readOnly ? this.windows.focusedProject(available.map(project => project.id)) : null;
     if (focused) { chosen.followed = available.find(project => project.id === focused); return focused; }
     throw new DomainError('project_required', available.length
-      ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name).join('; ')
+      ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name + (this.folderMissing(project) ? ' (its folder is not there)' : '')).join('; ')
       : 'No folder is shared yet. ' + this.howToShare(context));
   }
   // What to do about a folder that is not shared, said to the caller who can do it.
@@ -304,7 +340,9 @@ export class DevMateService {
     this.admit(context);
     return [...this.operations.values()].filter(operation =>
       (!operation.localOnly || this.reachesLocal(operation, context)) &&
-      (!(operation.humanOnly || operation.ownerDecision) || this.ownerDecides(context)));
+      (!(operation.humanOnly || operation.ownerDecision) || this.ownerDecides(context)) &&
+      // With delegation off a connected client is not offered what hands a task to an agent.
+      !(operation.delegates && this.delegation === 'off' && context?.surface !== 'local'));
   }
 
   async invoke(operation, args, context) {
@@ -317,7 +355,65 @@ export class DevMateService {
   async call(name, input = {}, context) {
     const done = this.usage.begin(this.operations.has(name) ? name : '(unknown)', context);
     try { const result = await this.perform(name, input, context); done(); return result; }
-    catch (error) { done(error); throw error; }
+    catch (error) {
+      // A call that found a project's folder gone has looked: what is said of that project is up to date at once.
+      if (error?.code === 'project_missing' && error.details?.projectId) {
+        try { this.folders.set(error.details.projectId, { root: this.store.get('project', error.details.projectId).root, at: Date.now(), missing: true }); } catch { /* the project is no longer on the list */ }
+      }
+      done(error); throw error;
+    }
+  }
+
+  // The other way round from a call that met a folder gone: a call for a project went through while its folder was
+  // marked as not there. Most such calls need the folder (reading a file in it), some only what DevMate keeps (its
+  // history), so the folder is looked at, now: what is said of the project is then not behind what was just done in
+  // it. Only for a project that is marked, which is rare, and whose folder a call has most likely just used.
+  folderBack(projectId) {
+    const seen = projectId ? this.folders.get(projectId) : null;
+    if (!seen?.missing || !seen.root) return;
+    try { fs.lstatSync(seen.root); } catch { return; /* not there, or not to be seen: it stays as it was */ }
+    this.folders.set(projectId, { root: seen.root, at: Date.now(), missing: false });
+    this.folderReturned();
+  }
+  // A folder that was gone is there again. Where the owner chose not to be asked, a task of a connected client that
+  // waited for it is tried again now: nothing else would, until something unrelated changed.
+  folderReturned() {
+    if (this.closing || this.delegation !== 'allow') return;
+    try { this.agents.allowWaiting(); } catch (error) { this.store.recordNotificationFailure(error); }
+  }
+
+  // One look at the folder of a project, and one at a time: what it finds is kept for whoever asks next. Only
+  // "nothing is at this path" counts as not there: no permission, or no answer, is not that.
+  lookAtFolder(project) {
+    const seen = this.folders.get(project.id), same = seen?.root === project.root;
+    if (same && seen.looking) return seen.looking;
+    const entry = { root: project.root, at: Date.now(), since: Date.now(), missing: same ? seen.missing : false, looking: null }, was = entry.missing;
+    entry.looking = fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))
+      .then(missing => { Object.assign(entry, { missing, at: Date.now(), looking: null }); if (was && !missing && this.folders.get(project.id) === entry) this.folderReturned(); return missing; });
+    this.folders.set(project.id, entry);
+    return entry.looking;
+  }
+  // The folders of these projects, looked at now, all at once, and waited for up to a bound: a share that does not
+  // answer holds whoever asks up for that long once, and is said as it was last seen. (A look that has gone on for
+  // longer than the bound is not waited for a second time.) Returns the projects whose folder has not answered.
+  async lookAtFolders(projects, waitMs = this.folderWaitMs) {
+    const began = Date.now(), looks = [];
+    for (const project of projects) { const look = this.lookAtFolder(project); if (began - this.folders.get(project.id).since < waitMs) looks.push(look); }
+    let timer;
+    await Promise.race([Promise.all(looks), new Promise(resolve => { timer = setTimeout(resolve, waitMs); })]);
+    clearTimeout(timer);
+    return projects.filter(project => this.folders.get(project.id)?.looking);
+  }
+  // Whether the folder of a project is known not to be there: moved, renamed or deleted, or on a drive that is not
+  // connected. It is said where projects are named for a model, which is on every request, so the file system is not
+  // asked there: what was seen last is answered at once, and it is looked at again in the background once in a while.
+  // A folder on a share that does not answer would otherwise hold up every call, for any project, for as long as the
+  // system waits for it. What was seen last is never older than the start of the runtime (it looks at every folder
+  // before it answers anything), a call that met the folder gone or found it back, or the last list of the projects.
+  folderMissing(project) {
+    const seen = this.folders.get(project.id);
+    if (seen?.root !== project.root || (!seen.looking && Date.now() - seen.at >= FOLDER_LOOK_MS)) this.lookAtFolder(project);
+    return this.folders.get(project.id).missing;
   }
 
   async perform(name, input = {}, context) {
@@ -343,6 +439,7 @@ export class DevMateService {
     if (context.windowId && !context.projectId && executionProject && !name.startsWith('window.')) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
     if (operation.readOnly || !args.operationId) {
       const result = await this.invoke(operation, args, context);
+      this.folderBack(executionProject);
       // Which project that was is part of the answer when the caller did not say and there were several.
       if (chosen.followed && result && typeof result === 'object' && Object.isExtensible(result)) Object.defineProperty(result, FOLLOWED_PROJECT, { value: { id: chosen.followed.id, name: chosen.followed.name } });
       return result;
@@ -360,6 +457,7 @@ export class DevMateService {
     this.store.saveOperation(operationKey, name, fingerprint, { pending: true });
     const work = this.invoke(operation, args, context).then(result => {
       this.store.db.prepare('UPDATE operations SET result=? WHERE id=?').run(JSON.stringify({ value: result }), operationKey);
+      this.folderBack(executionProject);
       return result;
     }, error => {
       // A failure is not a result to replay: forget the receipt so the same request can be tried again.
@@ -392,6 +490,12 @@ export class DevMateService {
     try { return await this.connection.status(); }
     catch (error) { return { kind: this.config.connection.kind, phase: 'unknown', error: { code: error.code || 'status_failed', message: error.message } }; }
   }
+  // The same for OpenAI's tunnel where it runs beside the connection (set where the runtime starts); null where it does not.
+  async tunnelState() {
+    if (!this.tunnel) return null;
+    try { return await this.tunnel.status(); }
+    catch (error) { return { kind: 'openai-tunnel', phase: 'unknown', error: { code: error.code || 'status_failed', message: error.message } }; }
+  }
 
   // How one coding agent is run: its configuration, then what was changed while the runtime ran.
   applyProviderSettings(name, live = (this.store.setting('providers.live') || {})[name] || {}) {
@@ -409,6 +513,8 @@ export class DevMateService {
     if (Object.keys(live).length) all[name] = live; else delete all[name];
     this.store.setting('providers.live', all);
     this.providerDiscovery = null;
+    // More sessions may be allowed now: a task that waited for one, where the owner is not asked, is tried again.
+    if (this.delegation === 'allow') this.agents.allowWaiting();
     return { provider: name, settings, changed: live };
   }
 
@@ -441,6 +547,7 @@ export class DevMateService {
     if (this.closed) return;
     this.closing = true;
     await this.ready.catch(() => {});
+    clearTimeout(this.firstMaintenance);
     clearInterval(this.maintenanceTimer);
     this.execution.abort(new DomainError('runtime_stopping', 'Runtime is stopping.'));
     this.inputs.close();

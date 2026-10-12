@@ -19,6 +19,13 @@ const changelog = fs.readFileSync(path.join(import.meta.dirname, '..', 'CHANGELO
 const heading = changelog.indexOf('## ' + vsix.version), next = changelog.findIndex((line, index) => index > heading && line.startsWith('## '));
 const notes = heading < 0 ? '' : changelog.slice(heading + 1, next < 0 ? undefined : next).join('\n').trim();
 if (!notes) throw new Error('CHANGELOG.md has no section "## ' + vsix.version + '".');
+// For a release (a tag in CI, or the preflight before one): nothing may still stand under "Unreleased". It would pass
+// every other check and be missing from the notes.
+if (process.argv.includes('--release') || process.env.GITHUB_REF_TYPE === 'tag') {
+  const waiting = changelog.findIndex(line => line.trim() === '## Unreleased'), after = changelog.findIndex((line, index) => index > waiting && line.startsWith('## '));
+  if (waiting >= 0 && changelog.slice(waiting + 1, after < 0 ? undefined : after).some(line => line.trim()))
+    throw new Error('CHANGELOG.md still has entries under "## Unreleased": they would be left out of the notes of ' + vsix.version + '. npm run version:set makes that section the version\'s; entries added since belong in "## ' + vsix.version + '".');
+}
 // Stable names beside the build, so a release step needs no globbing over timestamps.
 const release = path.join(path.dirname(candidate), 'release');
 fs.rmSync(release, { recursive: true, force: true });

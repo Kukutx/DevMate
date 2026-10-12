@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { fileText, line, projectPath, projectReference } from './operations/shared.mjs';
+import { commandShape, fileText, line, projectPath, projectReference } from './operations/shared.mjs';
 
 // The tools a model is shown depend on which model it is: one trained on Codex's tools is given apply_patch,
 // exec_command and write_stdin, one trained on Claude Code's is given write, edit and bash, and a client that is
@@ -91,8 +91,8 @@ const commandTool = opening => ({ title: 'Run command', labels: ['Running a comm
   description: shell => opening(shell) + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
     ': tests, builds, package managers, Git. It returns when the command exits, or after 30 seconds (with a longer timeout: after up to 50 seconds); a command still running then keeps running and is followed with process_read and ended with process_stop.',
   shape: { command: z.string().min(1).max(100000), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
-    timeout: z.number().int().min(1000).max(86400000).optional().describe('End the command after this many milliseconds.'), ...project },
-  run: async ({ call, present }, input) => present('shell.run', await call('shell.run', { projectId: input.projectId, command: input.command, cwd: input.working_directory,
+    timeout: z.number().int().min(1000).max(86400000).optional().describe('End the command after this many milliseconds.'), env: commandShape.env, ...project },
+  run: async ({ call, present }, input) => present('shell.run', await call('shell.run', { projectId: input.projectId, command: input.command, cwd: input.working_directory, env: input.env,
     ...(input.timeout ? { timeoutMs: input.timeout, waitMs: Math.min(input.timeout, 50000) } : {}) })) });
 
 /**
@@ -109,13 +109,16 @@ export const NATIVE_TOOLS = Object.freeze({
     run: async ({ call, present }, input) => present('workspace.patch', await call('workspace.patch', { projectId: input.projectId, patch: input.patch })) },
   exec_command: { title: 'Run command', labels: ['Running a command', 'Ran a command'], destructive: true, openWorld: true,
     description: shell => 'The shell here is ' + shell.label + (shell.noChaining ? ' (no && or ||: chain with ";" and "if ($?) { ... }")' : '') +
-      '. Run a command in the project: tests, builds, package managers, Git. It returns when the command exits or after yield_time_ms; a command that is still running then keeps running and is followed, given input and waited for with write_stdin and its session ID.',
+      '. Run a command in the project: tests, builds, package managers, Git. It returns when the command exits or after yield_time_ms; a command that is still running then keeps running and is followed and waited for with write_stdin and its session ID.',
+    // A command has no standard input unless it is asked for, as on the other surfaces: with one that nobody closes,
+    // everything that reads its input when it is given no file (rg, findstr, sort, python) waits for it without end.
     shape: { cmd: z.string().min(1).max(100000).describe('The command line.'), working_directory: z.string().max(4096).optional().describe('Folder to run in, relative to the project root.'),
-      yield_time_ms: yieldMs(YIELD_MS), max_output_tokens: tokens, ...project },
-    run: async ({ call }, input) => session(await call('shell.run', { projectId: input.projectId, command: input.cmd, cwd: input.working_directory, interactive: true,
+      tty: z.boolean().optional().describe('true keeps the command\'s standard input open, for a program that asks questions: write_stdin answers it. Left out, the command has none.'),
+      yield_time_ms: yieldMs(YIELD_MS), max_output_tokens: tokens, env: commandShape.env, ...project },
+    run: async ({ call }, input) => session(await call('shell.run', { projectId: input.projectId, command: input.cmd, cwd: input.working_directory, env: input.env, interactive: input.tty === true,
       waitMs: input.yield_time_ms ?? YIELD_MS }), input.max_output_tokens) },
   write_stdin: { title: 'Follow command', labels: ['Following a command', 'Followed a command'], openWorld: true,
-    description: () => 'Send text to a running command (include the newline yourself), or with no chars just wait for its next output. Returns what the command printed since the last look, and whether it is still running.',
+    description: () => 'Send text to a running command that was started with tty:true (include the newline yourself), or with no chars just wait for its next output. Returns what the command printed since the last look, and whether it is still running.',
     shape: { session_id: z.string().min(1).max(160).describe('The session ID exec_command returned.'), chars: z.string().max(100000).optional().describe('Text for the command\'s standard input. Leave out to only read.'),
       yield_time_ms: yieldMs(AFTER_WRITE_MS + ' after sending text, ' + POLL_MS + ' when only waiting'), max_output_tokens: tokens },
     run: async ({ call }, input) => {

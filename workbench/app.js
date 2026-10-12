@@ -418,18 +418,33 @@ function approvalsView(v) {
 }
 // Answers to an agent are the person's own and are given at their computer, never through a connected client.
 const ANSWER_LOCALLY = 'Answer this on your computer: in your editor, or in the local workbench (run “devmate ui”).';
+// Whether a task that a connected client handed to an agent is run at all. It runs on the owner's account with the
+// provider, so full access does not hand this answer to the client either.
+const ALLOW_LOCALLY = 'Whether this task runs is yours to say on your computer, in either access profile: in your editor, or in the local workbench (run “devmate ui”). Not to be asked: devmate delegation allow.';
 const requestTitle = item => str(item.prompt) || str(item.question) || str(item.details?.message) || str(item.summary) || str(item.title) || 'Request from an agent';
 function approvalCard(approval) {
   const options = Array.isArray(approval.options) ? approval.options : [];
+  // For a task that waits to be allowed there is no turn yet to cancel, and nothing to answer from inside a chat app.
+  const consent = approval.kind === 'delegation', here = !(consent && bridge.embedded);
+  const asked = consent && approval.details && typeof approval.details === 'object' && typeof approval.details.task === 'string' ? approval.details : null;
   // Once the decision is accepted the request leaves the waiting list at once, not with the next refresh.
   const decide = async optionId => { await mutate('approval.resolve', {id: approval.id, optionId, expectedRevision: approval.revision}, 'Decision sent.'); approval.status = 'resolved'; renderMain(); };
   return el('div', {class: 'item waiting', 'data-key': approval.id}, el('div', {class: 'row-head'}, el('h3', {text: str(approval.summary) || str(approval.title) || 'Approval request'}), badge(approval.status)),
-    caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
-    approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
-    el('div', {class: 'actions'}, options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))),
-      opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
+    // (The agent of a task that waits to be allowed may be named by the client that asks: its name stands in the
+    // question, in quotes, and nowhere on this card as words of its own.)
+    caption([consent ? '' : agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? consent ? 'allowed without asking (devmate delegation allow)' : 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
+    // A task that waits to be allowed is shown as what the owner agrees to: who asks, what would run it (the model,
+    // a session of the provider that is taken up again), and the task itself as the text it is, line by line. What
+    // somebody else named comes in quotes from the runtime, and is marked where the client chose it.
+    asked ? [caption([str(asked.askedBy), 'runs with ' + str(asked.agent) + ', model: ' + str(asked.model), str(asked.continues) ? 'continues ' + asked.continues : '', 'project: ' + str(asked.project), asked.characters + ' characters'].filter(Boolean).join(' · ')),
+      pre(str(asked.task), {class: 'preview file-view', 'aria-label': 'The task'}), str(asked.notShown) ? el('p', {class: 'error-text', text: asked.notShown}) : null, str(asked.note) ? caption(asked.note) : null]
+      : approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
+    // Where the owner chose not to be asked, a task that is still here waits for something else, and says what.
+    consent && str(approval.waits) ? el('p', {class: 'error-text', text: 'You chose not to be asked (devmate delegation allow), and this task has not begun because of something else. ' + approval.waits + ' It is let through when that is out of the way; refuse it here if it is not to run.'}) : null,
+    el('div', {class: 'actions'}, here ? options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))) : null,
+      consent ? null : opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
     options.length ? null : caption('The agent did not offer any choices for this request.'),
-    can('approval.resolve') ? null : caption(ANSWER_LOCALLY));
+    here && can('approval.resolve') ? null : caption(consent ? ALLOW_LOCALLY : ANSWER_LOCALLY));
 }
 // A question is known by its id where the agent gives one (Codex), otherwise by its own text (Claude Code).
 const qid = question => str(question.id) || str(question.question) || str(question.header);
@@ -562,15 +577,18 @@ function agentCard(v, agent) {
   };
   return el('div', {class: 'item', 'data-key': agent.id}, el('div', {class: 'row-head'}, el('h3', {text: name(agent)}), badge(agent.status)),
     caption([agent.provider, agent.model, agent.nativeSessionId].filter(Boolean).join(' · ')),
+    // The owner said so when they were asked about one of its tasks. It ends with the agent's connection: stopping it ends it now.
+    agent.delegationAllowed ? caption('A connected client hands this agent tasks, and adds to a task that runs (yours among them), without asking you, for as long as the agent stays connected. Stop it to be asked again.') : null,
+    agent.status === 'unstarted' ? caption('Written down by a connected client and not started: it starts when you allow a task of it, or resume it.') : null,
     str(agent.summary) ? el('p', {text: agent.summary}) : null, agent.error?.message ? el('p', {class: 'error-text', text: agent.error.message}) : null,
     el('div', {class: 'actions'},
       opButton('Send', 'agents.send', say('send', 'Send', 'Message queued.'), {disabled: !on('send', ['ready', 'running', 'waiting'])}),
       opButton('Steer', 'agents.steer', say('steer', 'Steer', 'Steering sent.'), {disabled: !on('steer', ['running', 'waiting'])}),
-      opButton('Resume', 'agents.resume', () => mutate('agents.resume', {id: agent.id}, 'Resuming.'), {disabled: !on('resume', ['closed', 'disconnected', 'unavailable'])}),
+      opButton('Resume', 'agents.resume', () => mutate('agents.resume', {id: agent.id}, 'Resuming.'), {disabled: !on('resume', ['closed', 'disconnected', 'unavailable', 'unstarted'])}),
       opButton('Show result', 'agents.result', async () => { await readResult(v, agent.id); v.shown = agent.id; renderMain(); }),
       button('Transcript', () => showTranscript(agent.id)),
       opButton('Cancel turn', 'agents.cancel', () => mutate('agents.cancel', {id: agent.id}, 'Cancellation requested.'), {class: 'danger', disabled: !on('cancel', ['running', 'waiting', 'cancelling'])}),
-      opButton('Stop', 'agents.stop', () => mutate('agents.stop', {id: agent.id}, 'Agent stopped.'), {class: 'danger', disabled: !on('stop', ['starting', 'ready', 'running', 'waiting', 'cancelling', 'disconnected', 'unavailable'])})));
+      opButton('Stop', 'agents.stop', () => mutate('agents.stop', {id: agent.id}, 'Agent stopped.'), {class: 'danger', disabled: !on('stop', ['starting', 'ready', 'running', 'waiting', 'cancelling', 'disconnected', 'unavailable', 'unstarted'])})));
 }
 function startAgent(provider) {
   const draft = {title: '', model: '', sessionId: '', prompt: ''};

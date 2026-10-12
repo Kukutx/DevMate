@@ -10,6 +10,14 @@ import { decodeOtherText, resolveProjectPath } from './workspace.mjs';
 import { redactSecrets } from './platform/redact.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
 
+// A command's own variables over the ones every command gets. Windows knows a variable by its name whatever its case:
+// one that is set again under another spelling replaces the first instead of standing beside it.
+function withVariables(base, own = {}) {
+  if (process.platform !== 'win32') return { ...base, ...own };
+  const set = new Set(Object.keys(own).map(name => name.toUpperCase()));
+  return { ...Object.fromEntries(Object.entries(base).filter(([name]) => !set.has(name.toUpperCase()))), ...own };
+}
+
 const { terminateProcessTree, childExited } = processTree;
 const fail = (code, message, details) => new DomainError(code, message, details);
 // Kept per command. When exceeded the oldest half is dropped, so the newest output is always there.
@@ -139,7 +147,8 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     return entry.rootExited || childExited(entry.child);
   }
 
-  // environment and label are for internal callers (engines); the public operations do not expose them.
+  // environment: the command's own variables, from an engine or from the caller (shell.run's env, checked there).
+  // label is for internal callers (engines).
   function start(project, { command, file, args, cwd = '.', timeoutMs, interactive = false, environment = {}, label = null } = {}) {
     if (closing) throw fail('runtime_stopping', 'Runtime is stopping.');
     if (project.access !== 'write') throw fail('read_only', 'Commands require a writable project.');
@@ -175,7 +184,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
       child = spawnImpl(launch.file, launch.args, { cwd: directoryPath, shell: false, windowsHide: true,
         detached: process.platform !== 'win32', stdio: [interactive ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         // The owner's own development environment. Terminal credential prompts cannot be answered without a console.
-        env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat', ...environment } });
+        env: withVariables({ ...env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat' }, environment) });
     } catch (error) {
       releaseLog(entry); fs.rmSync(log, { force: true }); launch.cleanup();
       throw fail('command_not_started', error.message);
@@ -289,7 +298,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
   function write({ id, input, end = false }) {
     const entry = owned(id);
     if (entry.status !== 'running') throw fail('process_not_running', 'Process has already finished.');
-    if (!entry.interactive || !entry.child.stdin) throw fail('stdin_closed', 'Start the command with interactive:true to send input.');
+    if (!entry.interactive || !entry.child.stdin) throw fail('stdin_closed', 'This command was started without a standard input. To send it text, start it again with interactive:true (exec_command: tty:true).');
     if (entry.stdinEnded || entry.child.stdin.destroyed) throw fail('stdin_closed', 'The input of this command was already closed.');
     if (input) entry.child.stdin.write(input);
     if (end) { entry.stdinEnded = true; entry.child.stdin.end(); }
@@ -312,12 +321,14 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     return view(entry);
   }
-  /** Run to completion for a durable Job and report the owned-child evidence it records. */
-  async function complete(project, input = {}, { signal } = {}) {
+  /** Run to completion for a durable Job and report the owned-child evidence it records. onStart is told the id of the process. */
+  async function complete(project, input = {}, { signal, onStart } = {}) {
     if (signal?.aborted) { const error = signal.reason instanceof Error ? signal.reason : fail('job_cancelled', 'Command cancelled.'); error.notStarted = true; throw error; }
     let entry;
     try { entry = start(project, { ...input, timeoutMs: input.timeoutMs ?? 1800000 }); }
     catch (error) { error.notStarted = true; throw error; }
+    // The command runs whether or not that could be written down.
+    try { onStart?.(entry.id); } catch { /* the job is followed without its process id */ }
     let confirmed = true;
     // A stop that could not be confirmed ends the wait at once; it is reported as such instead of a minute later.
     const unconfirmed = new AbortController();
@@ -370,6 +381,25 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     return { reaped, found: names.length };
   }
-  return { run, read, write, stop, complete, list, closeProject, close, shell, reapLeftovers,
+  // Whether the shell runs a command at all, asked the way every command is run. On Windows a command is a script file
+  // the shell is started with, and a policy of an organisation can forbid scripts whatever the command line asks for:
+  // the shell is there, and nothing runs.
+  function tryShell({ timeoutMs = 10000 } = {}) {
+    return new Promise(resolve => {
+      let launch, child, output = Buffer.alloc(0), settled = false;
+      const finish = result => { if (settled) return; settled = true; clearTimeout(timer); try { launch?.cleanup(); } catch {} resolve(result); };
+      const timer = setTimeout(() => { try { child?.kill(); } catch {} finish({ ok: false, reason: 'it did not end within ' + Math.round(timeoutMs / 1000) + ' seconds' }); }, timeoutMs);
+      try {
+        launch = shellInvocation('exit 0', { shell, scriptDirectory: directory, id: 'try-' + randomUUID() });
+        child = spawnImpl(launch.file, launch.args, { cwd: directory, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env });
+      } catch (error) { return finish({ ok: false, reason: error.message }); }
+      const keep = chunk => { if (output.length < 8000) output = Buffer.concat([output, Buffer.from(chunk)]); };
+      child.stdout?.on('data', keep); child.stderr?.on('data', keep);
+      child.once('error', error => finish({ ok: false, reason: error.message }));
+      child.once('close', code => finish(code === 0 ? { ok: true }
+        : { ok: false, reason: (decodeOutput(output).split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 4).join(' ') || 'it ended with code ' + code).slice(0, 500) }));
+    });
+  }
+  return { run, read, write, stop, complete, list, closeProject, close, shell, reapLeftovers, tryShell,
     projectOf: id => owned(id).projectId, get size() { return processes.size; } };
 }

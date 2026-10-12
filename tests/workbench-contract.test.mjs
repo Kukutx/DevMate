@@ -156,4 +156,6 @@ test('local HTML routing is explicit and never handles API or unrelated routes',
   assert.equal(await handleWorkbench({url:'/',method:'POST'},res),true);assert.equal(status,405);
   assert.equal(await handleWorkbench({url:'/workbench',method:'HEAD'},res),true);
   assert.equal(status,200);assert.equal(headers['Cache-Control'],'no-store');assert.equal(body,undefined);
+  // The page that is signed in as the owner at the computer is held in no other page's frame, and no other page keeps a hand on its window.
+  assert.deepEqual([headers['Content-Security-Policy'],headers['X-Frame-Options'],headers['Cross-Origin-Opener-Policy']],['frame-ancestors \'none\'','DENY','same-origin']);
 });

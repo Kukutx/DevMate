@@ -6,6 +6,7 @@ import { READ_ONLY, answer } from './capabilities.js';
 //   the runtime asks the browser to do something  → { type: 'call', id, method, params }   ← { type: 'result', id, ok, result | error }
 //   this extension, as an entry, asks the runtime → { type: 'request', id, action, input } ← { type: 'response', id, ok, result | error }
 //   the runtime tells what happened               → { type: 'event', name, data }
+//   the host will not serve this browser          → { type: 'refused', message }, and it ends
 //
 // As an entry the extension can ask for five things and nothing else: the status, a start, a link to the workbench,
 // the MCP address, and what waits for the owner. It cannot stop the runtime and cannot call an operation by name.
@@ -24,7 +25,7 @@ const ACTIVITY_KEPT = 30;
 const NOT_REGISTERED = /host not found|is forbidden|not installed|not registered/i;
 
 export function createBridge({ connect, methods, version = '', browser = '', settings, onChange = () => {}, schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, clock = () => Date.now() } = {}) {
-  let port = null, next = 1, retry = null, delay = 1000;
+  let port = null, next = 1, retry = null, delay = 1000, refusal = null;
   const waiting = new Map(), activity = [];
   // What the panel shows. host: 'connecting' | 'connected' | 'missing' | 'closed'. said: the browser's own words when
   // a connection ended, kept as they are; attempts: how often a connection was tried since the last one that held.
@@ -67,7 +68,10 @@ export function createBridge({ connect, methods, version = '', browser = '', set
       // "Start DevMate with the browser": the same switch an editor has, off until the owner turns it on.
       if (state.runtime?.running !== true && saved.startWithBrowser === true) request('start').then(runtime => { state.runtime = runtime || state.runtime; changed(); }, () => {});
       else if (state.runtime?.running === true) request('pending').then(result => { state.pending = Number(result?.count) || 0; changed(); }, () => {});
-    } else if (message.type === 'call') await called(message);
+    // The host says why it will not serve this browser, and ends: its words are what the panel shows, in place of the
+    // browser's "Native host has exited", which tells the owner nothing.
+    } else if (message.type === 'refused') refusal = String(message.message || '').slice(0, 600) || null;
+    else if (message.type === 'call') await called(message);
     else if (message.type === 'response') {
       const asked = waiting.get(message.id);
       if (!asked) return;
@@ -87,12 +91,14 @@ export function createBridge({ connect, methods, version = '', browser = '', set
     port = null;
     for (const asked of waiting.values()) { cancel(asked.timer); asked.reject(Object.assign(new Error('The connection to DevMate was closed.'), { code: 'not_connected' })); }
     waiting.clear();
-    const missing = NOT_REGISTERED.test(reason || '');
+    const missing = NOT_REGISTERED.test(reason || ''), refused = refusal;
+    refusal = null;
     state.host = missing ? 'missing' : 'closed'; state.runtime = null; state.pending = 0;
-    state.said = reason || 'The connection to DevMate was closed.'; state.saidAt = clock(); state.attempts++;
+    state.said = refused || reason || 'The connection to DevMate was closed.'; state.saidAt = clock(); state.attempts++;
     changed();
-    // A registration is made on the computer, not by trying again fast: look again every half minute.
-    if (retry === null) retry = schedule(() => { retry = null; open(); }, missing ? 30000 : delay);
+    // A registration is made on the computer, not by trying again fast: look again every half minute. The same where
+    // the host said why it will not serve: what it named does not change by itself either.
+    if (retry === null) retry = schedule(() => { retry = null; open(); }, missing || refused ? 30000 : delay);
     delay = Math.min(delay * 2, 30000);
   }
 

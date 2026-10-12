@@ -6,7 +6,7 @@ DevMate's domain tools are called capabilities. They are reached through three o
 { "capability": "godot.status", "input": {} }
 ```
 
-`projectId` may be added to both; it is optional when the caller has one project. Capability inputs never take a project or workspace id: the project of the call is the scope.
+`projectId` may be added to both; it is optional when the caller has one project. Capability inputs never take a project or workspace id: the project of the call is the scope. The owner's browser (`chrome.*`) is the exception: it belongs to no project, and its capabilities are answered whichever folders are shared, and when none is.
 
 ## Naming
 
@@ -20,6 +20,7 @@ A capability is `<engine>.<name>`.
 | `godot` | `godot.*` | the runtime, starting the configured Godot executable |
 | `reverse` | `reverse.*` | the runtime, optionally starting Python, Rizin/radare2 and Ghidra |
 | `obsidian` | `obsidian.*` | the Obsidian plugin of an attached vault |
+| `chrome` | `chrome.*`: the owner's own browser (bookmarks, tabs, windows, history, downloads, the reading list) and `chrome.page.*`, which debugs a page like DevTools | the DevMate extension in Chrome or Edge, through the program the browser starts for it |
 
 Configured external MCP servers are reached as `mcp.<serverId>.<operation>`.
 
@@ -31,13 +32,14 @@ Every engine with a diagnostic routine has `<engine>.diagnose`: effective settin
 
 | Input | Result |
 |---|---|
-| none | Summary: engines with status, and per capability its name, a one-line description and flags. About 16 KB for the built-in engines. |
+| none | Summary: engines with status, and per capability its name, a one-line description and flags. About 26 KB for the built-in engines, of which the browser's 52 are about 10 KB. |
 | `engine: "godot"` | That engine with the full description, flags and input schema of each capability. |
 | `engine: "godot", summary: true` | That engine in summary form. |
 | `name: "godot.export"` | One capability: full description, flags, input schema. |
+| `query: "export preset"` | Only the capabilities whose name or description has every one of those words; an engine that has none is left out. With `engine`, within that engine. |
 | `serverId` | Additionally the tools of one external MCP server. |
 
-An engine entry has `status`: `ready`, `disabled` (switched off), `unavailable` (it could not activate; `error` says why and the other engines keep working), or for `obsidian` `attached` / `detached`.
+An engine entry has `status`: `ready`, `disabled` (switched off), `unavailable` (it could not activate; `error` says why and the other engines keep working), for `obsidian` `attached` / `detached`, or for `chrome` `connected` / `not connected`.
 
 Flags, shown in the summary only when true:
 
@@ -63,6 +65,7 @@ Persistent processes started by an engine (`godot.run`) are ordinary project pro
 
 Every caller is the owner, at their computer or through a connected client. Some capabilities reach further than the project's files, and a connected client has them like any other:
 
+- all of `chrome.*`, which reaches furthest: the owner's own browser, signed in wherever the owner is. Its bookmarks, history and downloads, and with `chrome.page.*` any page open in it, are read and worked as the owner. It belongs to no project and no project's protection holds anything of it back; the owner connects it (`devmate chrome install`) and can pause it in the extension;
 - all of `browser-control.*`: a session is a browser on the owner's desktop and may hold a signed-in persistent profile;
 - `reverse.code_analyze`, `reverse.decompile`, `reverse.disassemble`: they start installed analysis programs;
 - everything under `mcp.*`: an external server has credentials and resources of its own.
@@ -78,13 +81,13 @@ Settings are layered, later wins:
 3. instance-wide values set with `capability.configure`;
 4. values for one project (set by `godot.quick_setup`, or `capability.configure` with a `projectId`).
 
-`engineSettings` is validated when the runtime starts. An unknown engine id or an unknown or invalid key stops the start with a message naming the engine and the key. Engine ids are `automation`, `browser-control`, `browser-qa`, `godot`, `reverse`, `obsidian`.
+`engineSettings` is validated when the runtime starts. An unknown engine id or an unknown or invalid key stops the start with a message naming the engine and the key. Engine ids are `automation`, `browser-control`, `browser-qa`, `godot`, `reverse`, `obsidian`. `chrome` is not among them: it has no settings, and `capability.configure` does not know it.
 
 ```json
 { "engineSettings": { "godot": { "executablePath": "C:\\Tools\\Godot\\godot.exe" }, "reverse": { "enabled": false } } }
 ```
 
-Every engine has `enabled` (default `true`). Switching an engine off closes what it has open (browsers, previews, helpers), removes its capabilities from the listing, and makes calls fail with `capability_disabled`.
+Every one of these engines has `enabled` (default `true`). Switching an engine off closes what it has open (browsers, previews, helpers), removes its capabilities from the listing, and makes calls fail with `capability_disabled`. The owner's browser (`chrome`) is not switched off here but where it is: paused in the extension's panel, or by removing the extension.
 
 | Engine | Settings |
 |---|---|

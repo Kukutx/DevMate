@@ -242,6 +242,8 @@ export function createAuth({ store, instanceRoot, config = {}, clientMetadata, p
       (details.client.configured ? '<p>The owner of this DevMate registered this client and chose its name. The client does not publish a description of itself.</p>' : '') +
       '<p>Return to: <strong>' + escape(target.host) + '</strong></p><p>Requested scope: ' + escape(details.scope) + '</p>' +
       (target.protocol === 'http:' ? '<p>This redirect returns to a local application. Confirm that you started this sign-in.</p>' : '') +
+      // Where the code comes from: someone who meets this page for the first time has nothing to type.
+      '<p>The code is made on the computer DevMate runs on: <code>devmate login-code</code> in a terminal there, or "Copy One-Time Sign-In Code" among the DevMate commands of its editor. It works once.</p>' +
       '<form method="post" action="/oauth/authorize">' + fields + '<label>One-time DevMate code <input type="password" name="authorization_code" autocomplete="one-time-code" required autofocus></label>' +
       '<button type="submit">Authorize this client</button></form>', { formAction: redirectSource(details.redirectUri), headers });
   }

@@ -118,6 +118,16 @@ test('less common operations are one generic call away and keep their own author
   assert.equal(summary.items.some(item => item.name === 'secret.set' || item.name === 'runtime.doctor'), false, 'local-only operations are not offered to an MCP caller');
   const one = await service.call('operations.list', { name: 'workflow.create' }, remote);
   assert.equal(one.items.length, 1); assert.ok(one.items[0].inputSchema.properties.turnBudget);
+  // What a task needs is seldom one operation: several are asked for in one call (a real ChatGPT asked eight times in a
+  // row, once for each), and a name there is no operation for is said instead of left out without a word.
+  const several = await service.call('operations.list', { names: ['workspace.mkdir', 'workspace.move', 'job.start', 'secret.set', 'no.such'] }, remote);
+  assert.deepEqual(several.items.map(item => item.name).sort(), ['job.start', 'workspace.mkdir', 'workspace.move']); assert.ok(several.items.every(item => item.inputSchema?.properties));
+  assert.deepEqual(several.unknown, ['secret.set', 'no.such'], 'what is not offered to this caller is as unknown as what does not exist');
+  assert.equal((await service.call('operations.list', { names: ['job.start'] }, remote)).unknown, undefined);
+  // One that is there and only lacks the words asked for is left out of the answer, and is not called unknown for that.
+  const narrowed = await service.call('operations.list', { names: ['workspace.mkdir', 'job.start', 'no.such'], query: 'missing parents' }, remote);
+  assert.deepEqual([narrowed.items.map(item => item.name), narrowed.unknown], [['workspace.mkdir'], ['no.such']]);
+  assert.equal((await service.call('operations.list', { names: ['job.start'], summary: true }, remote)).items[0].inputSchema, undefined);
   const workflow = await service.call('operations.call', { operation: 'workflow.create', input: { projectId: project.id, title: 'Through the generic call' } }, remote);
   assert.equal(service.store.get('workflow', workflow.id).title, 'Through the generic call');
   for (const operation of ['secret.list', 'settings.read', 'runtime.stop', 'operations.call', 'no.such']) {

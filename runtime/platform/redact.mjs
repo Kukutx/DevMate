@@ -4,7 +4,7 @@
 // recorded for display. The command that runs is never changed. This is a best
 // effort on well-known shapes, not a guarantee: a secret in an unusual form is
 // not recognised.
-const MARK = '[redacted]';
+export const MARK = '[redacted]';
 const RULES = [
   // Authorization headers and bearer tokens.
   [/\b(authorization\s*[:=]\s*(?:"|')?(?:bearer|basic|token)\s+)[^\s"']+/gi, '$1' + MARK],

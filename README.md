@@ -68,7 +68,7 @@ devmate ui --open                      # the workbench in your browser
 | `devmate` command line | Working without an editor | Everything: start, share folders, configure the connection, open the workbench, call any operation. `devmate mcp` serves MCP on standard input and output for clients that start their servers as a program |
 | VS Code extension | Everyday development | The editor's diagnostics, active file and selection; a status bar item |
 | Obsidian plugin | A knowledge base | Note search, properties, graph and vault operations |
-| Chrome and Edge extension | The browser itself | Bookmarks, tabs and windows, history, downloads, the reading list and the page in front of you |
+| Chrome and Edge extension | The browser itself | Bookmarks, tabs and windows, history, downloads, the reading list and the pages in its tabs |
 
 One instance directory (default `~/.devmate/runtime`) has exactly one runtime process at a time.
 
@@ -76,6 +76,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 - Each editor window works on its own folders. Closing a window affects neither the runtime nor the other windows.
 - **The runtime keeps running after you close the editor**, with its public connection if you configured one, until you stop it: `devmate stop`, or **Stop DevMate Runtime** in an editor. Stopping affects every entry, so the editors ask first.
 - After a crash the next start simply works. VS Code with `devMate.autoStart` brings a crashed runtime back; one you stopped stays stopped.
+- **Update the entries together.** A runtime is the release of the entry that started it. After an update the command line says when an older runtime is still the one that runs (`devmate restart` starts the new one). And once a newer release has used the instance, an entry that is still older can no longer start the runtime: it says which releases are involved, and it still joins a runtime that is running. So an editor that was left on the old release cannot quietly bring back a runtime that does not know what the new one was told, such as asking you before a client's task runs. For the same reason an instance that a release after 4.0.5 has used cannot go back to 4.0.5.
 
 ## Command line
 
@@ -88,14 +89,15 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate logs [--lines N]` | Recent runtime log |
 | `devmate project add [directory] [--name N] [--read-only]` / `list` / `remove` | What is shared. Without a directory, the current one |
 | `devmate access [guarded \| full]` | The permission profile: what a connected client may decide (see [Who may do what](#who-may-do-what)) |
+| `devmate delegation [ask \| allow \| off]` | Whether a connected client may hand tasks to the coding agents here, which run on your account with them. `ask` (the default): you allow each task at this computer first |
 | `devmate mcp-url` | The address for a client |
 | `devmate mcp` | MCP over standard input and output; starts the runtime when needed |
-| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in |
+| `devmate connect local \| quick \| cloudflare \| openai-tunnel \| https \| ssh …` | How cloud clients reach this computer. `--auth oauth` requires sign-in; `--openai-tunnel <id>` runs OpenAI's tunnel beside a route that has an address; `connect beside --openai-tunnel <id> \| none` adds it to the route there is, or takes it away |
 | `devmate secret set <NAME>` / `list` / `remove <NAME>` | Connection credentials. The value is read from standard input and never appears in shell history |
 | `devmate login-code` | A one-time sign-in code (when sign-in is on) |
 | `devmate ui [--open]` | A single-use link to the workbench |
 | `devmate operations` / `help <operation>` | Every operation, and one with its exact input |
-| `devmate <operation> --json '{…}'` | Call any operation; also `--file` or `--stdin` |
+| `devmate <operation> --json '{…}'` | Call any operation; also `--file <input.json>` or `--stdin`. On Windows use `--file`: Windows PowerShell 5.1 and cmd take the double quotes out of what follows `--json` |
 
 Every command accepts `--instance <directory>` to use another instance. The command line can do everything the workbench and the extensions can.
 
@@ -172,7 +174,7 @@ Leave **Developer mode** on, and that is all there is to do, updates included. T
   | A tab's page | title, address and text; a picture of what it shows or of the whole page | go back, go forward |
   | Debugging a page | the console and uncaught errors, the network requests and one of them in full, the page as its elements, one element in detail (attributes, box, styles), what the page stores, wait for an element or a text | click, type, press a key, choose from a list, hover, scroll, run a script, answer a dialog, reload, emulate a screen, a color scheme or being offline |
 
-- **Debugging works like DevTools, on the tab you name or the one in front.** The first call puts Chrome's debugger on that tab; Chrome shows its own bar on the tab while it is there, and it comes off after five minutes without a call or with `chrome.page.debugStop`. The console and the network are recorded from that moment: `chrome.page.reload` shows a page loading from the start. `chrome.page.snapshot` gives every element a number, and click, type, hover, scroll and inspect take that number, a CSS selector, or the text the element shows.
+- **Debugging works like DevTools, on the tab you name or the one in front.** The first call puts Chrome's debugger on that tab; Chrome shows its own bar on the tab while it is there, and it comes off after five minutes without a call or with `chrome.page.debugStop`. The console and the network are recorded from that moment: `chrome.page.reload` shows a page loading from the start. `chrome.page.snapshot` gives every element a number, and click, type, hover, scroll and inspect take that number, a CSS selector, or the text the element shows or is called by (its aria-label, title or alt, or what a text field holds or asks for; what a password field holds is never looked at). A tab behind another, or in a minimized window, is clicked, typed into, scrolled and pictured where it is: nothing is brought to the front of your screen. For that the page is told that it has the focus. After the mouse or the keys were used on it, it believes it is being looked at for as long as it is debugged (a site may mark messages as read, or go on playing), and it is drawn at full rate until the debugger comes off. A picture does this only while it is taken, and leaves the tab as it was; reading a page in any other way does not do it at all.
 - The values a page stores (its cookies among them) are credentials. `chrome.page.storage` gives names only; the values come only with `includeValues` through `capability_call`, which your client asks you about.
 - Text read from a web page (its text, its console, its requests, its elements, what a script returns) is marked as untrusted: it is data for the model, never instructions.
 - The browser talks to DevMate through a native messaging host, a small program the browser itself starts for this one extension. Nothing listens for it and it works with no public connection. `devmate chrome uninstall` takes the registration away.
@@ -276,7 +278,30 @@ This computer only reaches out, to `api.openai.com`, and asks for work: nothing 
 
 When OpenAI refuses the key or the tunnel, `devmate doctor` repeats OpenAI's answer and says what to do about it. For a key OpenAI wants the tunnel's organisation named with, that is `--organization <org-…>` on the `connect` command.
 
-If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; this has not been tried with a real account yet.
+If ChatGPT does not offer the tunnel although the doctor shows it connected, the cause is in the OpenAI account and not in DevMate: the tunnel has to include the ChatGPT workspace you use, not only a Platform organisation, and your account needs the Tunnels permissions Read and Use ("Troubleshooting" in [OpenAI's guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)). Whether your ChatGPT plan offers the Tunnel connection type is decided by OpenAI; the free plan of a personal account did when it was tried in October 2026.
+
+A tunnel of a personal account serves the ChatGPT of that same account. OpenAI does not take the workspace of another personal account into it (its settings page cannot verify that the workspace belongs to the organisation), and that account's ChatGPT is refused by OpenAI before a request reaches DevMate. A second account needs one of the routes with a public address.
+
+The tunnel and a route with a public address can run at once: name the tunnel on that route's `connect` command.
+
+```powershell
+devmate connect quick --openai-tunnel tunnel_xxxxxxxx
+devmate secret set CONTROL_PLANE_API_KEY      # the runtime key of the tunnel
+devmate restart
+```
+
+ChatGPT of the account the tunnel belongs to then comes through the tunnel, and every other client (a second account, Claude) through the address. `devmate mcp-url` prints the address and names the tunnel ID with it; `devmate doctor` shows the two separately, as `connection.*` and `tunnel.*`; and a client that asks (`connection_status`) is told that the tunnel runs beside the address and which of the two it came through itself (`via`). Beside an address the tunnel is always spoken by DevMate itself. A `connect` command that does not name the tunnel sets the connection up alone, and says how to have the tunnel again.
+
+The tunnel is put beside the connection there is, or taken away, without that connection being named again. That is the way for a relay, whose address you never typed:
+
+```powershell
+devmate connect beside --openai-tunnel tunnel_xxxxxxxx
+devmate connect beside --openai-tunnel none
+```
+
+`devmate relay setup` leaves a tunnel that runs beside the connection beside the relay. Where the tunnel was the connection itself, the relay takes its place, and the command says how to put the tunnel beside it.
+
+With an address this computer can be reached from outside again, whether the tunnel runs or not. Sign-in belongs to the address: what comes through the tunnel is served without it, because OpenAI decides who may use a tunnel ([SECURITY.md](SECURITY.md)); the doctor says so in a line of its own, `security.tunnel`. A quick tunnel and OpenAI's tunnel together were tried in October 2026 with two real accounts, each account's ChatGPT through its own way into the same runtime. An address that asks for sign-in beside the tunnel, and a relay beside it, have been tried against a stand-in for OpenAI's service only.
 
 **Is it really connected?**
 
@@ -307,6 +332,7 @@ Sources: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/art
 - **Optional sign-in (OAuth).** `devmate connect … --auth oauth` makes clients of the public address sign in: on first connection they are sent to DevMate's authorisation page, where you enter a one-time code from `devmate login-code`. Signing in proves the client is you: DevMate has one owner and no other accounts. A client that publishes no description of itself (a client metadata document) is registered by you under `auth.clients` in the configuration, with its name and redirect addresses. Clients on your own computer never need to sign in.
 - **Approvals and questions are answered by you, at your computer.** When an agent asks for permission, you answer in the editor or the local workbench. No connected client can answer, including the model that started the agent.
 - **Full access, when you want none of that in your way.** The default profile is *guarded*: everything above. If you drive your work from a chat client and do not want to walk to the computer, switch on *full access* there: `devmate access full`, **DevMate: Change Permission Profile** in VS Code, or **Permissions…** in Obsidian. A client connected as you can then share folders, widen access, read credential files, set up capability engines, answer what an agent asks and run the doctor, and what an agent you delegated to asks permission for is granted automatically (each grant stays on record). It takes effect at once and only you, at your computer, can switch it on; `devmate access guarded` takes it back. With full access, whoever reaches your MCP address acts as you without asking: keep the address private or require sign-in.
+- **A task for a coding agent is spent on your account, so you are asked first.** What Codex, Claude Code or another agent does runs on your account with its provider. When a connected client hands one a task (`agents_delegate`, or a message or a task for an agent), nothing runs and no agent is started until you allow it at your computer: from the notification in your editor or in the local workbench (`devmate ui --open`), which shows what you agree to: the task as the agent will be given it (of a very long one the first 20,000 characters, with how much more there is and where to read it), the model it would run with, and a session of the provider it would take up again. You allow that one task; or that task and no more asking for that agent while it stays connected, which covers its later tasks and what a client adds to a task that runs; or you refuse. A yes is not used up on a task that cannot begin right now (no session is free, or its workflow is paused or has no turns left): the answer is refused with what is in the way, and the question stays. At most twenty tasks wait for you at once. This is so in both profiles: full access does not answer it, because the client that asked would be the one answering, and a client that has your browser cannot read or click the workbench tab. What you hand to an agent yourself at the computer is not asked about, and a task that waits holds up nothing else: it starts nothing, and it counts against nothing until you allow it. `devmate delegation allow` ends the asking, `devmate delegation off` keeps connected clients from handing over tasks at all, `devmate delegation ask` is the default and, chosen again, has every agent asked about again, and every task of a client that has not begun (up to the twenty that may wait; what is beyond that is ended and says so); like the profile, it is chosen at your computer only.
 - **Credential files are protected by default.** `.env`, key files, `.npmrc` and the like are not read or listed by the file tools; Git status names them, marked "do not commit". You can switch that off for one project, at your computer.
 - **Secrets in command lines are not shown.** Process lists and activity records replace inline tokens and passwords with `[redacted]`; the command that runs is unchanged. This recognises common forms and is no guarantee.
 - **The workbench session stays in its browser tab.** It is entered through a single-use link, and its session is never a cookie that other local services would receive.
@@ -344,6 +370,7 @@ A model is shown its tools under the names it was trained on. Which list a clien
 - `projectId` is a project id, a project's root directory or a unique project name, and can be left out when only one project is shared. With several, read-only tools follow the editor window you are working in; a change must name its project.
 - There is no tool for sharing a folder. That is yours to do; the model is told to ask you.
 - A tool list has 34 to 37 entries and takes 32 to 35 KB. Nothing that only reads is kept off it: a tool a model cannot see is a tool it does not use, and what only reads is what a client does not ask you about.
+- A tool is found by words: `capability_list` and `operations_list` take `query` and keep what has every word in its name or its description. `shell_run` takes `env`, variables for that one command (DevMate's own, the names beginning with `DEVMATE_`, are not set this way). `workspace_write` takes `append` and then adds the text to the end of the file, which is kept restorable like before any change.
 - Tools carry accurate hints (read only, write, destructive, open world), so clients ask for confirmation only where it matters.
 - A cancelled or timed-out call only stops waiting: the command or agent task it started continues and stays reachable.
 - The server speaks MCP 2026-07-28 and the 2025 revisions.
@@ -357,6 +384,7 @@ One call hands a task to Codex, Claude Code, Gemini CLI or Grok CLI installed he
 { "projectId": "Example", "provider": "claude", "prompt": "Fix the failing case in tests/login.test.ts and say why it failed" }
 ```
 
+- You are asked first. The task runs on your account with the agent's provider, so the call returns at once with "the owner has to allow this task at their computer first", and the task starts when you allow it there (the notification in your editor, or the workbench). `devmate delegation allow` ends the asking; see [Who may do what](#who-may-do-what).
 - A task that finishes within the wait returns its result and the list of changed files; otherwise it returns an `agentId` to follow with `agents_result`.
 - Passing the same `agentId` again continues that session with its context.
 - With `"isolate": true` the agent works in a copy of the project instead (a Git worktree of the last commit, kept in DevMate's own directory). The project does not change until you have read what it proposes (`agents.proposal`) and brought it in (`agents.apply`: all of it as uncommitted changes, or none of it when the project changed in the same places meanwhile) or dropped it (`agents.discard`). The copy holds what is committed: uncommitted changes and ignored files such as installed dependencies are not in it.
@@ -383,9 +411,12 @@ Run `devmate doctor` first. It names the item that is wrong and how to fix it.
 | The model says folders are "shared by the owner on their own computer" | Share the folder yourself: open it in an editor with DevMate, or `devmate project add <folder>`. To let your client do such things itself: `devmate access full` |
 | The model says a project is read only, or a folder was taken out of sharing | That was your decision at this computer. Change it there: **Change Folder Sharing** in the editor, `devmate project add`, or the local workbench |
 | "Answer this on your computer" in an embedded workbench, or an agent that keeps waiting for approval | Approvals are answered locally: `devmate ui --open`, or the notification in your editor. With `devmate access full` they are granted automatically |
+| The model says "the owner has to allow this task at their computer first" | It handed a task to a coding agent, which runs on your account with the provider. Allow it in the notification of your editor or in the local workbench (`devmate ui --open`). Not to be asked again: `devmate delegation allow`, run at your computer |
 | `rg was not found on PATH` | Install ripgrep as the message says, then `devmate restart`; or open DevMate once in VS Code, whose copy is then used |
 | `The origin … is not allowed` | A browser-based client: add its origin to `allowedOrigins` in the configuration if you run that client yourself |
-| A cloud client cannot connect | The `connection.*` items of `doctor`; `devmate logs` shows the connector's output |
+| A cloud client cannot connect | The `connection.*` items of `doctor`: where the connector (cloudflared, OpenSSH) is not in order, the `connection.process` line carries what it said last, and so does the line about an address over SSH that is not reached; `devmate logs` has what the runtime itself recorded |
+| `This instance was last used by DevMate …, which stores its state in a newer format` | An entry of an older release (an extension or plugin that was not updated, an old `devmate`) tried to start the runtime. Update that entry; meanwhile it works with a runtime another entry started |
+| `DevMate … is still running, older than this command` | The runtime was started before the update: `devmate restart` |
 | Start fails | The message has the reason; the full log is `runtime.log` in the instance directory |
 
 ## Uninstalling
@@ -419,7 +450,8 @@ Pushing a tag `X.Y.Z` that matches the package version (no `v`) verifies that co
 | `runtime/engines/` | Browser, Godot, reverse engineering and other domain capabilities |
 | `runtime/platform/` | Process trees, paths, tools and other low-level helpers |
 | `workbench/` | The workbench, shared by the MCP App and the local page |
-| `vscode-host/` `obsidian-plugin/` | The two hosts |
+| `vscode-host/` `obsidian-plugin/` | The two editor hosts |
+| `chrome-extension/` | The extension for Chrome and Edge that connects the owner's own browser |
 | `tests/` `scripts/` | Tests; build, check, smoke and packaging scripts |
 
 Every operation is defined once in `runtime/operations/` and authorised by the registry in `runtime/service.mjs`. MCP, the command line and the workbench all get it from there.

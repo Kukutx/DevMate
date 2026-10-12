@@ -33,8 +33,19 @@ test('stored state says which DevMate wrote it, and a DevMate that would misread
   const directory = scratch(t, 'format');
   const first = new Store(directory);
   assert.deepEqual(first.setting('state.format'), { minor: STATE_MINOR, writtenBy: VERSION });
-  first.setting('state.format', { minor: STATE_MINOR + 1, writtenBy: '4.99.0' });
+  // State of the release before the owner was asked about a client's tasks (it wrote 0) is opened and from then on
+  // carries this release's number, which that release refuses: an entry that was not updated cannot start a runtime
+  // that would run those tasks unasked. The number is therefore not to go back below 1.
+  assert.ok(STATE_MINOR >= 1);
+  const kept = first.create('project', { name: 'kept', root: directory });
+  first.setting('delegation.mode', 'allow');
+  first.setting('state.format', { minor: 0, writtenBy: '4.0.5' });
   first.close();
+  const opened = new Store(directory);
+  assert.deepEqual(opened.setting('state.format'), { minor: STATE_MINOR, writtenBy: VERSION });
+  assert.deepEqual([opened.get('project', kept.id).name, opened.setting('delegation.mode')], ['kept', 'allow'], 'what was stored is all there');
+  opened.setting('state.format', { minor: STATE_MINOR + 1, writtenBy: '4.99.0' });
+  opened.close();
   assert.throws(() => new Store(directory), error => error.code === 'state_version' && /last used by DevMate 4\.99\.0/.test(error.message) && /Update this DevMate/.test(error.message));
   // Nothing was touched by the refusal, and the file is not held: the newer DevMate still finds its state.
   const raw = new DatabaseSync(path.join(directory, 'state.sqlite'));

@@ -25,7 +25,9 @@ function show(state) {
 
 // The tabs that have the debugger on them right now, for the panel.
 let debugging = [];
-const methods = createCapabilities(chrome, { version, onChange: tabs => { debugging = tabs; chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {}); } });
+// ownPort: the local port DevMate answers the owner on, as the bridge last heard it (see own() in capabilities.js).
+const methods = createCapabilities(chrome, { version, onChange: tabs => { debugging = tabs; chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {}); },
+  ownPort: () => bridge.state().runtime?.port });
 const letGo = () => methods['page.debugStop']({}).catch(() => {});
 
 const bridge = createBridge({

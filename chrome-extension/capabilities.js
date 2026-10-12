@@ -47,16 +47,38 @@ const download = item => ({ id: item.id, url: item.finalUrl || item.url, file: i
  * The methods, bound to a chrome object (the real one in the extension, a stand-in in tests). What else is given
  * (onChange, the clock and the timers) goes to the debugger: see createDebugger.
  */
-export function createCapabilities(chrome, { version = '', ...debugging } = {}) {
+export function createCapabilities(chrome, { version = '', ownPort = () => undefined, ...debugging } = {}) {
   const available = (api, name) => { if (!api) throw fail('not_supported', 'This browser has no ' + name + ' for extensions.'); return api; };
+  // DevMate's own workbench is not read, worked or sent elsewhere through the browser. What is decided there (what an
+  // agent asks for, whether a task is handed to a coding agent, the access profile) is the owner's to decide at the
+  // computer, and a client that could click in that tab would be deciding it for them. The tab is known by the local
+  // port DevMate says it answers the owner on (ownPort) and, where the runtime did not say or the page is reached
+  // through another port, by the name the page gives itself. A tab on its way there counts as there.
+  // A page of this extension opened as a tab is kept from it for the same reason: a script run there (the browser lets
+  // an extension debug its own pages, seen in a real Chrome) has everything the extension has, the workbench tab included.
+  const own = tab => {
+    for (const address of [tab?.url, tab?.pendingUrl]) {
+      try {
+        const at = new URL(address);
+        if (at.protocol === 'chrome-extension:' && at.host === chrome.runtime?.id) return 'This tab is a page of the DevMate extension itself. It is not read or worked through the browser.';
+        if (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(at.hostname) && (Number(at.port) === ownPort() || tab.title === 'DevMate Workbench'))
+          return 'This tab is DevMate\'s own workbench, where the owner decides at the computer. It is not read, worked or sent elsewhere through the browser.';
+      } catch { /* not an address: nothing of DevMate's */ }
+    }
+    return '';
+  };
   // The tab a page method works on: the one named, or the one in front.
   async function target(tabId) {
-    if (tabId !== undefined && tabId !== null) return chrome.tabs.get(whole(tabId, 'tabId')).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); });
-    const [front] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!front) throw fail('not_found', 'No tab is open.');
-    return front;
+    const tab = tabId !== undefined && tabId !== null ? await chrome.tabs.get(whole(tabId, 'tabId')).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); })
+      : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+    if (!tab) throw fail('not_found', 'No tab is open.');
+    const kept = own(tab);
+    if (kept) throw fail('not_supported', kept);
+    return tab;
   }
   const debug = createDebugger(chrome, { target, ...debugging });
+  // A tab that is being debugged and goes to one of these is let go as soon as the browser says where it is going.
+  chrome.tabs?.onUpdated?.addListener?.((tabId, change, tab) => { if (own(tab)) void debug.release(tabId); });
   const methods = {
     'browser.info': async () => ({ extension: version, browser: globalThis.navigator?.userAgentData?.brands?.map(item => item.brand + ' ' + item.version).join(', ') || globalThis.navigator?.userAgent || '',
       methods: Object.keys(methods), readOnly: READ_ONLY }),
@@ -101,7 +123,12 @@ export function createCapabilities(chrome, { version = '', ...debugging } = {}) 
       await chrome.windows.update(shown.windowId, { focused: true });
       return tab(shown);
     },
-    'tabs.navigate': async ({ tabId, url } = {}) => tab(await chrome.tabs.update(whole(tabId, 'tabId'), { url: webAddress(url) }).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); })),
+    // The workbench tab is not sent elsewhere either: what its tab was signed in with stays behind in the tab.
+    'tabs.navigate': async ({ tabId, url } = {}) => {
+      const id = whole(tabId, 'tabId'), address = webAddress(url);
+      await target(id);
+      return tab(await chrome.tabs.update(id, { url: address }).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); }));
+    },
     'tabs.reload': async ({ tabId } = {}) => { await chrome.tabs.reload(whole(tabId, 'tabId')).catch(() => { throw fail('not_found', 'No tab has the id ' + tabId + '.'); }); return { reloaded: tabId }; },
     // Back and forward in a tab's own history. A tab with nowhere to go says so. The page is still on its way when
     // this answers, so the address is not given: it would be the one that is being left.
@@ -166,9 +193,20 @@ export function createCapabilities(chrome, { version = '', ...debugging } = {}) 
     },
     'page.screenshot': async ({ tabId, fullPage } = {}) => {
       const page = await target(tabId);
-      // The tab in front is captured as it is seen. The whole page, or a tab behind another, takes the debugger.
-      if (fullPage === true || !page.active) return debug.capture(page.id, { fullPage: fullPage === true });
-      const image = await chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); });
+      // The tab in front is captured as it is seen. The whole page, a tab behind another, and a tab in front of a
+      // window that is itself put away (the page says so; one that cannot be asked is taken as shown) take the debugger.
+      // A page that does not answer within a moment (it is still loading, busy, or showing a dialog) is not waited for:
+      // it is captured as it is seen, as every tab in front was before.
+      const later = debugging.pause || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+      const shown = () => {
+        const asked = chrome.scripting?.executeScript({ target: { tabId: page.id }, injectImmediately: true, func: () => document.visibilityState }).then(([frame]) => frame?.result !== 'hidden', () => true);
+        return asked === undefined || Promise.race([asked, later(400).then(() => true)]);
+      };
+      const seen = fullPage !== true && page.active && await shown();
+      if (!seen) return debug.capture(page.id, { fullPage: fullPage === true });
+      // Under a dialog the browser was seen to give the picture at once, and also not at all: it is not waited for to the end.
+      const image = await Promise.race([chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); }),
+        later(8000).then(() => { throw fail('browser_error', 'The browser gave no picture of this tab in eight seconds. A page that is showing a dialog may be why: answer it with page.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again (tabs.reload).'); })]);
       return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
     },
     ...debug.methods

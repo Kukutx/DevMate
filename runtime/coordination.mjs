@@ -6,6 +6,8 @@ import { createAgentAdapter, inspectAgentProvider, AGENT_PROVIDERS } from './age
 import { modelName, nodeHelperEnvironment } from './agents/common.mjs';
 import { DomainError } from './store.mjs';
 import { resolveProviderSettings } from './config.mjs';
+import { resolveProjectPath } from './workspace.mjs';
+import { named } from './operations/shared.mjs';
 
 const channelEntry = fileURLToPath(new URL('./agent-channel.mjs', import.meta.url));
 const activeStates = new Set(['starting', 'running', 'waiting', 'cancelling']);
@@ -25,11 +27,34 @@ const minutes = ms => ms >= 60000 ? Math.round(ms / 60000) + ' min' : Math.round
 // The choice that grants what was asked, this once. ACP agents say which of their options that is; Codex and Claude name it.
 const grantOnce = options => (options.find(option => option.kind === 'allow_once') ||
   options.find(option => ['allow', 'accept'].includes(option.optionId)) || options.find(option => option.kind === 'allow_always'))?.optionId;
+// What the owner may answer when a connected client hands a task to an agent. The second answer hands the agent to
+// connected clients for as long as it stays connected: its later tasks, and what a client puts into a task that runs
+// (the owner's own among them), need no asking. It ends when the agent is stopped or goes, and when the owner chooses
+// to be asked again. Its words say all of that, because it is what the owner agrees to.
+const CONSENT_OPTIONS = Object.freeze([{ optionId: 'allow_once', name: 'Run this task' },
+  { optionId: 'allow_agent', name: 'Run it, and do not ask again for this agent while it stays connected (tasks, and what is added to a task that runs)' }, { optionId: 'deny', name: 'Do not run it' }]);
+// How much of a task the owner is shown where they are asked. What is beyond it is said, never passed over.
+const CONSENT_SHOWN_CHARS = 20000;
+// How many tasks may wait for the owner's word at once. A task that waits takes no process and no session, so nothing
+// else would keep a client from asking without end, and a list of hundreds is no question any more.
+const CONSENT_WAITING_MAX = 20;
+const delegationOff = () => new DomainError('delegation_off', 'The owner does not let connected clients hand tasks to the coding agents on this computer. ' +
+  'They can run a task themselves there, or change that at the computer: devmate delegation ask');
+const DECLINED = Object.freeze({ code: 'delegation_declined', message: 'The owner did not allow this task.' });
+const SWITCHED_OFF = Object.freeze({ code: 'delegation_off', message: 'The owner switched delegation off before this task was run.' });
+const ASKED_OF_TOO_MANY = Object.freeze({ code: 'delegation_backlog', message: 'The owner chose to be asked about each task again, and as many as may wait for their answer at once (' + CONSENT_WAITING_MAX + ') did already: this one was ended. Hand it over again once they have answered.' });
+// Of an agent a connected client had written down, once nothing of what it was written down for waits any more: it
+// was refused or taken back, the runtime was restarted meanwhile, or it could not be started. The task says which.
+const NEVER_RAN = Object.freeze({ code: 'agent_never_ran', message: 'No task of this agent ran: what it was written down for ended before it began (the task says why), and the agent was closed with that. Start a new agent for the next task.' });
 
 export class AgentCoordinator {
+  // delegation: whether a task that a connected client sends is run: 'ask' (the owner allows each at the computer),
+  // 'allow' or 'off'. What the owner sends at the computer is not asked about.
+  // discardCopy(agent): removes the copy of the project that was made for an agent which then never ran.
+  // folderGone(project): the folder of a project was looked for, for an agent, and is not there.
   constructor({ store, adapterFactory = createAgentAdapter, endpoint, providerSettings = {}, instanceRoot = path.dirname(store.filePath), cancelGraceMs = 15000,
-    grantsApprovals = () => false }) {
-    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals });
+    grantsApprovals = () => false, delegation = () => 'ask', discardCopy = null, folderGone = null }) {
+    Object.assign(this, { store, adapterFactory, endpoint, providerSettings, cancelGraceMs, grantsApprovals, delegation, discardCopy, folderGone });
     this.sessions = new Map();
     this.decisions = new Map();
     this.tokens = new Map();
@@ -42,6 +67,9 @@ export class AgentCoordinator {
     this.onStoreEvent = event => {
       for (const waiter of [...this.waiters]) waiter.notify(event);
       if (event.type === 'workflow.updated' && event.entity?.status === 'completed') this.stopWorkflow(event.entityId);
+      // Where the owner chose not to be asked, a task may still wait for its workflow (paused, out of turns) or its
+      // project (read only): it is tried again when one of them changed.
+      else if (['workflow.updated', 'project.updated'].includes(event.type) && !this.stopping && this.delegation() === 'allow') this.guard(() => this.allowWaiting())();
     };
     store.on('event', this.onStoreEvent);
   }
@@ -56,6 +84,9 @@ export class AgentCoordinator {
       for (const status of [...activeStates, 'ready']) {
         for (const agent of store.scan('agent', { status })) store.update('agent', agent.id, { status: 'disconnected', error: null });
       }
+      // With its session an agent loses the owner's word that its tasks need no asking: that held while it was
+      // connected, and no agent is connected now, whatever its record says of how it ended.
+      for (const agent of store.marked('agent', 'delegationAllowed')) store.update('agent', agent.id, { delegationAllowed: false });
       // Command and capability jobs belong to the job runner, which reconciles its own.
       for (const job of store.scan('job', { status: 'running' })) {
         if (job.kind === 'agent-turn') store.update('job', job.id, { status: 'unknown', error: interrupted });
@@ -65,7 +96,8 @@ export class AgentCoordinator {
       for (const status of ['running', 'cancelling']) {
         for (const task of store.scan('task', { status })) store.update('task', task.id, { status: 'unknown' });
       }
-      for (const delivery of store.scan('delivery', { status: 'queued' })) this.abandon(delivery, 'cancelled', unsent);
+      // What waited for the owner's word goes with what was queued: nothing runs unasked after a restart.
+      for (const status of ['queued', 'held']) for (const delivery of store.scan('delivery', { status })) this.abandon(delivery, 'cancelled', unsent);
       for (const kind of ['approval', 'input']) {
         for (const request of store.scan(kind, { status: 'pending' })) store.update(kind, request.id, { status: 'expired' });
       }
@@ -109,6 +141,9 @@ export class AgentCoordinator {
   // A completed workflow has no further use for its agent processes.
   stopWorkflow(workflowId) {
     if (this.stopping) return;
+    // Nor for a task in it that still waits for the owner's word: allowed, it could only fail.
+    this.guard(() => this.store.transaction(() => this.abandonHeld(agent => agent.workflowId === workflowId, 'cancelled',
+      { code: 'workflow_inactive', message: 'The workflow was completed before the owner allowed this task.' })))();
     for (const [agentId, session] of this.sessions) {
       if (!session.stopped && this.find('agent', agentId)?.workflowId === workflowId)
         this.stop(agentId).catch(error => this.store.recordNotificationFailure(error));
@@ -123,17 +158,53 @@ export class AgentCoordinator {
     return { project, workflow };
   }
 
-  // Everything that can refuse a new native session, checked before any record is written.
-  admit(project, provider, model) {
+  // Everything that can refuse a new native session, checked before any record is written. session:false: none is
+  // started now (the owner is asked about the task first), so how many there are is looked at when one is.
+  admit(project, provider, model, { session = true } = {}) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
     if (project.access !== 'write') throw new DomainError('read_only', 'Native execution requires a writable project.');
     if (!AGENT_PROVIDERS.includes(provider)) throw new DomainError('unsupported_provider', 'Choose a supported official provider.');
     modelName(model || undefined);
+    if (!session) return;
     const limit = this.limits(provider).maxSessions;
     let connected = 0;
     for (const session of this.sessions.values()) if (!session.stopped && session.provider === provider) connected++;
     if (connected >= limit) throw new DomainError('agent_limit', limit + ' ' + provider + ' sessions are already connected. Stop one with agents.stop, wait for an idle one to be disconnected, ' +
       'or allow more: providers.configure {provider:"' + provider + '", settings:{maxSessions:<more>}}.');
+  }
+
+  // With delegation off, a connected client (and an agent that works for one) is refused before anything is made.
+  offered(sender) {
+    if (sender?.client && this.delegation() === 'off') throw delegationOff();
+  }
+  // Whether the owner is asked before this agent runs a task of this sender: one that a connected client sent (or an
+  // agent that works for one), unless the owner chose not to be asked, or said so for this agent while it is connected.
+  // That word is kept with the session it was said of, and goes with it: a session that is started later, after a
+  // start that failed or by the owner's own hand, begins without it. (The agent's record carries it to be shown.)
+  asks(agent, sender) {
+    const session = agent ? this.sessions.get(agent.id) : null;
+    return !!sender?.client && this.delegation() !== 'allow' && !(session?.stopped === false && session.delegationAllowed === true);
+  }
+  // Refused before anything is made or taken in for it, with how many the owner has before them. A task that waits
+  // counts against nothing else (its workflow's turns are counted when it is allowed), so this is its only bound.
+  // What is counted is what really waits: a question whose task is gone is ended here, not counted. Returns how many
+  // wait.
+  backlog(more) {
+    let waiting = 0;
+    for (const decision of [...this.decisions.values()]) {
+      if (!decision.consent) continue;
+      if (this.find('delivery', decision.deliveryId)?.status === 'held') waiting++; else decision.abort();
+    }
+    if (waiting + more > CONSENT_WAITING_MAX) throw new DomainError('delegation_backlog', 'The owner has ' + waiting + ' task(s) of connected clients to allow or refuse and has not answered them yet. ' +
+      'No more are taken until they have (at most ' + CONSENT_WAITING_MAX + ' wait at once): ask them to answer in the DevMate workbench at their computer, or take back one that is no longer wanted ' +
+      '(approval.cancel with the id of its question, which agents_result gives under approvals; cancelling the task it belongs to does the same).');
+    return waiting;
+  }
+  // What a connected client may not do to an agent whose tasks the owner is asked about: start its process, or put
+  // more into a task that runs. Both are done by handing it a task, which the owner is asked about.
+  unasked(agent, sender, what) {
+    this.offered(sender);
+    if (this.asks(agent, sender)) throw new DomainError('delegation_ask', what + ' The owner is asked about each task a connected client hands to this agent: hand it the task (agents_delegate with agentId), and it runs when the owner allows it at their computer.');
   }
 
   budget(workflow, turns) {
@@ -144,16 +215,24 @@ export class AgentCoordinator {
   // isolated: the working copy this agent works in instead of the project folder ({ root, branch, base }).
   start({ projectId, workflowId, provider, model, name, title, prompt, sessionId, isolated }, sender = { kind: 'user', id: 'owner', label: 'You' }) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
+    this.offered(sender);
     const { project, workflow } = this.scope(projectId, workflowId);
-    this.admit(project, provider, model);
-    if (prompt?.trim()) this.budget(workflow, 1);
+    // Where the owner is asked first, a connected client starts no process: the agent is written down, and the first
+    // task of it that the owner allows starts it. Until then it takes no place among the sessions.
+    const later = this.asks(null, sender);
+    this.admit(project, provider, model, { session: !later });
+    // (A task that waits for the owner is counted against the workflow's turns when it is allowed.)
+    if (prompt?.trim()) { if (later) this.backlog(1); else this.budget(workflow, 1); }
     const agent = this.store.create('agent', { projectId, workflowId, provider, model: model || null,
-      label: name || title || provider, status: 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null,
-      ...(isolated ? { isolated } : {}) });
-    this.connect(agent).catch(error => this.store.recordNotificationFailure(error));
+      // unstarted: said as that, so that nobody takes it for an agent that runs or once did.
+      label: name || title || provider, status: later ? 'unstarted' : 'starting', nativeSessionId: sessionId || null, capabilities: {}, error: null,
+      // client: started through a connected client, not by the owner at this computer.
+      ...(isolated ? { isolated } : {}), ...(sender.client ? { client: true } : {}) });
+    if (!later) this.connect(agent).catch(error => this.store.recordNotificationFailure(error));
     // Queued before the process is up: a start that fails then fails this message too.
-    if (prompt?.trim()) this.send({ projectId, workflowId, recipientIds: [agent.id], body: prompt }, sender);
-    return agent;
+    if (!prompt?.trim()) return agent;
+    // deliveryId: the task that was handed over with the start, for whoever follows it.
+    return { ...agent, deliveryId: this.send({ projectId, workflowId, recipientIds: [agent.id], body: prompt }, sender).deliveries[0].id };
   }
 
   issue(agent, session) {
@@ -173,6 +252,24 @@ export class AgentCoordinator {
       env: { DEVMATE_AGENT_URL: this.endpoint, DEVMATE_AGENT_TOKEN: session.token, ...nodeHelperEnvironment() } };
   }
 
+  // Where an agent's program is started and works: the copy of its own, or the folder of its project. Where that is
+  // not there (moved, on a drive that is not connected, a copy that was deleted by hand) it is said as that: started
+  // all the same, the program fails for want of a folder to start in, which reads as if it were not installed.
+  place(agent) {
+    const project = this.store.get('project', agent.projectId);
+    if (!agent.isolated) {
+      // (Whoever keeps what was seen of the folders is told: it is then looked for again, and its return is noticed.)
+      try { resolveProjectPath(project); } catch (error) { if (error.code === 'project_missing') this.folderGone?.(project); throw error; }
+      return project.root;
+    }
+    // (What the agent committed in its copy is on the copy's branch in the project's repository, and outlasts the
+    // folder; agents.discard deletes that branch, so it is not offered here without saying so.)
+    if (!fs.statSync(agent.isolated.root, { throwIfNoEntry: false })?.isDirectory()) throw new DomainError('copy_missing', 'The copy of the project this agent works in is not there any more: ' + agent.isolated.root +
+      '. It was removed outside DevMate. What the agent had committed there is still on the branch ' + agent.isolated.branch + ' of the project\'s repository; what it had not committed went with the folder. ' +
+      'This agent cannot go on: start a new one for the next task. agents.discard takes its branch away as well, so look at the branch first if the work matters.');
+    return agent.isolated.root;
+  }
+
   async connect(agent, previous) {
     const session = { provider: agent.provider, adapter: null, token: null, current: null, turn: null, output: '', stopped: false, ready: false,
       draining: null, closing: null };
@@ -183,12 +280,12 @@ export class AgentCoordinator {
       released = previous?.closing ? await previous.closing : await true;
       if (!released) throw new DomainError('shutdown_unconfirmed', 'The previous agent process has not confirmed its exit. Stop the agent before resuming it.');
       if (session.stopped || this.stopping) return;
-      const project = this.store.get('project', agent.projectId);
+      const cwd = this.place(agent);
       const settings = resolveProviderSettings(this.providerSettings[agent.provider]);
       session.record = settings.recordNativeEvents === true;
       this.issue(agent, session);
       session.adapter = this.adapterFactory({
-        ...settings, provider: agent.provider, cwd: agent.isolated?.root || project.root, privateDir: this.privateDir,
+        ...settings, provider: agent.provider, cwd, privateDir: this.privateDir,
         mcpServers: [...(settings.mcpServers || []), this.channel(session)],
         onEvent: event => this.nativeEvent(agent.id, session, event),
         onApproval: (request, extra) => this.request(agent.id, 'approval', request, extra),
@@ -214,8 +311,10 @@ export class AgentCoordinator {
       if (this.stopping) return;
       const reason = publicError(error);
       this.store.transaction(() => {
-        this.abandonQueued(this.store.get('agent', agent.id), 'failed', reason);
-        this.store.update('agent', agent.id, { status: 'unavailable', error: reason });
+        const current = this.store.get('agent', agent.id);
+        this.abandonQueued(current, 'failed', reason);
+        // The session is gone, and with it what the owner said of it: a later start begins by being asked.
+        this.store.update('agent', agent.id, { status: 'unavailable', error: reason, ...(current.delegationAllowed ? { delegationAllowed: false } : {}) });
       });
     }
   }
@@ -233,6 +332,9 @@ export class AgentCoordinator {
     catch (error) { session.closeError = error; return false; }
     session.closeError = null;
     if (this.sessions.get(agentId) === session) this.sessions.delete(agentId);
+    // A place among the sessions is free: where the owner chose not to be asked, a task that was kept waiting only
+    // for want of one is let through now.
+    if (!this.stopping && this.delegation() === 'allow') this.guard(() => this.allowWaiting())();
     return true;
   }
 
@@ -247,32 +349,83 @@ export class AgentCoordinator {
     this.store.transaction(() => {
       const agent = this.store.get('agent', agentId);
       if (session.turn) this.finish(agent, session.turn, turnStatus, result || { output: session.output, outputTruncated: !!session.outputTruncated, error: reason });
-      for (const decision of [...this.decisions.values()]) if (decision.agentId === agentId) decision.abort();
+      // What the agent asked in its turn goes with the session. A task that waits for the owner's word does not: it
+      // has no session yet, and starts one when it is allowed.
+      for (const decision of [...this.decisions.values()]) if (decision.agentId === agentId && !decision.consent) decision.abort();
       this.abandonQueued(agent, 'cancelled', reason || { code: 'agent_disconnected', message: 'The agent session ended before this message ran.' });
-      this.store.update('agent', agentId, { status: 'disconnected', error: reason });
+      this.store.update('agent', agentId, { status: 'disconnected', error: reason, ...(agent.delegationAllowed ? { delegationAllowed: false } : {}) });
     });
     return session.closing = this.shut(agentId, session);
   }
 
-  // A delivery that never ran: record why, settle what waited on it and give its turn back.
+  // A delivery that never ran: record why, settle what waited on it and give its turn back. Where the owner was
+  // still being asked about it, the question goes with it: there is nothing left to answer.
   abandon(delivery, status, error) {
+    for (const decision of [...this.decisions.values()]) if (decision.consent && decision.deliveryId === delivery.id) decision.abort();
     this.store.update('delivery', delivery.id, { status, error: error || null });
     if (this.find('message', delivery.messageId)) this.refreshMessage(delivery.messageId);
     const task = delivery.taskId ? this.find('task', delivery.taskId) : null;
     if (task?.status === 'queued') this.store.update('task', task.id, { status });
-    const workflow = delivery.workflowId ? this.find('workflow', delivery.workflowId) : null;
+    // A turn is counted when a task is taken in to run, and given back here. One that still waited for the owner's
+    // word had not been counted: it is counted when it is allowed.
+    const workflow = delivery.status !== 'held' && delivery.workflowId ? this.find('workflow', delivery.workflowId) : null;
     if (workflow) this.store.update('workflow', workflow.id, { usedTurns: Math.max(0, (workflow.usedTurns || 0) - 1) });
+    if (delivery.status === 'held') this.neverRan(delivery.agentId);
+  }
+
+  // An agent that a connected client had written down and that never ran: once nothing of it waits for the owner any
+  // more, nothing is left that would start it. It is closed, a copy of the project that was made for it is removed,
+  // and the workflow that was made for its one task is completed. Every refused task would otherwise leave an agent,
+  // a copy and an open workflow behind.
+  neverRan(agentId) {
+    const agent = this.find('agent', agentId);
+    if (!agent || agent.status !== 'unstarted' || this.sessions.has(agentId)) return;
+    for (const delivery of this.store.scan('delivery', { projectId: agent.projectId, workflowId: agent.workflowId, status: 'held' })) if (delivery.agentId === agentId) return;
+    const copy = agent.isolated && !agent.isolated.settled ? agent.isolated : null;
+    this.store.update('agent', agentId, { status: 'closed', error: NEVER_RAN, ...(copy ? { isolated: { ...copy, settled: 'discarded' } } : {}) });
+    // (Said as discarded from here on, so that nothing takes the copy up while it goes.) One that could not be
+    // removed (a program still uses its folder, or the folder of the project is not there just now) is the agent's
+    // again. Nothing tries a second time by itself: the agent says so where its state is read, with what removes it.
+    if (copy && this.discardCopy) Promise.resolve().then(() => this.discardCopy(agent)).catch(error => {
+      this.store.recordNotificationFailure(error);
+      if (this.find('agent', agentId)?.isolated?.settled === 'discarded') this.store.update('agent', agentId, { isolated: copy,
+        error: { ...NEVER_RAN, message: NEVER_RAN.message + ' The copy of the project that was made for it could not be removed (' + String(error?.message || error).slice(0, 300) + '): agents.discard removes it, once that is out of the way.' } });
+    }).catch(error => this.store.recordNotificationFailure(error));
+    // The workflow was made for what a client handed over: with every agent in it closed like this one, nothing of
+    // it ran and nothing is left that would.
+    const workflow = this.find('workflow', agent.workflowId);
+    if (workflow?.delegated && workflow.status === 'active' && [...this.store.scan('agent', { projectId: agent.projectId, workflowId: agent.workflowId })]
+      .every(item => item.status === 'closed' && item.error?.code === NEVER_RAN.code)) this.store.update('workflow', workflow.id, { status: 'completed' });
+  }
+  // What such an agent says of a copy that could not be removed, where it says it (see neverRan): the words after
+  // those every agent that never ran has. Whoever asks after its task is given them beside why the task ended.
+  copyLeft(agent) {
+    return agent?.error?.code === NEVER_RAN.code && agent.error.message.length > NEVER_RAN.message.length ? agent.error.message.slice(NEVER_RAN.message.length).trim() : null;
+  }
+  // The copy is gone after all (somebody threw it away): the agent no longer says that it could not be removed.
+  copyCleared(agentId) {
+    if (this.copyLeft(this.find('agent', agentId))) this.store.update('agent', agentId, { error: NEVER_RAN });
   }
 
   abandonQueued(agent, status, error) {
     for (let delivery; (delivery = this.store.nextQueuedDelivery(agent.projectId, agent.workflowId, agent.id));) this.abandon(delivery, status, error);
   }
+  // The same for what still waits for the owner's word: of one agent (its id), of the agents that fit, or of all.
+  // A question whose agent or task is gone is ended with them.
+  abandonHeld(which, status, error) {
+    for (const decision of [...this.decisions.values()]) {
+      if (!decision.consent || (typeof which === 'string' && decision.agentId !== which)) continue;
+      if (typeof which === 'function') { const agent = this.find('agent', decision.agentId); if (agent && !which(agent)) continue; }
+      const delivery = this.find('delivery', decision.deliveryId);
+      if (delivery?.status === 'held') this.abandon(delivery, status, error); else decision.abort();
+    }
+  }
 
-  // Withdraw one delivery that has not started.
+  // Withdraw one delivery that has not started, whether it is queued or the owner is still asked about it.
   cancelQueued(deliveryId) {
     return this.store.transaction(() => {
       const delivery = this.store.get('delivery', deliveryId);
-      if (delivery.status === 'queued') this.abandon(delivery, 'cancelled', null);
+      if (['queued', 'held'].includes(delivery.status)) this.abandon(delivery, 'cancelled', null);
       return this.store.get('delivery', deliveryId);
     });
   }
@@ -393,7 +546,11 @@ export class AgentCoordinator {
       message: 'The agent process exited' + (event.exit?.error ? ': ' + event.exit.error : event.exit?.code != null ? ' with code ' + event.exit.code : '') + '.' }))();
   }
 
-  send({ projectId, workflowId, recipientIds, body, taskId, operationId }, sender) {
+  // continues: the caller means an agent that was closed to go on in a new process (agents.delegate).
+  send({ projectId, workflowId, recipientIds, body, taskId, operationId }, sender, { continues = false } = {}) {
+    // Every way a task reaches an agent ends here (delegating, a message, a task assigned, a turn tried again, an
+    // agent writing to another): with delegation off none of them queues anything for a connected client.
+    this.offered(sender);
     if (!body?.trim()) throw new DomainError('invalid_input', 'Message text is required.');
     const recipients = [...new Set(recipientIds)];
     if (!recipients.length) throw new DomainError('invalid_input', 'Choose at least one recipient.');
@@ -416,32 +573,50 @@ export class AgentCoordinator {
     }
     const { project, workflow } = this.scope(projectId, workflowId);
     if (project.access !== 'write') throw new DomainError('read_only', 'Native execution requires a writable project.');
-    const asleep = [];
+    const asleep = [], held = new Map();
     for (const id of recipients) {
       const agent = this.store.get('agent', id);
       if (agent.projectId !== projectId || agent.workflowId !== workflowId) throw new DomainError('scope_mismatch', 'Recipient belongs to another workflow.');
-      if (agent.status === 'closed') throw new DomainError('agent_closed', 'Resume the recipient before sending a message.');
+      // A task the owner is asked about first is held, here, where it is taken in: it needs no session until it is
+      // allowed, so none is started for it, and the agent goes on with whatever else it has.
+      const waits = this.asks(agent, sender);
+      if (agent.status === 'closed' && !(waits && continues)) throw new DomainError('agent_closed', 'Resume the recipient before sending a message.');
+      if (waits) { held.set(id, agent); continue; }
       if (this.sessions.get(id)?.stopped === false) continue;
       // A message is only accepted for a session that exists to run it. An idle or lost
       // session reconnects for it; a failed start needs a deliberate resume.
-      if (agent.status !== 'disconnected') throw new DomainError('agent_disconnected', 'Agent ' + agent.label + ' is ' + agent.status + '. Resume it before sending a message.');
+      if (!['disconnected', 'unstarted'].includes(agent.status)) throw new DomainError('agent_disconnected', 'Agent ' + agent.label + ' is ' + agent.status + '. Resume it before sending a message.');
       asleep.push(id);
     }
+    if (held.size) this.backlog(held.size);
     for (const id of asleep) this.resume(id);
     // The returned message names its deliveries, so a caller can follow exactly its own task.
-    const message = this.store.transaction(() => {
-      this.budget(workflow, recipients.length);
-      this.store.update('workflow', workflow.id, { usedTurns: (workflow.usedTurns || 0) + recipients.length });
-      const created = this.store.create('message', { projectId, workflowId, sender,
-        recipientIds: recipients, body, status: 'queued', taskId: taskId || null });
-      const deliveries = recipients.map(agentId => ({ agentId, id: this.store.create('delivery', {
-        projectId, workflowId, messageId: created.id, agentId, taskId: taskId || null, status: 'queued'
-      }).id }));
-      const value = { ...created, deliveries };
-      if (operationKey) this.store.saveOperation(operationKey, 'agent_send_message', fingerprint, { value });
-      return value;
-    });
-    for (const agentId of recipients) this.kick(agentId);
+    const asked = [];
+    let message;
+    try {
+      message = this.store.transaction(() => {
+        // A turn is counted for what is taken in to run. What waits for the owner's word is counted when it is
+        // allowed: counted now, a client could use up a workflow's turns with tasks that never run, and keep the
+        // owner's own out of it.
+        const counted = recipients.length - held.size;
+        this.budget(workflow, counted);
+        if (counted) this.store.update('workflow', workflow.id, { usedTurns: (workflow.usedTurns || 0) + counted });
+        const created = this.store.create('message', { projectId, workflowId, sender,
+          recipientIds: recipients, body, status: 'queued', taskId: taskId || null });
+        // allowed: a connected client's task that needs no asking (the owner said so). Only such a one, and what
+        // the owner sent, is ever queued.
+        const deliveries = recipients.map(agentId => ({ agentId, id: this.store.create('delivery', {
+          projectId, workflowId, messageId: created.id, agentId, taskId: taskId || null,
+          ...(held.has(agentId) ? { status: 'held' } : { status: 'queued', ...(sender.client ? { allowed: true } : {}) })
+        }).id }));
+        // One commit: whoever is told of the task finds the question to the owner with it.
+        for (const { agentId, id } of deliveries) if (held.has(agentId)) asked.push(this.hold(held.get(agentId), id, created));
+        const value = { ...created, deliveries };
+        if (operationKey) this.store.saveOperation(operationKey, 'agent_send_message', fingerprint, { value });
+        return value;
+      });
+    } catch (error) { for (const id of asked) this.decisions.delete(id); throw error; }
+    for (const agentId of recipients) if (!held.has(agentId)) this.kick(agentId);
     return message;
   }
 
@@ -470,6 +645,19 @@ export class AgentCoordinator {
       const delivery = this.store.nextQueuedDelivery(agent.projectId, agent.workflowId, agentId);
       if (!delivery) return;
       const message = this.store.get('message', delivery.messageId);
+      // A turn is what is spent on the owner's account with the provider, and this is the one place a turn begins. A
+      // connected client's task is queued only once it is allowed (send() holds the others, and marks these). Should
+      // one be here without that, it is held now, and not run.
+      if (message.sender?.client && !delivery.allowed) {
+        this.store.transaction(() => this.holdAgain(agent, delivery, message));
+        continue;
+      }
+      // The folder the agent works in may have gone while it was connected, and a provider that runs one process for
+      // each task starts that process there every time. The task ends with that, said as that, before it is begun.
+      try { this.place(agent); }
+      catch (error) { this.store.transaction(() => this.abandon(delivery, 'failed', publicError(error))); continue; }
+      // Whose task the agent works on, also after it: what it passes on between tasks is passed on for the same one.
+      session.lastSender = message.sender;
       const job = this.store.transaction(() => {
         const job = this.store.create('job', { projectId: agent.projectId, workflowId: agent.workflowId,
           agentId, deliveryId: delivery.id, taskId: delivery.taskId, kind: 'agent-turn', status: 'running', output: '' });
@@ -493,9 +681,7 @@ export class AgentCoordinator {
           session.adapter.setMcpServer(this.channel(session));
         }
         this.watch(agentId, session, turn, agent.provider);
-        const prefix = message.sender.kind === 'agent'
-          ? 'Message from ' + message.sender.label + ' (' + message.sender.id + '). Use the DevMate agent_send_message tool to reply when needed.\n\n' : '';
-        const result = await session.adapter.send({ text: prefix + message.body });
+        const result = await session.adapter.send({ text: this.sent(message) });
         this.flushNativeDeltas(agentId, session);
         // A turn that finished its work has completed, even when a limit or a cancellation raced it.
         const status = result.outcome === 'unconfirmed' ? 'unknown' : result.status === 'completed' ? 'completed'
@@ -516,6 +702,11 @@ export class AgentCoordinator {
         if (session.perTurn) this.revoke(session);
       }
     }
+  }
+
+  // The text a provider is given for a message: what the owner is shown before they allow it is this, all of it.
+  sent(message) {
+    return (message.sender.kind === 'agent' ? 'Message from ' + message.sender.label + ' (' + message.sender.id + '). Use the DevMate agent_send_message tool to reply when needed.\n\n' : '') + message.body;
   }
 
   // What is kept of the provider's own turn result; the raw payload only on request.
@@ -561,7 +752,7 @@ export class AgentCoordinator {
     const deliveries = this.store.deliveriesForMessage(id);
     const status = deliveries.every(item => item.status === 'delivered') ? 'delivered'
       : deliveries.some(item => item.status === 'running') ? 'running'
-      : deliveries.some(item => item.status === 'queued') ? 'queued'
+      : deliveries.some(item => ['queued', 'held'].includes(item.status)) ? 'queued'
       : deliveries.some(item => item.status === 'unknown') ? 'unknown'
       : deliveries.some(item => item.status === 'failed') ? 'failed' : 'cancelled';
     return this.store.update('message', id, { status });
@@ -585,9 +776,11 @@ export class AgentCoordinator {
     });
   }
 
+  // Whether the agent waits, in its turn, for something to be decided. A task of it that the owner is still asked
+  // about is not that: it has not begun, and the agent goes on with whatever else it has.
   waiting(agentId, excludedDecisionId) {
     for (const [id, decision] of this.decisions) {
-      if (id !== excludedDecisionId && decision.agentId === agentId) return true;
+      if (id !== excludedDecisionId && decision.agentId === agentId && !decision.consent) return true;
     }
     return false;
   }
@@ -606,7 +799,7 @@ export class AgentCoordinator {
     const session = this.sessions.get(agentId);
     if (!session || session.stopped || this.stopping) return null;
     const agent = this.store.get('agent', agentId);
-    if ((agent.status === 'cancelling' && !restoreCancelling) || ['closed', 'disconnected', 'unavailable'].includes(agent.status)) return null;
+    if ((agent.status === 'cancelling' && !restoreCancelling) || ['closed', 'disconnected', 'unavailable', 'unstarted'].includes(agent.status)) return null;
     if (this.waiting(agentId, excludedDecisionId)) return 'waiting';
     return session.current ? 'running' : 'ready';
   }
@@ -667,17 +860,181 @@ export class AgentCoordinator {
     });
   }
 
+  // The owner's word for one task that a connected client handed to an agent. It is kept as an approval, so that it
+  // shows wherever approvals do and is answered the same way. Unlike what an agent asks in a turn, the access profile
+  // never gives it: full access hands a client what the owner decides about this computer, not what is spent on
+  // their account with the provider (approval.resolve keeps the answer at the computer).
+  //
+  // The task is held where it was taken in (its delivery is "held"), and nothing waits on it but the task itself: no
+  // process is started for it, the agent runs whatever else it has, and nobody's turn stands still. Returns the id of
+  // the question. Called inside the commit that takes the task in.
+  hold(agent, deliveryId, message) {
+    // What the owner agrees to is what they are shown: the text as the provider will be given it (for what an agent
+    // passes on, with the line that says who it is from), the model, and a session of the provider that is taken up
+    // again. The model and that session are the client's to choose where it started the agent.
+    const project = this.find('project', agent.projectId), task = this.sent(message), body = message.body.trim(), shown = body.split(/\r?\n/)[0].slice(0, 160);
+    // A name is somebody's to choose (the agent's and the project's are a client's too, and so are the model and a
+    // session to take up where it wrote the agent down): given as a name, in quotes, on one line and cut short. No
+    // quotation mark of its own ends those quotes (each becomes an apostrophe), and nothing in it moves the text
+    // around it. Everything outside the quotes and before the colon is DevMate's own, here and in the details.
+    const quoted = named;
+    // (An agent that is not started is one a client wrote down, with the model and the session it chose. One that has
+    // run says which model it runs with and which session it has: the provider's words, then.)
+    const passed = message.sender.kind === 'agent', theirs = agent.status === 'unstarted' ? ' (the client chose it)' : '';
+    const askedBy = passed ? 'The agent ' + quoted(message.sender.label) + ' (' + message.sender.id + '), which works for a connected client' : 'A connected client';
+    const summary = (passed ? 'The agent ' + quoted(message.sender.label) + ', which works for a connected client,' : 'A connected client') + ' asks ' + agent.provider +
+      (agent.label && agent.label !== agent.provider ? ' (named ' + quoted(agent.label) + ')' : '') + ' to run a task' + (project ? ' in the project ' + quoted(project.name) : '') + ': ' + shown +
+      // How much more there is always stands at the end, whatever the names were.
+      (body.length > shown.length ? ' [and ' + (body.length - shown.length) + ' more characters]' : '');
+    const cut = task.length > CONSENT_SHOWN_CHARS;
+    const item = this.store.create('approval', { projectId: agent.projectId, workflowId: agent.workflowId, agentId: agent.id, jobId: null, deliveryId, kind: 'delegation', status: 'pending',
+      summary, options: CONSENT_OPTIONS,
+      // The whole task, as it will be sent. Of a very long one the beginning, and how much more there is and where it
+      // is read: the owner is never shown a part of it as if it were all.
+      details: { agent: agent.provider, model: agent.model ? quoted(agent.model) + theirs : 'the one ' + agent.provider + ' is set to use',
+        ...(agent.nativeSessionId ? { continues: 'the ' + agent.provider + ' session ' + quoted(agent.nativeSessionId, 80) + theirs } : {}),
+        project: project ? quoted(project.name) : agent.projectId, askedBy,
+        characters: task.length, task: cut ? task.slice(0, CONSENT_SHOWN_CHARS) : task,
+        ...(cut ? { notShown: (task.length - CONSENT_SHOWN_CHARS) + ' more characters of this task are not shown here. Read all of it before allowing it: it is the message ' + message.id + ' (Messages in the workbench, or devmate message.list).' } : {}),
+        note: 'Running it uses your account with ' + agent.provider + '. Not to be asked: devmate delegation allow' } });
+    // The task went another way (taken back, the agent stopped, delegation switched off): the question is over.
+    const abort = () => {
+      if (!this.decisions.delete(item.id)) return;
+      try { if (this.find('approval', item.id)) this.store.update('approval', item.id, { status: 'expired' }); } catch (error) { this.store.recordNotificationFailure(error); }
+    };
+    // What keeps this task from beginning right now, if anything does: from being queued (its workflow is paused or
+    // has no turns left), from running (the folder its agent works in is not there), or its agent from being started
+    // (no session is free, the project is read only, the process it had has not confirmed its exit).
+    const blocked = () => {
+      const current = this.stopping || this.find('delivery', deliveryId)?.status !== 'held' ? null : this.find('agent', agent.id);
+      if (!current) return null;
+      try {
+        this.budget(this.scope(current.projectId, current.workflowId).workflow, 1);
+        this.place(current);
+        if (this.sessions.get(agent.id)?.stopped !== false) this.startable(current);
+        return null;
+      } catch (error) { return error; }
+    };
+    // Before an answer is taken: a yes for such a task is not used up on it. The answer is refused with what is in
+    // the way, and the question stays as it is, instead of the task failing and being asked again. What the answer
+    // then does (answered) starts and queues with the same checks, in the same breath.
+    // (A copy that was deleted does not come back: of that the answer says so, and not that it will be out of the way.)
+    const ready = optionId => {
+      const error = optionId === 'deny' ? null : blocked();
+      if (error) throw new DomainError(error.code, error.message + (error.code === 'copy_missing' ? ' This task cannot begin with this agent any more: refuse it.'
+        : ' This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.'));
+    };
+    const answered = ({ optionId }) => {
+      const delivery = this.find('delivery', deliveryId);
+      if (delivery?.status !== 'held') return;
+      if (optionId === 'deny' || this.stopping) return this.store.transaction(() => this.abandon(delivery, 'cancelled', optionId === 'deny' ? DECLINED : { code: 'runtime_stopping', message: 'Runtime is stopping.' }));
+      // Allowed: now it needs a session to run in, and is given one before it is queued, so that nobody who looks in
+      // between takes it for a task that nothing will run. (That the agent can be started was looked at just before,
+      // in ready. Should it be refused here all the same, the task ends with that as its error.)
+      if (this.sessions.get(agent.id)?.stopped !== false) {
+        try { this.resume(agent.id); }
+        catch (error) { return this.store.transaction(() => this.abandon(delivery, 'failed', publicError(error))); }
+      }
+      this.store.transaction(() => {
+        this.store.update('delivery', deliveryId, { status: 'queued', allowed: true });
+        // Now it is a task that runs, and counts as one against its workflow's turns.
+        const workflow = this.find('workflow', delivery.workflowId);
+        if (workflow) this.store.update('workflow', workflow.id, { usedTurns: (workflow.usedTurns || 0) + 1 });
+      });
+      this.kick(agent.id);
+      // "Later tasks too": said of the session the agent has now, for as long as it stays connected, and its other
+      // tasks that wait are let through with this one.
+      if (optionId !== 'allow_agent') return;
+      const session = this.sessions.get(agent.id);
+      if (!session || session.stopped) return;
+      session.delegationAllowed = true;
+      this.store.update('agent', agent.id, { delegationAllowed: true });
+      this.allowWaiting(agent.id);
+    };
+    this.decisions.set(item.id, { kind: 'approval', consent: true, agentId: agent.id, deliveryId, blocked, ready, resolve: answered, abort, nativeRequest: { options: CONSENT_OPTIONS } });
+    return item.id;
+  }
+
+  // Said with the question of a task that waits although the owner chose not to be asked: what it waits for instead
+  // (null: for their answer, like any other).
+  waitsFor(id, reason) {
+    const item = this.find('approval', id);
+    if (item && (item.waits || null) !== reason) this.store.update('approval', id, { waits: reason });
+  }
+
+  // A task of a connected client that was let through and has not begun waits for the owner's word again. The turn
+  // that was counted for it is given back: it is counted when it is allowed.
+  holdAgain(agent, delivery, message) {
+    this.store.update('delivery', delivery.id, { status: 'held', allowed: false });
+    const workflow = delivery.workflowId ? this.find('workflow', delivery.workflowId) : null;
+    if (workflow) this.store.update('workflow', workflow.id, { usedTurns: Math.max(0, (workflow.usedTurns || 0) - 1) });
+    return this.hold(agent, delivery.id, message);
+  }
+
+  // The owner chose not to be asked (at all, or for one agent): what already waits for their word is covered by that.
+  // One that cannot begin now (see hold: no session is free, its workflow is paused or has no turns left, …) keeps
+  // waiting and says what for, and is tried again when that may be out of the way: a session ended (see shut), or its
+  // workflow or project was changed. Says how many were let through, which is said of a task that is queued or runs
+  // now, and how many still wait.
+  allowWaiting(agentId) {
+    let allowed = 0, waiting = 0;
+    // (Letting one through changes its workflow, which is one of the things this is tried again on.)
+    if (this.letting) return { allowed, waiting };
+    this.letting = true;
+    try {
+      for (const [id, pending] of [...this.decisions]) {
+        if (!pending.consent || (agentId && pending.agentId !== agentId)) continue;
+        const reason = pending.blocked();
+        if (reason) { waiting++; if (!agentId) this.waitsFor(id, reason.message); continue; }
+        try {
+          this.resolve('approval', { id, optionId: 'allow_once', automatic: true });
+          if (['queued', 'running'].includes(this.find('delivery', pending.deliveryId)?.status)) allowed++;
+        } catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }
+      }
+    } finally { this.letting = false; }
+    return { allowed, waiting };
+  }
+
+  // The owner chose to be asked: of every agent again, also one whose tasks they had let through, and about every
+  // task of a connected client that has not begun, also one that was let through before. off: and nothing of a
+  // connected client's is left to run, whether the owner was still asked about it or it was waiting its turn.
+  // No more wait for the owner at once than may (backlog): the oldest are kept, and what is beyond that is ended and
+  // says why. Says how many tasks wait for the owner again, and how many were ended for that.
+  askAgain(off) {
+    let again = 0, ended = 0;
+    this.store.transaction(() => {
+      for (const session of this.sessions.values()) session.delegationAllowed = false;
+      for (const agent of this.store.marked('agent', 'delegationAllowed')) this.store.update('agent', agent.id, { delegationAllowed: false });
+      if (off) this.abandonHeld(null, 'cancelled', SWITCHED_OFF);
+      // (What waited for something else while the owner was not asked waits for their answer now.)
+      for (const [id, decision] of this.decisions) if (decision.consent) this.waitsFor(id, null);
+      let room = off ? 0 : CONSENT_WAITING_MAX - this.backlog(0);
+      for (const delivery of [...this.store.scan('delivery', { status: 'queued' })]) {
+        const message = this.find('message', delivery.messageId), agent = this.find('agent', delivery.agentId);
+        if (!message?.sender?.client) continue;
+        if (off || !agent) this.abandon(delivery, 'cancelled', off ? SWITCHED_OFF : null);
+        else if (room-- > 0) { this.holdAgain(agent, delivery, message); again++; }
+        else { this.abandon(delivery, 'cancelled', ASKED_OF_TOO_MANY); ended++; }
+      }
+    });
+    return { again, ended };
+  }
+
   // Permissions that were already waiting when the owner chose full access.
   grantWaiting() {
     for (const [id, pending] of [...this.decisions]) {
-      if (pending.kind !== 'approval' || !this.grantsApprovals()) continue;
+      if (pending.kind !== 'approval' || pending.consent || !this.grantsApprovals()) continue;
       const optionId = grantOnce(pending.nativeRequest.options || []);
       try { if (optionId) this.resolve('approval', { id, optionId, automatic: true }); }
       catch (error) { if (error.code !== 'request_expired') this.store.recordNotificationFailure(error); }
     }
   }
 
-  resolve(kind, { id, optionId, response, expectedRevision, automatic }) {
+  // sender: who answers, where that is not the owner at the computer. With full access a connected client answers
+  // what an agent asks. Its answer to a question is text of its own that goes into the task that runs: the third way
+  // into a turn, beside a task and steering. It is the owner's choice of profile that opens it, so it is not refused;
+  // but from then on the task carries a client's words, and what the agent passes on is asked about.
+  resolve(kind, { id, optionId, response, expectedRevision, automatic }, sender) {
     const item = this.store.get(kind, id);
     const pending = this.decisions.get(id);
     if (item.status !== 'pending' || !pending || pending.signal?.aborted) throw new DomainError('request_expired', 'This native request is no longer awaiting a decision.');
@@ -686,7 +1043,13 @@ export class AgentCoordinator {
     }
     const answer = kind === 'approval' ? { optionId } : response;
     if (answer === undefined) throw new DomainError('invalid_input', 'A response is required.');
-    const nextStatus = this.decisionStatusAfter(pending.agentId, id);
+    pending.ready?.(optionId);
+    if (kind === 'input' && sender?.client) {
+      const session = this.sessions.get(pending.agentId);
+      if (session?.turn) session.lastSender = session.turn.sender = { ...session.turn.sender, client: true };
+    }
+    // (What the owner is asked about a task that has not begun says nothing of what the agent is doing.)
+    const nextStatus = pending.consent ? null : this.decisionStatusAfter(pending.agentId, id);
     const resolved = this.store.transaction(() => {
       const updated = this.store.update(kind, id, { status: 'resolved', ...(kind === 'approval' ? { answer } : {}), ...(automatic ? { automatic: true } : {}) }, expectedRevision);
       if (nextStatus) this.store.update('agent', pending.agentId, { status: nextStatus });
@@ -700,9 +1063,14 @@ export class AgentCoordinator {
   }
 
   async cancel(id) {
-    const session = this.sessions.get(id);
+    const session = this.sessions.get(id), current = session && !session.stopped ? session.current : null;
+    // With no task running, what there is to cancel are the tasks of this agent that wait for the owner's word: they
+    // are taken back, and the owner is asked about them no more. (Such an agent need not be connected at all.)
+    if (!current && [...this.decisions.values()].some(decision => decision.consent && decision.agentId === id)) {
+      this.store.transaction(() => this.abandonHeld(id, 'cancelled', null));
+      return { id, requested: true };
+    }
     if (!session || session.stopped) throw new DomainError('agent_disconnected', 'Agent is not connected.');
-    const current = session.current;
     if (current) this.store.update('agent', id, { status: 'cancelling' });
     const result = await session.adapter.cancel();
     if (!result.requested && session.current === current && current) {
@@ -712,43 +1080,63 @@ export class AgentCoordinator {
     return { id, ...result };
   }
 
-  async steer(id, text) {
+  // Text put into a task that runs is more work on the owner's account, and goes to the provider at once: it is the
+  // second way into a turn beside a task of its own, and is held to the same. A connected client does it only where
+  // its tasks for this agent need no asking; and from then on the task carries a client's words, so that what the
+  // agent passes on is passed on for the client.
+  async steer(id, text, sender) {
+    this.unasked(this.store.get('agent', id), sender, 'Steering a task that runs adds to it without the owner being asked.');
     const session = this.sessions.get(id);
     if (!session || session.stopped) throw new DomainError('agent_disconnected', 'Agent is not connected.');
     if (!session.adapter.capabilities.steer) throw new DomainError('unsupported_capability', 'This provider does not expose live steering.');
+    if (sender?.client && session.turn) session.lastSender = session.turn.sender = { ...session.turn.sender, client: true };
     return session.adapter.steer({ text });
   }
 
   async stop(id) {
-    const session = this.sessions.get(id);
-    if (!session) return this.store.update('agent', id, { status: 'closed' });
+    const session = this.sessions.get(id), stopped = { code: 'agent_stopped', message: 'The agent was stopped before this message ran.' };
+    const unsaid = () => this.find('agent', id)?.delegationAllowed ? { delegationAllowed: false } : {};
+    // Nothing of a stopped agent is asked about any more, whether it is connected, was never started, or has gone.
+    this.store.transaction(() => this.abandonHeld(id, 'cancelled', stopped));
+    if (!session) return this.store.update('agent', id, { status: 'closed', ...unsaid() });
     if (!session.stopped) {
       // A failed native process shutdown retains cleanup ownership, but never
       // retains its authority to talk to other agents.
       this.suspend(session);
       this.store.transaction(() => {
         // Nothing queued for a stopped agent may replay when it is resumed.
-        this.abandonQueued(this.store.get('agent', id), 'cancelled', { code: 'agent_stopped', message: 'The agent was stopped before this message ran.' });
-        this.store.update('agent', id, { status: 'cancelling' });
+        this.abandonQueued(this.store.get('agent', id), 'cancelled', stopped);
+        this.store.update('agent', id, { status: 'cancelling', ...unsaid() });
       });
-    }
+    // (A session that had ended already, and whose process has not confirmed its exit, is not connected either.)
+    } else if (this.find('agent', id)?.delegationAllowed) this.store.update('agent', id, { delegationAllowed: false });
     if (!session.closing || session.closeError) session.closing = this.shut(id, session);
     if (!(await session.closing)) throw session.closeError;
     try { this.flushNativeDeltas(id, session); } catch (error) { this.store.recordNotificationFailure(error); }
     await session.draining;
     // A resume that already took over owns the agent's state from here.
     if (this.sessions.has(id)) return this.store.get('agent', id);
-    return this.store.update('agent', id, { status: 'closed' });
+    return this.store.update('agent', id, { status: 'closed', ...unsaid() });
   }
 
-  resume(id) {
-    const agent = this.store.get('agent', id);
-    const previous = this.sessions.get(id);
+  // Everything that keeps an agent from being started again, said before anything is changed for it. Returns the
+  // session it had, whose process has to be gone first.
+  startable(agent) {
+    const previous = this.sessions.get(agent.id);
     if (previous && !previous.stopped) throw new DomainError('agent_connected', 'Agent already has a connected process.');
     if (previous?.closeError) throw new DomainError('shutdown_unconfirmed', 'The previous agent process has not confirmed its exit. Stop the agent before resuming it.');
     if (agent.isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + agent.isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
     const { project } = this.scope(agent.projectId, agent.workflowId);
     this.admit(project, agent.provider, agent.model);
+    return previous;
+  }
+
+  // sender: who asks for it, where that is not the runtime itself. A connected client starts no process for an agent
+  // whose tasks the owner is asked about: the first task that is allowed starts it.
+  resume(id, sender) {
+    const agent = this.store.get('agent', id);
+    this.unasked(agent, sender, 'An agent is started again for a connected client by a task, not on its own.');
+    const previous = this.startable(agent);
     const next = this.store.update('agent', id, { status: 'starting', error: null });
     this.connect(next, previous).catch(error => this.store.recordNotificationFailure(error));
     return next;
@@ -758,6 +1146,8 @@ export class AgentCoordinator {
   // for exactly that task. The outcome names its delivery and job for agents.result.
   async delegate({ projectId, provider, prompt, agentId, workflowId, model, waitMs = 30000, isolated } = {}, sender) {
     if (this.stopping) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
+    // Before a workflow or an agent is made for it.
+    this.offered(sender);
     if (!prompt?.trim()) throw new DomainError('invalid_input', 'A task prompt is required.');
     let agent;
     if (agentId) {
@@ -765,25 +1155,35 @@ export class AgentCoordinator {
       if ((projectId && agent.projectId !== projectId) || (workflowId && agent.workflowId !== workflowId))
         throw new DomainError('scope_mismatch', 'Agent belongs to another project.');
       if (provider && agent.provider !== provider) throw new DomainError('invalid_input', 'This agent runs ' + agent.provider + '. Omit provider to continue it, or omit agentId to start a new agent.');
-      this.budget(this.scope(agent.projectId, agent.workflowId).workflow, 1);
-      // A disconnected, unavailable or closed agent continues in a new process.
-      if (this.sessions.get(agentId)?.stopped !== false) agent = this.resume(agentId);
+      if (sender?.client && agent.status === 'closed' && agent.error?.code === NEVER_RAN.code) throw new DomainError(NEVER_RAN.code, NEVER_RAN.message + ' (agents_delegate without agentId.)');
+      // (A task the owner is asked about is counted against the workflow's turns when it is allowed.)
+      const { workflow } = this.scope(agent.projectId, agent.workflowId), later = this.asks(agent, sender);
+      if (!later) this.budget(workflow, 1);
+      // A disconnected, unavailable or closed agent continues in a new process: now, or, where the owner is asked
+      // about the task first, when they allow it.
+      if (!later && this.sessions.get(agentId)?.stopped !== false) agent = this.resume(agentId);
     } else {
       if (!provider) throw new DomainError('invalid_input', 'Choose a provider for a new agent, or pass agentId to continue one.');
-      const project = this.store.get('project', projectId);
-      if (workflowId) this.budget(this.scope(projectId, workflowId).workflow, 1);
-      this.admit(project, provider, model);
-      const target = workflowId || this.store.create('workflow', { projectId, status: 'active', turnBudget: 40, usedTurns: 0,
+      const project = this.store.get('project', projectId), later = this.asks(null, sender);
+      if (workflowId) { const { workflow } = this.scope(projectId, workflowId); if (!later) this.budget(workflow, 1); }
+      this.admit(project, provider, model, { session: !later });
+      // Before a workflow and an agent are made for a task that would only add to what the owner has not answered.
+      if (later) this.backlog(1);
+      // delegated: made for this one task. Should the task never run, the workflow is completed with it (neverRan).
+      const target = workflowId || this.store.create('workflow', { projectId, status: 'active', turnBudget: 40, usedTurns: 0, delegated: true,
         title: 'Delegated: ' + prompt.trim().split(/\r?\n/)[0].slice(0, 80) }).id;
-      agent = this.start({ projectId, workflowId: target, provider, model, isolated });
+      agent = this.start({ projectId, workflowId: target, provider, model, isolated }, sender);
     }
-    const message = this.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [agent.id], body: prompt }, sender);
-    return this.outcome(agent.id, { deliveryId: message.deliveries[0].id, waitMs });
+    const message = this.send({ projectId: agent.projectId, workflowId: agent.workflowId, recipientIds: [agent.id], body: prompt }, sender, { continues: true });
+    return this.outcome(agent.id, { deliveryId: message.deliveries[0].id, waitMs, announce: true });
   }
 
   // The state of one task of an agent: the given job or delivery, or its most recent task.
   // Waits up to waitMs until that task is settled or a person has to decide something.
-  async outcome(agentId, { jobId, deliveryId, waitMs = 0, signal } = {}) {
+  // announce: a task that waits for the owner's word is answered with that at once (the call that hands it over). A
+  // call that asks after the task later waits for it instead, through the owner's answer and the task itself: there
+  // is nothing the caller could do about the question, and it would otherwise ask again without a pause.
+  async outcome(agentId, { jobId, deliveryId, waitMs = 0, signal, announce = false } = {}) {
     const agent = this.store.get('agent', agentId);
     const target = { jobId: jobId || null, deliveryId: deliveryId || null };
     if (jobId) {
@@ -793,7 +1193,7 @@ export class AgentCoordinator {
     } else if (deliveryId) {
       if (this.store.get('delivery', deliveryId).agentId !== agentId) throw new DomainError('scope_mismatch', 'Delivery belongs to another agent.');
     } else target.deliveryId = this.store.latestDeliveryForAgent(agent.projectId, agent.workflowId, agentId)?.id || null;
-    const actionable = state => state.settled || state.approvals.length || state.inputs.length;
+    const actionable = state => state.settled || state.inputs.length || state.approvals.some(item => !item.delegation || announce);
     let state = this.observe(agentId, target);
     if (actionable(state) || !(waitMs > 0) || signal?.aborted || this.stopping) return state;
     await new Promise(resolve => {
@@ -815,22 +1215,34 @@ export class AgentCoordinator {
     const jobId = target.jobId || delivery?.jobId;
     const job = jobId ? this.find('job', jobId) : null;
     const live = this.sessions.get(agentId)?.stopped === false;
-    const pending = kind => [...this.decisions].filter(([, decision]) => decision.agentId === agentId && decision.kind === kind)
+    // What waits to be decided for this task: what the agent asks in its turn, and whether the owner allows this very
+    // task. Another task of the agent that waits for the owner's word is not this one's matter; and for a task that
+    // itself still waits for that word, neither is what the agent asks in the turn of another task: nothing of that
+    // is in its way, and a caller told of it would ask again at once for as long as it stands.
+    const pending = kind => [...this.decisions].filter(([, decision]) => decision.agentId === agentId && decision.kind === kind &&
+      (decision.consent ? decision.deliveryId === delivery?.id : delivery?.status !== 'held'))
       .map(([id]) => this.find(kind, id)).filter(Boolean);
     const finished = job ? job.status !== 'running' : delivery ? settledDeliveries.has(delivery.status) : true;
     const text = job && job.status !== 'running' ? job.output || '' : '';
-    // Without a live session nothing will run this task any more. A session that is just
-    // ending has not recorded yet how it ended; until the agent's state says so, nothing is settled.
-    const ending = !live && ['starting', 'running', 'cancelling'].includes(agent.status);
+    // Without a live session nothing will run this task any more, unless it waits for the owner's word (it is given
+    // a session when it is allowed). A session that is just ending has not recorded yet how it ended; until the
+    // agent's state says so, nothing is settled.
+    const ending = !live && ['starting', 'running', 'cancelling'].includes(agent.status), held = delivery?.status === 'held';
     const error = job?.error || delivery?.error || (job?.status === 'completed' ? null : agent.error) ||
-      (finished || live || ending ? null : { code: 'agent_' + agent.status, message: 'The agent is ' + agent.status + ' and cannot run this task.' });
-    return { agentId, workflowId: agent.workflowId, provider: agent.provider, status: agent.status, settled: finished || (!live && !ending),
+      (finished || live || ending || held ? null : { code: 'agent_' + agent.status, message: 'The agent is ' + agent.status + ' and cannot run this task.' });
+    return { agentId, workflowId: agent.workflowId, provider: agent.provider, status: agent.status, settled: finished || (!live && !ending && !held),
       deliveryId: delivery?.id || job?.deliveryId || null, jobId: job?.id || null,
       output: text.slice(-OUTCOME_OUTPUT_CHARS), outputTruncated: !!job?.outputTruncated || text.length > OUTCOME_OUTPUT_CHARS,
       turn: job ? { jobId: job.id, status: job.status, finishedAt: job.finishedAt || null, ...(job.error ? { error: job.error } : {}) } : null,
-      approvals: pending('approval').map(({ id, summary, options }) => ({ id, summary, options: options.map(option => option.name || option.optionId) })),
+      // delegation: not something the agent asks in its turn, but the owner's word for the task itself, which has not begun.
+      // waits: the owner chose not to be asked, and it is something else that keeps the task from beginning.
+      approvals: pending('approval').map(({ id, summary, options, kind, waits }) => ({ id, summary, options: options.map(option => option.name || option.optionId),
+        ...(kind === 'delegation' ? { delegation: true, ...(waits ? { waits } : {}) } : {}) })),
       inputs: pending('input').map(({ id, summary }) => ({ id, summary })),
-      ...(error ? { error } : {}) };
+      // (A task says why it ended; that the copy made for it is still there, and what removes it, is the agent's to
+      // say, and is what the caller does next.)
+      // (Where the task ended without a reason of its own, the agent's words are the reason, and are not said twice.)
+      ...(error ? { error } : {}), ...(this.copyLeft(agent) && !String(error?.message || '').endsWith(this.copyLeft(agent)) ? { copyNote: this.copyLeft(agent) } : {}) };
   }
 
   principal(token) {
@@ -855,9 +1267,13 @@ export class AgentCoordinator {
     if (name === 'agent_send_message') {
       if (typeof input?.operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(input.operationId))
         throw new DomainError('invalid_input', 'Agent messages require a stable operationId; reuse it only when retrying the same send.');
+      // What an agent sends while it works on a task of a connected client is sent for that client; between tasks,
+      // for whoever its last task was from (a part of the agent may still be at work on it), and before its first,
+      // for whoever started it. An agent the owner set to work at the computer writes for the owner.
+      const session = this.sessions.get(scope.agentId), working = session?.turn?.sender || session?.lastSender;
       return this.send({ ...scope, recipientIds: input.recipientIds, body: input.body,
         operationId: input.operationId },
-        { kind: 'agent', id: sender.id, label: sender.label, provider: sender.provider });
+        { kind: 'agent', id: sender.id, label: sender.label, provider: sender.provider, ...((working || sender).client ? { client: true } : {}) });
     }
     throw new DomainError('unknown_operation', 'Unknown agent communication tool.');
   }

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { report } from '../report.mjs';
 import { DomainError } from '../store.mjs';
 import { readConfig, saveConfig } from '../config.mjs';
-import { id, mutation, now } from './shared.mjs';
+import { hasWords, id, keywords, mutation, now } from './shared.mjs';
 import { doctor } from './doctor.mjs';
 import { snapshot } from './snapshot.mjs';
 
@@ -16,28 +16,41 @@ export function defineRuntimeOperations(service, add) {
   const local = { localOnly: true };
   // Local, and with full access also readable by the owner's connected client: what tells it why something does not work.
   const diagnostic = { localOnly: true, fullAccessRead: true };
-  add('connection.status', {}, true, 'Say how clients reach this DevMate: local only or through a public route, and whether that route was verified end to end. Useful when the user asks why a cloud client cannot connect; not needed for ordinary work.', async (_args, context) => {
-    const status = await service.connectionState();
+  add('connection.status', {}, true, 'Say how clients reach this DevMate: local only or through a public route, whether that route was verified end to end, whether OpenAI\'s tunnel runs beside it (openaiTunnel), and which way this request itself came (via: local, address or openai-tunnel). Useful when the user asks why a cloud client cannot connect; not needed for ordinary work.', async (_args, context) => {
+    const status = await service.connectionState(), tunnel = await service.tunnelState();
     const verified = service.verification?.verified === true;
+    // Which of the ways in this request took. A caller that came through the tunnel and is told of the address alone
+    // would look for a fault of its own way in the other one.
+    const via = context.via ? { via: context.via } : {};
     // Connector output, process ids and host names describe the owner's machine and network: for the owner at this
-    // computer, and for the owner's connected client when the owner chose full access.
+    // computer, and for the owner's connected client when the owner chose full access. That a second way in is there,
+    // and whether it is open, is no such detail.
     if (!service.ownerDecides(context)) {
-      return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified };
+      return { kind: status.kind, phase: status.phase || status.status, ...(service.identity ? { instance: { generation: service.identity.generation } } : {}), remoteMcpVerified: verified,
+        ...(tunnel ? { openaiTunnel: { phase: tunnel.phase } } : {}), ...via };
     }
-    const answer = { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}),
-      ...(service.connectionFault ? { startError: service.connectionFault } : {}) };
+    const answer = { ...status, ...(service.identity ? { instance: service.identity } : {}), remoteMcpVerified: verified, ...(service.verification ? { verification: service.verification } : {}), ...via,
+      ...(service.connectionFault ? { startError: service.connectionFault } : {}),
+      // OpenAI's tunnel where it runs beside this connection: a second way in, with a state of its own.
+      ...(tunnel ? { openaiTunnel: { ...tunnel, ...(service.tunnelFault ? { startError: service.tunnelFault } : {}) } } : {}) };
     if (context.surface === 'local') return answer;
     // What a connected client is told ends up in a conversation, and conversations get shared. The address of a quick
     // tunnel ends in its key; the client already has the address it came through and is not told the key again.
     const keyless = value => typeof value === 'string' ? value.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : value;
     return { ...answer, ...(answer.publicUrl ? { publicUrl: keyless(answer.publicUrl) } : {}), ...(answer.verification?.url ? { verification: { ...answer.verification, url: keyless(answer.verification.url) } } : {}) };
   });
-  add('operations.list', { name: z.string().max(100).optional(), summary: z.boolean().optional() }, true,
-    'Discover every available operation: names and descriptions. name returns one operation with its exact input schema; summary:false returns every schema at once (large).', (args, context) => {
+  add('operations.list', { name: z.string().max(100).optional(), names: z.array(z.string().min(1).max(100)).min(1).max(20).optional(), query: keywords, summary: z.boolean().optional() }, true,
+    'Discover every available operation: names and descriptions. query keeps those that have its words; name returns one operation with its exact input schema, names several of them in one call; summary:false returns every schema at once (large).', (args, context) => {
       // Without a name the answer is the short list. Through MCP it holds only what operations.call accepts.
-      const summary = args.summary ?? !args.name, local = context.surface === 'local', answers = service.ownerDecides(context);
-      return { items: service.visibleOperations(context).filter(op => (!args.name || op.name === args.name) && (local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name))))
-        .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) })) };
+      const wanted = args.names || (args.name ? [args.name] : null);
+      const summary = args.summary ?? !wanted, local = context.surface === 'local', answers = service.ownerDecides(context);
+      const callable = service.visibleOperations(context).filter(op => local || !((op.humanOnly && !answers) || UNCALLABLE.includes(op.name)));
+      const items = callable.filter(op => (!wanted || wanted.includes(op.name)) && (!args.query || hasWords(args.query, op.name, op.description)))
+        .map(op => ({ name: op.name, description: op.description, readOnly: op.readOnly, ...(summary ? {} : { inputSchema: z.toJSONSchema(op.schema) }) }));
+      // Of several asked for by name, the ones there is no such operation for are said, so that a wrong name is not taken
+      // for an empty schema. One that is there and only lacks the words of query is not among them.
+      const unknown = args.names ? args.names.filter(name => !callable.some(op => op.name === name)) : [];
+      return { items, ...(unknown.length ? { unknown } : {}) };
     });
   add('operations.call', { operation: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }, false,
     'Invoke any operation from operations_list by name: workflows, tasks and messages between several agents, jobs, artifacts, references. The everyday file, shell, Git and delegation tools are available directly and do not need this.',
@@ -76,6 +89,15 @@ export function defineRuntimeOperations(service, add) {
     'Choose the permission profile: guarded or full. The owner does this at their own computer (devmate access full, or "Change Permission Profile" in the editor); it takes effect immediately.',
     args => service.setAccessProfile(args.profile), { ...local, idempotent: true });
 
+  // Whether a connected client may have a coding agent run a task. A choice of its own beside the access profile:
+  // that one is about this computer, this one about what is spent on the owner's account with a provider. It is made
+  // at this computer in either profile, and "ask" is answered there too.
+  add('delegation.read', {}, true, 'Say whether a connected client may hand tasks to the coding agents on this computer (agents_delegate), which run on the owner\'s account with their provider. ask (the default): the owner allows each task at their computer before it runs. allow: tasks run without asking. off: a connected client cannot hand over tasks.',
+    () => ({ mode: service.delegation }));
+  add('delegation.update', { mode: z.enum(['ask', 'allow', 'off']) }, false,
+    'Choose whether a connected client may hand tasks to coding agents: ask, allow or off. The owner does this at their own computer (devmate delegation allow); it takes effect immediately.',
+    args => service.setDelegation(args.mode), { ...local, idempotent: true });
+
   // Which release saved the file is not a setting: it alone never calls for a restart.
   const differs = (saved, active) => JSON.stringify({ ...saved, writtenBy: undefined }) !== JSON.stringify({ ...active, writtenBy: undefined });
   add('settings.read', {}, true, 'Read active and saved runtime configuration.', () => {
@@ -99,15 +121,25 @@ export function defineRuntimeOperations(service, add) {
       : 'Explicitly ' + action + ' the configured connection while keeping local work running.', async () => {
       // Whatever was verified or failed before says nothing about the connection after this.
       service.verification = null;
-      try {
-        if (action === 'restart') { await service.connection.stop(); service.connection.refresh?.(service.secrets.environment()); }
-        const status = await service.connection[action === 'restart' ? 'start' : action]();
-        service.connectionFault = null;
-        return status;
-      } catch (error) {
-        if (action !== 'stop') service.connectionFault = { code: error.code || 'connection_error', message: error.message, at: now() };
-        throw error;
-      }
+      const apply = async connection => {
+        if (action === 'restart') { await connection.stop(); connection.refresh?.(service.secrets.environment()); }
+        // A runtime that began to stop while this was under way has stopped its connectors, or is about to: none is
+        // started behind its back, where nothing would stop it again.
+        if (action !== 'stop' && service.closing) throw new DomainError('runtime_stopping', 'The runtime is stopping: the connection is not started again.');
+        return connection[action === 'restart' ? 'start' : action]();
+      };
+      const settle = (result, fault) => {
+        if (result.status === 'fulfilled') service[fault] = null;
+        else if (action !== 'stop') service[fault] = { code: result.reason.code || 'connection_error', message: result.reason.message, at: now() };
+      };
+      // OpenAI's tunnel beside the connection is stopped and started with it: its key is stored and applied the same
+      // way. One that fails does not keep the other from starting.
+      const [main, beside] = await Promise.allSettled([apply(service.connection), ...(service.tunnel ? [apply(service.tunnel)] : [])]);
+      settle(main, 'connectionFault');
+      if (beside) settle(beside, 'tunnelFault');
+      const failed = [main, beside].find(result => result?.status === 'rejected');
+      if (failed) throw failed.reason;
+      return beside ? { ...main.value, openaiTunnel: beside.value } : main.value;
     }, local);
   }
 

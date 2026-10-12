@@ -120,13 +120,30 @@ test('the tools a GPT model knows work as it expects: read, apply_patch, exec_co
   fs.writeFileSync(path.join(f.root, 'long.js'), "console.log('start');for(let i=0;i<4000;i++)console.log('line '+i);console.log('finish')");
   const finished = await call('exec_command', { cmd: run('answer.js') });
   assert.match(finished, /^Process exited with code 0\nOutput:\n42\s*$/);
+  // A variable for this one command, under the tool's own name: a real ChatGPT found none there and went round by
+  // the generic call. A name of DevMate's own is refused here as it is there.
+  fs.writeFileSync(path.join(f.root, 'variable.js'), 'console.log("value:" + (process.env.PROBE_VALUE || "none"))');
+  assert.match(await call('exec_command', { cmd: run('variable.js'), env: { PROBE_VALUE: '42' } }), /Output:\nvalue:42\s*$/);
+  assert.match(await call('exec_command', { cmd: run('variable.js') }), /Output:\nvalue:none\s*$/);
+  const own = await client.callTool({ name: 'exec_command', arguments: { cmd: run('variable.js'), env: { DEVMATE_CLIENT_COMMAND: '' } } });
+  assert.equal(own.isError, true); assert.match(own.content[0].text, /invalid_command/);
   // Long output keeps its beginning and its end within the budget that was asked for.
   const long = await call('exec_command', { cmd: run('long.js'), max_output_tokens: 100 });
   assert.ok(long.length < 700, long.length + ' characters'); assert.match(long, /start/); assert.match(long, /finish/); assert.match(long, /\[… \d+ characters of output left out here …\]/);
+  // A command has no input unless it is asked for. What reads its input when it is given no file (rg without a path,
+  // findstr, sort) finds none and ends; with an input nobody closes it waited for the whole of yield_time_ms and ran on.
+  fs.writeFileSync(path.join(f.root, 'reads.js'), "let all='';process.stdin.on('data',d=>all+=d).on('end',()=>console.log('input ended after '+all.length))");
+  assert.match(await call('exec_command', { cmd: run('reads.js'), yield_time_ms: 20000 }), /^Process exited with code 0\nOutput:\ninput ended after 0\s*$/);
   // A command that keeps running hands back a session; text sent to it is answered, and only what is new comes back.
   const script = path.join(f.root, 'echo.js');
-  fs.writeFileSync(script, "process.stdout.write('ready\\n');process.stdin.on('data',d=>{const s=String(d).trim();if(s==='quit')process.exit(3);process.stdout.write('got '+s+'\\n')});");
-  const started = await call('exec_command', { cmd: run('echo.js'), yield_time_ms: 3000 });
+  fs.writeFileSync(script, "process.stdout.write('ready\\n');process.stdin.on('data',d=>{const s=String(d).trim();if(s==='quit')process.exit(3);process.stdout.write('got '+s+'\\n')});setInterval(()=>{},1000)");
+  // Started without tty it runs on with no input, and text for it is refused with how to start it so that it takes some.
+  const deaf = /^Process running with session ID (\S+)\n/.exec(await call('exec_command', { cmd: run('echo.js'), yield_time_ms: 300 }))?.[1];
+  assert.ok(deaf);
+  const refused = await client.callTool({ name: 'write_stdin', arguments: { session_id: deaf, chars: 'hello\n' } });
+  assert.equal(refused.isError, true); assert.match(refused.content[0].text, /stdin_closed/); assert.match(refused.content[0].text, /start it again with interactive:true \(exec_command: tty:true\)/);
+  await call('process_stop', { id: deaf });
+  const started = await call('exec_command', { cmd: run('echo.js'), tty: true, yield_time_ms: 3000 });
   const sessionId = /^Process running with session ID (\S+)\nOutput:\n/.exec(started)?.[1];
   assert.ok(sessionId, started);
   // What a command prints arrives when it arrives, later on a busy computer: a look is repeated until it is there,
@@ -175,6 +192,9 @@ test('the tools a Claude model knows work as it expects: read, write, edit and t
   fs.writeFileSync(path.join(f.root, 'wait.js'), 'setInterval(()=>{},1000)');
   const ran = await call(SHELL_TOOL, { command: run('answer.js') });
   assert.match(ran, /^42\s*\n\[exited, exit code 0\]/);
+  // A variable for this one command, here too.
+  fs.writeFileSync(path.join(f.root, 'variable.js'), 'console.log("value:" + (process.env.PROBE_VALUE || "none"))');
+  assert.match(await call(SHELL_TOOL, { command: run('variable.js'), env: { PROBE_VALUE: '42' } }), /^value:42\s*\n\[exited, exit code 0\]/);
   // A command that outlives the call says, in this surface's words, how it is followed and ended.
   const running = f.service.processes.run ? await client.callTool({ name: 'workspace_read', arguments: { path: 'wait.js' } }).then(() => f.service.call('shell.run', { command: run('wait.js'), waitMs: 300 }, connected)) : null;
   assert.equal(running.status, 'running');

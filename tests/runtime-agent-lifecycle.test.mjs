@@ -117,7 +117,7 @@ test('a delegated Codex session is isolated, answers with its final message only
   assert.equal(first.turn.status, 'completed');
   const seen = JSON.parse(first.output);
   assert.equal(seen.prompt, 'Run the tests', 'the answer is the final_answer message, not every assistant message of the turn');
-  assert.deepEqual(seen.argv, ['app-server', '-c', 'mcp_servers.owner_tools.enabled=false', '-c', 'features.apps=false']);
+  assert.deepEqual(seen.argv, ['app-server', '-c', 'mcp_servers.owner_tools.enabled=false', '-c', 'features.apps=false', '-c', 'features.plugins=false']);
   assert.deepEqual(seen.thread, { method: 'thread/start', excludeTurns: null, reviewer: 'user' });
   assert.equal(seen.status, 200);
   for (const name of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CLOUDFLARE_TUNNEL_TOKEN']) assert.equal(seen.env.includes(name), false, name + ' must not reach the agent');

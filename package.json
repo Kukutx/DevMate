@@ -2,7 +2,7 @@
   "name": "devmate-agent",
   "displayName": "DevMate Agent",
   "description": "Give ChatGPT, Claude and any MCP client real hands on your own computer: files, shell, Git, editor diagnostics and local coding agents, without a paid tunnel.",
-  "version": "4.0.5",
+  "version": "4.0.6",
   "license": "MIT",
   "publisher": "kukutx",
   "icon": "assets/icon.png",
@@ -335,7 +335,7 @@
     "package:cli": "node scripts/package-runtime.mjs cli",
     "candidate": "node scripts/release-candidate.mjs",
     "version:set": "node scripts/set-version.mjs",
-    "release:preflight": "npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate",
+    "release:preflight": "npm audit --omit=dev --audit-level=moderate && npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate -- --release",
     "devmate": "node runtime/cli.mjs",
     "lint": "eslint ."
   },

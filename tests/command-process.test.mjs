@@ -17,6 +17,20 @@ test('normal commands preserve bounded output and exit metadata', async () => {
   assert.equal(result.stdoutTruncated, true);
 });
 
+test('a command whose beginning is all that is wanted is ended once it has written that much, and what comes back is the beginning', async () => {
+  // It would write for ever: without the bound being acted on, this call ends only at its time limit.
+  const endless = "let n=0;const more=()=>{while(process.stdout.write('line '+(n++)+'\\n'));process.stdout.once('drain',more)};more()";
+  const began = Date.now();
+  const result = await executeCommand(process.execPath, ['-e', endless], { timeoutMs: 60000, maxOutputChars: 5000, enough: true });
+  assert.ok(Date.now() - began < 30000, 'ended long before the time limit');
+  assert.deepEqual([result.endedFull, result.timedOut, result.stdoutTruncated, result.exitConfirmed], [true, false, true, true]);
+  assert.equal(result.stdout.length, 5000); assert.match(result.stdout, /^line 0\nline 1\nline 2\n/);
+  assert.equal(activeCommandProcessCount(), 0);
+  // One that ends by itself within the bound is left to end, and is whole.
+  const short = await executeCommand(process.execPath, ['-e', "process.stdout.write('abcdef')"], { timeoutMs: 5000, maxOutputChars: 100, enough: true });
+  assert.deepEqual([short.stdout, short.exitCode, short.stdoutTruncated, short.endedFull], ['abcdef', 0, false, undefined]);
+});
+
 test('Git commands are forced non-interactive because MCP commands have no stdin', () => {
   for (const command of [
     'git',

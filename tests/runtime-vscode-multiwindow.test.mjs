@@ -343,7 +343,8 @@ test('a window offers the ripgrep its editor ships, in either layout, so searchi
 });
 
 test('a window with several shared folders hears about every shared folder before its user has chosen one, and only about its own',async t=>{
-  const f=await fixture(t),roots=['api','web'].map(name=>{const root=path.join(f.temp,'several-'+name);fs.mkdirSync(root);return root;});
+  // (One folder has a name that would read as a link where a notification names it: see the end of this test.)
+  const f=await fixture(t),roots=['api','web [x](y)'].map(name=>{const root=path.join(f.temp,'several-'+name);fs.mkdirSync(root);return root;});
   const elsewhere=path.join(f.temp,'several-elsewhere');fs.mkdirSync(elsewhere);
   const window=fakeWindow(f.instanceRoot,'Monorepo editor',roots);
   t.after(()=>window.entry.deactivate());
@@ -361,6 +362,41 @@ test('a window with several shared folders hears about every shared folder befor
   await until(()=>window.asked.some(message=>/^An agent is waiting for your approval: Run the migration/.test(message)),'the approval is announced');
   assert.equal(window.asked.filter(message=>/waiting for your approval/.test(message)).length,1,'what happens in a folder of another window is not announced here');
   assert.ok(mine.id);
+  // What an agent asks is announced cut short. A task that a connected client handed over is announced with its
+  // whole question: the names in it stand in quotes the runtime closes, and a cut could leave one of them open.
+  const question='A connected client asks codex (named "'+'n'.repeat(60)+'") to run a task in the project "'+'p'.repeat(60)+'": '+'x'.repeat(160)+' [and 12 more characters]';
+  store.create('approval',{projectId:mine.projectId,status:'pending',summary:'y'.repeat(300)});
+  store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:question});
+  await until(()=>window.asked.includes('A connected client asks to run a task on your account: '+question),'the task is announced with its whole question');
+  assert.ok(question.length>200&&window.asked.includes('An agent is waiting for your approval: '+'y'.repeat(200)));
+  // VS Code makes a link of "[label](address)" in the text of a notification, and a link that names a command runs
+  // it when it is clicked. What a notification says is not all DevMate's: the first line of a client's task, a name,
+  // what an agent asks (which it may have read in the repository). None of it can form a link, whoever wrote it.
+  const command='command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22devmate%20delegation%20allow%5Cr%22%7D';
+  const lure='A connected client asks codex (named "[x]('+command+')") to run a task in the project "[y](https://example.com/)": [Open Workbench]('+command+')';
+  store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:lure});
+  store.create('approval',{projectId:mine.projectId,status:'pending',summary:'Run [this](command:workbench.action.reloadWindow)'});
+  store.create('input',{projectId:mine.projectId,status:'pending',summary:'Which [branch](file:///c:/x)?'});
+  await until(()=>window.asked.filter(message=>/\[Open Workbench\]|\[this\]|\[branch\]/.test(message)).length===3,'the three are announced');
+  assert.ok(window.asked.includes('A connected client asks to run a task on your account: '+lure.replaceAll('](','] (')));
+  assert.ok(window.asked.includes('An agent is waiting for your approval: Run [this] (command:workbench.action.reloadWindow)'));
+  assert.ok(window.asked.includes('An agent is asking you a question: Which [branch] (file:///c:/x)?'));
+  for(const message of window.asked)assert.ok(!message.includes(']('),message);
+  // (As VS Code 1.101 reads it: its own pattern for a link in a notification finds none in any of them.)
+  const link=/\[([^\]]+)\]\(((?:https?:\/\/|command:|file:)[^)\s]+)(?: (["'])(.+?)(\3))?\)/i;
+  assert.ok(link.test(lure));for(const message of window.asked)assert.equal(link.test(message),false,message);
+  // The same for what is shown as a warning and as an error. A warning that names a folder as it is called on the
+  // disk (a repository somebody else named); an error whose words came from elsewhere.
+  const warned=[],picked=window.vscode.window.showQuickPick;
+  window.vscode.window.showWarningMessage=async message=>{warned.push(message);};
+  window.vscode.window.showQuickPick=async items=>items.find(item=>item.access==='none')||items[0];
+  await window.commands.get('devMate.runtime.registerFolder')(roots[1]);
+  assert.deepEqual(warned,['Stop sharing "several-web [x] (y)" with AI clients?']);
+  assert.ok(window.asked.some(message=>message.startsWith('DevMate shares "several-web [x] (y)"')),'the notice that it is shared named it the same way');
+  window.vscode.window.showQuickPick=async()=>{throw new Error('The server said [Open Workbench]('+command+')');};
+  await window.commands.get('devMate.runtime.accessProfile')();
+  assert.ok(window.shown.includes('error: The server said [Open Workbench] ('+command+')'),window.shown.filter(line=>line.startsWith('error')).join(' | '));
+  window.vscode.window.showQuickPick=picked;
   // Sharing changed from elsewhere reaches the window at once.
   await f.call('project.update',{id:window.entry.attachment.roots[0].projectId,access:'read'});
   await until(()=>window.entry.attachment.roots[0].access==='read','the window shows the new access');
