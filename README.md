@@ -447,7 +447,8 @@ Pushing a tag `X.Y.Z` that matches the package version (no `v`) verifies that co
 | `runtime/engines/` | Browser, Godot, reverse engineering and other domain capabilities |
 | `runtime/platform/` | Process trees, paths, tools and other low-level helpers |
 | `workbench/` | The workbench, shared by the MCP App and the local page |
-| `vscode-host/` `obsidian-plugin/` | The two hosts |
+| `vscode-host/` `obsidian-plugin/` | The two editor hosts |
+| `chrome-extension/` | The extension for Chrome and Edge that connects the owner's own browser |
 | `tests/` `scripts/` | Tests; build, check, smoke and packaging scripts |
 
 Every operation is defined once in `runtime/operations/` and authorised by the registry in `runtime/service.mjs`. MCP, the command line and the workbench all get it from there.

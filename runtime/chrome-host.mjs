@@ -66,11 +66,11 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     const status = await client.status(), up = status.running === true;
     return { running: up, version: up ? status.record?.version || VERSION : VERSION, ...(up && Number.isInteger(status.record?.port) ? { port: status.record.port } : {}), ...(status.outdated ? { outdated: true } : {}) };
   };
+  // How many things wait for the owner, and only that: what they say (the task a client handed over, a question of an
+  // agent) is read in the workbench, and is not sent into the browser for a number the extension shows.
   const pending = async () => {
     const [approvals, inputs] = await Promise.all([client.call('approval.list', { status: 'pending', limit: 20 }), client.call('input.list', { status: 'pending', limit: 20 })]);
-    const items = [...approvals.items.map(item => ({ kind: 'approval', id: item.id, summary: String(item.summary || 'An agent asks for permission').slice(0, 200) })),
-      ...inputs.items.map(item => ({ kind: 'input', id: item.id, summary: String(item.details?.questions?.[0]?.question || item.summary || 'An agent asks a question').slice(0, 200) }))];
-    return { count: items.length, items };
+    return { count: approvals.items.length + inputs.items.length };
   };
 
   // Everything the runtime asks of the browser while it runs: one reader, asking again as soon as it was answered.

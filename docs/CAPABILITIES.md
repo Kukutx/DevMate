@@ -6,7 +6,7 @@ DevMate's domain tools are called capabilities. They are reached through three o
 { "capability": "godot.status", "input": {} }
 ```
 
-`projectId` may be added to both; it is optional when the caller has one project. Capability inputs never take a project or workspace id: the project of the call is the scope.
+`projectId` may be added to both; it is optional when the caller has one project. Capability inputs never take a project or workspace id: the project of the call is the scope. The owner's browser (`chrome.*`) is the exception: it belongs to no project, and its capabilities are answered whichever folders are shared, and when none is.
 
 ## Naming
 
@@ -20,6 +20,7 @@ A capability is `<engine>.<name>`.
 | `godot` | `godot.*` | the runtime, starting the configured Godot executable |
 | `reverse` | `reverse.*` | the runtime, optionally starting Python, Rizin/radare2 and Ghidra |
 | `obsidian` | `obsidian.*` | the Obsidian plugin of an attached vault |
+| `chrome` | `chrome.*`: the owner's own browser (bookmarks, tabs, windows, history, downloads, the reading list) and `chrome.page.*`, which debugs a page like DevTools | the DevMate extension in Chrome or Edge, through the program the browser starts for it |
 
 Configured external MCP servers are reached as `mcp.<serverId>.<operation>`.
 
@@ -31,7 +32,7 @@ Every engine with a diagnostic routine has `<engine>.diagnose`: effective settin
 
 | Input | Result |
 |---|---|
-| none | Summary: engines with status, and per capability its name, a one-line description and flags. About 16 KB for the built-in engines. |
+| none | Summary: engines with status, and per capability its name, a one-line description and flags. About 26 KB for the built-in engines, of which the browser's 52 are about 10 KB. |
 | `engine: "godot"` | That engine with the full description, flags and input schema of each capability. |
 | `engine: "godot", summary: true` | That engine in summary form. |
 | `name: "godot.export"` | One capability: full description, flags, input schema. |

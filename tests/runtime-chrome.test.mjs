@@ -497,7 +497,13 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   assert.match((await ask('workbench')).result.url, /^http:\/\/127\.0\.0\.1:\d+\/\?code=/); const address = (await ask('mcpUrl')).result;
   // No public route is configured here: the address is this computer's own, and says so.
   assert.match(address.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/); assert.equal(address.scope, 'local');
-  assert.deepEqual((await ask('pending')).result, { count: 0, items: [] });
+  assert.deepEqual((await ask('pending')).result, { count: 0 });
+  // What waits for the owner is told as a number. What it says, a task a client handed over among it, is not sent
+  // into the browser.
+  const waits = runtime.service.store.create('approval', { status: 'pending', kind: 'delegation', summary: 'A connected client asks codex to run a task: the-words-of-the-task' });
+  const counted = await ask('pending');
+  assert.deepEqual(counted.result, { count: 1 }); assert.ok(!JSON.stringify(counted).includes('the-words-of-the-task'));
+  runtime.service.store.update('approval', waits.id, { status: 'resolved' });
 
   // A model's client asks for the browser through the capability tools, with no project shared at all.
   const listed = await runtime.service.call('capability.list', { engine: 'chrome' }, connected);

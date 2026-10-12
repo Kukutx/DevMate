@@ -448,7 +448,8 @@ npm run candidate          # 构建一次，对打包产物做冒烟，把一次
 | `runtime/engines/` | 浏览器、Godot、逆向等领域能力 |
 | `runtime/platform/` | 进程树、路径、工具等底层辅助 |
 | `workbench/` | 工作台，MCP App 与本机页面共用 |
-| `vscode-host/` `obsidian-plugin/` | 两个宿主 |
+| `vscode-host/` `obsidian-plugin/` | 两个编辑器宿主 |
+| `chrome-extension/` | Chrome 和 Edge 的扩展，把所有者自己的浏览器接进来 |
 | `tests/` `scripts/` | 测试；构建、检查、冒烟和打包脚本 |
 
 每个操作只在 `runtime/operations/` 里定义一次，经 `runtime/service.mjs` 的注册表统一授权。MCP、命令行和工作台都从这里获得它。
