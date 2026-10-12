@@ -1166,8 +1166,9 @@ export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
   // itself is being taken off the list. Where its folder is gone then (it was moved), the copy is removed all the
   // same: nothing would ever remove it afterwards. What stays is in the repository, wherever it is now: its note of
   // this worktree and the branch, which only Git there can remove. Anyone else who throws a copy away while the
-  // folder is not there (a drive that is not connected) is refused as before: the copy and its record stay, and the
-  // same call clears all of it once the folder is back.
+  // folder is not there (a drive that is not connected) is refused as before: the copy and its record stay, and
+  // agents.discard clears all of it once the folder is back. (Nothing calls it again by itself: where the copy of an
+  // agent that never ran could not be removed, the agent says so, see neverRan.)
   async function removeCopy(project, copy, { leaving = false } = {}) {
     let root = null;
     try { root = projectRoot(project); } catch (failure) { if (!leaving || failure.code !== 'project_missing') throw failure; }

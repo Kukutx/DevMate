@@ -131,18 +131,22 @@ export function defineProjectOperations(service, add) {
     // it its place among the tasks that may wait.
     service.store.transaction(() => service.agents.abandonHeld(agent => agent.projectId === args.id, 'cancelled',
       { code: 'project_removed', message: 'The project was taken out of sharing before the owner allowed this task.' }));
-    // A copy that could not be removed (a program still has its folder) is named with the answer: its record goes
-    // with the project, and nothing here would speak of it again.
+    // A copy that could not be removed (a program still has its folder) is named with the answer, with what is left
+    // of it in the repository and how that goes: its record goes with the project, and nothing here would speak of
+    // it again. (A record that names a folder which is no copy of this runtime's is passed over: that folder is not
+    // DevMate's to have removed.)
     const left = [];
     for (const agent of service.store.list('agent', { projectId: args.id, limit: 10000 })) {
-      if (agent.isolated && !agent.isolated.settled) await service.workspace.discardProposal(service.project(args.id), agent.isolated, { leaving: true }).catch(() => { left.push(agent.isolated.root); });
+      if (agent.isolated && !agent.isolated.settled) await service.workspace.discardProposal(service.project(args.id), agent.isolated, { leaving: true })
+        .catch(error => { if (error?.code !== 'invalid_input') left.push({ root: agent.isolated.root, branch: agent.isolated.branch }); });
     }
     return closing(args.id, () => {
       const removed = service.store.remove('project', args.id);
       service.windows.projectRemoved(args.id);
       // Taken out stays out: no editor default and no connected client brings the folder back.
       service.setDeclined(root, true);
-      return left.length ? { ...removed, copiesLeft: left, note: left.length + ' copy(ies) an agent worked in could not be removed and are still on this computer: ' + left.join('; ') + '. Nothing of DevMate uses them any more: delete those folders when no program holds them.' } : removed;
+      return left.length ? { ...removed, copiesLeft: left, note: left.length + ' copy(ies) an agent worked in could not be removed, most likely because a program still uses the folder: ' +
+        left.map(copy => copy.root + ' (branch ' + copy.branch + ')').join('; ') + '. Nothing of DevMate uses them any more. When nothing else does either, delete such a folder and run "git worktree prune" and "git branch -D <its branch>" in the repository of the project.' } : removed;
     });
   }, { destructive: true });
 }

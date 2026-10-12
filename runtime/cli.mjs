@@ -407,11 +407,18 @@ export async function main(argv = process.argv.slice(2), {
     }
     if (command === 'status') { const current = await status(runtimeOptions); print(current); older(current); return 0; }
     if (command === 'serve') {
-      const { serve } = await import('./main.mjs');
-      const runtime = await serve({ ...(runtimeOptions.instanceRoot ? { instanceRoot } : {}), ...(options.port ? { port: Number(options.port) } : {}) });
-      stderr.write('DevMate is running on http://127.0.0.1:' + runtime.port + ' — press Ctrl+C to stop.\n');
-      while (runtime.health.status !== 'stopped') await new Promise(resolve => setTimeout(resolve, 250));
-      return 0;
+      // The runtime runs in this process and writes lines of its own straight to the process's output: a fault with
+      // the path that was asked for, what a connector's program or a server said. In this terminal they are held to
+      // what everything else here is (legible), for as long as it runs.
+      const streams = [process.stdout, process.stderr].map(stream => ({ stream, write: stream.write }));
+      for (const { stream, write } of streams) stream.write = (chunk, ...rest) => write.call(stream, typeof chunk === 'string' ? legible(chunk) : chunk, ...rest);
+      try {
+        const { serve } = await import('./main.mjs');
+        const runtime = await serve({ ...(runtimeOptions.instanceRoot ? { instanceRoot } : {}), ...(options.port ? { port: Number(options.port) } : {}) });
+        stderr.write('DevMate is running on http://127.0.0.1:' + runtime.port + ' — press Ctrl+C to stop.\n');
+        while (runtime.health.status !== 'stopped') await new Promise(resolve => setTimeout(resolve, 250));
+        return 0;
+      } finally { for (const { stream, write } of streams) stream.write = write; }
     }
     if (command === 'mcp') {
       // Standard output belongs to the protocol from here on: nothing else may be written to it.

@@ -102,10 +102,11 @@ test('the doctor names what works, what is missing and the exact next step', asy
   // to one that shows nothing.
   const relayed = await service(t, { connection: { kind: 'ssh', publicUrl: 'https://devmate.example.com/mcp/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true } },
     { verifier: async () => ({ verified: false, reachable: false, reason: 'no answer' }) });
-  relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected', diagnostic: 'Warning: remote port forwarding failed for listen port 18443\n' }) };
+  relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected', diagnostic: 'debug1: Connecting to 203.0.113.7\r\nWarning: remote port forwarding failed for listen port 18443\n' }) };
   const stuck = await relayed.service.call('runtime.doctor', {}, owner);
   assert.equal(find(stuck, 'connection.process').status, 'ok');
-  assert.deepEqual([find(stuck, 'connection.public').status, find(stuck, 'connection.public').fix], ['fail', 'devmate restart opens the forward to the relay again. What OpenSSH said last: Warning: remote port forwarding failed for listen port 18443']);
+  // (An entry is one line, also where what a program said had several: nothing in it begins a line of its own.)
+  assert.deepEqual([find(stuck, 'connection.public').status, find(stuck, 'connection.public').fix], ['fail', 'devmate restart opens the forward to the relay again. What OpenSSH said last: debug1: Connecting to 203.0.113.7 Warning: remote port forwarding failed for listen port 18443']);
   relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected' }) }; relayed.service.verification = null;
   assert.equal(find(await relayed.service.call('runtime.doctor', {}, owner), 'connection.public').fix, 'devmate restart opens the forward to the relay again.');
   assert.equal(healthy.status, 'warn', 'a verified but unauthenticated public URL is still a warning');
@@ -169,7 +170,7 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.match(serverInstructions(runtime), / = kept \(.*, write\);/);
   const missing = await find('projects.missing');
   assert.equal(missing.status, 'warn');
-  assert.equal(missing.detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
+  assert.equal(missing.detail, 'The folder of 1 project(s) is not there: "moved" at ' + project.root);
   assert.equal(missing.fix, 'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
     '(devmate project remove <id, name or folder>) and share the folder where it is now (devmate project add <folder>). ' + takingOff);
   // At the computer the command line lists it marked as well.
@@ -197,7 +198,7 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
   // The doctor answers from the same look: what it says and what the list says are never two things.
   fs.renameSync(moved, elsewhere);
-  assert.equal((await find('projects.missing')).detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
+  assert.equal((await find('projects.missing')).detail, 'The folder of 1 project(s) is not there: "moved" at ' + project.root);
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
   assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);
@@ -240,10 +241,10 @@ test('a runtime that starts while a shared folder is gone says so from its first
     assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
     assert.ok(Date.now() - began < 600, 'a look that has not answered for longer than the bound is not waited for again: ' + (Date.now() - began) + ' ms');
     const checks = (await runtime.call('runtime.doctor', {}, owner)).checks, unanswered = checks.find(item => item.id === 'projects.unanswered');
-    assert.deepEqual([unanswered.status, unanswered.detail], ['warn', 'The folder of 1 project(s) has not answered when it was looked for: slow at ' + projects.slow.root]);
+    assert.deepEqual([unanswered.status, unanswered.detail], ['warn', 'The folder of 1 project(s) has not answered when it was looked for: "slow" at ' + projects.slow.root]);
     // Nothing is to be removed for it: a project that is taken off the list does not come back with the share.
     assert.equal(unanswered.fix, 'That is a share or a drive that hangs. Connect it again, or wait for it: nothing has to be removed. Until it answers, calls for such a project wait for it as long as the system does.');
-    assert.equal(checks.find(item => item.id === 'projects.missing').detail, 'The folder of 1 project(s) is not there: away at ' + projects.away.root);
+    assert.equal(checks.find(item => item.id === 'projects.missing').detail, 'The folder of 1 project(s) is not there: "away" at ' + projects.away.root);
   } finally { fs.promises.lstat = look; }
 
   // A drive letter that is not there at all (Windows): connecting it is the whole remedy, and removing is not offered.
@@ -282,14 +283,27 @@ test('what the command line writes for the owner to read holds no character a te
   const none = (text, what) => { for (const [one, called] of [[esc, 'ESC'], [bel, 'BEL'], [csi, 'CSI'], [del, 'DEL'], [turned, 'a character that turns the line'], [back, 'a carriage return']]) assert.equal(text.includes(one), false, what + ' holds ' + called); };
   const doctor = await run(['doctor']);
   none(doctor.text, 'the doctor');
-  assert.ok(doctor.text.includes('[warn] projects.missing: The folder of 2 project(s) is not there: x\\u001b[1A\\u001b[2K[ ok ] security: nothing to do \\u001b]8;;https://example.com\\u0007here\\u001b]8;;\\u0007\\u009b2K\\u007f\\u202e [ ok ] forged: line at '));
-  assert.ok(doctor.text.includes('; p q at '), 'an entry stays on its one line');
+  // The doctor gives a name as a name: in quotes it cannot close, on one line, without those characters, cut short.
+  const given = 'x[1A[2K[ ok ] security: nothing to do ]8;;https://example.comhere]8;;2K [ ok ] forged: line'.slice(0, 60);
+  assert.ok(doctor.text.includes('[warn] projects.missing: The folder of 2 project(s) is not there: "' + given + '" at '), doctor.text);
+  assert.ok(doctor.text.includes('; "p q" at '), 'an entry stays on its one line');
   assert.equal(doctor.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false, 'no line of the report is one the name wrote');
+  // The answer itself is made that way, so every place that shows it has it: an editor's output and a side panel too.
+  const checked = (await runtime.call('runtime.doctor', {}, owner)).checks;
+  for (const item of checked) assert.equal(/[\r\n]/.test(item.detail + (item.fix || '')), false, item.id);
   const report = await run(['doctor', '--report']);
   none(report.text, 'the report');
   assert.ok(report.text.includes('Unknown DevMate operation: no\\u001b[2Ksuch [ ok ] forged: line'));
   assert.equal(report.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false);
-  assert.ok(report.text.includes('; p q at ') && !report.text.split('\n').some(line => line.startsWith('q at ')), 'an entry of the report stays on its one line');
+  assert.ok(report.text.includes('; "p q" at ') && !report.text.split('\n').some(line => line.startsWith('q" at ')), 'an entry of the report stays on its one line');
+  // A report is made to be shared: the name of a project is taken out of it, also as the doctor says it. A name
+  // that is one of the report's own marks is left, or the report would lose its marks with it.
+  assert.ok(report.text.includes('is not there: "<folder-1>" at <folder-1>'), report.text);
+  assert.equal(report.text.includes('security: nothing to do'), false);
+  const marked = path.join(temp, 'marked'); fs.mkdirSync(marked);
+  await runtime.call('project.create', { root: marked, name: '[ ok ]' }, owner);
+  const again = await run(['doctor', '--report']);
+  assert.ok(again.text.split('\n').some(line => line.startsWith('[ ok ] node: ')), 'the marks of the report are its own');
   // What is printed as JSON says the same characters by their numbers, and reads back as the name it is.
   const listed = await run(['project', 'list']);
   none(listed.text, 'the list');

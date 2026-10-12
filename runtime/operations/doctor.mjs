@@ -6,7 +6,7 @@ import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
 import { TAKING_OFF_THE_LIST } from '../workspace.mjs';
-import { within } from './shared.mjs';
+import { named, within } from './shared.mjs';
 
 /**
  * One list of everything that decides whether this installation works, each
@@ -14,7 +14,10 @@ import { within } from './shared.mjs';
  */
 export async function doctor(service) {
   const checks = [];
-  const check = (id, status, detail, fix) => checks.push({ id, status, detail, ...(fix ? { fix } : {}) });
+  // Each entry is one line, wherever it is shown (a terminal, an editor's output, a side panel, a report): words
+  // from elsewhere in it, a name or what a program said, do not begin a line of their own beside DevMate's.
+  const oneLine = text => String(text).replace(/\s*[\r\n]+\s*/g, ' ');
+  const check = (id, status, detail, fix) => checks.push({ id, status, detail: oneLine(detail), ...(fix ? { fix: oneLine(fix) } : {}) });
   const major = Number(process.versions.node.split('.')[0]);
   check('node', major >= 24 ? 'ok' : 'fail', 'Node.js ' + process.versions.node, major >= 24 ? null : 'Install Node.js 24 or newer.');
   const shell = service.processes.shell;
@@ -49,7 +52,7 @@ export async function doctor(service) {
   // look the list of projects and the instructions answer from, so that the three say the same. A folder that has
   // not answered within the time such a look is given (a share that hangs) is named as that, instead of this report
   // not coming.
-  const listed = service.store.list('project', { limit: 10000 }), places = found => found.slice(0, 8).map(project => project.name + ' at ' + project.root).join('; ') + (found.length > 8 ? '; and ' + (found.length - 8) + ' more' : '');
+  const listed = service.store.list('project', { limit: 10000 }), places = found => found.slice(0, 8).map(project => named(project.name) + ' at ' + project.root).join('; ') + (found.length > 8 ? '; and ' + (found.length - 8) + ' more' : '');
   const silent = await service.lookAtFolders(listed), gone = listed.filter(project => service.folders.get(project.id)?.missing && !silent.includes(project));
   if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there: ' + places(gone),
     'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
@@ -157,7 +160,8 @@ export async function doctor(service) {
   'Keep the account and the tunnel (' + TUNNEL_HELP.settings + ') to people you would let work on this computer.');
   // Whether a client got through at all, and as what: the answer to "ChatGPT is connected but the tools look wrong".
   const client = service.lastClient;
-  if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? '"' + client.name + '"' : 'nothing') + (client.userAgent ? ' (sender line "' + client.userAgent + '")' : '') + ' and was shown the tool names of ' +
+  // (What it calls itself is its own to choose: given as a name, in quotes it cannot close, and cut short.)
+  if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? named(client.name) : 'nothing') + (client.userAgent ? ' (sender line ' + named(client.userAgent, 120) + ')' : '') + ' and was shown the tool names of ' +
     { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself' }[client.surface] + ', ' +
     { address: 'as the address it used says (?tools=' + client.surface + ')', name: 'going by that name', tunnel: 'because it came through OpenAI\'s tunnel', default: 'because nothing about it was recognised' }[client.by] + ', at ' + client.at + '.',
   // The address is the owner's to add to; a tunnel id has no place for it.

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { instanceFiles } from './client.mjs';
 import { redactSecrets } from './platform/redact.mjs';
+import { plainName } from './operations/shared.mjs';
 import { VERSION } from './version.mjs';
 
 // One text a person can paste into a bug report: what the doctor found, how the operations went and what the
@@ -27,7 +28,9 @@ export function anonymize(text, { home = os.homedir(), places = [], names = [], 
   result = result.replace(/((?:\\{1,2}|\/)(?:Users|home)(?:\\{1,2}|\/))[^\\/\s"'<>:|]+/gi, '$1<user>');
   for (const host of hosts) if (typeof host === 'string' && host.length > 3) result = result.replace(new RegExp(literal(host), 'gi'), '<public-host>');
   // A project's name is often the name of a client or a product. Short names are left: replacing "app" everywhere would say less, not more.
-  for (const [name, label] of names) if (typeof name === 'string' && name.length > 3) result = result.replace(new RegExp('(?<![A-Za-z0-9_])' + literal(name) + '(?![A-Za-z0-9_])', 'g'), label);
+  // So is a name that is one of the report's own words (a client may name a project "[FAIL]"): taken out everywhere,
+  // it would take the report's own marks and headings with it.
+  for (const [name, label] of names) if (typeof name === 'string' && name.length > 3 && !OWN_WORDS.some(words => words.includes(name))) result = result.replace(new RegExp('(?<![A-Za-z0-9_])' + literal(name) + '(?![A-Za-z0-9_])', 'g'), label);
   return result.replace(/[a-z0-9-]+\.trycloudflare\.com/gi, '<assigned>.trycloudflare.com').replace(/\/mcp\/[A-Za-z0-9_-]{20,}/g, '/mcp/<key>')
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '<email>')
     .replace(/\b(?!127\.0\.0\.1\b)(?:\d{1,3}\.){3}\d{1,3}\b/g, '<address>')
@@ -61,12 +64,15 @@ const folderPlaces = roots => roots.map((root, index) => [root, '<folder-' + (in
 // What can be said without a runtime: what is seen from outside, and what it logged before it stopped.
 export function offlineReport(instanceRoot, doctor) {
   return anonymize([HEADING, '', 'DevMate ' + doctor.version + ' · ' + process.platform + ' ' + process.arch + ' ' + os.release() + ' · Node ' + process.versions.node + ' · the runtime is not running',
-    '', 'Checks', ...checkLines(doctor.checks), '', 'Runtime log, last lines', ...logTail(instanceRoot).map(line => line.slice(0, 600))].join('\n'),
+    '', SECTIONS.checks, ...checkLines(doctor.checks), '', SECTIONS.log, ...logTail(instanceRoot).map(line => line.slice(0, 600))].join('\n'),
   { places: [...folderPlaces(recordedFolders(instanceRoot)), [instanceRoot, '<instance>']] });
 }
 
 const MARK = { ok: '[ ok ]', info: '[info]', warn: '[warn]', fail: '[FAIL]' };
 const HEADING = 'DevMate report. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it.';
+const SECTIONS = { checks: 'Checks', operations: 'Operations since the start: name, calls (through MCP), failed, ms for half of the calls, for 19 in 20, slowest', failures: 'Recent failures, newest first', log: 'Runtime log, last lines' };
+// What the report says in its own words wherever it is made: its marks and its headings.
+const OWN_WORDS = [...Object.values(MARK), HEADING, ...Object.values(SECTIONS)];
 // One entry on one line: a name or a message from elsewhere does not begin a line of its own beside the report's.
 const oneLine = text => String(text ?? '').replace(/\s*[\r\n]+\s*/g, ' ');
 function checkLines(checks) {
@@ -79,7 +85,8 @@ export async function report(service) {
   const hostOf = value => { try { return new URL(value).host; } catch { return value; } };
   const clean = text => anonymize(text, {
     places: [...folderPlaces(projects.map(project => project.root)), [service.instanceRoot, '<instance>']],
-    names: projects.map((project, index) => [project.name, '<folder-' + (index + 1) + '>']),
+    // A name is taken out as it is, and as the doctor says it (on one line, without the characters it leaves out).
+    names: projects.flatMap((project, index) => [...new Set([project.name, oneLine(project.name), plainName(project.name)])].map(name => [name, '<folder-' + (index + 1) + '>'])),
     hosts: [service.publicUrl(), config.auth?.issuer, config.connection?.host].filter(Boolean).map(hostOf) });
   const access = level => projects.filter(project => project.access === level).length;
   const failures = usage.recentFailures.slice(0, 20);
@@ -87,12 +94,12 @@ export async function report(service) {
     'DevMate ' + VERSION + ' · ' + process.platform + ' ' + process.arch + ' ' + os.release() + ' · Node ' + process.versions.node + ' · ' + service.processes.shell.label,
     'Connection: ' + config.connection.kind + (config.openaiTunnel ? ' with openai-tunnel beside it' : '') + ' · sign-in: ' + config.auth.mode + ' · profile: ' + service.accessProfile + ' · delegation: ' + service.delegation + ' · up ' + Math.round(process.uptime() / 60) + ' min',
     'Shared folders: ' + projects.length + ' (' + access('write') + ' read and write, ' + access('read') + ' read only) · editor windows: ' + service.windows.list().length,
-    '', 'Checks', ...checkLines(doctor.checks),
-    '', 'Operations since the start: name, calls (through MCP), failed, ms for half of the calls, for 19 in 20, slowest',
+    '', SECTIONS.checks, ...checkLines(doctor.checks),
+    '', SECTIONS.operations,
     ...(usage.operations.length ? usage.operations.map(item => item.name + '  ' + item.calls + ' (' + item.connected + ')  ' + item.failed + '  ' + (item.p50Ms ?? '>50000') + '  ' + (item.p95Ms ?? '>50000') + '  ' + item.maxMs +
       (item.failed ? '  ' + Object.entries(item.errors).map(([code, count]) => code + '×' + count).join(', ') : '')) : ['(none yet)']),
-    '', 'Recent failures, newest first',
+    '', SECTIONS.failures,
     ...(failures.length ? failures.map(item => oneLine('#' + item.request + ' ' + item.at + ' ' + item.operation + ' ' + item.code + ' (' + item.caller + ', ' + item.ms + ' ms): ' + item.message)) : ['(none)']),
-    '', 'Runtime log, last lines', ...(logTail(service.instanceRoot).map(line => line.slice(0, 600)))];
+    '', SECTIONS.log, ...(logTail(service.instanceRoot).map(line => line.slice(0, 600)))];
   return { text: clean(lines.join('\n')) };
 }

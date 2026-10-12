@@ -144,6 +144,9 @@ test('a copy that was made for a task the owner then does not allow goes with it
   await refuse(second);
   await until(() => tried === 1 && !service.store.get('agent', second.agentId).isolated.settled, 'the copy to be the agent\'s again');
   assert.deepEqual([service.store.get('agent', second.agentId).status, fs.existsSync(second.copy.root), branches()], ['closed', true, [second.copy.branch]]);
+  // Nothing tries again by itself, so the agent says it where its state is read, with what removes the copy.
+  assert.deepEqual(service.store.get('agent', second.agentId).error, { code: 'agent_never_ran', message: 'No task of this agent ran: what it was written down for ended before it began (the task says why), and the agent was closed with that. Start a new agent for the next task. ' +
+    'The copy of the project that was made for it could not be removed (A program still uses the folder of the copy.): agents.discard removes it, once that is out of the way.' });
   service.workspace.discardProposal = remove;
   assert.equal((await service.call('agents.discard', { agentId: second.agentId }, owner)).discarded, true);
   assert.deepEqual([fs.existsSync(second.copy.root), branches(), service.store.get('agent', second.agentId).isolated.settled], [false, [], 'discarded']);
@@ -162,6 +165,11 @@ test('taking a project off the list whose folder was moved removes the copy an a
   // the project, such a folder is not removed.)
   const other = path.join(temp, 'not-a-copy'); fs.mkdirSync(other); fs.writeFileSync(path.join(other, 'kept.txt'), 'kept');
   service.store.create('agent', { projectId: project.id, workflowId: done.workflowId, provider: 'codex', label: 'elsewhere', status: 'closed', isolated: { root: other, branch: 'devmate/elsewhere', base: 'c0ffee' } });
+  // (And a copy that a program still holds, which cannot be removed.)
+  const held = path.join(temp, 'instance-copies', 'copy-held'); fs.mkdirSync(held);
+  service.store.create('agent', { projectId: project.id, workflowId: done.workflowId, provider: 'codex', label: 'held', status: 'closed', isolated: { root: held, branch: 'devmate/copy-held', base: 'c0ffee' } });
+  const discard = service.workspace.discardProposal;
+  service.workspace.discardProposal = (place, one, options) => one.root === held ? Promise.reject(Object.assign(new Error('The working copy is still in use and could not be removed.'), { code: 'copy_in_use' })) : discard(place, one, options);
   const elsewhere = path.join(temp, 'moved');
   fs.renameSync(top, elsewhere);
   assert.equal(fs.existsSync(path.join(copy, 'src', 'new.js')), true);
@@ -174,11 +182,15 @@ test('taking a project off the list whose folder was moved removes the copy an a
   const removed = await service.call('project.remove', { id: project.id }, owner);
   assert.equal(removed.removed, true);
   assert.equal(fs.existsSync(copy), false, 'the record that named it is gone with the project');
-  assert.deepEqual(fs.readdirSync(path.join(temp, 'instance-copies')), []);
-  // What could not be removed is named with the answer, since no record speaks of it afterwards.
+  assert.deepEqual(fs.readdirSync(path.join(temp, 'instance-copies')), ['copy-held']);
+  // What could not be removed is named with the answer, since no record speaks of it afterwards: where it is, and
+  // what is left of it in the repository with the commands that remove that.
+  assert.deepEqual(removed.copiesLeft, [{ root: held, branch: 'devmate/copy-held' }]);
+  assert.equal(removed.note, '1 copy(ies) an agent worked in could not be removed, most likely because a program still uses the folder: ' + held + ' (branch devmate/copy-held). Nothing of DevMate uses them any more. ' +
+    'When nothing else does either, delete such a folder and run "git worktree prune" and "git branch -D <its branch>" in the repository of the project.');
+  // A folder that is no copy of this runtime's is neither removed nor offered for removing.
   assert.equal(fs.readFileSync(path.join(other, 'kept.txt'), 'utf8'), 'kept');
-  assert.deepEqual(removed.copiesLeft, [other]);
-  assert.equal(removed.note, '1 copy(ies) an agent worked in could not be removed and are still on this computer: ' + other + '. Nothing of DevMate uses them any more: delete those folders when no program holds them.');
+  assert.equal(removed.note.includes(other), false);
   // The repository keeps the branch: only Git there can remove it, which the words that sent the owner here say.
   assert.ok(git(elsewhere, 'branch', '--list', 'devmate/*').includes(branch));
 });

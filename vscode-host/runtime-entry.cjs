@@ -18,6 +18,26 @@ const ACCESS_LABEL = { write: 'read and write', read: 'read only' };
 const pathKey = value => process.platform === 'win32' ? value.toLowerCase() : value;
 const samePath = (a, b) => pathKey(a) === pathKey(b);
 
+// Every notification and every input box of this extension is shown through here. VS Code makes a link of
+// "[label](address)" in the text of a notification, and a link that names a command runs it when it is clicked (its
+// own code says so, and it was tried in 1.101). The text carries words that are not DevMate's: the first line of a
+// task a client handed over, what an agent asks, the name of a folder or an agent, what a program or a server said.
+// So no text that is shown can form such a link: a bracket that closes is never followed directly by one that
+// opens. Everything else of a notification's text is shown as the characters it is.
+// An input box reads what it asks, and what it says of an input, the same way (seen in the code of 1.101 and 1.133):
+// both go through here as well, whatever they are made of today. A test holds every file of this folder to these
+// functions (tests/repository-check.test.mjs).
+function notifier(vscode) {
+  const inert = text => typeof text === 'string' ? text.replace(/\]\(/g, '] (') : text;
+  const notify = {};
+  for (const name of ['showInformationMessage', 'showWarningMessage', 'showErrorMessage'])
+    Object.defineProperty(notify, name, { get: () => typeof vscode.window[name] === 'function' ? (message, ...rest) => vscode.window[name](inert(message), ...rest) : undefined });
+  const said = answer => typeof answer === 'string' ? inert(answer) : answer && typeof answer === 'object' ? { ...answer, message: inert(answer.message) } : answer;
+  notify.showInputBox = (options = {}) => vscode.window.showInputBox({ ...options, ...(options.prompt === undefined ? {} : { prompt: inert(options.prompt) }),
+    ...(typeof options.validateInput === 'function' ? { validateInput: async value => said(await options.validateInput(value)) } : {}) });
+  return notify;
+}
+
 function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactory = createHostClient, clock = Date.now } = {}) {
   // This identity lives only inside one VS Code extension host (one editor
   // window). It never becomes a machine-wide "active workspace". Any number of
@@ -76,22 +96,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   };
   let shownRunning;
   function report(error) { output?.appendLine(error?.message || String(error)); }
-  // Every notification of this extension is shown through here. VS Code makes a link of "[label](address)" in the
-  // text of a notification, and a link that names a command runs it when it is clicked (its own code says so, and it
-  // was tried in 1.101). The text carries words that are not DevMate's: the first line of a task a client handed
-  // over, what an agent asks, the name of a folder or an agent, what a program or a server said. So no text that is
-  // shown can form such a link: a bracket that closes is never followed directly by one that opens. Everything else
-  // of a notification's text is shown as the characters it is.
-  const inert = text => typeof text === 'string' ? text.replace(/\]\(/g, '] (') : text;
-  const notify = {};
-  for (const name of ['showInformationMessage', 'showWarningMessage', 'showErrorMessage'])
-    Object.defineProperty(notify, name, { get: () => typeof vscode.window[name] === 'function' ? (message, ...rest) => vscode.window[name](inert(message), ...rest) : undefined });
-  // An input box reads what it asks, and what it says of an input, the same way (seen in the code of 1.101 and
-  // 1.133): both go through here as well, whatever they are made of today. A test holds every notification and
-  // every input box of this folder to these functions (tests/repository-check.test.mjs).
-  const said = answer => typeof answer === 'string' ? inert(answer) : answer && typeof answer === 'object' ? { ...answer, message: inert(answer.message) } : answer;
-  notify.showInputBox = (options = {}) => vscode.window.showInputBox({ ...options, ...(options.prompt === undefined ? {} : { prompt: inert(options.prompt) }),
-    ...(typeof options.validateInput === 'function' ? { validateInput: async value => said(await options.validateInput(value)) } : {}) });
+  const notify = notifier(vscode);
   async function showError(error) {
     report(error);
     const action = error?.code === 'NODE_REQUIRED' ? 'Open Settings' : error?.code === 'RUNTIME_STOPPED' ? 'Start DevMate'
@@ -759,4 +764,4 @@ function deactivate() {
   return existing?.deactivate();
 }
 
-module.exports = {activate,deactivate,createVscodeRuntimeEntry};
+module.exports = {activate,deactivate,createVscodeRuntimeEntry,notifier};

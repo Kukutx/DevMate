@@ -42,6 +42,13 @@ export const commandShape = { command: z.string().min(1).max(100000).optional(),
 export const keywords = z.string().min(1).max(200).optional().describe('Words to look for in names and descriptions; all of them have to be there.');
 export const hasWords = (query, ...texts) => { const where = texts.join(' ').toLowerCase().replace(/[._]/g, ' '); return String(query).toLowerCase().replace(/[._]/g, ' ').split(/\s+/).filter(Boolean).every(word => where.includes(word)); };
 
+// A name somebody else chose (a client names projects and agents, and says what it is called itself), where DevMate
+// says it among words of its own: on one line, without a character that acts on what shows it or turns the line
+// around, with no quotation mark of its own (each becomes an apostrophe), and cut short. named: that, in quotes
+// which the name cannot close, so that everything outside them is DevMate's.
+export const plainName = (name, most = 60) => String(name).replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Bidi_Control}]/gu, '').replace(/\p{Quotation_Mark}/gu, '\'').slice(0, most);
+export const named = (name, most) => '"' + plainName(name, most) + '"';
+
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
 // client: sent through a connected client, not by the owner at this computer. A task that comes that way is run

@@ -7,6 +7,7 @@ import { modelName, nodeHelperEnvironment } from './agents/common.mjs';
 import { DomainError } from './store.mjs';
 import { resolveProviderSettings } from './config.mjs';
 import { resolveProjectPath } from './workspace.mjs';
+import { named } from './operations/shared.mjs';
 
 const channelEntry = fileURLToPath(new URL('./agent-channel.mjs', import.meta.url));
 const activeStates = new Set(['starting', 'running', 'waiting', 'cancelling']);
@@ -383,10 +384,12 @@ export class AgentCoordinator {
     const copy = agent.isolated && !agent.isolated.settled ? agent.isolated : null;
     this.store.update('agent', agentId, { status: 'closed', error: NEVER_RAN, ...(copy ? { isolated: { ...copy, settled: 'discarded' } } : {}) });
     // (Said as discarded from here on, so that nothing takes the copy up while it goes.) One that could not be
-    // removed, because a program still uses its folder, is the agent's again: agents.discard removes it later.
+    // removed (a program still uses its folder, or the folder of the project is not there just now) is the agent's
+    // again. Nothing tries a second time by itself: the agent says so where its state is read, with what removes it.
     if (copy && this.discardCopy) Promise.resolve().then(() => this.discardCopy(agent)).catch(error => {
       this.store.recordNotificationFailure(error);
-      if (this.find('agent', agentId)?.isolated?.settled === 'discarded') this.store.update('agent', agentId, { isolated: copy });
+      if (this.find('agent', agentId)?.isolated?.settled === 'discarded') this.store.update('agent', agentId, { isolated: copy,
+        error: { ...NEVER_RAN, message: NEVER_RAN.message + ' The copy of the project that was made for it could not be removed (' + String(error?.message || error).slice(0, 300) + '): agents.discard removes it, once that is out of the way.' } });
     }).catch(error => this.store.recordNotificationFailure(error));
     // The workflow was made for what a client handed over: with every agent in it closed like this one, nothing of
     // it ran and nothing is left that would.
@@ -865,7 +868,7 @@ export class AgentCoordinator {
     // session to take up where it wrote the agent down): given as a name, in quotes, on one line and cut short. No
     // quotation mark of its own ends those quotes (each becomes an apostrophe), and nothing in it moves the text
     // around it. Everything outside the quotes and before the colon is DevMate's own, here and in the details.
-    const quoted = (name, most = 60) => '"' + String(name).replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Bidi_Control}]/gu, '').replace(/\p{Quotation_Mark}/gu, '\'').slice(0, most) + '"';
+    const quoted = named;
     // (An agent that is not started is one a client wrote down, with the model and the session it chose. One that has
     // run says which model it runs with and which session it has: the provider's words, then.)
     const passed = message.sender.kind === 'agent', theirs = agent.status === 'unstarted' ? ' (the client chose it)' : '';

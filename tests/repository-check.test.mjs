@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { retiredWording, validateVersions } from '../scripts/check-runtime.mjs';
 import { VERSION } from '../runtime/version.mjs';
@@ -79,9 +80,26 @@ test('every notification and input box of the editor host is shown through the o
     const rest = source.replace(/^\s*for \(const name of \['showInformationMessage', 'showWarningMessage', 'showErrorMessage'\]\)$/m, '');
     for (const [, before] of rest.matchAll(/(.{0,12})show(?:Information|Warning|Error)Message/g)) assert.match(before, /notify\.$/, name + ': a notification is shown past notify (' + before + ')');
     assert.equal((source.match(/window\s*\[/g) || []).length, own ? 2 : 0, name + ': a function of the window is reached by a name that is worked out');
-    assert.equal((source.match(/(?<!notify)\.showInputBox/g) || []).length, own ? 1 : 0, name + ': an input box is shown past notify');
+    // The input box, by whatever way it is reached: its name stands after "notify." everywhere but in the one place
+    // notify itself calls it (taken out of the window by name, as a part of it, it would stand alone); and the box
+    // that is built by hand, which has a prompt and a message of its own, is not used at all.
+    const boxes = [...source.matchAll(/(.{0,14})showInputBox/g)].map(([, before]) => before).filter(before => !/notify\.$/.test(before));
+    assert.deepEqual(boxes.map(before => /vscode\.window\.$/.test(before)), own ? [true] : [], name + ': an input box is shown past notify');
+    assert.equal(source.includes('createInputBox'), false, name + ': an input box is built by hand');
     if (name === 'runtime-entry.cjs') assert.equal(own, 1, 'the place itself is there');
   }
+  // And the place does what it is there for, with each kind: a text that would be a link is none when it arrives.
+  const { notifier } = createRequire(import.meta.url)('../vscode-host/runtime-entry.cjs'), lure = 'see [Open Workbench](command:workbench.action.reloadWindow) and [docs](https://example.com/)', plain = lure.replaceAll('](', '] (');
+  const got = [], window = Object.fromEntries(['showInformationMessage', 'showWarningMessage', 'showErrorMessage'].map(kind => [kind, (message, ...rest) => { got.push([kind, message, rest]); }]));
+  window.showInputBox = async options => { got.push(['showInputBox', options.prompt, [options.title, await options.validateInput?.('typed'), await options.validateInput?.('object')]]); };
+  const notify = notifier({ window });
+  notify.showInformationMessage(lure, 'Open Workbench'); notify.showWarningMessage(lure, { modal: true }, 'Yes'); notify.showErrorMessage(lure);
+  return notify.showInputBox({ title: 'A title', prompt: lure, validateInput: value => value === 'object' ? { message: lure, severity: 2 } : lure }).then(() => {
+    assert.deepEqual(got, [['showInformationMessage', plain, ['Open Workbench']], ['showWarningMessage', plain, [{ modal: true }, 'Yes']], ['showErrorMessage', plain, []],
+      ['showInputBox', plain, ['A title', plain, { message: plain, severity: 2 }]]]);
+    // A kind this editor does not have is not made up.
+    assert.equal(notifier({ window: {} }).showWarningMessage, undefined);
+  });
 });
 
 test('the version is the one the owner approved in AGENTS.md, and any other number is stopped by the check', t => {
