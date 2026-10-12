@@ -54,8 +54,13 @@ export function defineProjectOperations(service, add) {
   // With a writable project a client can run commands, and with those reach whatever the owner can reach. So which
   // folders are shared at all is not a client's call: project.create is the owner's own act (ownerDecision), unless
   // the owner chose the full access profile.
+  // missing: its folder was not there when it was last looked at (moved, renamed or deleted, or on a drive that is not
+  // connected). Such a project is still on the list, and every call for it is refused until the folder is back.
   add('project.list', { query: z.string().max(200).optional(), cursor: id.optional(), limit: z.number().int().min(1).max(1000).optional() }, true,
-    'List registered projects.', (args, context) => service.list('project', args, context));
+    'List registered projects. One whose folder is not there at the moment is marked missing:true.', (args, context) => {
+      const listed = service.list('project', args, context);
+      return { ...listed, items: listed.items.map(project => service.folderMissing(project) ? { ...project, missing: true } : project) };
+    });
   add('project.create', { root: directory, name: z.string().min(1).max(200).optional(),
     access: z.enum(['read', 'write']).default('write'), protectSecrets: z.boolean().optional(), ...mutation }, false,
     'Share a local directory as a project. This is the owner\'s decision and is made on their own computer (editor, command line, local workbench); a connected client can do it only when the owner chose the full access profile. Credential-like files such as .env, key files and .npmrc stay out of the file tools unless the owner lifts that for the project.', args => {

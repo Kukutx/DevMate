@@ -6,6 +6,7 @@ import { createAgentAdapter, inspectAgentProvider, AGENT_PROVIDERS } from './age
 import { modelName, nodeHelperEnvironment } from './agents/common.mjs';
 import { DomainError } from './store.mjs';
 import { resolveProviderSettings } from './config.mjs';
+import { resolveProjectPath } from './workspace.mjs';
 
 const channelEntry = fileURLToPath(new URL('./agent-channel.mjs', import.meta.url));
 const activeStates = new Set(['starting', 'running', 'waiting', 'cancelling']);
@@ -253,6 +254,10 @@ export class AgentCoordinator {
       if (!released) throw new DomainError('shutdown_unconfirmed', 'The previous agent process has not confirmed its exit. Stop the agent before resuming it.');
       if (session.stopped || this.stopping) return;
       const project = this.store.get('project', agent.projectId);
+      // The agent's program is started in the project's folder. Where that is not there (moved, or on a drive that is
+      // not connected) it is said as that: started all the same, the program fails for want of a folder to start in,
+      // which reads as if it were not installed.
+      if (!agent.isolated) resolveProjectPath(project);
       const settings = resolveProviderSettings(this.providerSettings[agent.provider]);
       session.record = settings.recordNativeEvents === true;
       this.issue(agent, session);

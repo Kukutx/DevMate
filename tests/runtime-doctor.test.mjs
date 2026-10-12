@@ -113,23 +113,55 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   await runtime.call('project.create', { root: kept, name: 'kept' }, owner);
   const project = await runtime.call('project.create', { root: moved, name: 'moved' }, owner);
   const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
-  assert.equal(await find('projects.missing'), undefined);
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.equal(await find('projects.missing'), undefined);
   fs.renameSync(moved, path.join(temp, 'elsewhere'));
-  // Each call that needs the folder says what happened to it and what its owner does about it, instead of a bare ENOENT.
-  const said = 'The folder of this project is not there: ' + project.root + ' (moved, renamed or deleted, or on a drive that is not connected). Its owner takes it off the list with devmate project remove ' + project.id +
-    ' and shares the folder where it is now with devmate project add <folder>.';
-  for (const [operation, input] of [['workspace.read', { path: 'a.txt' }], ['workspace.files', {}], ['workspace.write', { path: 'b.txt', text: 'b' }], ['git.status', {}], ['project.overview', {}], ['shell.run', { file: process.execPath, args: ['-v'] }]])
+  // Until a call has met the missing folder, or it was looked at again, it is listed as it was last seen.
+  const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, connected)).items.map(item => [item.name, item.missing]));
+  assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  // Each call that needs the folder says what happened to it and what is done about it, instead of a bare ENOENT.
+  // What is done differs: a drive is connected again and nothing is lost; taking the project off the list takes what
+  // is kept for it as well, and is said to.
+  const said = 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
+    'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes the workflows, tasks and agent records kept for it) ' +
+    'and shares the folder where it is now (devmate project add <folder>).';
+  for (const [operation, input] of [['workspace.read', { path: 'a.txt' }], ['workspace.files', {}], ['workspace.write', { path: 'b.txt', text: 'b' }], ['git.status', {}], ['project.overview', {}], ['shell.run', { file: process.execPath, args: ['-v'] }],
+    // A coding agent and an engine start their programs in that folder: refused the same way, before anything is made
+    // for the task (started all the same, the program fails for want of a folder, which reads as if it were not installed).
+    ['agents.delegate', { provider: 'codex', prompt: 'x', waitMs: 0 }], ['agents.delegate', { provider: 'codex', prompt: 'x', isolate: true, waitMs: 0 }], ['capability.list', { engine: 'godot' }]])
     await assert.rejects(runtime.call(operation, { projectId: project.id, ...input }, connected), { code: 'project_missing', message: said }, operation);
+  assert.deepEqual([runtime.store.count('workflow', { projectId: project.id }), runtime.store.count('agent', { projectId: project.id }), runtime.store.count('approval', { projectId: project.id })], [0, 0, 0], 'nothing was made for the agent, and the owner is not asked about a task that cannot start');
   assert.equal((await runtime.call('workspace.read', { projectId: 'kept', path: 'a.txt' }, connected)).text, 'a', 'the other project works as before');
+  // Where projects are listed it is marked, from the call that met it on.
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  // What is said of a folder is what was seen last. The file system is not asked each time projects are named for a
+  // model, which is on every request: fifty of them look at each folder once.
+  const look = fs.promises.lstat;
+  let looks = 0;
+  fs.promises.lstat = (...args) => { looks++; return look(...args); };
+  try { runtime.folders.clear(); for (let request = 0; request < 50; request++) serverInstructions(runtime); await listed(); } finally { fs.promises.lstat = look; }
+  assert.equal(looks, 2, 'one look at each of the two folders');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(await listed(), { kept: undefined, moved: true }, 'and what was seen is what is said');
   // Where a call has to say which project it means, the one that is gone is marked.
   await assert.rejects(runtime.call('workspace.write', { path: 'b.txt', text: 'b' }, connected), error => error.code === 'project_required' && error.message.includes(' = kept;') && error.message.endsWith(project.id + ' = moved (its folder is not there)'));
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   assert.match(serverInstructions(runtime), / = kept \(.*, write\);/);
   const missing = await find('projects.missing');
   assert.equal(missing.status, 'warn');
-  assert.equal(missing.detail, 'The folder of 1 project(s) is not there (moved, renamed or deleted, or on a drive that is not connected): moved at ' + project.root);
-  assert.match(missing.fix, /devmate project remove <id, name or folder>.*devmate project add <folder>/);
+  assert.equal(missing.detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
+  assert.equal(missing.fix, 'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
+    '(devmate project remove <id, name or folder>, which also removes the workflows, tasks and agent records kept for it) and share the folder where it is now (devmate project add <folder>).');
+  // Put back where it was (a drive that is connected again), the project works with everything it had, and is listed
+  // as there again once it was looked at.
+  fs.renameSync(path.join(temp, 'elsewhere'), moved);
+  assert.equal((await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, connected)).text, 'a');
+  assert.equal(await find('projects.missing'), undefined);
+  runtime.folders.clear();
+  await listed();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  fs.renameSync(moved, path.join(temp, 'elsewhere'));
   // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
   assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);
   assert.equal(await find('projects.missing'), undefined);

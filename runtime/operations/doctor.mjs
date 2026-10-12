@@ -43,10 +43,15 @@ export async function doctor(service) {
   const projects = service.store.count('project');
   check('projects', projects ? 'ok' : 'warn', projects + ' project(s) registered', projects ? null : 'Register one with devmate project add, or share a folder from an editor that runs DevMate.');
   // A folder that was moved, renamed or deleted after it was shared stays on the list, and every call for it fails.
-  const gone = service.store.list('project', { limit: 10000 }).filter(project => !fs.existsSync(project.root));
-  if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there (moved, renamed or deleted, or on a drive that is not connected): ' +
+  // So does one on a drive that is not connected, for which the remedy is the opposite: nothing is to be removed.
+  // Looked at now, all at once and without holding anything else up; only "nothing is at this path" counts.
+  const listed = service.store.list('project', { limit: 10000 });
+  const looked = await Promise.all(listed.map(project => fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))));
+  const gone = listed.filter((_, index) => looked[index]);
+  if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there: ' +
     gone.slice(0, 8).map(project => project.name + ' at ' + project.root).join('; ') + (gone.length > 8 ? '; and ' + (gone.length - 8) + ' more' : ''),
-  'Take each off the list (devmate project remove <id, name or folder>) and share the folder where it is now (devmate project add <folder>).');
+  'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
+    '(devmate project remove <id, name or folder>, which also removes the workflows, tasks and agent records kept for it) and share the folder where it is now (devmate project add <folder>).');
   const windows = service.windows.list().length;
   check('editor', windows ? 'ok' : 'info', windows + ' editor window(s) attached', windows ? null : 'Editor context needs VS Code or Obsidian with DevMate running; diagnostics come from VS Code.');
   for (const provider of (await service.discoverProviders()).items) {
@@ -106,10 +111,10 @@ export async function doctor(service) {
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason + (verification.reachable || verification.pending ? '' : ' (asked from this computer; a client in the cloud may still get through: try it there)')),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.'
           : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes: devmate restart gets a new one, and its address is then a new one (devmate mcp-url).'
-          : connection.relay ? 'devmate logs shows what OpenSSH said; devmate restart opens the forward to the relay again.'
-          : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '; devmate logs shows what OpenSSH said.'
+          : connection.relay ? 'What OpenSSH said last is in the connection.process line above; devmate restart opens the forward to the relay again.'
+          : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '. What OpenSSH said last is in the connection.process line above.'
           : 'Your proxy has to send this address on to the ingress port of this computer (ingressPort in devmate status) and ' + passOn + '.');
-    } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
+    } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again: what cloudflared said last is in the connection.process line above.');
     else tunnelProof('connection.public', status, connection.tunnelId);
     if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');

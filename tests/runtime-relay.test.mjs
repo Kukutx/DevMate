@@ -276,7 +276,21 @@ test('the SSH route carries the relay\'s path, tells the relay this computer\'s 
   assert.deepEqual(spawned.map(args => args.at(-1)), ['/usr/local/lib/devmate/allow-owner', '203.0.113.7']);
   assert.equal(said.length, 1); assert.match(said[0], /^the relay at 203\.0\.113\.7 has not answered for 0 seconds; the start goes on without it\./); assert.ok(!said[0].includes(key));
   assert.deepEqual(killed, [], 'the login is left to its own limit');
+  // It stays the connection's own: a stop ends it, so that a restart leaves no login behind.
   await unanswered.stop();
+  assert.deepEqual(killed, ['/usr/local/lib/devmate/allow-owner']);
+  // And how a late one ended is written down where its being late was.
+  for (const [ending, words] of [[child => { child.exitCode = 0; child.emit('exit', 0, null); }, /^the relay at 203\.0\.113\.7 has been told this computer's address after all\.$/],
+    [child => { child.exitCode = 255; child.emit('exit', 255, null); }, /^the relay at 203\.0\.113\.7 was not told this computer's address \(the login ended with code 255\)\.$/]]) {
+    spawned.length = 0; said.length = 0;
+    const logins = [];
+    const later = (file, args) => { const child = silent(file, args); if (args.at(-1) === '/usr/local/lib/devmate/allow-owner') logins.push(child); return child; };
+    const slow = createSshConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/' + key, instanceRoot: temp, env: { PATH: 'x' }, spawnImpl: later, terminateImpl, tellWaitMs: 40, note: line => said.push(line) });
+    await slow.start();
+    ending(logins[0]);
+    assert.equal(said.length, 2); assert.match(said[1], words);
+    await slow.stop();
+  }
 
   // The runtime behind the relay: the configured path opens it, /mcp alone does not exist.
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);

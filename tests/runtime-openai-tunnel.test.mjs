@@ -553,7 +553,7 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   for (const [args, says] of [
     [['--openai-tunnel', 'tunnel_abc123', '--url', publicAddress, '--host', 'example.com'], /leaves the connection as it is and takes only --openai-tunnel and --organization \(given: --url, --host\)/],
     [['--openai-tunnel', 'tunnel_abc123', '--tunnel-id', 'tunnel_def456'], /\(given: --tunnel-id\)/],
-    [['--openai-tunnel', 'tunnel_abc123', '--ssh-port', '2222', '--identity', 'key', '--domain', 'relay.example.com'], /\(given: --ssh-port, --identity, --domain\)/],
+    [['--openai-tunnel', 'tunnel_abc123', '--ssh-port', '2222', '--identity', 'key', '--domain', 'relay.example.com', '--any-address'], /\(given: --ssh-port, --identity, --domain, --any-address\)/],
     [['--openai-tunnel', 'none', '--organization', 'org-abc'], /--organization says nothing of a tunnel that is no longer there/]
   ]) { const answer = await run(['connect', 'beside', ...args], kept); assert.notEqual(answer.code, 0, args.join(' ')); assert.match(answer.stderr, says); }
   assert.deepEqual(saved(kept).openaiTunnel, { ...mine, organizationId: 'org-other' }, 'a refused command wrote nothing');
@@ -577,9 +577,30 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   // they would log in on port 22 with no key, and set a relay up under the server's bare address.
   const how = ' --ssh-port 2222 --identity "' + keyFile + '"';
   assert.equal(JSON.parse(plain.stdout).next.find(line => line.startsWith('The relay on')), 'The relay on 203.0.113.7 was the connection until now, and this command put another in its place: a plain SSH connection, without the relay\'s own ports and key file and without telling the relay the address of this computer. ' +
-    'The relay stays installed on that server. To make that server the relay again: devmate relay setup deploy@203.0.113.7 --domain ' + publicHost + how + ' (its address is then a new one, which the client has to be given: devmate mcp-url); ' +
-    'to take it off the server: devmate relay remove deploy@203.0.113.7' + how + '. To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>');
+    'The relay stays installed on that server. The commands that make it the relay again, and that take it off the server, are printed below this answer as they are typed. ' +
+    'To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>');
+  // They are printed as they are typed, not inside the answer: there every quote and every backslash of a Windows
+  // path would be doubled, and what is copied from it is no command. And that a relay may have been set up to answer
+  // any address is said, since nothing here remembers it.
+  assert.equal(plain.stderr, ['To make that server the relay again (its address is then a new one, which the client has to be given: devmate mcp-url):', '  devmate relay setup deploy@203.0.113.7 --domain ' + publicHost + how,
+    'If it was set up with --any-address, add that: without it the relay answers only ChatGPT, Claude and this computer.', 'To take the relay off that server:', '  devmate relay remove deploy@203.0.113.7' + how, ''].join('\n'));
+  assert.ok(!plain.stdout.includes('relay setup deploy@'), 'the command is not in the answer as well, in another spelling');
   assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress], replaced)).stdout, /The relay on/, 'said once, where the relay was replaced');
+  // A relay that answers under the server's own name was set up with that name given (setup asks for it): so is the command.
+  fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify({ connection: { ...relayConfig.connection, host: publicHost, sshPort: 22, identityFile: undefined } }));
+  assert.match((await run(['connect', 'https', '--url', publicAddress], replaced)).stderr, new RegExp('\\n {2}devmate relay setup deploy@' + publicHost.replaceAll('.', '\\.') + ' --domain ' + publicHost.replaceAll('.', '\\.') + '\\n'));
+  // What an SSH connection is told about its login is kept: its port and its key file. And an option that names
+  // something another kind of connection has is refused, not passed over.
+  const sshAt = path.join(temp, 'ssh'), sshArgs = ['connect', 'ssh', '--url', publicAddress, '--host', '203.0.113.7', '--user', 'deploy', '--executable', process.execPath];
+  assert.equal((await run([...sshArgs, '--ssh-port', '2222', '--identity', keyFile], sshAt)).code, 0);
+  assert.deepEqual([saved(sshAt).connection.sshPort, saved(sshAt).connection.identityFile], [2222, keyFile]);
+  for (const [args, says] of [
+    [[...sshArgs, '--domain', 'relay.example.com'], /^connect ssh does not take --domain: of the options that name a connection it takes --url, --executable, --host, --user, --ssh-port, --identity\. --domain and --any-address belong to a relay: devmate relay setup <user@host>\.$/],
+    [['connect', 'https', '--url', publicAddress, '--ssh-port', '2222', '--identity', keyFile], /^connect https does not take --ssh-port, --identity: of the options that name a connection it takes --url\.$/],
+    [['connect', 'local', '--url', publicAddress], /^connect local does not take --url: it takes no option that names a connection\.$/],
+    [['connect', 'quick', '--executable', process.execPath, '--any-address'], /^connect quick does not take --any-address: .*devmate relay setup <user@host>\.$/]
+  ]) { const answer = await run(args, path.join(temp, 'strict')); assert.notEqual(answer.code, 0, args.join(' ')); assert.match(JSON.parse(answer.stderr).error.message, says); }
+  assert.ok(!fs.existsSync(path.join(temp, 'strict', 'config.json')), 'a refused command saved nothing');
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
   const other2 = await run(['connect', 'quick', '--executable', process.execPath], replaced);
   assert.match(other2.stdout, /"The relay on 203\.0\.113\.7 was the connection until now, and this command put another in its place\. The relay stays installed/);

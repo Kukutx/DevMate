@@ -387,7 +387,10 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     announcedRoute = mark;
     await shared?.update(ROUTE_KEY, mark);
     if (!checked.verified) {
-      const picked = await vscode.window.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') + ', asked from this computer itself. A client in the cloud such as ChatGPT may still get through: try it there, or run the doctor.', 'Run Doctor');
+      const picked = await vscode.window.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') +
+        // Where the check got no answer at all, that is what is known, and a client in the cloud comes another way.
+        // Where it was answered (by another runtime, or with a refusal) the address is not this computer's for anyone.
+        (checked.reachable ? '. Run the doctor for what to do.' : ', asked from this computer itself. A client in the cloud such as ChatGPT may still get through: try it there, or run the doctor.'), 'Run Doctor');
       if (picked === 'Run Doctor') await doctor();
     } else if (!before.startsWith(id + ':')) {
       // The same address working again is shown in the status bar and needs nothing from the person.

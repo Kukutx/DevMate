@@ -208,9 +208,17 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   assert.match(await waits.textContent(),/Running it uses your account with codex\./);
   for(const name of ['Run this task',ALLOW_AGENT,'Do not run it'])assert.equal(await waits.getByRole('button',{name,exact:true}).count(),1,name);
   assert.equal(await waits.getByRole('button',{name:'Cancel turn',exact:true}).count(),0);
+  // A yes for a task that cannot begin right now is refused with what is in the way. The owner reads that here, where
+  // they answered, and the question stays as it was, to be answered again.
+  const inTheWay='8 codex sessions are already connected. Stop one with agents.stop. This task keeps waiting for your answer: allow it once that is out of the way.';
+  f.failNext('approval.resolve',inTheWay,'agent_limit');
+  await waits.getByRole('button',{name:'Run this task',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:inTheWay}).waitFor();
+  assert.equal(await waits.getByRole('button',{name:'Run this task',exact:true}).count(),1,'the question is still there');
+  assert.equal(f.approvals.find(item=>item.id==='approval-delegation').status,'pending');
   await page.getByRole('button',{name:'Do not run it',exact:true}).click();
-  await until(()=>f.count('approval.resolve')===2,'the owner\'s answer');
-  const answered=f.calls.filter(x=>x.operation==='approval.resolve')[1].input;
+  await until(()=>f.count('approval.resolve')===3,'the owner\'s answer');
+  const answered=f.calls.filter(x=>x.operation==='approval.resolve')[2].input;
   assert.deepEqual([answered.id,answered.optionId],['approval-delegation','deny']);
   await page.getByLabel('Choose a route').selectOption('Short');
   await page.getByRole('button',{name:'Respond',exact:true}).click();

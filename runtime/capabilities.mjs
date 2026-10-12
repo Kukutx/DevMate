@@ -111,6 +111,8 @@ export async function createCapabilities({
     assertOpen(); callContext.getStore()?.signal?.throwIfAborted();
     if(closingProjects.has(id))throw fail('project_closing','Project capability resources are closing.');
     const project=service.project(id,{write});
+    // An engine starts its programs in the project's folder. One that is not there is said as that, here, for all of them.
+    resolveProjectPath(project);
     if(!projectControllers.has(id))projectControllers.set(id,new AbortController());
     return project;
   };

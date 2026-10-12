@@ -278,7 +278,7 @@ test('a restart keeps the port the runtime ran on unless another one is named', 
 
 test('JSON after --json that a Windows shell took the quotes out of is answered with the way that works there', async () => {
   const mangled='{capability:chrome.browser.info,input:{}}';
-  await assert.rejects(readCliInput({json:mangled},undefined,'win32'),{message:'Input must contain valid JSON. Windows PowerShell takes the double quotes out of what follows --json: write the input into a file and pass --file <input.json>. (--stdin works for plain ASCII; PowerShell 5.1 turns other letters it pipes into question marks.)'});
+  await assert.rejects(readCliInput({json:mangled},undefined,'win32'),{message:'Input must contain valid JSON. If the JSON itself is right and this was typed in Windows PowerShell 5.1 or cmd: they take the double quotes out of what follows --json. Write the input into a file and pass --file <input.json>. (--stdin works for plain ASCII; PowerShell 5.1 turns other letters it pipes into question marks.)'});
   await assert.rejects(readCliInput({json:mangled},undefined,'linux'),{message:'Input must contain valid JSON'});
   await assert.rejects(readCliInput({stdin:true},Readable.from([mangled]),'win32'),{message:'Input must contain valid JSON'});
 });

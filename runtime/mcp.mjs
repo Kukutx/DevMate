@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { z } from 'zod';
 import { McpServer, ResourceNotFoundError, ResourceTemplate } from '@modelcontextprotocol/server';
 import { registerWorkbench } from './workbench.mjs';
@@ -94,7 +93,8 @@ export function serverInstructions(service, surface = 'generic') {
   const budget = INSTRUCTION_LIMIT - lead.length - rest.length - 2;
   for (const [index, project] of projects.entries()) {
     // A folder that was moved or deleted since it was shared is named as that, not offered as something to work in.
-    const entry = ' ' + project.id + ' = ' + project.name + ' (' + project.root + ', ' + (fs.existsSync(project.root) ? project.access : 'folder not there') + ');';
+    // (As it was last seen: this is written for every request, and the file system is not asked each time.)
+    const entry = ' ' + project.id + ' = ' + project.name + ' (' + project.root + ', ' + (service.folderMissing(project) ? 'folder not there' : project.access) + ');';
     if (known.length + entry.length > budget - 40) { known += ' and ' + (projects.length - index) + ' more (project_list).'; break; }
     known += entry;
   }

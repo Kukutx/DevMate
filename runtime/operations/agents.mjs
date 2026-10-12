@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { AGENT_PROVIDERS } from '../agents/index.mjs';
 import { DomainError } from '../store.mjs';
+import { resolveProjectPath } from '../workspace.mjs';
 import { actor, id, listOptions, mutation, ownerCommand, projectPath, projectScope, text, waitMs, workflowScope } from './shared.mjs';
 
 // Coding agents installed on this computer: one-call delegation for a connected
@@ -61,6 +62,8 @@ export function defineAgentOperations(service, add) {
     'Without agentId a new session starts; with agentId the task continues that session. Returns the result when it finishes within waitMs (default 30s, at most 50s), otherwise follow with agents_result.',
     async (args, context) => {
       const project = service.project(args.projectId, { write: true });
+      // Before a workflow, an agent or a question to the owner is made for it: a folder that is not there.
+      resolveProjectPath(project);
       const { waitMs: wait = 30000, operationId, isolate, ...task } = args;
       if (args.agentId && service.store.get('agent', args.agentId).isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + service.store.get('agent', args.agentId).isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
       if (isolate && args.agentId) throw new DomainError('invalid_input', 'isolate is chosen when an agent is started. An agent that continues keeps working where it started.');
@@ -122,6 +125,7 @@ export function defineAgentOperations(service, add) {
     name: z.string().max(200).optional(), title: z.string().max(200).optional(), prompt: text.optional(), sessionId: z.string().max(200).optional(), ...mutation }, false,
     'Start or explicitly resume a native provider session for this workflow. Where the owner is asked about a connected client\'s tasks (delegation.read), a client\'s agent is only written down: its process starts with the first task the owner allows.',
     (args, context) => {
+      resolveProjectPath(service.project(args.projectId, { write: true }));
       const agent = service.agents.start(args, actor(context));
       // Said with the answer too, where nothing was started: its status alone is a word. A prompt that came with the
       // start is a task the owner is already asked about, named so that it is followed and not handed over again.

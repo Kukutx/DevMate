@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { CLIENT_COMMAND_ENV, createRuntimeClient, instanceDirectory } from './client.mjs';
 import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './launcher.mjs';
@@ -60,6 +61,7 @@ Connecting an AI client
                                     for a key OpenAI wants it named with (the doctor says when)
   devmate connect https --url https://<host>/mcp [--auth oauth]
   devmate connect ssh --url https://<host>/mcp --host <server> --user <name> --executable <ssh>
+                                    [--ssh-port <n>] [--identity <key file>]
   devmate connect quick | cloudflare | https | ssh … --openai-tunnel <tunnel_…> [--organization <org-…>]
                                     OpenAI's tunnel beside that connection, both at once: ChatGPT of the account
                                     the tunnel belongs to comes through the tunnel, every other client through
@@ -141,10 +143,12 @@ export async function readCliInput(options, inputStream = process.stdin, platfor
   // PowerShell writes a byte order mark into piped and redirected text.
   try { value = JSON.parse(raw.replace(/^\ufeff/, '')); }
   catch {
-    // Windows PowerShell 5.1 hands a program its argument without the double quotes that were inside it, so JSON
-    // written after --json arrives as {name:value}. What it pipes to a program it writes as ASCII.
+    // Windows PowerShell 5.1 and cmd hand a program its argument without the double quotes that were inside it, so
+    // JSON written after --json arrives as {name:value}. What PowerShell 5.1 pipes to a program it writes as ASCII.
+    // Which shell it was typed in is not known here (PowerShell 7 and Git Bash keep the quotes), and the JSON may
+    // simply be wrong: said as what may be the matter, with the way that works in any of them.
     throw new Error('Input must contain valid JSON' + (platform === 'win32' && options.json !== undefined && !options.file && !options.stdin
-      ? '. Windows PowerShell takes the double quotes out of what follows --json: write the input into a file and pass --file <input.json>. (--stdin works for plain ASCII; PowerShell 5.1 turns other letters it pipes into question marks.)' : ''));
+      ? '. If the JSON itself is right and this was typed in Windows PowerShell 5.1 or cmd: they take the double quotes out of what follows --json. Write the input into a file and pass --file <input.json>. (--stdin works for plain ASCII; PowerShell 5.1 turns other letters it pipes into question marks.)' : ''));
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Input must be a JSON object');
   return value;
@@ -243,9 +247,19 @@ async function configureConnection(kind, options, instanceRoot) {
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
     : kind === 'openai-tunnel' ? { kind, tunnelId: need('tunnel-id'), ...(options.executable ? { executable: executable() } : {}), ...(options.organization ? { organizationId: options.organization } : {}) }
     : kind === 'https' ? { kind: 'external-https', url: need('url') }
-    : kind === 'ssh' ? { kind, publicUrl: need('url'), executable: executable(), host: need('host'), user: need('user') }
+    // The port and the key file of the login are part of an SSH connection: left out of what is saved, the connection
+    // logged in on port 22 without the key, whatever the command had said.
+    : kind === 'ssh' ? { kind, publicUrl: need('url'), executable: executable(), host: need('host'), user: need('user'),
+      ...(options['ssh-port'] ? { sshPort: Number(options['ssh-port']) } : {}), ...(options.identity ? { identityFile: path.resolve(options.identity) } : {}) }
     : null;
   if (!connection) throw new Error('Choose one of: connect local, quick, cloudflare, openai-tunnel, https, ssh, beside');
+  // What names a connection and says nothing for this kind is not passed over in silence: a command that was accepted
+  // would be taken to have done what it said.
+  const NAMING = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address'];
+  const takes = { local: [], quick: ['executable'], cloudflare: ['url', 'executable'], 'openai-tunnel': ['tunnel-id', 'executable'], https: ['url'], ssh: ['url', 'executable', 'host', 'user', 'ssh-port', 'identity'], beside: [] }[kind];
+  const stray = NAMING.filter(name => options[name] !== undefined && !takes.includes(name));
+  if (stray.length && !staying) throw new Error('connect ' + kind + ' does not take ' + stray.map(name => '--' + name).join(', ') + (takes.length ? ': of the options that name a connection it takes ' + takes.map(name => '--' + name).join(', ') : ': it takes no option that names a connection') +
+    (stray.some(name => ['domain', 'any-address'].includes(name)) ? '. --domain and --any-address belong to a relay: devmate relay setup <user@host>' : '') + '.');
   if (options.auth && !['none', 'oauth'].includes(options.auth)) throw new Error('--auth is none or oauth');
   // OpenAI's tunnel beside a connection that has an address. With no such connection the tunnel is the connection.
   const beside = options['openai-tunnel'] === 'none' ? null : options['openai-tunnel'];
@@ -253,7 +267,6 @@ async function configureConnection(kind, options, instanceRoot) {
     if (!options['openai-tunnel']) throw new Error('connect beside needs --openai-tunnel <tunnel_…>, or --openai-tunnel none to take the tunnel away');
     if (options.auth) throw new Error('connect beside changes the tunnel alone. Sign-in belongs to the address and is chosen with it: devmate connect … --auth ' + options.auth);
     // What names a connection says nothing here, and is not passed over in silence.
-    const stray = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain'].filter(name => options[name] !== undefined);
     if (stray.length) throw new Error('connect beside leaves the connection as it is and takes only --openai-tunnel and --organization (given: ' + stray.map(name => '--' + name).join(', ') +
       '). To set the connection up anew: devmate connect quick | cloudflare | https | ssh …');
     if (!beside && options.organization) throw new Error('--openai-tunnel none takes the tunnel away: --organization says nothing of a tunnel that is no longer there');
@@ -296,8 +309,13 @@ async function configureConnection(kind, options, instanceRoot) {
   // under the server's bare address).
   const relayed = current.connection.relay && !staying ? current.connection : null, relay = relayed ? relayed.user + '@' + relayed.host : null;
   const reach = relayed ? (relayed.sshPort && relayed.sshPort !== 22 ? ' --ssh-port ' + relayed.sshPort : '') + (relayed.identityFile ? ' --identity "' + relayed.identityFile + '"' : '') : '';
-  const named = relayed && new URL(relayed.publicUrl).hostname !== relayed.host ? ' --domain ' + new URL(relayed.publicUrl).hostname : '';
-  return { saved: { connection: staying ? { kind: saved.connection.kind, ...(saved.connection.relay ? { relay: true } : {}) } : saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
+  // A relay that answers under a name was set up with that name, also where it is the server's own: setup asks for it.
+  const named = relayed && !isIP(new URL(relayed.publicUrl).hostname) ? ' --domain ' + new URL(relayed.publicUrl).hostname : '';
+  // commands: lines for the owner to type, written as they are. Inside the answer they would be printed as JSON, with
+  // every quote and every backslash of a Windows path doubled up, which is not a command any more.
+  return { ...(relay ? { commands: ['To make that server the relay again (its address is then a new one, which the client has to be given: devmate mcp-url):', '  devmate relay setup ' + relay + named + reach,
+    'If it was set up with --any-address, add that: without it the relay answers only ChatGPT, Claude and this computer.', 'To take the relay off that server:', '  devmate relay remove ' + relay + reach] } : {}),
+    saved: { connection: staying ? { kind: saved.connection.kind, ...(saved.connection.relay ? { relay: true } : {}) } : saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
     next: [store(credential, 'the credential', 'the credential of another tunnel'), store(tunnelKey, 'the runtime key of the tunnel', 'the runtime key of another tunnel'), 'Apply it: devmate restart', 'Then check: devmate doctor',
       saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it changes each time DevMate or the tunnel starts again)' : null,
       // Sign-in is asked where a sign-in page can be reached: at the address. Nothing asks for it on the tunnel's way.
@@ -306,8 +324,7 @@ async function configureConnection(kind, options, instanceRoot) {
         : lost && besideBefore ? lost + 'On its own it is: devmate connect openai-tunnel --tunnel-id ' + before.tunnelId : null,
       relay ? 'The relay on ' + current.connection.host + ' was the connection until now, and this command put another in its place' +
         (saved.connection.kind === 'ssh' ? ': a plain SSH connection, without the relay\'s own ports and key file and without telling the relay the address of this computer' : '') +
-        '. The relay stays installed on that server. To make that server the relay again: devmate relay setup ' + relay + named + reach +
-        ' (its address is then a new one, which the client has to be given: devmate mcp-url); to take it off the server: devmate relay remove ' + relay + reach +
+        '. The relay stays installed on that server. The commands that make it the relay again, and that take it off the server, are printed below this answer as they are typed' +
         '. To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>' : null].filter(Boolean) };
 }
 
@@ -402,7 +419,12 @@ export async function main(argv = process.argv.slice(2), {
             connected?.connected ? 'Connected. A model reaches the browser through capability_list {engine:"chrome"}.' : null].filter(Boolean) });
       return 0;
     }
-    if (command === 'connect') { print(await configureConnection(positional[0], options, instanceRoot)); return 0; }
+    if (command === 'connect') {
+      const { commands, ...answer } = await configureConnection(positional[0], options, instanceRoot);
+      print(answer);
+      if (commands) stderr.write(commands.join('\n') + '\n');
+      return 0;
+    }
     if (command === 'relay') {
       const [action, target] = positional;
       if (!['setup', 'remove'].includes(action) || !target) throw new Error('Use relay setup <user@host> [--domain <name>], or relay remove <user@host>');

@@ -32,7 +32,7 @@ import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.m
 // is sent to whatever answers at that address, so it may ask which runtime that is, and nothing else.
 const PROBE_ID = 'verification', PROBE_OPERATION = 'connection.status';
 const storedKinds = ['agent', 'workflow', 'task', 'job', 'approval', 'input', 'reference', 'artifact'];
-const MAINTENANCE_INTERVAL_MS = 6 * 3600000, FIRST_MAINTENANCE_MS = 15000;
+const MAINTENANCE_INTERVAL_MS = 6 * 3600000, FIRST_MAINTENANCE_MS = 15000, FOLDER_LOOK_MS = 30000;
 const LOCAL_OWNER = Object.freeze({ id: 'owner', surface: 'local' });
 const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root;
 // What a project command inherits: the owner's environment without DevMate's own
@@ -95,6 +95,8 @@ export class DevMateService {
     this.activeCalls = new Set();
     this.usage = createUsage();
     this.projectTransitions = new Set();
+    // Whether the folder of each project was there when it was last looked at (folderMissing).
+    this.folders = new Map();
     this.closing = false;
     this.workspace = createWorkspaceService({ store: this.store });
     this.processes = createProcessManager({ instanceRoot: this.instanceRoot, store: this.store, env: commandEnvironment(this.config) });
@@ -264,7 +266,7 @@ export class DevMateService {
     const focused = operation?.readOnly ? this.windows.focusedProject(available.map(project => project.id)) : null;
     if (focused) { chosen.followed = available.find(project => project.id === focused); return focused; }
     throw new DomainError('project_required', available.length
-      ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name + (fs.existsSync(project.root) ? '' : ' (its folder is not there)')).join('; ')
+      ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name + (this.folderMissing(project) ? ' (its folder is not there)' : '')).join('; ')
       : 'No folder is shared yet. ' + this.howToShare(context));
   }
   // What to do about a folder that is not shared, said to the caller who can do it.
@@ -342,7 +344,30 @@ export class DevMateService {
   async call(name, input = {}, context) {
     const done = this.usage.begin(this.operations.has(name) ? name : '(unknown)', context);
     try { const result = await this.perform(name, input, context); done(); return result; }
-    catch (error) { done(error); throw error; }
+    catch (error) {
+      // A call that found a project's folder gone has looked: what is said of that project is up to date at once.
+      if (error?.code === 'project_missing' && error.details?.projectId) {
+        try { this.folders.set(error.details.projectId, { root: this.store.get('project', error.details.projectId).root, at: Date.now(), missing: true }); } catch { /* the project is no longer on the list */ }
+      }
+      done(error); throw error;
+    }
+  }
+
+  // Whether the folder of a project is known not to be there: moved, renamed or deleted, or on a drive that is not
+  // connected. It is said where projects are named for a model, which is on every request, so the file system is not
+  // asked there: what was seen last is answered at once, and it is looked at again in the background once in a while.
+  // A folder on a share that does not answer would otherwise hold up every call, for any project, for as long as the
+  // system waits for it. Only "nothing is at this path" counts as not there: no permission, or no answer, is not that.
+  folderMissing(project) {
+    const seen = this.folders.get(project.id), same = seen?.root === project.root;
+    if (!same || (!seen.looking && Date.now() - seen.at >= FOLDER_LOOK_MS)) {
+      const entry = { root: project.root, at: Date.now(), missing: same ? seen.missing : false, looking: true };
+      this.folders.set(project.id, entry);
+      fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))
+        .then(missing => Object.assign(entry, { missing, at: Date.now(), looking: false }));
+      return entry.missing;
+    }
+    return seen.missing;
   }
 
   async perform(name, input = {}, context) {

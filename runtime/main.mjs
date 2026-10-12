@@ -235,7 +235,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       // address itself is not said: without sign-in it is all that keeps a stranger out, and a page of any site can
       // be made to ask this port.
       const named = String(req.headers.host || '').replace(/[^\x21-\x7e]/g, '').slice(0, 120);
-      return refuse(res, 'invalid_host', 'This request names the host ' + (named || '(none)') + ', which is not the public address of this DevMate (devmate mcp-url shows it). A proxy in front of DevMate has to pass the public host name on: nginx "proxy_set_header Host $host;", Apache "ProxyPreserveHost On".');
+      // Where this DevMate has no public address (OpenAI's tunnel is the only connection, or a quick tunnel has not
+      // been given its address yet) there is no proxy to speak of and no address that devmate mcp-url would show.
+      return refuse(res, 'invalid_host', 'This request names the host ' + (named || '(none)') + (publicOrigin
+        ? ', which is not the public address of this DevMate (devmate mcp-url shows it). A proxy in front of DevMate has to pass the public host name on: nginx "proxy_set_header Host $host;", Apache "ProxyPreserveHost On".'
+        : '. This DevMate has no public address at the moment, so nothing is answered on this port under that name' + (config.connection.kind === 'cloudflare-quick' ? ' (the quick tunnel has not been given its address yet: try again in a few seconds).' : '.')));
     }
     const requestOrigin = tunnelLocal ? 'http://' + req.headers.host : publicOrigin;
     const url = new URL(req.url, requestOrigin);

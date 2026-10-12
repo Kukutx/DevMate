@@ -41,7 +41,8 @@ export function createSshConnection({ config, localMcpUrl, instanceRoot, env = p
   owned = spawnImpl === spawn && instanceRoot ? ownedProcess(path.join(instanceRoot, 'connector.json')) : null } = {}) {
   const settings = normalizeSshConfig(config);
   const args = sshArguments(settings, localMcpUrl);
-  let child = null, phase = 'stopped', diagnostic = '', lastError = null, queue = Promise.resolve();
+  // telling: the login that tells a relay this computer's address, while it runs.
+  let child = null, telling = null, phase = 'stopped', diagnostic = '', lastError = null, queue = Promise.resolve();
   const serial = action => { const work = queue.then(action); queue = work.catch(() => {}); return work; };
   const recovery = createConnectionRecovery({ restart: () => start(),
     onError: error => { phase = 'failed'; lastError = {code:'ssh_restart_failed',message:error.message}; } });
@@ -61,15 +62,22 @@ export function createSshConnection({ config, localMcpUrl, instanceRoot, env = p
       // Best effort and bounded: a relay that cannot be told still forwards, and the check then says what is the matter.
       // The start waits a few seconds for it, so that the check that follows finds this computer on the relay's list,
       // and no longer: a server that does not answer held the start of the whole runtime up for as long as a start is
-      // given at all, local use included. The login goes on by itself until its own limit.
+      // given at all, local use included. The login goes on by itself until its own limit, and stays this
+      // connection's own: a stop ends it (see stop), and how it ended is written down where its being late was.
       if (settings.relay) await new Promise(resolve => {
-        let told;
+        let told, late = false;
         try { told = spawnImpl(settings.executable, ownerAddressArguments(settings), { cwd: instanceRoot, env: environment, shell: false, windowsHide: true, stdio: 'ignore' }); }
         catch { return resolve(); }
+        telling = told;
         const limit = setTimeout(() => { try { told.kill?.(); } catch {} }, 20000);
-        const waited = setTimeout(() => { note('the relay at ' + settings.host + ' has not answered for ' + Math.round(tellWaitMs / 1000) + ' seconds; the start goes on without it. Where this computer\'s address has changed since the relay was last told, the check of the route from here fails until it is.'); told.unref?.(); resolve(); }, tellWaitMs);
+        const waited = setTimeout(() => { late = true; note('the relay at ' + settings.host + ' has not answered for ' + Math.round(tellWaitMs / 1000) + ' seconds; the start goes on without it. Where this computer\'s address has changed since the relay was last told, the check of the route from here fails until it is.'); told.unref?.(); resolve(); }, tellWaitMs);
         limit.unref?.();
-        const done = () => { clearTimeout(limit); clearTimeout(waited); resolve(); };
+        const done = (code, signal) => {
+          clearTimeout(limit); clearTimeout(waited);
+          if (telling === told) telling = null;
+          if (late) note('the relay at ' + settings.host + (code === 0 ? ' has been told this computer\'s address after all.' : ' was not told this computer\'s address (' + (code instanceof Error ? code.message : signal ? 'the login was ended' : 'the login ended with code ' + code) + ').'));
+          resolve();
+        };
         told.once('error', done); told.once('exit', done);
       });
       const proc = spawnImpl(settings.executable, args, { cwd: instanceRoot, env: environment,
@@ -101,6 +109,8 @@ export function createSshConnection({ config, localMcpUrl, instanceRoot, env = p
   }
   function stop() {
     recovery.disable();
+    // A login to the relay that is still on its way is not left behind by a stop or a restart.
+    if (telling) { try { telling.kill?.(); } catch {} }
     return serial(async () => {
       if (!child) { phase = 'stopped'; return status(); }
       phase = 'stopping';

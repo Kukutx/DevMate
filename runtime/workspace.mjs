@@ -97,10 +97,18 @@ function projectRoot(project) {
   let stat;
   try { stat = fs.lstatSync(project.root); }
   catch (failure) {
-    // A folder that was shared and has been moved, renamed or deleted since, or whose drive is not there now.
+    // A folder that was shared and has been moved, renamed or deleted since, or whose drive is not there now. The two
+    // call for opposite things: a drive is connected again and nothing is lost, while taking the project off the
+    // list also takes what is kept for it. So what to do is said for each, and removing is not offered for the first.
     if (project[OWN_COPY] || !['ENOENT', 'ENOTDIR'].includes(failure.code)) throw failure;
-    throw error('project_missing', 'The folder of this project is not there: ' + project.root + ' (moved, renamed or deleted, or on a drive that is not connected). Its owner takes it off the list with devmate project remove ' + project.id +
-      ' and shares the folder where it is now with devmate project add <folder>.');
+    const drive = path.parse(project.root).root;
+    // (Asked of a drive letter only: a share that does not answer has just been waited for once already.)
+    const away = WINDOWS && /^[A-Za-z]:[\\/]$/.test(drive) && !fs.existsSync(drive);
+    throw error('project_missing', away
+      ? 'The folder of this project is on a drive that is not connected: ' + project.root + '. Connect the drive and call again; nothing has to be removed for that.'
+      : 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
+        'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes the workflows, tasks and agent records kept for it) ' +
+        'and shares the folder where it is now (devmate project add <folder>).', { projectId: project.id, ...(away ? { driveMissing: true } : {}) });
   }
   // A registered directory that has since been swapped for a link would silently redirect every file tool.
   if (stat.isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
