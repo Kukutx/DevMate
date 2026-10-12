@@ -60,7 +60,23 @@ export function defineCommandOperations(service, add) {
     // A list is for finding a job; each may hold a quarter megabyte of output.
     return { ...page, items: page.items.map(item => { const { output, ...job } = item; return { ...job, outputChars: output?.length || 0, ...(output ? { outputTail: output.slice(-400) } : {}) }; }) };
   });
-  add('job.read', { id }, true, 'Read one job including output and outcome evidence.', args => service.store.get('job', args.id));
+  // A job is followed to its end by waiting for it, not by asking again and again. Whoever waits is woken by what
+  // happens to that job (one listener for all of them), and looks for itself whether it has ended.
+  const ended = job => !['queued', 'running', 'cancelling'].includes(job.status), waiting = new Map();
+  service.store.on('event', event => { for (const wake of [...(waiting.get(event.entityId) || [])]) wake(); });
+  add('job.read', { id, waitMs }, true, 'Read one job including output and outcome evidence. waitMs waits until the job has ended. Output is recorded when a job ends; while a command job runs, process_read {id: its processId} reads what it has printed so far.',
+    async (args, context) => {
+      const signal = service.waitSignal(context);
+      if (!ended(service.store.get('job', args.id)) && args.waitMs > 0 && !signal.aborted) await new Promise(resolve => {
+        const waiters = waiting.get(args.id) || waiting.set(args.id, new Set()).get(args.id);
+        const done = () => { clearTimeout(timer); waiters.delete(wake); if (!waiters.size && waiting.get(args.id) === waiters) waiting.delete(args.id); signal.removeEventListener('abort', done); resolve(); };
+        const wake = () => { if (ended(service.store.get('job', args.id))) done(); };
+        const timer = setTimeout(done, args.waitMs);
+        waiters.add(wake);
+        signal.addEventListener('abort', done, { once: true });
+      });
+      return service.store.get('job', args.id);
+    });
   add('job.cancel', { id, ...mutation }, false, 'Cancel an owned job and inspect its confirmed outcome.', args => {
     const job = service.store.get('job', args.id);
     if (job.kind !== 'agent-turn') return service.jobs.cancel(args.id);

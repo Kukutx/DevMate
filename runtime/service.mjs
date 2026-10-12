@@ -131,7 +131,9 @@ export class DevMateService {
         externalServers: this.config.externalServers, engineSettings: this.config.engineSettings, hostRegistry: this.hosts,
         onInputRequest: request => this.inputs.request(request), inputCapabilities: { elicitation: { form: {} } } });
       this.jobs = createJobRunner({ store: this.store, execute: async (job, { signal }) => {
-        if (job.kind === 'command') return this.processes.complete(this.project(job.projectId, { write: true }), job.input.args, { signal });
+        // The job says which process it is while it runs, so that what the command prints can be read before it ends.
+        if (job.kind === 'command') return this.processes.complete(this.project(job.projectId, { write: true }), job.input.args, { signal,
+          onStart: processId => this.store.update('job', job.id, { processId }) });
         try { return await this.capabilities.call(job.input.args, { signal }); }
         catch (error) {
           // The capability registry owns its client/process lifetime separately from this request.

@@ -321,12 +321,14 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     return view(entry);
   }
-  /** Run to completion for a durable Job and report the owned-child evidence it records. */
-  async function complete(project, input = {}, { signal } = {}) {
+  /** Run to completion for a durable Job and report the owned-child evidence it records. onStart is told the id of the process. */
+  async function complete(project, input = {}, { signal, onStart } = {}) {
     if (signal?.aborted) { const error = signal.reason instanceof Error ? signal.reason : fail('job_cancelled', 'Command cancelled.'); error.notStarted = true; throw error; }
     let entry;
     try { entry = start(project, { ...input, timeoutMs: input.timeoutMs ?? 1800000 }); }
     catch (error) { error.notStarted = true; throw error; }
+    // The command runs whether or not that could be written down.
+    try { onStart?.(entry.id); } catch { /* the job is followed without its process id */ }
     let confirmed = true;
     // A stop that could not be confirmed ends the wait at once; it is reported as such instead of a minute later.
     const unconfirmed = new AbortController();
