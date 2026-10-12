@@ -1044,6 +1044,11 @@ export function createWorkspaceService({ store } = {}) {
   async function removeCopy(project, copy) {
     const root = projectRoot(project);
     if (fs.existsSync(copy.root)) {
+      // Where the owner has switched on Git's own file watcher (core.fsmonitor), the agent's Git starts one in the
+      // copy, and it stays when the agent has gone, with the folder open (seen with the real Codex on Windows, where
+      // such a folder cannot be removed). It is told to end first. A Git that has none, and a copy nobody watches,
+      // answer with an error that says nothing here.
+      await gitChange(copy.root, ['fsmonitor--daemon', 'stop'], { timeoutMs: 15000 }).catch(() => {});
       const removed = await gitChange(root, ['worktree', 'remove', '--force', copy.root]);
       // Whatever Git would not remove (a file held open by a program that is still running) must not be reported as gone.
       if (removed.exitCode !== 0 && fs.existsSync(copy.root)) {
@@ -1103,9 +1108,13 @@ export function createWorkspaceService({ store } = {}) {
       }
     };
     if (store?.transaction) store.transaction(record); else record();
-    await removeCopy(project, copy);
-    return { applied: true, files, ...(warning ? { warning } : {}),
-      ...(unrecorded.length ? { notInHistory: unrecorded, note: 'Applied, but not in the history (links and other entries that are no plain files): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') } : {}) };
+    // The work is in the project from here on. A copy that cannot be removed yet does not make that untrue: it is said,
+    // with what is left and how it goes.
+    let left = null;
+    try { await removeCopy(project, copy); }
+    catch (failure) { if (failure.code !== 'copy_in_use') throw failure; left = 'The copy it came from could not be removed, because a program still uses its folder: ' + copy.root + '. When nothing uses it any more, delete that folder and run "git worktree prune" and "git branch -D ' + copy.branch + '" in the project.'; }
+    const notes = [unrecorded.length ? 'Applied, but not in the history (links and other entries that are no plain files): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') : null, left].filter(Boolean);
+    return { applied: true, files, ...(warning ? { warning } : {}), ...(unrecorded.length ? { notInHistory: unrecorded } : {}), ...(left ? { copyLeft: true } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) };
   }
   async function discardProposal(project, copy) {
     await removeCopy(project, copy);

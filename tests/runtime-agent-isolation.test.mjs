@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { DevMateService } from '../runtime/service.mjs';
 import { presentResult } from '../runtime/mcp.mjs';
 
@@ -136,6 +136,45 @@ test('a copy beside an instance that lives in a folder named .devmate is read, a
   for (const place of [elsewhere, copies, path.join(temp, '.devmate', 'runtime')]) {
     await assert.rejects(service.workspace.proposal(service.project(project.id), { root: place, branch: 'devmate/x', base: git(root, 'rev-parse', 'HEAD').trim() }), { code: 'invalid_input' }, place);
   }
+});
+
+// An owner who has switched on Git's own file watcher (core.fsmonitor in their Git configuration) gets one for every
+// folder Git is used in. The agent's Git starts it in the copy, and it stays when the agent has gone, with the
+// folder open: on Windows a folder that is open cannot be removed. Seen with the real Codex on the owner's computer.
+test('a copy that Git itself still watches is applied and removed all the same', { timeout: 120000 }, async t => {
+  const { service, project, root, factory, instances, read } = await fixture(t);
+  const said = (cwd, ...args) => { const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }); return String(result.stdout) + String(result.stderr); };
+  let watched = false;
+  factory.work = cwd => { work(cwd); said(cwd, '-c', 'core.fsmonitor=true', 'status', '--porcelain'); watched = /is watching/.test(said(cwd, 'fsmonitor--daemon', 'status')); };
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const copy = instances[0].options.cwd;
+  try {
+    if (!watched) t.diagnostic('this Git has no file watcher of its own here: nothing holds the copy');
+    const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+    assert.equal(applied.applied, true); assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n');
+    assert.equal(fs.existsSync(copy), false, 'the folder of the copy is gone'); assert.equal(git(root, 'branch', '--list', 'devmate/*').trim(), '');
+    assert.equal(service.store.get('agent', done.agentId).isolated.settled, 'applied');
+  } finally { if (fs.existsSync(copy)) said(copy, 'fsmonitor--daemon', 'stop'); }
+});
+
+// Whatever else still stands in the copy when its work is applied: the work is in the project all the same, and the
+// answer is not that it failed.
+test('work is applied also where its copy cannot be removed yet, and what is left is said', { skip: process.platform !== 'win32' && 'a folder a program stands in can be removed here', timeout: 120000 }, async t => {
+  const { service, project, root, factory, instances, read } = await fixture(t);
+  factory.work = work;
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const copy = instances[0].options.cwd;
+  const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: copy, stdio: 'ignore', windowsHide: true });
+  await new Promise((resolve, reject) => { holder.once('spawn', resolve); holder.once('error', reject); });
+  try {
+    const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+    assert.equal(applied.applied, true); assert.deepEqual(applied.files.sort(), ['old.txt', 'src/a.js', 'src/new.js']); assert.equal(applied.copyLeft, true);
+    assert.match(applied.note, /could not be removed, because a program still uses its folder: .*copy-[a-f0-9]{12}\. When nothing uses it any more, delete that folder and run "git worktree prune" and "git branch -D devmate\/copy-[a-f0-9]{12}" in the project\.$/);
+    assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n'); assert.equal(fs.existsSync(path.join(root, 'old.txt')), false);
+    // It is applied, and is not applied a second time.
+    assert.equal(service.store.get('agent', done.agentId).isolated.settled, 'applied');
+    await assert.rejects(service.call('agents.apply', { agentId: done.agentId }, connected), { code: 'agent_finished' });
+  } finally { holder.kill(); await new Promise(resolve => holder.once('exit', resolve)); }
 });
 
 test('a very large file an agent brought is taken back only while it is as the agent left it', { timeout: 120000 }, async t => {
