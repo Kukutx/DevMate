@@ -409,6 +409,17 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   await run(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123'], other);
   assert.match((await run(['connect', 'https', '--url', publicAddress], other)).stdout, /To run it beside this connection, add: --openai-tunnel tunnel_abc123"/);
   assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress], other)).stdout, /no longer used/, 'nothing is said where no tunnel was');
+  // A key that is stored for the tunnel that was set up here before is not asked for a second time. For another
+  // tunnel it is: that one has a key of its own.
+  const again = ['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'tunnel_abc123'], storeIt = /Store the runtime key of the tunnel/;
+  assert.match((await run(again, other)).stdout, storeIt, 'not stored yet');
+  createSecretStore(other).set('CONTROL_PLANE_API_KEY', 'the-runtime-key');
+  assert.doesNotMatch((await run(again, other)).stdout, storeIt); assert.match((await run(again, other)).stdout, /Apply it: devmate restart/);
+  assert.match((await run(['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'tunnel_other999'], other)).stdout, storeIt);
+  // The same for the tunnel on its own.
+  await run(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123'], other);
+  assert.doesNotMatch((await run(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_abc123'], other)).stdout, /Store the credential/);
+  assert.match((await run(['connect', 'openai-tunnel', '--tunnel-id', 'tunnel_new111'], other)).stdout, /Store the credential: devmate secret set CONTROL_PLANE_API_KEY/);
   // A relay that is taken away leaves the tunnel that ran beside it, as the connection from then on.
   const relayed = path.join(temp, 'relayed'); fs.mkdirSync(relayed);
   fs.writeFileSync(path.join(relayed, 'config.json'), JSON.stringify({ connection: { kind: 'ssh', publicUrl: publicAddress + '/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true }, openaiTunnel: { tunnelId: 'tunnel_abc123' } }));

@@ -236,11 +236,16 @@ async function configureConnection(kind, options, instanceRoot) {
   } else if (options.auth === 'none' || !url || (current.auth.mode === 'oauth' && current.auth.issuer !== new URL(url).origin)) next.auth = { mode: 'none' };
   const saved = saveConfig(instanceRoot, next);
   const credential = saved.connection.tokenEnv || saved.connection.runtimeKeyEnv || null, tunnelKey = saved.openaiTunnel?.runtimeKeyEnv || null;
+  // A credential that is stored, and belongs to what was set up here before, is not asked for a second time.
+  const { createSecretStore } = await import('./secrets.mjs');
+  const kept = (name, same) => { if (!name || !same) return false; try { return createSecretStore(instanceRoot).has(name); } catch { return false; } };
+  const asBefore = saved.connection.kind === 'openai-tunnel' ? before?.tunnelId === saved.connection.tunnelId
+    : current.connection.kind === saved.connection.kind && current.connection.publicUrl === saved.connection.publicUrl;
   // A tunnel that is taken away without having been named is said, with the way to keep it.
   const lost = before && !saved.openaiTunnel && saved.connection.kind !== 'openai-tunnel' ? 'OpenAI\'s tunnel ' + before.tunnelId + ' is no longer used. ' : null;
   return { saved: { connection: saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
-    next: [credential ? 'Store the credential: devmate secret set ' + credential : null,
-      tunnelKey ? 'Store the runtime key of the tunnel: devmate secret set ' + tunnelKey : null, 'Apply it: devmate restart', 'Then check: devmate doctor',
+    next: [credential && !kept(credential, asBefore) ? 'Store the credential: devmate secret set ' + credential : null,
+      tunnelKey && !kept(tunnelKey, before?.tunnelId === saved.openaiTunnel.tunnelId) ? 'Store the runtime key of the tunnel: devmate secret set ' + tunnelKey : null, 'Apply it: devmate restart', 'Then check: devmate doctor',
       saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it changes each time DevMate or the tunnel starts again)' : null,
       lost && saved.connection.kind !== 'local' ? lost + 'To run it beside this connection, add: --openai-tunnel ' + before.tunnelId + (before.organizationId ? ' --organization ' + before.organizationId : '')
         : lost && besideBefore ? lost + 'On its own it is: devmate connect openai-tunnel --tunnel-id ' + before.tunnelId : null].filter(Boolean) };
