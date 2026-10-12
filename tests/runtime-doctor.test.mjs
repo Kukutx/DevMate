@@ -386,6 +386,16 @@ test('a report keeps its own words and gives nothing away, whatever a project is
   // A name is a word where it begins or ends with a letter, and stands anywhere where it does not.
   assert.equal(anonymize('AcmeCorp, Acme-Corp, x[beta]y and a/shop/b', { names: [['Acme', '<folder-1>'], ['[beta]', '<folder-2>'], ['/shop', '<folder-3>']] }), 'AcmeCorp, <folder-1>-Corp, x<folder-2>y and a<folder-3>/b');
   assert.equal(anonymize('five     blanks', { names: [['     ', '<folder-1>']] }), 'five     blanks');
+  // A public host is a word somebody chose as well, and goes after the addresses for the same reason: before them,
+  // the account on the owner's own server was left standing before the @ (what OpenSSH says of a relay it cannot reach).
+  assert.equal(anonymize('ssh: deploy@relay.example.com: Permission denied (publickey). Asked Relay.Example.com:22', { hosts: ['relay.example.com'] }), 'ssh: <email>: Permission denied (publickey). Asked <public-host>:22');
+  // A host that is an address with a port, or one a quick tunnel was given, does not stand there either way.
+  assert.equal(anonymize('at 203.0.113.9:8443 and calm-river.trycloudflare.com', { hosts: ['203.0.113.9:8443', 'calm-river.trycloudflare.com'] }), 'at <address>:8443 and <assigned>.trycloudflare.com');
+  // Nor does a host find anything in what was put in, for an address or for another host; and of two hosts the longer
+  // goes first, so that one is not left as a part of the other.
+  assert.equal(anonymize('carol@example.org, mail, host and relay.host', { hosts: ['mail', 'host', 'relay', 'relay.host'] }), '<email>, <public-host>, <public-host> and <public-host>');
+  // What stands for a credential is put in as well, and no name is found in it.
+  assert.equal(anonymize('Authorization: Bearer abcdefghijklmnop for redacted', { names: [['redacted', '<folder-1>']] }), 'Authorization: Bearer [redacted] for <folder-1>');
 
   const { service: runtime, temp } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } });
   const connected = { id: 'owner' }, key = 'abcdefghijklmnopqrstuvwxyz012345', special = 'a.b*c(d)[e]+?';
@@ -431,6 +441,40 @@ test('a report keeps its own words and gives nothing away, whatever a project is
     for (const one of [name, other].filter(long)) assert.ok(!stands(said(one).trim(), content(text).replace(/<folder-\d>/g, '')), what + ': ' + JSON.stringify(one) + ' is in the report: ' + content(text));
     assert.ok(lines.some(line => /^#\d+ \S+ \S+ \w+ \(connected, \d+ ms\): Unknown .* operation: +<folder-\d> ?$/.test(line)), what + ': the failure says which folder, not what it is called: ' + text);
   }
+});
+
+test('what a report cuts short it has cleaned first: half of an address, a path or a name is not recognised as what it was', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const log = path.join(temp, 'instance', 'runtime.log'), report = async () => (await runtime.call('runtime.report', {}, owner)).text;
+  // A line of the log is shown by its first 600 characters. The mail address in this one begins before them and ends after.
+  fs.writeFileSync(log, 'x'.repeat(590) + ' dora@private.example and more\n');
+  let text = await report();
+  assert.ok(text.includes('x'.repeat(590) + ' <email>') && !text.includes('dora@'), text);
+  // The log is read from its last 24000 bytes on. Where that begins inside a line, the line is the end of one: here
+  // the end of a path, without the part that says it is somebody's home. It is not shown; the lines after it are.
+  const end = 'me/zoe-private-account/work\n', filler = 'y'.repeat(479) + '\n', last = 'z'.repeat(24000 - end.length - 49 * filler.length - 1) + '\n';
+  fs.writeFileSync(log, 'a line from long ago at /ho' + end + filler.repeat(49) + last);
+  assert.equal(fs.statSync(log).size - 24000, 'a line from long ago at /ho'.length);
+  text = await report();
+  assert.ok(!text.includes('zoe-private-account') && text.includes('\n' + 'y'.repeat(479) + '\n') && text.endsWith('\n' + last.trim()), text);
+  // A log that is shorter than that is shown from its first line.
+  fs.writeFileSync(log, 'the first line\nthe second\n');
+  assert.ok((await report()).endsWith('Runtime log, last lines\nthe first line\nthe second'));
+  // The message of a failure is shown by its first 300 characters. This one lists the projects by their names, and
+  // the second name begins before the 300th character and ends after it.
+  const named = 'Client Secret Product '.repeat(9).trim();
+  const made = [];
+  for (const [folder, name] of [['one', 'filler '.repeat(21).trim()], ['two', named]]) { const root = path.join(temp, folder); fs.mkdirSync(root); made.push(await runtime.call('project.create', { root, name }, owner)); }
+  await assert.rejects(runtime.call('workspace.read', { path: 'a.txt' }, { id: 'owner' }), error => error.code === 'project_required' && error.message.indexOf(named) < 300 && error.message.indexOf(named) + named.length > 300);
+  text = await report();
+  const failure = text.split('\n').find(line => / workspace\.read project_required \(connected, \d+ ms\): /.test(line));
+  assert.ok(/ = <folder-1>; \S+ = <folder-2>$/.test(failure) && !text.includes('Client Sec'), text);
+  // What runtime.metrics gives of the same failure is its first 300 characters, as before.
+  const told = (await runtime.call('runtime.metrics', {}, owner)).usage.recentFailures[0].message;
+  assert.equal(told.length, 300); assert.ok(told.startsWith('Several projects are available'));
+  // And a message that is long when it has been cleaned is shown by its first 300 characters in the report as well.
+  await assert.rejects(runtime.call('workspace.read', { projectId: made[0].id, path: 'q'.repeat(400) + '.txt' }, { id: 'owner' }), error => error.message.includes('q'.repeat(400)));
+  assert.equal((await report()).split('\n').find(line => line.includes('qqqq')).split(' ms): ')[1].length, 300);
 });
 
 test('the VS Code connection wizard stores the token privately, saves a signed-in Cloudflare route and offers the URL and sign-in code', async () => {
