@@ -46,7 +46,7 @@ test('setting a version states it in every file that carries one, the browser ex
   assert.equal(back.status, 0, back.stderr);
   assert.match(back.stdout, new RegExp('What was collected for 9\\.8\\.7 is under "## Unreleased" of CHANGELOG\\.md again, and versions\\.json no longer names 9\\.8\\.7'));
   assert.deepEqual([fs.readFileSync(changelog, 'utf8'), fs.readFileSync(path.join(copy, 'versions.json'), 'utf8'), everywhere()], [collected, versions, Array(4).fill(VERSION)]);
-  assert.match(fs.readFileSync(path.join(copy, 'runtime', 'version.mjs'), 'utf8'), new RegExp('^export const VERSION = \'' + VERSION.replace(/\./g, '\\.') + '\';'));
+  assert.ok(fs.readFileSync(path.join(copy, 'runtime', 'version.mjs'), 'utf8').startsWith('export const VERSION = \'' + VERSION + '\';'));
   // Taken back where entries were already collected anew: neither section is chosen for the other, and nothing is written.
   assert.equal(set().status, 0);
   fs.writeFileSync(changelog, '# Changelog\n\n## Unreleased\n- one more\n\n## 9.8.7\n- something new\n\n## ' + VERSION + '\n- before\n');

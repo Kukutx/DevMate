@@ -600,7 +600,7 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   // The organization is said of a tunnel: where no tunnel is named it is refused, not taken and dropped.
   for (const args of [['connect', 'https', '--url', publicAddress, '--organization', 'org-abc'], ['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'none', '--organization', 'org-abc'], ['connect', 'local', '--organization', 'org-abc']]) {
     const dropped = await run(args, replaced);
-    assert.notEqual(dropped.code, 0, args.join(' ')); assert.match(dropped.stderr, new RegExp('--organization names the OpenAI organization of a tunnel, and connect ' + args[1] + ' names no tunnel here\\. Give it with the tunnel: --openai-tunnel <tunnel_…> --organization <org-…>'));
+    assert.notEqual(dropped.code, 0, args.join(' ')); assert.ok(dropped.stderr.includes('--organization names the OpenAI organization of a tunnel, and connect ' + args[1] + ' names no tunnel here. Give it with the tunnel: --openai-tunnel <tunnel_…> --organization <org-…>'), dropped.stderr);
   }
   // What an SSH connection is told about its login is kept: its port and its key file. And an option that names
   // something another kind of connection has is refused, not passed over.

@@ -208,7 +208,7 @@ test('devmate relay setup makes that server how this computer is reached, keeps 
   assert.match((await run(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123'])).stderr, /takes only --openai-tunnel and --organization \(given: --executable\)/);
   const beside = await plainly(['connect', 'beside', '--openai-tunnel', 'tunnel_abc123']);
   assert.equal(beside.code, 0, beside.stderr); assert.equal(saved().connection.publicUrl, address); assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123');
-  assert.deepEqual(JSON.parse(beside.stdout).saved.connection, { kind: 'ssh', relay: true }); assert.ok(!beside.stdout.includes(address.split('/').pop()) && !beside.stdout.includes('devmate.example.com'));
+  assert.deepEqual(JSON.parse(beside.stdout).saved.connection, { kind: 'ssh', relay: true }); assert.ok(!beside.stdout.includes(address.split('/').pop())); assert.equal(beside.stdout.split('devmate.example.com').length, 1, 'the public host is nowhere in the answer');
   // It stays beside the relay when the relay is set up again, which is said.
   const again = await run(['relay', 'setup', 'deploy@203.0.113.7', '--domain', 'devmate.example.com']);
   assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123'); assert.match(again.stdout, /"openaiTunnel": "tunnel_abc123 stays beside it"/); assert.doesNotMatch(again.stdout, /no longer used/);

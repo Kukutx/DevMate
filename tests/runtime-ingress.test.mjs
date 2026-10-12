@@ -50,7 +50,7 @@ test('the public ingress port serves only MCP and never the owner control interf
   const foreign = await request(runtime.ingressPort, '/mcp', { headers: { host: 'attacker.example' } });
   assert.equal(foreign.status, 421);
   assert.equal(foreign.json.error.message, 'This request names the host attacker.example, which is not the public address of this DevMate (devmate mcp-url shows it). A proxy in front of DevMate has to pass the public host name on: nginx "proxy_set_header Host $host;", Apache "ProxyPreserveHost On".');
-  assert.ok(!foreign.text.includes(publicHost));
+  assert.equal(foreign.text.split(publicHost).length, 1, 'the public host is nowhere in the answer');
   const listed = await request(runtime.ingressPort, '/mcp', { method: 'OPTIONS', headers: viaProxy });
   assert.equal(listed.status, 204, 'MCP itself is served for the configured public host');
 });
