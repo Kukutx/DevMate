@@ -473,11 +473,33 @@ test('the browser host says which local port the runtime answers on, and says so
   port = 9001;
   await until(() => heard.some(message => message.name === 'runtime.status' && message.data.port === 9001), 'the news of the other port');
   assert.deepEqual(heard.filter(message => message.name === 'runtime.status').at(-1).data, { running: true, version: '4.0.5', port: 9001 });
+  // The folder the runtime was started from is gone under it: said when it becomes so, as what it is.
+  client.status = async () => ({ running: true, record: { version: '4.0.5', port }, health: { filesGone: true } });
+  await until(() => heard.some(message => message.name === 'runtime.status' && message.data.filesGone === true), 'the news that its files are gone');
+  assert.deepEqual(heard.filter(message => message.name === 'runtime.status').at(-1).data, { running: true, version: '4.0.5', port: 9001, filesGone: true });
   // A runtime that does not run has no port to say.
   client.status = async () => ({ running: false });
   await until(() => heard.some(message => message.name === 'runtime.status' && message.data.running === false), 'the news that it stopped');
   assert.equal(heard.filter(message => message.name === 'runtime.status').at(-1).data.port, undefined);
   input.end(); await served;
+});
+
+test('a browser host whose own program was replaced by an update leaves, so that the browser starts the new one', async () => {
+  // A host is started once and lives as long as the browser. After an update of DevMate it went on speaking for a
+  // program that is not installed any more, until somebody ended it by hand.
+  const input = new PassThrough(), output = new PassThrough(), heard = [], asked = [];
+  output.on('data', frames(message => heard.push(message)));
+  const client = { status: async () => ({ running: true, record: { version: '4.0.6', port: 8788 } }),
+    call: async name => { asked.push(name); return name === 'chrome.attach' ? { linkId: 'link' } : name === 'chrome.next' ? new Promise(resolve => setTimeout(() => resolve({ calls: [] }), 40)) : { items: [] }; } };
+  let replaced = false, ended = false;
+  const served = serveChromeHost({ origin: EXTENSION_ORIGIN, input, output, client, pollMs: 20, replaced: () => replaced }).then(() => { ended = true; });
+  input.write(frame({ type: 'hello', protocol: 1, extension: '4.0.6', browser: 'Google Chrome', methods: [] }));
+  await until(() => asked.includes('chrome.next'), 'the link');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(ended, false, 'it serves for as long as its program is the one that was started');
+  replaced = true;
+  await served;
+  assert.ok(asked.includes('chrome.detach'), 'the runtime is told that this link is over');
 });
 
 test('the browser host is the link, end to end: started as a browser starts it, it serves the extension as an entry and carries the runtime\'s calls to the browser', { timeout: 120000 }, async t => {

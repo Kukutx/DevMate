@@ -66,8 +66,9 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     // A vault that keeps failing to attach is not "attaching": say that it failed; the sidebar has the reason.
     return 'DevMate: ' + ({ attached: 'vault attached' + (vaultAccess === 'read' ? ' (read only)' : ''), unregistered: 'vault not shared',
       detached: wanted ? (lastError ? 'vault could not be attached' : 'vault attaching…') : 'vault detached' })[vault] +
-      // This plugin ships a newer runtime than the one that is running.
-      (runtime.outdated ? ' · restart the runtime to update' : '');
+      // The folder the running runtime was started from is gone (an update removed it): agents and the browser fail
+      // until it is started again. Or this plugin ships a newer runtime than the one that is running.
+      (runtime.health?.filesGone ? ' · its files were removed by an update, restart the runtime' : runtime.outdated ? ' · restart the runtime to update' : '');
   }
   function render() {
     statusItem?.setText?.(statusText());
@@ -255,7 +256,11 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
 
   // Bring this window in line with the runtime: attach again after a restart, detach state after a stop.
   async function syncOnce() {
-    runtime = await client.status();
+    const observed = await client.status();
+    // A runtime that holds its instance and did not answer within a moment is busy, not gone: the vault stays attached
+    // until it answers again or its process is gone. Taken for stopped, the vault was let go for the length of one look.
+    if (!observed.running && observed.processAlive === true && runtime.running === true) return status();
+    runtime = observed;
     if (runtime.running) startConsidered = true;
     else if (await startsItself(runtime)) runtime = await client.status();
     if (!runtime.running) {

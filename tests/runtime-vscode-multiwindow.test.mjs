@@ -226,7 +226,38 @@ test('with auto-start a runtime that died is brought back, a bounded number of t
   manual.state.crashed=true;
   await plain.entry.refresh();
   assert.equal(manual.state.starts,0,'without auto-start nothing is started on the user\'s behalf');
+  // What is not started again is said as what happened: a runtime that ended by itself is not one somebody stopped.
+  assert.equal(plain.statusBars[0].text,'$(warning) DevMate');assert.match(plain.statusBars[0].tooltip,/^DevMate runtime: stopped unexpectedly\nClick to start$/);
   await plain.entry.deactivate();
+});
+
+test('a runtime that holds its instance and does not answer for a moment is busy, not stopped: the window keeps what it has',async()=>{
+  // It was read as "not running": the window let go of its folders, and the editor\'s own tools lost the endpoint,
+  // until the next look a few seconds later attached everything anew.
+  const client=scripted(),window=fakeWindow('unused','Busy',[process.cwd()],{client});
+  await window.activate();
+  await window.commands.get('devMate.runtime.start')();
+  assert.notEqual(window.entry.attachment,null);assert.equal(window.statusBars[0].text,'$(plug) DevMate');
+  const attached=client.calls.filter(([name])=>name==='window.attach').length,answers=client.status;
+  client.status=async()=>({state:'unavailable',running:false,processAlive:true,owner:{pid:1}});
+  await window.entry.refresh();
+  assert.notEqual(window.entry.attachment,null,'the folders of the window stay attached');
+  assert.equal(window.statusBars[0].text,'$(sync~spin) DevMate');assert.match(window.statusBars[0].tooltip,/^DevMate runtime: busy, it does not answer at the moment/);
+  assert.equal(window.statusBars[0].command,'devMate.runtime.menu','it is not offered to be started: it runs');
+  // It answers again: nothing was let go, so nothing is attached a second time.
+  client.status=answers;
+  await window.entry.refresh();
+  assert.equal(window.statusBars[0].text,'$(plug) DevMate');assert.equal(client.calls.filter(([name])=>name==='window.attach').length,attached);
+  // The folder the runtime was started from is gone under it (an update removed it): said for as long as it is so.
+  client.status=async()=>({...await answers(),health:{filesGone:true}});
+  await window.entry.refresh();
+  assert.equal(window.statusBars[0].text,'$(warning) DevMate');assert.match(window.statusBars[0].tooltip,/^DevMate runtime: ready \(its files were removed by an update, restart it\)/);
+  client.status=answers;
+  // A runtime whose process is gone is one that stopped: the window lets go.
+  client.state.running=false;
+  await window.entry.refresh();
+  assert.equal(window.entry.attachment,null);assert.equal(window.statusBars[0].text,'$(circle-slash) DevMate');
+  await window.entry.deactivate();
 });
 
 test('a newer extension offers to restart an older shared runtime once; diagnostics keep their errors under a flood of hints',async()=>{

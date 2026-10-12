@@ -16,6 +16,7 @@ import { startRuntime } from '../runtime/main.mjs';
 import { readRuntimeRecord } from '../runtime/client.mjs';
 import { __test as lock } from '../runtime/instance-lock.mjs';
 import { VERSION } from '../runtime/version.mjs';
+import { main as cli } from '../runtime/cli.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const localConnection = () => ({ async start() {}, async stop() {}, status() { return { kind: 'local', status: 'ready' }; } });
@@ -87,6 +88,32 @@ test('state files cut short by a crash do not lock the owner out: credentials, t
   fs.mkdirSync(path.join(instance, 'processes', 'left-over-directory'), { recursive: true });
   const again = await startRuntime({ instanceRoot: instance, port: 0, connectionFactory: localConnection });
   await again.stop();
+});
+
+test('a runtime whose own folder was taken away under it says so to whoever asks, for as long as it is so', { timeout: 60000 }, async t => {
+  // An update of an editor's extension removes the folder of the version before, while the runtime that was started
+  // from it runs on. It answers from memory; what it starts from that folder later (an agent's channel, Claude
+  // Code's permission requests, the program a browser starts) fails, and nothing said why.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-files-')), instance = path.join(temp, 'instance'), program = path.join(temp, 'extension-4.0.5', 'runtime', 'main.mjs');
+  fs.mkdirSync(path.dirname(program), { recursive: true }); fs.writeFileSync(program, '');
+  const runtime = await startRuntime({ instanceRoot: instance, port: 0, connectionFactory: localConnection, programFile: program });
+  t.after(async () => { await runtime.stop().catch(() => {}); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const health = async () => (await fetch('http://127.0.0.1:' + runtime.port + '/health')).json();
+  const doctor = async () => (await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' })).checks.find(item => item.id === 'runtime.files');
+  assert.equal((await health()).filesGone, undefined); assert.equal(await doctor(), undefined);
+  fs.rmSync(path.join(temp, 'extension-4.0.5'), { recursive: true });
+  // At once, with no timer in between: it is looked at when somebody asks.
+  const gone = await health();
+  assert.equal(gone.filesGone, true); assert.equal(gone.status, 'ready', 'it still answers as itself');
+  const check = await doctor();
+  assert.equal(check.status, 'fail'); assert.match(check.detail, /^The folder this runtime was started from is not there any more/); assert.match(check.fix, /devmate restart/);
+  // The command line says it with every start and status, as it says an older runtime.
+  const said = [];
+  await cli(['status'], { stdout: { write() {} }, stderr: { write: text => said.push(text) }, status: async () => ({ state: 'ready', running: true, record: { version: VERSION }, health: gone }) });
+  assert.match(said.join(''), /^The folder the running DevMate was started from is not there any more: an update removed it\. .* Start it again: devmate restart\n$/);
+  // Put back (never so in life, but the word must follow the fact): nothing is said any more.
+  fs.mkdirSync(path.dirname(program), { recursive: true }); fs.writeFileSync(program, '');
+  assert.equal((await health()).filesGone, undefined); assert.equal(await doctor(), undefined);
 });
 
 test('two starters that both find a dead socket do not both become owner, and an abandoned claim is broken', async t => {

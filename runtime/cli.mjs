@@ -201,6 +201,8 @@ function openInBrowser(url, spawnImpl = spawn) {
 // that "attached", a doctor that finds everything in place, a new command the runtime has never heard of.
 function olderRuntime(current) {
   const running = current?.running ? current.record?.version : null;
+  // (Or the folder it was started from was removed by an update while it ran: what it starts from there fails.)
+  if (running && current.health?.filesGone) return { detail: 'The folder the running DevMate was started from is not there any more: an update removed it. It still answers, but tasks for coding agents and the browser\'s connection fail.', fix: 'Start it again: devmate restart' };
   return running && newerVersion(VERSION, running)
     ? { detail: 'DevMate ' + running + ' is still running, older than this command (' + VERSION + ').', fix: 'Run the new one: devmate restart' } : null;
 }

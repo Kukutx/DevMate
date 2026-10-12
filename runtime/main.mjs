@@ -110,7 +110,12 @@ function listen(listener, port, way) {
 }
 
 export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.devmate', 'runtime'), port = 8788, ingressPort,
-  adapterFactory, connectionFactory = createConnection, capabilitiesFactory, authOptions, onReady, proxy = null } = {}) {
+  adapterFactory, connectionFactory = createConnection, capabilitiesFactory, authOptions, onReady, proxy = null, programFile = fileURLToPath(import.meta.url) } = {}) {
+  // A runtime keeps answering from memory when the folder it was started from is taken away under it, as an update
+  // of an editor's extension does. What it starts from that folder later does not: the channel of a coding agent,
+  // Claude Code's permission requests, the program a browser starts. Looked at whenever somebody asks how it is, and
+  // said for as long as it is so, by every entry: it has to be started again.
+  const filesGone = () => !fs.existsSync(programFile);
   instanceRoot = path.resolve(instanceRoot);
   fs.mkdirSync(instanceRoot, { recursive: true, mode: 0o700 });
   // The mode applies only when the directory is created. One that already existed is made private too:
@@ -260,7 +265,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     if (FORWARDED_HEADERS.some(name => req.headers[name] !== undefined)) return refuse(res, 'forwarded_request', 'The local control port must not be published. Point the tunnel or proxy at the ingress port.');
     const requestOrigin = 'http://' + requestHost;
     const url = new URL(req.url, requestOrigin);
-    if (url.pathname === '/health' && req.method === 'GET') return send(res, 200, health);
+    if (url.pathname === '/health' && req.method === 'GET') return send(res, 200, filesGone() ? { ...health, filesGone: true } : health);
     const allowedOrigins = new Set([requestOrigin, ...(config.allowedOrigins || [])]);
     if (req.headers.origin && !allowedOrigins.has(req.headers.origin)) return refuse(res, 'invalid_origin', 'The origin ' + req.headers.origin + ' is not allowed. A browser-based client you run yourself is allowed by adding its origin to "allowedOrigins" in the DevMate configuration; on the local port such an origin acts as the owner.');
     if (url.pathname === '/mcp') return serveMcp(req, res, true);
@@ -391,6 +396,7 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   try {
     service = new DevMateService({ instanceRoot, endpoint: '', adapterFactory, config, capabilitiesFactory, authOptions,
       onStop: input => { void stop(input); } });
+    service.filesGone = filesGone;
     await service.ready;
     streams = createEventStreams({ store: service.store });
     const requestedPort = port;

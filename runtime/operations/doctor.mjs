@@ -19,6 +19,10 @@ export async function doctor(service) {
   const check = (id, status, detail, fix) => checks.push({ id, status, detail: oneLine(detail), ...(fix ? { fix: oneLine(fix) } : {}) });
   const major = Number(process.versions.node.split('.')[0]);
   check('node', major >= 24 ? 'ok' : 'fail', 'Node.js ' + process.versions.node, major >= 24 ? null : 'Install Node.js 24 or newer.');
+  // The folder this runtime was started from, taken away while it runs (an update of an editor's extension removes
+  // the folder of the version before). It answers on from memory, and what it starts from there later fails.
+  if (service.filesGone?.()) check('runtime.files', 'fail', 'The folder this runtime was started from is not there any more: an update removed it while the runtime ran. It still answers, but what it starts from that folder fails: tasks for coding agents, Claude Code\'s permission requests, the program a browser starts.',
+    'Start it again, from what is installed now: devmate restart (or "Restart shared runtime" in the editor).');
   const shell = service.processes.shell;
   const present = startable(shell.file);
   check('shell', present ? 'ok' : 'fail', shell.label + ' at ' + shell.file, 'Commands cannot run without the system shell.');

@@ -46,7 +46,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   const windowId = randomUUID();
   let client, active = false, subscription, poll, refreshTimer, changes, output, statusBar, mcpChanged, memory;
   let refreshPromise, rerun = false, attachment = null, rememberedRoot = null, boundKey = '', boundGeneration = '', seenAt = 0;
-  let state = { state: 'stopped', running: false }, contextTimer, publishedContext = '', asking = false, updateOffered = false, servedMcp = '', pendingConnection = '';
+  let state = { state: 'stopped', running: false }, contextTimer, publishedContext = '', asking = false, updateOffered = false, servedMcp = '', pendingConnection = '', busy = false;
   const declined = new Set(), recoveries = [], announced = new Set();
   let route = null, routeFailingSince = 0, announcedRoute = '', shared = null;
 
@@ -76,7 +76,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     // A relay that does not list this computer's own address still serves the clients in the cloud: nothing to show.
     return !checked || checked.verified || checked.pending === 'not-listed' ? '' : checked.pending ? 'waiting for the new address to be known' : ROUTE_BROKEN;
   };
-  const connectionNote = () => state.health?.connection === 'failed' ? 'connection failed' : state.outdated ? 'older version running, restart to update'
+  // (Its own folder gone under it comes first: until it is started again, agents and the browser fail for no reason
+  // that anything else would show.)
+  const connectionNote = () => state.health?.filesGone ? 'its files were removed by an update, restart it' : state.health?.connection === 'failed' ? 'connection failed' : state.outdated ? 'older version running, restart to update'
     : pendingConnection && pendingConnection === state.record?.generation ? 'restart to apply the saved connection' : routeNote();
   const provider = {
     getTreeItem: item => item,
@@ -109,8 +111,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   function render() {
     if (statusBar) {
       const note = connectionNote();
-      statusBar.text = (state.running ? (ROUTE_WAITING.includes(note) ? '$(sync~spin)' : note ? '$(warning)' : '$(plug)') : '$(circle-slash)') + ' DevMate';
-      statusBar.tooltip = 'DevMate runtime: ' + state.state + (note ? ' (' + note + ')' : '') +
+      statusBar.text = (busy ? '$(sync~spin)' : state.running ? (ROUTE_WAITING.includes(note) ? '$(sync~spin)' : note ? '$(warning)' : '$(plug)') : state.crashed ? '$(warning)' : '$(circle-slash)') + ' DevMate';
+      // (Said as what happened: a runtime that ended by itself is not one somebody stopped.)
+      statusBar.tooltip = 'DevMate runtime: ' + (busy ? 'busy, it does not answer at the moment' : state.crashed ? 'stopped unexpectedly' : state.state) + (note ? ' (' + note + ')' : '') +
         (state.running && !note && route?.verification?.verified ? '\nReachable from the cloud: the public address was checked end to end' : '') +
         (state.running ? '\nPort ' + state.record?.port + (attachment?.selectedProjectId ? ''
           : attachment?.roots.some(folder => folder.projectId) ? '\nSeveral folders are shared: choose the one this window works in (DevMate: Select This Window Workspace)' : '\nThis window shares no folder') +
@@ -427,6 +430,11 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (!active) return state;
     const observed = await client.status();
     if (!active) return observed;
+    // A runtime that holds its instance and did not answer within a moment is busy, not gone (a long step, a computer
+    // under load). The window stays as it is until it answers again or its process is gone: taken for stopped, the
+    // window let go of its folders and the editor's own tools lost the endpoint, for the length of one look.
+    busy = !observed.running && observed.processAlive === true && state.running === true;
+    if (busy) { render(); return state; }
     state = observed;
     if (!state.running) await recover().catch(report);
     route = state.running ? await client.call('connection.status', {}, { scoped: false }).catch(() => null) : null;
