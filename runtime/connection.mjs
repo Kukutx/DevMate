@@ -9,6 +9,7 @@ import { createCloudflareConnection, normalizeCloudflareConfig } from './cloudfl
 import { createConnectionRecovery } from './connection-recovery.mjs';
 import { createOpenAiTunnel } from './openai-tunnel.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
+import { startable } from './platform/tools.mjs';
 
 const { childExited, terminateProcessTree } = processTree;
 const executeFile = promisify(execFile);
@@ -145,7 +146,7 @@ export function createConnection({
       failed = false;
       if (settings.kind === 'local') { phase = 'local'; return snapshot(); }
       if (settings.kind === 'external-https') { phase = 'configured'; return snapshot(); }
-      if (!fs.statSync(settings.executable, { throwIfNoEntry: false })?.isFile()) throw new Error('Official tunnel-client executable is not installed at the selected path');
+      if (!startable(settings.executable)) throw new Error('Official tunnel-client executable is not installed at the selected path');
       const runtimeKey = env[settings.runtimeKeyEnv];
       if (typeof runtimeKey !== 'string' || !runtimeKey.trim()) throw new Error(`Missing runtime key environment variable: ${settings.runtimeKeyEnv}`);
       fs.mkdirSync(path.dirname(healthFile), { recursive: true, mode: 0o700 });

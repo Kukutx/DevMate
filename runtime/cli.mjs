@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { CLIENT_COMMAND_ENV, createRuntimeClient, instanceDirectory } from './client.mjs';
 import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './launcher.mjs';
 import { inspectTunnelClient, TUNNEL_CLIENT_SETUP } from './connection.mjs';
-import { findCloudflared, findOnPath, installHint, recallTools, resolveTool } from './platform/tools.mjs';
+import { findCloudflared, findOnPath, installHint, recallTools, resolveTool, startable } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
 import { VERSION, newerVersion } from './version.mjs';
 
@@ -223,7 +223,7 @@ async function offlineDoctor(instanceRoot) {
     const config = readConfig(instanceRoot), url = publicMcpUrl(config);
     // What the doctor prints gets pasted into bug reports. The last part of a relay's address is its key.
     check('settings', 'ok', 'connection: ' + config.connection.kind + (config.openaiTunnel ? ' with OpenAI\'s tunnel beside it' : '') + ', auth: ' + config.auth.mode + (url ? ', public URL: ' + url.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>') : ''));
-    if (config.connection.executable) check('connection.executable', fs.statSync(config.connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail',
+    if (config.connection.executable) check('connection.executable', startable(config.connection.executable) ? 'ok' : 'fail',
       config.connection.executable, 'Install the connector and set its absolute path with devmate connect.');
   } catch (error) { check('settings', 'fail', 'config.json is not valid: ' + error.message, 'Fix or delete ' + path.join(instanceRoot, 'config.json') + '.'); }
   check('runtime', 'warn', 'The runtime is not running, so projects, the connection and agents were not checked.', 'Start it with: devmate start');

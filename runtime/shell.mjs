@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { findOnPath } from './platform/tools.mjs';
+import { findOnPath, startable } from './platform/tools.mjs';
 
 // Windows PowerShell 5.1 reads a BOM-less script as ANSI and reports redirected
 // errors as CLIXML for -EncodedCommand. A UTF-8 script file with a BOM gives
@@ -14,6 +14,16 @@ const POWERSHELL_PREFIX = "$ProgressPreference='SilentlyContinue'; [Console]::Ou
 const POWERSHELL_SUFFIX = "\n\n$devmateOk = $?\nif ($devmateOk) { exit 0 }\nif ($LASTEXITCODE) { exit $LASTEXITCODE }\n" +
   "if ($null -ne $LASTEXITCODE -and $Error.Count -gt 0 -and \"$($Error[0].FullyQualifiedErrorId)\" -like 'NativeCommandError*') { exit 0 }\nexit 1\n";
 
+// PowerShell 7 from winget or the Store is an app package. Its folder carries its version in its name
+// (...\WindowsApps\Microsoft.PowerShell_7.6.6.0_x64__...) and is gone with the next update, which Windows installs by
+// itself; a runtime that was started from such a PowerShell finds that folder first on PATH, and would have no shell
+// left after the update until it is started again. The name Windows keeps for the package stays, so that is used.
+function lasting(file, env) {
+  if (!/[\\/]WindowsApps[\\/]Microsoft\.PowerShell[^\\/]*[\\/]pwsh\.exe$/i.test(file) || !env.LOCALAPPDATA) return file;
+  const alias = path.join(env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'pwsh.exe');
+  return startable(alias) ? alias : file;
+}
+
 export function detectShell(env = process.env, platform = process.platform, { exists = file => !!fs.statSync(file, { throwIfNoEntry: false })?.isFile() } = {}) {
   if (platform !== 'win32') {
     // /bin/sh is dash on Debian and Ubuntu: `source`, `[[ ]]` and `set -o pipefail`, which models write by habit, fail there.
@@ -21,7 +31,7 @@ export function detectShell(env = process.env, platform = process.platform, { ex
     return bash ? { kind: 'sh', file: bash, label: 'bash' } : { kind: 'sh', file: '/bin/sh', label: 'POSIX sh' };
   }
   const modern = findOnPath('pwsh', env);
-  if (modern) return { kind: 'powershell', file: modern, label: 'PowerShell 7' };
+  if (modern) return { kind: 'powershell', file: lasting(modern, env), label: 'PowerShell 7' };
   // Windows PowerShell 5.1 rejects `a && b`, which is what gets written by habit. Its error text is localized and
   // arrives in the console code page, so the plain statement of the cause is attached by DevMate (see processes.mjs).
   return { kind: 'powershell', label: 'Windows PowerShell 5.1', noChaining: true,

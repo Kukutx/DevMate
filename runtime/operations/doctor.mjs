@@ -1,8 +1,7 @@
-import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createChromeRegistration } from '../platform/chrome-registration.mjs';
-import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
+import { findOnPath, installHint, resolveTool, startable } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
 import { TAKING_OFF_THE_LIST } from '../workspace.mjs';
@@ -21,7 +20,7 @@ export async function doctor(service) {
   const major = Number(process.versions.node.split('.')[0]);
   check('node', major >= 24 ? 'ok' : 'fail', 'Node.js ' + process.versions.node, major >= 24 ? null : 'Install Node.js 24 or newer.');
   const shell = service.processes.shell;
-  const present = !!fs.statSync(shell.file, { throwIfNoEntry: false })?.isFile();
+  const present = startable(shell.file);
   check('shell', present ? 'ok' : 'fail', shell.label + ' at ' + shell.file, 'Commands cannot run without the system shell.');
   // The shell being there does not say that it runs anything. PowerShell is started with a script file, which a policy
   // of an organisation can forbid: asked by running the smallest command the way every command is run.
@@ -100,7 +99,7 @@ export async function doctor(service) {
   const credential = connection.kind === 'cloudflare' ? connection.tokenEnv : connection.kind === 'openai-tunnel' ? connection.runtimeKeyEnv : null;
   if (connection.kind === 'local') check('connection', 'info', 'Local only: http://127.0.0.1 clients can connect, cloud clients such as ChatGPT cannot.', 'For ChatGPT use OpenAI\'s own tunnel (devmate connect openai-tunnel --tunnel-id <id>); for any client a relay on a server of yours (devmate relay setup user@host).');
   else {
-    if (connection.executable) check('connection.executable', fs.statSync(connection.executable, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', connection.executable, 'Install the connector and set its absolute path in the connection settings.');
+    if (connection.executable) check('connection.executable', startable(connection.executable) ? 'ok' : 'fail', connection.executable, 'Install the connector and set its absolute path in the connection settings.');
     if (credential) check('connection.credential', env[credential] ? 'ok' : 'fail', credential + (env[credential] ? ' is set' : ' is missing'),
       'Store it with: devmate secret set ' + credential + ' (or "Configure Connection" in the editor), then restart DevMate.');
     const phase = status.phase || status.status || 'unknown', fault = status.error?.message || service.connectionFault?.message;

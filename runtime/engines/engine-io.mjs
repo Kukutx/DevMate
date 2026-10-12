@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSensitiveWorkspacePath, sensitiveWorkspacePathReason } from '../platform/sensitive-path-policy.mjs';
+import { startable } from '../platform/tools.mjs';
 const normalizeSlash = value => String(value).replace(/\\/g, '/');
 
 // Everything an engine child process may inherit from the runtime's environment:
@@ -65,6 +66,14 @@ export function resolveWorkspacePath(workspace, subpath = '.', { mustExist = fal
   return resolved;
 }
 
+// The path a program is started by: the file it really is, or, for a name Windows keeps on PATH for an app (see
+// startable), that name itself, which is the only way to start it. Null where there is no program to start; a name
+// that cannot be looked at is passed over, not thrown at whoever asked for an engine.
+const program = file => {
+  if (!startable(file)) return null;
+  try { return fs.realpathSync.native(file); } catch { return file; }
+};
+
 export function findExecutable(candidates = []) {
   const pathEntries = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
   const extensions = process.platform === 'win32'
@@ -72,16 +81,15 @@ export function findExecutable(candidates = []) {
     : [''];
   for (const raw of candidates.map(item => String(item || '').trim()).filter(Boolean)) {
     if (path.isAbsolute(raw)) {
-      const stat = fs.statSync(raw, { throwIfNoEntry: false });
-      if (stat?.isFile()) return fs.realpathSync.native(raw);
+      const found = program(raw);
+      if (found) return found;
       continue;
     }
     const names = (path.extname(raw) || process.platform !== 'win32') ? [raw] : extensions.map(ext => `${raw}${ext}`);
     for (const directory of pathEntries) {
       for (const name of names) {
-        const candidate = path.join(directory, name);
-        const stat = fs.statSync(candidate, { throwIfNoEntry: false });
-        if (stat?.isFile()) return fs.realpathSync.native(candidate);
+        const found = program(path.join(directory, name));
+        if (found) return found;
       }
     }
   }
