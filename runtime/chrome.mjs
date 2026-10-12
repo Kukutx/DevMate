@@ -121,55 +121,79 @@ const HOW_TO_CONNECT = 'Open Chrome or Edge with the DevMate extension on the ow
 const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused', 'page_error', 'dialog_open', 'covered', 'timeout']);
 // The owner's own switch in the extension. It is a decision, not a fault, and a model is told so.
 const PAUSED = 'The owner has paused DevMate\'s use of this browser, in the DevMate extension. That is their decision, not a fault: do not try again or work around it. Say so; they switch it back on when they want.';
-// A browser host asks for work again the moment it was answered. A link nobody is asking on for longer than this
-// belongs to a browser that is gone: closed, or ended before its host could say so.
-const IDLE_MS = 5000, CALL_TIMEOUT_MS = 30000;
+// A browser host asks for work again the moment it was answered. A link nobody is asking on for longer than IDLE_MS
+// belongs to a browser that is gone: closed, or ended before its host could say so. A host that was handed work and
+// has not asked again within UNHEARD_MS has, as far as can be told, not received it.
+const IDLE_MS = 5000, UNHEARD_MS = 1500, CALL_TIMEOUT_MS = 30000;
 
 /** The browsers connected to this runtime, and the calls that wait for them. */
-export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, callTimeoutMs = CALL_TIMEOUT_MS } = {}) {
+export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs = UNHEARD_MS, callTimeoutMs = CALL_TIMEOUT_MS } = {}) {
   const links = new Map();
   // The order in which they connected: two can connect within one millisecond.
   let connected = 0;
-  const hand = link => {
+  // A look that is made after whatever arrived meanwhile was read: a runtime that was busy for a moment does not take
+  // a host that was waiting all along for gone.
+  const later = (ms, look) => { const timer = setTimeout(() => setImmediate(look), ms); timer.unref?.(); return timer; };
+  const elsewhere = (link, method) => [...links.values()].filter(other => other !== link && !other.lost && other.heard && other.methods.has(method)).sort((a, b) => b.order - a.order)[0] || null;
+  // What waits on a link and can still go to another browser: what was not handed on yet, and what was handed on
+  // without the host asking again since, as long as it only reads. A read asked for twice is still a read; a change is
+  // not asked for twice.
+  function reroute(link) {
+    for (const item of [...link.queue, ...[...link.handed.values()].filter(one => link.pending.get(one.id)?.readOnly)]) {
+      const other = elsewhere(link, item.method), entry = link.pending.get(item.id);
+      if (!other || !entry) continue;
+      const queued = link.queue.indexOf(item);
+      if (queued >= 0) link.queue.splice(queued, 1);
+      link.handed.delete(item.id); link.pending.delete(item.id);
+      entry.link = other; other.pending.set(item.id, entry); other.queue.push(item); hand(other);
+    }
+  }
+  // Its host went away in the middle of asking, or took work and was not heard of since: new calls pass it over while
+  // another browser is there, and what waits on it and can go elsewhere goes there now.
+  function lose(link) { if (links.get(link.id) !== link) return; link.lost = true; reroute(link); }
+  function hand(link) {
     if (!link.waiter || !link.queue.length) return;
-    const waiter = link.waiter; link.waiter = null; clearTimeout(link.timer); unasked(link);
-    waiter({ calls: link.queue.splice(0).map(({ id, method, params }) => ({ id, method, params })) });
-  };
+    const waiter = link.waiter, items = link.queue.splice(0);
+    link.waiter = null; clearTimeout(link.timer);
+    for (const item of items) link.handed.set(item.id, item);
+    unasked(link);
+    clearTimeout(link.unheardTimer);
+    link.unheardTimer = later(unheardMs, () => { if (links.get(link.id) === link && !link.waiter && link.handed.size) lose(link); });
+    waiter({ calls: items.map(({ id, method, params }) => ({ id, method, params })) });
+  }
   const drop = (link, why) => {
     if (links.get(link.id) !== link) return;
     links.delete(link.id);
-    clearTimeout(link.timer); clearTimeout(link.idleTimer); link.waiter?.({ calls: [] }); link.waiter = null;
-    // What it was not handed yet goes to a browser that is still there and can do it; without one it is refused now,
-    // and was never begun. What it was handed is answered now too: nobody will bring its answer.
-    for (const item of link.queue.splice(0)) {
-      const entry = link.pending.get(item.id), other = current();
-      link.pending.delete(item.id);
-      if (!entry) continue;
-      if (other?.methods.has(item.method)) { entry.link = other; other.pending.set(item.id, entry); other.queue.push(item); hand(other); }
-      else { clearTimeout(entry.timer); entry.reject(fault('browser_unavailable', 'The browser was closed or disconnected before it was asked (' + why + '). ' + HOW_TO_CONNECT, { notStarted: true })); }
+    clearTimeout(link.timer); clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.waiter?.({ calls: [] }); link.waiter = null;
+    reroute(link);
+    // What is left has nowhere to go. What was never handed on was never begun; of what was handed on nothing is known.
+    const never = new Set(link.queue.map(item => item.id));
+    link.queue.length = 0;
+    for (const [id, entry] of link.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(never.has(id) ? fault('browser_unavailable', 'The browser was closed or disconnected before it was asked (' + why + '). ' + HOW_TO_CONNECT, { notStarted: true })
+        : fault('browser_unavailable', 'The browser was closed or disconnected before it answered (' + why + ').' + (entry.readOnly ? '' : ' Whether it was done is not known: look before repeating it.') + ' ' + HOW_TO_CONNECT));
     }
-    for (const call of link.pending.values()) { clearTimeout(call.timer); call.reject(fault('browser_unavailable', 'The browser was closed or disconnected before it answered (' + why + '). ' + HOW_TO_CONNECT)); }
-    link.pending.clear();
+    link.pending.clear(); link.handed.clear();
   };
-  const gone = link => !link.waiter && now() - link.unaskedSince > idleMs;
+  const gone = link => !link.waiter && now() - link.unaskedSince > link.grace;
   const sweep = () => { for (const link of [...links.values()]) if (gone(link)) drop(link, 'it stopped asking for work'); };
-  // From now on nobody asks on this link. Its host is given idleMs to ask again; the look is made after whatever
-  // arrived meanwhile was read, so that a runtime that was busy for a moment does not take a waiting host for gone.
-  function unasked(link) {
-    link.unaskedSince = now();
+  // From now on nobody asks on this link. Its host is given idleMs to ask again; one whose question was dropped
+  // unanswered, which is what a host that was ended leaves behind, the shorter time.
+  function unasked(link, grace = idleMs) {
+    link.unaskedSince = now(); link.grace = grace;
     clearTimeout(link.idleTimer);
-    link.idleTimer = setTimeout(() => setImmediate(() => { if (links.get(link.id) === link && gone(link)) drop(link, 'it stopped asking for work'); }), idleMs + 1);
-    link.idleTimer.unref?.();
+    link.idleTimer = later(grace + 1, () => { if (links.get(link.id) === link && gone(link)) drop(link, 'it stopped asking for work'); });
   }
-  // The browser a call goes to: the one that connected last. One whose host went away in the middle of asking is
-  // passed over while another is there.
-  const current = () => { sweep(); const live = [...links.values()].sort((a, b) => b.order - a.order); return live.find(link => !link.lost) || live[0] || null; };
+  // The browser a call goes to: the one that connected last. One that was lost sight of, or has connected and not yet
+  // asked for work once, is passed over while another is there.
+  const current = () => { sweep(); const live = [...links.values()].sort((a, b) => b.order - a.order); return live.find(link => !link.lost && link.heard) || live.find(link => !link.lost) || live[0] || null; };
   const owned = linkId => { const link = links.get(linkId); if (!link) throw fault('not_found', 'This browser link is no longer known to the runtime; attach again.'); return link; };
 
   function attach({ browser = '', extension = '', methods = [] } = {}) {
     sweep();
     const link = { id: 'browser-' + randomUUID(), browser: String(browser).slice(0, 100), extension: String(extension).slice(0, 40), methods: new Set(methods),
-      attachedAt: now(), order: ++connected, unaskedSince: now(), lost: false, queue: [], pending: new Map(), waiter: null, timer: null, idleTimer: null };
+      attachedAt: now(), order: ++connected, unaskedSince: now(), grace: idleMs, lost: false, heard: false, queue: [], handed: new Map(), pending: new Map(), waiter: null, timer: null, idleTimer: null, unheardTimer: null };
     links.set(link.id, link);
     unasked(link);
     return { linkId: link.id };
@@ -182,10 +206,11 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, callTimeou
     const link = owned(linkId);
     // One reader at a time: an earlier one that is still waiting is answered with nothing.
     if (link.waiter) { clearTimeout(link.timer); link.waiter({ calls: [] }); link.waiter = null; }
-    clearTimeout(link.idleTimer); link.lost = false;
+    // It asks again: what it was handed has arrived, and it is the browser it was.
+    clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.handed.clear(); link.lost = false; link.heard = true;
     return new Promise(resolve => {
       link.waiter = resolve;
-      const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); link.lost = lost; unasked(link); resolve({ calls: [] }); };
+      const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); unasked(link, lost ? Math.min(idleMs, unheardMs) : idleMs); resolve({ calls: [] }); if (lost) lose(link); };
       link.timer = setTimeout(() => left(false), Math.max(0, waitMs));
       link.timer.unref?.();
       if (signal?.aborted) left(true); else signal?.addEventListener('abort', () => left(true), { once: true });
@@ -195,7 +220,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, callTimeou
   function result({ linkId, id, ok, result: value, error } = {}) {
     const link = owned(linkId), call = link.pending.get(id);
     if (!call) return { accepted: false };
-    link.pending.delete(id); clearTimeout(call.timer);
+    link.pending.delete(id); link.handed.delete(id); clearTimeout(call.timer);
     if (ok === true) call.resolve(value);
     else if (error?.code === 'paused') call.reject(fault('paused', PAUSED, { notStarted: true }));
     else call.reject(fault(ERROR_CODES.has(error?.code) ? error.code : 'browser_error', String(error?.message || 'The browser could not do this.').slice(0, 1000)));
@@ -229,8 +254,8 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, callTimeou
     const id = 'call-' + randomUUID();
     const answer = await new Promise((resolve, reject) => {
       // The link is the one the call waits on now: another one, when the first went away before it was handed on.
-      const entry = { resolve, reject, timer: null, link };
-      const give = failure => { const on = entry.link; on.pending.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); reject(failure(queued >= 0)); };
+      const entry = { resolve, reject, timer: null, link, readOnly: definition.readOnly };
+      const give = failure => { const on = entry.link; on.pending.delete(id); on.handed.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); reject(failure(queued >= 0)); };
       const patience = Math.max(callTimeoutMs, definition.waitMs?.(params) ?? 0);
       entry.timer = setTimeout(() => give(waiting => fault('browser_timeout', 'The browser did not answer ' + capability + ' within ' + Math.round(patience / 1000) + ' seconds.' +
         (definition.readOnly || waiting ? '' : ' Whether it was done is not known: look before repeating it.'), waiting ? { notStarted: true } : {})), patience);

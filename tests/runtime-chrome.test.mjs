@@ -96,11 +96,21 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   assert.deepEqual([link.status().browser, link.status().browsers], ['Google Chrome', 1]);
   await assert.rejects(async () => link.next({ linkId: edge }), { code: 'not_found' });
 
-  // A browser whose host stopped asking without a word (it hangs, or was ended between two questions): what waits for
-  // it and was not handed on yet goes to the browser that is there.
+  // A browser that has connected and has not asked for work yet is not what a call waits for while another browser
+  // is there: the call is answered at once. If it never asks, its link goes after the moment it is given.
   const silent = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
-  assert.deepEqual(await quickly(link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), 'the call that waited on a browser that never asked'), { by: 'chrome' });
+  assert.deepEqual(await quickly(link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), 'the call beside a browser that has not asked yet'), { by: 'chrome' });
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(link.status().browsers, 1);
   await assert.rejects(async () => link.next({ linkId: silent }), { code: 'not_found' });
+  // Alone, such a browser is what there is: the call waits for it, and is its to answer once it asks.
+  const late = createBrowserLink({ idleMs: 400, callTimeoutMs: 10000 }), slow = late.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
+  const waited = late.call({ capability: 'chrome.tabs.list' }, { readOnly: true });
+  await new Promise(resolve => setTimeout(resolve, 60));
+  const given = await late.next({ linkId: slow, waitMs: 1000 });
+  late.result({ linkId: slow, id: given.calls[0].id, ok: true, result: { by: 'the browser that asked late' } });
+  assert.deepEqual(await waited, { by: 'the browser that asked late' });
+  late.close();
 
   // The only browser goes: a call is refused within that moment, as never begun, and not after half a minute.
   const alone = createBrowserLink({ idleMs: 80, callTimeoutMs: 10000 });
@@ -125,7 +135,22 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   // And one that keeps asking stays, however long nothing is asked of it.
   const steady = createBrowserLink({ idleMs: 80 }), kept = steady.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
   for (let round = 0; round < 6; round++) { await steady.next({ linkId: kept, waitMs: 40 }); assert.equal(steady.status().connected, true); }
-  alone.close(); steady.close(); link.close();
+  // A host that took calls and was not heard of again (it was ended while it was being answered): a call that only
+  // reads goes to the browser that is there; a change is not asked for twice, and is answered when the link goes,
+  // with nothing claimed about whether it was done.
+  const taker = createBrowserLink({ idleMs: 250, unheardMs: 40, callTimeoutMs: 10000 }), there = taker.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, asked = [];
+  void (async () => { for (;;) { let work; try { work = await taker.next({ linkId: there, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { asked.push(call.method); taker.result({ linkId: there, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
+  const ended = taker.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
+  assert.deepEqual(await taker.next({ linkId: ended, waitMs: 10 }), { calls: [] });
+  const read = taker.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), change = taker.call({ capability: 'chrome.tabs.close', input: { tabIds: [7] } });
+  assert.deepEqual((await taker.next({ linkId: ended, waitMs: 1000 })).calls.map(call => call.method), ['tabs.list', 'tabs.close']);
+  assert.deepEqual(await quickly(read, 'the read a host took with it'), { by: 'the browser that is there' });
+  const unknown = await quickly(change, 'the change a host took with it');
+  assert.deepEqual([unknown.code, unknown.notStarted], ['browser_unavailable', undefined]);
+  assert.match(unknown.message, /before it answered \(it stopped asking for work\)\. Whether it was done is not known: look before repeating it\./);
+  assert.deepEqual(asked, ['tabs.list'], 'the change was not asked of the other browser');
+  taker.close(); alone.close(); steady.close(); link.close();
 });
 
 test('what a developer debugs a page with: answers read as lines, a wait that is given its time, and cookie values only as a change', async () => {
