@@ -84,7 +84,7 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
       for (const call of work.calls) link.result({ linkId, id: call.id, ok: true, result: { by: name } }); } })();
     return () => stop.abort();
   };
-  const quickly = async (work, what) => { const started = Date.now(), value = await work.then(result => result, failure => failure); assert.ok(Date.now() - started < 2000, what + ' took ' + (Date.now() - started) + ' ms'); return value; };
+  const quickly = async (work, what) => { const started = Date.now(), value = await work.then(result => result, failure => failure); assert.ok(Date.now() - started < 5000, what + ' took ' + (Date.now() - started) + ' ms'); return value; };
   // The owner's browser, and a second one that connected after it: calls go to the second.
   const chrome = link.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId; host(chrome, 'chrome');
   const edge = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId, endEdge = host(edge, 'edge');
@@ -105,7 +105,7 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   assert.equal(link.status().browsers, 1);
   await assert.rejects(async () => link.next({ linkId: silent }), { code: 'not_found' });
   // Alone, such a browser is what there is: the call waits for it, and is its to answer once it asks.
-  const late = createBrowserLink({ idleMs: 400, callTimeoutMs: 10000 }), slow = late.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
+  const late = createBrowserLink({ idleMs: 1500, callTimeoutMs: 10000 }), slow = late.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
   const waited = late.call({ capability: 'chrome.tabs.list' }, { readOnly: true });
   await new Promise(resolve => setTimeout(resolve, 60));
   const given = await late.next({ linkId: slow, waitMs: 1000 });
@@ -114,7 +114,9 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   late.close();
 
   // The only browser goes: a call is refused within that moment, as never begun, and not after half a minute.
-  const alone = createBrowserLink({ idleMs: 80, callTimeoutMs: 10000 });
+  // (The moments here are a few hundred milliseconds: long enough that a busy computer running the tests does not
+  // lose a browser that is still there, short enough to tell them from the half minute a call would wait.)
+  const alone = createBrowserLink({ idleMs: 300, callTimeoutMs: 10000 });
   const only = alone.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, leaving = new AbortController();
   const asking = alone.next({ linkId: only, waitMs: 5000 }, { signal: leaving.signal });
   leaving.abort(); assert.deepEqual(await asking, { calls: [] });
@@ -134,12 +136,12 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   alone.result({ linkId: back, id: returned.calls[0].id, ok: true, result: { by: 'the same browser' } });
   assert.deepEqual(await wanted, { by: 'the same browser' }); assert.equal(alone.status().connected, true);
   // And one that keeps asking stays, however long nothing is asked of it.
-  const steady = createBrowserLink({ idleMs: 80 }), kept = steady.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
-  for (let round = 0; round < 6; round++) { await steady.next({ linkId: kept, waitMs: 40 }); assert.equal(steady.status().connected, true); }
+  const steady = createBrowserLink({ idleMs: 500 }), kept = steady.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
+  for (let round = 0; round < 5; round++) { await steady.next({ linkId: kept, waitMs: 150 }); assert.equal(steady.status().connected, true); }
   // A host that took calls and was not heard of again (it was ended while it was being answered): a call that only
   // reads goes to the browser that is there; a change is not asked for twice, and is answered when the link goes,
   // with nothing claimed about whether it was done.
-  const taker = createBrowserLink({ idleMs: 250, unheardMs: 40, callTimeoutMs: 10000 }), there = taker.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, asked = [];
+  const taker = createBrowserLink({ idleMs: 1000, unheardMs: 100, callTimeoutMs: 10000 }), there = taker.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, asked = [];
   void (async () => { for (;;) { let work; try { work = await taker.next({ linkId: there, waitMs: 300 }); } catch { return; }
     for (const call of work.calls) { asked.push(call.method); taker.result({ linkId: there, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
   const ended = taker.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;

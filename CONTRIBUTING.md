@@ -16,7 +16,7 @@ Do not include credentials, real environment files, private endpoints, keys, dat
 - Preserve the documented identity and execution boundaries in `SECURITY.md`.
 - Keep CLI, plugin, MCP and workbench actions connected to the same service operation and state.
 - Update public usage and verification documentation when a protocol, configuration, host entrypoint or build procedure changes.
-- The version is stated in several files (runtime, package, lock file, `plugin.json`, Obsidian `manifest.json` and `versions.json`). Change it with `npm run version:set -- X.Y.Z`; `npm run check` fails when they disagree.
+- The version is stated in several files (runtime, package, lock file, `plugin.json`, Obsidian `manifest.json` and `versions.json`, and the browser extension's `chrome-extension/manifest.json`). Change it with `npm run version:set -- X.Y.Z`; `npm run check` fails when they disagree.
 
 ## Build and test
 

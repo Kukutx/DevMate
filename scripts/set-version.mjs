@@ -21,6 +21,9 @@ rewrite('package.json', stated, 1);
 rewrite('package-lock.json', stated, 2);
 rewrite('plugin.json', stated, 1);
 rewrite('manifest.json', stated, 1);
+// The browser extension. A runtime puts its own copy in the place of the one a browser loads unless that one states
+// a later version: an extension left at the number before would be put back by every entry that is still older.
+rewrite('chrome-extension/manifest.json', stated, 1);
 rewrite('runtime/version.mjs', /^(export const VERSION = ')[^']*(')/m, 1);
 // Obsidian reads here which release fits which version of the app.
 const versions = JSON.parse(fs.readFileSync(path.join(root, 'versions.json'), 'utf8'));
