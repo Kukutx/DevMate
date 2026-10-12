@@ -1009,6 +1009,12 @@ export function createWorkspaceService({ store } = {}) {
     if (!/^[A-Za-z0-9-]{1,80}$/.test(name) || !project.controlRoot) throw error('invalid_input', 'A working copy needs a plain name.');
     const head = await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']), base = head.stdout.trim();
     if (head.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(base)) throw error('not_a_repository', 'A copy of its own needs a Git repository with at least one commit: what the agent proposes is what differs from that commit.');
+    // A copy is a worktree, which is the whole repository. Of a project that is one folder of a repository nothing
+    // here would be right: the agent would stand in the repository's top folder, Git applies a patch from inside a
+    // folder to that folder only and is silent about the rest, and what was applied would be looked for one folder
+    // too deep. So such a project gets no copy.
+    const within = (await git(project, ['rev-parse', '--show-prefix'])).stdout.trim().replace(/\/$/, '');
+    if (within) throw error('not_repository_root', 'A copy of its own needs the project to be the top folder of its Git repository: this project is the folder ' + within + ' inside one. Delegate without isolate, or share the repository\'s top folder as the project.');
     const root = path.join(copiesRoot(project), name), branch = 'devmate/' + name;
     fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
     checkedCommand(await gitChange(projectRoot(project), ['worktree', 'add', '--quiet', '-b', branch, root, base]));

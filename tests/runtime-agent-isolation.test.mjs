@@ -34,19 +34,21 @@ function adapters() {
   };
   return { factory, instances };
 }
-async function fixture(t, { repository = true, instance = 'instance' } = {}) {
+// within: the project is that folder inside the repository, not the repository's top folder.
+async function fixture(t, { repository = true, instance = 'instance', within = '' } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-isolation-'));
-  const root = path.join(temp, 'project'); fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  const top = path.join(temp, 'project'), root = path.join(top, within); fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
   fs.writeFileSync(path.join(root, 'old.txt'), 'to be deleted\n');
-  if (repository) { git(root, 'init', '--quiet', '-b', 'main'); git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'first'); }
+  if (within) { fs.mkdirSync(path.join(top, 'other')); fs.writeFileSync(path.join(top, 'other', 'b.txt'), 'beside the project\n'); }
+  if (repository) { git(top, 'init', '--quiet', '-b', 'main'); git(top, 'add', '.'); git(top, 'commit', '--quiet', '-m', 'first'); }
   const { factory, instances } = adapters();
   const service = new DevMateService({ instanceRoot: path.join(temp, instance), endpoint: 'http://127.0.0.1:1/api/agent', adapterFactory: factory });
   await service.ready;
   t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const project = await service.call('project.create', { root, name: 'Isolation' }, owner);
   const file = name => path.join(root, name), read = name => fs.readFileSync(file(name), 'utf8').replace(/\r\n/g, '\n');
-  return { service, project, root, temp, factory, instances, file, read };
+  return { service, project, root, top, temp, factory, instances, file, read };
 }
 // What the stand-in agent does: an edit, a new file and a deletion.
 const work = cwd => {
@@ -136,6 +138,26 @@ test('a copy beside an instance that lives in a folder named .devmate is read, a
   for (const place of [elsewhere, copies, path.join(temp, '.devmate', 'runtime')]) {
     await assert.rejects(service.workspace.proposal(service.project(project.id), { root: place, branch: 'devmate/x', base: git(root, 'rev-parse', 'HEAD').trim() }), { code: 'invalid_input' }, place);
   }
+});
+
+// A copy is a Git worktree, and that is the whole repository. For a project that is one folder of a repository the
+// rest of what applying does would go wrong: Git applies a patch from inside a folder to that folder only and says
+// nothing of the rest, so work outside it would be lost with the copy while the answer listed it as applied; and
+// what was applied would be looked for one folder too deep, and never reach the history.
+test('a project that is a folder inside a larger repository gets no copy: it is refused before anything is made', async t => {
+  const { service, project, root, top, temp, factory, instances, read } = await fixture(t, { within: 'pkg' });
+  factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, '..', 'other', 'b.txt'), 'changed beside the project\n'); };
+  await assert.rejects(service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected), error => {
+    assert.equal(error.code, 'not_repository_root');
+    assert.match(error.message, /^A copy of its own needs the project to be the top folder of its Git repository: this project is the folder pkg inside one\. Delegate without isolate, or share the repository's top folder as the project\.$/);
+    return true;
+  });
+  // Nothing was made, and nobody was started.
+  assert.equal(instances.length, 0); assert.equal(fs.existsSync(path.join(temp, 'instance-copies')), false);
+  assert.equal(git(top, 'branch', '--list', 'devmate/*').trim(), ''); assert.equal(git(top, 'worktree', 'list').trim().split('\n').length, 1);
+  // Without a copy the agent works in the project's folder as before.
+  const direct = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', waitMs: 20000 }, connected);
+  assert.equal(direct.settled, true); assert.equal(instances[0].options.cwd, fs.realpathSync.native(root)); assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n');
 });
 
 // An owner who has switched on Git's own file watcher (core.fsmonitor in their Git configuration) gets one for every
