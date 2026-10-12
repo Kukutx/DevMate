@@ -9,9 +9,9 @@
 
 export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor']);
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
-// How long a picture of a tab that is not shown is waited for (see capture()). In a real Chrome one was seen to
-// come after four seconds, and another never.
-const HIDDEN_PICTURE_MS = 10000;
+// How long each asking for a picture of a tab is given before it is asked for again, and at last given up: ten
+// seconds in all (see capture()).
+const PICTURE_AGAIN_MS = [500, 1000, 2000, 3000, 3500];
 const LEVELS = { verbose: 0, debug: 0, log: 1, info: 1, navigation: 1, warning: 2, warn: 2, dialog: 2, error: 3, exception: 3, assert: 3 };
 const ASKED = { debug: 0, info: 1, warn: 2, error: 3 };
 const INTERACTIVE = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'listbox', 'treeitem']);
@@ -51,8 +51,11 @@ const printed = item => {
 
 // What follows runs in the page, not here: each is sent there as text, so it may use nothing else from this file.
 function byText(wanted) {
-  const shown = item => (item.innerText || item.value || item.getAttribute('aria-label') || '').trim();
-  const hit = list => [...list].slice(0, 5000).filter(item => item.getClientRects().length && shown(item).includes(wanted)).sort((a, b) => shown(a).length - shown(b).length)[0];
+  // What an element shows, what a field holds, and what it is called where it shows other words or none (a button
+  // drawn as a picture, an empty field): the names page.snapshot gives. The length of the shortest that has the text.
+  const least = item => Math.min(...[item.innerText, item.value, item.getAttribute('aria-label'), item.getAttribute('title'), item.getAttribute('alt'), item.getAttribute('placeholder')]
+    .map(name => typeof name === 'string' ? name.trim() : '').filter(name => name.includes(wanted)).map(name => name.length));
+  const hit = list => [...list].slice(0, 5000).filter(item => item.getClientRects().length).map(item => [item, least(item)]).filter(([, length]) => length < Infinity).sort((a, b) => a[1] - b[1])[0]?.[0];
   return hit(document.querySelectorAll('button, a, [role=button], [role=link], [role=tab], [role=menuitem], input, select, textarea, summary, label')) || hit(document.querySelectorAll('body *')) || null;
 }
 function inFront(x, y) {
@@ -60,8 +63,18 @@ function inFront(x, y) {
   if (!hit || hit === this || this.contains(hit) || hit.contains(this) || hit.closest('label')?.control === this) return null;
   return '<' + hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') + (typeof hit.className === 'string' && hit.className.trim() ? '.' + hit.className.trim().split(/\s+/).slice(0, 3).join('.') : '') + '>';
 }
+// Whether the page shows a text: written on it, or as the name of something that shows no words (what a screen reader
+// says of a button drawn as a picture, what a field holds or asks for). page.snapshot gives these names too.
+function shows(wanted) {
+  if (!document.body) return false;
+  if (document.body.innerText.includes(wanted)) return true;
+  return [...document.querySelectorAll('[aria-label], [title], [alt], [placeholder], input, textarea')].slice(0, 5000).some(item => item.getClientRects().length &&
+    [item.getAttribute('aria-label'), item.getAttribute('title'), item.getAttribute('alt'), item.getAttribute('placeholder'), item.value].some(named => typeof named === 'string' && named.includes(wanted)));
+}
 function keyboard(clear) {
-  const field = document.activeElement;
+  let field = document.activeElement;
+  // Of a component the page names only the outside: what has the keyboard is further in.
+  while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement;
   if (!field || field === document.body || field === document.documentElement) return null;
   if (clear) {
     if (typeof field.select === 'function') field.select();
@@ -173,7 +186,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       throw fail('browser_error', /cannot access|chrome:|chrome-extension:|web store/i.test(said(error)) ? 'The browser does not let a page of its own, or of the Web Store, be debugged.' : 'The browser did not attach the debugger to this tab (' + said(error) + ').');
     });
     // Each of the two lists counts what it lost itself, once it is full.
-    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null };
+    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false };
     sessions.set(tabId, session);
     try { for (const domain of ['Runtime', 'Log', 'Network', 'Page']) await command(tabId, domain + '.enable'); }
     catch (error) { await release(tabId); throw error; }
@@ -221,6 +234,25 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     if (answer.exceptionDetails) throw fail('page_error', cut(answer.exceptionDetails.exception?.description || answer.exceptionDetails.text, 1000));
     return answer.result?.value;
   };
+  // A tab behind another, or in a window that is put away, the browser treats as not shown. It draws nothing of it. A
+  // page it has never drawn it gives no click and no key, while answering that they were given; a pointer moved there
+  // is answered after five seconds, a turn of the wheel never (all seen in a real Chrome). Told that it has the focus,
+  // the page is drawn and given all of that where it is, so nothing is brought forward on the owner's screen: what
+  // DevTools calls "Emulate a focused page". It lasts while the tab is debugged. Only what uses the mouse or the keys
+  // on a page, or pictures it, does this: a read leaves a tab that is put away as it is.
+  const hidden = async id => (await run(id, 'document.visibilityState'))?.value === 'hidden';
+  const wake = id => raw(id, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  async function awake(id, session) {
+    if (session.awake) return;
+    const put = await hidden(id);
+    await wake(id);
+    if (put) {
+      // A page that was never drawn takes a click only once it has been: it is given two frames, or two seconds.
+      await run(id, 'new Promise(done => { requestAnimationFrame(() => requestAnimationFrame(() => done())); setTimeout(done, 2000); })', { awaitPromise: true }).catch(() => {});
+      if (await hidden(id)) throw fail('invalid_input', 'The browser is not showing this tab and could not be made to draw it where it is, so a click, a key or the wheel may never arrive there. Bring it forward (tabs.activate) and ask again.');
+    }
+    session.awake = true;
+  }
 
   // The element a method acts on: by its number in the last snapshot, by a CSS selector, or by the text it shows.
   async function element(id, { ref, selector, text: shown }) {
@@ -317,7 +349,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     'page.waitFor': async ({ tabId, selector, text: shown, timeoutMs } = {}) => {
       if ((selector === undefined) === (shown === undefined)) throw fail('invalid_input', 'Say what to wait for: selector, or text.');
       const limit = whole(timeoutMs, 'timeoutMs', { optional: true, min: 100, max: 30000 }) ?? 10000, began = clock();
-      const expression = selector !== undefined ? '!!document.querySelector(' + JSON.stringify(text(selector, 'selector', { max: 1000 })) + ')' : '!!document.body && document.body.innerText.includes(' + JSON.stringify(text(shown, 'text', { max: 500 })) + ')';
+      const expression = selector !== undefined ? '!!document.querySelector(' + JSON.stringify(text(selector, 'selector', { max: 1000 })) + ')' : inPage(shows, text(shown, 'text', { max: 500 }));
       // The tab is the one that was in front when this was asked, whatever the owner turns to while it waits.
       const { id } = await page(tabId);
       for (;;) {
@@ -332,7 +364,9 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     },
 
     'page.click': async ({ tabId, ref, selector, text: shown, double } = {}) => {
-      const { id, session } = await page(tabId), at = await point(id, { ref, selector, text: shown }), button = { x: at.x, y: at.y, button: 'left' };
+      const { id, session } = await page(tabId);
+      await awake(id, session);
+      const at = await point(id, { ref, selector, text: shown }), button = { x: at.x, y: at.y, button: 'left' };
       await unlessDialog(session, async halted => {
         await command(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
         // A button that was pressed is let go whatever happens; a second click is not begun once the first was answered with a dialog.
@@ -344,13 +378,16 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       return withDialog(session, { tabId: id, clicked: at });
     },
     'page.hover': async ({ tabId, ref, selector, text: shown } = {}) => {
-      const { id } = await page(tabId), at = await point(id, { ref, selector, text: shown });
+      const { id, session } = await page(tabId);
+      await awake(id, session);
+      const at = await point(id, { ref, selector, text: shown });
       await command(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
       return { tabId: id, hovered: at };
     },
     'page.type': async ({ tabId, ref, selector, text: typed, clear } = {}) => {
       if (typeof typed !== 'string' || typed.length > 100000) throw fail('invalid_input', 'text is what to type, at most 100000 characters.');
       const { id, session } = await page(tabId);
+      await awake(id, session);
       if (ref !== undefined || selector !== undefined) await raw(id, 'DOM.focus', { objectId: await element(id, { ref, selector }) }).catch(error => { throw error.code ? error : fail('invalid_input', 'This element cannot take the keyboard: it is not something to type into.'); });
       const into = (await run(id, inPage(keyboard, clear === true))).value;
       if (!into) throw fail('invalid_input', 'Nothing on the page has the keyboard. Say where to type: ref or selector.');
@@ -366,6 +403,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       if (!Array.isArray(held) || held.some(one => !Object.hasOwn(MODIFIERS, one))) throw fail('invalid_input', 'modifiers is a list of: ' + Object.keys(MODIFIERS).join(', ') + '.');
       if (typeof name !== 'string' || (!/^[a-z0-9]$/i.test(name) && !Object.hasOwn(KEYS, name))) throw fail('invalid_input', 'key is one letter or digit, or one of: ' + Object.keys(KEYS).join(', ') + '.');
       const { id, session } = await page(tabId);
+      await awake(id, session);
       await unlessDialog(session, () => press(id, name, held));
       return withDialog(session, { tabId: id, pressed: [...held, name].join('+') });
     },
@@ -378,9 +416,11 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       return { tabId: id, selected: chosen, untrusted: true };
     },
     'page.scroll': async ({ tabId, ref, selector, deltaY } = {}) => {
-      const { id } = await page(tabId);
+      const { id, session } = await page(tabId);
       if (ref !== undefined || selector !== undefined) { await command(id, 'DOM.scrollIntoViewIfNeeded', { objectId: await element(id, { ref, selector }) }); return { tabId: id, scrolledTo: ref ?? selector }; }
-      const by = whole(deltaY, 'deltaY', { min: -100000, max: 100000 }), view = (await command(id, 'Page.getLayoutMetrics')).cssVisualViewport || {};
+      const by = whole(deltaY, 'deltaY', { min: -100000, max: 100000 });
+      await awake(id, session);
+      const view = (await command(id, 'Page.getLayoutMetrics')).cssVisualViewport || {};
       await command(id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round((view.clientWidth || 800) / 2), y: Math.round((view.clientHeight || 600) / 2), deltaX: 0, deltaY: by });
       return { tabId: id, scrolledBy: by };
     },
@@ -423,16 +463,22 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
 
   /** A picture of a tab through the debugger: the whole page, or a tab that is not in front. */
   async function capture(tabId, { fullPage = false } = {}) {
-    const { id } = await page(tabId);
-    // The browser draws only what it shows. Of a tab behind another it still has a picture where it drew it before;
-    // of one that was never shown it never answers. That is waited for briefly and then said, with what to do.
-    const hidden = (await run(id, 'document.visibilityState'))?.value === 'hidden';
-    const pictured = params => {
-      const asked = command(id, 'Page.captureScreenshot', params);
-      if (!hidden) return asked;
-      asked.catch(() => {});
-      return Promise.race([asked, pause(HIDDEN_PICTURE_MS).then(() => { throw fail('invalid_input', 'The browser gives no picture of this tab while it is behind another: it draws only what it shows. Bring it forward (tabs.activate) and ask again.'); })]);
-    };
+    const { id, session } = await page(tabId);
+    // The browser draws only what it shows, so a tab that is put away is first told that it is looked at (see awake).
+    if (!session.awake && await hidden(id)) { await wake(id); session.awake = !await hidden(id); }
+    // Of a tab behind another the browser may still leave a picture unanswered, and gives it when it is asked again
+    // (seen in a real Chrome: each one came by the third asking). So it is asked again, soon at first, until one
+    // answer has come, and after ten seconds it is said what to do.
+    const pictured = params => new Promise((resolve, reject) => {
+      let asks = 0, timer;
+      const ended = settle => given => { cancel(timer); settle(given); };
+      const ask = () => {
+        if (asks === PICTURE_AGAIN_MS.length) return reject(fail('invalid_input', 'The browser gave no picture of this tab in ten seconds. If it is behind another tab, bring it forward (tabs.activate) and ask again.'));
+        command(id, 'Page.captureScreenshot', params).then(ended(resolve), ended(reject));
+        timer = schedule(ask, PICTURE_AGAIN_MS[asks++]);
+      };
+      ask();
+    });
     if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' })).data };
     // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
     const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
