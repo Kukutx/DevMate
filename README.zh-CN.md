@@ -44,6 +44,8 @@ DevMate 让聊天里的模型直接在你自己的电脑上干活：读写和搜
 
 ## 最初五分钟
 
+第一次用、想让 ChatGPT 网页版或 Claude.ai 在你的电脑上干活？[上手教程](docs/GETTING_STARTED.zh-CN.md)一步一步带你做，每一步都写了做完应该看到什么。下面是简短版：
+
 用 VS Code：
 
 1. 打开一个项目文件夹，在命令面板里运行 **DevMate: Start DevMate Runtime**。这个文件夹会以读写方式共享，窗口会告诉你一次。
@@ -460,6 +462,7 @@ npm run candidate          # 构建一次，对打包产物做冒烟，把一次
 
 ## 文档
 
+- [上手教程](docs/GETTING_STARTED.zh-CN.md)：从零到 ChatGPT 在你的电脑上干活，一步一步
 - [领域能力](docs/CAPABILITIES.md)：浏览器、Godot、逆向分析、Obsidian
 - [安全策略](SECURITY.md)及已知限制
 - [更新日志](CHANGELOG.md)

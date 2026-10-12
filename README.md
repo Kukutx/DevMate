@@ -44,6 +44,8 @@ The main use is connecting the chat window you already use (ChatGPT on the web, 
 
 ## The first five minutes
 
+New to DevMate and want ChatGPT on the web or Claude.ai working on your computer? [Getting started](docs/GETTING_STARTED.md) walks through it step by step, with what you should see after each one. The short form:
+
 With VS Code:
 
 1. Open a project folder and run **DevMate: Start DevMate Runtime** from the Command Palette. The folder is shared, read and write, and the window tells you so once.
@@ -458,6 +460,7 @@ Every operation is defined once in `runtime/operations/` and authorised by the r
 
 ## Documentation
 
+- [Getting started](docs/GETTING_STARTED.md): from nothing to ChatGPT working on your computer, step by step
 - [Capabilities](docs/CAPABILITIES.md): browser, Godot, reverse engineering, Obsidian
 - [Security policy](SECURITY.md) and its known limits
 - [Changelog](CHANGELOG.md)
