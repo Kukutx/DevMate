@@ -64,11 +64,15 @@ const inside = (root, target) => {
 const protects = project => project.protectSecrets !== false;
 const hidden = (project, rel) => protects(project) && isSensitiveWorkspacePath(rel);
 
+// Marks the view of a project that stands in a working copy this runtime made (see inCopy). Not a name data can carry.
+const OWN_COPY = Symbol('own copy');
 function projectRoot(project) {
   if (!project || typeof project.id !== 'string' || !path.isAbsolute(project.root || '') || !['read', 'write'].includes(project.access)) {
     throw error('invalid_project', 'A project with an absolute root and read/write access is required.');
   }
-  assertSafeWorkspaceRoot(project.root);
+  // The rule is for a folder an owner shares. A copy of the runtime's own is where the runtime put it, beside its
+  // instance directory, and that is ~/.devmate where nothing else was chosen: a name the rule refuses.
+  if (!project[OWN_COPY]) assertSafeWorkspaceRoot(project.root);
   // A registered directory that has since been swapped for a link would silently redirect every file tool.
   if (fs.lstatSync(project.root).isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
   const root = fs.realpathSync.native(project.root);
@@ -989,8 +993,15 @@ export function createWorkspaceService({ store } = {}) {
   const gitChange = (cwd, args, input = {}, extra = {}) => invoke('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull, '-c', 'core.quotePath=false',
     '-c', 'color.ui=false', '-c', 'commit.gpgsign=false', ...(WINDOWS ? ['-c', 'core.longpaths=true'] : []), ...args], cwd, { timeoutMs: 120000, ...input },
   { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_PAGER: 'cat', PAGER: 'cat', ...extra });
-  // The copy as a project of its own for reading: the same rules about what may be shown, another folder.
-  const inCopy = (project, copy) => ({ ...project, root: copy.root, controlRoot: null });
+  // Where this runtime keeps the copies of a project: beside its instance directory.
+  const copiesRoot = project => path.join(path.dirname(project.controlRoot), path.basename(project.controlRoot) + '-copies');
+  // The copy as a project of its own for reading: the same rules about what may be shown, another folder. That folder
+  // is one of the runtime's own copies or it is not read: what lets it past the rule for shared folders is where it is.
+  const inCopy = (project, copy) => {
+    const root = path.resolve(String(copy?.root || '')), name = project.controlRoot ? path.relative(copiesRoot(project), root) : '';
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(name)) throw error('invalid_input', 'This is not a working copy this DevMate made for an agent.');
+    return { ...project, root, controlRoot: null, [OWN_COPY]: true };
+  };
   const copyExists = copy => { if (!copy?.root || !fs.existsSync(copy.root)) throw error('not_found', 'This agent has no working copy of its own (any more).'); };
 
   async function isolate(project, name) {
@@ -998,7 +1009,7 @@ export function createWorkspaceService({ store } = {}) {
     if (!/^[A-Za-z0-9-]{1,80}$/.test(name) || !project.controlRoot) throw error('invalid_input', 'A working copy needs a plain name.');
     const head = await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']), base = head.stdout.trim();
     if (head.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(base)) throw error('not_a_repository', 'A copy of its own needs a Git repository with at least one commit: what the agent proposes is what differs from that commit.');
-    const root = path.join(path.dirname(project.controlRoot), path.basename(project.controlRoot) + '-copies', name), branch = 'devmate/' + name;
+    const root = path.join(copiesRoot(project), name), branch = 'devmate/' + name;
     fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
     checkedCommand(await gitChange(projectRoot(project), ['worktree', 'add', '--quiet', '-b', branch, root, base]));
     // What is not committed is not in the copy; whoever delegates is told how much that is.

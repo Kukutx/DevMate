@@ -34,14 +34,14 @@ function adapters() {
   };
   return { factory, instances };
 }
-async function fixture(t, { repository = true } = {}) {
+async function fixture(t, { repository = true, instance = 'instance' } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-isolation-'));
   const root = path.join(temp, 'project'); fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
   fs.writeFileSync(path.join(root, 'old.txt'), 'to be deleted\n');
   if (repository) { git(root, 'init', '--quiet', '-b', 'main'); git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'first'); }
   const { factory, instances } = adapters();
-  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: 'http://127.0.0.1:1/api/agent', adapterFactory: factory });
+  const service = new DevMateService({ instanceRoot: path.join(temp, instance), endpoint: 'http://127.0.0.1:1/api/agent', adapterFactory: factory });
   await service.ready;
   t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const project = await service.call('project.create', { root, name: 'Isolation' }, owner);
@@ -106,6 +106,36 @@ test('an agent with a copy of its own leaves the project alone until its work is
   await assert.rejects(service.call('agents.delegate', { projectId: project.id, agentId: done.agentId, prompt: 'more' }, connected), { code: 'agent_finished' });
   await assert.rejects(service.call('agents.apply', { agentId: done.agentId }, connected), { code: 'agent_finished' });
   assert.equal(instances.length, 1);
+});
+
+// Where DevMate is installed without being told otherwise, its instance is ~/.devmate/runtime, and the copies are
+// beside it, in a folder named .devmate: a name no shared folder may have above it.
+test('a copy beside an instance that lives in a folder named .devmate is read, applied and discarded like any other', async t => {
+  const { service, project, root, temp, factory, instances, read } = await fixture(t, { instance: path.join('.devmate', 'runtime') });
+  factory.work = work;
+  const delegate = () => service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
+  const done = await delegate();
+  const copies = path.join(temp, '.devmate', 'runtime-copies'), copy = instances[0].options.cwd;
+  assert.ok(copy.startsWith(copies + path.sep), 'the copy is beside the instance: ' + copy);
+  assert.deepEqual(done.proposedFiles.sort(), ['A src/new.js', 'D old.txt', 'M src/a.js']);
+  const proposal = await service.call('agents.proposal', { agentId: done.agentId }, connected);
+  assert.deepEqual(proposal.files.map(item => item.status + ' ' + item.path).sort(), ['A src/new.js', 'D old.txt', 'M src/a.js']); assert.match(proposal.stdout, /-const b = 2;\n\+const b = 20;/);
+  const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+  assert.equal(applied.applied, true); assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 20;\nconst c = 3;\n'); assert.equal(fs.existsSync(copy), false);
+  git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
+  factory.work = cwd => fs.writeFileSync(path.join(cwd, 'src', 'second.js'), 'export {};\n');
+  const other = await delegate();
+  assert.equal((await service.call('agents.proposal', { agentId: other.agentId }, connected)).files.length, 1);
+  await service.call('agents.discard', { agentId: other.agentId }, connected);
+  assert.equal(fs.existsSync(instances[1].options.cwd), false); assert.equal(git(root, 'branch', '--list', 'devmate/*').trim(), '');
+  // What is let through is a copy this runtime made, where it makes them. A folder the owner shares is held to the
+  // rule as before, there too; and a folder that is not such a copy is not read as one.
+  fs.mkdirSync(path.join(copies, 'shared'), { recursive: true });
+  await assert.rejects(service.call('project.create', { root: path.join(copies, 'shared') }, owner), { code: 'protected_workspace_root' });
+  const elsewhere = path.join(temp, 'elsewhere'); fs.mkdirSync(elsewhere);
+  for (const place of [elsewhere, copies, path.join(temp, '.devmate', 'runtime')]) {
+    await assert.rejects(service.workspace.proposal(service.project(project.id), { root: place, branch: 'devmate/x', base: git(root, 'rev-parse', 'HEAD').trim() }), { code: 'invalid_input' }, place);
+  }
 });
 
 test('a very large file an agent brought is taken back only while it is as the agent left it', { timeout: 120000 }, async t => {
