@@ -387,7 +387,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     announcedRoute = mark;
     await shared?.update(ROUTE_KEY, mark);
     if (!checked.verified) {
-      const picked = await vscode.window.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') + '. Cloud clients such as ChatGPT cannot connect.', 'Run Doctor');
+      const picked = await vscode.window.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') + ', asked from this computer itself. A client in the cloud such as ChatGPT may still get through: try it there, or run the doctor.', 'Run Doctor');
       if (picked === 'Run Doctor') await doctor();
     } else if (!before.startsWith(id + ':')) {
       // The same address working again is shown in the status bar and needs nothing from the person.

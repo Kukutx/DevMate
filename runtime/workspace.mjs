@@ -94,8 +94,16 @@ function projectRoot(project) {
   // The rule is for a folder an owner shares. A copy of the runtime's own is where the runtime put it, beside its
   // instance directory, and that is ~/.devmate where nothing else was chosen: a name the rule refuses.
   if (!project[OWN_COPY]) assertSafeWorkspaceRoot(project.root);
+  let stat;
+  try { stat = fs.lstatSync(project.root); }
+  catch (failure) {
+    // A folder that was shared and has been moved, renamed or deleted since, or whose drive is not there now.
+    if (project[OWN_COPY] || !['ENOENT', 'ENOTDIR'].includes(failure.code)) throw failure;
+    throw error('project_missing', 'The folder of this project is not there: ' + project.root + ' (moved, renamed or deleted, or on a drive that is not connected). Its owner takes it off the list with devmate project remove ' + project.id +
+      ' and shares the folder where it is now with devmate project add <folder>.');
+  }
   // A registered directory that has since been swapped for a link would silently redirect every file tool.
-  if (fs.lstatSync(project.root).isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
+  if (stat.isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
   const root = fs.realpathSync.native(project.root);
   if (!fs.statSync(root).isDirectory()) throw error('invalid_project', 'Project root must be a directory.');
   return root;
@@ -168,7 +176,7 @@ export function resolveProjectPath(project, value = '.', { mustExist = true, pol
   if (policy && protects(project)) {
     try { assertSafeWorkspacePath(slash(path.relative(root, current)) || '.'); }
     catch (failure) {
-      failure.message += ' This project keeps credential-like files and folders out of the file tools. Its owner can lift that for the project on their own computer; until then work without this path.';
+      failure.message += ' This project keeps credential-like files and folders out of the file tools. Its owner lifts that for the project on their own computer: in the local workbench (devmate ui), or with devmate project.update. Until then work without this path.';
       throw failure;
     }
   }
@@ -183,7 +191,7 @@ function readRegular(full, { limit = MAX_FILE_BYTES, linked = false } = {}) {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || (stat.nlink > 1 && !linked)) throw error('unsafe_file', 'Only regular, unlinked files are supported.');
     if (stat.size > limit) throw error('file_too_large', 'This file is ' + Math.round(stat.size / 1048576) + ' MiB, more than the ' + Math.round(limit / 1048576) +
-      ' MiB that can be handled here. Look at a part of it with a command (for example its last lines), or page its bytes with operations_call workspace.read_bytes.');
+      ' MiB that can be handled here. Look at a part of it with a command (for example its last lines), or page its bytes with operations_query workspace.read_bytes.');
     const bytes = Buffer.allocUnsafe(stat.size);
     let offset = 0;
     while (offset < bytes.length) {
@@ -213,7 +221,7 @@ export function statProjectFile(project, value) {
   return { full, stat };
 }
 function textBytes(bytes) {
-  if (bytes.includes(0)) throw error('binary_file', 'This is a binary file, not text. Its bytes can be paged with operations_call workspace.read_bytes.');
+  if (bytes.includes(0)) throw error('binary_file', 'This is a binary file, not text. Its bytes can be paged with operations_query workspace.read_bytes.');
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { throw error('binary_file', 'This file is text in an encoding other than UTF-8. It can be read with workspace_read; changing it here would rewrite it as UTF-8, so change it with a command (shell_run) or convert it first.'); }
 }
@@ -430,7 +438,7 @@ export function createWorkspaceService({ store } = {}) {
     return { path: rel, text: selected.join('\n'), sha256, totalLines, startLine, endLine,
       truncated: longLine !== null || endLine < totalLines, partial: startLine > 1 || endLine < totalLines, ...(endLine < totalLines ? { nextStartLine: endLine + 1 } : {}),
       ...(foreign ? { encoding } : {}),
-      ...(longLine !== null || foreign ? { ...(longLine !== null ? { cutLine: longLine } : {}), note: [foreign, longLine !== null ? 'Line ' + longLine + ' is longer than ' + pageChars + ' characters and was cut; its bytes can be paged with operations_call workspace.read_bytes.' : null].filter(Boolean).join(' ') } : {}) };
+      ...(longLine !== null || foreign ? { ...(longLine !== null ? { cutLine: longLine } : {}), note: [foreign, longLine !== null ? 'Line ' + longLine + ' is longer than ' + pageChars + ' characters and was cut; its bytes can be paged with operations_query workspace.read_bytes.' : null].filter(Boolean).join(' ') } : {}) };
   }
 
   function readBytePage(project, input = {}) {

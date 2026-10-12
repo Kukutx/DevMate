@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { AGENT_PROVIDERS } from '../agents/index.mjs';
 import { DomainError } from '../store.mjs';
-import { actor, id, listOptions, mutation, projectPath, projectScope, text, waitMs, workflowScope } from './shared.mjs';
+import { actor, id, listOptions, mutation, ownerCommand, projectPath, projectScope, text, waitMs, workflowScope } from './shared.mjs';
 
 // Coding agents installed on this computer: one-call delegation for a connected
 // model, and the finer session operations the workbench uses.
@@ -12,7 +12,7 @@ export function defineAgentOperations(service, add) {
 
   // How an agent is run names programs and credentials on this computer and decides how much may run at once: the
   // owner sets it there, or their client does when they chose full access. It needs no restart.
-  const OWNER_SETS_AGENTS = 'Coding agents are set up by the owner on their own computer (devmate providers.configure --json \'{"provider":"codex","settings":{…}}\'), or by their connected client when they chose the full access profile.';
+  const OWNER_SETS_AGENTS = 'Coding agents are set up by the owner on their own computer (' + ownerCommand('providers.configure', '{"provider":"codex","settings":{…}}') + '), or by their connected client when they chose the full access profile.';
   add('providers.settings', { provider: z.enum(AGENT_PROVIDERS).optional() }, true,
     'Read how each coding agent is run: the sessions allowed at once (maxSessions), the time limits of a turn (turnTimeoutMs, turnIdleTimeoutMs, sessionIdleMs), whether it gets the owner\'s MCP servers and API keys (inheritMcpServers, inheritApiKeys), and what was changed while DevMate runs.',
     args => ({ items: AGENT_PROVIDERS.filter(name => !args.provider || name === args.provider).map(name => ({ provider: name,

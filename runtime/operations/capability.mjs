@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
-import { hasWords, id, keywords, mutation, projectScope } from './shared.mjs';
+import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
 // Domain capabilities: the built-in engines (browser control and QA, Godot, reverse
 // engineering, Obsidian) and the owner's configured external MCP servers.
@@ -46,7 +46,7 @@ export function defineCapabilityOperations(service, add) {
         throw new DomainError('forbidden', 'Capability engines are set up by the owner on their own computer (local workbench or the devmate command). A connected client can only switch one off.');
       // Reading and writing the memory of other processes is switched on at this computer and nowhere else, in either profile.
       if (context.surface !== 'local' && (args.settings.allowProcessAccess || args.settings.allowMemoryWrite))
-        throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: devmate capability.configure --json \'{"engine":"reverse","settings":{"allowProcessAccess":true}}\'');
+        throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: ' + ownerCommand('capability.configure', '{"engine":"reverse","settings":{"allowProcessAccess":true}}'));
       return service.capabilities.configure(args);
     });
 }

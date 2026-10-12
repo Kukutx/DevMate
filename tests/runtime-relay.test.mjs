@@ -259,6 +259,24 @@ test('the SSH route carries the relay\'s path, tells the relay this computer\'s 
   spawned.length = 0;
   const plain = createSshConnection({ config: { ...config, relay: undefined, publicUrl: 'https://devmate.example.com/mcp' }, localMcpUrl: 'http://127.0.0.1:8789/mcp', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl });
   await plain.start(); assert.equal(spawned.length, 1); await plain.stop();
+  // A relay that does not answer is waited for a moment and no longer: the forward is started all the same, the log
+  // says why, and the login that is still on its way is ended at its own limit, not by the start.
+  spawned.length = 0;
+  const said = [], killed = [];
+  const silent = (file, args) => {
+    const child = new EventEmitter(); child.pid = 7100 + spawned.length; child.exitCode = null; child.signalCode = null; child.stderr = new EventEmitter(); child.kill = () => killed.push(args.at(-1));
+    spawned.push(args);
+    queueMicrotask(() => { child.emit('spawn'); });
+    return child;
+  };
+  const unanswered = createSshConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/' + key, instanceRoot: temp, env: { PATH: 'x' }, spawnImpl: silent, terminateImpl, tellWaitMs: 40, note: line => said.push(line) });
+  const began = Date.now();
+  assert.equal((await unanswered.start()).phase, 'process-running');
+  assert.ok(Date.now() - began < 5000, 'the start did not wait for the login to give up');
+  assert.deepEqual(spawned.map(args => args.at(-1)), ['/usr/local/lib/devmate/allow-owner', '203.0.113.7']);
+  assert.equal(said.length, 1); assert.match(said[0], /^the relay at 203\.0\.113\.7 has not answered for 0 seconds; the start goes on without it\./); assert.ok(!said[0].includes(key));
+  assert.deepEqual(killed, [], 'the login is left to its own limit');
+  await unanswered.stop();
 
   // The runtime behind the relay: the configured path opens it, /mcp alone does not exist.
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);

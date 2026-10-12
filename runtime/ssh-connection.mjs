@@ -36,7 +36,8 @@ const sshLogin = config => ['-T', '-a', '-F', 'none', '-S', 'none', '-o', 'Batch
 // route can be checked from here. That address changes; the relay is told the current one at every connection.
 export const ownerAddressArguments = config => [...sshLogin(config), config.host, '/usr/local/lib/devmate/allow-owner'];
 export function createSshConnection({ config, localMcpUrl, instanceRoot, env = process.env,
-  spawnImpl = spawn, terminateImpl = processTree.terminateProcessTree,
+  spawnImpl = spawn, terminateImpl = processTree.terminateProcessTree, tellWaitMs = 5000,
+  note = line => process.stderr.write(new Date().toISOString() + ' connection: ' + line + '\n'),
   owned = spawnImpl === spawn && instanceRoot ? ownedProcess(path.join(instanceRoot, 'connector.json')) : null } = {}) {
   const settings = normalizeSshConfig(config);
   const args = sshArguments(settings, localMcpUrl);
@@ -58,12 +59,17 @@ export function createSshConnection({ config, localMcpUrl, instanceRoot, env = p
       const inherited = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'ssh_auth_sock']);
       const environment = Object.fromEntries(Object.entries(env).filter(([name]) => inherited.has(name.toLowerCase())));
       // Best effort and bounded: a relay that cannot be told still forwards, and the check then says what is the matter.
+      // The start waits a few seconds for it, so that the check that follows finds this computer on the relay's list,
+      // and no longer: a server that does not answer held the start of the whole runtime up for as long as a start is
+      // given at all, local use included. The login goes on by itself until its own limit.
       if (settings.relay) await new Promise(resolve => {
         let told;
         try { told = spawnImpl(settings.executable, ownerAddressArguments(settings), { cwd: instanceRoot, env: environment, shell: false, windowsHide: true, stdio: 'ignore' }); }
         catch { return resolve(); }
-        const timer = setTimeout(() => { try { told.kill?.(); } catch {} resolve(); }, 20000);
-        const done = () => { clearTimeout(timer); resolve(); };
+        const limit = setTimeout(() => { try { told.kill?.(); } catch {} }, 20000);
+        const waited = setTimeout(() => { note('the relay at ' + settings.host + ' has not answered for ' + Math.round(tellWaitMs / 1000) + ' seconds; the start goes on without it. Where this computer\'s address has changed since the relay was last told, the check of the route from here fails until it is.'); told.unref?.(); resolve(); }, tellWaitMs);
+        limit.unref?.();
+        const done = () => { clearTimeout(limit); clearTimeout(waited); resolve(); };
         told.once('error', done); told.once('exit', done);
       });
       const proc = spawnImpl(settings.executable, args, { cwd: instanceRoot, env: environment,

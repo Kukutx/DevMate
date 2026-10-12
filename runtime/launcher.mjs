@@ -47,6 +47,12 @@ function startFailure(instanceRoot, from) {
   return thrown ? { message: thrown } : lines.length ? { message: lines.slice(-3).join(' | ') } : null;
 }
 
+// A runtime that holds its instance and answers nobody is not ended by DevMate: a process is ended by its number only
+// by the person at the computer, who is told how.
+const endIt = current => current.owner?.pid
+  ? 'A runtime that stays like this is ended by its process: ' + (process.platform === 'win32' ? 'taskkill /pid ' + current.owner.pid + ' /t /f' : 'kill ' + current.owner.pid) + '. Then start again: devmate start'
+  : 'A runtime that stays like this is ended in the system\'s list of processes (a node process running DevMate\'s main.mjs). Then start again: devmate start';
+
 // Remove the record of a dead runtime, but never one a new runtime published in the meantime.
 function discardStaleRecord(files) {
   const read = () => { try { return fs.readFileSync(files.record, 'utf8'); } catch { return null; } };
@@ -99,7 +105,7 @@ export async function startRuntime({
   while (current.processAlive && !current.running && Date.now() < deadline) { await pause(remaining()); current = await status(); }
   if (current.running) return { ...current, started: false, attached: true };
   if (current.processAlive) {
-    const error = new Error('A DevMate runtime process' + (current.owner ? ' (' + current.owner.pid + ')' : '') + ' holds this instance but is not ready (' + current.state + '). See ' + files.log);
+    const error = new Error('A DevMate runtime process' + (current.owner ? ' (' + current.owner.pid + ')' : '') + ' holds this instance but is not ready (' + current.state + '). See ' + files.log + '. ' + endIt(current));
     error.code = 'RUNTIME_ALREADY_RUNNING';
     throw error;
   }
@@ -165,7 +171,7 @@ export async function stopRuntime({
   }
   const stoppable = current.record && ['ready', 'stopping', 'shutdown_failed'].includes(current.health?.status) &&
     matchesRuntime({ ...current.health, status: 'ready' }, current.record);
-  if (!stoppable) throw new Error('The runtime process' + (current.owner ? ' (' + current.owner.pid + ')' : '') + ' is ' + current.state + ' and does not answer as this instance; nothing was stopped');
+  if (!stoppable) throw new Error('The runtime process' + (current.owner ? ' (' + current.owner.pid + ')' : '') + ' is ' + current.state + ' and does not answer as this instance; nothing was stopped. ' + endIt(current));
   const expectedGeneration = current.record.generation;
   await clientFactory({ instanceRoot: files.directory }).call('runtime.stop', { expectedGeneration }, { timeoutMs: duration });
   const deadline = Date.now() + duration;

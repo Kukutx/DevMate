@@ -298,7 +298,7 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
   function write({ id, input, end = false }) {
     const entry = owned(id);
     if (entry.status !== 'running') throw fail('process_not_running', 'Process has already finished.');
-    if (!entry.interactive || !entry.child.stdin) throw fail('stdin_closed', 'Start the command with interactive:true to send input.');
+    if (!entry.interactive || !entry.child.stdin) throw fail('stdin_closed', 'This command was started without a standard input. To send it text, start it again with interactive:true (exec_command: tty:true).');
     if (entry.stdinEnded || entry.child.stdin.destroyed) throw fail('stdin_closed', 'The input of this command was already closed.');
     if (input) entry.child.stdin.write(input);
     if (end) { entry.stdinEnded = true; entry.child.stdin.end(); }
@@ -381,6 +381,25 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     }
     return { reaped, found: names.length };
   }
-  return { run, read, write, stop, complete, list, closeProject, close, shell, reapLeftovers,
+  // Whether the shell runs a command at all, asked the way every command is run. On Windows a command is a script file
+  // the shell is started with, and a policy of an organisation can forbid scripts whatever the command line asks for:
+  // the shell is there, and nothing runs.
+  function tryShell({ timeoutMs = 10000 } = {}) {
+    return new Promise(resolve => {
+      let launch, child, output = Buffer.alloc(0), settled = false;
+      const finish = result => { if (settled) return; settled = true; clearTimeout(timer); try { launch?.cleanup(); } catch {} resolve(result); };
+      const timer = setTimeout(() => { try { child?.kill(); } catch {} finish({ ok: false, reason: 'it did not end within ' + Math.round(timeoutMs / 1000) + ' seconds' }); }, timeoutMs);
+      try {
+        launch = shellInvocation('exit 0', { shell, scriptDirectory: directory, id: 'try-' + randomUUID() });
+        child = spawnImpl(launch.file, launch.args, { cwd: directory, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env });
+      } catch (error) { return finish({ ok: false, reason: error.message }); }
+      const keep = chunk => { if (output.length < 8000) output = Buffer.concat([output, Buffer.from(chunk)]); };
+      child.stdout?.on('data', keep); child.stderr?.on('data', keep);
+      child.once('error', error => finish({ ok: false, reason: error.message }));
+      child.once('close', code => finish(code === 0 ? { ok: true }
+        : { ok: false, reason: (decodeOutput(output).split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 4).join(' ') || 'it ended with code ' + code).slice(0, 500) }));
+    });
+  }
+  return { run, read, write, stop, complete, list, closeProject, close, shell, reapLeftovers, tryShell,
     projectOf: id => owned(id).projectId, get size() { return processes.size; } };
 }

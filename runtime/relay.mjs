@@ -273,7 +273,7 @@ export async function setupRelay({ target, domain, sshPort = 22, identityFile, e
   if (result.code !== 0 || !said.some(line => line.startsWith('ready: '))) {
     const reason = said.findLast(line => line.startsWith('error: '))?.slice(7) || result.stderr.trim().split(/\r?\n/).slice(-3).join(' | ') || 'the server script ended with code ' + result.code;
     throw fault(result.code === 255 ? 'ssh_failed' : 'relay_setup_failed', result.code === 255
-      ? 'Could not log in to ' + settings.user + '@' + settings.host + ' without a password: ' + reason + '. Set up key login first (ssh-copy-id, or add your public key to ~/.ssh/authorized_keys on the server).'
+      ? 'Could not log in to ' + settings.user + '@' + settings.host + ' without a password: ' + reason + '. Set up key login first (ssh-copy-id, or add your public key to ~/.ssh/authorized_keys on the server). Where it is set up already: DevMate does not read ~/.ssh/config, so a key file under a name of its own is named with --identity <file> and another port with --ssh-port <number>; a key with a passphrase needs a running ssh-agent that holds it (on Windows the service "OpenSSH Authentication Agent", which is off until it is switched on).'
       : 'The relay was not set up: ' + reason);
   }
   return { ...settings, notes: said, connection: { kind: 'ssh', publicUrl: settings.publicUrl, executable, host: settings.host, user: settings.user, sshPort, remotePort: settings.remotePort,

@@ -95,7 +95,7 @@ devmate ui --open                      # 在浏览器里打开工作台
 | `devmate login-code` | 一次性登录码（启用登录时） |
 | `devmate ui [--open]` | 工作台的一次性链接 |
 | `devmate operations` / `help <操作>` | 全部操作；以及某一个操作的准确输入 |
-| `devmate <操作> --json '{…}'` | 调用任何操作；也可以 `--file` 或 `--stdin` |
+| `devmate <操作> --json '{…}'` | 调用任何操作；也可以 `--file <输入.json>` 或 `--stdin`。Windows 上请用 `--file`：Windows PowerShell 5.1 和 cmd 会把 `--json` 后面的双引号去掉 |
 
 所有命令都接受 `--instance <目录>` 来使用另一个实例。命令行能做工作台和扩展能做的一切。
 

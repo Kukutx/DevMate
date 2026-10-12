@@ -48,6 +48,9 @@ export const hash = value => createHash('sha256').update(value).digest('hex');
 // by a coding agent only with the owner's word (delegation.read).
 // It is named as that too: an agent that reads who wrote to it is not told "You", which is the owner at the computer.
 export const actor = context => context.surface === 'local' ? { id: context.id, kind: 'user', label: 'You' } : { id: context.id, kind: 'user', label: 'Connected client', client: true };
+// The command line that calls an operation with an input, as the owner types it on this computer. The shells of
+// Windows take the double quotes out of an argument, so there the input goes through a file.
+export const ownerCommand = (operation, json, platform = process.platform) => 'devmate ' + operation + (platform === 'win32' ? ' --file <a file that holds ' + json + '>' : ' --json \'' + json + '\'');
 export const within = (root, target) => { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)); };
 export const oneCommand = value => {
   if ((value.command === undefined) === (value.file === undefined)) throw new DomainError('invalid_command', 'Supply either command text or an executable file with args.');

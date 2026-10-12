@@ -43,9 +43,12 @@ function createHostClient(options = {}) {
     async start() {
       // An editor's own executable is Electron, not Node: use the configured Node, else the one on PATH.
       let node;
-      try { node = resolveNodeRuntime({ preferredExecutable: options.nodePath || '', processExecutable: '' }); }
+      try { node = (options.resolveNode || resolveNodeRuntime)({ preferredExecutable: options.nodePath || '', processExecutable: '' }); }
       catch (cause) {
-        const error = new Error('DevMate needs Node.js 24 or newer and did not find it. Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.');
+        // What each try said: a Node that is there but too old, or too slow to answer, is not one that is missing.
+        const said = reason => /ENOENT/.test(reason) ? 'not found' : /ETIMEDOUT/.test(reason) ? 'did not answer in time' : String(reason || 'not usable').slice(0, 120);
+        const tried = (cause.attempts || []).filter(item => item.source !== 'host').map(item => (item.source === 'configured' ? 'the one in the settings' : 'node on PATH') + ': ' + said(item.reason)).join('; ');
+        const error = new Error('DevMate needs Node.js 24 or newer and did not find one it can use' + (tried ? ' (' + tried + ')' : '') + '. Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.');
         error.code = 'NODE_REQUIRED';
         error.cause = cause;
         throw error;

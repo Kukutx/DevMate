@@ -63,7 +63,9 @@ export function defineProjectOperations(service, add) {
     if (!path.isAbsolute(args.root)) throw new DomainError('invalid_path', 'Project root must be absolute.');
     const root = fs.realpathSync.native(args.root);
     if (!fs.statSync(root).isDirectory() || root === path.parse(root).root) throw new DomainError('invalid_path', 'Choose a project directory.');
-    if (within(root, service.instanceRoot) || within(service.instanceRoot, root)) throw new DomainError('private_runtime', 'Project roots must be separate from the DevMate control directory.');
+    // The usual case is someone's whole home folder, which holds ~/.devmate.
+    if (within(root, service.instanceRoot)) throw new DomainError('private_runtime', 'This folder holds DevMate\'s own directory (' + service.instanceRoot + '), where its credentials and state are kept, so it is not shared as a whole. Share the folders inside it that you work in.');
+    if (within(service.instanceRoot, root)) throw new DomainError('private_runtime', 'This folder is inside DevMate\'s own directory (' + service.instanceRoot + ') and is not shared.');
     if (service.store.projectForRoot(root)) throw new DomainError('already_exists', 'Project is already registered.');
     // A credential or control directory can never be a project, whatever its protection setting.
     try { assertSafeWorkspaceRoot(root); } catch (error) { throw new DomainError('protected_workspace_root', error.message); }

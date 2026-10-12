@@ -256,7 +256,7 @@ export class DevMateService {
     const focused = operation?.readOnly ? this.windows.focusedProject(available.map(project => project.id)) : null;
     if (focused) { chosen.followed = available.find(project => project.id === focused); return focused; }
     throw new DomainError('project_required', available.length
-      ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name).join('; ')
+      ? 'Several projects are available; say which one with projectId. ' + available.slice(0, 20).map(project => project.id + ' = ' + project.name + (fs.existsSync(project.root) ? '' : ' (its folder is not there)')).join('; ')
       : 'No folder is shared yet. ' + this.howToShare(context));
   }
   // What to do about a folder that is not shared, said to the caller who can do it.

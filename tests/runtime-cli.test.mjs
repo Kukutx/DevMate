@@ -201,6 +201,11 @@ test('the CLI alone runs DevMate: start, register a project, work in it, open th
   assert.match(cli(['logs','--lines','5',...at]).stdout,/"event":"ready"/);
   const invalid=JSON.parse(cli(['workspace.read','--json','{"path":7}',...at]).stderr).error;
   assert.equal(invalid.code,'invalid_input');assert.match(invalid.message,/Invalid input for workspace\.read: path/);
+  // A restart that names no port keeps the one the owner chose: it does not go back to the usual one.
+  const again=cli(['restart',...at]);
+  assert.equal(again.status,0,again.stderr);
+  assert.deepEqual([JSON.parse(again.stdout).started,JSON.parse(again.stdout).record.port],[true,port]);
+  assert.equal(cli(['status',...at]).stderr,'','a runtime of this version is not called an older one');
   assert.equal(JSON.parse(cli(['project','remove','Mine',...at]).stdout).removed,true);
   assert.equal(JSON.parse(cli(['stop',...at]).stdout).stopped,true);
   assert.equal(JSON.parse(cli(['status',...at]).stdout).state,'stopped');
@@ -215,4 +220,65 @@ test('the CLI answers when it is started through a link, as a global install doe
   assert.match(result.stdout,/^\d+\.\d+\.\d+\n$/,'it runs and prints instead of exiting silently');
   const status=spawnSync(process.execPath,[path.join(link,'cli.mjs'),'status','--instance',path.join(directory,'none')],{encoding:'utf8',windowsHide:true,timeout:30000});
   assert.equal(JSON.parse(status.stdout).state,'stopped');
+});
+
+test('after an update the command line says that an older runtime is still the one that runs', async t => {
+  const {VERSION}=await import('../runtime/version.mjs'),instance=path.join(temp(t),'instance');
+  const [major,minor,patch]=VERSION.split('.').map(Number);
+  const earlier=patch?[major,minor,patch-1].join('.'):minor?[major,minor-1,99].join('.'):[major-1,99,99].join('.'),later=[major,minor,patch+1].join('.');
+  const runs=version=>({state:'ready',running:true,record:{version,port:9000}});
+  const SAID='DevMate '+earlier+' is still running, older than this command ('+VERSION+'). Run the new one: devmate restart';
+  const at=['--instance',instance];
+  // A start that found it running, and a look at it: both would otherwise read as "all is well".
+  for(const [command,fakes] of [['start',version=>({launch:async()=>({...runs(version),started:false,attached:true})})],['status',version=>({status:async()=>runs(version)})]]){
+    for(const [version,said] of [[earlier,SAID+'\n'],[VERSION,''],[later,'']]){
+      const stdout=output(),stderr=output();
+      assert.equal(await main([command,...at],{stdout,stderr,...fakes(version)}),0);
+      assert.equal(stderr.text,said,command+' beside a runtime of '+version);
+      assert.equal(JSON.parse(stdout.text).record.version,version,'what is printed stays what it was');
+    }
+  }
+  const stopped=output();
+  await main(['status',...at],{stdout:output(),stderr:stopped,status:async()=>({state:'stopped',running:false,crashed:true,record:{version:earlier}})});
+  assert.equal(stopped.text,'','what a runtime that is gone left behind is not one that runs');
+  // The doctor's report is the running runtime's own: it gets a line for this, and is no longer "everything in place".
+  const report=version=>({status:'ok',version,checks:[{id:'node',status:'ok',detail:'Node.js'}]});
+  const examined=async version=>{const stdout=output();assert.equal(await main(['doctor',...at],{stdout,stderr:output(),clientFactory:()=>({call:async()=>report(version)})}),0);return stdout.text;};
+  assert.equal(await examined(earlier),'[ ok ] node: Node.js\n[warn] runtime.version: DevMate '+earlier+' is still running, older than this command ('+VERSION+').\n       -> Run the new one: devmate restart\n\nDevMate '+earlier+': working, with warnings above.\n');
+  assert.equal(await examined(VERSION),'[ ok ] node: Node.js\n\nDevMate '+VERSION+': everything needed is in place.\n');
+  // A command the update brought, which that runtime has never heard of.
+  const unknown=()=>({call:async()=>{const error=new Error('Unknown DevMate operation: delegation.read');error.code='unknown_operation';throw error;}});
+  const refused=async version=>{const stderr=output();assert.equal(await main(['delegation',...at],{stdout:output(),stderr,status:async()=>runs(version),clientFactory:unknown}),1);return JSON.parse(stderr.text).error;};
+  assert.deepEqual(await refused(earlier),{code:'unknown_operation',message:'Unknown DevMate operation: delegation.read. '+SAID});
+  assert.deepEqual(await refused(VERSION),{code:'unknown_operation',message:'Unknown DevMate operation: delegation.read'});
+  // Another refusal is left as it is, and the runtime is not asked about.
+  const other=output();
+  assert.equal(await main(['delegation',...at],{stdout:output(),stderr:other,status:async()=>{throw new Error('not asked');},clientFactory:()=>({call:async()=>{const error=new Error('No');error.code='forbidden';throw error;}})}),1);
+  assert.deepEqual(JSON.parse(other.text).error,{code:'forbidden',message:'No'});
+});
+
+test('a restart keeps the port the runtime ran on unless another one is named', async t => {
+  const instance=path.join(temp(t),'instance'),at=['--instance',instance];
+  const restarted=async(args,current)=>{
+    const order=[];let launched;
+    assert.equal(await main(['restart',...args,...at],{stdout:output(),stderr:output(),status:async()=>{order.push('look');return current;},
+      stop:async()=>{order.push('stop');return{stopped:true};},launch:async options=>{order.push('start');launched=options;return{started:true};}}),0);
+    return{order,launched};
+  };
+  const running={state:'ready',running:true,record:{version:'0.0.0',port:9000}};
+  const kept=await restarted([],running);
+  assert.deepEqual(kept.order,['look','stop','start'],'the port is read before the runtime that has it is stopped');
+  assert.deepEqual(kept.launched,{instanceRoot:instance,port:9000});
+  const named=await restarted(['--port','9100'],running);
+  assert.deepEqual(named.order,['stop','start']);assert.equal(named.launched.port,9100);
+  // Nothing ran, or what ran does not answer as this instance: the usual port, which the launcher fills in.
+  for(const current of [{state:'stopped',running:false},{state:'unavailable',running:false,processAlive:true,record:{port:9000}}])
+    assert.deepEqual((await restarted([],current)).launched,{instanceRoot:instance});
+});
+
+test('JSON after --json that a Windows shell took the quotes out of is answered with the way that works there', async () => {
+  const mangled='{capability:chrome.browser.info,input:{}}';
+  await assert.rejects(readCliInput({json:mangled},undefined,'win32'),{message:'Input must contain valid JSON. Windows PowerShell takes the double quotes out of what follows --json: write the input into a file and pass --file <input.json>. (--stdin works for plain ASCII; PowerShell 5.1 turns other letters it pipes into question marks.)'});
+  await assert.rejects(readCliInput({json:mangled},undefined,'linux'),{message:'Input must contain valid JSON'});
+  await assert.rejects(readCliInput({stdin:true},Readable.from([mangled]),'win32'),{message:'Input must contain valid JSON'});
 });

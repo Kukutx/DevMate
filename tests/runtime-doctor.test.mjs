@@ -105,6 +105,55 @@ test('the doctor names what works, what is missing and the exact next step', asy
   assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => healthy }) }), 0);
 });
 
+test('a shared folder that was moved or deleted is said to be that: by the call that needs it, by the doctor and where projects are named', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const connected = { id: 'owner' }, kept = path.join(temp, 'kept'), moved = path.join(temp, 'moved');
+  for (const folder of [kept, moved]) { fs.mkdirSync(folder); fs.writeFileSync(path.join(folder, 'a.txt'), 'a'); }
+  await runtime.call('project.create', { root: kept, name: 'kept' }, owner);
+  const project = await runtime.call('project.create', { root: moved, name: 'moved' }, owner);
+  const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
+  assert.equal(await find('projects.missing'), undefined);
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  fs.renameSync(moved, path.join(temp, 'elsewhere'));
+  // Each call that needs the folder says what happened to it and what its owner does about it, instead of a bare ENOENT.
+  const said = 'The folder of this project is not there: ' + project.root + ' (moved, renamed or deleted, or on a drive that is not connected). Its owner takes it off the list with devmate project remove ' + project.id +
+    ' and shares the folder where it is now with devmate project add <folder>.';
+  for (const [operation, input] of [['workspace.read', { path: 'a.txt' }], ['workspace.files', {}], ['workspace.write', { path: 'b.txt', text: 'b' }], ['git.status', {}], ['project.overview', {}], ['shell.run', { file: process.execPath, args: ['-v'] }]])
+    await assert.rejects(runtime.call(operation, { projectId: project.id, ...input }, connected), { code: 'project_missing', message: said }, operation);
+  assert.equal((await runtime.call('workspace.read', { projectId: 'kept', path: 'a.txt' }, connected)).text, 'a', 'the other project works as before');
+  // Where a call has to say which project it means, the one that is gone is marked.
+  await assert.rejects(runtime.call('workspace.write', { path: 'b.txt', text: 'b' }, connected), error => error.code === 'project_required' && error.message.includes(' = kept;') && error.message.endsWith(project.id + ' = moved (its folder is not there)'));
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  assert.match(serverInstructions(runtime), / = kept \(.*, write\);/);
+  const missing = await find('projects.missing');
+  assert.equal(missing.status, 'warn');
+  assert.equal(missing.detail, 'The folder of 1 project(s) is not there (moved, renamed or deleted, or on a drive that is not connected): moved at ' + project.root);
+  assert.match(missing.fix, /devmate project remove <id, name or folder>.*devmate project add <folder>/);
+  // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
+  assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);
+  assert.equal(await find('projects.missing'), undefined);
+});
+
+test('the doctor says when the shell is there and runs nothing', async t => {
+  const { service: runtime } = await service(t, {});
+  const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
+  // Asked only where a command is a script the shell is started with, and said only when it fails.
+  if (runtime.processes.shell.kind !== 'powershell') assert.equal(await find('shell.run'), undefined);
+  runtime.processes.shell.kind = 'powershell';
+  let asked = 0;
+  runtime.processes.tryShell = async () => { asked++; return { ok: true }; };
+  assert.equal(await find('shell.run'), undefined); assert.equal(asked, 1);
+  runtime.processes.tryShell = async () => ({ ok: false, reason: 'File C:\\x.ps1 cannot be loaded because running scripts is disabled on this system. + FullyQualifiedErrorId : UnauthorizedAccess' });
+  const refused = await find('shell.run');
+  assert.equal(refused.status, 'fail');
+  assert.match(refused.detail, / did not run a one-line command: File C:\\x\.ps1 cannot be loaded because running scripts is disabled/);
+  assert.match(refused.fix, /^A policy on this computer forbids PowerShell to run scripts .*Get-ExecutionPolicy -List/);
+  runtime.processes.tryShell = async () => ({ ok: false, reason: 'it did not end within 10 seconds' });
+  assert.match((await find('shell.run')).fix, /^No command runs through DevMate until the shell does\./);
+  assert.equal((await runtime.call('runtime.doctor', {}, owner)).status, 'fail');
+});
+
 test('the report for a bug says what happened and not who or where: no credentials, paths, account names or addresses', async t => {
   const { anonymize } = await import('../runtime/report.mjs');
   const home = process.platform === 'win32' ? 'C:\\Users\\Maria Example' : '/home/maria';

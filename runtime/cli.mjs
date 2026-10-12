@@ -8,7 +8,7 @@ import { runtimeLogTail, runtimeStatus, startRuntime, stopRuntime } from './laun
 import { inspectTunnelClient, TUNNEL_CLIENT_SETUP } from './connection.mjs';
 import { findCloudflared, findOnPath, installHint, recallTools, resolveTool } from './platform/tools.mjs';
 import { isProgram } from './platform/entry.mjs';
-import { VERSION } from './version.mjs';
+import { VERSION, newerVersion } from './version.mjs';
 
 export const CLI_HELP = `DevMate ${VERSION} — gives AI clients real access to the projects on this computer.
 Works on its own: no editor is required.
@@ -125,7 +125,7 @@ async function readAll(stream, limit, label) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function readCliInput(options, inputStream = process.stdin) {
+export async function readCliInput(options, inputStream = process.stdin, platform = process.platform) {
   // A file write may carry 4 MB of text; the limit leaves room for its JSON escaping.
   const limit = 8 * 1024 * 1024;
   let raw = options.json;
@@ -140,7 +140,12 @@ export async function readCliInput(options, inputStream = process.stdin) {
   let value;
   // PowerShell writes a byte order mark into piped and redirected text.
   try { value = JSON.parse(raw.replace(/^\ufeff/, '')); }
-  catch { throw new Error('Input must contain valid JSON'); }
+  catch {
+    // Windows PowerShell 5.1 hands a program its argument without the double quotes that were inside it, so JSON
+    // written after --json arrives as {name:value}. What it pipes to a program it writes as ASCII.
+    throw new Error('Input must contain valid JSON' + (platform === 'win32' && options.json !== undefined && !options.file && !options.stdin
+      ? '. Windows PowerShell takes the double quotes out of what follows --json: write the input into a file and pass --file <input.json>. (--stdin works for plain ASCII; PowerShell 5.1 turns other letters it pipes into question marks.)' : ''));
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Input must be a JSON object');
   return value;
 }
@@ -184,6 +189,15 @@ function openInBrowser(url, spawnImpl = spawn) {
   const child = spawnImpl(file, args, { detached: true, stdio: 'ignore', windowsHide: true, shell: false });
   child.once('error', () => {});
   child.unref();
+}
+
+// The runtime keeps serving the program it was started from. After an update this command is newer than what runs,
+// until the runtime is started again. Said wherever the difference would otherwise show as something else: a start
+// that "attached", a doctor that finds everything in place, a new command the runtime has never heard of.
+function olderRuntime(current) {
+  const running = current?.running ? current.record?.version : null;
+  return running && newerVersion(VERSION, running)
+    ? { detail: 'DevMate ' + running + ' is still running, older than this command (' + VERSION + ').', fix: 'Run the new one: devmate restart' } : null;
 }
 
 // What can be checked while no runtime is running, so the first thing a new user sees is the way forward.
@@ -309,6 +323,7 @@ export async function main(argv = process.argv.slice(2), {
   // Started by a browser for the DevMate extension: its standard output carries the browser's own framing and nothing
   // else, and its arguments are the browser's (the extension that asks, a window handle), not this command line's.
   if (argv[0] === 'chrome-host') return (await import('./chrome-host.mjs')).chromeHostMain(argv.slice(1), { stdin, stdout, stderr });
+  let running = async () => null;
   try {
     const { command, positional, options } = parseCli(argv);
     // Started by a connected client (its shell tool, or an agent it delegated to): the runtime then answers as it
@@ -324,16 +339,20 @@ export async function main(argv = process.argv.slice(2), {
     };
     const instanceRoot = instanceDirectory(runtimeOptions.instanceRoot);
     const callOptions = options.timeout ? { timeoutMs: Number(options.timeout) } : {};
+    running = () => status(runtimeOptions);
+    const older = current => { const stale = olderRuntime(current); if (stale) stderr.write(stale.detail + ' ' + stale.fix + '\n'); return current; };
     if (command === 'help' && !positional.length) { stdout.write(CLI_HELP); return 0; }
     if (command === 'version') { stdout.write(VERSION + '\n'); return 0; }
-    if (command === 'start') { print(await launch(runtimeOptions)); return 0; }
+    if (command === 'start') { const started = await launch(runtimeOptions); print(started); older(started); return 0; }
     if (command === 'stop') { print(await stop(runtimeOptions)); return 0; }
     if (command === 'restart') {
+      // A port the owner chose for the runtime stays its port: one that is not named again is the one that ran.
+      const before = options.port ? null : await status(runtimeOptions).catch(() => null);
       await stop(runtimeOptions);
-      print(await launch(runtimeOptions));
+      print(await launch({ ...runtimeOptions, ...(before?.running && Number.isInteger(before.record?.port) ? { port: before.record.port } : {}) }));
       return 0;
     }
-    if (command === 'status') { print(await status(runtimeOptions)); return 0; }
+    if (command === 'status') { const current = await status(runtimeOptions); print(current); older(current); return 0; }
     if (command === 'serve') {
       const { serve } = await import('./main.mjs');
       const runtime = await serve({ ...(runtimeOptions.instanceRoot ? { instanceRoot } : {}), ...(options.port ? { port: Number(options.port) } : {}) });
@@ -346,8 +365,9 @@ export async function main(argv = process.argv.slice(2), {
       const { serveStdioBridge } = await import('./stdio-bridge.mjs');
       const note = line => stderr.write('devmate mcp: ' + line + '\n');
       const connect = async () => {
-        const current = await status(runtimeOptions);
+        const current = await status(runtimeOptions), stale = olderRuntime(current);
         if (!current.running) { note('starting the runtime'); await launch(runtimeOptions); }
+        if (stale) note(stale.detail + ' ' + stale.fix);
         return clientFactory(runtimeOptions).origin() + '/mcp';
       };
       await connect();
@@ -449,6 +469,9 @@ export async function main(argv = process.argv.slice(2), {
       let report;
       try { report = await client.call('runtime.doctor', {}, { timeoutMs: 60000 }); }
       catch (error) { if (error.code !== 'RUNTIME_STOPPED') throw error; report = await offlineDoctor(instanceRoot); }
+      // The report is the running runtime's, and so is the version in its last line.
+      const stale = olderRuntime({ running: true, record: report });
+      if (stale) report = { ...report, status: report.status === 'ok' ? 'warn' : report.status, checks: [...report.checks, { id: 'runtime.version', status: 'warn', ...stale }] };
       const mark = { ok: '[ ok ]', info: '[info]', warn: '[warn]', fail: '[FAIL]' };
       for (const item of report.checks) {
         stdout.write(`${mark[item.status]} ${item.id}: ${item.detail}\n`);
@@ -554,7 +577,9 @@ export async function main(argv = process.argv.slice(2), {
     print(await client.call(operation, await readCliInput(options, stdin), callOptions));
     return 0;
   } catch (error) {
-    stderr.write(`${JSON.stringify({ ok: false, error: { code: error.code || 'CLI_ERROR', message: error.message } })}\n`);
+    // A runtime that was started before an update has never heard of what the update brought.
+    const stale = error.code === 'unknown_operation' ? olderRuntime(await running().catch(() => null)) : null;
+    stderr.write(`${JSON.stringify({ ok: false, error: { code: error.code || 'CLI_ERROR', message: error.message + (stale ? '. ' + stale.detail + ' ' + stale.fix : '') } })}\n`);
     return 1;
   }
 }

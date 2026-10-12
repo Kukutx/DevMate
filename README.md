@@ -96,7 +96,7 @@ One instance directory (default `~/.devmate/runtime`) has exactly one runtime pr
 | `devmate login-code` | A one-time sign-in code (when sign-in is on) |
 | `devmate ui [--open]` | A single-use link to the workbench |
 | `devmate operations` / `help <operation>` | Every operation, and one with its exact input |
-| `devmate <operation> --json '{…}'` | Call any operation; also `--file` or `--stdin` |
+| `devmate <operation> --json '{…}'` | Call any operation; also `--file <input.json>` or `--stdin`. On Windows use `--file`: Windows PowerShell 5.1 and cmd take the double quotes out of what follows `--json` |
 
 Every command accepts `--instance <directory>` to use another instance. The command line can do everything the workbench and the extensions can.
 

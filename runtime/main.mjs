@@ -99,10 +99,11 @@ function stableInstanceId(file) {
 }
 // Readers never observe a half-written file: write beside it, then rename over it.
 const publish = writeAtomic;
-function listen(listener, port, purpose) {
+// way: how the owner gets another port. (An editor knows this refusal by how it begins, and offers its own setting.)
+function listen(listener, port, way) {
   return new Promise((resolve, reject) => {
     const failed = error => reject(error.code === 'EADDRINUSE'
-      ? new DomainError('port_in_use', 'Port ' + port + ' on 127.0.0.1 is already used by another program. Choose another ' + purpose + ' port.') : error);
+      ? new DomainError('port_in_use', 'Port ' + port + ' on 127.0.0.1 is already used by another program. ' + way) : error);
     listener.once('error', failed);
     listener.listen({ host: '127.0.0.1', port }, () => { listener.off('error', failed); resolve(); });
   });
@@ -229,7 +230,13 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // is the only connection, and what it hands over is checked like every request from outside.
     const tunnelLocal = proven || (config.connection.kind === 'openai-tunnel' && loopback);
     const publicOrigin = currentOrigin();
-    if (!tunnelLocal && (!publicOrigin || req.headers.host !== new URL(publicOrigin).host)) return refuse(res, 'invalid_host', 'Unexpected host.');
+    if (!tunnelLocal && (!publicOrigin || req.headers.host !== new URL(publicOrigin).host)) {
+      // What usually brings a request here under another name is a proxy that does not pass the public one on. The
+      // address itself is not said: without sign-in it is all that keeps a stranger out, and a page of any site can
+      // be made to ask this port.
+      const named = String(req.headers.host || '').replace(/[^\x21-\x7e]/g, '').slice(0, 120);
+      return refuse(res, 'invalid_host', 'This request names the host ' + (named || '(none)') + ', which is not the public address of this DevMate (devmate mcp-url shows it). A proxy in front of DevMate has to pass the public host name on: nginx "proxy_set_header Host $host;", Apache "ProxyPreserveHost On".');
+    }
     const requestOrigin = tunnelLocal ? 'http://' + req.headers.host : publicOrigin;
     const url = new URL(req.url, requestOrigin);
     if (service?.auth && await service.auth.handle(req, res, url)) return;
@@ -380,10 +387,13 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     await service.ready;
     streams = createEventStreams({ store: service.store });
     const requestedPort = port;
-    await listen(server, port, 'runtime');
+    const another = 'devmate start --port <number> (in an editor: its DevMate runtime port setting)';
+    await listen(server, port, 'Start DevMate on another one: ' + another + '.');
     port = server.address().port;
     if (hasIngress) {
-      await listen(ingress, ingressPort ?? config.ingressPort ?? (requestedPort ? requestedPort + 1 : 0), 'ingress');
+      const named = ingressPort ?? config.ingressPort;
+      await listen(ingress, named ?? (requestedPort ? requestedPort + 1 : 0), named ? 'It is the port the public connection comes in by, as ingressPort names it in config.json: name another one there.'
+        : 'It is the port the public connection comes in by, the one after the runtime\'s. Start DevMate on another one: ' + another + ', or name a port for it as ingressPort in config.json.');
       ingressPort = ingress.address().port;
     } else ingressPort = null;
     service.agents.endpoint = 'http://127.0.0.1:' + port + '/api/agent';

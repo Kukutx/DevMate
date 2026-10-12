@@ -1,4 +1,4 @@
-import { VERSION } from './version.mjs';
+import { VERSION, newerVersion } from './version.mjs';
 import { writeAtomic } from './platform/atomic-write.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -141,12 +141,6 @@ export function readConfig(instanceRoot) {
       ? ' was saved by DevMate ' + raw.writtenBy + ' and has settings this DevMate ' + VERSION + ' does not know (' + problems + '). Update this DevMate.'
       : ' has settings DevMate does not accept (' + problems + '). Fix them, or delete the file to start from the defaults.'));
   }
-}
-function newerVersion(a, b) {
-  const parts = value => String(value).split(/[.-]/).slice(0, 3).map(part => Number.parseInt(part, 10) || 0);
-  const [x, y] = [parts(a), parts(b)];
-  for (let index = 0; index < 3; index++) if (x[index] !== y[index]) return x[index] > y[index];
-  return false;
 }
 export function saveConfig(instanceRoot, input) {
   const config = normalizeConfig({ ...input, writtenBy: VERSION });

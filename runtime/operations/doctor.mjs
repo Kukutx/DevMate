@@ -17,7 +17,17 @@ export async function doctor(service) {
   const major = Number(process.versions.node.split('.')[0]);
   check('node', major >= 24 ? 'ok' : 'fail', 'Node.js ' + process.versions.node, major >= 24 ? null : 'Install Node.js 24 or newer.');
   const shell = service.processes.shell;
-  check('shell', fs.statSync(shell.file, { throwIfNoEntry: false })?.isFile() ? 'ok' : 'fail', shell.label + ' at ' + shell.file, 'Commands cannot run without the system shell.');
+  const present = !!fs.statSync(shell.file, { throwIfNoEntry: false })?.isFile();
+  check('shell', present ? 'ok' : 'fail', shell.label + ' at ' + shell.file, 'Commands cannot run without the system shell.');
+  // The shell being there does not say that it runs anything. PowerShell is started with a script file, which a policy
+  // of an organisation can forbid: asked by running the smallest command the way every command is run.
+  if (present && shell.kind === 'powershell') {
+    const tried = await service.processes.tryShell();
+    if (!tried.ok) check('shell.run', 'fail', shell.label + ' did not run a one-line command: ' + tried.reason,
+      /PSSecurityException|UnauthorizedAccess/.test(tried.reason)
+        ? 'A policy on this computer forbids PowerShell to run scripts and overrides what DevMate asks for (Get-ExecutionPolicy -List shows where it is set). No command runs through DevMate until that policy allows scripts for your account.'
+        : 'No command runs through DevMate until the shell does. If the message says that running scripts is disabled, a policy on this computer sets PowerShell\'s execution policy (Get-ExecutionPolicy -List shows where).');
+  }
   // Models write `a && b` by habit. Windows PowerShell 5.1 does not have it; PowerShell 7 does.
   if (shell.label === 'Windows PowerShell 5.1') check('shell.version', 'info', 'Commands run in Windows PowerShell 5.1: it has no && and ||, which models write by habit, and every command pays about a third of a second for its start.',
     'Install PowerShell 7 with one command (winget install --id Microsoft.PowerShell --source winget) and restart DevMate: it is used automatically, accepts what models usually write and starts faster.');
@@ -32,6 +42,11 @@ export async function doctor(service) {
     'Other accounts on this computer may be able to read its owner token and credentials. Keep the instance under ' + os.homedir() + ', or restrict the folder\'s permissions.');
   const projects = service.store.count('project');
   check('projects', projects ? 'ok' : 'warn', projects + ' project(s) registered', projects ? null : 'Register one with devmate project add, or share a folder from an editor that runs DevMate.');
+  // A folder that was moved, renamed or deleted after it was shared stays on the list, and every call for it fails.
+  const gone = service.store.list('project', { limit: 10000 }).filter(project => !fs.existsSync(project.root));
+  if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there (moved, renamed or deleted, or on a drive that is not connected): ' +
+    gone.slice(0, 8).map(project => project.name + ' at ' + project.root).join('; ') + (gone.length > 8 ? '; and ' + (gone.length - 8) + ' more' : ''),
+  'Take each off the list (devmate project remove <id, name or folder>) and share the folder where it is now (devmate project add <folder>).');
   const windows = service.windows.list().length;
   check('editor', windows ? 'ok' : 'info', windows + ' editor window(s) attached', windows ? null : 'Editor context needs VS Code or Obsidian with DevMate running; diagnostics come from VS Code.');
   for (const provider of (await service.discoverProviders()).items) {
@@ -84,9 +99,16 @@ export async function doctor(service) {
       // What the doctor prints gets pasted into bug reports. The last part of a quick tunnel or relay address is its key.
       const shown = url.replace(/\/mcp\/[A-Za-z0-9_-]{20,}$/, '/mcp/<key>');
       // A name this computer's own DNS has not caught up with is not a broken route.
+      // The check is made from this computer, through the public address. Where it gets no answer at all, that is
+      // what is known: a client in the cloud comes another way and may still get through.
+      const passOn = 'pass the public host name on (nginx: proxy_set_header Host $host; Apache: ProxyPreserveHost On)';
       check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
-        shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason),
-        verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.' : 'Check the proxy route to the ingress port.');
+        shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason + (verification.reachable || verification.pending ? '' : ' (asked from this computer; a client in the cloud may still get through: try it there)')),
+        verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.'
+          : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes: devmate restart gets a new one, and its address is then a new one (devmate mcp-url).'
+          : connection.relay ? 'devmate logs shows what OpenSSH said; devmate restart opens the forward to the relay again.'
+          : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '; devmate logs shows what OpenSSH said.'
+          : 'Your proxy has to send this address on to the ingress port of this computer (ingressPort in devmate status) and ' + passOn + '.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again; devmate logs shows what cloudflared says.');
     else tunnelProof('connection.public', status, connection.tunnelId);
     if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',

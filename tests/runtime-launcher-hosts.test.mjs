@@ -153,3 +153,15 @@ test('a multi-root VS Code window listens to all its shared folders with a strea
   } finally {await entry.deactivate();}
   assert.equal(fixture.calls.unsubscribe,fixture.calls.subscribe,'and none is left open');
 });
+
+test('an editor that has no usable Node says what each one it tried said, not only that none was found', async () => {
+  const {createHostClient}=require('../runtime/host-client.cjs');
+  const failing=attempts=>()=>{throw Object.assign(new Error('DevMate requires a usable Node.js 24+ runtime'),{code:'DEVMATE_NODE_RUNTIME_UNAVAILABLE',attempts});};
+  const refused=attempts=>createHostClient({resolveNode:failing(attempts)}).start().then(()=>assert.fail('started'),error=>{assert.equal(error.code,'NODE_REQUIRED');return error.message;});
+  const WAY=' Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.';
+  // Installed but too old, and one that did not answer in the time it is given: neither is "not found".
+  assert.equal(await refused([{source:'configured',requestedExecutable:'C:\old\node.exe',reason:'Node 24+ required; found 20.11.0'},{source:'path',requestedExecutable:'node',reason:'spawnSync node ETIMEDOUT'}]),
+    'DevMate needs Node.js 24 or newer and did not find one it can use (the one in the settings: Node 24+ required; found 20.11.0; node on PATH: did not answer in time).'+WAY);
+  assert.equal(await refused([{source:'path',requestedExecutable:'node',reason:'spawnSync node ENOENT'}]),'DevMate needs Node.js 24 or newer and did not find one it can use (node on PATH: not found).'+WAY);
+  assert.equal(await refused(undefined),'DevMate needs Node.js 24 or newer and did not find one it can use.'+WAY);
+});
