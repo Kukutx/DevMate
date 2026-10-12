@@ -375,9 +375,9 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   let runtime;
   t.after(async () => { await runtime?.stop(); await runtime?.service.tunnel?.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   fs.mkdirSync(projectRoot);
-  const run = async (args, instance = instanceRoot) => {
+  const run = async (args, instance = instanceRoot, env = {}) => {
     const stdout = { text: '', write(value) { stdout.text += value; } }, stderr = { text: '', write(value) { stderr.text += value; } };
-    return { code: await cli([...args, '--instance', instance], { stdout, stderr, env: {}, remove: async () => ({ removed: true, notes: [] }) }), stdout: stdout.text, stderr: stderr.text };
+    return { code: await cli([...args, '--instance', instance], { stdout, stderr, env, remove: async () => ({ removed: true, notes: [] }) }), stdout: stdout.text, stderr: stderr.text };
   };
   const saved = (instance = instanceRoot) => JSON.parse(fs.readFileSync(path.join(instance, 'config.json'), 'utf8'));
   const tunnel = { tunnelId: 'tunnel_abc123', runtimeKeyEnv: 'CONTROL_PLANE_API_KEY', maxConcurrentRequests: 32 };
@@ -386,6 +386,10 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   assert.equal(both.code, 0, both.stderr);
   assert.deepEqual(saved().connection, { kind: 'external-https', url: publicAddress }); assert.deepEqual(saved().openaiTunnel, { ...tunnel, organizationId: 'org-abc' });
   assert.match(both.stdout, /Store the runtime key of the tunnel: devmate secret set CONTROL_PLANE_API_KEY/);
+  // A second way in makes what is shared reachable by more: like every connection it is the owner's to set up, at the
+  // computer. A devmate command a connected client runs is refused, and nothing is changed by it.
+  const byClient = await run(['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'tunnel_other999'], instanceRoot, { DEVMATE_CLIENT_COMMAND: '1' });
+  assert.notEqual(byClient.code, 0); assert.match(byClient.stderr, /run by the owner in their own terminal/); assert.equal(saved().openaiTunnel.tunnelId, 'tunnel_abc123');
   // Beside nothing the tunnel is the connection itself, and is chosen as that.
   const alone = await run(['connect', 'local', '--openai-tunnel', 'tunnel_abc123'], path.join(temp, 'alone'));
   assert.notEqual(alone.code, 0); assert.match(alone.stderr, /devmate connect openai-tunnel --tunnel-id tunnel_abc123/);
@@ -430,10 +434,15 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   assert.equal(throughAddress.status, 200); assert.ok(names(throughAddress.json).includes('shell_run') && !names(throughAddress.json).includes('exec_command'));
   // The loopback name alone opens nothing. A proxy that rewrites Host to it (nginx does unless told otherwise) would
   // otherwise make every request from outside the tunnel's.
-  assert.equal((await ask(port, loopback, list(3))).status, 421);
+  const byName = await ask(port, loopback, list(3));
+  assert.equal(byName.status, 421); assert.equal(byName.json.error.code, 'invalid_host');
   assert.equal((await ask(port, loopback, list(4), { headers: { 'x-devmate-tunnel': 'forged' } })).status, 421);
   assert.equal((await ask(port, 'localhost:' + port, list(5), { headers: { 'x-devmate-tunnel': secret + 'x' } })).status, 421);
   assert.equal((await ask(port, loopback, list(6), { headers: { 'x-devmate-tunnel': secret } })).status, 200, 'the secret is what is checked');
+  // And the secret alone opens nothing either: under the name of the address a request is one from outside, whatever
+  // it says in the runtime's header, the right value included.
+  const outside = await ask(port, publicHost, list(8), { headers: { 'x-devmate-tunnel': secret } });
+  assert.equal(outside.status, 200); assert.ok(names(outside.json).includes('shell_run') && !names(outside.json).includes('exec_command'), 'served as the address is, not as the tunnel');
   // Both ways are told apart when asked how this DevMate is reached, and by the doctor.
   await until(() => runtime.service.tunnel.status().served >= 1, 'the call to be counted');
   const status = await runtime.service.call('connection.status', {}, owner);
@@ -482,6 +491,9 @@ test('beside an address that asks for sign-in the tunnel asks for none, and besi
   signIn.queue.push(command(3, list('rpc_3'), viaTunnel));
   await until(() => answerTo(signIn, 3), 'the tool list through the tunnel');
   assert.equal(answerTo(signIn, 3).resp_code, 200); assert.ok(names(answerTo(signIn, 3).resp_json).includes('exec_command'));
+  // Nor does the right value, said from outside: under the name of the address there is no way around the sign-in.
+  const known = signIn.local.at(-1).headers.get('x-devmate-tunnel');
+  assert.equal((await ask(guarded.ingressPort, publicHost, list(31), { headers: { 'x-devmate-tunnel': known } })).status, 401);
 
   // A quick tunnel's own address answers in single JSON bodies, because Cloudflare carries no event streams through
   // it. OpenAI's tunnel does carry them, and the address ends in a key that the tunnel's way has no use for.
@@ -499,12 +511,64 @@ test('beside an address that asks for sign-in the tunnel asks for none, and besi
   assert.ok(names(answerTo(streamed, 4).resp_json).includes('exec_command'));
   const keyed = await ask(quick.ingressPort, host, list(5), { pathname: new URL(address).pathname });
   assert.equal(keyed.status, 200); assert.equal(keyed.type, 'application/json'); assert.ok(names(keyed.json).includes('shell_run'));
-  // The plain path is the tunnel's alone: from outside it is not an address.
+  // The plain path is the tunnel's alone: from outside it is not an address, and the secret said from outside does
+  // not make it one. Under the key of the address the same request is one from outside: one JSON body, DevMate's names.
   assert.equal((await ask(quick.ingressPort, host, list(6))).status, 404);
+  const told = streamed.local.at(-1).headers.get('x-devmate-tunnel');
+  assert.equal((await ask(quick.ingressPort, host, list(61), { headers: { 'x-devmate-tunnel': told } })).status, 404);
+  const outside = await ask(quick.ingressPort, host, list(62), { pathname: new URL(address).pathname, headers: { 'x-devmate-tunnel': told } });
+  assert.equal(outside.type, 'application/json'); assert.ok(names(outside.json).includes('shell_run') && !names(outside.json).includes('exec_command'));
   // A command a client runs does not inherit the key of the tunnel, whatever the owner named it.
   assert.equal(streamed.polls[0].headers.get('authorization'), 'Bearer the-runtime-key');
   const projectRoot = path.join(temp, 'project'), owner = { id: 'owner', surface: 'local' }; fs.mkdirSync(projectRoot);
   const project = await quick.service.call('project.create', { root: projectRoot }, owner);
   const printed = await quick.service.call('shell.run', { projectId: project.id, file: process.execPath, args: ['-e', 'console.log("key:" + (process.env.BESIDE_TUNNEL_KEY || "none"))'] }, owner);
   assert.match(printed.output, /key:none/);
+
+  // A tunnel that cannot start (its key was never stored) does not take the address down with it, and what says how
+  // DevMate is reached says which of the two it is.
+  const keyless = controlPlane((url, init) => fetch(url, init));
+  const half = await start('keyless', { connection: { kind: 'external-https', url: publicAddress }, openaiTunnel: { tunnelId: 'tunnel_abc123', runtimeKeyEnv: 'TUNNEL_KEY_NEVER_STORED' } },
+    options => createConnection({ ...options, fetchImpl: keyless.fetch }));
+  assert.equal((await ask(half.ingressPort, publicHost, list(7))).status, 200); assert.equal(keyless.polls.length, 0);
+  const status = await half.service.call('connection.status', {}, owner);
+  assert.equal(status.phase, 'configured'); assert.equal(status.startError, undefined);
+  assert.equal(status.openaiTunnel.phase, 'stopped'); assert.equal(status.openaiTunnel.startError.code, 'missing_credential');
+  const checks = Object.fromEntries((await half.service.call('runtime.doctor', {}, owner)).checks.map(item => [item.id, item]));
+  assert.equal(checks['connection.process'].status, 'ok');
+  assert.equal(checks['tunnel.credential'].status, 'fail'); assert.equal(checks['tunnel.credential'].detail, 'TUNNEL_KEY_NEVER_STORED is missing');
+  assert.equal(checks['tunnel.process'].status, 'fail'); assert.match(checks['tunnel.process'].detail, /^OpenAI's tunnel beside it: stopped .* — Missing runtime key environment variable: TUNNEL_KEY_NEVER_STORED$/);
+});
+
+test('where the tunnel is the only connection, OpenAI\'s own program is served as before and the runtime\'s own client is the owner\'s', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-tunnel-alone-'));
+  const runtimes = [];
+  t.after(async () => { for (const runtime of runtimes) await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const start = async (name, config, connectionFactory) => {
+    const instanceRoot = path.join(temp, name); fs.mkdirSync(instanceRoot);
+    fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify(config));
+    createSecretStore(instanceRoot).set('CONTROL_PLANE_API_KEY', 'the-runtime-key');
+    const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory }); runtimes.push(runtime);
+    return runtime;
+  };
+  // Sign-in together with a tunnel as the only connection is not something a command or a wizard sets up: it is
+  // written by hand, and is what an owner has who publishes the ingress port through a proxy of their own as well.
+  const signIn = { mode: 'oauth', issuer: 'https://' + publicHost };
+  // OpenAI's tunnel-client program, which cannot be told the secret: whatever calls the ingress port by its loopback name.
+  const program = () => ({ async start() {}, async stop() {}, status() { return { kind: 'openai-tunnel', phase: 'relay-ready', client: 'tunnel-client', remoteMcpVerified: false }; } });
+  const official = { kind: 'openai-tunnel', tunnelId: 'tunnel_abc123', executable: process.execPath };
+  const plain = await start('program', { connection: official }, program);
+  const served = await ask(plain.ingressPort, '127.0.0.1:' + plain.ingressPort, list(1));
+  assert.equal(served.status, 200); assert.ok(names(served.json).includes('exec_command'), 'taken for the tunnel by the loopback name, as before');
+  // With sign-in, what the program hands over is checked like every request from outside.
+  const checked = await start('program-sign-in', { connection: official, auth: signIn }, program);
+  assert.equal((await ask(checked.ingressPort, '127.0.0.1:' + checked.ingressPort, list(2))).status, 401);
+  // The runtime's own client says the secret: what it hands over is the owner's, also where sign-in is on. Anything
+  // else that calls the port by its loopback name is checked as the program is.
+  const plane = controlPlane((url, init) => fetch(url, init));
+  const own = await start('own-sign-in', { connection: { kind: 'openai-tunnel', tunnelId: 'tunnel_abc123' }, auth: signIn }, options => createConnection({ ...options, fetchImpl: plane.fetch }));
+  plane.queue.push(command(3, list('rpc_3'), { response_timeout: '30s', headers: { 'Mcp-Protocol-Version': ['2025-06-18'] } }));
+  await until(() => answerTo(plane, 3), 'the tool list through the tunnel');
+  assert.equal(answerTo(plane, 3).resp_code, 200); assert.ok(names(answerTo(plane, 3).resp_json).includes('exec_command'));
+  assert.equal((await ask(own.ingressPort, '127.0.0.1:' + own.ingressPort, list(4))).status, 401);
 });
