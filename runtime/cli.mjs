@@ -516,9 +516,17 @@ export async function main(argv = process.argv.slice(2), {
       if (mode !== undefined && !['ask', 'allow', 'off'].includes(mode)) throw new Error('Use delegation, delegation ask, delegation allow or delegation off');
       const chosen = mode ? await client.call('delegation.update', { mode }, callOptions) : await client.call('delegation.read', {}, callOptions);
       stdout.write(chosen.mode + '\n');
-      stderr.write({ ask: 'Ask: a task that a connected client hands to Codex, Claude Code or another agent here waits until you allow it at this computer, in the workbench (devmate ui) or your editor. What you start here yourself is not asked about, and an agent whose later tasks you had let through is asked about again from now on. Not to be asked: devmate delegation allow\n',
-        allow: 'Allow: a connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider. Tasks that waited for your answer when you chose this were let through. To be asked first: devmate delegation ask\n',
-        off: 'Off: a connected client cannot hand tasks to the coding agents here; you still can, at this computer. To be asked for each task instead: devmate delegation ask\n' }[chosen.mode]);
+      // What choosing it did is said where it was chosen just now, with what it did to the tasks there were; a look
+      // at the choice changes nothing and says nothing of that.
+      const tasks = count => count + (count === 1 ? ' task' : ' tasks');
+      const did = !mode ? '' : chosen.mode === 'ask' ? ' From now on every agent is asked about again, also one whose later tasks you had let through' +
+          (chosen.again ? ', and ' + tasks(chosen.again) + ' of a client that had been let through and had not begun wait for your answer again.' : '.')
+        : chosen.mode === 'allow' ? (chosen.allowed ? ' ' + tasks(chosen.allowed) + ' that waited for your answer ' + (chosen.allowed === 1 ? 'was' : 'were') + ' let through.' : '') +
+          (chosen.waiting ? ' ' + tasks(chosen.waiting) + ' still wait' + (chosen.waiting === 1 ? 's' : '') + ': no session is free for ' + (chosen.waiting === 1 ? 'it' : 'them') + ' (or the workflow has no turns left), and ' + (chosen.waiting === 1 ? 'it is' : 'they are') + ' let through when one has ended.' : '')
+        : ' What waited for your answer or its turn was ended.';
+      stderr.write({ ask: 'Ask: a task that a connected client hands to Codex, Claude Code or another agent here waits until you allow it at this computer, in the workbench (devmate ui) or your editor. What you start here yourself is not asked about.' + did + ' Not to be asked: devmate delegation allow\n',
+        allow: 'Allow: a connected client hands tasks to the coding agents here without asking you; each runs on your account with the provider.' + did + ' To be asked first: devmate delegation ask\n',
+        off: 'Off: a connected client cannot hand tasks to the coding agents here; you still can, at this computer.' + did + ' To be asked for each task instead: devmate delegation ask\n' }[chosen.mode]);
       return 0;
     }
     if (command === 'mcp-url') {

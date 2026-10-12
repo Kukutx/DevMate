@@ -118,6 +118,10 @@ export function defineProjectOperations(service, add) {
     if (service.agents.connectedInProject(args.id)) throw new DomainError('project_busy', 'Stop connected agents first.');
     const { root } = service.store.get('project', args.id);
     // The copy an agent worked in lives in the instance directory and on a branch of the repository: neither outlives the project here.
+    // Nothing of this project is asked about any more: a task that waited for the owner's word goes with it, and with
+    // it its place among the tasks that may wait.
+    service.store.transaction(() => service.agents.abandonHeld(agent => agent.projectId === args.id, 'cancelled',
+      { code: 'project_removed', message: 'The project was taken out of sharing before the owner allowed this task.' }));
     for (const agent of service.store.list('agent', { projectId: args.id, limit: 10000 })) {
       if (agent.isolated && !agent.isolated.settled) await service.workspace.discardProposal(service.project(args.id), agent.isolated).catch(() => {});
     }

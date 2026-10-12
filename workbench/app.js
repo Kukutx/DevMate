@@ -426,11 +426,16 @@ function approvalCard(approval) {
   const options = Array.isArray(approval.options) ? approval.options : [];
   // For a task that waits to be allowed there is no turn yet to cancel, and nothing to answer from inside a chat app.
   const consent = approval.kind === 'delegation', here = !(consent && bridge.embedded);
+  const asked = consent && approval.details && typeof approval.details === 'object' && typeof approval.details.task === 'string' ? approval.details : null;
   // Once the decision is accepted the request leaves the waiting list at once, not with the next refresh.
   const decide = async optionId => { await mutate('approval.resolve', {id: approval.id, optionId, expectedRevision: approval.revision}, 'Decision sent.'); approval.status = 'resolved'; renderMain(); };
   return el('div', {class: 'item waiting', 'data-key': approval.id}, el('div', {class: 'row-head'}, el('h3', {text: str(approval.summary) || str(approval.title) || 'Approval request'}), badge(approval.status)),
     caption([agentName(approval.agentId), str(approval.provider), str(approval.risk), date(approval.createdAt), approval.automatic ? consent ? 'allowed without asking (devmate delegation allow)' : 'granted automatically (full access)' : ''].filter(Boolean).join(' · ')),
-    approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
+    // A task that waits to be allowed is shown as what the owner agrees to: who asks, what would run it (the model,
+    // a session of the provider that is taken up again), and the task itself as the text it is, line by line.
+    asked ? [caption([str(asked.askedBy), 'runs with ' + str(asked.agent) + ', model: ' + str(asked.model), str(asked.continues) ? 'continues ' + asked.continues : '', 'project: ' + str(asked.project), asked.characters + ' characters'].filter(Boolean).join(' · ')),
+      pre(str(asked.task), {class: 'preview file-view', 'aria-label': 'The task'}), str(asked.notShown) ? el('p', {class: 'error-text', text: asked.notShown}) : null, str(asked.note) ? caption(asked.note) : null]
+      : approval.details ? pre(typeof approval.details === 'string' ? approval.details : JSON.stringify(approval.details, null, 2), {'aria-label': 'What is being asked'}) : null,
     el('div', {class: 'actions'}, here ? options.map(option => opButton(str(option.label) || str(option.name) || option.optionId, 'approval.resolve', () => decide(option.optionId))) : null,
       consent ? null : opButton('Cancel turn', 'approval.cancel', () => mutate('approval.cancel', {id: approval.id}, 'Cancellation requested.'), {class: 'danger'})),
     options.length ? null : caption('The agent did not offer any choices for this request.'),

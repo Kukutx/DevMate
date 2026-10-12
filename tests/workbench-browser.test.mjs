@@ -31,9 +31,13 @@ after(async()=>{await browser?.close();});
 
 /** An in-memory stand-in for the service that answers like it: lists honour status, newestFirst, limit and cursor. */
 // What the owner is asked when a connected client hands a task to an agent (runtime/coordination.mjs, consent).
-const delegationRequest=()=>({id:'approval-delegation',kind:'delegation',projectId:'p-one',agentId:'a-one',deliveryId:'delivery-001',summary:'A connected client asks codex to run a task in Project One: Fix it',status:'pending',revision:1,
-  options:[{optionId:'allow_once',name:'Run this task'},{optionId:'allow_agent',name:'Run it, and later tasks for this agent while it stays connected'},{optionId:'deny',name:'Do not run it'}],
-  details:{agent:'codex',project:'Project One',askedBy:'A connected client',characters:6,task:'Fix it'}});
+// In the words the runtime gives it (tests/runtime-delegation.test.mjs holds those to the product).
+const DELEGATION_ASKS='A connected client asks codex to run a task in the project "Project One": Fix it [and 14 more characters]';
+const ALLOW_AGENT='Run it, and do not ask again for this agent while it stays connected (tasks, and what is added to a task that runs)';
+const delegationRequest=()=>({id:'approval-delegation',kind:'delegation',projectId:'p-one',agentId:'a-one',deliveryId:'delivery-001',summary:DELEGATION_ASKS,status:'pending',revision:1,
+  options:[{optionId:'allow_once',name:'Run this task'},{optionId:'allow_agent',name:ALLOW_AGENT},{optionId:'deny',name:'Do not run it'}],
+  details:{agent:'codex',model:'gpt-large',continues:'the codex session thread-7',project:'Project One',askedBy:'A connected client',characters:20,task:'Fix it\nand the tests',
+    note:'Running it uses your account with codex. Not to be asked: devmate delegation allow'}});
 function fixture() {
   const calls=[],refs=[],failures=new Map();
   const projects=[{id:'p-one',name:'Project One',root:'C:/fixture-one',access:'write',revision:1},{id:'p-two',name:'Project Two',root:'C:/fixture-two',access:'write',revision:1}];
@@ -195,7 +199,15 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   assert.equal(await page.getByRole('button',{name:'Approve',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Allow once from provider',exact:true}).count(),0,'an answered request offers no decision any more');
   // Whether a task of a connected client runs at all is answered here, at the computer, like any other request.
-  await page.getByRole('heading',{name:'A connected client asks codex to run a task in Project One: Fix it',exact:true}).waitFor();
+  await page.getByRole('heading',{name:DELEGATION_ASKS,exact:true}).waitFor();
+  // What the owner agrees to is what is shown: who asks and what would run it, and the task as the text it is, line
+  // by line, not as one line of a record. The three answers are offered in their own words.
+  const waits=page.locator('[data-key="approval-delegation"]');
+  assert.equal(await waits.getByLabel('The task').textContent(),'Fix it\nand the tests');
+  assert.match(await waits.textContent(),/A connected client · runs with codex, model: gpt-large · continues the codex session thread-7 · project: Project One · 20 characters/);
+  assert.match(await waits.textContent(),/Running it uses your account with codex\./);
+  for(const name of ['Run this task',ALLOW_AGENT,'Do not run it'])assert.equal(await waits.getByRole('button',{name,exact:true}).count(),1,name);
+  assert.equal(await waits.getByRole('button',{name:'Cancel turn',exact:true}).count(),0);
   await page.getByRole('button',{name:'Do not run it',exact:true}).click();
   await until(()=>f.count('approval.resolve')===2,'the owner\'s answer');
   const answered=f.calls.filter(x=>x.operation==='approval.resolve')[1].input;
@@ -209,7 +221,18 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   assert.deepEqual(errors,[]);
   mkdirSync('tmp/workbench-validation',{recursive:true});
   await page.screenshot({path:'tmp/workbench-validation/local-files.png',fullPage:true});
+  // An agent whose later tasks the owner let through says so, with how that ends; one a connected client wrote down
+  // and that has not run is said to be that, and can be started or closed by the owner here.
+  f.agents[0].delegationAllowed=true;
+  f.agents.push({id:'a-two',projectId:'p-one',workflowId:'w-one',provider:'claude',label:'Written down',status:'unstarted',capabilities:{}});
   await page.getByRole('tab',{name:'Agents',exact:true}).click();
+  const card=id=>page.locator('.item[data-key="'+id+'"]');
+  await card('a-two').waitFor();
+  assert.match(await card('a-one').textContent(),/A connected client hands this agent tasks, and adds to a task that runs \(yours among them\), without asking you, for as long as the agent stays connected\. Stop it to be asked again\./);
+  assert.match(await card('a-two').textContent(),/Written down by a connected client and not started: it starts when you allow a task of it, or resume it\./);
+  assert.doesNotMatch(await card('a-two').textContent(),/without asking you/);
+  for(const name of ['Resume','Stop'])assert.equal(await card('a-two').getByRole('button',{name,exact:true}).isDisabled(),false,name+' is offered for an agent that has not started');
+  assert.equal(await card('a-two').getByRole('button',{name:'Send',exact:true}).isDisabled(),true);
   await page.screenshot({path:'tmp/workbench-validation/local-agents.png',fullPage:true});
 });
 
@@ -248,7 +271,8 @@ test('official MCP Apps SDK runs in iframe and attaches real saved references wi
   // Inside a chat app nothing offers to allow a task a connected client handed over: that is said at the computer.
   f.approvals.push(delegationRequest());
   await frame.getByRole('tab',{name:'Approvals',exact:true}).click();
-  await frame.getByRole('heading',{name:'A connected client asks codex to run a task in Project One: Fix it',exact:true}).waitFor();
+  await frame.getByRole('heading',{name:DELEGATION_ASKS,exact:true}).waitFor();
+  assert.equal(await frame.locator('[data-key="approval-delegation"]').getByLabel('The task').textContent(),'Fix it\nand the tests','the task is shown there as well');
   await frame.getByText('Whether this task runs is yours to say on your computer, in either access profile',{exact:false}).waitFor();
   assert.equal(await frame.getByRole('button',{name:'Run this task',exact:true}).count(),0);
   assert.equal(await frame.getByRole('button',{name:'Allow once from provider',exact:true}).count(),1,'what an agent asks in its turn is offered as before');

@@ -55,7 +55,11 @@ export class DomainError extends Error {
 
 const STATE_MAJOR = 4;
 // Raised by a release that changes what is stored in a way an earlier release would misread.
-export const STATE_MINOR = 0;
+// 1: a task that a connected client hands to an agent may wait for the owner's word (a delivery that is "held", the
+// setting delegation.mode). A release before that would neither ask nor ever run or end such a task: started by an
+// entry that was not updated, it would run a client's tasks unasked where the owner had chosen to be asked. It refuses
+// this state instead, with the release that wrote it, and still joins a runtime of that release that is running.
+export const STATE_MINOR = 1;
 
 export class Store extends EventEmitter {
   constructor(instanceRoot) {
@@ -188,6 +192,12 @@ export class Store extends EventEmitter {
       .all(...args).map(row => JSON.parse(row.data));
   }
 
+  // The records of one kind that carry a mark, found without reading the others: the many that do not are history.
+  marked(kind, field) {
+    if (!KINDS.includes(kind) || !/^[A-Za-z]+$/.test(field)) throw new TypeError('Unknown entity kind or field.');
+    return this.db.prepare("SELECT data FROM entities WHERE kind=? AND json_extract(data,'$." + field + "') IS 1").all(kind).map(row => JSON.parse(row.data));
+  }
+
   *scan(kind, options = {}) {
     let afterId = options.afterId;
     for (;;) {
@@ -271,17 +281,19 @@ export class Store extends EventEmitter {
     const pageSize=Math.min(Math.max(Number(limit)||100,1),500);
     // What a connected client sent this agent is not its to read before it was given it: not while the owner is
     // still asked about it (held), and not once it was refused or taken back without having run (cancelled). Read from
-    // the inbox it would be a task all the same, and one the owner did not allow.
+    // the inbox it would be a task all the same, and one the owner did not allow. So a client's message to the agent
+    // is shown where the record of its handing over says it was given, and not otherwise: that record is removed with
+    // age, and a refused message whose record is gone must not come back as if nothing had been decided about it.
     const sql="SELECT data FROM entities WHERE kind='message' AND project_id=? AND workflow_id=? " +
       "AND (json_extract(data,'$.sender.id')=? OR EXISTS " +
       "(SELECT 1 FROM json_each(entities.data,'$.recipientIds') WHERE value=?)) " +
-      "AND NOT (json_extract(data,'$.sender.client') IS 1 AND EXISTS (SELECT 1 FROM entities held WHERE held.kind='delivery' " +
-      "AND held.project_id=entities.project_id AND held.workflow_id=entities.workflow_id AND json_extract(held.data,'$.messageId')=entities.id " +
-      "AND json_extract(held.data,'$.agentId')=? AND json_extract(held.data,'$.status') IN ('held','cancelled'))) " +
+      "AND NOT (json_extract(data,'$.sender.client') IS 1 AND json_extract(data,'$.sender.id') IS NOT ? AND NOT EXISTS (SELECT 1 FROM entities given WHERE given.kind='delivery' " +
+      "AND given.project_id=entities.project_id AND given.workflow_id=entities.workflow_id AND json_extract(given.data,'$.messageId')=entities.id " +
+      "AND json_extract(given.data,'$.agentId')=? AND json_extract(given.data,'$.status') NOT IN ('held','cancelled'))) " +
       (older ? "AND (json_extract(data,'$.createdAt')<? OR " +
         "(json_extract(data,'$.createdAt')=? AND id<?)) " : '') +
       "ORDER BY json_extract(data,'$.createdAt') DESC,id DESC LIMIT ?";
-    const args=[projectId,workflowId,agentId,agentId,agentId,...(older?[older.createdAt,older.createdAt,older.id]:[]),pageSize+1];
+    const args=[projectId,workflowId,agentId,agentId,agentId,agentId,...(older?[older.createdAt,older.createdAt,older.id]:[]),pageSize+1];
     const rows=this.db.prepare(sql).all(...args);
     const items=rows.slice(0,pageSize).map(row=>JSON.parse(row.data));
     const oldest=items.at(-1);

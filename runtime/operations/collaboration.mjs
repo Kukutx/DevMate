@@ -104,7 +104,8 @@ export function defineCollaborationOperations(service, add) {
   add('input.list', listOptions, true, 'List native input requests.', (args, context) => service.list('input', args, context));
   add('input.respond', { id, ...revision, ...mutation, response: z.unknown() }, false,
     'Return the user\'s answer to the exact waiting request (input.list shows it under details). For an agent\'s question: the answer as plain text when there is one question, otherwise {answers:{"<question id or text>":"<answer>"}}. For a form (details.requestedSchema): {action:"accept", content:{…}}, {action:"decline"} or {action:"cancel"}.',
-    args => service.store.get('input', args.id).source === 'mcp' ? service.inputs.respond(args) : service.agents.resolve('input', args), { humanOnly: true });
+    // Who answers goes with it: what a connected client answers (it can, with full access) is its text in the task.
+    (args, context) => service.store.get('input', args.id).source === 'mcp' ? service.inputs.respond(args) : service.agents.resolve('input', args, actor(context)), { humanOnly: true });
   add('approval.cancel', { id, ...mutation }, false, 'Cancel the native turn that is awaiting this approval. Of a task that waits for the owner to allow it (kind delegation) there is no turn yet: that task is taken back.', args => {
     const approval = service.store.get('approval', args.id);
     if (approval.kind !== 'delegation') return service.agents.cancel(approval.agentId);

@@ -113,7 +113,9 @@ export class DevMateService {
     this.delegation = ['allow', 'off'].includes(this.store.setting('delegation.mode')) ? this.store.setting('delegation.mode') : 'ask';
     this.agents = new AgentCoordinator({ store: this.store, endpoint, adapterFactory, providerSettings: providerSettings || this.config.providers,
       // Full access is the owner's standing answer to what an agent asks.
-      grantsApprovals: () => this.fullAccess(), delegation: () => this.delegation });
+      grantsApprovals: () => this.fullAccess(), delegation: () => this.delegation,
+      // The copy of the project that was made for a connected client's agent whose task the owner then did not allow.
+      discardCopy: agent => this.workspace.discardProposal(this.project(agent.projectId), agent.isolated) });
     // What the owner changed about the coding agents while the runtime ran lies on top of the configuration.
     if (!providerSettings) for (const name of Object.keys(this.store.setting('providers.live') || {})) {
       try { this.applyProviderSettings(name); } catch (error) { this.store.recordNotificationFailure(error); }
@@ -229,11 +231,12 @@ export class DevMateService {
     this.store.setting('delegation.mode', mode);
     this.delegation = mode;
     // Tasks that already wait for the owner's word are covered by "do not ask". Choosing to be asked means of every
-    // agent again, also one whose later tasks had been let through; and with off nothing of a connected client's is
-    // left to run.
-    if (mode === 'allow') this.agents.allowWaiting();
-    else this.agents.askAgain(mode === 'off');
-    return { mode };
+    // agent again, also one whose later tasks had been let through, and of every task of a client that has not begun;
+    // and with off nothing of a connected client's is left to run. What that did to the tasks there were is said
+    // with the answer, in numbers: allowed (let through now), waiting (kept for want of a free session or of turns
+    // in their workflow, and let through when there is room), again (wait for the owner's word once more).
+    const done = mode === 'allow' ? this.agents.allowWaiting() : this.agents.askAgain(mode === 'off');
+    return { mode, ...Object.fromEntries(Object.entries(done).filter(([, count]) => count > 0)) };
   }
   // Folders the owner took out of sharing. They come back only by the owner's own choice, and not through a
   // folder above or below them either: an editor's default never shares what would bring one back.

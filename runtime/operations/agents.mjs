@@ -64,8 +64,10 @@ export function defineAgentOperations(service, add) {
       const { waitMs: wait = 30000, operationId, isolate, ...task } = args;
       if (args.agentId && service.store.get('agent', args.agentId).isolated?.settled) throw new DomainError('agent_finished', 'The work of this agent was ' + service.store.get('agent', args.agentId).isolated.settled + ' and its copy is gone. Start a new agent for the next task.');
       if (isolate && args.agentId) throw new DomainError('invalid_input', 'isolate is chosen when an agent is started. An agent that continues keeps working where it started.');
-      // Refused before a copy is made for it.
+      // Refused before a copy is made for it: where delegation is off, and where the owner already has as many tasks
+      // to answer as may wait. (A copy that was made for a task the owner then does not allow is removed with it.)
       service.agents.offered(actor(context));
+      if (isolate && service.agents.asks(null, actor(context))) service.agents.backlog(1);
       const isolated = isolate ? await service.workspace.isolate(project, 'copy-' + randomBytes(6).toString('hex')) : null;
       // The task is handed over first; waiting for it is separate, so giving up on the wait never withdraws the task.
       let started;
@@ -95,7 +97,11 @@ export function defineAgentOperations(service, add) {
     if (session && !session.stopped && session.current) throw new DomainError('agent_busy', 'The agent is still working on a task. Wait for it with agents_result, or cancel it with agents.cancel.');
     if (session && !session.stopped) await service.agents.stop(agent.id);
     const result = await work();
-    service.store.update('agent', agent.id, { isolated: { ...agent.isolated, settled: how } });
+    service.store.transaction(() => {
+      service.store.update('agent', agent.id, { isolated: { ...agent.isolated, settled: how } });
+      // A task of it that still waited for the owner's word has nowhere to run any more: the question ends with the copy.
+      service.agents.abandonHeld(agent.id, 'cancelled', { code: 'agent_finished', message: 'The work of this agent was ' + how + ' before the owner allowed this task.' });
+    });
     return { agentId: agent.id, ...result };
   };
   const projectOfAgent = args => service.store.get('agent', named(args)).projectId;
@@ -117,8 +123,11 @@ export function defineAgentOperations(service, add) {
     'Start or explicitly resume a native provider session for this workflow. Where the owner is asked about a connected client\'s tasks (delegation.read), a client\'s agent is only written down: its process starts with the first task the owner allows.',
     (args, context) => {
       const agent = service.agents.start(args, actor(context));
-      // Said with the answer too, where nothing was started: its status alone is a word.
-      return agent.status === 'unstarted' ? { ...agent, note: 'This agent is written down and not started. Its process starts when the owner allows the first task that is handed to it (agents_delegate with agentId, or agents.send): they are asked at their computer.' } : agent;
+      // Said with the answer too, where nothing was started: its status alone is a word. A prompt that came with the
+      // start is a task the owner is already asked about, named so that it is followed and not handed over again.
+      return agent.status !== 'unstarted' ? agent : { ...agent, note: 'This agent is written down and not started. ' + (agent.deliveryId
+        ? 'The owner is being asked at their computer about the task that came with it (the prompt), and its process starts when they allow that. Follow it with agents_result {agentId:"' + agent.id + '", deliveryId:"' + agent.deliveryId + '"}; do not hand the task over again.'
+        : 'Its process starts when the owner allows the first task that is handed to it (agents_delegate with agentId, or agents.send): they are asked at their computer.') };
     }, { openWorld: true, delegates: true });
   for (const action of ['stop', 'cancel']) add('agents.' + action, { id, ...mutation }, false,
     action + ' a native agent session.' + (action === 'cancel' ? ' Where no task runs, the tasks of it that still wait for the owner to allow them are taken back.' : ''), args => service.agents[action](args.id));
