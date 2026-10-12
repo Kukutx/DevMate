@@ -39,7 +39,7 @@ const METHODS = [
   ['tabs.list', true, 'The open tabs of every window, or of one (windowId), optionally only those whose title or address contains query.', { windowId: whole.optional(), query: text(1000).optional() }],
   ['tabs.open', false, 'Open an address in a new tab (in front unless active:false).', { url: address, active: z.boolean().optional(), windowId: whole.optional() }],
   ['tabs.activate', false, 'Bring a tab and its window to the front.', { tabId: whole }],
-  ['tabs.navigate', false, 'Send a tab to another address.', { tabId: whole, url: address }],
+  ['tabs.navigate', false, 'Send a tab to another address. Not the tab of DevMate\'s own workbench: that one is left where it is.', { tabId: whole, url: address }],
   ['tabs.reload', false, 'Reload a tab.', { tabId: whole }],
   ['tabs.back', false, 'Go back one page in a tab\'s own history.', { tabId: tab }],
   ['tabs.forward', false, 'Go forward one page in a tab\'s own history.', { tabId: tab }],
@@ -82,7 +82,7 @@ const METHODS = [
     { waitMs: input => (input.timeoutMs ?? 10000) + 10000 }],
   ['page.click', false, 'Click an element: by its ref from page.snapshot, by a CSS selector, or by its text (what it shows or is called). double:true clicks twice.', { tabId: tab, ...element, double: z.boolean().optional() }],
   ['page.hover', false, 'Move the pointer over an element.', { tabId: tab, ...element }],
-  ['page.type', false, 'Type text into the element that has the keyboard, or into one named by ref or selector. clear empties the field first.', { tabId: tab, ref: element.ref, selector: element.selector, text: z.string().max(100000), clear: z.boolean().optional() }],
+  ['page.type', false, 'Type text into the element that has the keyboard, or into one named by ref or selector. clear empties the field first. typed in the answer is how many characters were really typed: none where a dialog came up first.', { tabId: tab, ref: element.ref, selector: element.selector, text: z.string().max(100000), clear: z.boolean().optional() }],
   ['page.press', false, 'Press one key in the page: a letter or a digit, or Enter, Tab, Escape, Backspace, Delete, an arrow, Home, End, PageUp, PageDown, Space (written in any case). modifiers holds alt, ctrl, meta or shift down with it.',
     { tabId: tab, key: z.string().regex(/^([a-z0-9]|Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown|Space)$/i), modifiers: z.array(z.enum(['alt', 'ctrl', 'meta', 'shift'])).max(4).optional() }],
   ['page.select', false, 'Choose from a <select> list (by ref or selector): the choice by its value, or by label, the text it shows.', { tabId: tab, ref: element.ref, selector: element.selector, value: text(1000).min(1).optional(), label: text(1000).min(1).optional() }],
@@ -92,7 +92,7 @@ const METHODS = [
   ['page.emulate', false, 'Show the page as it would be elsewhere: another screen (width and height, deviceScaleFactor, mobile), a userAgent, a dark or light colorScheme, or offline. It lasts while the tab is debugged; reset:true ends it.',
     { tabId: tab, width: z.number().int().min(100).max(8000).optional(), height: z.number().int().min(100).max(8000).optional(), deviceScaleFactor: z.number().positive().max(5).optional(), mobile: z.boolean().optional(), userAgent: text(500).min(1).optional(),
       colorScheme: z.enum(['dark', 'light']).optional(), offline: z.boolean().optional(), reset: z.boolean().optional() }],
-  ['page.dialog', false, 'Answer the dialog a page has opened (alert, confirm, prompt): accept true for OK, false for Cancel, promptText for what is typed into a prompt. A page that waits for a dialog answers nothing else until then.',
+  ['page.dialog', false, 'Answer the dialog a page has opened (alert, confirm, prompt): accept true for OK, false for Cancel, promptText for what is typed into a prompt. A page that waits for a dialog answers nothing else until then. A dialog the page was already showing before DevMate first looked at the tab cannot be answered from here: the owner closes it in the browser, or tabs.reload loads the page again.',
     { tabId: tab, accept: z.boolean(), promptText: text(10000).optional() }],
   ['page.debugStop', false, 'Take the debugger off a tab, or off every tab when none is named. It comes off by itself after five minutes without a call.', { tabId: tab }]
 ];
@@ -202,7 +202,15 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   function unasked(link, grace = idleMs) {
     link.unaskedSince = now(); link.grace = grace;
     clearTimeout(link.idleTimer);
-    link.idleTimer = later(grace + 1, () => { if (links.get(link.id) === link && gone(link)) drop(link, 'it stopped asking for work'); });
+    // A timer and the clock do not count alike: the timer can come a millisecond before the clock says the time is
+    // over. Then the look is made again, and not left to the next call (a call that waited on this link would
+    // otherwise wait out its whole time: seen on Linux, where it took ten seconds instead of a quarter of one).
+    const look = () => {
+      if (links.get(link.id) !== link || link.waiter) return;
+      if (gone(link)) drop(link, 'it stopped asking for work');
+      else link.idleTimer = later(Math.max(1, link.grace - (now() - link.unaskedSince) + 1), look);
+    };
+    link.idleTimer = later(grace + 1, look);
   }
   // The browser a call goes to: the one that connected last. One that was lost sight of, or has connected and not yet
   // asked for work once, is passed over while another is there.
@@ -312,7 +320,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       if (!item) throw fault('unknown_capability', 'Unknown browser capability: ' + name + '. capability_list {engine:"chrome"} shows them.');
       return { capability: { engine: BROWSER_ENGINE, ...view(item, true) }, hint: 'Invoke with ' + (item.readOnly ? 'capability_query' : 'capability_call') + ' {capability:"' + name + '", input}. No projectId is needed: the browser is the owner\'s, not a project\'s.' };
     }
-    return { id: BROWSER_ENGINE, name: 'The owner\'s browser', description: 'Bookmarks, tabs and windows, history, downloads, the reading list and the pages in its tabs, through the DevMate extension in Chrome or Edge. A page in a tab behind another or in a minimized window is clicked, typed into and pictured where it is; it is not brought to the front.',
+    return { id: BROWSER_ENGINE, name: 'The owner\'s browser', description: 'Bookmarks, tabs and windows, history, downloads, the reading list and the pages in its tabs, through the DevMate extension in Chrome or Edge. A page in a tab behind another or in a minimized window is clicked, typed into and pictured where it is; it is not brought to the front. DevMate\'s own workbench and the pages of the extension itself are not read or worked this way: what is decided there is the owner\'s to decide at the computer.',
       status: link ? 'connected' : 'not connected', ...(link ? { browser: link.browser, extension: link.extension } : { hint: HOW_TO_CONNECT }),
       capabilities: BROWSER_CAPABILITIES.filter(item => !link || link.methods.has(item.method)).map(item => view(item, full)) };
   }

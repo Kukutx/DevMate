@@ -60,9 +60,11 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     if (data.length - 4 > MAX_TO_BROWSER) return false;
     try { output.write(data); return true; } catch { return false; }
   };
+  // port: the local port this runtime answers the owner on, the workbench among it. The extension keeps the browser's
+  // tools off the pages of that origin: what is decided there is the owner's to decide at the computer.
   const runtime = async () => {
-    const status = await client.status();
-    return { running: status.running === true, version: status.running === true ? status.record?.version || VERSION : VERSION, ...(status.outdated ? { outdated: true } : {}) };
+    const status = await client.status(), up = status.running === true;
+    return { running: up, version: up ? status.record?.version || VERSION : VERSION, ...(up && Number.isInteger(status.record?.port) ? { port: status.record.port } : {}), ...(status.outdated ? { outdated: true } : {}) };
   };
   const pending = async () => {
     const [approvals, inputs] = await Promise.all([client.call('approval.list', { status: 'pending', limit: 20 }), client.call('input.list', { status: 'pending', limit: 20 })]);
@@ -94,7 +96,8 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     while (!signal.aborted) {
       try {
         const now = await runtime();
-        if (running === null || now.running !== running.running || now.version !== running.version) { running = now; if (extension) send({ type: 'event', name: 'runtime.status', data: now }); }
+        // (Also where only the port is another: a runtime of the same version that was started again elsewhere.)
+        if (running === null || now.running !== running.running || now.version !== running.version || now.port !== running.port) { running = now; if (extension) send({ type: 'event', name: 'runtime.status', data: now }); }
         if (now.running) {
           if (!polling) void work();
           if (extension && Date.now() - lastPending >= pendingMs) {

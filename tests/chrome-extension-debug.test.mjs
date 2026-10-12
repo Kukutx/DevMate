@@ -17,16 +17,18 @@ const no = message => { throw new Error(message); };
 // that is not named is answered with {}. Every call is written down in order. The clock moves only when a test moves
 // it or the code pauses, and a timer runs only when a test runs it.
 function standIn(replies = {}) {
-  const log = [], listeners = { event: [], detach: [] }, timers = [], changes = [], pauses = [], time = { now: START };
+  const log = [], listeners = { event: [], detach: [] }, timers = [], watches = [], changes = [], pauses = [], time = { now: START };
   const reply = async (name, ...given) => { const answer = replies[name]; return typeof answer === 'function' ? answer(...given) : answer; };
   const chrome = { debugger: {
     attach: async ({ tabId }, version) => { log.push({ tabId, method: 'attach', params: version }); await reply('attach', tabId, log.filter(call => call.method === 'attach' && call.tabId === tabId).length); },
     detach: async ({ tabId }) => { log.push({ tabId, method: 'detach' }); await reply('detach', tabId); },
     sendCommand: async ({ tabId }, method, params) => { log.push({ tabId, method, params }); return (await reply(method, params, tabId)) ?? {}; },
     onEvent: { addListener: listener => listeners.event.push(listener) }, onDetach: { addListener: listener => listeners.detach.push(listener) } } };
-  const fakes = { clock: () => time.now, schedule: (run, ms) => { const timer = { run, ms, cancelled: false }; timers.push(timer); return timer; }, cancel: timer => { if (timer) timer.cancelled = true; },
+  // The watch on a tab that does not answer its first question (five seconds) is kept apart from the other timers:
+  // every tab starts one when it is first put under the debugger, and it is called off as soon as the tab answers.
+  const fakes = { clock: () => time.now, schedule: (run, ms) => { const timer = { run, ms, cancelled: false }; (ms === 5000 ? watches : timers).push(timer); return timer; }, cancel: timer => { if (timer) timer.cancelled = true; },
     pause: async ms => { pauses.push(ms); time.now += ms; }, onChange: list => changes.push(list) };
-  return { chrome, replies, fakes, log, timers, changes, pauses, time,
+  return { chrome, replies, fakes, log, timers, watches, changes, pauses, time,
     say: (tabId, method, params = {}) => { for (const listener of listeners.event) listener({ tabId }, method, params); },
     drop: (tabId, reason = 'canceled_by_user') => { for (const listener of listeners.detach) listener({ tabId }, reason); },
     names: (from = 0) => log.slice(from).map(call => call.method), sent: method => log.filter(call => call.method === method).map(call => call.params) };
@@ -38,12 +40,15 @@ function harness(replies = {}) {
 }
 // The extension's methods on that stand-in, with two tabs in one window: tab 1 in front and tab 2 behind it. What the
 // browser's tabs are asked is written down in `asked`.
-function extension(replies = {}, tabReplies = {}) {
-  const stand = standIn(replies), asked = [];
+function extension(replies = {}, tabReplies = {}, given = {}) {
+  const stand = standIn(replies), asked = [], heard = [];
   const open = [{ id: 1, windowId: 7, index: 0, title: 'Front', url: 'https://front.example/', active: true, status: 'complete' }, { id: 2, windowId: 7, index: 1, title: 'Behind', url: 'https://behind.example/', active: false, status: 'complete' }];
   const answers = { get: id => open.find(tab => tab.id === id) ?? no('No tab with id: ' + id + '.'), query: () => open.filter(tab => tab.active), captureVisibleTab: () => 'data:image/png;base64,AAAA', goBack: () => undefined, goForward: () => undefined, ...tabReplies };
   stand.chrome.tabs = Object.fromEntries(Object.entries(answers).map(([name, reply]) => [name, async (...args) => { asked.push([name, ...args]); return reply(...args); }]));
-  return { ...stand, asked, methods: createCapabilities(stand.chrome, { version: '9.9.9', ...stand.fakes }) };
+  stand.chrome.tabs.onUpdated = { addListener: listener => heard.push(listener) };
+  // goes: a tab changes as the browser changes it, and the browser says so.
+  return { ...stand, asked, open, goes: (id, change) => { const tab = Object.assign(open.find(one => one.id === id), change); for (const listener of heard) listener(id, change, tab); },
+    methods: createCapabilities(stand.chrome, { version: '9.9.9', ...stand.fakes, ...given }) };
 }
 // The methods of the debugger that change a page, or what is debugged. The others are its reads: DEBUG_READ_ONLY.
 const CHANGES = ['page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.reload', 'page.emulate', 'page.dialog', 'page.debugStop'];
@@ -1541,11 +1546,11 @@ test('page.waitFor does not put the debugger back on a tab the owner took it off
   const stand = harness({ 'Runtime.evaluate': () => { if (stand.sent('Runtime.evaluate').length === 2) stand.drop(1, 'canceled_by_user'); return { result: { type: 'boolean', value: false } }; } });
   await refuses(stand.methods['page.waitFor']({ text: 'Saved' }), 'browser_error', /^The debugger was taken off this tab before this was done: the owner took it off, or the tab was closed\.$/);
   assert.deepEqual(stand.log.filter(call => call.method === 'attach').length, 1, 'attached once, and not again');
-  assert.deepEqual(stand.debugging(), []); assert.deepEqual(stand.pauses, [250, 250]);
+  assert.deepEqual(stand.debugging(), []); assert.deepEqual(stand.pauses, [250], 'said as soon as the look that found it gone came back, not as a text that did not come');
   // The same when the tab is let go with page.debugStop from another call.
   const other = harness({ 'Runtime.evaluate': () => { if (other.sent('Runtime.evaluate').length === 3) void other.methods['page.debugStop'](); return { result: { type: 'boolean', value: false } }; } });
   await refuses(other.methods['page.waitFor']({ selector: '#never', timeoutMs: 30000 }), 'browser_error', /taken off this tab/);
-  assert.equal(other.log.filter(call => call.method === 'attach').length, 1); assert.deepEqual(other.pauses, [250, 250, 250]);
+  assert.equal(other.log.filter(call => call.method === 'attach').length, 1); assert.deepEqual(other.pauses, [250, 250]);
 });
 
 test('page.press takes a named key however it is written, and says it as it is known', async () => {
@@ -1556,14 +1561,26 @@ test('page.press takes a named key however it is written, and says it as it is k
   assert.equal((await methods['page.press']({ key: 'E' })).pressed, 'E');
 });
 
-test('a call that names nothing, or something that is gone, does not bring a tab that is put away to life', async () => {
+test('a call that names nothing does not bring a tab that is put away to life; one whose element is not there wakes it and looks again', async () => {
   const { tab, replies } = putAway({ more: { 'DOM.resolveNode': ({ backendNodeId }) => backendNodeId === 13 ? { object: { type: 'object', objectId: 'node-13' } } : no('No node with given id found') } });
   const { methods, names } = harness({ ...replies, 'Runtime.evaluate': params => params.returnByValue === false ? { result: { type: 'object', subtype: 'null', value: null } } : replies['Runtime.evaluate'](params) });
   await refuses(methods['page.click'](), 'invalid_input', /Say which element/);
-  await refuses(methods['page.click']({ ref: 99 }), 'not_found', /ref 99 any more/);
-  await refuses(methods['page.hover']({ selector: '#gone' }), 'not_found', /#gone/);
-  await refuses(methods['page.type']({ ref: 99, text: 'Ada' }), 'not_found', /page\.snapshot/);
+  await refuses(methods['page.hover']({}), 'invalid_input', /Say which element/);
   assert.equal(names().includes('Emulation.setFocusEmulationEnabled'), false); assert.equal(tab.state, 'hidden');
+  // A page that is put away may build what is asked for only once it is drawn: it is woken, and looked at once more.
+  const from = names().length;
+  await refuses(methods['page.click']({ ref: 99 }), 'not_found', /ref 99 any more/);
+  assert.deepEqual(names(from).filter(name => name === 'DOM.resolveNode' || name === 'Emulation.setFocusEmulationEnabled'), ['DOM.resolveNode', 'Emulation.setFocusEmulationEnabled', 'DOM.resolveNode']);
+  assert.equal(names().some(name => name.startsWith('Input.')), false);
+  // And where it is there after the waking, it is used.
+  let drawn = false;
+  const late = putAway(), page = harness({ ...late.replies, 'Emulation.setFocusEmulationEnabled': params => { late.replies['Emulation.setFocusEmulationEnabled'](params); drawn = true; }, 'DOM.resolveNode': () => drawn ? { object: { type: 'object', objectId: 'node-late' } } : no('No node with given id found') });
+  assert.deepEqual(await page.methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
+  assert.deepEqual(page.sent('DOM.getContentQuads'), [{ objectId: 'node-late' }]);
+  // A page that was there before it was woken is looked at again too: it may have drawn itself anew.
+  const redrawn = putAway(), again = harness(redrawn.replies);
+  await again.methods['page.click']({ ref: 13 });
+  assert.equal(again.sent('DOM.resolveNode').length, 2);
 });
 
 test('two calls that use the mouse on a tab that is put away wake it once, and neither goes ahead before it was given its frames', async () => {
@@ -1600,4 +1617,207 @@ test('page.screenshot of the tab in front goes through the debugger when the pag
   said.length = 0;
   await methods['page.screenshot']({ tabId: 2 }); await methods['page.screenshot']({ fullPage: true });
   assert.deepEqual(said, []);
+});
+// What a third reading found (2026-10-12): steps of a call that were not under the watch for a dialog.
+
+test('a dialog that a step of the call brings up ends the call at once, and nothing of it is sent once the dialog is answered', async () => {
+  const visible = { result: { type: 'string', value: 'visible' } }, seen = ({ expression }) => expression.startsWith('(function keyboard') ? { result: { type: 'string', value: 'input #name' } } : visible;
+  // Giving a field the keyboard takes it from another one, and its page answers that with alert(): the browser leaves the step unanswered.
+  const held = [], form = harness(shown({ 'DOM.focus': () => new Promise(resolve => held.push(resolve)), 'Runtime.evaluate': seen }));
+  const typing = refuses(form.methods['page.type']({ ref: 13, text: 'Ada', clear: true }), 'dialog_open', /alert: "Fill in the first field"/);
+  await settle();
+  form.say(1, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Fill in the first field' });
+  await typing;
+  // The dialog is answered and the browser answers the step it had left open: the text is not typed now.
+  await form.methods['page.dialog']({ accept: true });
+  held[0]({}); await settle();
+  assert.equal(form.sent('Input.insertText').length, 0); assert.equal(form.sent('Input.dispatchKeyEvent').length, 0);
+  // The same for a click whose element was still being pointed at.
+  const stuck = [], click = harness(shown({ 'Runtime.callFunctionOn': () => new Promise(resolve => stuck.push(resolve)), 'Runtime.evaluate': visible }));
+  const clicking = refuses(click.methods['page.click']({ ref: 13 }), 'dialog_open', /confirm: "Leave\?"/);
+  await settle();
+  click.say(1, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Leave?' });
+  await clicking;
+  await click.methods['page.dialog']({ accept: false });
+  stuck[0]({ result: { type: 'object', subtype: 'null', value: null } }); await settle();
+  assert.deepEqual(click.sent('Input.dispatchMouseEvent'), [], 'the mouse is not moved, pressed or let go afterwards');
+});
+
+test('what is answered when a dialog cuts a call short is what was done: nothing is called clicked or typed that was not sent', async () => {
+  const visible = { result: { type: 'string', value: 'visible' } }, seen = ({ expression }) => expression.startsWith('(function keyboard') ? { result: { type: 'string', value: 'input #name' } } : visible;
+  const dialog = stand => stand.say(1, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Discard?' }), named = { dialog: 'confirm: "Discard?"', note: DIALOG_NOTE, untrusted: true };
+  const moving = () => { const held = []; return { held, replies: shown({ 'Input.dispatchMouseEvent': ({ type }) => type === 'mouseMoved' ? new Promise(resolve => held.push(resolve)) : {}, 'Runtime.evaluate': visible }) }; };
+  // The pointer is on its way when the dialog opens (something under it answers a pointer with a question): no press was sent, so nothing was clicked.
+  const way = moving(), click = harness(way.replies), refused = refuses(click.methods['page.click']({ ref: 13 }), 'dialog_open', /Discard\?/);
+  await settle(); dialog(click); await refused;
+  assert.deepEqual(click.sent('Input.dispatchMouseEvent').map(event => event.type), ['mouseMoved']);
+  // For page.hover the pointer was what it was asked to move: said, with the dialog.
+  const over = moving(), hover = harness(over.replies), hovering = hover.methods['page.hover']({ ref: 13 });
+  await settle(); dialog(hover);
+  assert.deepEqual(await hovering, { tabId: 1, hovered: { x: 60, y: 40 }, ...named });
+  // The field was being emptied when its page asked: the text was not typed, and the answer says 0 characters.
+  const keys = [], form = harness(shown({ 'Input.dispatchKeyEvent': () => new Promise(resolve => keys.push(resolve)), 'Runtime.evaluate': seen })), typing = form.methods['page.type']({ ref: 13, text: 'Ada', clear: true });
+  await settle(); dialog(form);
+  assert.deepEqual(await typing, { tabId: 1, typed: 0, into: 'input #name', ...named });
+  assert.equal(form.sent('Input.insertText').length, 0);
+  // A choice the page answers with a question is made by then, and what was chosen is not known here: only the dialog is told.
+  const picking = [], list = harness(shown({ 'Runtime.callFunctionOn': () => new Promise(resolve => picking.push(resolve)), 'Runtime.evaluate': visible })), choosing = list.methods['page.select']({ ref: 13, value: 'm' });
+  await settle(); dialog(list);
+  assert.deepEqual(await choosing, { tabId: 1, ...named });
+  // And a wheel turned or an element scrolled to when the dialog opened is said with it.
+  const wheel = [], long = harness(shown({ 'Input.dispatchMouseEvent': () => new Promise(resolve => wheel.push(resolve)), 'Runtime.evaluate': visible, 'Page.getLayoutMetrics': {} })), turning = long.methods['page.scroll']({ deltaY: 300 });
+  await settle(); dialog(long);
+  assert.deepEqual(await turning, { tabId: 1, scrolledBy: 300, ...named });
+});
+
+test('an element is found by the piece of text that holds the words, however large the page is around it', async () => {
+  const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node' } }, 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } });
+  await methods['page.inspect']({ text: 'Save' });
+  const [{ expression }] = sent('Runtime.evaluate'), asked = [];
+  const item = (innerText, more = {}) => ({ tagName: 'DIV', innerText, getAttribute: () => null, getClientRects: () => [{}], ...more }), piece = (data, holder) => ({ data, parentElement: holder });
+  const find = (texts, all = [], controls = []) => inPage(expression, { document: { body: {}, createTreeWalker: (root, what) => { asked.push(what); let at = -1; return { nextNode: () => texts[++at] ?? null }; },
+    querySelectorAll: selector => selector === 'body *' ? all : controls } });
+  // A table of thousands of rows: the cell is found, not the table that also "shows" the word.
+  const table = item('Name Save Delete '.repeat(3000)), cell = item('Save'), unseen = item('Save', { getClientRects: () => [] });
+  assert.equal(find([piece('Name', table), piece('  Save\n', cell), piece('Save', unseen), piece('Save it all for later', item('Save it all for later'))], [table]), cell);
+  assert.deepEqual(asked, [4], 'only pieces of text are walked');
+  // Something to press is still preferred, and words spread over several elements are still found by what holds them all.
+  const button = item('Save changes', { tagName: 'BUTTON' });
+  assert.equal(find([piece('Save', cell)], [table], [button]), button);
+  const split = item('Save now');
+  assert.equal(inPage(expression.replace(/\("Save"\)$/, '("Save now")'), { document: { body: {}, createTreeWalker: () => { const texts = [piece('Save ', split), piece('now', split)]; let at = -1; return { nextNode: () => texts[++at] ?? null }; }, querySelectorAll: selector => selector === 'body *' ? [split] : [] } }), split);
+});
+
+test('page.inspect does not show what a password field holds where the page keeps it in the markup', async () => {
+  const { methods, sent } = harness(shown({ 'Runtime.callFunctionOn': { result: { type: 'object', value: {} } } }));
+  await methods['page.inspect']({ ref: 13, styles: ['color'], maxChars: 1000 });
+  const [{ functionDeclaration, arguments: given }] = sent('Runtime.callFunctionOn');
+  const seen = outerHTML => onElement(functionDeclaration, { document: { elementFromPoint: () => null }, getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1', getPropertyValue: () => '' }) })(
+    { tagName: 'FORM', id: '', className: '', outerHTML, contains: () => false, getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }) }, ...given.map(item => item.value)).html;
+  assert.equal(seen('<form><input type="password" name="p" value="hunter2"><input value=\'s3cret\' TYPE=password><input type=password value=abc123 required></form>'),
+    '<form><input type="password" name="p" value="(hidden)"><input value="(hidden)" TYPE=password><input type=password value="(hidden)" required></form>');
+  assert.equal(seen('<form><input type="text" name="user" value="ada"><input type="password" name="p"></form>'), '<form><input type="text" name="user" value="ada"><input type="password" name="p"></form>', 'what is no password stays');
+});
+
+test('page.screenshot does not wait for a page that does not say at once whether it is shown', async () => {
+  const { chrome, methods, asked, pauses, sent } = extension({ 'Page.captureScreenshot': { data: 'UE5H' } });
+  // Still loading, busy, or showing a dialog: the page runs nothing for now.
+  const said = [];
+  chrome.scripting = { executeScript: given => { said.push(given); return new Promise(() => {}); } };
+  assert.deepEqual(await methods['page.screenshot'](), { tabId: 1, mimeType: 'image/png', base64: 'AAAA' });
+  assert.deepEqual(pauses, [400, 8000], 'a moment for the page to say how it is shown, then the picture as it is seen'); assert.equal(said[0].injectImmediately, true);
+  assert.equal(asked.filter(([name]) => name === 'captureVisibleTab').length, 1); assert.equal(sent('Page.captureScreenshot').length, 0);
+});
+test('a tab that answers nothing when it is first looked at is given up after five seconds, with what it may be and what to do', async () => {
+  // A page that was showing alert() before the debugger came: the browser leaves every question unanswered, and says of the dialog that none is showing.
+  const stand = harness({ 'Runtime.enable': () => new Promise(() => {}) });
+  const looking = refuses(stand.methods['page.snapshot'](), 'browser_error', /^This tab does not answer the debugger\. A page that was already showing a dialog .* cannot be answered from here: close it in the browser, or load the page again with tabs\.reload, which closes it\.$/);
+  const waiting = refuses(stand.methods['page.dialog']({ accept: true }), 'browser_error', /does not answer the debugger/);
+  await settle();
+  assert.deepEqual(stand.names(), ['attach', 'Runtime.enable'], 'nothing else is asked of it meanwhile');
+  assert.deepEqual(stand.watches.map(watch => [watch.ms, watch.cancelled]), [[5000, false]]);
+  stand.watches[0].run();
+  await looking; await waiting;
+  assert.deepEqual(stand.names(), ['attach', 'Runtime.enable', 'detach'], 'and the tab is let go');
+  assert.deepEqual(stand.debugging(), []);
+  // Once the page answers again (the dialog was closed, or the page loaded again), the next call finds it as any tab.
+  stand.replies['Runtime.enable'] = {};
+  stand.replies['Accessibility.getFullAXTree'] = shop();
+  assert.equal((await stand.methods['page.snapshot']()).nodes, 11);
+  assert.deepEqual(stand.watches.map(watch => watch.cancelled), [false, true], 'the watch is called off as soon as a tab answers');
+});
+test('page.screenshot of the tab in front does not wait to the end for a picture the browser does not give', async () => {
+  // Seen under a dialog: the browser gave the picture of the window at once on one try, and not at all on the next.
+  const { methods, pauses } = extension({}, { captureVisibleTab: () => new Promise(() => {}) });
+  await refuses(methods['page.screenshot'](), 'browser_error', /^The browser gave no picture of this tab in eight seconds\. A page that is showing a dialog may be why: answer it with page\.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again \(tabs\.reload\)\.$/);
+  assert.deepEqual(pauses, [8000]);
+  // What the browser refuses is still said in its words, and a picture that comes is not held up.
+  const refusing = extension({}, { captureVisibleTab: () => no('The \'activeTab\' permission is not in effect') });
+  await refuses(refusing.methods['page.screenshot'](), 'browser_error', /^The browser did not capture this tab \(The 'activeTab' permission is not in effect\)\.$/);
+  assert.deepEqual(await extension().methods['page.screenshot'](), { tabId: 1, mimeType: 'image/png', base64: 'AAAA' });
+});
+// What each method that works on a tab is asked here, so that nothing but the tab can be the reason it refuses.
+const OF_A_TAB = { 'page.read': {}, 'page.screenshot': {}, 'page.console': {}, 'page.network': {}, 'page.networkRequest': { requestId: '1' }, 'page.snapshot': {}, 'page.inspect': { selector: 'button' },
+  'page.storage': { includeValues: true }, 'page.waitFor': { text: 'Allow' }, 'page.click': { text: 'Allow' }, 'page.hover': { text: 'Allow' }, 'page.type': { text: 'yes' }, 'page.press': { key: 'Enter' },
+  'page.select': { selector: 'select', value: 'allow' }, 'page.scroll': { deltaY: 100 }, 'page.evaluate': { expression: 'sessionStorage.length' }, 'page.reload': {}, 'page.emulate': { reset: true },
+  'page.dialog': { accept: true }, 'tabs.back': {}, 'tabs.forward': {}, 'tabs.navigate': { url: 'https://elsewhere.example/' } };
+const WORKBENCH = /^This tab is DevMate's own workbench, where the owner decides at the computer\. It is not read, worked or sent elsewhere through the browser\.$/;
+test('DevMate\'s own workbench is not read, worked or sent elsewhere through the browser', async () => {
+  const { methods, open, asked, names } = extension({}, { update: (id, change) => ({ id, ...change }) }, { ownPort: () => 8788 });
+  assert.deepEqual(Object.keys(methods).filter(name => name.startsWith('page.') && name !== 'page.debugStop' && !Object.hasOwn(OF_A_TAB, name)), [], 'every method that works on a page is held to this');
+  // The tab behind is the workbench: known by the port DevMate answers the owner on, under each name of this computer,
+  // whatever the page is called so far, and already while the tab is on its way there.
+  for (const change of [{ url: 'http://127.0.0.1:8788/', title: 'DevMate Workbench' }, { url: 'http://localhost:8788/workbench', title: '' }, { url: 'http://[::1]:8788/?code=once', title: '[::1]:8788' },
+    { url: 'https://behind.example/', pendingUrl: 'http://127.0.0.1:8788/?code=once', title: 'Behind' }]) {
+    Object.assign(open[1], { pendingUrl: undefined }, change);
+    for (const [name, input] of Object.entries(OF_A_TAB)) await refuses(methods[name]({ tabId: 2, ...input }), 'not_supported', WORKBENCH);
+  }
+  assert.deepEqual(names(), [], 'the debugger never came near it');
+  assert.deepEqual(asked.filter(([name]) => name !== 'get'), [], 'and the browser was asked only which tab it is');
+  // In front, it is not the tab a call without a tabId works on either.
+  Object.assign(open[0], { url: 'http://127.0.0.1:8788/', title: 'DevMate Workbench' });
+  for (const name of ['page.read', 'page.screenshot', 'page.evaluate', 'page.click', 'tabs.back']) await refuses(methods[name](OF_A_TAB[name]), 'not_supported', WORKBENCH);
+  assert.deepEqual(names(), []);
+  assert.deepEqual(await methods['page.debugStop']({ tabId: 1 }), { released: [] }, 'there is nothing on it to take off');
+});
+test('the workbench is known by its name where the port was not said, and only on this computer', async () => {
+  const { methods, open, names } = extension({ 'Accessibility.getFullAXTree': shop() }, { update: (id, change) => ({ ...open.find(tab => tab.id === id), ...change }) });
+  // Reached through a port another program forwards, or with a runtime that did not say its port.
+  Object.assign(open[1], { url: 'http://127.0.0.1:3000/', title: 'DevMate Workbench' });
+  await refuses(methods['page.snapshot']({ tabId: 2 }), 'not_supported', WORKBENCH);
+  await refuses(methods['tabs.navigate']({ tabId: 2, url: 'https://elsewhere.example/' }), 'not_supported', WORKBENCH);
+  assert.deepEqual(names(), []);
+  // Any other page on this computer, a page elsewhere with that name, and the same port on another computer are pages like any other.
+  const { methods: told, open: tabs } = extension({ 'Accessibility.getFullAXTree': shop() }, {}, { ownPort: () => 8788 });
+  for (const change of [{ url: 'http://127.0.0.1:3000/', title: 'My app' }, { url: 'http://localhost:8789/', title: 'My app' }, { url: 'https://devmate.example/', title: 'DevMate Workbench' }, { url: 'http://app.example:8788/', title: 'App' },
+    { url: 'about:blank', title: 'DevMate Workbench' }, { url: '', title: 'DevMate Workbench' }]) {
+    Object.assign(tabs[1], change);
+    assert.equal((await told['page.snapshot']({ tabId: 2 })).nodes, 11, change.url);
+  }
+  Object.assign(open[1], { url: 'http://127.0.0.1:3000/', title: 'My app' });
+  assert.equal((await methods['tabs.navigate']({ tabId: 2, url: 'https://elsewhere.example/' })).url, 'https://elsewhere.example/');
+});
+test('a page of the extension itself, opened as a tab, is not read or worked through the browser', async () => {
+  // The browser lets an extension debug its own pages (seen in a real Chrome), and a script run there has all the extension has.
+  const stand = extension({ 'Accessibility.getFullAXTree': shop() });
+  stand.chrome.runtime = { id: 'devmateextensionid' };
+  const ITSELF = /^This tab is a page of the DevMate extension itself\. It is not read or worked through the browser\.$/;
+  for (const change of [{ url: 'chrome-extension://devmateextensionid/popup.html', title: 'DevMate' }, { url: 'https://behind.example/', pendingUrl: 'chrome-extension://devmateextensionid/popup.html' }]) {
+    Object.assign(stand.open[1], { pendingUrl: undefined }, change);
+    for (const [name, input] of Object.entries(OF_A_TAB)) await refuses(stand.methods[name]({ tabId: 2, ...input }), 'not_supported', ITSELF);
+  }
+  assert.deepEqual(stand.names(), []);
+  // A page of another extension is the browser's to refuse, in its own words.
+  Object.assign(stand.open[1], { url: 'chrome-extension://anotherextension/page.html', pendingUrl: undefined });
+  stand.replies.attach = () => no('Cannot access a chrome-extension:// URL of different extension');
+  await refuses(stand.methods['page.snapshot']({ tabId: 2 }), 'browser_error', /does not let a page of its own, or of the Web Store, be debugged/);
+});
+test('a tab that is being debugged and goes to the workbench is let go as soon as the browser says where it is going', async () => {
+  const { methods, goes, names, changes } = extension({ 'Accessibility.getFullAXTree': shop() }, {}, { ownPort: () => 8788 });
+  await methods['page.snapshot']({ tabId: 2 });
+  await methods['page.snapshot']({ tabId: 1 });
+  const before = names().length;
+  // Somewhere else, a tab stays debugged.
+  goes(1, { status: 'loading', pendingUrl: 'https://front.example/next' });
+  goes(1, { status: 'complete', url: 'https://front.example/next', pendingUrl: undefined, title: 'Next' });
+  await settle();
+  assert.deepEqual(names(before), []);
+  // On its way to the workbench, before the page is there.
+  goes(2, { status: 'loading', pendingUrl: 'http://127.0.0.1:8788/' });
+  await settle();
+  assert.deepEqual(names(before), ['detach']);
+  assert.deepEqual(changes.at(-1), [1]);
+  await refuses(methods['page.console']({ tabId: 2 }), 'not_supported', WORKBENCH);
+  // By its name too, once the page has given it.
+  goes(1, { url: 'http://localhost:3000/', title: 'localhost:3000' });
+  await settle();
+  assert.deepEqual(names(before), ['detach'], 'a page on this computer is a page like any other');
+  goes(1, { title: 'DevMate Workbench' });
+  await settle();
+  assert.deepEqual(names(before), ['detach', 'detach']);
+  assert.deepEqual(changes.at(-1), []);
+  // A tab nobody was debugging has nothing to let go.
+  goes(2, { status: 'complete', url: 'http://127.0.0.1:8788/', pendingUrl: undefined, title: 'DevMate Workbench' });
+  await settle();
+  assert.deepEqual(names(before), ['detach', 'detach']);
 });

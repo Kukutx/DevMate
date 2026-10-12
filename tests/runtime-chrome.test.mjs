@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { BROWSER_CAPABILITIES, BROWSER_TEXT, EXTENSION_ORIGIN, NATIVE_HOST, createBrowserLink } from '../runtime/chrome.mjs';
-import { frame, frames } from '../runtime/chrome-host.mjs';
+import { PassThrough } from 'node:stream';
+import { frame, frames, serveChromeHost } from '../runtime/chrome-host.mjs';
 import { createChromeRegistration } from '../runtime/platform/chrome-registration.mjs';
 import { READ_ONLY, createCapabilities } from '../chrome-extension/capabilities.js';
 import { startRuntime } from '../runtime/main.mjs';
@@ -416,6 +417,28 @@ test('a browser that is ended without closing leaves no link behind: the runtime
   assert.deepEqual(runtime.service.browser.status(), { connected: false });
 });
 
+// The extension knows DevMate's own workbench by the local port the runtime says it answers the owner on. A runtime of
+// the same version that was started again on another port is another origin: the extension is told.
+test('the browser host says which local port the runtime answers on, and says so again when only that has changed', async () => {
+  const input = new PassThrough(), output = new PassThrough(), heard = [];
+  output.on('data', frames(message => heard.push(message)));
+  let port = 8788;
+  const client = { status: async () => ({ running: true, record: { version: '4.0.5', port } }),
+    call: async name => name === 'chrome.attach' ? { linkId: 'link' } : name === 'chrome.next' ? new Promise(resolve => setTimeout(() => resolve({ calls: [] }), 40)) : { items: [] } };
+  const served = serveChromeHost({ origin: EXTENSION_ORIGIN, input, output, client, pollMs: 20 });
+  input.write(frame({ type: 'hello', protocol: 1, extension: '4.0.5', browser: 'Google Chrome', methods: [] }));
+  await until(() => heard.some(message => message.type === 'ready'), 'ready');
+  assert.deepEqual(heard.find(message => message.type === 'ready').runtime, { running: true, version: '4.0.5', port: 8788 });
+  port = 9001;
+  await until(() => heard.some(message => message.name === 'runtime.status' && message.data.port === 9001), 'the news of the other port');
+  assert.deepEqual(heard.filter(message => message.name === 'runtime.status').at(-1).data, { running: true, version: '4.0.5', port: 9001 });
+  // A runtime that does not run has no port to say.
+  client.status = async () => ({ running: false });
+  await until(() => heard.some(message => message.name === 'runtime.status' && message.data.running === false), 'the news that it stopped');
+  assert.equal(heard.filter(message => message.name === 'runtime.status').at(-1).data.port, undefined);
+  input.end(); await served;
+});
+
 test('the browser host is the link, end to end: started as a browser starts it, it serves the extension as an entry and carries the runtime\'s calls to the browser', { timeout: 120000 }, async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-chrome-host-')), instanceRoot = path.join(temp, 'instance');
   let runtime, host;
@@ -441,13 +464,15 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   say({ type: 'hello', protocol: 1, extension: '4.0.5', browser: 'Google Chrome', methods: BROWSER_CAPABILITIES.map(item => item.method) });
   // No runtime runs, and the host does not start one by itself: that is the extension's switch.
   const ready = await hear(message => message.type === 'ready', 'ready');
-  assert.deepEqual([ready.protocol, ready.runtime.running], [1, false]);
+  assert.deepEqual([ready.protocol, ready.runtime.running, ready.runtime.port], [1, false, undefined]);
   assert.deepEqual((await ask('status')).result.running, false);
   assert.equal((await ask('stop')).error.code, 'invalid_input'); assert.equal((await ask('pending')).error.code, 'not_running');
   // A runtime comes up (here in this process, as an editor or the command line would start it): the extension is told.
   runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: () => ({ async start() {}, async stop() {}, status() { return { kind: 'local', status: 'ready' }; } }) });
   const told = await hear(message => message.type === 'event' && message.name === 'runtime.status' && message.data.running === true, 'the news that the runtime runs');
   assert.match(told.data.version, /^\d+\.\d+\.\d+/);
+  // With it, the local port the runtime answers the owner on: the extension keeps the browser's tools off that origin.
+  assert.equal(told.data.port, runtime.port); assert.equal((await ask('status')).result.port, runtime.port);
   await until(() => runtime.service.browser.status().connected, 'the browser to be linked');
   assert.deepEqual([runtime.service.browser.status().browser, runtime.service.browser.status().extension], ['Google Chrome', '4.0.5']);
   // As an entry: the status, the workbench, the MCP address, what waits; and a start that joins what already runs.
