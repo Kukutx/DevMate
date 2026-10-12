@@ -170,6 +170,42 @@ test('a call that says how long it is waited for is served: what is left of that
   assert.equal(tunnel.status().error, undefined);
 });
 
+test('a request for work is given longer than the service takes to answer it, and giving one up is not called being unreachable', async t => {
+  // What the real service does (measured 2026-10-12): asked to wait 1000 or 5000 ms it answers after about 5.5
+  // seconds, asked to wait 30000 ms after 30.4. A request given six seconds in all was cut off just before its answer.
+  const limits = [], polls = [];
+  let giveUp = 0, fails = null;
+  const tunnel = createOpenAiTunnel({ tunnelId: 'tunnel_abc123', localMcpUrl: 'http://127.0.0.1:8789/mcp', env: { CONTROL_PLANE_API_KEY: 'k' }, pause: quick,
+    // The time a request is given: recorded, and for the one request chosen below it is over at once.
+    limit: ms => { limits.push(ms); const ending = new AbortController(); if (limits.length === giveUp) ending.abort(new DOMException('The operation timed out.', 'TimeoutError')); return ending.signal; },
+    fetchImpl: async (url, init) => {
+      polls.push(new URL(String(url)).searchParams.get('timeout_ms'));
+      if (init.signal.aborted) throw init.signal.reason;
+      if (fails) throw fails;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return new Response(null, { status: 204 });
+    } });
+  t.after(() => tunnel.stop());
+  giveUp = 1;
+  await tunnel.start();
+  // The first request is given up: OpenAI can be reached, it only did not answer in time, and that is what is said.
+  await until(() => tunnel.status().error?.code === 'no_answer' || tunnel.status().phase === 'connected', 'the first request to end');
+  await until(() => tunnel.status().phase === 'connected', 'the next request to be answered');
+  assert.deepEqual(polls.slice(0, 3), ['1000', '1000', '30000']);
+  // A short wait asked for is given ten seconds more than the service was seen to take; a long one its own time and the same room.
+  assert.ok(limits[0] >= 5600 + 10000 && limits[0] <= 20000, 'the first request is given ' + limits[0] + ' ms');
+  assert.equal(limits[2], 30000 + (limits[0] - 1000));
+  giveUp = limits.length + 1;
+  await until(() => tunnel.status().error?.code === 'no_answer', 'a later request to be given up');
+  assert.equal(tunnel.status().error.message, 'OpenAI did not answer a request for work within ' + Math.round(limits[giveUp - 1] / 1000) + ' seconds; asking again.');
+  assert.doesNotMatch(tunnel.status().error.message, /could not be reached/);
+  await until(() => tunnel.status().phase === 'connected' && !tunnel.status().error, 'the request after it');
+  // No way to OpenAI at all is the other thing, and keeps its own words.
+  fails = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+  await until(() => tunnel.status().error?.code === 'unreachable', 'the failure to connect');
+  assert.equal(tunnel.status().error.message, 'api.openai.com could not be reached: ENOTFOUND'); assert.equal(tunnel.status().phase, 'connecting');
+});
+
 test('a refusal says what OpenAI said and what to do about that, and blames the tunnel id only where OpenAI does', async t => {
   const plane = controlPlane(async () => { throw new Error('no call is expected'); }), seen = [];
   // Every refusal is followed by a wait: what the owner is told is read there, before the next poll clears it.

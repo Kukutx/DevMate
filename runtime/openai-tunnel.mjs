@@ -15,8 +15,14 @@ export const WIRE_PROTOCOL_VERSION = '2026-08-25';
 // says why a tunnel is not offered in ChatGPT.
 export const TUNNEL_HELP = Object.freeze({ settings: 'https://platform.openai.com/settings/organization/tunnels', guide: 'https://developers.openai.com/api/docs/guides/secure-mcp-tunnels' });
 const CONTROL_PLANE = 'https://api.openai.com';
-// The wait asked for in a poll before any has come back (see loop()).
+// The wait asked for in a poll before any has come back (see loop()). The service bounds it from below: measured
+// against the real one on 2026-10-12, a poll asked to wait 1000 or 5000 ms came back after about 5.5 seconds, one
+// asked to wait 30000 ms after 30.4.
 const FIRST_POLL_MS = 1000;
+// How much longer than the wait it asked for a poll is given before it is given up. The service's own shortest wait
+// and the time it takes to connect have to fit into it with room to spare: six seconds in all cut off polls that
+// were about to be answered.
+const POLL_GRACE_MS = 15000;
 // OpenAI's interface has no code for a protocol version it has stopped taking, so that is told by what the answer says
 // about the version or about the client, and by nothing vaguer: "upgrade your plan" is not it.
 const OUTDATED = /(wire|protocol|client)[ _-]*version|(upgrade|update)[^.]{0,30}client|client[^.]{0,30}(too old|outdated|deprecated)/i;
@@ -65,7 +71,7 @@ async function* streamEvents(body) {
 
 export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_API_KEY', organizationId = '', localMcpUrl, instanceId = '', env = process.env, maxConcurrentRequests = 32,
   fetchImpl = globalThis.fetch, pollTimeoutMs = 30000, pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
-  now = () => performance.now(), random = Math.random } = {}) {
+  now = () => performance.now(), random = Math.random, limit = ms => AbortSignal.timeout(ms) } = {}) {
   if (!/^tunnel_[A-Za-z0-9_]+$/.test(tunnelId || '')) throw fault('invalid_connection', 'A valid OpenAI tunnel id is required.');
   const base = CONTROL_PLANE + '/v1/tunnels/' + encodeURIComponent(tunnelId);
   let stopper = null, running = null, phase = 'stopped', problem = null, polls = 0, served = 0, lastPollAt = null, lastCallAt = null, startedAt = null;
@@ -81,7 +87,7 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   // A request that ends after so many milliseconds. What is left until a deadline is a fraction (the clock counts in
   // fractions, and so may the time a call has), and AbortSignal.timeout takes whole milliseconds only: it throws for
   // anything else, which once left every call that had a deadline unserved and unanswered.
-  const within = ms => AbortSignal.timeout(Math.max(1, Math.ceil(ms)));
+  const within = ms => limit(Math.max(1, Math.ceil(ms)));
   const stamp = () => new Date().toISOString();
   // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence.
   const said = async response => {
@@ -198,13 +204,17 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
       // Whether OpenAI takes this client is known when a poll comes back, and a long poll with nothing to hand out
       // comes back late. Until one has come back the wait asked for is short, so that "connected", or the refusal,
       // is there within a second or two of a start instead of half a minute.
-      const asked = phase === 'connected' ? pollTimeoutMs : Math.min(pollTimeoutMs, FIRST_POLL_MS);
+      const asked = phase === 'connected' ? pollTimeoutMs : Math.min(pollTimeoutMs, FIRST_POLL_MS), patience = within(asked + POLL_GRACE_MS);
       try {
         response = await fetchImpl(base + '/poll?limit=' + Math.min(25, room) + '&timeout_ms=' + asked, { headers: common(), redirect: 'error',
-          signal: AbortSignal.any([signal, within(asked + 5000)]) });
+          signal: AbortSignal.any([signal, patience]) });
       } catch (error) {
         if (signal.aborted) break;
-        phase = 'connecting'; problem = { code: 'unreachable', message: 'api.openai.com could not be reached: ' + String(error?.cause?.code || error?.name || error?.message || error).slice(0, 200), at: stamp() };
+        // Two different things: no way to OpenAI, and a way on which the answer did not come in the time given to it.
+        phase = 'connecting';
+        problem = patience.aborted
+          ? { code: 'no_answer', message: 'OpenAI did not answer a request for work within ' + Math.round((asked + POLL_GRACE_MS) / 1000) + ' seconds; asking again.', at: stamp() }
+          : { code: 'unreachable', message: 'api.openai.com could not be reached: ' + String(error?.cause?.code || error?.name || error?.message || error).slice(0, 200), at: stamp() };
         await pause(jitter(delay), signal); delay = Math.min(delay * 2, 30000);
         continue;
       }
