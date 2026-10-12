@@ -10,6 +10,8 @@ import { AgentCoordinator } from '../runtime/coordination.mjs';
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-agent-scale-'));
   const store=new Store(path.join(root,'state'));
+  // (The folder is there: a task is not begun for an agent whose folder has gone.)
+  fs.mkdirSync(path.join(root,'checkout'));
   const project=store.create('project',{name:'Scale',root:path.join(root,'checkout'),access:'write',status:'ready'});
   const workflow=store.create('workflow',{projectId:project.id,title:'Scale',status:'active',turnBudget:10000,usedTurns:0});
   t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
