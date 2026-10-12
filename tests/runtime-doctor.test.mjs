@@ -117,16 +117,39 @@ test('the doctor names what works, what is missing and the exact next step', asy
   assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => healthy }) }), 0);
 });
 
+// Where projects are named for a model there is room for a few of them only: the instructions stay under what clients
+// read, and a project is named with its whole folder. How many fit depends on how long the folders are, and a
+// temporary folder is long on some systems (macOS: /private/var/folders/…/T/…, eighty characters before the project's
+// own name). The tests that look at what is said of one project read the surface that leaves the most room, so that
+// two projects fit wherever the tests run; what happens to a project there is no room for has a test of its own.
+const WITH_ROOM = 'gpt';
+
+test('where projects are named for a model, one there is no room for is counted and not named, also when its folder is gone: the list of projects says it', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const made = [];
+  for (let index = 0; index < 8; index++) { const root = path.join(temp, 'a-folder-with-a-name-of-some-length-' + index); fs.mkdirSync(root); made.push(await runtime.call('project.create', { root, name: 'project ' + index }, owner)); }
+  fs.rmSync(made.at(-1).root, { recursive: true });
+  assert.equal((await runtime.call('project.list', {}, { id: 'owner' })).items.find(item => item.id === made.at(-1).id).missing, true);
+  for (const surface of ['generic', 'gpt', 'claude']) {
+    const text = serverInstructions(runtime, surface), listed = made.filter(project => text.includes(' ' + project.id + ' = ')).length;
+    // (The tool that lists them all is named as the surface names it.)
+    assert.ok(listed >= 1 && Number(/ and (\d+) more \(\w+\)\./.exec(text)?.[1]) === made.length - listed, surface + ': ' + text);
+    assert.equal(text.includes(made.at(-1).id), false, surface); assert.equal(text.includes('folder not there'), false, surface);
+  }
+});
+
 test('a shared folder that was moved or deleted is said to be that: by the call that needs it, by the doctor and where projects are named', async t => {
   const { service: runtime, temp } = await service(t, {});
   const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const named = () => serverInstructions(runtime, WITH_ROOM);
   const connected = { id: 'owner' }, kept = path.join(temp, 'kept'), moved = path.join(temp, 'moved');
   for (const folder of [kept, moved]) { fs.mkdirSync(folder); fs.writeFileSync(path.join(folder, 'a.txt'), 'a'); }
   await runtime.call('project.create', { root: kept, name: 'kept' }, owner);
   const project = await runtime.call('project.create', { root: moved, name: 'moved' }, owner);
   const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
   const flow = await runtime.call('workflow.create', { projectId: project.id, title: 'Before it moved' }, owner);
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);'));
   assert.equal(await find('projects.missing'), undefined);
   fs.renameSync(moved, path.join(temp, 'elsewhere'));
   // What is said of a folder where projects are named for a model is what was seen last: that is on every request,
@@ -134,13 +157,13 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   const look = fs.promises.lstat;
   let looks = 0;
   fs.promises.lstat = (...args) => { looks++; return look(...args); };
-  try { for (let request = 0; request < 50; request++) assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);')); } finally { fs.promises.lstat = look; }
+  try { for (let request = 0; request < 50; request++) assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);')); } finally { fs.promises.lstat = look; }
   assert.equal(looks, 0);
   // Where the projects are listed the folders are looked at for the answer, so the list is true when it is given,
   // and what is said elsewhere is true from then on: no call has to have met the missing folder first.
   const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, connected)).items.map(item => [item.name, item.missing]));
   assert.deepEqual(await listed(), { kept: undefined, moved: true });
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // Each call that needs the folder says what happened to it and what is done about it, instead of a bare ENOENT.
   // What is done differs: a drive is connected again and nothing is lost; taking the project off the list takes what
   // is kept for it as well, and is said to, in full.
@@ -166,8 +189,8 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.deepEqual(await listed(), { kept: undefined, moved: true });
   // Where a call has to say which project it means, the one that is gone is marked.
   await assert.rejects(runtime.call('workspace.write', { path: 'b.txt', text: 'b' }, connected), error => error.code === 'project_required' && error.message.includes(' = kept;') && error.message.endsWith(project.id + ' = moved (its folder is not there)'));
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
-  assert.match(serverInstructions(runtime), / = kept \(.*, write\);/);
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  assert.match(named(), / = kept \(.*, write\);/);
   const missing = await find('projects.missing');
   assert.equal(missing.status, 'warn');
   assert.equal(missing.detail, 'The folder of 1 project(s) is not there: "moved" at ' + project.root);
@@ -180,14 +203,14 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   // A call for the project that goes through without its folder (it reads what DevMate keeps) does not take the mark
   // off: the folder is looked at, and it is still not there.
   await runtime.call('workspace.history', { projectId: project.id }, connected);
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // Put back where it was (a drive that is connected again), the project works with everything it had, and the first
   // call for it that goes through takes the mark off at once, wherever it is said: a model that has just read a file
   // there is not told that the folder is not there.
   const elsewhere = path.join(temp, 'elsewhere');
   fs.renameSync(elsewhere, moved);
   assert.equal((await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, connected)).text, 'a');
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);'));
   assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
   assert.equal(await find('projects.missing'), undefined);
   // Gone again and back again with no call in between that used it: the list alone takes the mark, and takes it off.
@@ -195,11 +218,11 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.deepEqual(await listed(), { kept: undefined, moved: true });
   fs.renameSync(elsewhere, moved);
   assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);'));
   // The doctor answers from the same look: what it says and what the list says are never two things.
   fs.renameSync(moved, elsewhere);
   assert.equal((await find('projects.missing')).detail, 'The folder of 1 project(s) is not there: "moved" at ' + project.root);
-  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
   assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);
   assert.equal(await find('projects.missing'), undefined);
@@ -208,6 +231,7 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
 test('a runtime that starts while a shared folder is gone says so from its first answer; a folder that does not answer is named and not waited for twice; a drive that is not connected is said to be that', async t => {
   const owned = temporary(t, 'devmate-doctor-'), temp = owned.directory, instanceRoot = path.join(temp, 'instance');
   const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const named = () => serverInstructions(runtime, WITH_ROOM);
   let runtime = new DevMateService({ instanceRoot, endpoint: '', config: {} });
   owned.close = () => runtime.close();
   await runtime.ready;
@@ -220,8 +244,8 @@ test('a runtime that starts while a shared folder is gone says so from its first
   runtime = new DevMateService({ instanceRoot, endpoint: '', config: {} });
   await runtime.ready;
   // The first thing a client is told names the projects, and a session keeps it: it is true from the start.
-  assert.match(serverInstructions(runtime), new RegExp(projects.away.id + ' = away \\(.*, folder not there\\);'));
-  assert.match(serverInstructions(runtime), new RegExp(projects.kept.id + ' = kept \\(.*, write\\);'));
+  assert.match(named(), new RegExp(projects.away.id + ' = away \\(.*, folder not there\\);'));
+  assert.match(named(), new RegExp(projects.kept.id + ' = kept \\(.*, write\\);'));
   const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, { id: 'owner' })).items.map(item => [item.name, item.missing]));
   assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
 
