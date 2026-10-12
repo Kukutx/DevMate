@@ -96,6 +96,28 @@ test('a job is followed to its end by waiting for it, and a command job that sti
   assert.equal(read.structuredContent.status, 'completed'); assert.ok(Date.now() - began < 5000);
 });
 
+test('the variables a command job was given are used when it runs and made again, and are shown by name only', async t => {
+  const f = await fixture(t), p = await f.project('variables');
+  // The command says how long its variable is, not what it holds, and fails the first time so that it can be made again.
+  fs.writeFileSync(path.join(p.root, 'print.mjs'), "import fs from 'node:fs';console.log('length:'+String(process.env.JOB_TOKEN||'').length);const again=fs.existsSync('ran');fs.writeFileSync('ran','');process.exitCode=again?0:5;");
+  const given = { JOB_TOKEN: 'not-for-display-1234', JOB_MODE: 'quiet' }, names = { JOB_TOKEN: '[given]', JOB_MODE: '[given]' };
+  const job = await f.call('job.start', { ...p.scope, kind: 'command', input: { file: process.execPath, args: ['print.mjs'], env: given } });
+  assert.deepEqual(job.input.args.environment, names);
+  const failed = await f.call('job.read', { id: job.id, waitMs: 12000 });
+  assert.equal(failed.status, 'failed'); assert.match(failed.output, /length:20/, 'the command had its variable'); assert.deepEqual(failed.input.args.environment, names);
+  assert.deepEqual((await f.call('job.list', p.scope)).items.find(item => item.id === job.id).input.args.environment, names);
+  // Made again, it runs with what it was given the first time.
+  const retry = await f.call('job.retry', { id: job.id });
+  assert.deepEqual(retry.input.args.environment, names);
+  const completed = await f.call('job.read', { id: retry.id, waitMs: 12000 });
+  assert.equal(completed.status, 'completed'); assert.match(completed.output, /length:20/);
+  // Nothing that shows what happened holds the value: not the journal every view reads, not the events a client lists.
+  const journal = JSON.stringify(f.runtime.service.store.events({ projectId: p.project.id, limit: 2000 }));
+  assert.ok(journal.includes('JOB_TOKEN') && !journal.includes('not-for-display-1234'), 'the journal has the name and not the value');
+  const listed = JSON.stringify(await f.call('event.list', { ...p.scope }));
+  assert.ok(!listed.includes('not-for-display-1234'));
+});
+
 test('runtime.stop through local HTTP drains a real command before releasing ownership', async t => {
   const f = await fixture(t), p = await f.project('shutdown');
   fs.writeFileSync(path.join(p.root, 'wait.mjs'), "import fs from 'node:fs';fs.writeFileSync('owned.pid',String(process.pid));setInterval(()=>{},1000);");

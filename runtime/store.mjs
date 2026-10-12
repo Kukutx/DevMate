@@ -21,9 +21,17 @@ export function orderedId(kind) {
 // The journal says what changed, not everything an entity holds: large fields
 // (command output, results, message bodies) stay on the entity only.
 const JOURNAL_FIELD_BYTES = 4096;
+// The variables a command job was given are for that command, and are often credentials. They are kept with the job,
+// which has to run and to be made again with them, and nowhere else: whatever shows a job says their names only.
+const GIVEN = '[given]';
+export function withoutVariableValues(job) {
+  const environment = job?.input?.args?.environment;
+  if (!environment || typeof environment !== 'object') return job;
+  return { ...job, input: { ...job.input, args: { ...job.input.args, environment: Object.fromEntries(Object.keys(environment).map(name => [name, GIVEN])) } } };
+}
 function journalView(entity) {
   const view = {};
-  for (const [key, value] of Object.entries(entity)) {
+  for (const [key, value] of Object.entries(withoutVariableValues(entity))) {
     const size = typeof value === 'string' ? value.length : value && typeof value === 'object' ? JSON.stringify(value).length : 0;
     view[key] = size > JOURNAL_FIELD_BYTES ? { omitted: true, bytes: size } : value;
   }

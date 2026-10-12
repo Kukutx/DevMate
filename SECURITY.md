@@ -67,7 +67,7 @@ The extension can also debug a page as DevTools does (`chrome.page.*`), through 
 
 With full access the last distance between "can reach `/mcp` as the owner" and "is the owner at the keyboard" is gone. With `auth.mode: none` on a public address that is everyone who learns the address; `devmate doctor` reports this combination as a warning.
 
-Command lines are shown in process lists and recorded in a project's activity without the credentials written inline in them; the command that runs is unchanged. This recognises well-known forms only and is not a guarantee. A job keeps its exact command, so that it can run and be retried, and shows it as it is.
+Command lines are shown in process lists and recorded in a project's activity without the credentials written inline in them; the command that runs is unchanged. This recognises well-known forms only and is not a guarantee. A job keeps its exact command, so that it can run and be retried, and shows it as it is. The variables a command job was given are kept with it for the same reason, in the private state database like every job, and are shown by name only: `job.read`, `job.list` and the journal of events never hold their values.
 
 Credential-like files (`.env`, key files, `.npmrc` and similar) are withheld from the file tools by default and can be enabled per project by the owner. Git status names them, marked as protected, so they are not committed by accident; their content is never returned. The read-only Git tools accept only commits as revisions and never run a program the repository configures (filters, textconv, external diff). Executables DevMate starts itself are resolved to absolute paths on `PATH`, never in the project directory.
 
