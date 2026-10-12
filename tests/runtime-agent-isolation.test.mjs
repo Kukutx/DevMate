@@ -323,17 +323,37 @@ test('where Git stops half-way, a file that could not be kept is named and never
 // script was no longer one, and Git showed a change where "the project is as it was" had been said.
 test('work that is taken out again leaves a file the mode it had', { skip: (process.platform === 'win32' && 'Windows has no such modes') || (process.getuid?.() === 0 && 'nothing is refused to root'), timeout: 60000 }, async t => {
   const { service, project, root, factory, file, read } = await fixture(t);
-  fs.chmodSync(file('src/a.js'), 0o755); fs.mkdirSync(file('z')); fs.writeFileSync(file('z/held.txt'), 'one\n'); git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
-  factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, 'z', 'held.txt'), 'one\ntwo\n'); };
+  fs.chmodSync(file('src/a.js'), 0o755); fs.mkdirSync(file('z')); fs.writeFileSync(file('z/held.txt'), 'one\n'); fs.writeFileSync(file('run.sh'), '#!/bin/sh\n');
+  git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
+  // The work changes one file's bytes, and of another nothing but its mode: it makes a script of it.
+  factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, 'z', 'held.txt'), 'one\ntwo\n'); fs.chmodSync(path.join(cwd, 'run.sh'), 0o755); };
   const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
-  // Git can write the first file and not the one in a folder nothing may be changed in.
+  // Git can write the first files and not the one in a folder nothing may be changed in.
   fs.chmodSync(file('z'), 0o555); t.after(() => { try { fs.chmodSync(file('z'), 0o755); } catch { /* gone with the fixture */ } });
   await assert.rejects(service.call('agents.apply', { agentId: done.agentId }, connected), { code: 'apply_failed' });
-  assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n'); assert.equal(fs.statSync(file('src/a.js')).mode & 0o777, 0o755);
+  assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
+  assert.deepEqual([fs.statSync(file('src/a.js')).mode & 0o777, fs.statSync(file('run.sh')).mode & 0o777], [0o755, 0o644], 'the file that got its bytes back, and the one of which only the mode had been changed');
   assert.equal(git(root, 'status', '--porcelain').trim(), '', 'Git sees the project as it was, modes included');
   fs.chmodSync(file('z'), 0o755);
   assert.equal((await service.call('agents.apply', { agentId: done.agentId }, connected)).applied, true);
-  assert.equal(fs.statSync(file('src/a.js')).mode & 0o777, 0o755);
+  assert.deepEqual([fs.statSync(file('src/a.js')).mode & 0o777, fs.statSync(file('run.sh')).mode & 0o777], [0o755, 0o755]);
+});
+
+// Work that makes a folder of a file: what it puts into that folder was not there before, and is taken back with
+// the rest. A path below a file cannot be looked at, and such a file was written down as one that had been there.
+test('a file the work put into a folder it made of a file is one the work created', { timeout: 60000 }, async t => {
+  const { service, project, factory, file, read } = await fixture(t);
+  factory.work = cwd => { fs.rmSync(path.join(cwd, 'old.txt')); fs.mkdirSync(path.join(cwd, 'old.txt')); fs.writeFileSync(path.join(cwd, 'old.txt', 'inner.txt'), 'inside\n'); };
+  const point = (await service.call('workspace.history', { projectId: project.id }, connected)).items[0]?.sequence ?? 0;
+  const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'A folder of it', isolate: true, waitMs: 20000 }, connected);
+  const applied = await service.call('agents.apply', { agentId: done.agentId }, connected);
+  // The folder that took the file's place is no plain file, and is named as not in the history. What the work put
+  // into it is in the history, as created.
+  assert.deepEqual([applied.applied, applied.files.sort(), applied.notInHistory], [true, ['old.txt', 'old.txt/inner.txt'], ['old.txt']]);
+  assert.equal(read('old.txt/inner.txt'), 'inside\n');
+  const taken = await service.call('workspace.restore', { projectId: project.id, since: point }, connected);
+  assert.deepEqual(taken.restored.map(item => [item.path, item.action]), [['old.txt/inner.txt', 'removed again (this change created it)']]);
+  assert.equal(fs.existsSync(file('old.txt/inner.txt')), false);
 });
 
 // A copy that was made for a project that is one folder of a repository, before such a project was refused one, is

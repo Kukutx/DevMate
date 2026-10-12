@@ -31,6 +31,8 @@ const SERVER_INFO = JSON.stringify({ version: 1, channels: [{ name: 'main' }] })
 // What of the endpoint's answer the protocol carries back.
 const RESPONSE_HEADERS = { 'content-type': 'Content-Type', 'mcp-session-id': 'Mcp-Session-Id', 'mcp-protocol-version': 'Mcp-Protocol-Version',
   'last-event-id': 'Last-Event-ID', 'access-control-expose-headers': 'Access-Control-Expose-Headers', 'www-authenticate': 'WWW-Authenticate' };
+// The names of headers this protocol carries or is asked for: not taken for a key where OpenAI names one in a refusal.
+const HEADER_NAMES = new Set([...Object.values(RESPONSE_HEADERS), 'OpenAI-Organization', 'Authorization']);
 // What a command may not set on the request to the endpoint: hop-by-hop fields, and whatever claims where it came from.
 const WITHHELD = /^(host|connection|keep-alive|proxy-.*|transfer-encoding|upgrade|te|trailer|content-length|content-type|accept|forwarded|x-forwarded-.*|x-real-ip|true-client-ip|cf-.*|x-openai-.*|openai-.*|x-devmate-.*)$/i;
 const RETRY_TERMINAL = new Set([408, 429, 502, 503, 504]);
@@ -110,12 +112,13 @@ export function createOpenAiTunnel({ tunnelId, runtimeKeyEnv = 'CONTROL_PLANE_AP
   // What OpenAI says goes into the status, the doctor and the report. Its API answers a wrong key by repeating a part
   // of it ("sk-abc***wxyz"), so nothing that could be the key or a piece of it is kept: the key itself, anything with
   // stars in it, and any long run of the characters keys are made of. Left as they are: the tunnel id, which is no
-  // secret; a name written in small letters and underscores alone, which is how OpenAI names its errors; and words
-  // of letters joined by hyphens, which is how headers are named (X-Tunnel-Client-Wire-Protocol-Version).
+  // secret; a name written in small letters and underscores alone, which is how OpenAI names its errors; and the
+  // name of a header, by which is meant one that begins with X- (X-Tunnel-Client-Wire-Protocol-Version) or one this
+  // protocol carries. Letters joined by hyphens are not enough to go by: the beginning of a key is that as well.
   const withoutKey = text => {
     const secret = key();
     return (secret ? text.split(secret).join('[key]') : text).replace(/[A-Za-z0-9_-]*\*{2,}[A-Za-z0-9_*-]*/g, '[key]')
-      .replace(/[A-Za-z0-9_-]{20,}/g, word => word === tunnelId || /^[a-z_]+$/.test(word) || /^[A-Za-z]+(?:-[A-Za-z]+)+$/.test(word) ? word : '[key]');
+      .replace(/[A-Za-z0-9_-]{20,}/g, word => word === tunnelId || /^[a-z_]+$/.test(word) || /^X-[A-Za-z]+(?:-[A-Za-z]+)+$/.test(word) || HEADER_NAMES.has(word) ? word : '[key]');
   };
   // The error of an answer, as OpenAI's API words it: a stable code where there is one, and a sentence. message is
   // what is kept and shown; raw is the sentence as it came, by which the kind of answer is told and which goes nowhere.

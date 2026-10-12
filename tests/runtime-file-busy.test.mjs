@@ -68,29 +68,53 @@ test('text that was added to a file is said as added also where the file cannot 
   let added;
   try { added = await call('workspace.write', { path: 'server.log', text: 'noted\n', append: true }); } finally { fs.appendFileSync = real; }
   assert.deepEqual([added.path, added.written, added.sha256], ['server.log', true, undefined]);
-  assert.equal(added.note, 'The text was added. What the file holds now could not be read back, because another program is writing to it: no sha256 is given. Read the file again before changing it.');
+  assert.equal(added.note, 'The text was added. What the file holds now could not be read back (another program may be writing to it, or has it open, or has moved or replaced it since): no sha256 is given. Read the file again before changing it.');
   const held = fs.readFileSync(file('server.log'));
   assert.equal(held.subarray(0, 14).toString(), 'started\nnoted\n'); assert.equal(held.length, 14 + 8 * 1024 * 1024 + 1, 'added once');
   // It is in the history as a change, and what it left is not known: taking it back leaves the file alone and says why.
-  const entry = (await call('workspace.history', {})).items[0];
+  const entry = (await call('workspace.history', {})).items[0], unknown = 'what this change wrote was not recorded (it was too large, or could not be read back), so it cannot be told whether it was changed since';
   assert.deepEqual([entry.path, entry.sha256 ?? null], ['server.log', null]);
   const taken = await call('workspace.restore', { since: entry.sequence - 1 });
-  assert.deepEqual(taken.left.map(item => [item.path, item.reason]), [['server.log', 'what this change wrote was not recorded (it was too large, or another program was writing to the file), so it cannot be told whether it was changed since']]);
+  assert.deepEqual(taken.left.map(item => [item.path, item.reason]), [['server.log', unknown]]);
+  // Also once the file is gone (the program rotated its log away): that it is gone is a change too, and what was
+  // there before the adding is not made anew under its name.
+  fs.rmSync(file('server.log'));
+  const after = await call('workspace.restore', { since: entry.sequence - 1 });
+  assert.deepEqual([after.restored, after.left.map(item => [item.path, item.reason]), fs.existsSync(file('server.log'))], [[], [['server.log', unknown]], false]);
 });
 
-// What was moved out of the way and could not be removed at once is removed with a later change to any file, and a
-// file that is missing after a move is named as the one that is missing.
-test('a working copy that was left behind goes with the next change, and a move names the file that is gone', async t => {
-  const { call, root, file } = await fixture(t);
-  const left = path.join(root, '.devmate-write-left-behind'); fs.writeFileSync(left, 'what a file held');
-  workspaceTest.leftAside.add(left);
+// What was moved out of the way and could not be removed at once is removed with a later change to any file: one that
+// is replaced, added to, moved or deleted.
+test('a working copy that was left behind goes with the next file that is replaced, added to, moved or deleted', async t => {
+  const { call, root } = await fixture(t);
+  const left = path.join(root, '.devmate-write-left-behind'), leave = () => { fs.writeFileSync(left, 'what a file held'); workspaceTest.leftAside.add(left); };
+  leave();
   await call('workspace.write', { path: 'a.txt', text: 'one\n' });
   assert.equal(fs.existsSync(left), true, 'a new file replaces nothing, and nothing is tried');
-  await call('workspace.write', { path: 'a.txt', text: 'two\n', overwrite: true });
-  assert.equal(fs.existsSync(left), false); assert.equal(workspaceTest.leftAside.size, 0);
-  // Of the two files of a move the one that was to be replaced is the one that is gone; the other is where it was.
-  assert.throws(() => workspaceTest.unheld(true, 'from.txt or to.txt', file('from.txt'), () => { throw Object.assign(new Error('refused'), { displaced: path.join(root, '.devmate-write-1') }); }, 'to.txt'),
-    { code: 'file_displaced', message: /^to\.txt could not be replaced, and could not be put back where it was: there is no file under that name now\. What it held is in \.devmate-write-1 in the same folder/ });
+  for (const [what, operation, input] of [['replaced', 'workspace.write', { path: 'a.txt', text: 'two\n', overwrite: true }], ['added to', 'workspace.write', { path: 'a.txt', text: 'three\n', append: true }],
+    ['moved', 'workspace.move', { from: 'a.txt', to: 'b.txt' }], ['deleted', 'workspace.delete', { path: 'b.txt' }]]) {
+    leave();
+    await call(operation, input);
+    assert.deepEqual([fs.existsSync(left), workspaceTest.leftAside.size], [false, 0], 'with a file that is ' + what);
+  }
+});
+
+// Of the two files of a move the one that was to be replaced is the one that can end up missing; the one that was
+// moved is where it was. The refusal named both as gone.
+test('a move over a file that ended up missing names that file', { skip: process.platform !== 'win32' && 'only Windows moves a file aside to replace it' }, async t => {
+  const { call, root, file } = await fixture(t);
+  await call('workspace.write', { path: 'from.txt', text: 'new\n' }); await call('workspace.write', { path: 'to.txt', text: 'old\n' });
+  // Windows as it refuses a file that is held: nothing takes the place of to.txt, and what was moved out of its way
+  // cannot be put back either. Moving it out of the way is allowed.
+  const real = fs.renameSync;
+  fs.renameSync = (from, to) => { if (path.dirname(String(to)) !== root || path.basename(String(to)).startsWith('.devmate-write-')) return real(from, to); throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }); };
+  let refused;
+  try { refused = await call('workspace.move', { from: 'from.txt', to: 'to.txt', overwrite: true }).then(() => null, failure => failure); } finally { fs.renameSync = real; }
+  const aside = fs.readdirSync(root).filter(name => name.startsWith('.devmate-write-'));
+  assert.equal(refused?.code, 'file_displaced', String(refused?.message));
+  assert.equal(refused.message, 'to.txt could not be replaced, and could not be put back where it was: there is no file under that name now. What it held is in ' + aside[0] +
+    ' in the same folder, a name the file tools do not list. Move it back with a command (for example: mv), then try the change again.');
+  assert.deepEqual([fs.readFileSync(file('from.txt'), 'utf8'), fs.existsSync(file('to.txt')), aside.length, fs.readFileSync(path.join(root, aside[0]), 'utf8')], ['new\n', false, 1, 'old\n']);
 });
 
 test('on Windows a file that is open in a program that lets it be moved is replaced at once, with nothing waited for', { skip: process.platform !== 'win32' && 'only Windows refuses to replace a file another program has open', timeout: 60000 }, async t => {

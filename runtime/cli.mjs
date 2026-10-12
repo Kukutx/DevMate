@@ -238,7 +238,7 @@ async function configureConnection(kind, options, instanceRoot) {
     if (!options['openai-tunnel']) throw new Error('connect beside needs --openai-tunnel <tunnel_…>, or --openai-tunnel none to take the tunnel away');
     if (options.auth) throw new Error('connect beside changes the tunnel alone. Sign-in belongs to the address and is chosen with it: devmate connect … --auth ' + options.auth);
     // What names a connection says nothing here, and is not passed over in silence.
-    const stray = ['url', 'host', 'user', 'executable', 'tunnel-id'].filter(name => options[name] !== undefined);
+    const stray = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain'].filter(name => options[name] !== undefined);
     if (stray.length) throw new Error('connect beside leaves the connection as it is and takes only --openai-tunnel and --organization (given: ' + stray.map(name => '--' + name).join(', ') +
       '). To set the connection up anew: devmate connect quick | cloudflare | https | ssh …');
     if (!beside && options.organization) throw new Error('--openai-tunnel none takes the tunnel away: --organization says nothing of a tunnel that is no longer there');
@@ -253,7 +253,9 @@ async function configureConnection(kind, options, instanceRoot) {
   const before = besideBefore || (current.connection.kind === 'openai-tunnel' && !current.connection.executable ? current.connection : null);
   // The tunnel that is named again keeps what was set for it (its organization, and what the settings file gives it:
   // the name of its key, how many calls at once). Another tunnel starts with nothing of the one before.
-  const same = beside && before?.tunnelId === beside ? Object.fromEntries(['organizationId', 'runtimeKeyEnv', 'maxConcurrentRequests'].filter(name => before[name] !== undefined).map(name => [name, before[name]])) : {};
+  // (Whoever carried it until now: also where it was the connection and OpenAI's own program ran it.)
+  const carried = besideBefore || (current.connection.kind === 'openai-tunnel' ? current.connection : null);
+  const same = beside && carried?.tunnelId === beside ? Object.fromEntries(['organizationId', 'runtimeKeyEnv', 'maxConcurrentRequests'].filter(name => carried[name] !== undefined).map(name => [name, carried[name]])) : {};
   const next = { ...current, connection, ...(beside ? { openaiTunnel: { ...same, tunnelId: beside, ...(options.organization ? { organizationId: options.organization } : {}) } } : {}) };
   const url = publicMcpUrl(next);
   // Sign-in belongs to a public URL. Keep the chosen mode when the URL stays; never keep an issuer for another origin.
@@ -274,7 +276,12 @@ async function configureConnection(kind, options, instanceRoot) {
   const lost = before && !saved.openaiTunnel && saved.connection.kind !== 'openai-tunnel' ? 'OpenAI\'s tunnel ' + before.tunnelId + ' is no longer used. ' : null;
   // So is a relay that this command put another connection in the place of. It is not changed by naming its address
   // on an SSH connection: that is a connection of another kind, without what makes a relay work.
-  const relay = current.connection.relay && !staying ? current.connection.user + '@' + current.connection.host : null;
+  // The commands it names are the ones that reach that relay: with the port, the key file and the name it was set up
+  // with, which a command without them would not use (it would log in on port 22 without the key, and set up a relay
+  // under the server's bare address).
+  const relayed = current.connection.relay && !staying ? current.connection : null, relay = relayed ? relayed.user + '@' + relayed.host : null;
+  const reach = relayed ? (relayed.sshPort && relayed.sshPort !== 22 ? ' --ssh-port ' + relayed.sshPort : '') + (relayed.identityFile ? ' --identity "' + relayed.identityFile + '"' : '') : '';
+  const named = relayed && new URL(relayed.publicUrl).hostname !== relayed.host ? ' --domain ' + new URL(relayed.publicUrl).hostname : '';
   return { saved: { connection: staying ? { kind: saved.connection.kind, ...(saved.connection.relay ? { relay: true } : {}) } : saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
     next: [store(credential, 'the credential', 'the credential of another tunnel'), store(tunnelKey, 'the runtime key of the tunnel', 'the runtime key of another tunnel'), 'Apply it: devmate restart', 'Then check: devmate doctor',
       saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it changes each time DevMate or the tunnel starts again)' : null,
@@ -284,7 +291,8 @@ async function configureConnection(kind, options, instanceRoot) {
         : lost && besideBefore ? lost + 'On its own it is: devmate connect openai-tunnel --tunnel-id ' + before.tunnelId : null,
       relay ? 'The relay on ' + current.connection.host + ' was the connection until now, and this command put another in its place' +
         (saved.connection.kind === 'ssh' ? ': a plain SSH connection, without the relay\'s own ports and key file and without telling the relay the address of this computer' : '') +
-        '. The relay stays installed on that server. To make it the connection again: devmate relay setup ' + relay + '; to take it off the server: devmate relay remove ' + relay +
+        '. The relay stays installed on that server. To make that server the relay again: devmate relay setup ' + relay + named + reach +
+        ' (its address is then a new one, which the client has to be given: devmate mcp-url); to take it off the server: devmate relay remove ' + relay + reach +
         '. To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>' : null].filter(Boolean) };
 }
 

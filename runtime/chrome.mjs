@@ -141,8 +141,12 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   // of, whether it was handed on already or not (a read asked for twice is still a read). A change stays with the
   // browser it was meant for, and so does whatever names a tab, a window, a bookmark or an element by its id: the
   // other browser has such ids of its own, and tab 57 there is another tab.
-  function reroute(link) {
-    for (const item of [...link.queue, ...link.handed.values()]) {
+  // taken: the link is gone for good, and with it also what its host had taken and not answered yet (a host asks for
+  // work again as soon as it has what it was handed, which is all that is known of it by then). A look that could
+  // have gone anywhere is asked of the other browser again; where the link is only lost sight of, its host may still
+  // bring that answer.
+  function reroute(link, taken = false) {
+    for (const item of taken ? [...link.pending.values()].map(entry => entry.item) : [...link.queue, ...link.handed.values()]) {
       const entry = link.pending.get(item.id), other = entry?.anywhere ? elsewhere(link, item.method) : null;
       if (!other) continue;
       const queued = link.queue.indexOf(item);
@@ -169,7 +173,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     if (links.get(link.id) !== link) return;
     links.delete(link.id);
     clearTimeout(link.timer); clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.waiter?.({ calls: [] }); link.waiter = null;
-    if (!stopping) reroute(link);
+    if (!stopping) reroute(link, true);
     // What is left has nowhere to go. What was never handed on was never begun; of what was handed on nothing is known.
     const never = new Set(link.queue.map(item => item.id));
     link.queue.length = 0;
@@ -286,8 +290,8 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       const over = settle => value => { signal?.removeEventListener('abort', cancelled); settle(value); };
       // The link is the one the call waits on now: another one, when the first went away and the call could go elsewhere
       // (anywhere: it only looks, hands out no credentials, and names nothing that is one browser's own).
-      const names = OWN.some(key => params[key] !== undefined);
-      const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, readOnly: definition.readOnly, names,
+      const names = OWN.some(key => params[key] !== undefined), item = { id, method: definition.method, params };
+      const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, readOnly: definition.readOnly, names, item,
         anywhere: definition.readOnly && !definition.changesWhen?.(params) && !names };
       const give = failure => { const on = entry.link; on.pending.delete(id); on.handed.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); entry.reject(failure(queued >= 0)); };
       const patience = Math.max(callTimeoutMs, definition.waitMs?.(params) ?? 0);
@@ -296,7 +300,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       entry.timer.unref?.();
       signal?.addEventListener('abort', cancelled, { once: true });
       link.pending.set(id, entry);
-      link.queue.push({ id, method: definition.method, params });
+      link.queue.push(item);
       hand(link);
     });
     // A picture is handed on as a picture, not as a long text a model would have to read.

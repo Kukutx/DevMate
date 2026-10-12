@@ -504,7 +504,7 @@ export function createWorkspaceService({ store } = {}) {
       try { sha256 = hash(readBytes(full)); } catch { /* said below */ }
       const result = { path: rel, ...(sha256 ? { sha256 } : {}), written: true };
       const warning = event(project, 'workspace.file.written', { ...result, sha256, previousSha256 });
-      const note = sha256 ? null : 'The text was added. What the file holds now could not be read back, because another program is writing to it: no sha256 is given. Read the file again before changing it.';
+      const note = sha256 ? null : 'The text was added. What the file holds now could not be read back (another program may be writing to it, or has it open, or has moved or replaced it since): no sha256 is given. Read the file again before changing it.';
       return { ...result, ...(note ? { note } : {}), ...(warning ? { warning } : {}) };
     }
     // overwrite: the caller means to replace whatever is there. What is there is still kept, like before any change.
@@ -857,10 +857,11 @@ export function createWorkspaceService({ store } = {}) {
           restored.push({ ...step, action: 'brought back' });
         } else {
           const stat = present(item.path);
-          // A file whose content after the change is not known (too large to have been read, or another program was
-          // writing to it at that moment) cannot be told from one that was changed since: it is left alone, never
-          // taken for unchanged.
-          if (stat?.isFile() && !item.sha256) throw leave('what this change wrote was not recorded (it was too large, or another program was writing to the file), so it cannot be told whether it was changed since');
+          // A file whose content after the change is not known (too large to have been read, or not readable at that
+          // moment) cannot be told from one that was changed since: it is left alone, never taken for unchanged. Also
+          // where nothing is under its name any more: that it is gone is a change too, and what was there before is
+          // not made anew on the ground that nothing matches nothing.
+          if (!item.sha256) throw leave('what this change wrote was not recorded (it was too large, or could not be read back), so it cannot be told whether it was changed since');
           if ((stat?.isFile() ? contentHash(at(item.path), stat.size) : null) !== item.sha256) throw leave('it was changed again by something else');
           if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }); restored.push({ ...step, action: 'restored' }); }
           else { remove(project, { path: item.path }); restored.push({ ...step, action: 'removed again (this change created it)' }); }
@@ -1132,12 +1133,12 @@ export function createWorkspaceService({ store } = {}) {
     const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
     if (!was.existed) { if (stat) fs.rmSync(full, { force: true }); return true; }
     if (!was.sha256) return false;
-    if (stat?.isFile() && contentHash(full, stat.size) === was.sha256) return true;
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.copyFileSync(snapshotPath(project, was.sha256), full);
-    // What is kept is kept for the owner alone (0600), and a copy takes that mode with it: the file gets back the one
-    // it had, or a script would no longer run and Git would show a change of mode where "as it was" was said.
-    if (!WINDOWS) fs.chmodSync(full, was.mode);
+    const same = stat?.isFile() && contentHash(full, stat.size) === was.sha256;
+    if (!same) { fs.mkdirSync(path.dirname(full), { recursive: true }); fs.copyFileSync(snapshotPath(project, was.sha256), full); }
+    // The mode as well as the bytes. What is kept is kept for the owner alone (0600), and a copy takes that mode with
+    // it; and Git may have changed nothing of a file but its mode (a script that was made to run). Either way the
+    // file gets back the mode it had, or Git would show a change where "as it was" was said.
+    if (!WINDOWS && (!same || (stat.mode & 0o777) !== was.mode)) fs.chmodSync(full, was.mode);
     return true;
   }
   // A copy is a worktree, which is the whole repository. Of a project that is one folder of a repository nothing here
@@ -1176,8 +1177,9 @@ export function createWorkspaceService({ store } = {}) {
         return [file, { existed: true, mode: stat.mode & 0o777, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
       // What could not be looked at (a link in the way, a file a program holds for a moment, no room left to keep it)
       // is not taken for a file that was not there: on that ground it would be deleted when the work is taken out
-      // again. It is there and not kept, and is named where that matters.
-      } catch { return [file, { existed: true, sha256: null }]; }
+      // again. It is there and not kept, and is named where that matters. Only a path below something that is a file
+      // (the work makes a folder of that file) is known to have nothing at it.
+      } catch (failure) { return [file, { existed: !['not_directory', 'ENOTDIR', 'ENOENT'].includes(failure?.code), sha256: null }]; }
     }));
     const patchFile = copy.root + '.patch';
     try {

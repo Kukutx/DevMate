@@ -340,7 +340,8 @@ test('a refusal says what OpenAI said and what to do about that, and blames the 
   plane.pollStatus.push({ status: 401, error: { code: 'invalid_api_key', message: 'Incorrect API key provided: sk-proj-Ab**********************stuv for tunnel_0123456789abcdef0123456789. You sent ' + secret + ' and before it rk-0123456789012345678901234 (tunnel_runtime_key_rejected).' } },
     // A header is named in letters and hyphens and is no key. What kind of answer this is, is told by the sentence as
     // it came, before anything is taken out of it: this one says that the protocol version is no longer taken.
-    { status: 400, error: { message: 'X-Tunnel-Client-Wire-Protocol-Version 2026-08-25 is not supported; X-Tunnel-Shard-Token was Zx9-Abcdefghij0123456789.' } },
+    // Letters joined by hyphens are not a header for that alone: the beginning of a key is such a run as well.
+    { status: 400, error: { message: 'X-Tunnel-Client-Wire-Protocol-Version 2026-08-25 is not supported; X-Tunnel-Shard-Token was Zx9-Abcdefghij0123456789; Mcp-Protocol-Version is fine; the key began sk-proj-AbCdEfGhIjKlMnOp.' } },
     { status: 400, error: { message: 'Not accepted: wire-protocol-version-2026-08-25.' } });
   await tunnel.start();
   await until(() => seen.length === 3, 'the refused key and the refused version');
@@ -348,7 +349,7 @@ test('a refusal says what OpenAI said and what to do about that, and blames the 
   assert.deepEqual([seen[2].code, /\(HTTP 400: Not accepted: \[key\]\.\)/.test(seen[2].message)], ['protocol_outdated', true]);
   assert.match(seen[0].message, /\(HTTP 401 invalid_api_key: Incorrect API key provided: \[key\] for tunnel_0123456789abcdef0123456789\. You sent \[key\] and before it \[key\] \(tunnel_runtime_key_rejected\)\.\)/);
   assert.equal(seen[1].code, 'protocol_outdated');
-  assert.match(seen[1].message, /\(HTTP 400: X-Tunnel-Client-Wire-Protocol-Version 2026-08-25 is not supported; X-Tunnel-Shard-Token was \[key\]\.\)\. Update DevMate\./);
+  assert.match(seen[1].message, /\(HTTP 400: X-Tunnel-Client-Wire-Protocol-Version 2026-08-25 is not supported; X-Tunnel-Shard-Token was \[key\]; Mcp-Protocol-Version is fine; the key began \[key\]\.\)\. Update DevMate\./);
   assert.ok(!/sk-proj|stuv|Abcdefghij|rk-0123/.test(JSON.stringify(tunnel.status())), 'nothing of a key is in the status');
 });
 
@@ -552,9 +553,17 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   for (const [args, says] of [
     [['--openai-tunnel', 'tunnel_abc123', '--url', publicAddress, '--host', 'example.com'], /leaves the connection as it is and takes only --openai-tunnel and --organization \(given: --url, --host\)/],
     [['--openai-tunnel', 'tunnel_abc123', '--tunnel-id', 'tunnel_def456'], /\(given: --tunnel-id\)/],
+    [['--openai-tunnel', 'tunnel_abc123', '--ssh-port', '2222', '--identity', 'key', '--domain', 'relay.example.com'], /\(given: --ssh-port, --identity, --domain\)/],
     [['--openai-tunnel', 'none', '--organization', 'org-abc'], /--organization says nothing of a tunnel that is no longer there/]
   ]) { const answer = await run(['connect', 'beside', ...args], kept); assert.notEqual(answer.code, 0, args.join(' ')); assert.match(answer.stderr, says); }
   assert.deepEqual(saved(kept).openaiTunnel, { ...mine, organizationId: 'org-other' }, 'a refused command wrote nothing');
+  // The same where the tunnel was the connection until now and OpenAI's own program carried it: put beside an address
+  // it is still that tunnel, with its organization and with the name its key is stored under.
+  const carried = path.join(temp, 'carried'); fs.mkdirSync(carried);
+  fs.writeFileSync(path.join(carried, 'config.json'), JSON.stringify({ connection: { kind: 'openai-tunnel', tunnelId: 'tunnel_abc123', executable: process.execPath, organizationId: 'org-abc', runtimeKeyEnv: 'MY_TUNNEL_KEY' } }));
+  const moved = await run(['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'tunnel_abc123'], carried);
+  assert.deepEqual(saved(carried).openaiTunnel, { tunnelId: 'tunnel_abc123', organizationId: 'org-abc', runtimeKeyEnv: 'MY_TUNNEL_KEY', maxConcurrentRequests: 32 });
+  assert.match(moved.stdout, /"Store the runtime key of the tunnel: devmate secret set MY_TUNNEL_KEY"/);
 
   // A relay is not changed by naming its address on another connection: it is replaced, which is said with what is
   // lost by it and with the command that adds a tunnel to a relay.
@@ -564,7 +573,12 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
   const plain = await run(['connect', 'ssh', '--url', relayConfig.connection.publicUrl, '--host', '203.0.113.7', '--user', 'deploy', '--executable', process.execPath, '--openai-tunnel', 'tunnel_abc123'], replaced);
   assert.equal(plain.code, 0, plain.stderr); assert.equal(saved(replaced).connection.relay, undefined);
-  assert.match(plain.stdout, /"The relay on 203\.0\.113\.7 was the connection until now, and this command put another in its place: a plain SSH connection, without the relay's own ports and key file and without telling the relay the address of this computer\. The relay stays installed on that server\. To make it the connection again: devmate relay setup deploy@203\.0\.113\.7; to take it off the server: devmate relay remove deploy@203\.0\.113\.7\. To put OpenAI's tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>"/);
+  // The commands it names reach that relay: with its port, its key file and the name it answers under. Without them
+  // they would log in on port 22 with no key, and set a relay up under the server's bare address.
+  const how = ' --ssh-port 2222 --identity "' + keyFile + '"';
+  assert.equal(JSON.parse(plain.stdout).next.find(line => line.startsWith('The relay on')), 'The relay on 203.0.113.7 was the connection until now, and this command put another in its place: a plain SSH connection, without the relay\'s own ports and key file and without telling the relay the address of this computer. ' +
+    'The relay stays installed on that server. To make that server the relay again: devmate relay setup deploy@203.0.113.7 --domain ' + publicHost + how + ' (its address is then a new one, which the client has to be given: devmate mcp-url); ' +
+    'to take it off the server: devmate relay remove deploy@203.0.113.7' + how + '. To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>');
   assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress], replaced)).stdout, /The relay on/, 'said once, where the relay was replaced');
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
   const other2 = await run(['connect', 'quick', '--executable', process.execPath], replaced);

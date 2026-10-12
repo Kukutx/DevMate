@@ -151,7 +151,24 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   assert.deepEqual([unknown.code, unknown.notStarted], ['browser_unavailable', undefined]);
   assert.match(unknown.message, /before it answered \(it stopped asking for work\)\. Whether it was done is not known: look before repeating it\./);
   assert.deepEqual(asked, ['tabs.list'], 'the change was not asked of the other browser');
-  taker.close(); alone.close(); steady.close(); link.close();
+  // A look that the browser had taken, and whose host has asked for work again since (which is all that is known of a
+  // call by then), is asked of the other browser when the first one goes for good. It was left where it was, and
+  // told that the other browser could not be given it, which that one could.
+  const pair = createBrowserLink({ idleMs: 5000, unheardMs: 5000, callTimeoutMs: 10000 }), other = pair.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, askedOfOther = [];
+  void (async () => { for (;;) { let work; try { work = await pair.next({ linkId: other, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { askedOfOther.push(call.method); pair.result({ linkId: other, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
+  const going = pair.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
+  assert.deepEqual(await pair.next({ linkId: going, waitMs: 10 }), { calls: [] });
+  const look = pair.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), gone = pair.call({ capability: 'chrome.tabs.close', input: { tabIds: [7] } });
+  assert.deepEqual((await pair.next({ linkId: going, waitMs: 1000 })).calls.map(call => call.method), ['tabs.list', 'tabs.close']);
+  void pair.next({ linkId: going, waitMs: 5000 });
+  pair.detach({ linkId: going });
+  assert.deepEqual(await quickly(look, 'the look a browser had taken'), { by: 'the browser that is there' });
+  // The change it had taken is not asked for twice, and nothing is claimed about whether it was done.
+  const undone = await quickly(gone, 'the change a browser had taken');
+  assert.deepEqual([undone.code, undone.notStarted, askedOfOther], ['browser_unavailable', undefined, ['tabs.list']]);
+  assert.match(undone.message, /before it answered \(the browser was closed\)\. Whether it was done is not known: look before repeating it\. A browser is connected now, and this call was not passed on to it: it changes something/);
+  pair.close(); taker.close(); alone.close(); steady.close(); link.close();
 });
 
 // With Chrome and Edge both connected, a model holds ids it got from one of them. When that one goes, a call that
