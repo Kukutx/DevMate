@@ -851,7 +851,7 @@ test('what waits for the owner ends with what it waited in: a project that is re
   // A copy of the project is not made for a task that would only add to what the owner has not answered, and one
   // that was made for a task the owner then does not allow is removed with it. (The copy itself is a stand-in here.)
   const made = [], removed = [];
-  service.workspace.isolate = async (_project, name) => { made.push(name); return { root: path.join(path.dirname(project.root), name), branch: 'devmate/' + name, base: 'c0ffee', uncommitted: 0 }; };
+  service.workspace.isolate = async (_project, name) => { made.push(name); const root = path.join(path.dirname(project.root), name); fs.mkdirSync(root); return { root, branch: 'devmate/' + name, base: 'c0ffee', uncommitted: 0 }; };
   service.workspace.discardProposal = async (_project, copy) => { removed.push(copy.branch); return { discarded: true }; };
   const isolated = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'in a copy', isolate: true, waitMs: 1000 }, connected);
   assert.deepEqual([made.length, isolated.approvals.length, service.store.get('agent', isolated.agentId).isolated.branch], [1, 1, 'devmate/' + made[0]]);
@@ -872,4 +872,43 @@ test('what waits for the owner ends with what it waited in: a project that is re
   await service.call('agents.discard', { agentId: worker.agentId }, local);
   assert.deepEqual([service.store.get('approval', next.approvals[0].id).status, service.store.get('delivery', next.deliveryId).status, service.store.get('delivery', next.deliveryId).error.code], ['expired', 'cancelled', 'agent_finished']);
   assert.ok(!turns(instances).includes('and then this'));
+});
+
+test('a task that reaches an agent whose folder went while it was connected ends with that, said as that, before anything is spent on it; so does one for a copy that was deleted by hand', async t => {
+  const { service, project, instances } = await fixture(t);
+  const workflow = await service.call('workflow.create', { projectId: project.id, title: 'Connected' }, local), scope = { projectId: project.id, workflowId: workflow.id };
+  // An agent that stays connected between its tasks, as for half an hour it does. (Claude Code runs one process for
+  // each task, started in the project's folder every time.)
+  const agent = await service.call('agents.start', { ...scope, provider: 'claude' }, local);
+  await until(() => service.store.get('agent', agent.id).status === 'ready', 'the agent');
+  const waiting = await service.call('agents.delegate', { agentId: agent.id, prompt: 'A client\'s', waitMs: 0 }, connected);
+  const away = project.root + '-away';
+  fs.renameSync(project.root, away);
+  // The owner's message is taken in, since the agent is there, and ended before it is begun: nothing reaches the
+  // provider, no turn stays counted, and the agent is as it was.
+  const sent = await service.call('agents.send', { id: agent.id, body: 'Mine' }, local);
+  await until(() => service.store.get('delivery', sent.deliveries[0].id).status === 'failed', 'the task to end');
+  const ended = service.store.get('delivery', sent.deliveries[0].id).error;
+  assert.equal(ended.code, 'project_missing'); assert.match(ended.message, /^The folder of this project is not there: /); assert.doesNotMatch(ended.message, /ENOENT|spawn/);
+  assert.deepEqual([turns(instances), service.store.get('workflow', workflow.id).usedTurns, service.store.get('agent', agent.id).status, service.store.count('job', { projectId: project.id })], [[], 0, 'ready', 0]);
+  // A yes for the client's task is not used up on it either: it is refused with the same words, and the question stays.
+  await assert.rejects(answer(service, waiting.approvals[0].id, 'allow_once'), { code: 'project_missing', message: /^The folder of this project is not there: .* This task keeps waiting for your answer: allow it once that is out of the way, or refuse it\.$/ });
+  assert.deepEqual([service.store.get('approval', waiting.approvals[0].id).status, service.store.get('delivery', waiting.deliveryId).status], ['pending', 'held']);
+  // With the folder back (a drive that is connected again) the agent works on, with no start in between.
+  fs.renameSync(away, project.root);
+  await answer(service, waiting.approvals[0].id, 'allow_once');
+  assert.equal((await service.call('agents.result', { agentId: agent.id, deliveryId: waiting.deliveryId, waitMs: 5000 }, connected)).output, 'done: A client\'s');
+  assert.equal(instances.length, 1);
+
+  // An agent with a copy of its own works there. A copy that was deleted by hand is said as that, and what to do.
+  service.workspace.isolate = async (_project, name) => { const root = path.join(path.dirname(project.root), name); fs.mkdirSync(root); return { root, branch: 'devmate/' + name, base: 'c0ffee', uncommitted: 0 }; };
+  service.workspace.proposal = async () => ({ files: [] });
+  const worker = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'In a copy', isolate: true, waitMs: 20000 }, local);
+  assert.equal(worker.output, 'done: In a copy');
+  const copy = service.store.get('agent', worker.agentId).isolated.root;
+  fs.rmSync(copy, { recursive: true });
+  const lost = await service.agents.delegate({ agentId: worker.agentId, prompt: 'More, in the copy', waitMs: 5000 }, { kind: 'user', id: 'owner', label: 'You' });
+  assert.deepEqual([lost.settled, lost.error.code, lost.error.message], [true, 'copy_missing', 'The copy of the project this agent works in is not there any more: ' + copy +
+    '. It was removed outside DevMate, and what the agent did in it went with it. Throw away what is left of it (agents.discard) and start a new agent for the next task.']);
+  assert.deepEqual(turns(instances), ['A client\'s', 'In a copy']);
 });

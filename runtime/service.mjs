@@ -32,7 +32,7 @@ import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.m
 // is sent to whatever answers at that address, so it may ask which runtime that is, and nothing else.
 const PROBE_ID = 'verification', PROBE_OPERATION = 'connection.status';
 const storedKinds = ['agent', 'workflow', 'task', 'job', 'approval', 'input', 'reference', 'artifact'];
-const MAINTENANCE_INTERVAL_MS = 6 * 3600000, FIRST_MAINTENANCE_MS = 15000, FOLDER_LOOK_MS = 30000;
+const MAINTENANCE_INTERVAL_MS = 6 * 3600000, FIRST_MAINTENANCE_MS = 15000, FOLDER_LOOK_MS = 30000, FOLDER_WAIT_MS = 2000;
 const LOCAL_OWNER = Object.freeze({ id: 'owner', surface: 'local' });
 const rootKey = root => process.platform === 'win32' ? root.toLowerCase() : root;
 // What a project command inherits: the owner's environment without DevMate's own
@@ -95,8 +95,10 @@ export class DevMateService {
     this.activeCalls = new Set();
     this.usage = createUsage();
     this.projectTransitions = new Set();
-    // Whether the folder of each project was there when it was last looked at (folderMissing).
+    // Whether the folder of each project was there when it was last looked at (folderMissing), and how long a look
+    // that is made for an answer is waited for.
     this.folders = new Map();
+    this.folderWaitMs = FOLDER_WAIT_MS;
     this.closing = false;
     this.workspace = createWorkspaceService({ store: this.store });
     this.processes = createProcessManager({ instanceRoot: this.instanceRoot, store: this.store, env: commandEnvironment(this.config) });
@@ -150,10 +152,14 @@ export class DevMateService {
         catch (error) {
           // The capability registry owns its client/process lifetime separately from this request.
           error.executionSettled = true;
-          if (['forbidden', 'read_only', 'scope_mismatch', 'unknown_capability', 'invalid_input', 'missing_credential', 'not_found'].includes(error.code) || error.name === 'ZodError') error.notStarted = true;
+          // (project_missing: the folder was looked for before anything was started in it.)
+          if (['forbidden', 'read_only', 'scope_mismatch', 'unknown_capability', 'invalid_input', 'missing_credential', 'not_found', 'project_missing'].includes(error.code) || error.name === 'ZodError') error.notStarted = true;
           throw error;
         }
       } });
+      // Which folders are there is known before the first request is answered: the first thing a client is told names
+      // the projects, and a session keeps that. A share that does not answer is waited for up to the bound, no longer.
+      await this.lookAtFolders(this.store.list('project', { limit: 10000 }));
       return this;
     });
     this.ready.catch(() => {});
@@ -364,21 +370,38 @@ export class DevMateService {
     try { fs.lstatSync(seen.root); this.folders.set(projectId, { root: seen.root, at: Date.now(), missing: false }); } catch { /* not there, or not to be seen: it stays as it was */ }
   }
 
+  // One look at the folder of a project, and one at a time: what it finds is kept for whoever asks next. Only
+  // "nothing is at this path" counts as not there: no permission, or no answer, is not that.
+  lookAtFolder(project) {
+    const seen = this.folders.get(project.id), same = seen?.root === project.root;
+    if (same && seen.looking) return seen.looking;
+    const entry = { root: project.root, at: Date.now(), since: Date.now(), missing: same ? seen.missing : false, looking: null };
+    entry.looking = fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))
+      .then(missing => { Object.assign(entry, { missing, at: Date.now(), looking: null }); return missing; });
+    this.folders.set(project.id, entry);
+    return entry.looking;
+  }
+  // The folders of these projects, looked at now, all at once, and waited for up to a bound: a share that does not
+  // answer holds whoever asks up for that long once, and is said as it was last seen. (A look that has gone on for
+  // longer than the bound is not waited for a second time.) Returns the projects whose folder has not answered.
+  async lookAtFolders(projects, waitMs = this.folderWaitMs) {
+    const began = Date.now(), looks = [];
+    for (const project of projects) { const look = this.lookAtFolder(project); if (began - this.folders.get(project.id).since < waitMs) looks.push(look); }
+    let timer;
+    await Promise.race([Promise.all(looks), new Promise(resolve => { timer = setTimeout(resolve, waitMs); })]);
+    clearTimeout(timer);
+    return projects.filter(project => this.folders.get(project.id)?.looking);
+  }
   // Whether the folder of a project is known not to be there: moved, renamed or deleted, or on a drive that is not
   // connected. It is said where projects are named for a model, which is on every request, so the file system is not
   // asked there: what was seen last is answered at once, and it is looked at again in the background once in a while.
   // A folder on a share that does not answer would otherwise hold up every call, for any project, for as long as the
-  // system waits for it. Only "nothing is at this path" counts as not there: no permission, or no answer, is not that.
+  // system waits for it. What was seen last is never older than the start of the runtime (it looks at every folder
+  // before it answers anything), a call that met the folder gone or found it back, or the last list of the projects.
   folderMissing(project) {
-    const seen = this.folders.get(project.id), same = seen?.root === project.root;
-    if (!same || (!seen.looking && Date.now() - seen.at >= FOLDER_LOOK_MS)) {
-      const entry = { root: project.root, at: Date.now(), missing: same ? seen.missing : false, looking: true };
-      this.folders.set(project.id, entry);
-      fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))
-        .then(missing => Object.assign(entry, { missing, at: Date.now(), looking: false }));
-      return entry.missing;
-    }
-    return seen.missing;
+    const seen = this.folders.get(project.id);
+    if (seen?.root !== project.root || (!seen.looking && Date.now() - seen.at >= FOLDER_LOOK_MS)) this.lookAtFolder(project);
+    return this.folders.get(project.id).missing;
   }
 
   async perform(name, input = {}, context) {

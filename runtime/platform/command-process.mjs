@@ -199,9 +199,10 @@ export async function executeCommand(command, args = [], {
   let termination = { terminated: false, forced: false, exitConfirmed: true };
   const gone = () => child.exitCode != null || child.signalCode != null;
   if (winner.type === 'full' && gone()) {
-    // It wrote enough and ended by itself: an end like any other, with nothing left to end. (A process that is gone is
-    // not asked to end again: on Windows its number may be another program's by then, and the asking fails and would
-    // leave this one counted as not known to have ended, for good.)
+    // It wrote enough and ended by itself: an end like any other, with nothing left to end. (Handed to the ending
+    // below, it was not asked to end again either: of a process that is gone on Windows the ending only answers that
+    // its tree is not known to be gone, and that answer kept this one counted among the living for good. Where it
+    // ends while it is being ended, see below, the asking is as with any time limit or cancelling.)
     exit = await waitWithTimeout(exitPromise, 1000);
   } else if (winner.type === 'timeout' || winner.type === 'aborted' || winner.type === 'full') {
     cleanupPending = true;

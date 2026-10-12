@@ -97,6 +97,17 @@ test('the doctor names what works, what is missing and the exact next step', asy
   exposed.service.connection = { status: () => ({ kind: 'cloudflare', phase: 'connected' }) };
   const healthy = await exposed.service.call('runtime.doctor', {}, owner);
   assert.equal(find(healthy, 'connection.credential').status, 'ok'); assert.equal(find(healthy, 'connection.public').status, 'ok');
+  // A relay whose address is not reached while ssh runs: the line about the process is in order, and the remedy of a
+  // line in order is not shown anywhere. So what OpenSSH said last stands in the line that needs it, not in a pointer
+  // to one that shows nothing.
+  const relayed = await service(t, { connection: { kind: 'ssh', publicUrl: 'https://devmate.example.com/mcp/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true } },
+    { verifier: async () => ({ verified: false, reachable: false, reason: 'no answer' }) });
+  relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected', diagnostic: 'Warning: remote port forwarding failed for listen port 18443\n' }) };
+  const stuck = await relayed.service.call('runtime.doctor', {}, owner);
+  assert.equal(find(stuck, 'connection.process').status, 'ok');
+  assert.deepEqual([find(stuck, 'connection.public').status, find(stuck, 'connection.public').fix], ['fail', 'devmate restart opens the forward to the relay again. What OpenSSH said last: Warning: remote port forwarding failed for listen port 18443']);
+  relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected' }) }; relayed.service.verification = null;
+  assert.equal(find(await relayed.service.call('runtime.doctor', {}, owner), 'connection.public').fix, 'devmate restart opens the forward to the relay again.');
   assert.equal(healthy.status, 'warn', 'a verified but unauthenticated public URL is still a warning');
   // The CLI prints the same report and fails the command only when something is broken.
   const lines = [];
@@ -113,36 +124,43 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   await runtime.call('project.create', { root: kept, name: 'kept' }, owner);
   const project = await runtime.call('project.create', { root: moved, name: 'moved' }, owner);
   const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
+  const flow = await runtime.call('workflow.create', { projectId: project.id, title: 'Before it moved' }, owner);
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
   assert.equal(await find('projects.missing'), undefined);
   fs.renameSync(moved, path.join(temp, 'elsewhere'));
-  // Until a call has met the missing folder, or it was looked at again, it is listed as it was last seen.
+  // What is said of a folder where projects are named for a model is what was seen last: that is on every request,
+  // and the file system is not asked there. Fifty of them look at nothing.
+  const look = fs.promises.lstat;
+  let looks = 0;
+  fs.promises.lstat = (...args) => { looks++; return look(...args); };
+  try { for (let request = 0; request < 50; request++) assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);')); } finally { fs.promises.lstat = look; }
+  assert.equal(looks, 0);
+  // Where the projects are listed the folders are looked at for the answer, so the list is true when it is given,
+  // and what is said elsewhere is true from then on: no call has to have met the missing folder first.
   const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, connected)).items.map(item => [item.name, item.missing]));
-  assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // Each call that needs the folder says what happened to it and what is done about it, instead of a bare ENOENT.
   // What is done differs: a drive is connected again and nothing is lost; taking the project off the list takes what
-  // is kept for it as well, and is said to.
+  // is kept for it as well, and is said to, in full.
+  const keptFor = 'everything DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, and the copies agents worked in that were not applied';
   const said = 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
-    'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes the workflows, tasks and agent records kept for it) ' +
+    'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes ' + keptFor + ') ' +
     'and shares the folder where it is now (devmate project add <folder>).';
   for (const [operation, input] of [['workspace.read', { path: 'a.txt' }], ['workspace.files', {}], ['workspace.write', { path: 'b.txt', text: 'b' }], ['git.status', {}], ['project.overview', {}], ['shell.run', { file: process.execPath, args: ['-v'] }],
     // A coding agent and an engine start their programs in that folder: refused the same way, before anything is made
     // for the task (started all the same, the program fails for want of a folder, which reads as if it were not installed).
-    ['agents.delegate', { provider: 'codex', prompt: 'x', waitMs: 0 }], ['agents.delegate', { provider: 'codex', prompt: 'x', isolate: true, waitMs: 0 }], ['capability.list', { engine: 'godot' }]])
+    ['agents.delegate', { provider: 'codex', prompt: 'x', waitMs: 0 }], ['agents.delegate', { provider: 'codex', prompt: 'x', isolate: true, waitMs: 0 }],
+    ['agents.start', { workflowId: flow.id, provider: 'codex' }], ['agents.start', { workflowId: flow.id, provider: 'codex', prompt: 'x' }], ['capability.list', { engine: 'godot' }]])
     await assert.rejects(runtime.call(operation, { projectId: project.id, ...input }, connected), { code: 'project_missing', message: said }, operation);
-  assert.deepEqual([runtime.store.count('workflow', { projectId: project.id }), runtime.store.count('agent', { projectId: project.id }), runtime.store.count('approval', { projectId: project.id })], [0, 0, 0], 'nothing was made for the agent, and the owner is not asked about a task that cannot start');
+  assert.deepEqual([runtime.store.count('workflow', { projectId: project.id }), runtime.store.count('agent', { projectId: project.id }), runtime.store.count('approval', { projectId: project.id })], [1, 0, 0], 'nothing was made for the agent, and the owner is not asked about a task that cannot start');
   assert.equal((await runtime.call('workspace.read', { projectId: 'kept', path: 'a.txt' }, connected)).text, 'a', 'the other project works as before');
-  // Where projects are listed it is marked, from the call that met it on.
+  // A job for an engine in that project is one that never started, and says so: nothing is left to be looked into.
+  const job = await runtime.call('job.start', { projectId: project.id, kind: 'capability', input: { capability: 'godot.diagnose', input: {} } }, owner);
+  let ended = job;
+  for (let round = 0; round < 200 && ['queued', 'running'].includes(ended.status); round++) { await new Promise(resolve => setTimeout(resolve, 25)); ended = await runtime.call('job.read', { id: job.id }, owner); }
+  assert.deepEqual([ended.status, ended.outcome, ended.error?.code], ['failed', 'not_started', 'project_missing']);
   assert.deepEqual(await listed(), { kept: undefined, moved: true });
-  // What is said of a folder is what was seen last. The file system is not asked each time projects are named for a
-  // model, which is on every request: fifty of them look at each folder once.
-  const look = fs.promises.lstat;
-  let looks = 0;
-  fs.promises.lstat = (...args) => { looks++; return look(...args); };
-  try { runtime.folders.clear(); for (let request = 0; request < 50; request++) serverInstructions(runtime); await listed(); } finally { fs.promises.lstat = look; }
-  assert.equal(looks, 2, 'one look at each of the two folders');
-  await new Promise(resolve => setTimeout(resolve, 200));
-  assert.deepEqual(await listed(), { kept: undefined, moved: true }, 'and what was seen is what is said');
   // Where a call has to say which project it means, the one that is gone is marked.
   await assert.rejects(runtime.call('workspace.write', { path: 'b.txt', text: 'b' }, connected), error => error.code === 'project_required' && error.message.includes(' = kept;') && error.message.endsWith(project.id + ' = moved (its folder is not there)'));
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
@@ -151,23 +169,84 @@ test('a shared folder that was moved or deleted is said to be that: by the call 
   assert.equal(missing.status, 'warn');
   assert.equal(missing.detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
   assert.equal(missing.fix, 'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
-    '(devmate project remove <id, name or folder>, which also removes the workflows, tasks and agent records kept for it) and share the folder where it is now (devmate project add <folder>).');
+    '(devmate project remove <id, name or folder>, which also removes ' + keptFor + ') and share the folder where it is now (devmate project add <folder>).');
   // A call for the project that goes through without its folder (it reads what DevMate keeps) does not take the mark
   // off: the folder is looked at, and it is still not there.
   await runtime.call('workspace.history', { projectId: project.id }, connected);
-  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // Put back where it was (a drive that is connected again), the project works with everything it had, and the first
-  // call for it that goes through takes the mark off at once: a model that has just read a file there is not told by
-  // the list that the folder is not there.
-  fs.renameSync(path.join(temp, 'elsewhere'), moved);
+  // call for it that goes through takes the mark off at once, wherever it is said: a model that has just read a file
+  // there is not told that the folder is not there.
+  const elsewhere = path.join(temp, 'elsewhere');
+  fs.renameSync(elsewhere, moved);
   assert.equal((await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, connected)).text, 'a');
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  assert.equal(await find('projects.missing'), undefined);
+  // Gone again and back again with no call in between that used it: the list alone takes the mark, and takes it off.
+  fs.renameSync(moved, elsewhere);
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  fs.renameSync(elsewhere, moved);
   assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
   assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, write\\);'));
-  assert.equal(await find('projects.missing'), undefined);
-  fs.renameSync(moved, path.join(temp, 'elsewhere'));
+  // The doctor answers from the same look: what it says and what the list says are never two things.
+  fs.renameSync(moved, elsewhere);
+  assert.equal((await find('projects.missing')).detail, 'The folder of 1 project(s) is not there: moved at ' + project.root);
+  assert.match(serverInstructions(runtime), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
   // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
   assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);
   assert.equal(await find('projects.missing'), undefined);
+});
+
+test('a runtime that starts while a shared folder is gone says so from its first answer; a folder that does not answer is named and not waited for twice; a drive that is not connected is said to be that', async t => {
+  const owned = temporary(t, 'devmate-doctor-'), temp = owned.directory, instanceRoot = path.join(temp, 'instance');
+  const { serverInstructions } = await import('../runtime/mcp.mjs');
+  let runtime = new DevMateService({ instanceRoot, endpoint: '', config: {} });
+  owned.close = () => runtime.close();
+  await runtime.ready;
+  const folders = Object.fromEntries(['kept', 'away', 'slow'].map(name => { const folder = path.join(temp, name); fs.mkdirSync(folder); return [name, folder]; }));
+  const projects = {};
+  for (const [name, root] of Object.entries(folders)) projects[name] = await runtime.call('project.create', { root, name }, owner);
+  await runtime.close();
+  // The folder went while nothing ran (a drive that is connected later, a folder that was moved meanwhile).
+  fs.renameSync(folders.away, path.join(temp, 'elsewhere'));
+  runtime = new DevMateService({ instanceRoot, endpoint: '', config: {} });
+  await runtime.ready;
+  // The first thing a client is told names the projects, and a session keeps it: it is true from the start.
+  assert.match(serverInstructions(runtime), new RegExp(projects.away.id + ' = away \\(.*, folder not there\\);'));
+  assert.match(serverInstructions(runtime), new RegExp(projects.kept.id + ' = kept \\(.*, write\\);'));
+  const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, { id: 'owner' })).items.map(item => [item.name, item.missing]));
+  assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
+
+  // A folder on a share that does not answer: whoever lists the projects waits for it up to a bound, once, and is
+  // given it as it was last seen; the doctor names it instead of waiting for the system to give up.
+  const look = fs.promises.lstat;
+  runtime.folderWaitMs = 300;
+  fs.promises.lstat = target => target === projects.slow.root ? new Promise(() => {}) : look(target);
+  try {
+    let began = Date.now();
+    assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
+    assert.ok(Date.now() - began >= 250 && Date.now() - began < 5000, 'waited for the bound: ' + (Date.now() - began) + ' ms');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    began = Date.now();
+    assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
+    assert.ok(Date.now() - began < 200, 'a look that has not answered for longer than the bound is not waited for again: ' + (Date.now() - began) + ' ms');
+    const checks = (await runtime.call('runtime.doctor', {}, owner)).checks, unanswered = checks.find(item => item.id === 'projects.unanswered');
+    assert.deepEqual([unanswered.status, unanswered.detail], ['warn', 'The folder of 1 project(s) has not answered when it was looked for: slow at ' + projects.slow.root]);
+    assert.match(unanswered.fix, /^That is a share or a drive that hangs\./);
+    assert.equal(checks.find(item => item.id === 'projects.missing').detail, 'The folder of 1 project(s) is not there: away at ' + projects.away.root);
+  } finally { fs.promises.lstat = look; }
+
+  // A drive letter that is not there at all (Windows): connecting it is the whole remedy, and removing is not offered.
+  if (process.platform === 'win32') {
+    const letter = [...'ZYXWVUTSRQ'].find(one => !fs.existsSync(one + ':\\'));
+    if (letter) {
+      const root = letter + ':\\devmate-not-connected\\project';
+      runtime.store.update('project', projects.kept.id, { root });
+      await assert.rejects(runtime.call('workspace.read', { projectId: projects.kept.id, path: 'a.txt' }, { id: 'owner' }), error => error.code === 'project_missing' && error.details?.driveMissing === true &&
+        error.message === 'The folder of this project is on a drive that is not connected: ' + root + '. Connect the drive and call again; nothing has to be removed for that.');
+    }
+  }
 });
 
 test('the doctor says when the shell is there and runs nothing', async t => {

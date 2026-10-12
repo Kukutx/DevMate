@@ -36,6 +36,7 @@ Every engine with a diagnostic routine has `<engine>.diagnose`: effective settin
 | `engine: "godot"` | That engine with the full description, flags and input schema of each capability. |
 | `engine: "godot", summary: true` | That engine in summary form. |
 | `name: "godot.export"` | One capability: full description, flags, input schema. |
+| `query: "export preset"` | Only the capabilities whose name or description has every one of those words; an engine that has none is left out. With `engine`, within that engine. |
 | `serverId` | Additionally the tools of one external MCP server. |
 
 An engine entry has `status`: `ready`, `disabled` (switched off), `unavailable` (it could not activate; `error` says why and the other engines keep working), for `obsidian` `attached` / `detached`, or for `chrome` `connected` / `not connected`.

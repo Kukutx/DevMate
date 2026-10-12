@@ -87,6 +87,9 @@ const hidden = (project, rel) => protects(project) && isSensitiveWorkspacePath(r
 
 // Marks the view of a project that stands in a working copy this runtime made (see inCopy). Not a name data can carry.
 const OWN_COPY = Symbol('own copy');
+// What goes with a project that is taken off the list (the store removes every record of the project with it, and
+// project.remove the copies): said wherever taking it off is the remedy, so that it is not taken for a small step.
+export const KEPT_FOR_A_PROJECT = 'everything DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, and the copies agents worked in that were not applied';
 function projectRoot(project) {
   if (!project || typeof project.id !== 'string' || !path.isAbsolute(project.root || '') || !['read', 'write'].includes(project.access)) {
     throw error('invalid_project', 'A project with an absolute root and read/write access is required.');
@@ -107,7 +110,7 @@ function projectRoot(project) {
     throw error('project_missing', away
       ? 'The folder of this project is on a drive that is not connected: ' + project.root + '. Connect the drive and call again; nothing has to be removed for that.'
       : 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
-        'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes the workflows, tasks and agent records kept for it) ' +
+        'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ', which also removes ' + KEPT_FOR_A_PROJECT + ') ' +
         'and shares the folder where it is now (devmate project add <folder>).', { projectId: project.id, ...(away ? { driveMissing: true } : {}) });
   }
   // A registered directory that has since been swapped for a link would silently redirect every file tool.

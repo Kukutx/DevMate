@@ -43,8 +43,9 @@ Projects
                                     whether a connected client may hand tasks to Codex, Claude Code and the
                                     other agents here, which run on your account with them: ask (default) has
                                     you allow each task at this computer, in either access profile, and starts
-                                    nothing for a task before that; allow runs them without asking, those that
-                                    wait included; off refuses them and ends what waits
+                                    no process for a task before that (a copy of the project a client asked
+                                    for is made before, and removed when you say no); allow runs them without
+                                    asking, those that wait included; off refuses them and ends what waits
 
 Connecting an AI client
   devmate mcp-url                   the address to enter in ChatGPT, Claude or another MCP client
@@ -263,6 +264,9 @@ async function configureConnection(kind, options, instanceRoot) {
   if (options.auth && !['none', 'oauth'].includes(options.auth)) throw new Error('--auth is none or oauth');
   // OpenAI's tunnel beside a connection that has an address. With no such connection the tunnel is the connection.
   const beside = options['openai-tunnel'] === 'none' ? null : options['openai-tunnel'];
+  // The organization is said of a tunnel: where none is named it would be taken and dropped.
+  if (options.organization !== undefined && !staying && kind !== 'openai-tunnel' && !beside)
+    throw new Error('--organization names the OpenAI organization of a tunnel, and connect ' + kind + ' names no tunnel here. Give it with the tunnel: --openai-tunnel <tunnel_…> --organization <org-…>' + (kind === 'local' ? ' on a connection that has an address, or devmate connect openai-tunnel --tunnel-id <tunnel_…> --organization <org-…>' : '') + '.');
   if (staying) {
     if (!options['openai-tunnel']) throw new Error('connect beside needs --openai-tunnel <tunnel_…>, or --openai-tunnel none to take the tunnel away');
     if (options.auth) throw new Error('connect beside changes the tunnel alone. Sign-in belongs to the address and is chosen with it: devmate connect … --auth ' + options.auth);
@@ -308,7 +312,10 @@ async function configureConnection(kind, options, instanceRoot) {
   // with, which a command without them would not use (it would log in on port 22 without the key, and set up a relay
   // under the server's bare address).
   const relayed = current.connection.relay && !staying ? current.connection : null, relay = relayed ? relayed.user + '@' + relayed.host : null;
-  const reach = relayed ? (relayed.sshPort && relayed.sshPort !== 22 ? ' --ssh-port ' + relayed.sshPort : '') + (relayed.identityFile ? ' --identity "' + relayed.identityFile + '"' : '') : '';
+  // So with the program, where it is not the one a plain command finds: a relay that was set up with --executable,
+  // because OpenSSH is not on the PATH, is not reached by a command that leaves it out.
+  const reach = relayed ? (relayed.sshPort && relayed.sshPort !== 22 ? ' --ssh-port ' + relayed.sshPort : '') + (relayed.identityFile ? ' --identity "' + relayed.identityFile + '"' : '') +
+    (relayed.executable && relayed.executable !== findOnPath('ssh') ? ' --executable "' + relayed.executable + '"' : '') : '';
   // A relay that answers under a name was set up with that name, also where it is the server's own: setup asks for it.
   const named = relayed && !isIP(new URL(relayed.publicUrl).hostname) ? ' --domain ' + new URL(relayed.publicUrl).hostname : '';
   // commands: lines for the owner to type, written as they are. Inside the answer they would be printed as JSON, with

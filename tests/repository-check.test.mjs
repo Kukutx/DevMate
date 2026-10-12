@@ -27,19 +27,41 @@ test('setting a version states it in every file that carries one, the browser ex
     fs.mkdirSync(path.dirname(path.join(copy, name)), { recursive: true }); fs.copyFileSync(path.join(root, name), path.join(copy, name));
   }
   const changelog = path.join(copy, 'CHANGELOG.md'), headings = () => fs.readFileSync(changelog, 'utf8').split(/\r?\n/).filter(line => line.startsWith('## '));
-  const set = () => spawnSync(process.execPath, [path.join(copy, 'scripts', 'set-version.mjs'), '9.8.7'], { encoding: 'utf8', windowsHide: true });
-  const stated = file => JSON.parse(fs.readFileSync(path.join(copy, file), 'utf8')).version;
-  fs.writeFileSync(changelog, '# Changelog\n\n## Unreleased\n- something new\n\n## ' + VERSION + '\n- before\n');
+  const set = (version = '9.8.7') => spawnSync(process.execPath, [path.join(copy, 'scripts', 'set-version.mjs'), version], { encoding: 'utf8', windowsHide: true });
+  const stated = file => JSON.parse(fs.readFileSync(path.join(copy, file), 'utf8')).version, everywhere = () => ['package.json', 'plugin.json', 'manifest.json', 'chrome-extension/manifest.json'].map(stated);
+  const collected = '# Changelog\n\n## Unreleased\n- something new\n\n## ' + VERSION + '\n- before\n', versions = fs.readFileSync(path.join(copy, 'versions.json'), 'utf8');
+  fs.writeFileSync(changelog, collected);
   const done = set();
   assert.equal(done.status, 0, done.stderr);
   assert.match(done.stdout, /The "## Unreleased" section of CHANGELOG\.md is now "## 9\.8\.7"/);
   assert.deepEqual(headings(), ['## 9.8.7', '## ' + VERSION]);
-  assert.deepEqual(['package.json', 'plugin.json', 'manifest.json', 'chrome-extension/manifest.json'].map(stated), ['9.8.7', '9.8.7', '9.8.7', '9.8.7']);
+  assert.deepEqual(everywhere(), ['9.8.7', '9.8.7', '9.8.7', '9.8.7']);
   assert.match(fs.readFileSync(path.join(copy, 'runtime', 'version.mjs'), 'utf8'), /^export const VERSION = '9\.8\.7';/);
+  assert.ok('9.8.7' in JSON.parse(fs.readFileSync(path.join(copy, 'versions.json'), 'utf8')));
+  // Setting the version back takes all of that back: the section waits for the next release again, and no file names
+  // a release that never was. (Left as it was, the section would stay under a number nothing is released by, and the
+  // version that is released later would pass with an empty section of its own.)
+  const back = set(VERSION);
+  assert.equal(back.status, 0, back.stderr);
+  assert.match(back.stdout, new RegExp('What was collected for 9\\.8\\.7 is under "## Unreleased" of CHANGELOG\\.md again, and versions\\.json no longer names 9\\.8\\.7'));
+  assert.deepEqual([fs.readFileSync(changelog, 'utf8'), fs.readFileSync(path.join(copy, 'versions.json'), 'utf8'), everywhere()], [collected, versions, Array(4).fill(VERSION)]);
+  assert.match(fs.readFileSync(path.join(copy, 'runtime', 'version.mjs'), 'utf8'), new RegExp('^export const VERSION = \'' + VERSION.replace(/\./g, '\\.') + '\';'));
+  // Taken back where entries were already collected anew: neither section is chosen for the other, and nothing is written.
+  assert.equal(set().status, 0);
+  fs.writeFileSync(changelog, '# Changelog\n\n## Unreleased\n- one more\n\n## 9.8.7\n- something new\n\n## ' + VERSION + '\n- before\n');
+  const both = set(VERSION);
+  assert.notEqual(both.status, 0); assert.match(both.stderr, /CHANGELOG\.md has both "## Unreleased" and "## 9\.8\.7", the version that is taken back/);
+  assert.deepEqual(everywhere(), Array(4).fill('9.8.7'), 'nothing was written by the run that was refused');
+  // Taken back where the changelog was never given a section for it (the number was set by hand): what is collected
+  // stays where it is, beside the section of the version that is stated again.
+  fs.writeFileSync(changelog, collected);
+  const plain = set(VERSION);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.deepEqual([fs.readFileSync(changelog, 'utf8'), fs.readFileSync(path.join(copy, 'versions.json'), 'utf8'), everywhere()], [collected, versions, Array(4).fill(VERSION)]);
   // Entries written under a new "Unreleased" beside the version's own section would be left out of the release
   // notes: refused, before anything is written.
   fs.writeFileSync(changelog, '# Changelog\n\n## Unreleased\n- one more\n\n## 9.8.7\n- something new\n');
-  fs.writeFileSync(path.join(copy, 'plugin.json'), fs.readFileSync(path.join(copy, 'plugin.json'), 'utf8').replace('"9.8.7"', '"0.0.1"'));
+  fs.writeFileSync(path.join(copy, 'plugin.json'), fs.readFileSync(path.join(copy, 'plugin.json'), 'utf8').replace('"version": "' + VERSION + '"', '"version": "0.0.1"'));
   const refused = set();
   assert.notEqual(refused.status, 0); assert.match(refused.stderr, /CHANGELOG\.md has both "## Unreleased" and "## 9\.8\.7"/);
   assert.equal(stated('plugin.json'), '0.0.1', 'nothing was written by the run that was refused');

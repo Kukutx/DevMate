@@ -250,6 +250,17 @@ export class AgentCoordinator {
       env: { DEVMATE_AGENT_URL: this.endpoint, DEVMATE_AGENT_TOKEN: session.token, ...nodeHelperEnvironment() } };
   }
 
+  // Where an agent's program is started and works: the copy of its own, or the folder of its project. Where that is
+  // not there (moved, on a drive that is not connected, a copy that was deleted by hand) it is said as that: started
+  // all the same, the program fails for want of a folder to start in, which reads as if it were not installed.
+  place(agent) {
+    const project = this.store.get('project', agent.projectId);
+    if (!agent.isolated) { resolveProjectPath(project); return project.root; }
+    if (!fs.statSync(agent.isolated.root, { throwIfNoEntry: false })?.isDirectory()) throw new DomainError('copy_missing', 'The copy of the project this agent works in is not there any more: ' + agent.isolated.root +
+      '. It was removed outside DevMate, and what the agent did in it went with it. Throw away what is left of it (agents.discard) and start a new agent for the next task.');
+    return agent.isolated.root;
+  }
+
   async connect(agent, previous) {
     const session = { provider: agent.provider, adapter: null, token: null, current: null, turn: null, output: '', stopped: false, ready: false,
       draining: null, closing: null };
@@ -260,16 +271,12 @@ export class AgentCoordinator {
       released = previous?.closing ? await previous.closing : await true;
       if (!released) throw new DomainError('shutdown_unconfirmed', 'The previous agent process has not confirmed its exit. Stop the agent before resuming it.');
       if (session.stopped || this.stopping) return;
-      const project = this.store.get('project', agent.projectId);
-      // The agent's program is started in the project's folder. Where that is not there (moved, or on a drive that is
-      // not connected) it is said as that: started all the same, the program fails for want of a folder to start in,
-      // which reads as if it were not installed.
-      if (!agent.isolated) resolveProjectPath(project);
+      const cwd = this.place(agent);
       const settings = resolveProviderSettings(this.providerSettings[agent.provider]);
       session.record = settings.recordNativeEvents === true;
       this.issue(agent, session);
       session.adapter = this.adapterFactory({
-        ...settings, provider: agent.provider, cwd: agent.isolated?.root || project.root, privateDir: this.privateDir,
+        ...settings, provider: agent.provider, cwd, privateDir: this.privateDir,
         mcpServers: [...(settings.mcpServers || []), this.channel(session)],
         onEvent: event => this.nativeEvent(agent.id, session, event),
         onApproval: (request, extra) => this.request(agent.id, 'approval', request, extra),
@@ -625,6 +632,10 @@ export class AgentCoordinator {
         this.store.transaction(() => this.holdAgain(agent, delivery, message));
         continue;
       }
+      // The folder the agent works in may have gone while it was connected, and a provider that runs one process for
+      // each task starts that process there every time. The task ends with that, said as that, before it is begun.
+      try { this.place(agent); }
+      catch (error) { this.store.transaction(() => this.abandon(delivery, 'failed', publicError(error))); continue; }
       // Whose task the agent works on, also after it: what it passes on between tasks is passed on for the same one.
       session.lastSender = message.sender;
       const job = this.store.transaction(() => {
@@ -872,13 +883,14 @@ export class AgentCoordinator {
       try { if (this.find('approval', item.id)) this.store.update('approval', item.id, { status: 'expired' }); } catch (error) { this.store.recordNotificationFailure(error); }
     };
     // What keeps this task from beginning right now, if anything does: from being queued (its workflow is paused or
-    // has no turns left), or its agent from being started (no session is free, the project is read only, the process
-    // it had has not confirmed its exit).
+    // has no turns left), from running (the folder its agent works in is not there), or its agent from being started
+    // (no session is free, the project is read only, the process it had has not confirmed its exit).
     const blocked = () => {
       const current = this.stopping || this.find('delivery', deliveryId)?.status !== 'held' ? null : this.find('agent', agent.id);
       if (!current) return null;
       try {
         this.budget(this.scope(current.projectId, current.workflowId).workflow, 1);
+        this.place(current);
         if (this.sessions.get(agent.id)?.stopped !== false) this.startable(current);
         return null;
       } catch (error) { return error; }

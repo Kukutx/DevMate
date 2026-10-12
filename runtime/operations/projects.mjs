@@ -54,12 +54,14 @@ export function defineProjectOperations(service, add) {
   // With a writable project a client can run commands, and with those reach whatever the owner can reach. So which
   // folders are shared at all is not a client's call: project.create is the owner's own act (ownerDecision), unless
   // the owner chose the full access profile.
-  // missing: its folder was not there when it was last looked at (moved, renamed or deleted, or on a drive that is not
-  // connected). Such a project is still on the list, and every call for it is refused until the folder is back.
+  // missing: its folder is not there (moved, renamed or deleted, or on a drive that is not connected). Such a project
+  // is still on the list, and every call for it is refused until the folder is back. The folders are looked at for
+  // this answer, all at once; one on a share that does not answer in time is given as it was last seen.
   add('project.list', { query: z.string().max(200).optional(), cursor: id.optional(), limit: z.number().int().min(1).max(1000).optional() }, true,
-    'List registered projects. One whose folder is not there at the moment is marked missing:true.', (args, context) => {
+    'List registered projects. One whose folder is not there at the moment is marked missing:true.', async (args, context) => {
       const listed = service.list('project', args, context);
-      return { ...listed, items: listed.items.map(project => service.folderMissing(project) ? { ...project, missing: true } : project) };
+      await service.lookAtFolders(listed.items);
+      return { ...listed, items: listed.items.map(project => service.folders.get(project.id)?.missing ? { ...project, missing: true } : project) };
     });
   add('project.create', { root: directory, name: z.string().min(1).max(200).optional(),
     access: z.enum(['read', 'write']).default('write'), protectSecrets: z.boolean().optional(), ...mutation }, false,

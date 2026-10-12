@@ -41,10 +41,11 @@ A provider account, a public tunnel, a connection from ChatGPT or Claude, an opt
 
 A release is one tag on `main`; the rest is automatic.
 
-1. `npm run version:set -- X.Y.Z` states the version everywhere.
-2. `CHANGELOG.md` collects what changes under `## Unreleased`; step 1 makes that section `## X.Y.Z`. Read it once more: it becomes the release notes. (Without an Unreleased section, add `## X.Y.Z` yourself.) A release with entries still under Unreleased is refused.
-3. `npm run release:preflight` runs what the release workflow will run.
-4. Merge to `main`, then push the tag `X.Y.Z`. No `v`: Obsidian finds the release of a community plugin by the bare version.
+1. The owner approves the number: the line `- Owner-approved version: X.Y.Z.` in `AGENTS.md` says which. `npm run check` refuses any other version, so that line and the files of step 2 change in one commit.
+2. `npm run version:set -- X.Y.Z` states the version everywhere else. (Setting the number back the same way takes it all back: the changelog section and `versions.json` too.)
+3. `CHANGELOG.md` collects what changes under `## Unreleased`; step 2 makes that section `## X.Y.Z`. Read it once more: it becomes the release notes. (Without an Unreleased section, add `## X.Y.Z` yourself.) A release with entries still under Unreleased is refused.
+4. `npm run release:preflight` runs what the release workflow will run.
+5. Merge to `main`, then push the tag `X.Y.Z`. No `v`: Obsidian finds the release of a community plugin by the bare version.
 
 The **DevMate 4 Release** workflow verifies the tagged commit again, builds one candidate and publishes that same build:
 

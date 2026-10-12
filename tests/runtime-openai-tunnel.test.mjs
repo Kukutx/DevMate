@@ -12,6 +12,7 @@ import { normalizeConfig } from '../runtime/config.mjs';
 import { createSecretStore } from '../runtime/secrets.mjs';
 import { startRuntime } from '../runtime/main.mjs';
 import { main as cli } from '../runtime/cli.mjs';
+import { findOnPath } from '../runtime/platform/tools.mjs';
 import { VERSION } from '../runtime/version.mjs';
 
 const until = async (condition, what, ms = 8000) => { const end = Date.now() + ms; while (!condition()) { if (Date.now() > end) throw new Error('timed out waiting for ' + what); await new Promise(resolve => setTimeout(resolve, 10)); } };
@@ -573,9 +574,10 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify(relayConfig));
   const plain = await run(['connect', 'ssh', '--url', relayConfig.connection.publicUrl, '--host', '203.0.113.7', '--user', 'deploy', '--executable', process.execPath, '--openai-tunnel', 'tunnel_abc123'], replaced);
   assert.equal(plain.code, 0, plain.stderr); assert.equal(saved(replaced).connection.relay, undefined);
-  // The commands it names reach that relay: with its port, its key file and the name it answers under. Without them
-  // they would log in on port 22 with no key, and set a relay up under the server's bare address.
-  const how = ' --ssh-port 2222 --identity "' + keyFile + '"';
+  // The commands it names reach that relay: with its port, its key file, the name it answers under and the program
+  // it was set up with where that is not the OpenSSH a plain command finds. Without them they would log in on port 22
+  // with no key, set a relay up under the server's bare address, or stop at "OpenSSH is not on this computer".
+  const how = ' --ssh-port 2222 --identity "' + keyFile + '" --executable "' + process.execPath + '"';
   assert.equal(JSON.parse(plain.stdout).next.find(line => line.startsWith('The relay on')), 'The relay on 203.0.113.7 was the connection until now, and this command put another in its place: a plain SSH connection, without the relay\'s own ports and key file and without telling the relay the address of this computer. ' +
     'The relay stays installed on that server. The commands that make it the relay again, and that take it off the server, are printed below this answer as they are typed. ' +
     'To put OpenAI\'s tunnel beside a relay, leave the relay as it is and run: devmate connect beside --openai-tunnel <tunnel id>');
@@ -588,7 +590,18 @@ test('OpenAI\'s tunnel runs beside a public address: each way in is served as it
   assert.doesNotMatch((await run(['connect', 'https', '--url', publicAddress], replaced)).stdout, /The relay on/, 'said once, where the relay was replaced');
   // A relay that answers under the server's own name was set up with that name given (setup asks for it): so is the command.
   fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify({ connection: { ...relayConfig.connection, host: publicHost, sshPort: 22, identityFile: undefined } }));
-  assert.match((await run(['connect', 'https', '--url', publicAddress], replaced)).stderr, new RegExp('\\n {2}devmate relay setup deploy@' + publicHost.replaceAll('.', '\\.') + ' --domain ' + publicHost.replaceAll('.', '\\.') + '\\n'));
+  assert.ok((await run(['connect', 'https', '--url', publicAddress], replaced)).stderr.includes('\n  devmate relay setup deploy@' + publicHost + ' --domain ' + publicHost + ' --executable "' + process.execPath + '"\n'));
+  // A relay that was set up with the OpenSSH a plain command finds needs no program named.
+  const found = findOnPath('ssh');
+  if (found) {
+    fs.writeFileSync(path.join(replaced, 'config.json'), JSON.stringify({ connection: { ...relayConfig.connection, executable: found, host: publicHost, sshPort: 22, identityFile: undefined } }));
+    assert.ok((await run(['connect', 'https', '--url', publicAddress], replaced)).stderr.includes('\n  devmate relay setup deploy@' + publicHost + ' --domain ' + publicHost + '\n'));
+  }
+  // The organization is said of a tunnel: where no tunnel is named it is refused, not taken and dropped.
+  for (const args of [['connect', 'https', '--url', publicAddress, '--organization', 'org-abc'], ['connect', 'https', '--url', publicAddress, '--openai-tunnel', 'none', '--organization', 'org-abc'], ['connect', 'local', '--organization', 'org-abc']]) {
+    const dropped = await run(args, replaced);
+    assert.notEqual(dropped.code, 0, args.join(' ')); assert.match(dropped.stderr, new RegExp('--organization names the OpenAI organization of a tunnel, and connect ' + args[1] + ' names no tunnel here\\. Give it with the tunnel: --openai-tunnel <tunnel_…> --organization <org-…>'));
+  }
   // What an SSH connection is told about its login is kept: its port and its key file. And an option that names
   // something another kind of connection has is refused, not passed over.
   const sshAt = path.join(temp, 'ssh'), sshArgs = ['connect', 'ssh', '--url', publicAddress, '--host', '203.0.113.7', '--user', 'deploy', '--executable', process.execPath];
@@ -783,6 +796,10 @@ test('where the tunnel is the only connection, OpenAI\'s own program is served a
   const plain = await start('program', { connection: official }, program);
   const served = await ask(plain.ingressPort, '127.0.0.1:' + plain.ingressPort, list(1));
   assert.equal(served.status, 200); assert.ok(names(served.json).includes('exec_command'), 'taken for the tunnel by the loopback name, as before');
+  // Under any other name nothing is answered there, and it is said as it is: this DevMate has no public address, so
+  // there is no proxy to speak of and nothing devmate mcp-url would show.
+  const named = await ask(plain.ingressPort, publicHost, list(11));
+  assert.deepEqual([named.status, named.json.error.code, named.json.error.message], [421, 'invalid_host', 'This request names the host ' + publicHost + '. This DevMate has no public address at the moment, so nothing is answered on this port under that name.']);
   // With sign-in, what the program hands over is checked like every request from outside.
   const checked = await start('program-sign-in', { connection: official, auth: signIn }, program);
   assert.equal((await ask(checked.ingressPort, '127.0.0.1:' + checked.ingressPort, list(2))).status, 401);

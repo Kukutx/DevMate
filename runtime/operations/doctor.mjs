@@ -5,6 +5,7 @@ import { createChromeRegistration } from '../platform/chrome-registration.mjs';
 import { findOnPath, installHint, resolveTool } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
+import { KEPT_FOR_A_PROJECT } from '../workspace.mjs';
 import { within } from './shared.mjs';
 
 /**
@@ -44,14 +45,17 @@ export async function doctor(service) {
   check('projects', projects ? 'ok' : 'warn', projects + ' project(s) registered', projects ? null : 'Register one with devmate project add, or share a folder from an editor that runs DevMate.');
   // A folder that was moved, renamed or deleted after it was shared stays on the list, and every call for it fails.
   // So does one on a drive that is not connected, for which the remedy is the opposite: nothing is to be removed.
-  // Looked at now, all at once and without holding anything else up; only "nothing is at this path" counts.
-  const listed = service.store.list('project', { limit: 10000 });
-  const looked = await Promise.all(listed.map(project => fs.promises.lstat(project.root).then(() => false, error => ['ENOENT', 'ENOTDIR'].includes(error.code))));
-  const gone = listed.filter((_, index) => looked[index]);
-  if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there: ' +
-    gone.slice(0, 8).map(project => project.name + ' at ' + project.root).join('; ') + (gone.length > 8 ? '; and ' + (gone.length - 8) + ' more' : ''),
-  'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
-    '(devmate project remove <id, name or folder>, which also removes the workflows, tasks and agent records kept for it) and share the folder where it is now (devmate project add <folder>).');
+  // Looked at now, all at once and without holding anything else up; only "nothing is at this path" counts. It is the
+  // look the list of projects and the instructions answer from, so that the three say the same. A folder that has
+  // not answered within the time such a look is given (a share that hangs) is named as that, instead of this report
+  // not coming.
+  const listed = service.store.list('project', { limit: 10000 }), places = found => found.slice(0, 8).map(project => project.name + ' at ' + project.root).join('; ') + (found.length > 8 ? '; and ' + (found.length - 8) + ' more' : '');
+  const silent = await service.lookAtFolders(listed), gone = listed.filter(project => service.folders.get(project.id)?.missing && !silent.includes(project));
+  if (gone.length) check('projects.missing', 'warn', 'The folder of ' + gone.length + ' project(s) is not there: ' + places(gone),
+    'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
+    '(devmate project remove <id, name or folder>, which also removes ' + KEPT_FOR_A_PROJECT + ') and share the folder where it is now (devmate project add <folder>).');
+  if (silent.length) check('projects.unanswered', 'warn', 'The folder of ' + silent.length + ' project(s) has not answered when it was looked for: ' + places(silent),
+    'That is a share or a drive that hangs. Calls for such a project wait for it as long as the system does; connect it again, or take the project off the list until it is back (devmate project remove <id, name or folder>).');
   const windows = service.windows.list().length;
   check('editor', windows ? 'ok' : 'info', windows + ' editor window(s) attached', windows ? null : 'Editor context needs VS Code or Obsidian with DevMate running; diagnostics come from VS Code.');
   for (const provider of (await service.discoverProviders()).items) {
@@ -96,6 +100,10 @@ export async function doctor(service) {
     if (credential) check('connection.credential', env[credential] ? 'ok' : 'fail', credential + (env[credential] ? ' is set' : ' is missing'),
       'Store it with: devmate secret set ' + credential + ' (or "Configure Connection" in the editor), then restart DevMate.');
     const phase = status.phase || status.status || 'unknown', fault = status.error?.message || service.connectionFault?.message;
+    // What OpenSSH said last is the remedy of the line about the process, and a remedy is shown only where its line
+    // is not in order: while ssh runs it would be pointed at and not be there. A line further down that needs it
+    // therefore says it itself.
+    const lastSaid = status.diagnostic ? ' What OpenSSH said last: ' + String(status.diagnostic).slice(-400).trim() : '';
     check('connection.process', ['connected', 'relay-ready', 'configured', 'process-running'].includes(phase) ? 'ok' : ['connecting', 'starting'].includes(phase) ? 'warn' : 'fail',
       connection.kind + ': ' + phase + (connection.kind === 'openai-tunnel' ? status.client === 'built-in' ? ' (spoken by DevMate itself, protocol ' + status.wireProtocol + ', up to ' + status.maxConcurrentRequests + ' calls at once)' : ' (OpenAI\'s tunnel-client program)' : '') +
         (fault ? ' — ' + fault : ''), status.diagnostic ? String(status.diagnostic).slice(-400) : fault ? 'Fix the cause, then restart DevMate (devmate restart, or "Restart" in the editor).' : null);
@@ -111,8 +119,8 @@ export async function doctor(service) {
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason + (verification.reachable || verification.pending ? '' : ' (asked from this computer; a client in the cloud may still get through: try it there)')),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.'
           : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes: devmate restart gets a new one, and its address is then a new one (devmate mcp-url).'
-          : connection.relay ? 'What OpenSSH said last is in the connection.process line above; devmate restart opens the forward to the relay again.'
-          : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '. What OpenSSH said last is in the connection.process line above.'
+          : connection.relay ? 'devmate restart opens the forward to the relay again.' + lastSaid
+          : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '.' + lastSaid
           : 'Your proxy has to send this address on to the ingress port of this computer (ingressPort in devmate status) and ' + passOn + '.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again: what cloudflared said last is in the connection.process line above.');
     else tunnelProof('connection.public', status, connection.tunnelId);
