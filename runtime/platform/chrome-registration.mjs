@@ -62,7 +62,8 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
   // What the browser starts: a Node with a copy of DevMate, for this instance. The browser adds who is asking.
   // (On Windows it is a command file, which cmd.exe reads in the code page of the system and not as the UTF-8 it is
   // written in: a path with other than ASCII letters in it, a home directory in Chinese, came out as other characters
-  // and nothing was started, with no word of it anywhere. The file's first act is to say how it is to be read.)
+  // and nothing was started, with no word of it anywhere. Its second line, before the one with the paths, says how
+  // the file is to be read.)
   const starts = (withNode, withCli) => windows
     ? '@echo off\r\nchcp 65001 >nul 2>&1\r\n"' + withNode.replace(/%/g, '%%') + '" "' + withCli.replace(/%/g, '%%') + '" chrome-host --instance "' + root.replace(/%/g, '%%') + '" %*\r\n'
     : '#!/bin/sh\nexec \'' + [withNode, withCli, 'chrome-host', '--instance', root].map(word => word.replace(/'/g, '\'\\\'\'')).join('\' \'') + '\' "$@"\n';

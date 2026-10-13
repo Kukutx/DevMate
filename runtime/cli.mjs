@@ -661,4 +661,10 @@ export async function main(argv = process.argv.slice(2), {
   }
 }
 
-if (isProgram(import.meta.url, 'cli.mjs')) process.exitCode = await main();
+if (isProgram(import.meta.url, 'cli.mjs')) {
+  const code = await main();
+  // The program a browser starts ends when it is done, whatever it still holds open: the browser keeps its end of the
+  // connection open for as long as this process lives, and a host that stayed would serve nobody.
+  if (process.argv[2] === 'chrome-host') process.exit(code);
+  process.exitCode = code;
+}

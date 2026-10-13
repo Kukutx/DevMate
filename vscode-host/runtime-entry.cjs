@@ -433,7 +433,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     // A runtime that holds its instance and did not answer within a moment is busy, not gone (a long step, a computer
     // under load). The window stays as it is until it answers again or its process is gone: taken for stopped, the
     // window let go of its folders and the editor's own tools lost the endpoint, for the length of one look.
-    busy = !observed.running && observed.processAlive === true && state.running === true;
+    // (One that answers that it is stopping, or is still starting, is not busy: it says what it does.)
+    busy = !observed.running && observed.processAlive === true && observed.state === 'unavailable' && state.running === true;
     if (busy) { render(); return state; }
     state = observed;
     if (!state.running) await recover().catch(report);

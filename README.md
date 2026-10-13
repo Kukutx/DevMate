@@ -318,7 +318,7 @@ Whether a chat product lets a connector you add yourself change things is decide
 | Product | Custom MCP connectors |
 | --- | --- |
 | ChatGPT Business, Enterprise, Edu | Read and write, in developer mode on the web (a beta). An admin or owner switches developer mode on |
-| ChatGPT Pro | Read only, in developer mode. DevMate marks its reading tools as read-only (files, search, Git, diagnostics, `operations_query`, `capability_query`); editing, commands and delegation need a plan that allows writing. Not tried with a Pro account |
+| ChatGPT Pro | Read only, in developer mode, by OpenAI's documentation as it read in October 2026. DevMate marks its reading tools as read-only (files, search, Git, diagnostics, `operations_query`, `capability_query`); editing, commands and delegation need, by that documentation, a plan that allows writing. Whether a write from a Pro account is carried out was not verified by us: in October 2026 the authorization setting of a plugin in a Pro account offered "allow all tools", which says only that the choice is there |
 | ChatGPT Plus, Go, Free | Not named in OpenAI's documentation for custom MCP connectors |
 | Claude (claude.ai, desktop, mobile) | Custom connectors by URL; a tool call may take 240 seconds and return about 150,000 characters |
 | Claude Code, Codex and other local clients | No plan limits of this kind: they connect on this computer |

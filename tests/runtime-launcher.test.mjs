@@ -302,11 +302,25 @@ test('an entry that stops the runtime and starts it again finds it on the port i
   assert.equal((await editor.status()).running,false);
   const again=await editor.start();
   assert.equal(again.started,true);assert.equal(again.record.port,ran,'a restart from the editor does not move the runtime');
-  // An entry whose settings name a port of the owner's choosing starts it there: that is their word.
+  // The port is the instance's: stopped the usual way from anywhere, and started from an entry that names no port
+  // (a browser, a plain `devmate start`), it is found where it was. The usual port is not what is tried.
+  await stopRuntime({instanceRoot,timeoutMs:15000});
+  assert.equal((await runtimeStatus({instanceRoot})).crashed,undefined);
+  assert.equal(fs.readFileSync(path.join(instanceRoot,'port'),'utf8'),ran+'\n');
+  assert.equal((await startRuntime({instanceRoot,entryPath,timeoutMs:30000})).record.port,ran);
+  // An entry whose settings name a port of the owner's choosing starts it there: that is their word, and from then
+  // on it is the one the instance is found on.
   const chosen=await freePort(),other=createHostClient({instanceRoot,entryPath,nodePath:process.execPath,port:chosen,timeoutMs:30000});
   t.after(()=>other.dispose());
   await other.stop();
   assert.equal((await other.start()).record.port,chosen);
+  await editor.stop();
+  assert.equal((await editor.start()).record.port,chosen);
+  // A port that is named on the command line wins over what is written down, and is written down in its place.
+  await stopRuntime({instanceRoot,timeoutMs:15000});
+  const named=await freePort();
+  assert.equal((await startRuntime({instanceRoot,entryPath,port:named,timeoutMs:30000})).record.port,named);
+  assert.equal(fs.readFileSync(path.join(instanceRoot,'port'),'utf8'),named+'\n');
 });
 
 test('the runtime is started with the owner environment, without the variables an editor injects into its own processes', async t => {

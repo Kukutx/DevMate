@@ -1,6 +1,8 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { instanceDirectory } from './client.mjs';
 import { EXTENSION_ORIGIN } from './chrome.mjs';
 import { VERSION } from './version.mjs';
 
@@ -172,19 +174,38 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
   // The browser is gone: the runtime is told, and keeps running.
   if (linkId) await client.call('chrome.detach', { linkId }, { timeoutMs: 3000 }).catch(() => {});
   client.dispose?.();
+  // Nothing more is read. Where this program leaves by itself the browser still holds its end open, and an input that
+  // is listened to keeps a process alive: it stayed, served nobody, and the extension went on showing "connected".
+  input.removeAllListeners('data'); input.pause?.(); input.destroy?.();
 }
 
 /** The program itself: devmate chrome-host <origin> [--parent-window=<n>] [--instance <directory>], as a browser starts it. */
-export async function chromeHostMain(argv, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr } = {}) {
+export async function chromeHostMain(argv, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, program = process.argv[1] || fileURLToPath(import.meta.url) } = {}) {
   const origin = argv.find(word => word.startsWith('chrome-extension://')) || '';
   const at = argv.indexOf('--instance'), instanceRoot = at >= 0 ? argv[at + 1] : undefined;
   const { createHostClient } = createRequire(import.meta.url)('./host-client.cjs');
-  // Whether the file this program was started from is another now: written anew by an update, and the same at two
-  // looks in a row (an update writes for a while). One that is gone says nothing: the browser could start no other.
-  const own = fileURLToPath(import.meta.url), mark = () => { try { const stat = fs.statSync(own); return stat.mtimeMs + ':' + stat.size; } catch { return null; } };
+  // Whether the program a browser would start now is another than this one. Two ways an update goes: the file this
+  // one was started from is written anew (a global install, a checkout), or what the browser starts is made another
+  // file (an editor's extension is installed into a folder of its own for every version, and a start of the runtime
+  // writes down which program the browser starts from then on). Either has to be so at two looks in a row: an update
+  // writes for a while. A file that is merely gone, with nothing in its place, says nothing: the browser could start
+  // no other.
+  const same = (one, other) => { const [a, b] = [one, other].map(file => path.resolve(file)); return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b; };
+  const registered = path.join(instanceDirectory(instanceRoot), 'chrome', 'registration.json');
+  const mark = () => {
+    let started = null, elsewhere = '';
+    try { const stat = fs.statSync(program); started = stat.mtimeMs + ':' + stat.size; } catch { /* gone */ }
+    try { const now = JSON.parse(fs.readFileSync(registered, 'utf8')).cli; if (typeof now === 'string' && !same(now, program) && fs.statSync(now).isFile()) elsewhere = now; } catch { /* none registered, or not there */ }
+    return { started, elsewhere };
+  };
   const first = mark();
   let last = first;
-  const replaced = () => { const now = mark(), settled = now !== null && now !== first && now === last; last = now; return settled; };
+  const replaced = () => {
+    const now = mark(), other = (now.started !== null && now.started !== first.started) || now.elsewhere !== '';
+    const settled = other && now.started === last.started && now.elsewhere === last.elsewhere;
+    last = now;
+    return settled;
+  };
   try {
     // The Node that runs this program is the one a start uses.
     await serveChromeHost({ origin, input: stdin, output: stdout, replaced, client: createHostClient({ ...(instanceRoot ? { instanceRoot } : {}), nodePath: process.execPath }),

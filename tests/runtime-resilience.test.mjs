@@ -114,6 +114,10 @@ test('a runtime whose own folder was taken away under it says so to whoever asks
   // Put back (never so in life, but the word must follow the fact): nothing is said any more.
   fs.mkdirSync(path.dirname(program), { recursive: true }); fs.writeFileSync(program, '');
   assert.equal((await health()).filesGone, undefined); assert.equal(await doctor(), undefined);
+  // A file that cannot be asked about for another reason than not being there is not said to be gone.
+  const stat = fs.statSync;
+  fs.statSync = (file, ...rest) => { if (file === program) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return stat(file, ...rest); };
+  try { assert.equal((await health()).filesGone, undefined); } finally { fs.statSync = stat; }
 });
 
 test('two starters that both find a dead socket do not both become owner, and an abandoned claim is broken', async t => {

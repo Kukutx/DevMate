@@ -115,7 +115,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   // of an editor's extension does. What it starts from that folder later does not: the channel of a coding agent,
   // Claude Code's permission requests, the program a browser starts. Looked at whenever somebody asks how it is, and
   // said for as long as it is so, by every entry: it has to be started again.
-  const filesGone = () => !fs.existsSync(programFile);
+  // (Gone is what the system says is not there. A file that cannot be asked about for another reason, a drive that
+  // is away for a moment, is not said to have been removed by an update.)
+  const filesGone = () => { try { fs.statSync(programFile); return false; } catch (error) { return error.code === 'ENOENT' || error.code === 'ENOTDIR'; } };
   instanceRoot = path.resolve(instanceRoot);
   fs.mkdirSync(instanceRoot, { recursive: true, mode: 0o700 });
   // The mode applies only when the directory is created. One that already existed is made private too:

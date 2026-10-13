@@ -103,7 +103,18 @@ export async function startRuntime({
   // starting this instance. Join it; never start a second one beside it.
   let current = await status();
   while (current.processAlive && !current.running && Date.now() < deadline) { await pause(remaining()); current = await status(); }
-  if (current.running) return { ...current, started: false, attached: true };
+  // The port is the instance's, not that of the entry which happens to start it. The one a runtime of this instance
+  // ran on is written down beside its state, and a start that names no port takes it: clients on this computer and
+  // the route of a tunnel are set to that port, and a start from another entry (the browser, a plain `devmate
+  // start`, another editor) moved the runtime away from them. A port that is named wins and is the one remembered
+  // from then on. One that is taken by another program meanwhile is said to be taken, as ever; none is picked.
+  const portFile = path.join(files.directory, 'port');
+  const remember = ran => {
+    if (!Number.isInteger(ran)) return;
+    try { if (fs.readFileSync(portFile, 'utf8').trim() === String(ran)) return; } catch { /* not written yet */ }
+    try { fs.writeFileSync(portFile, ran + '\n', { mode: 0o600 }); } catch { /* the next start writes it */ }
+  };
+  if (current.running) { remember(current.record?.port); return { ...current, started: false, attached: true }; }
   if (current.processAlive) {
     const error = new Error('A DevMate runtime process' + (current.owner ? ' (' + current.owner.pid + ')' : '') + ' holds this instance but is not ready (' + current.state + '). See ' + files.log + '. ' + endIt(current));
     error.code = 'RUNTIME_ALREADY_RUNNING';
@@ -111,11 +122,9 @@ export async function startRuntime({
   }
   if (!path.isAbsolute(nodePath) || !fs.statSync(nodePath, { throwIfNoEntry: false })?.isFile()) throw new Error('An existing absolute Node executable is required');
   if (!path.isAbsolute(entryPath) || !fs.statSync(entryPath, { throwIfNoEntry: false })?.isFile()) throw new Error('DevMate runtime entry is missing');
-  // Where no port is named, a runtime that ended unexpectedly is followed on the port it ran on (its record is still
-  // there): what was set to that port, a client on this computer and the route of a tunnel, reaches the next one too.
-  let left;
-  if (port === undefined && current.crashed) { try { left = readRuntimeRecord(files.directory)?.port; } catch {} }
-  const selectedPort = runtimePort(Number.isInteger(left) && left >= 1 && left <= 65535 ? left : port);
+  let kept;
+  if (port === undefined) { try { kept = Number(fs.readFileSync(portFile, 'utf8').trim()); } catch { /* none ran yet: the usual one */ } }
+  const selectedPort = runtimePort(Number.isInteger(kept) && kept >= 1 && kept <= 65535 ? kept : port);
   fs.mkdirSync(files.directory, { recursive: true, mode: 0o700 });
   if ((fs.statSync(files.log, { throwIfNoEntry: false })?.size || 0) > LOG_ROTATE_BYTES) fs.renameSync(files.log, files.log + '.1');
   const logStart = fs.statSync(files.log, { throwIfNoEntry: false })?.size || 0;
@@ -141,6 +150,7 @@ export async function startRuntime({
       if (launchError) throw launchError;
       current = await status();
       if (current.running) {
+        remember(current.record.port);
         if (current.record.pid === child.pid) { child.unref(); return { ...current, started: true, attached: false }; }
         // Another starter's runtime won. This one's own process normally left by itself when the lock refused it. One
         // that is still on its way must not stay behind: it would take the instance over the moment the winner is

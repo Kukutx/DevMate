@@ -248,6 +248,17 @@ test('a runtime that holds its instance and does not answer for a moment is busy
   client.status=answers;
   await window.entry.refresh();
   assert.equal(window.statusBars[0].text,'$(plug) DevMate');assert.equal(client.calls.filter(([name])=>name==='window.attach').length,attached);
+  // A runtime that answers that it is stopping, or is still starting, is not busy: it says what it does, and the
+  // window does not go on offering what is on its way out.
+  for(const going of ['stopping','starting']){
+    client.status=async()=>({state:going,running:false,processAlive:true,owner:{pid:1}});
+    await window.entry.refresh();
+    assert.equal(window.entry.attachment,null,going);assert.equal(window.statusBars[0].text,'$(circle-slash) DevMate',going);
+    assert.match(window.statusBars[0].tooltip,new RegExp('^DevMate runtime: '+going),going);
+    client.status=answers;
+    await window.entry.refresh();
+    assert.notEqual(window.entry.attachment,null,going);
+  }
   // The folder the runtime was started from is gone under it (an update removed it): said for as long as it is so.
   client.status=async()=>({...await answers(),health:{filesGone:true}});
   await window.entry.refresh();

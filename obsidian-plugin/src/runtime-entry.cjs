@@ -30,7 +30,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   // Attach by itself while the setting allows it; an explicit Detach holds until the next explicit Attach.
   let wanted = plugin.settings?.autoAttach !== false, startConsidered = false;
   const recoveries = [];
-  let runtime = { state: 'stopped', running: false }, vault = 'detached', vaultAccess = null, lastError = null, windowBound = false, boundProject = null, publishedContext = '';
+  let runtime = { state: 'stopped', running: false }, vault = 'detached', vaultAccess = null, lastError = null, windowBound = false, boundProject = null, publishedContext = '', busy = false;
   // Projects are stored under their real path. Only the vault's own path is resolved here: another project whose
   // folder has been deleted or is on an unplugged drive must not keep this vault from attaching.
   const key=value=>process.platform==='win32'?value.toLowerCase():value;
@@ -68,7 +68,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
       detached: wanted ? (lastError ? 'vault could not be attached' : 'vault attaching…') : 'vault detached' })[vault] +
       // The folder the running runtime was started from is gone (an update removed it): agents and the browser fail
       // until it is started again. Or this plugin ships a newer runtime than the one that is running.
-      (runtime.health?.filesGone ? ' · its files were removed by an update, restart the runtime' : runtime.outdated ? ' · restart the runtime to update' : '');
+      (busy ? ' · busy, it does not answer at the moment' : runtime.health?.filesGone ? ' · its files were removed by an update, restart the runtime' : runtime.outdated ? ' · restart the runtime to update' : '');
   }
   function render() {
     statusItem?.setText?.(statusText());
@@ -259,7 +259,9 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     const observed = await client.status();
     // A runtime that holds its instance and did not answer within a moment is busy, not gone: the vault stays attached
     // until it answers again or its process is gone. Taken for stopped, the vault was let go for the length of one look.
-    if (!observed.running && observed.processAlive === true && runtime.running === true) return status();
+    // (One that answers that it is stopping, or is still starting, is not busy: it says what it does.)
+    busy = !observed.running && observed.processAlive === true && observed.state === 'unavailable' && runtime.running === true;
+    if (busy) return status();
     runtime = observed;
     if (runtime.running) startConsidered = true;
     else if (await startsItself(runtime)) runtime = await client.status();

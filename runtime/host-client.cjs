@@ -40,14 +40,12 @@ function createHostClient(options = {}) {
   const client = () => clientPromise ||= factory().then(create => create());
   const version = () => versionPromise ||= import('./version.mjs');
   // The port a start from this entry asks for. One the owner set in this entry, other than the usual one, is their
-  // word. Otherwise the port the runtime ran on when this entry stopped it is taken again: the runtime may have been
-  // started elsewhere (a terminal, another entry) on a port this entry's settings do not name, and a restart from
-  // here moved it, away from the clients on this computer and the route of a tunnel that were set to it. Where
-  // nothing is remembered the launcher decides (the port of a runtime that ended unexpectedly, else the usual one).
-  let ran;
+  // word. Otherwise none is named, and the launcher takes the port the instance ran on last: the runtime may have
+  // been started elsewhere (a terminal, another entry) on a port this entry's settings do not name, and a start or
+  // a restart from here moved it, away from the clients on this computer and the route of a tunnel set to it.
   const startPort = async () => {
     const usual = (await import('./client.mjs')).DEFAULT_RUNTIME_PORT;
-    return options.port !== undefined && Number(options.port) !== usual ? options.port : ran;
+    return options.port !== undefined && Number(options.port) !== usual ? options.port : undefined;
   };
   return {
     async start() {
@@ -68,8 +66,6 @@ function createHostClient(options = {}) {
     },
     async stop() {
       const launcher = await import('./launcher.mjs');
-      const before = await launcher.runtimeStatus({ ...options, clientFactory: await factory() }).catch(() => null);
-      if (before?.running && Number.isInteger(before.record?.port)) ran = before.record.port;
       return launcher.stopRuntime({ ...options, clientFactory: await factory() });
     },
     async status() {

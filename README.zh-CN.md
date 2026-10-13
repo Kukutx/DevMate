@@ -320,7 +320,7 @@ devmate connect beside --openai-tunnel none
 | 产品 | 自定义 MCP 连接器 |
 | --- | --- |
 | ChatGPT Business、Enterprise、Edu | 可读可写，在网页版的开发者模式里（测试阶段）。由管理员或所有者打开开发者模式 |
-| ChatGPT Pro | 只读，在开发者模式里。DevMate 把读取类工具标记为只读（文件、搜索、Git、诊断、`operations_query`、`capability_query`）；编辑、运行命令和委派需要允许写入的套餐。没有用 Pro 账号试过 |
+| ChatGPT Pro | 按 OpenAI 的文档（2026 年 10 月读到的）是只读，在开发者模式里。DevMate 把读取类工具标记为只读（文件、搜索、Git、诊断、`operations_query`、`capability_query`）；编辑、运行命令和委派按文档需要允许写入的套餐。我们没有验证过 Pro 账号发出的写操作是否真的被执行：2026 年 10 月在一个 Pro 账号里，插件的授权设置给出了“允许全部工具”的选项，这只说明界面上有这个选择 |
 | ChatGPT Plus、Go、Free | OpenAI 关于自定义 MCP 连接器的文档里没有提到 |
 | Claude（claude.ai、桌面端、移动端） | 可以按地址添加自定义连接器；一次工具调用最长 240 秒，结果约 150,000 个字符 |
 | Claude Code、Codex 等本机客户端 | 没有这类套餐限制：它们在本机连接 |

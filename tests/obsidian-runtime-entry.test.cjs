@@ -202,7 +202,16 @@ test('a stopped runtime is shown, its listener is given up, and a start attaches
   f.client.status = async () => ({ running: false, state: 'unavailable', processAlive: true });
   await f.entry.sync();
   assert.deepEqual([f.entry.status().vault, f.entry.status().running, f.state.bridges.at(-1).disposed, f.state.bridges.length], ['attached', true, false, listeners]);
+  assert.equal(f.state.statusText, 'DevMate: vault attached · busy, it does not answer at the moment');
   f.client.status = answers;
+  await f.entry.sync();
+  assert.equal(f.state.statusText, 'DevMate: vault attached · restart the runtime to update');
+  // A runtime that says it is stopping is not busy: it is on its way out, and the vault is let go as before.
+  f.client.status = async () => ({ running: false, state: 'stopping', processAlive: true });
+  await f.entry.sync();
+  assert.deepEqual([f.entry.status().vault, f.entry.status().running], ['detached', false]);
+  f.client.status = answers;
+  await f.entry.sync();
   // The folder it was started from is gone under it: said until it is started again, before anything else.
   f.state.filesGone = true;
   await f.entry.sync();
