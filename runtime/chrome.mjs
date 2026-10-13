@@ -137,7 +137,8 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   // A look that is made after whatever arrived meanwhile was read: a runtime that was busy for a moment does not take
   // a host that was waiting all along for gone.
   const later = (ms, look) => { const timer = setTimeout(() => setImmediate(look), ms); timer.unref?.(); return timer; };
-  const elsewhere = (link, method) => [...links.values()].filter(other => other !== link && !other.lost && other.heard && other.methods.has(method)).sort((a, b) => b.order - a.order)[0] || null;
+  // (One the owner has not paused comes first here as everywhere: a paused browser refuses whatever it is handed.)
+  const elsewhere = (link, method) => { const others = [...links.values()].filter(other => other !== link && !other.lost && other.heard && other.methods.has(method)).sort((a, b) => b.order - a.order); return others.find(other => !other.paused) || others[0] || null; };
   // What waits on a link and can still go to another browser: a look that names nothing of the browser it was asked
   // of, whether it was handed on already or not (a read asked for twice is still a read). A change stays with the
   // browser it was meant for, and so does whatever names a tab, a window, a bookmark or an element by its id: the
@@ -167,7 +168,17 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     unasked(link);
     clearTimeout(link.unheardTimer);
     link.unheardTimer = later(unheardMs, () => { if (links.get(link.id) === link && !link.waiter && link.handed.size) lose(link); });
-    waiter({ calls: items.map(({ id, method, params }) => ({ id, method, params })) });
+    waiter({ calls: items.map(({ id, method, params }) => ({ id, method, params })), ...told(link) });
+  }
+  // Something about who is used has changed (a browser came or went, was paused, was chosen): every host that waits
+  // for work is answered now, with nothing to do and with how it stands, so that its panel says it within the moment.
+  function wake(except = null) {
+    for (const link of links.values()) {
+      if (link === except || !link.waiter) continue;
+      const waiter = link.waiter;
+      link.waiter = null; clearTimeout(link.timer); unasked(link);
+      waiter({ calls: [], ...told(link) });
+    }
   }
   // stopping: the runtime itself is ending, and takes every browser's calls with it.
   const drop = (link, why, { stopping = false } = {}) => {
@@ -199,6 +210,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
         : fault('browser_unavailable', 'The browser was closed or disconnected before it answered (' + why + ').' + unknown + ' ' + advice(entry)));
     }
     link.pending.clear(); link.handed.clear();
+    if (!stopping) wake();
   };
   const gone = link => !link.waiter && now() - link.unaskedSince > link.grace;
   const sweep = () => { for (const link of [...links.values()]) if (gone(link)) drop(link, 'it stopped asking for work'); };
@@ -217,18 +229,37 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     };
     link.idleTimer = later(grace + 1, look);
   }
-  // The browser a call goes to: the one that connected last. One that was lost sight of, or has connected and not yet
-  // asked for work once, is passed over while another is there.
-  const current = () => { sweep(); const live = [...links.values()].sort((a, b) => b.order - a.order); return live.find(link => !link.lost && link.heard) || live.find(link => !link.lost) || live[0] || null; };
+  // The browser a call goes to: the one that connected last, or the one the owner chose in its panel since ("use this
+  // browser" puts it first). One that was lost sight of, or has connected and not yet asked for work once, is passed
+  // over while another is there; and so is one its owner has paused, which refuses whatever it is handed. Where every
+  // browser is paused the first of them is asked all the same, and says that it is paused.
+  const pick = () => { const live = [...links.values()].sort((a, b) => b.order - a.order), ready = live.filter(link => !link.lost && link.heard); return ready.find(link => !link.paused) || ready[0] || live.find(link => !link.lost) || live[0] || null; };
+  const current = () => { sweep(); return pick(); };
+  // What a host is told of its own link with every answer: whether this browser is the one that is used, and how many
+  // are connected. Its panel says so only where there is more than one.
+  const told = link => ({ current: pick() === link, browsers: links.size });
   const owned = linkId => { const link = links.get(linkId); if (!link) throw fault('not_found', 'This browser link is no longer known to the runtime; attach again.'); return link; };
 
-  function attach({ browser = '', extension = '', methods = [] } = {}) {
+  function attach({ browser = '', extension = '', methods = [], paused = false } = {}) {
     sweep();
-    const link = { id: 'browser-' + randomUUID(), browser: String(browser).slice(0, 100), extension: String(extension).slice(0, 40), methods: new Set(methods),
+    const link = { id: 'browser-' + randomUUID(), browser: String(browser).slice(0, 100), extension: String(extension).slice(0, 40), methods: new Set(methods), paused: paused === true,
       attachedAt: now(), order: ++connected, unaskedSince: now(), grace: idleMs, lost: false, heard: false, queue: [], handed: new Map(), pending: new Map(), waiter: null, timer: null, idleTimer: null, unheardTimer: null };
     links.set(link.id, link);
     unasked(link);
     return { linkId: link.id };
+  }
+  /** The owner paused this browser in its panel, or lets DevMate use it again. Said by the browser's own host. */
+  function state({ linkId, paused } = {}) {
+    const link = owned(linkId);
+    if (link.paused !== (paused === true)) { link.paused = paused === true; wake(link); }
+    return told(link);
+  }
+  /** "Use this browser": the owner's choice in its panel. It is put first; a paused one stays paused, and says so. */
+  function prefer({ linkId } = {}) {
+    const link = owned(linkId);
+    link.order = ++connected;
+    wake(link);
+    return told(link);
   }
   /**
    * What the browser should do next: at once when something waits, otherwise when something arrives or after waitMs.
@@ -237,16 +268,22 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   function next({ linkId, waitMs = 25000 } = {}, { signal } = {}) {
     const link = owned(linkId);
     // One reader at a time: an earlier one that is still waiting is answered with nothing.
-    if (link.waiter) { clearTimeout(link.timer); link.waiter({ calls: [] }); link.waiter = null; }
+    if (link.waiter) { clearTimeout(link.timer); link.waiter({ calls: [], ...told(link) }); link.waiter = null; }
     // It asks again: what it was handed has arrived, and it is the browser it was.
+    const first = !link.heard;
     clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.handed.clear(); link.lost = false; link.heard = true;
+    // The first time it asks, it becomes a browser that can be used, which changes who is used: the others are told.
+    if (first) wake(link);
     return new Promise(resolve => {
       link.waiter = resolve;
-      const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); unasked(link, lost ? Math.min(idleMs, unheardMs) : idleMs); resolve({ calls: [] }); if (lost) lose(link); };
+      const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); unasked(link, lost ? Math.min(idleMs, unheardMs) : idleMs); resolve({ calls: [], ...told(link) }); if (lost) lose(link); };
       link.timer = setTimeout(() => left(false), Math.max(0, waitMs));
       link.timer.unref?.();
       if (signal?.aborted) left(true); else signal?.addEventListener('abort', () => left(true), { once: true });
       hand(link);
+      // And so is this one, at once where nothing waits for it: its panel says how it stands from its first moment
+      // (it asks again right away).
+      if (first) left(false);
     });
   }
   function result({ linkId, id, ok, result: value, error } = {}) {
@@ -265,7 +302,11 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   }
   function status() {
     const link = current();
-    return link ? { connected: true, browser: link.browser, extension: link.extension, methods: link.methods.size, connectedAt: new Date(link.attachedAt).toISOString(), browsers: links.size }
+    // connections: every browser that is connected, the one that is used first; said where there is more than one.
+    const each = [...links.values()].sort((a, b) => (b === link) - (a === link) || b.order - a.order)
+      .map(one => ({ browser: one.browser, extension: one.extension, connectedAt: new Date(one.attachedAt).toISOString(), ...(one === link ? { current: true } : {}), ...(one.paused ? { paused: true } : {}) }));
+    return link ? { connected: true, browser: link.browser, extension: link.extension, methods: link.methods.size, connectedAt: new Date(link.attachedAt).toISOString(), browsers: links.size,
+      ...(link.paused ? { paused: true } : {}), ...(each.length > 1 ? { connections: each } : {}) }
       : { connected: false };
   }
 
@@ -330,5 +371,5 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       capabilities: BROWSER_CAPABILITIES.filter(item => !link || link.methods.has(item.method)).map(item => view(item, full)) };
   }
   function close() { for (const link of [...links.values()]) drop(link, 'the runtime is stopping', { stopping: true }); }
-  return { attach, next, result, detach, status, call, list, close };
+  return { attach, next, result, detach, state, prefer, status, call, list, close };
 }

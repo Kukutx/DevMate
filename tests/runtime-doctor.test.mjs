@@ -332,6 +332,32 @@ test('what the command line writes for the owner to read holds no character a te
   assert.ok(logs.text.includes('a line a program wrote \\u001b[31mred\\u001b[0m'));
 });
 
+test('the doctor says which of several browsers is used, names the others as names, and says when the one in use is paused', async t => {
+  const { service: runtime } = await service(t, {});
+  const chrome = async () => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'chrome');
+  const methods = ['tabs.list'];
+  const first = runtime.browser.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId;
+  await runtime.browser.next({ linkId: first, waitMs: 1000 });
+  // One browser: as it was.
+  assert.deepEqual([(await chrome()).status, (await chrome()).detail], ['ok', 'The DevMate extension 4.0.6 in Google Chrome is connected: its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).']);
+  // A second one, whose extension says of itself what it likes: named in quotes, on the one line, cut short.
+  const second = runtime.browser.attach({ browser: 'Edge"\n[ ok ] forged: line ' + 'x'.repeat(60), extension: '4.0.6', methods }).linkId;
+  await runtime.browser.next({ linkId: second, waitMs: 1000 });
+  runtime.browser.prefer({ linkId: first });
+  let check = await chrome();
+  const other = '"' + ('Edge\' [ ok ] forged: line ' + 'x'.repeat(60)).slice(0, 40) + '"';
+  assert.equal(check.status, 'ok');
+  assert.ok(check.detail.endsWith(' 2 browsers are connected and this is the one that is used; also connected: ' + other + '. To use another, open the DevMate panel in it and choose "Use this browser".'), check.detail);
+  assert.equal(/[\r\n]/.test(check.detail), false);
+  // The one in use is paused by its owner, and so is the other: said as a warning, with what ends it.
+  runtime.browser.state({ linkId: second, paused: true });
+  assert.ok((await chrome()).detail.includes('also connected: ' + other + ' (paused).'));
+  runtime.browser.state({ linkId: first, paused: true });
+  check = await chrome();
+  assert.equal(check.status, 'warn');
+  assert.match(check.detail, /^The DevMate extension 4\.0\.6 in Google Chrome is connected, and paused there: every request is refused until you let DevMate use that browser again in the extension's panel\./);
+});
+
 test('the doctor says when the shell is there and runs nothing', async t => {
   const { service: runtime } = await service(t, {});
   const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);

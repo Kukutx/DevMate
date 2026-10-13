@@ -30,9 +30,11 @@
   code { font: 12px ui-monospace, Consolas, monospace; background: var(--soft); padding: 1px 5px; border-radius: 4px; user-select: all; }
 
   /* A debugger on a tab is the owner's to see and to take off, here as on the bar the browser shows. */
-  #debugging { display: flex; align-items: center; gap: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; font-size: 12px; }
-  #debugging span { flex: 1; }
-  #debugging button { flex: none; padding: 4px 8px; }
+  #debugging, #link { display: flex; align-items: center; gap: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; font-size: 12px; }
+  #debugging span, #link span { flex: 1; }
+  #debugging button, #link button { flex: none; padding: 4px 8px; }
+  /* Where several browsers are connected: which one DevMate uses, and the owner's way to make it this one. */
+  #link { border-color: var(--line); }
 
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
   .actions .wide { grid-column: 1 / -1; }
@@ -76,6 +78,11 @@
   <div id="debugging" hidden>
     <span id="debuggingText"></span>
     <button id="debugStop" class="action" type="button"></button>
+  </div>
+
+  <div id="link" hidden>
+    <span id="linkText"></span>
+    <button id="prefer" class="action" type="button" hidden></button>
   </div>
 
   <div class="actions">

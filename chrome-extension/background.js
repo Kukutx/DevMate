@@ -19,7 +19,7 @@ function show(state) {
   const problem = state.host === 'missing' || (state.host === 'closed' && state.attempts > 2);
   const text = problem ? '!' : state.paused ? 'II' : state.pending > 0 ? String(Math.min(state.pending, 99)) : '';
   chrome.action.setBadgeText({ text }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ color: problem ? '#b3261e' : state.paused ? '#7a7a7a' : '#1f6feb' }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: problem ? '#b3261e' : state.paused ? '#7a7a7a' : '#18181b' }).catch(() => {});
   chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {});
 }
 
@@ -34,7 +34,7 @@ const bridge = createBridge({
   // Chrome reports why a connection ended in runtime.lastError, readable only inside the disconnect listener.
   connect: name => {
     const port = chrome.runtime.connectNative(name);
-    return { postMessage: message => port.postMessage(message), onMessage: port.onMessage,
+    return { postMessage: message => port.postMessage(message), disconnect: () => port.disconnect(), onMessage: port.onMessage,
       onDisconnect: { addListener: listener => port.onDisconnect.addListener(() => listener(chrome.runtime.lastError?.message || '')) } };
   },
   methods, version, browser, settings, onChange: show
@@ -53,7 +53,8 @@ chrome.runtime.onInstalled.addListener(() => { void open(); void renewal.loaded(
 chrome.alarms.create('devmate-connection', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== 'devmate-connection') return;
-  void tidy.then(() => { if (!bridge.connected()) bridge.again(); });
+  // Not connected: try again. Connected: see that the host still answers (bridge.look).
+  void tidy.then(() => { if (!bridge.connected()) bridge.again(); else void bridge.look(); });
   void renewal.look();
 });
 void open();
@@ -75,7 +76,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return true;
   }
   if (message.ask === 'request') {
-    bridge.request(message.action).then(result => respond({ ok: true, result }), error => respond({ ok: false, error: { code: error.code || 'failed', message: error.message } }));
+    (message.action === 'prefer' ? bridge.prefer() : bridge.request(message.action)).then(result => respond({ ok: true, result }), error => respond({ ok: false, error: { code: error.code || 'failed', message: error.message } }));
     return true;
   }
   return false;

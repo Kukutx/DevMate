@@ -173,7 +173,12 @@ export async function doctor(service) {
   // the system is asked about the registration only where this instance has written one.
   const browser = service.browser.status();
   const registration = browser.connected ? null : await (service.browserHost || createChromeRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) })).status({ ask: false }).catch(() => null);
-  if (browser.connected) check('chrome', 'ok', 'The DevMate extension' + (browser.extension ? ' ' + browser.extension : '') + ' in ' + (browser.browser || 'the browser') + ' is connected: its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).');
+  // Several browsers: one is used, and which one is the owner's to say in the panel of the browser they mean. A
+  // browser's name is what its extension said of itself, so it stands here as a name (in quotes, cut short).
+  const others = (browser.connections || []).slice(1).map(one => named(one.browser || 'a browser', 40) + (one.paused ? ' (paused)' : '')).join(', ');
+  if (browser.connected) check('chrome', browser.paused ? 'warn' : 'ok', 'The DevMate extension' + (browser.extension ? ' ' + browser.extension : '') + ' in ' + (browser.browser || 'the browser') + ' is connected' +
+    (browser.paused ? ', and paused there: every request is refused until you let DevMate use that browser again in the extension\'s panel.' : ': its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).') +
+    (others ? ' ' + browser.connections.length + ' browsers are connected and this is the one that is used; also connected: ' + others + '. To use another, open the DevMate panel in it and choose "Use this browser".' : ''));
   else if (registration?.stale) check('chrome', 'warn', 'The browser was registered with a Node or a copy of DevMate that is no longer there, so the DevMate extension cannot reach this runtime.', 'Register it again: devmate chrome install');
   else if (registration?.registered) check('chrome', 'info', 'DevMate is registered with ' + registration.browsers.join(', ') + '; no browser with the DevMate extension is connected right now.', 'Open the browser. If the extension is not in it yet, devmate chrome says where to load it from.');
   else if (registration?.supported) check('chrome', 'info', 'The browser is not connected to DevMate: its bookmarks, tabs, history and downloads are not available to your client.', 'Connect it: devmate chrome install');

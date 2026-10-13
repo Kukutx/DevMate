@@ -94,3 +94,43 @@ test('a line of the activity says the time, what it was, whether it changed some
   assert.equal(failed.mark, 'failed · not_found');
   assert.equal(activityLine({ at, method: 'tabs.open', read: false, ok: false, code: 'paused' }, 'zh').mark, '已拒绝');
 });
+
+test('with several browsers connected the panel says which one DevMate uses and offers to make it this one; with one it says nothing', () => {
+  for (const language of LANGUAGES) {
+    assert.equal(describe(state({}), language).link, null);
+    assert.equal(describe(state({ link: { current: true, browsers: 1 } }), language).link, null);
+    const used = describe(state({ link: { current: true, browsers: 2 } }), language).link, other = describe(state({ link: { current: false, browsers: 3 } }), language).link;
+    assert.ok(used.text.includes('2') && other.text.includes('3') && used.text !== other.text.replace('3', '2'), language);
+    assert.equal(used.canPrefer, false, 'the one in use is not offered itself');
+    assert.equal(other.canPrefer, true);
+    // Being chosen lifts no pause, so a paused browser is not offered it; and nothing is said of a runtime that is
+    // not there to use any browser.
+    assert.equal(describe(state({ paused: true, link: { current: false, browsers: 2 } }), language).link.canPrefer, false);
+    assert.equal(describe(state({ runtime: { running: false }, link: { current: false, browsers: 2 } }), language).link, null);
+    assert.equal(describe(state({ host: 'closed', link: { current: false, browsers: 2 } }), language).link, null);
+  }
+});
+
+test('a start with the browser that did not work shows what DevMate said, as DevMate\'s words and not the browser\'s', () => {
+  const view = describe(state({ runtime: { running: false }, startSaid: 'Port 8788 is in use by another program.' }), 'en');
+  assert.equal(view.said, 'Port 8788 is in use by another program.');
+  assert.equal(view.saidBy, 'devmate');
+  assert.equal(view.level, 'bad');
+  assert.equal(view.primary, 'start');
+  const plain = describe(state({ runtime: { running: false } }), 'en');
+  assert.equal(plain.said, null);
+  assert.equal(plain.level, 'wait');
+  assert.equal(describe(state({ host: 'closed', said: 'Native host has exited.', attempts: 1 }), 'en').saidBy, 'browser');
+});
+
+test('a DevMate that runs from files that are gone is said to be that, with the command that restarts it, before anything else about it', () => {
+  for (const language of LANGUAGES) {
+    const view = describe(state({ runtime: { running: true, version: '4.0.6', filesGone: true }, paused: true, pending: 3 }), language);
+    assert.equal(view.level, 'bad');
+    assert.ok(view.status.includes('4.0.6') && view.text.includes('{restart}'), language);
+    assert.notEqual(view.status, describe(state({ paused: true }), language).status, 'it is not hidden behind the pause');
+  }
+  // Only the runtime's own word counts, and an older runtime is still said to be older first.
+  assert.equal(describe(state({ runtime: { running: true, filesGone: 'yes' } }), 'en').level, 'good');
+  assert.match(describe(state({ runtime: { running: true, version: '4.0.5', outdated: true, filesGone: true } }), 'en').status, /older than this extension/);
+});

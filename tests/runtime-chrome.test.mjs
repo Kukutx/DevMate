@@ -68,7 +68,7 @@ test('a browser link hands a call to the browser that asks for work and brings i
   assert.deepEqual((await picture).content[0], { type: 'image', data: 'aGk=', mimeType: 'image/png' });
   // A browser that does not answer is said to be that; one that stopped asking for work is no longer there.
   await assert.rejects(link.call({ capability: 'chrome.tabs.list' }), { code: 'browser_timeout', notStarted: true });
-  assert.deepEqual(await link.next({ linkId, waitMs: 10 }), { calls: [] });
+  assert.deepEqual((await link.next({ linkId, waitMs: 10 })).calls, []);
   clock += 60000;
   assert.deepEqual(link.status(), { connected: false });
   await assert.rejects(async () => link.next({ linkId }), { code: 'not_found' });
@@ -119,7 +119,7 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   const alone = createBrowserLink({ idleMs: 300, callTimeoutMs: 10000 });
   const only = alone.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId, leaving = new AbortController();
   const asking = alone.next({ linkId: only, waitMs: 5000 }, { signal: leaving.signal });
-  leaving.abort(); assert.deepEqual(await asking, { calls: [] });
+  leaving.abort(); assert.deepEqual((await asking).calls, []);
   const refused = await quickly(alone.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), 'the refusal');
   assert.deepEqual([refused.code, refused.notStarted], ['browser_unavailable', true]); assert.match(refused.message, /closed or disconnected before it was asked \(it stopped asking for work\)/);
   assert.deepEqual(alone.status(), { connected: false });
@@ -145,7 +145,7 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   void (async () => { for (;;) { let work; try { work = await taker.next({ linkId: there, waitMs: 300 }); } catch { return; }
     for (const call of work.calls) { asked.push(call.method); taker.result({ linkId: there, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
   const ended = taker.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
-  assert.deepEqual(await taker.next({ linkId: ended, waitMs: 10 }), { calls: [] });
+  assert.deepEqual((await taker.next({ linkId: ended, waitMs: 10 })).calls, []);
   const read = taker.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), change = taker.call({ capability: 'chrome.tabs.close', input: { tabIds: [7] } });
   assert.deepEqual((await taker.next({ linkId: ended, waitMs: 1000 })).calls.map(call => call.method), ['tabs.list', 'tabs.close']);
   assert.deepEqual(await quickly(read, 'the read a host took with it'), { by: 'the browser that is there' });
@@ -160,7 +160,7 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
   void (async () => { for (;;) { let work; try { work = await pair.next({ linkId: other, waitMs: 300 }); } catch { return; }
     for (const call of work.calls) { askedOfOther.push(call.method); pair.result({ linkId: other, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
   const going = pair.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
-  assert.deepEqual(await pair.next({ linkId: going, waitMs: 10 }), { calls: [] });
+  assert.deepEqual((await pair.next({ linkId: going, waitMs: 10 })).calls, []);
   const look = pair.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), gone = pair.call({ capability: 'chrome.tabs.close', input: { tabIds: [7] } });
   assert.deepEqual((await pair.next({ linkId: going, waitMs: 1000 })).calls.map(call => call.method), ['tabs.list', 'tabs.close']);
   void pair.next({ linkId: going, waitMs: 5000 });
@@ -184,7 +184,7 @@ test('a call that names something of one browser is not passed on to another, an
     for (const call of work.calls) { asked.push(call.method); link.result({ linkId: stays, id: call.id, ok: true, result: { by: 'the browser that stays' } }); } } })();
   // The one that connected after it asked for work once and is not heard of again: what is asked now waits for it.
   const goes = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods: [...methods, 'history.search'] }).linkId;
-  assert.deepEqual(await link.next({ linkId: goes, waitMs: 10 }), { calls: [] });
+  assert.deepEqual((await link.next({ linkId: goes, waitMs: 10 })).calls, []);
   const calls = {
     list: link.call({ capability: 'chrome.tabs.list', input: { query: 'docs' } }, { readOnly: true }),
     history: link.call({ capability: 'chrome.history.search', input: { query: 'docs' } }, { readOnly: true }),
@@ -232,7 +232,7 @@ test('a call that names something of one browser is not passed on to another, an
   link.close();
   const ending = createBrowserLink({ idleMs: 5000, unheardMs: 5000, callTimeoutMs: 10000 });
   const first = ending.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
-  assert.deepEqual(await ending.next({ linkId: first, waitMs: 10 }), { calls: [] });
+  assert.deepEqual((await ending.next({ linkId: first, waitMs: 10 })).calls, []);
   ending.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods });
   const waits = ending.call({ capability: 'chrome.tabs.close', input: { tabIds: [57] } }).then(value => value, failure => failure);
   ending.close();
@@ -481,6 +481,117 @@ test('the browser host says which local port the runtime answers on, and says so
   client.status = async () => ({ running: false });
   await until(() => heard.some(message => message.name === 'runtime.status' && message.data.running === false), 'the news that it stopped');
   assert.equal(heard.filter(message => message.name === 'runtime.status').at(-1).data.port, undefined);
+  input.end(); await served;
+});
+
+test('where several browsers are connected the owner says which one is used: a paused one is passed over, and one chosen in its panel is used', async () => {
+  // Every call went to the browser that connected last. One the owner had paused refused them all while another
+  // stood idle, and nothing said which of two browsers was the one in use, nor let the owner choose.
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list'];
+  // (Told in the moment, not when its wait for work is over: a host waits for twenty-five seconds.)
+  const soon = answer => Promise.race([answer, new Promise((resolve, reject) => setTimeout(() => reject(new Error('the host that waited was not told')), 1000))]);
+  const a = link.attach({ browser: 'Chrome A', extension: '4.0.6', methods }).linkId;
+  // A browser is told how it stands with its first answer, at once: here the only one, and the one that is used.
+  assert.deepEqual(await link.next({ linkId: a, waitMs: 5000 }), { calls: [], current: true, browsers: 1 });
+  // A second one connects. From its first question on it is the one that is used, and the first, which was
+  // waiting for work, is told so in that moment.
+  let waiting = link.next({ linkId: a, waitMs: 5000 });
+  const b = link.attach({ browser: 'Chrome B', extension: '4.0.6', methods }).linkId;
+  assert.deepEqual(await link.next({ linkId: b, waitMs: 5000 }), { calls: [], current: true, browsers: 2 });
+  assert.deepEqual(await soon(waiting), { calls: [], current: false, browsers: 2 });
+  assert.deepEqual(link.status().connections.map(one => [one.browser, one.current, one.paused]), [['Chrome B', true, undefined], ['Chrome A', undefined, undefined]]);
+  // Which of the two a call is handed to.
+  const goes = async () => {
+    const asked = link.call({ capability: 'chrome.tabs.list' }, { readOnly: true });
+    const answers = await Promise.all([link.next({ linkId: a, waitMs: 60 }), link.next({ linkId: b, waitMs: 60 })]), at = answers.findIndex(answer => answer.calls.length);
+    link.result({ linkId: [a, b][at], id: answers[at].calls[0].id, ok: true, result: { items: [] } });
+    await asked;
+    return 'AB'[at];
+  };
+  assert.equal(await goes(), 'B');
+  // The owner pauses B in its panel: A is used, and is told so while it waits.
+  waiting = link.next({ linkId: a, waitMs: 5000 });
+  assert.deepEqual(link.state({ linkId: b, paused: true }), { current: false, browsers: 2 });
+  assert.deepEqual(await soon(waiting), { calls: [], current: true, browsers: 2 });
+  assert.equal(await goes(), 'A');
+  assert.deepEqual(link.status().connections.map(one => [one.browser, one.current, one.paused]), [['Chrome A', true, undefined], ['Chrome B', undefined, true]]);
+  // B may be used again: it is, being the one that connected last.
+  link.state({ linkId: b, paused: false });
+  assert.equal(await goes(), 'B');
+  // "Use this browser" in the panel of A: A is used from now on, though B connected after it.
+  assert.deepEqual(link.prefer({ linkId: a }), { current: true, browsers: 2 });
+  assert.equal(await goes(), 'A'); assert.equal(link.status().browser, 'Chrome A');
+  // Choosing a browser does not take its pause away: the other one is used, and the answer says so.
+  link.state({ linkId: a, paused: true });
+  assert.deepEqual(link.prefer({ linkId: a }), { current: false, browsers: 2 });
+  assert.equal(await goes(), 'B');
+  // Every browser paused: one of them is asked all the same, and what is said of it is that it is paused.
+  link.state({ linkId: b, paused: true });
+  assert.equal(link.status().paused, true);
+  // Only a link that is there speaks, and only of itself.
+  assert.throws(() => link.prefer({ linkId: 'browser-of-nobody' }), { code: 'not_found' });
+  assert.throws(() => link.state({ linkId: 'browser-of-nobody', paused: false }), { code: 'not_found' });
+  // A look that waited on a browser which then went away goes to another one, as before: to one that is not
+  // paused, where there is one, though a paused one connected after it.
+  link.state({ linkId: a, paused: false });
+  link.prefer({ linkId: b });
+  const c = link.attach({ browser: 'Chrome C', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: c, waitMs: 5000 });
+  const looked = link.call({ capability: 'chrome.tabs.list' }, { readOnly: true });
+  link.detach({ linkId: c });
+  const [toA, toB] = await Promise.all([link.next({ linkId: a, waitMs: 80 }), link.next({ linkId: b, waitMs: 80 })]);
+  assert.deepEqual([toA.calls.length, toB.calls.length], [1, 0], 'the paused browser is not asked while another one is free');
+  link.result({ linkId: a, id: toA.calls[0].id, ok: true, result: { items: [] } });
+  await looked;
+  // One of the two goes: the other is told that it is alone in that moment, and nothing is listed any more.
+  waiting = link.next({ linkId: a, waitMs: 5000 });
+  link.detach({ linkId: b });
+  assert.deepEqual(await soon(waiting), { calls: [], current: true, browsers: 1 });
+  assert.equal(link.status().connections, undefined);
+  link.close();
+});
+
+test('the browser host carries the owner\'s word between a browser\'s panel and the runtime: paused, which browser is used, and "use this browser"', async () => {
+  const input = new PassThrough(), output = new PassThrough(), heard = [], asked = [];
+  output.on('data', frames(message => heard.push(message)));
+  let standing = { current: true, browsers: 1 };
+  const client = { status: async () => ({ running: true, record: { version: '4.0.6', port: 8788 } }),
+    call: async (name, args) => {
+      asked.push([name, args]);
+      if (name === 'chrome.attach') return { linkId: 'link' };
+      if (name === 'chrome.next') return new Promise(resolve => setTimeout(() => resolve({ calls: [], ...standing }), 30));
+      if (name === 'chrome.state') return standing = { current: !args.paused, browsers: 2 };
+      if (name === 'chrome.prefer') return standing = { current: true, browsers: 2 };
+      return { items: [] };
+    } };
+  const served = serveChromeHost({ origin: EXTENSION_ORIGIN, input, output, client, pollMs: 20 });
+  const stood = () => heard.filter(message => message.name === 'link.status').map(message => message.data);
+  // What the owner chose in the panel is said with the first word, where the extension knows it by then.
+  input.write(frame({ type: 'hello', protocol: 1, extension: '4.0.6', browser: 'Google Chrome', methods: [], paused: true }));
+  await until(() => stood().length === 1, 'how this browser stands');
+  assert.deepEqual(asked.find(([name]) => name === 'chrome.attach')[1], { browser: 'Google Chrome', extension: '4.0.6', methods: [], paused: true });
+  assert.deepEqual(stood(), [{ current: true, browsers: 1 }]);
+  // What has not changed is not said again.
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(stood().length, 1);
+  // The owner lets DevMate use the browser again: the runtime is told, and the panel hears how it stands now.
+  input.write(frame({ type: 'state', paused: false }));
+  await until(() => stood().length === 2, 'the news after the pause was lifted');
+  assert.deepEqual(asked.find(([name]) => name === 'chrome.state')[1], { linkId: 'link', paused: false });
+  assert.deepEqual(stood().at(-1), { current: true, browsers: 2 });
+  // Another browser took over meanwhile, and the owner chooses this one in its panel.
+  standing = { current: false, browsers: 2 };
+  await until(() => stood().at(-1).current === false, 'the news that another browser is used');
+  input.write(frame({ type: 'request', id: 'r1', action: 'prefer' }));
+  await until(() => heard.some(message => message.type === 'response' && message.id === 'r1'), 'the answer to the choice');
+  assert.deepEqual(heard.find(message => message.id === 'r1'), { type: 'response', id: 'r1', ok: true, result: { current: true, browsers: 2 } });
+  assert.deepEqual(asked.find(([name]) => name === 'chrome.prefer')[1], { linkId: 'link' });
+  assert.deepEqual(stood().at(-1), { current: true, browsers: 2 });
+  // A word that is no yes or no is not passed on.
+  const states = asked.filter(([name]) => name === 'chrome.state').length;
+  input.write(frame({ type: 'state', paused: 'yes' }));
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(asked.filter(([name]) => name === 'chrome.state').length, states);
   input.end(); await served;
 });
 

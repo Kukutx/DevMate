@@ -8,7 +8,8 @@ const element = id => document.getElementById(id);
 const ask = message => chrome.runtime.sendMessage(message);
 const note = text => { element('note').textContent = text; };
 const COMMANDS = { install: 'devmate chrome install', restart: 'devmate restart' };
-let language = 'en', busy = false;
+// said: the note under the panel says that DevMate uses this browser now. It is taken back when that stops being so.
+let language = 'en', busy = false, said = false;
 
 // A sentence with {install} or {restart} in it, with the command shown as something to copy.
 function sentence(text) {
@@ -34,12 +35,17 @@ function render({ state, settings, version }) {
   if (view.steps) { const list = document.createElement('ol'); for (const step of view.steps) { const item = document.createElement('li'); item.append(sentence(step)); list.append(item); } detail.append(list); }
   if (view.said) {
     const said = Object.assign(document.createElement('div'), { className: 'said' });
-    said.append(Object.assign(document.createElement('b'), { textContent: t.browserSaid }), view.said);
+    said.append(Object.assign(document.createElement('b'), { textContent: view.saidBy === 'devmate' ? t.devmateSaid : t.browserSaid }), view.said);
     detail.append(said);
   }
   element('debugging').hidden = !view.debugging;
   element('debuggingText').textContent = view.debugging || '';
   element('debugStop').textContent = view.labels.debugStop;
+  element('link').hidden = !view.link;
+  element('linkText').textContent = view.link?.text || '';
+  element('prefer').hidden = view.link?.canPrefer !== true;
+  element('prefer').textContent = view.labels.prefer;
+  if (said && state.link?.current !== true) { said = false; note(''); }
   for (const id of ['start', 'again']) { element(id).hidden = view.primary !== id; element(id).textContent = view.labels[id]; element(id).disabled = busy; }
   element('workbench').textContent = view.labels.workbench;
   element('workbench').disabled = !view.canOpen;
@@ -82,6 +88,11 @@ element('copy').addEventListener('click', async () => {
   try { const result = await request('mcpUrl'); await navigator.clipboard.writeText(result.url); note(copiedNote(result, language)); } catch (error) { note(error.message); }
 });
 element('debugStop').addEventListener('click', async () => render(await ask({ ask: 'debugStop' })));
+element('prefer').addEventListener('click', async () => {
+  // (Said only where DevMate answers that it is so: a browser that is paused is put first and still passed over.)
+  try { const link = await request('prefer'); said = link?.current === true; note(said ? texts().preferred : texts().preferredNot); } catch (error) { note(error.message); }
+  await refresh();
+});
 element('access').addEventListener('change', async event => render(await ask({ ask: 'pause', paused: !event.target.checked })));
 element('autostart').addEventListener('change', async event => render(await ask({ ask: 'settings', startWithBrowser: event.target.checked })));
 element('language').addEventListener('click', async () => render(await ask({ ask: 'settings', language: language === 'zh' ? 'en' : 'zh' })));

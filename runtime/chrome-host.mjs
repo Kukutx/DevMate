@@ -24,7 +24,7 @@ export const PROTOCOL = 1;
 const MAX_TO_BROWSER = 1024 * 1024, MAX_FROM_BROWSER = 64 * 1024 * 1024;
 // What one answer of the browser may weigh on its way into the runtime (a picture of a page is a few megabytes).
 const MAX_RESULT_BYTES = 12 * 1024 * 1024;
-const ACTIONS = ['status', 'start', 'workbench', 'mcpUrl', 'pending'];
+const ACTIONS = ['status', 'start', 'workbench', 'mcpUrl', 'pending', 'prefer'];
 const pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); });
 
 /** The messages of a stream that carries the browser's framing: each a four-byte length, least significant first, then JSON. */
@@ -59,6 +59,15 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
   if (origin !== EXTENSION_ORIGIN) throw Object.assign(new Error('devmate chrome-host is started by a browser for the DevMate extension, not by hand.'), { code: 'forbidden' });
   const stop = new AbortController(), signal = stop.signal;
   let extension = null, linkId = null, running = null, pendingCount = null, polling = false, leave = () => {};
+  // Whether this browser is the one DevMate uses, and how many are connected: told to the extension when it changes,
+  // and once for every link (a link is new after the runtime was started again, and the extension forgot what it knew).
+  let standing = null;
+  const stands = answer => {
+    if (typeof answer?.current !== 'boolean' || !Number.isInteger(answer.browsers)) return;
+    if (standing && standing.current === answer.current && standing.browsers === answer.browsers) return;
+    standing = { current: answer.current, browsers: answer.browsers };
+    send({ type: 'event', name: 'link.status', data: standing });
+  };
   const send = message => {
     const data = frame(message);
     if (data.length - 4 > MAX_TO_BROWSER) return false;
@@ -85,9 +94,13 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     if (polling || !extension) return;
     polling = true;
     try {
-      linkId = (await client.call('chrome.attach', { browser: extension.browser, extension: extension.version, methods: extension.methods })).linkId;
+      standing = null;
+      // (paused: what the owner chose in the panel, where the extension has read it by now. Not yet known counts as
+      // not paused: the extension says it right after.)
+      linkId = (await client.call('chrome.attach', { browser: extension.browser, extension: extension.version, methods: extension.methods, ...(extension.paused === true ? { paused: true } : {}) })).linkId;
       while (!signal.aborted && linkId) {
-        const { calls } = await client.call('chrome.next', { linkId, waitMs: 25000 }, { timeoutMs: 40000 });
+        const answer = await client.call('chrome.next', { linkId, waitMs: 25000 }, { timeoutMs: 40000 }), calls = answer.calls || [];
+        stands(answer);
         for (const call of calls) {
           if (!send({ type: 'call', id: call.id, method: call.method, params: call.params })) {
             await client.call('chrome.result', { linkId, id: call.id, ok: false, error: { code: 'invalid_input', message: 'This request is larger than a browser accepts in one message.' } }).catch(() => {});
@@ -135,6 +148,13 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
         return answer(true, running);
       }
       if (message.action === 'workbench') return answer(true, { url: await client.workbenchUrl() });
+      if (message.action === 'prefer') {
+        // "Use this browser", from the panel of this browser, about this browser's own link and no other.
+        if (!linkId) return answer(false, { code: 'not_running', message: 'DevMate is not running, or this browser is not connected to it yet.' });
+        const now = await client.call('chrome.prefer', { linkId });
+        stands(now);
+        return answer(true, { current: now.current === true, browsers: now.browsers });
+      }
       if (message.action === 'mcpUrl') {
         // The address the owner pastes into a client in the cloud, as "devmate mcp-url" prints it: the public route
         // where there is one, and only otherwise the address that works on this computer alone. scope says which.
@@ -153,7 +173,8 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     if (!message || typeof message !== 'object') return;
     if (message.type === 'hello') {
       extension = { version: String(message.extension || '').slice(0, 40), browser: String(message.browser || '').slice(0, 100),
-        methods: Array.isArray(message.methods) ? message.methods.filter(name => typeof name === 'string' && name.length <= 80).slice(0, 200) : [] };
+        methods: Array.isArray(message.methods) ? message.methods.filter(name => typeof name === 'string' && name.length <= 80).slice(0, 200) : [],
+        ...(typeof message.paused === 'boolean' ? { paused: message.paused } : {}) };
       running = await runtime().catch(() => ({ running: false, version: VERSION }));
       send({ type: 'ready', protocol: PROTOCOL, runtime: running });
       if (running.running && !polling) void work();
@@ -163,6 +184,12 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
       const outcome = size > MAX_RESULT_BYTES ? { ok: false, error: { code: 'browser_error', message: 'The browser\'s answer is ' + Math.round(size / 1048576) + ' MiB, more than DevMate takes in one answer. Ask for less.' } }
         : message.ok === true ? { ok: true, result: message.result } : { ok: false, error: { code: String(message.error?.code || 'browser_error').slice(0, 80), message: String(message.error?.message || 'The browser could not do this.').slice(0, 2000) } };
       await client.call('chrome.result', { linkId, id: message.id, ...outcome }).catch(error => log('result: ' + (error?.message || error)));
+    } else if (message.type === 'state') {
+      // The owner paused this browser in its panel, or lets DevMate use it again: the runtime turns to another
+      // browser that is not paused, where there is one.
+      if (!extension || typeof message.paused !== 'boolean') return;
+      extension.paused = message.paused;
+      if (linkId) stands(await client.call('chrome.state', { linkId, paused: message.paused }).catch(error => { log('state: ' + (error?.message || error)); return null; }));
     } else if (message.type === 'request') await asked(message);
   }
 
