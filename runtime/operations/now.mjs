@@ -4,8 +4,10 @@ import { now } from './shared.mjs';
 // Everything that is going on in this runtime right now, across all projects, in one answer: what runs (commands,
 // jobs, agents), what waits for the owner, and who is attached (editor windows, the browser, the route from outside,
 // the client that asked last). It is put together from the registries that are already there and keeps nothing of
-// its own; each thing is stopped with the operation that has always stopped it. The whole picture is the owner's:
-// a connected client is told about the project it works in, not about every other one.
+// its own; each thing is stopped with the operation that has always stopped it. With it, who has been here: the
+// clients since the runtime started and the last changes anybody made, as the service noted them (noteCall: which
+// operation, who, whether it went through; never what it carried). The whole picture is the owner's: a connected
+// client is told about the project it works in, not about every other one.
 const RUNNING_JOBS = ['queued', 'running', 'cancelling'];
 const LIVE_AGENTS = ['starting', 'ready', 'running', 'waiting', 'cancelling'];
 // As much of a text as tells the owner which one it is. The whole of it is read where it belongs (the project's pages).
@@ -13,6 +15,8 @@ const START = 200;
 const start = text => { const whole = String(text ?? '').replace(/\s+/g, ' ').trim(); return whole.length > START ? whole.slice(0, START) + '…' : whole; };
 // At most this many of each kind are listed; how many there are is said beside it.
 const MOST = 200;
+// The last changes that are shown, newest first.
+const CHANGES = 50;
 
 export function defineNowOperations(service, add) {
   add('runtime.now', {}, true,
@@ -47,6 +51,9 @@ export function defineNowOperations(service, add) {
           folders: window.roots.map(folder => ({ name: folder.name, projectId: folder.projectId || null })) })),
         browser: service.browser.status(),
         connection: await service.call('connection.status', {}, context),
+        clients: [...service.clients.values()].reverse(),
+        changes: service.store.recentEvents({ type: 'operation.called', limit: CHANGES }).reverse().map(event => ({ sequence: event.sequence, at: event.createdAt, projectId: event.projectId,
+          operation: event.operation, by: event.by, ok: event.ok === true, ...(event.code ? { code: event.code } : {}), ...(event.what ? { what: event.what } : {}), ms: event.ms })),
         client: client ? { name: client.name || '', userAgent: client.userAgent || '', surface: client.surface || '', tunnel: client.tunnel === true, at: client.at } : null,
         updatedAt: now()
       };

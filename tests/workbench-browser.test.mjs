@@ -955,6 +955,9 @@ test('the page of everything that is going on: what runs in any project is liste
   const command=await ownerCall(service,'shell.run',{projectId:second.id,file:process.execPath,args:['-e','setInterval(()=>{},1000)'],waitMs:0});
   const agent=service.store.create('agent',{projectId:project.id,provider:'codex',label:'A helper',status:'unstarted',capabilities:{},error:null});
   service.store.create('approval',{projectId:project.id,agentId:agent.id,kind:'delegation',status:'pending',summary:'A connected client asks for a task '+'whose words go on and on '.repeat(12),options:[{optionId:'deny',name:'Do not run it'}]});
+  // A client that came through the public address and changed a file, and one that only looked.
+  await service.call('workspace.write',{projectId:project.id,path:'from-a-client.md',text:'x'},{id:'owner',via:'address',client:'You'});
+  await service.call('project.list',{},{id:'owner',via:'local'});
   const server=await serverFixture(f);t.after(server.close);
   service.store.on('event',event=>server.push(event));
   const {page,errors}=await open(t,server,{viewport:{width:1380,height:1000}});
@@ -973,10 +976,20 @@ test('the page of everything that is going on: what runs in any project is liste
   // The row's actions keep their width beside a long title: a button is one line, not a column of letters.
   const stop=part('Running commands').getByRole('button',{name:'Stop',exact:true});
   for(const name of ['Stop','Open','Answer']){const box=await page.locator('#panel .item').getByRole('button',{name,exact:true}).boundingBox();assert.ok(box.width>box.height&&box.height<48,'the '+name+' button is one line: '+JSON.stringify(box));}
+  // Who has been here, and who asked for each change: the client by its name and its way, the owner as themselves.
+  const clients=await part('Clients since DevMate started').locator('.entry').allTextContents();
+  assert.equal(clients.length,2);
+  for(const part of ['A client that gave no name','on this computer','1 call, 0 of them changed something'])assert.ok(clients[0].includes(part),part+' in '+clients[0]);
+  for(const part of ['"You"','through the public address','1 call, 1 of them changed something','last: workspace.write at '])assert.ok(clients[1].includes(part),part+' in '+clients[1]);
+  const changes=await part('Recent changes').locator('.entry').allTextContents();
+  assert.ok(changes[0].startsWith('workspace.write"You", through the public address · First project'),'a client that calls itself You is shown as a name, in quotes: '+changes[0]);
+  assert.ok(changes[1].startsWith('shell.runYou, at this computer · Second project'),changes[1]);
+  assert.ok(changes.at(-1).startsWith('project.createYou, at this computer'),changes.at(-1));
   // Stopped from here, with the operation that stops a command anywhere.
   await stop.click();
   await part('Running commands').getByText('No command is running.').waitFor();
   await until(()=>service.processes.list(second.id).items.find(item=>item.id===command.id).status!=='running','the command to have ended');
+  await part('Recent changes').locator('.entry').first().filter({hasText:'process.stop'}).waitFor();
   // What waits is answered where it always is: one press chooses its project and opens that page.
   await part('Waiting for your answer').getByRole('button',{name:'Answer',exact:true}).click();
   await page.getByRole('heading',{name:'Approvals and questions'}).waitFor();

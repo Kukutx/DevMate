@@ -390,9 +390,11 @@ export class Store extends EventEmitter {
         projectId: row.project_id, workflowId: row.workflow_id, createdAt: row.created_at }));
   }
 
-  // The newest events of one scope, oldest first: what a view of that scope shows as recent activity.
-  recentEvents({ projectId, workflowId, limit = 100 } = {}) {
+  // The newest events of one scope, oldest first: what a view of that scope shows as recent activity. type: of one
+  // kind only (the notes of who did what, across all projects).
+  recentEvents({ projectId, workflowId, type, limit = 100 } = {}) {
     const clauses = [], args = [];
+    if (type) { clauses.push('type=?'); args.push(type); }
     if (projectId) { clauses.push('project_id=?'); args.push(projectId); }
     if (workflowId) { clauses.push('workflow_id=?'); args.push(workflowId); }
     args.push(Math.min(Math.max(Number(limit) || 100, 1), 2000));

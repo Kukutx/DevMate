@@ -444,12 +444,15 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
         const plain = value => String(value || '').replace(/[^\x20-\x7e]/g, '').slice(0, 80), userAgent = plain(sender);
         service.lastClient = { name: plain(said) || (service.lastClient?.userAgent === userAgent ? service.lastClient.name : ''), userAgent, ...decided, tunnel, at: new Date().toISOString() };
       }
-      return asked.run({ listing: messages.length > 0 && messages.every(message => message.method === 'tools/list'), surface: decided.surface }, () => handler.fetch(request, extra));
+      // (client: the name it goes by, for the note of who did what. Its own text, kept short and printable as above.)
+      const client = String(said || (sender ? named.get(sender) : '') || '').replace(/[^\x20-\x7e]/g, '').slice(0, 80);
+      return asked.run({ listing: messages.length > 0 && messages.every(message => message.method === 'tools/list'), surface: decided.surface, client }, () => handler.fetch(request, extra));
     } });
     const serverFor = ({ authInfo }) => {
       const principal = authInfo?.extra?.devmatePrincipal;
       if (!principal) throw new DomainError('unauthorized', 'A verified MCP identity is required.');
-      return createMcpServer(service, authInfo.extra.via ? { ...principal, via: authInfo.extra.via } : principal, asked.getStore());
+      const client = asked.getStore()?.client;
+      return createMcpServer(service, { ...principal, ...(authInfo.extra.via ? { via: authInfo.extra.via } : {}), ...(client ? { client } : {}) }, asked.getStore());
     };
     // The SDK default also serves MCP clients that still speak a 2025 protocol
     // revision, statelessly. Which clients may connect is not DevMate's own history.

@@ -104,6 +104,9 @@ const subheading = (title, ...actions) => el('div', {class: 'toolbar'}, el('h3',
 const empty = (title, text, actions = []) => el('div', {class: 'empty'}, el('h2', {text: title}), el('p', {text}), ...actions);
 const pre = (text, props = {}) => el('pre', {class: 'preview', tabindex: '0', ...props, text});
 const fact = (term, text) => text ? [el('dt', {text: term}), el('dd', {text})] : [];
+// What a client calls itself is its own text. It is shown as a name, in quotes and cut short, wherever it stands
+// beside the page's own words: a client that calls itself "You" does not read as the owner.
+const clientName = value => str(value) ? '"' + str(value).replaceAll('"', "'").slice(0, 60) + '"' : 'A client that gave no name';
 function required(value, what) {
   const text = String(value ?? '').trim();
   if (!text) throw new Error('Enter ' + what + '.');
@@ -269,6 +272,8 @@ function pending(src, what) {
 const more = src => src.data?.nextCursor ? button('Load more', () => pull(src, true).then(repaint)) : null;
 function describe(event) {
   const native = event.nativeEvent, entity = event.entity || {};
+  // The note of who asked for a change (see the Now page): who, which operation, and whether it went through.
+  if (event.type === 'operation.called') return [event.by?.surface === 'connected' ? clientName(event.by.client) : 'You', 'ran ' + str(event.operation) + (event.what ? ' (' + event.what + ')' : ''), event.ok === false ? 'failed' + (event.code ? ' (' + event.code + ')' : '') : ''].filter(Boolean).join(' · ');
   if (event.type === 'agent.native') return 'Agent ' + (str(native?.nativeMethod) || str(native?.type) || 'event') + (str(native?.state) ? ' · ' + native.state : '');
   const subject = str(entity.name) || str(entity.title) || str(entity.label) || (entity.agentId ? agentName(entity.agentId) : '') || str(event.path) || str(event.command);
   return [String(event.type || 'activity').replaceAll('.', ' '), subject, str(entity.status) || str(event.status)].filter(Boolean).join(' · ');
@@ -403,6 +408,10 @@ function nowView(v) {
   const status = data.connection || {}, browser = data.browser || {}, client = data.client, windows = Array.isArray(data.windows) ? data.windows : [];
   const route = status.kind === 'local' || !status.kind ? 'Local only: apps on this computer' : status.kind + ', ' + (str(status.phase) || str(status.status) || 'unknown') +
     (status.remoteMcpVerified ? ', reached from outside' : ', not verified from outside') + (status.openaiTunnel ? '; the tunnel of OpenAI beside it: ' + (str(status.openaiTunnel.phase) || 'unknown') : '');
+  // Who asked for a change: the owner at this computer (an editor window among it), or a client by the name it gave and the way it came.
+  const way = {local: 'on this computer', address: 'through the public address', 'openai-tunnel': 'through the tunnel of OpenAI'};
+  const who = by => by?.surface === 'connected' ? clientName(by.client) + (way[by.via] ? ', ' + way[by.via] : '') : by?.window ? 'You, in an editor window' : 'You, at this computer';
+  const clients = Array.isArray(data.clients) ? data.clients : [], changes = Array.isArray(data.changes) ? data.changes : [];
   const delegation = {ask: 'asks you first', allow: 'runs without asking', off: 'is not offered'}[data.runtime.delegation] || str(data.runtime.delegation);
   return [
     heading('Now', button('Refresh', () => pull(v.now).then(repaint))),
@@ -418,12 +427,20 @@ function nowView(v) {
       badge(item.status), button('Open', () => open(item.projectId, 'Agents')), opButton('Stop', 'agents.stop', () => stopAgent(item), {class: 'danger'})), 'No agent is at work.'),
     section('Jobs', data.jobs, item => row(item, item.what || item.kind, [projectName(item.projectId), item.kind, item.startedAt ? 'since ' + time(item.startedAt) : ''].filter(Boolean).join(' · '),
       badge(item.status), opButton('Cancel', cancelWith(item), () => cancelJob(item), {class: 'danger', disabled: item.status === 'cancelling'})), 'No job is queued or running.'),
+    el('section', {class: 'panel'}, el('h3', {text: 'Clients since DevMate started' + (clients.length ? ' (' + clients.length + ')' : '')}),
+      clients.map(item => el('div', {class: 'entry', 'data-key': str(item.via) + ' ' + str(item.name)}, el('div', {class: 'row-head'}, el('strong', {text: clientName(item.name)}), caption(way[item.via] || '')),
+        caption([item.calls + (item.calls === 1 ? ' call' : ' calls') + ', ' + item.changes + ' of them changed something', 'last: ' + str(item.lastOperation) + ' at ' + time(item.lastAt), 'first seen ' + date(item.firstAt)].join(' · ')))),
+      clients.length ? null : caption('No client has connected since DevMate started.')),
+    el('section', {class: 'panel'}, el('h3', {text: 'Recent changes'}),
+      changes.map(item => el('div', {class: 'entry', 'data-key': String(item.sequence)}, el('div', {class: 'row-head'}, el('strong', {text: str(item.operation) + (item.what ? ' (' + item.what + ')' : '')}), item.ok ? null : badge('failed' + (item.code ? ' · ' + item.code : ''), 'error')),
+        caption([who(item.by), item.projectId ? projectName(item.projectId) : '', date(item.at)].filter(Boolean).join(' · ')))),
+      changes.length ? caption('What was changed is on the pages of each project; this says who asked for it. What a call carried is not kept.') : caption('Nothing has been changed yet.')),
     el('section', {class: 'panel'}, el('h3', {text: 'Who is attached'}),
       el('dl', {class: 'facts'},
         fact('Route from outside', route),
         fact('Browser', browser.connected ? [browser.browser, 'extension ' + browser.extension, browser.browsers > 1 ? browser.browsers + ' are connected' : ''].filter(Boolean).join(' · ') : 'None connected'),
         fact('Editor windows', windows.length ? windows.map(window => (window.title || 'Editor') + ((window.folders || []).length ? ' (' + window.folders.map(folder => folder.name).join(', ') + ')' : '')).join('; ') : 'None attached'),
-        fact('Last client', client ? [client.name || client.userAgent || 'a client that gave no name', client.tunnel ? 'through the tunnel of OpenAI' : '', date(client.at)].filter(Boolean).join(' · ') : 'None since DevMate started'),
+        fact('Last client', client ? [client.name ? clientName(client.name) : client.userAgent || 'a client that gave no name', client.tunnel ? 'through the tunnel of OpenAI' : '', date(client.at)].filter(Boolean).join(' · ') : 'None since DevMate started'),
         fact('Profile', (data.runtime.access === 'full' ? 'Full access' : 'Guarded') + ' · a task a client hands to an agent ' + delegation)))
   ];
 }

@@ -13,7 +13,7 @@ import { createWindowRegistry } from './windows.mjs';
 import { recallTools } from './platform/tools.mjs';
 import { checkProviderSettings, normalizeConfig, publicMcpUrl } from './config.mjs';
 import { createProcessManager } from './processes.mjs';
-import { verifyPublicMcp } from './connection-verify.mjs';
+import { VERIFY_CLIENT, verifyPublicMcp } from './connection-verify.mjs';
 import { createSecretStore } from './secrets.mjs';
 import { CLIENT_COMMAND_ENV } from './client.mjs';
 import { createUsage } from './usage.mjs';
@@ -77,6 +77,9 @@ function pruneHistory(directory, retentionMs, maxBytes = HISTORY_MAX_BYTES) {
 }
 export const __test = { pruneHistory };
 
+// Calls that change something and are still no deed to note (see noteCall), and how many clients are remembered.
+const UNNOTED = /^(?:window\.|chrome\.|host\.)/, GENERIC = /^operations\.(?:call|query)$/, CLIENTS_KEPT = 20;
+
 export class DevMateService {
   constructor({ instanceRoot, endpoint, adapterFactory, providerSettings, connection, onStop, store, config = {}, capabilitiesFactory = createCapabilities, authOptions = {}, verifier = verifyPublicMcp }) {
     this.verifier = verifier;
@@ -86,6 +89,11 @@ export class DevMateService {
     this.proxy = null;
     // The MCP client that asked last: what it called itself and which tool names it was shown (set where requests arrive).
     this.lastClient = null;
+    // The connected clients since this runtime started, newest last: who they said they are, the way they came and
+    // what they did last. Kept in memory, a few of them; what each change was is in the journal (see noteCall).
+    this.clients = new Map();
+    // Failures that are already noted, so that a generic call does not note again what its target has noted.
+    this.notedFailures = new WeakSet();
     // The owner's browser, where the DevMate extension in it is connected (./chrome.mjs).
     this.browser = createBrowserLink();
     this.store = store || new Store(instanceRoot);
@@ -353,15 +361,55 @@ export class DevMateService {
 
   // Every call is counted here, also one that is refused before it runs: a model using a tool wrongly is mostly that.
   async call(name, input = {}, context) {
-    const done = this.usage.begin(this.operations.has(name) ? name : '(unknown)', context);
-    try { const result = await this.perform(name, input, context); done(); return result; }
+    const done = this.usage.begin(this.operations.has(name) ? name : '(unknown)', context), began = Date.now(), seen = {};
+    try { const result = await this.perform(name, input, context, seen); done(); this.noteCall(name, input, context, seen, null, began); return result; }
     catch (error) {
+      this.noteCall(name, input, context, seen, error, began);
       // A call that found a project's folder gone has looked: what is said of that project is up to date at once.
       if (error?.code === 'project_missing' && error.details?.projectId) {
         try { this.folders.set(error.details.projectId, { root: this.store.get('project', error.details.projectId).root, at: Date.now(), missing: true }); } catch { /* the project is no longer on the list */ }
       }
       done(error); throw error;
     }
+  }
+
+  // Who did it. Every call that changes something leaves one line in the journal: which operation, who asked (the
+  // owner at this computer or a connected client, the way it came, and the name the client gave itself), whether it
+  // went through, and how long it took. Nothing of what the call carried is kept: no command, no path, no text.
+  // The line is written here, where a call ends, and not onto everything that happens while it runs: an agent a
+  // client started goes on for hours, and what it does then is not that client's doing.
+  // Not noted: what only reads; and what an editor or the browser host asks in the background at its own pace, which
+  // is no deed of anybody. The generic calls (operations.call, operations.query) hand a call on, and the operation
+  // they hand it to is noted and counted as itself: they are noted and counted only where it never came to that
+  // (the operation named is not there, or is not the caller's to ask for), with the name that was asked for.
+  noteCall(name, input, context, seen, error, began) {
+    try {
+      const operation = this.operations.get(name);
+      if (!operation || context?.id !== 'owner') return;
+      const generic = GENERIC.test(name);
+      if (generic && (!error || this.notedFailures.has(error))) return;
+      if (error && typeof error === 'object') this.notedFailures.add(error);
+      const connected = context.surface !== 'local', client = connected ? String(context.client || '') : '';
+      // (The runtime asking through its own public route which runtime answers is not a client of the owner's. Only
+      // that one question is passed over: whatever else comes under that name is noted like anybody's.)
+      if (connected && !(client === VERIFY_CLIENT && name === PROBE_OPERATION)) {
+        // (The way it came is one word, so the two cannot run into each other.)
+        const key = (context.via || '') + ' ' + client, known = this.clients.get(key), at = new Date().toISOString();
+        this.clients.delete(key);
+        this.clients.set(key, { name: client, via: context.via || null, firstAt: known?.firstAt || at, lastAt: at, calls: (known?.calls || 0) + 1,
+          // (changes: the calls that changed something. One that was refused or failed changed nothing.)
+          changes: (known?.changes || 0) + (operation.readOnly || error ? 0 : 1), lastOperation: name });
+        if (this.clients.size > CLIENTS_KEPT) this.clients.delete(this.clients.keys().next().value);
+      }
+      if (operation.readOnly || UNNOTED.test(name) || this.closing) return;
+      this.store.event('operation.called', seen.projectId ? { projectId: seen.projectId } : null, {
+        operation: name, by: { surface: connected ? 'connected' : 'local', ...(context.via ? { via: context.via } : {}), ...(client ? { client } : {}), ...(context.windowId ? { window: true } : {}) },
+        ok: !error, ...(error ? { code: String(error.code || 'internal_error').slice(0, 80) } : {}),
+        // Of a call to an engine, which capability: its name is DevMate's own, and what it was given is not kept.
+        // Of a generic call that came to nothing, which operation was asked for: a name, kept short and printable.
+        ...(name === 'capability.call' && typeof input?.capability === 'string' ? { what: input.capability.slice(0, 80) }
+          : generic && typeof input?.operation === 'string' ? { what: input.operation.replace(/[^\x20-\x7e]/g, '').slice(0, 80) } : {}), ms: Date.now() - began });
+    } catch { /* a note that cannot be written never fails the call it is about */ }
   }
 
   // The other way round from a call that met a folder gone: a call for a project went through while its folder was
@@ -416,7 +464,7 @@ export class DevMateService {
     return this.folders.get(project.id).missing;
   }
 
-  async perform(name, input = {}, context) {
+  async perform(name, input = {}, context, seen = {}) {
     this.admit(context, name);
     await this.ready;
     if (this.closing && !['runtime.stop', 'host.record.get', 'host.record.put', 'host.record.list'].includes(name)) throw new DomainError('runtime_stopping', 'Runtime is stopping.');
@@ -433,7 +481,7 @@ export class DevMateService {
     // the caller may be the very model that started the agent, and nothing a client says about itself proves otherwise.
     if (operation.humanOnly && !this.ownerDecides(context)) throw new DomainError('forbidden', 'This decision is the user\'s own. They answer it on their computer: in the DevMate workbench (devmate ui) or in their editor. (With the full access profile, devmate access full, permissions are granted automatically and the owner\'s client may answer.)');
     if (operation.ownerDecision && !this.ownerDecides(context)) throw new DomainError('forbidden', operation.ownerDecision);
-    const executionProject = this.operationProject(name, operation, args);
+    const executionProject = seen.projectId = this.operationProject(name, operation, args);
     if (!operation.readOnly && name !== 'host.record.put' && executionProject && this.projectTransitions.has(executionProject)) throw new DomainError('project_busy', 'Project execution resources are closing.');
     if (context.projectId && executionProject && executionProject !== context.projectId) throw new DomainError('scope_mismatch', 'Project is outside this caller scope.');
     if (context.windowId && !context.projectId && executionProject && !name.startsWith('window.')) throw new DomainError('window_unselected', 'Share and select a folder of this editor window first.');
