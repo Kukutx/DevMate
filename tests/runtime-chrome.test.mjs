@@ -484,6 +484,18 @@ test('the browser host says which local port the runtime answers on, and says so
   input.end(); await served;
 });
 
+test('a browser the owner paused is not the one in use either while none of them has asked for work yet', () => {
+  // The moment after a start: two browsers are attached and neither has asked once. The one that connected last is
+  // paused, and was said to be the one in use all the same.
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list'];
+  link.attach({ browser: 'Chrome A', extension: '4.0.6', methods });
+  link.attach({ browser: 'Chrome B', extension: '4.0.6', methods, paused: true });
+  const status = link.status();
+  assert.deepEqual(status.connections.map(one => [one.browser, one.current, one.paused]), [['Chrome A', true, undefined], ['Chrome B', undefined, true]]);
+  assert.equal(status.paused, undefined);
+  link.close();
+});
+
 test('where several browsers are connected the owner says which one is used: a paused one is passed over, and one chosen in its panel is used', async () => {
   // Every call went to the browser that connected last. One the owner had paused refused them all while another
   // stood idle, and nothing said which of two browsers was the one in use, nor let the owner choose.

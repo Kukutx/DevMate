@@ -405,13 +405,17 @@ function nowView(v) {
   const cancelWith = item => item.processId ? 'process.stop' : item.agentId ? 'agents.cancel' : 'job.cancel';
   const cancelJob = item => item.processId ? mutate('process.stop', {id: item.processId}, 'The command was stopped.')
     : item.agentId ? mutate('agents.cancel', {id: item.agentId}, 'The turn was cancelled.') : mutate('job.cancel', {id: item.id}, 'The job was cancelled.');
-  const status = data.connection || {}, browser = data.browser || {}, client = data.client, windows = Array.isArray(data.windows) ? data.windows : [];
+  const status = data.connection || {}, browser = data.browser || {}, windows = Array.isArray(data.windows) ? data.windows : [];
   const route = status.kind === 'local' || !status.kind ? 'Local only: apps on this computer' : status.kind + ', ' + (str(status.phase) || str(status.status) || 'unknown') +
     (status.remoteMcpVerified ? ', reached from outside' : ', not verified from outside') + (status.openaiTunnel ? '; the tunnel of OpenAI beside it: ' + (str(status.openaiTunnel.phase) || 'unknown') : '');
   // Who asked for a change: the owner at this computer (an editor window among it), or a client by the name it gave and the way it came.
   const way = {local: 'on this computer', address: 'through the public address', 'openai-tunnel': 'through the tunnel of OpenAI'};
   const who = by => by?.surface === 'connected' ? clientName(by.client) + (way[by.via] ? ', ' + way[by.via] : '') : by?.window ? 'You, in an editor window' : 'You, at this computer';
   const clients = Array.isArray(data.clients) ? data.clients : [], changes = Array.isArray(data.changes) ? data.changes : [];
+  // Each browser that is connected: what it is, and where there are several, which one DevMate uses (the owner
+  // chooses that in the extension's panel) and which the owner has paused. Its name is the extension's own text.
+  const several = Array.isArray(browser.connections) ? browser.connections : [];
+  const browserLine = (one, index, all) => [(str(one.browser) || 'A browser').slice(0, 60), 'extension ' + str(one.extension).slice(0, 20), all.length ? (one.current ? 'in use' : 'not in use') : '', one.paused ? 'paused by you' : ''].filter(Boolean).join(', ');
   const delegation = {ask: 'asks you first', allow: 'runs without asking', off: 'is not offered'}[data.runtime.delegation] || str(data.runtime.delegation);
   return [
     heading('Now', button('Refresh', () => pull(v.now).then(repaint))),
@@ -438,9 +442,9 @@ function nowView(v) {
     el('section', {class: 'panel'}, el('h3', {text: 'Who is attached'}),
       el('dl', {class: 'facts'},
         fact('Route from outside', route),
-        fact('Browser', browser.connected ? [browser.browser, 'extension ' + browser.extension, browser.browsers > 1 ? browser.browsers + ' are connected' : ''].filter(Boolean).join(' · ') : 'None connected'),
+        fact(several.length ? 'Browsers' : 'Browser', !browser.connected ? 'None connected' : several.length ? several.map(browserLine).join('; ')
+          : browserLine({browser: browser.browser, extension: browser.extension, paused: browser.paused, current: true}, 0, [])),
         fact('Editor windows', windows.length ? windows.map(window => (window.title || 'Editor') + ((window.folders || []).length ? ' (' + window.folders.map(folder => folder.name).join(', ') + ')' : '')).join('; ') : 'None attached'),
-        fact('Last client', client ? [client.name ? clientName(client.name) : client.userAgent || 'a client that gave no name', client.tunnel ? 'through the tunnel of OpenAI' : '', date(client.at)].filter(Boolean).join(' · ') : 'None since DevMate started'),
         fact('Profile', (data.runtime.access === 'full' ? 'Full access' : 'Guarded') + ' · a task a client hands to an agent ' + delegation)))
   ];
 }

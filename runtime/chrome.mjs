@@ -232,8 +232,12 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   // The browser a call goes to: the one that connected last, or the one the owner chose in its panel since ("use this
   // browser" puts it first). One that was lost sight of, or has connected and not yet asked for work once, is passed
   // over while another is there; and so is one its owner has paused, which refuses whatever it is handed. Where every
-  // browser is paused the first of them is asked all the same, and says that it is paused.
-  const pick = () => { const live = [...links.values()].sort((a, b) => b.order - a.order), ready = live.filter(link => !link.lost && link.heard); return ready.find(link => !link.paused) || ready[0] || live.find(link => !link.lost) || live[0] || null; };
+  // browser is paused the first of them is asked all the same, and says that it is paused. (A paused one comes last
+  // at every step of this, also among those that have not asked yet, in the moment after a start.)
+  const pick = () => {
+    const live = [...links.values()].sort((a, b) => b.order - a.order), first = list => list.find(link => !link.paused) || list[0];
+    return first(live.filter(link => !link.lost && link.heard)) || first(live.filter(link => !link.lost)) || first(live) || null;
+  };
   const current = () => { sweep(); return pick(); };
   // What a host is told of its own link with every answer: whether this browser is the one that is used, and how many
   // are connected. Its panel says so only where there is more than one.

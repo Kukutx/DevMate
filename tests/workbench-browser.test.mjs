@@ -955,6 +955,9 @@ test('the page of everything that is going on: what runs in any project is liste
   const command=await ownerCall(service,'shell.run',{projectId:second.id,file:process.execPath,args:['-e','setInterval(()=>{},1000)'],waitMs:0});
   const agent=service.store.create('agent',{projectId:project.id,provider:'codex',label:'A helper',status:'unstarted',capabilities:{},error:null});
   service.store.create('approval',{projectId:project.id,agentId:agent.id,kind:'delegation',status:'pending',summary:'A connected client asks for a task '+'whose words go on and on '.repeat(12),options:[{optionId:'deny',name:'Do not run it'}]});
+  // Two browsers with the extension: the one that connected last is paused by the owner, so the other is the one in use.
+  // (Each asks for work once, as its host does as soon as it is attached.)
+  for(const browser of [{browser:'Google Chrome'},{browser:'Microsoft Edge',paused:true}]){const {linkId}=await ownerCall(service,'chrome.attach',{...browser,extension:'4.0.6',methods:['tabs.list']});await ownerCall(service,'chrome.next',{linkId,waitMs:1});}
   // A client that came through the public address and changed a file, and one that only looked.
   await service.call('workspace.write',{projectId:project.id,path:'from-a-client.md',text:'x'},{id:'owner',via:'address',client:'You'});
   await service.call('project.list',{},{id:'owner',via:'local'});
@@ -972,7 +975,9 @@ test('the page of everything that is going on: what runs in any project is liste
   assert.match(await part('Waiting for your answer').locator('.item').textContent(),/A connected client asks for a task[\s\S]*First project · A helper/);
   assert.equal(await part('Agents at work').getByText('No agent is at work.').count(),1,'an agent that was written down and not started is not at work');
   const counts=await page.locator('.cards .card').evaluateAll(cards=>Object.fromEntries(cards.map(card=>[card.querySelector('.card-title').textContent,card.querySelector('.metric').textContent])));
-  assert.deepEqual(counts,{'Waiting for you':'1','Commands running':'1','Agents at work':'0','Jobs':'0','Editor windows':'0','Browsers':'0'});
+  assert.deepEqual(counts,{'Waiting for you':'1','Commands running':'1','Agents at work':'0','Jobs':'0','Editor windows':'0','Browsers':'2'});
+  const attached=await part('Who is attached').locator('dl').textContent();
+  assert.ok(attached.includes('BrowsersGoogle Chrome, extension 4.0.6, in use; Microsoft Edge, extension 4.0.6, not in use, paused by you'),attached);
   // The row's actions keep their width beside a long title: a button is one line, not a column of letters.
   const stop=part('Running commands').getByRole('button',{name:'Stop',exact:true});
   for(const name of ['Stop','Open','Answer']){const box=await page.locator('#panel .item').getByRole('button',{name,exact:true}).boundingBox();assert.ok(box.width>box.height&&box.height<48,'the '+name+' button is one line: '+JSON.stringify(box));}
