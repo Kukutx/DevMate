@@ -143,7 +143,10 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   // one client holds are those of the browser that answered it, not of the one that answered another client since.
   const answered = new Map();
   const answeredBy = caller => answered.get(caller) ?? null;
-  const noteAnswer = (caller, link) => { answered.delete(caller); answered.set(caller, link); if (answered.size > CALLERS_KEPT) answered.delete(answered.keys().next().value); };
+  // forgotten: some caller's browser was let go to keep the list short; from then on a caller with none known is not
+  // taken to hold the ids of a browser that is alone either (it may hold another's, from before).
+  let forgotten = false;
+  const noteAnswer = (caller, link) => { answered.delete(caller); answered.set(caller, link); if (answered.size > CALLERS_KEPT) { answered.delete(answered.keys().next().value); forgotten = true; } };
   // A look that is made after whatever arrived meanwhile was read: a runtime that was busy for a moment does not take
   // a host that was waiting all along for gone.
   const later = (ms, look) => { const timer = setTimeout(() => setImmediate(look), ms); timer.unref?.(); return timer; };
@@ -343,9 +346,9 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     if (!link.methods.has(definition.method)) throw refuse('not_supported', 'The DevMate extension in this browser (version ' + (link.extension || 'unknown') + ') has no ' + definition.method + '. Update the extension.');
     const names = OWN.some(key => params[key] !== undefined);
     const before = answeredBy(caller);
-    if (names && before !== link && (before || links.size > 1)) throw refuse('browser_changed', (before
+    if (names && before !== link && (before || links.size > 1 || forgotten)) throw refuse('browser_changed', (before
       ? 'DevMate uses another browser now than the one that answered before (the owner paused that one or chose another, or a browser came or went), and '
-      : 'Several browsers are connected and none has answered a call since DevMate started (it was started again, and which browser is used was decided anew), and ') + capability +
+      : 'Several browsers are connected and none has answered a call of this caller\'s yet (DevMate may have been started again, and which browser is used decided anew), and ') + capability +
       ' names something by an id (a tab, a window, a bookmark, an element) that belongs to one browser, where the same id is something else in another: it was not passed on. Ask the browser that is used now what it has (tabs.list, bookmarks.tree), then call again.');
     const id = 'call-' + randomUUID();
     const answer = await new Promise((resolve, reject) => {

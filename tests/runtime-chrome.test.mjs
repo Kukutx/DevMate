@@ -865,7 +865,7 @@ test('with several browsers connected and none answered yet, a call that names a
   await new Promise(resolve => setTimeout(resolve, 100));
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^Several browsers are connected and none has answered a call since DevMate started/);
+  assert.match(refused.message, /^Several browsers are connected and none has answered a call of this caller's yet/);
   assert.match(refused.message, /Ask the browser that is used now what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/);
   // A look that names nothing is answered, and from then on the ids are those of the browser that answered it.
   const answeredBy = (await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true })).by;
@@ -926,5 +926,21 @@ test('the browser whose ids a caller holds is kept for each caller: another clie
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
   assert.match(refused.message, /^DevMate uses another browser now than the one that answered before/);
   assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'Y' }), { by: a });
+  link.close();
+});
+
+test('once a caller\'s browser was let go to keep the list short, a caller with none known is not taken to hold the ids of a browser that is alone', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list', 'tabs.close'];
+  const serve = linkId => { void (async () => { for (;;) { let work; try { work = await link.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) link.result({ linkId, id: call.id, ok: true, result: { by: linkId } }); } })(); };
+  const only = link.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId; serve(only);
+  // Alone and nothing forgotten: a caller's ids are that browser's.
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }), { by: only });
+  for (let index = 0; index < 64; index++) await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'caller ' + index });
+  // 'first' was let go: its ids may be another browser's from before, so they are not passed on until it looks.
+  const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }).then(() => null, failure => failure);
+  assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
+  await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'first' });
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }), { by: only });
   link.close();
 });
