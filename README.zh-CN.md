@@ -128,7 +128,7 @@ VS Code 的显示语言为简体中文时，命令和设置的说明以中文显
 | `devMate.shareFolders` | `readWrite` | 你打开的受信任文件夹默认怎样共享：`readWrite`、`readOnly`、`ask`、`never`。未受信任的工作区永远不共享 |
 | `devMate.shareEditorContext` | `true` | 客户端能否看到当前文件、选区、打开的文件和诊断 |
 | `devMate.autoStart` | `true` | 随编辑器启动运行时，意外退出后再拉起 |
-| `devMate.runtimePort` | `8788` | 由此编辑器启动运行时时使用的本机端口 |
+| `devMate.runtimePort` | （空） | 由此编辑器启动运行时时使用的本机端口。留空：运行时上一次用的端口（第一次是 8788） |
 | `devMate.nodeCommandPath` | 空 | Node.js 24+ 的可执行文件，自动找不到时填写 |
 | `devMate.runtimeInstanceDirectory` | 空 | 使用 `~/.devmate/runtime` 以外的实例目录 |
 

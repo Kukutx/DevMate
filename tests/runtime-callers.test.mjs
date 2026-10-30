@@ -149,3 +149,20 @@ test('a call repeated under the same operation id is one change; what DevMate as
   await service.call('workbench.snapshot', {}, who);
   assert.deepEqual([[...service.clients.values()][0].calls, [...service.clients.values()][0].lastOperation], [3, 'workbench.snapshot']);
 });
+
+test('a call that is still waiting when the runtime stops is noted all the same', async t => {
+  const { service, projects, temp } = await runtimeWith(t), [project] = projects;
+  // A command that runs on, waited for: the stop ends it, and the call that waited ends with the stop.
+  const waiting = service.call('shell.run', { projectId: project.id, file: process.execPath, args: ['-e', 'setTimeout(() => {}, 60000)'], waitMs: 30000 }, client('ChatGPT'));
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const ended = waiting.then(() => 'answered', error => error.code);
+  await service.close();
+  assert.equal(await ended, 'runtime_stopping');
+  // The journal is read again from the instance, as the next runtime would.
+  const { Store } = await import('../runtime/store.mjs');
+  const store = new Store(path.join(temp, 'instance'));
+  try {
+    const [note] = store.recentEvents({ type: 'operation.called', limit: 50 }).filter(item => item.operation === 'shell.run');
+    assert.deepEqual([note?.ok, note?.code, note?.by?.client], [false, 'runtime_stopping', 'ChatGPT']);
+  } finally { store.close(); }
+});

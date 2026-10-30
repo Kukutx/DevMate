@@ -98,7 +98,7 @@ test('a window names a local port only where its owner set one, the usual one to
   // a value the owner set is their word: set back to 8788, it is how they go back to the usual port.
   const base=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-windows-port-')),instanceRoot=path.join(base,'instance');
   t.after(()=>fs.rmSync(base,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
-  for(const [settings,port] of [[{},undefined],[{runtimePort:8788},8788],[{runtimePort:9123},9123]]){
+  for(const [settings,port] of [[{},undefined],[{runtimePort:null},undefined],[{runtimePort:8788},8788],[{runtimePort:9123},9123]]){
     const window=fakeWindow(instanceRoot,'Ports',[],{settings});
     await window.activate();
     assert.equal(window.made.at(-1).port,port,JSON.stringify(settings));

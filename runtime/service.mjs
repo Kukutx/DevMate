@@ -610,6 +610,9 @@ export class DevMateService {
     const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
     if (errors.length) throw new AggregateError(errors, 'Owned execution resources have not all stopped.');
     await Promise.allSettled([...this.activeCalls, ...this.inflight.values()]);
+    // A call whose work has just settled notes itself a few steps later (see noteCall): one turn of the event loop
+    // lets every such note be written before the journal is closed.
+    await new Promise(resolve => setImmediate(resolve));
     this.store.close();
     this.closed = true;
   }

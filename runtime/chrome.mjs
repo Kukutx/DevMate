@@ -163,7 +163,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   }
   // Its host went away in the middle of asking, or took work and was not heard of since: new calls pass it over while
   // another browser is there, and what waits on it and can go elsewhere goes there now.
-  function lose(link) { if (links.get(link.id) !== link) return; link.lost = true; reroute(link); wake(link); }
+  function lose(link) { if (links.get(link.id) !== link) return; const was = pick(); link.lost = true; reroute(link); if (pick() !== was) wake(link); }
   function hand(link) {
     if (!link.waiter || !link.queue.length) return;
     const waiter = link.waiter, items = link.queue.splice(0);
@@ -278,11 +278,11 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     // One reader at a time: an earlier one that is still waiting is answered with nothing.
     if (link.waiter) { clearTimeout(link.timer); link.waiter({ calls: [], ...told(link) }); link.waiter = null; }
     // It asks again: what it was handed has arrived, and it is the browser it was.
-    const first = !link.heard, back = link.lost;
+    const first = !link.heard, back = link.lost, was = pick();
     clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.handed.clear(); link.lost = false; link.heard = true;
     // The first time it asks, or again after it was lost sight of, it is a browser that can be used, which changes who
     // is used: the others are told.
-    if (first || back) wake(link);
+    if ((first || back) && pick() !== was) wake(link);
     return new Promise(resolve => {
       link.waiter = resolve;
       const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); unasked(link, lost ? Math.min(idleMs, unheardMs) : idleMs); resolve({ calls: [], ...told(link) }); if (lost) lose(link); };
@@ -334,7 +334,9 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     if (!link) throw refuse('browser_unavailable', 'No browser is connected to DevMate. ' + HOW_TO_CONNECT);
     if (!link.methods.has(definition.method)) throw refuse('not_supported', 'The DevMate extension in this browser (version ' + (link.extension || 'unknown') + ') has no ' + definition.method + '. Update the extension.');
     const names = OWN.some(key => params[key] !== undefined);
-    if (names && answered && answered !== link) throw refuse('browser_changed', 'DevMate uses another browser now than the one that answered before (the owner paused that one or chose another, or a browser came or went), and ' + capability +
+    if (names && answered !== link && (answered || links.size > 1)) throw refuse('browser_changed', (answered
+      ? 'DevMate uses another browser now than the one that answered before (the owner paused that one or chose another, or a browser came or went), and '
+      : 'Several browsers are connected and none has answered a call since DevMate started (it was started again, and which browser is used was decided anew), and ') + capability +
       ' names something by an id (a tab, a window, a bookmark, an element) that belongs to one browser, where the same id is something else in another: it was not passed on. Ask the browser that is used now what it has (tabs.list, bookmarks.tree), then call again.');
     const id = 'call-' + randomUUID();
     const answer = await new Promise((resolve, reject) => {

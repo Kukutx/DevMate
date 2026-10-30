@@ -175,8 +175,11 @@
           "description": "%config.nodeCommandPath%"
         },
         "devMate.runtimePort": {
-          "type": "integer",
-          "default": 8788,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": null,
           "minimum": 1024,
           "maximum": 65535,
           "scope": "machine",

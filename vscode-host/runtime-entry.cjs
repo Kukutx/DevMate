@@ -59,7 +59,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   }
   const settings = () => vscode.workspace.getConfiguration('devMate');
   // The local port where the owner set one (for the user, the workspace or the folder), else undefined.
-  const chosenPort = () => { const seen = settings().inspect?.('runtimePort'), set = [seen?.workspaceFolderValue, seen?.workspaceValue, seen?.globalValue].find(value => value !== undefined); return set === undefined ? undefined : Number(set); };
+  // (The setting has no number of its own: VS Code's Settings page drops a value equal to a default, so a default of
+  // 8788 would make 8788 typed there no word at all. Empty, or null, is no port named.)
+  const chosenPort = () => { const seen = settings().inspect?.('runtimePort'), set = [seen?.workspaceFolderValue, seen?.workspaceValue, seen?.globalValue].find(value => value !== undefined && value !== null); return set === undefined ? undefined : Number(set); };
   function treeItem(label, command, description = '', args) {
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     item.description = description;
@@ -634,7 +636,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     // Settings are validated and saved first: a rejected configuration must not leave a stored credential behind.
     await client.call('settings.replace', { config });
     if (secret) await client.call('secret.set', { name: secret[0], value: secret[1] });
-    const ingress = state.record?.ingressPort || config.ingressPort || (state.record?.port || Number(settings().get('runtimePort', 8788))) + 1;
+    const ingress = state.record?.ingressPort || config.ingressPort || (state.record?.port || Number(settings().get('runtimePort') ?? 8788)) + 1;
     const answer = await notify.showWarningMessage('Connection saved. Restart the shared DevMate runtime to apply it?',
       { modal: true, detail: 'Other windows and connected clients reconnect after the restart.' +
         (choice.kind === 'cloudflare' ? ' In the Cloudflare dashboard, route the hostname to http://127.0.0.1:' + ingress + '.'

@@ -126,7 +126,7 @@ Settings (user settings only: a repository's `.vscode/settings.json` cannot chan
 | `devMate.shareFolders` | `readWrite` | What connected clients may do in a trusted folder you open: `readWrite`, `readOnly`, `ask`, `never`. Folders of an untrusted workspace are never shared |
 | `devMate.shareEditorContext` | `true` | Whether clients see the active file, selection, open files and diagnostics |
 | `devMate.autoStart` | `true` | Start the runtime with the editor, and again after a crash. One you stopped stays stopped |
-| `devMate.runtimePort` | `8788` | The local port when this editor starts the runtime |
+| `devMate.runtimePort` | (empty) | The local port when this editor starts the runtime. Empty: the port the runtime ran on last (8788 the first time) |
 | `devMate.nodeCommandPath` | empty | A Node.js 24+ executable, when it is not found on its own |
 | `devMate.runtimeInstanceDirectory` | empty | Another instance directory than `~/.devmate/runtime` |
 

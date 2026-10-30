@@ -146,6 +146,8 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
     for (const call of work.calls) { asked.push(call.method); taker.result({ linkId: there, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
   const ended = taker.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
   assert.deepEqual((await taker.next({ linkId: ended, waitMs: 10 })).calls, []);
+  // (It has answered a look, so that ids are its own: see the test of a call that names an id before any answer.)
+  { const seen = taker.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), work = await taker.next({ linkId: ended, waitMs: 1000 }); taker.result({ linkId: ended, id: work.calls[0].id, ok: true, result: {} }); await seen; }
   const read = taker.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), change = taker.call({ capability: 'chrome.tabs.close', input: { tabIds: [7] } });
   assert.deepEqual((await taker.next({ linkId: ended, waitMs: 1000 })).calls.map(call => call.method), ['tabs.list', 'tabs.close']);
   assert.deepEqual(await quickly(read, 'the read a host took with it'), { by: 'the browser that is there' });
@@ -161,6 +163,8 @@ test('a browser that is gone is noticed in a moment: its link goes, and no call 
     for (const call of work.calls) { askedOfOther.push(call.method); pair.result({ linkId: other, id: call.id, ok: true, result: { by: 'the browser that is there' } }); } } })();
   const going = pair.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods }).linkId;
   assert.deepEqual((await pair.next({ linkId: going, waitMs: 10 })).calls, []);
+  // (It has answered a look, so that ids are its own: see the test of a call that names an id before any answer.)
+  { const seen = pair.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), work = await pair.next({ linkId: going, waitMs: 1000 }); pair.result({ linkId: going, id: work.calls[0].id, ok: true, result: {} }); await seen; }
   const look = pair.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), gone = pair.call({ capability: 'chrome.tabs.close', input: { tabIds: [7] } });
   assert.deepEqual((await pair.next({ linkId: going, waitMs: 1000 })).calls.map(call => call.method), ['tabs.list', 'tabs.close']);
   void pair.next({ linkId: going, waitMs: 5000 });
@@ -185,6 +189,8 @@ test('a call that names something of one browser is not passed on to another, an
   // The one that connected after it asked for work once and is not heard of again: what is asked now waits for it.
   const goes = link.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods: [...methods, 'history.search'] }).linkId;
   assert.deepEqual((await link.next({ linkId: goes, waitMs: 10 })).calls, []);
+  // (It has answered a look, so that ids are its own: see the test of a call that names an id before any answer.)
+  { const seen = link.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), work = await link.next({ linkId: goes, waitMs: 1000 }); link.result({ linkId: goes, id: work.calls[0].id, ok: true, result: {} }); await seen; }
   const calls = {
     list: link.call({ capability: 'chrome.tabs.list', input: { query: 'docs' } }, { readOnly: true }),
     history: link.call({ capability: 'chrome.history.search', input: { query: 'docs' } }, { readOnly: true }),
@@ -233,6 +239,8 @@ test('a call that names something of one browser is not passed on to another, an
   const ending = createBrowserLink({ idleMs: 5000, unheardMs: 5000, callTimeoutMs: 10000 });
   const first = ending.attach({ browser: 'Google Chrome', extension: '4.0.5', methods }).linkId;
   assert.deepEqual((await ending.next({ linkId: first, waitMs: 10 })).calls, []);
+  // (It has answered a look, so that ids are its own: see the test of a call that names an id before any answer.)
+  { const seen = ending.call({ capability: 'chrome.tabs.list' }, { readOnly: true }), work = await ending.next({ linkId: first, waitMs: 1000 }); ending.result({ linkId: first, id: work.calls[0].id, ok: true, result: {} }); await seen; }
   ending.attach({ browser: 'Microsoft Edge', extension: '4.0.5', methods });
   const waits = ending.call({ capability: 'chrome.tabs.close', input: { tabIds: [57] } }).then(value => value, failure => failure);
   ending.close();
@@ -837,4 +845,53 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   await assert.rejects(runtime.service.call('capability.query', { capability: 'chrome.tabs.list' }, connected), { code: 'browser_unavailable' });
   assert.equal(runtime.health.status, 'ready');
   assert.match((await runtime.service.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'chrome').fix, /devmate chrome install/);
+});
+
+// After a restart the owner's choice is forgotten and whichever browser came back last is used: a model may still
+// hold ids from before. While several browsers are connected and none has answered since, an id is nobody's yet.
+test('with several browsers connected and none answered yet, a call that names an id is not passed on; alone, a browser is the one', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list', 'tabs.close'];
+  const serve = linkId => { void (async () => { for (;;) { let work; try { work = await link.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) link.result({ linkId, id: call.id, ok: true, result: { by: linkId } }); } })(); };
+  const first = link.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId; serve(first);
+  // Alone: its ids are its own, answered or not.
+  const lone = createBrowserLink({ callTimeoutMs: 2000 }), only = lone.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId;
+  const closing = lone.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }), given = await lone.next({ linkId: only, waitMs: 1000 });
+  lone.result({ linkId: only, id: given.calls[0].id, ok: true, result: { closed: [5] } });
+  assert.deepEqual(await closing, { closed: [5] });
+  lone.close();
+  // Two, and nothing answered yet: refused before anything is asked, with what to do.
+  const second = link.attach({ browser: 'Microsoft Edge', extension: '4.0.6', methods }).linkId; serve(second);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }).then(() => null, failure => failure);
+  assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
+  assert.match(refused.message, /^Several browsers are connected and none has answered a call since DevMate started/);
+  assert.match(refused.message, /Ask the browser that is used now what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/);
+  // A look that names nothing is answered, and from then on the ids are those of the browser that answered it.
+  const answeredBy = (await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true })).by;
+  assert.equal(answeredBy, second);
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }), { by: second });
+  link.close();
+});
+
+test('a browser that is lost or comes back wakes the other hosts only where that changes which browser is used', async () => {
+  const link = createBrowserLink({ idleMs: 5000, unheardMs: 5000, callTimeoutMs: 2000 }), methods = ['tabs.list'];
+  const attach = name => link.attach({ browser: name, extension: '4.0.6', methods }).linkId;
+  const a = attach('A'), b = attach('B'), c = attach('C');
+  for (const id of [a, b, c]) await link.next({ linkId: id, waitMs: 1 });
+  // C came last and is used. A waits for work; B, which is not used, is lost: nothing changes for A.
+  const started = Date.now(), waiting = link.next({ linkId: a, waitMs: 600 });
+  const away = new AbortController(), asking = link.next({ linkId: b, waitMs: 5000 }, { signal: away.signal });
+  away.abort(); await asking;
+  const told = await waiting;
+  assert.ok(Date.now() - started >= 550, 'A was answered after ' + (Date.now() - started) + ' ms, not woken');
+  assert.deepEqual([told.current, told.browsers], [false, 3]);
+  // C, which is used, is lost: A is not used either, B is lost, so the choice falls to A, and A is woken at once.
+  const second = Date.now(), again = link.next({ linkId: a, waitMs: 3000 });
+  const gone = new AbortController(), last = link.next({ linkId: c, waitMs: 5000 }, { signal: gone.signal });
+  gone.abort(); await last;
+  const now = await again;
+  assert.ok(Date.now() - second < 1000, 'A was woken after ' + (Date.now() - second) + ' ms');
+  assert.equal(now.current, true);
+  link.close();
 });
