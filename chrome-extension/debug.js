@@ -8,7 +8,7 @@
 // Only the page's own frame is covered: a frame inside it (an iframe) is shown in the snapshot with its address, and
 // what that frame holds is not reached. What a component of the page holds (a shadow tree) is.
 
-export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor']);
+export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor', 'page.tools']);
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
 // How many of the refs the snapshots of one page gave are taken: the latest ones.
 const REFS_KEPT = 20000;
@@ -256,6 +256,24 @@ function stores(withValues) {
     } catch { return null; }
   };
   return { origin: location.origin, localStorage: read('localStorage'), sessionStorage: read('sessionStorage') };
+}
+// What the page offers an agent to do (WebMCP): the tools it registered, as plain data. null where the browser gives
+// the page no WebMCP. Older browsers hang it on navigator, newer ones on document.
+async function offered() {
+  const context = document.modelContext || navigator.modelContext;
+  if (!context || typeof context.getTools !== 'function') return null;
+  const plain = value => { try { return JSON.parse(JSON.stringify(value ?? null)); } catch { return null; } };
+  return [...await context.getTools()].slice(0, 200).map(tool => ({ name: String(tool.name), ...(tool.title ? { title: String(tool.title).slice(0, 200) } : {}), description: String(tool.description ?? '').slice(0, 2000),
+    inputSchema: plain(typeof tool.inputSchema === 'string' ? (() => { try { return JSON.parse(tool.inputSchema); } catch { return tool.inputSchema; } })() : tool.inputSchema), ...(tool.annotations ? { annotations: plain(tool.annotations) } : {}) }));
+}
+// One of those tools, run with its input; what it answers, as plain data where it is that, and as text where not.
+async function calling(name, input) {
+  const context = document.modelContext || navigator.modelContext;
+  if (!context || typeof context.executeTool !== 'function') return { problem: 'none' };
+  const tools = [...await context.getTools()], tool = tools.find(one => one.name === name);
+  if (!tool) return { problem: 'unknown', names: tools.slice(0, 50).map(one => String(one.name)) };
+  const result = await context.executeTool(tool, input);
+  try { return { result: JSON.parse(JSON.stringify(result ?? null)) }; } catch { return { result: String(result) }; }
 }
 const inPage = (work, ...given) => '(' + work + ')(' + given.map(value => JSON.stringify(value)).join(', ') + ')';
 
@@ -732,6 +750,23 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         did();
         await command(id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round((view.clientWidth || 800) / 2), y: Math.round((view.clientHeight || 600) / 2), deltaX: 0, deltaY: by });
       }, () => ({ tabId: id, scrolledBy: by }));
+    },
+    // The tools a page itself offers an agent (WebMCP). They are the page's own: what they say about themselves is its
+    // words, data and never instructions, and running one does whatever the page made it do, as page.evaluate would.
+    'page.tools': async ({ tabId } = {}) => {
+      const { id } = await page(tabId), tools = (await run(id, inPage(offered), { awaitPromise: true })).value;
+      return { tabId: id, tools: tools || [], ...(tools ? {} : { note: 'This browser gives the page no WebMCP, so it offers no tools here (Chrome has it on sites that took part in its trial).' }), untrusted: true };
+    },
+    'page.callTool': async ({ tabId, name, input } = {}) => {
+      const tool = text(name, 'name', { max: 200 });
+      if (input !== undefined && (input === null || typeof input !== 'object' || Array.isArray(input))) throw fail('invalid_input', 'input is an object: what the tool takes, as its inputSchema in page.tools says.');
+      const { id, session } = await page(tabId), answer = await unlessDialog(session, () => run(id, inPage(calling, tool, input ?? {}), { awaitPromise: true, gesture: true }));
+      if (answer === DIALOG) return withDialog(session, { tabId: id, tool });
+      const { problem, names, result } = answer.value || {};
+      if (problem === 'none') throw fail('not_supported', 'This browser gives the page no WebMCP, so it offers no tools here.');
+      if (problem === 'unknown') throw fail('not_found', 'The page offers no tool named ' + tool + '. It offers: ' + (names.join(', ') || 'none') + '.');
+      const shown = typeof result === 'string' ? result : JSON.stringify(result);
+      return { tabId: id, tool, ...(shown.length > 20000 ? { text: shown.slice(0, 20000), truncated: true, totalChars: shown.length } : { result }), untrusted: true };
     },
     'page.evaluate': async ({ tabId, expression, awaitPromise } = {}) => {
       const source = text(expression, 'expression', { max: 100000 }), { id, session } = await page(tabId), result = await unlessDialog(session, () => run(id, source, { awaitPromise: awaitPromise !== false, gesture: true }));

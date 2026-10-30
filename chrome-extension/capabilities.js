@@ -10,7 +10,7 @@ export const READ_ONLY = Object.freeze(['browser.info', 'bookmarks.tree', 'bookm
   'history.search', 'downloads.list', 'sessions.recentlyClosed', 'readingList.list', 'topSites.list', 'page.read', 'page.screenshot', ...DEBUG_READ_ONLY]);
 // What a step of page.run may be: the methods of one tab's page, without its picture, its stored values or the debugger itself.
 export const RUN_STEPS = Object.freeze(['tabs.navigate', 'tabs.back', 'tabs.forward', 'page.read', 'page.snapshot', 'page.inspect', 'page.waitFor', 'page.console', 'page.network',
-  'page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.dialog', 'page.reload']);
+  'page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.dialog', 'page.reload', 'page.tools', 'page.callTool']);
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const text = (value, name, { optional = false, max = 4096 } = {}) => {

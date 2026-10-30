@@ -65,7 +65,7 @@ function extension(replies = {}, tabReplies = {}, given = {}) {
   return Object.assign(made, { listed: tabId => listing(made, tabId) });
 }
 // The methods of the debugger that change a page, or what is debugged. The others are its reads: DEBUG_READ_ONLY.
-const CHANGES = ['page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.reload', 'page.emulate', 'page.dialog', 'page.debugStop'];
+const CHANGES = ['page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.reload', 'page.emulate', 'page.dialog', 'page.debugStop', 'page.callTool'];
 // A function the page is sent, run here as the page would run it: on an element, or as the expression it came in. It
 // is carried over as text, so it can use nothing from the file it was written in: whatever of the page it names
 // (document, window, getComputedStyle) is given to it by the test.
@@ -615,6 +615,58 @@ test('page.run does methods of a page one after another on one tab, and stops at
   await refuses(methods['page.run']({ steps: [{ method: 'page.read' }, { method: 'page.read', input: { tabId: 1 } }] }), 'invalid_input', /^Step 2: a run works on one tab\. Give its tabId once, for the run\.$/);
   assert.deepEqual([asked.length, names().length], before);
   assert.deepEqual([...RUN_STEPS].every(name => typeof methods[name] === 'function'), true);
+});
+
+test('page.tools lists what the page itself offers an agent, and page.callTool runs one of them as the page made it, under the watch for a dialog', async () => {
+  let listed = [{ name: 'add_to_cart', description: 'Add a product.', inputSchema: { type: 'object' } }], called = { result: { content: [{ type: 'text', text: 'Added.' }] } };
+  const { methods, sent, say, replies } = harness({ 'Runtime.evaluate': ({ expression }) => ({ result: { type: 'object', value: expression.startsWith('(async function offered') ? listed : called } }) });
+  assert.deepEqual(await methods['page.tools'](), { tabId: 1, tools: listed, untrusted: true });
+  const [looked] = sent('Runtime.evaluate');
+  assert.match(looked.expression, /^\(async function offered\(\) \{[^]*\}\)\(\)$/); assert.deepEqual([looked.awaitPromise, looked.userGesture], [true, false]);
+  // A browser that gives the page no WebMCP is said as that.
+  listed = null;
+  assert.deepEqual(await methods['page.tools'](), { tabId: 1, tools: [], note: 'This browser gives the page no WebMCP, so it offers no tools here (Chrome has it on sites that took part in its trial).', untrusted: true });
+  // A tool is run with its name and its input carried into the page as data, as done by the page's user.
+  assert.deepEqual(await methods['page.callTool']({ name: 'add_to_cart', input: { sku: 'A1"); hit("' } }), { tabId: 1, tool: 'add_to_cart', result: called.result, untrusted: true });
+  const ran = sent('Runtime.evaluate').at(-1);
+  assert.match(ran.expression, /^\(async function calling\(name, input\) \{[^]*\}\)\("add_to_cart", \{"sku":"A1\\"\); hit\(\\""\}\)$/); assert.deepEqual([ran.awaitPromise, ran.userGesture], [true, true]);
+  // What the page says back: no WebMCP, no such tool, or more than is handed on.
+  called = { problem: 'none' };
+  await refuses(methods['page.callTool']({ name: 'add_to_cart' }), 'not_supported', /^This browser gives the page no WebMCP/);
+  called = { problem: 'unknown', names: ['search', 'checkout'] };
+  await refuses(methods['page.callTool']({ name: 'add_to_cart' }), 'not_found', /^The page offers no tool named add_to_cart\. It offers: search, checkout\.$/);
+  called = { result: 'x'.repeat(20001) };
+  assert.deepEqual(await methods['page.callTool']({ name: 'long' }), { tabId: 1, tool: 'long', text: 'x'.repeat(20000), truncated: true, totalChars: 20001, untrusted: true });
+  for (const input of [null, [], 'sku', 5]) await refuses(methods['page.callTool']({ name: 'a', input }), 'invalid_input', /^input is an object/);
+  for (const name of [undefined, '', 5, 'n'.repeat(201)]) await refuses(methods['page.callTool']({ name }), 'invalid_input', /name/);
+  // A tool that opens a dialog ends the call with the dialog named.
+  replies['Runtime.evaluate'] = () => new Promise(() => {});
+  const calling = methods['page.callTool']({ name: 'delete_all' });
+  await settle(); say(1, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete all?' });
+  assert.deepEqual(await calling, { tabId: 1, tool: 'delete_all', dialog: 'confirm: "Delete all?"', note: DIALOG_NOTE, untrusted: true });
+});
+
+test('what page.tools and page.callTool run in the page stand on their own there: the tools of document.modelContext, or of navigator.modelContext in an older browser', async () => {
+  const { methods, sent } = harness({ 'Runtime.evaluate': { result: { type: 'object', value: [] } } });
+  await methods['page.tools'](); await methods['page.callTool']({ name: 'search', input: { q: 'shoes' } }).catch(() => {});
+  const [list, call] = sent('Runtime.evaluate').map(given => given.expression), ran = [];
+  const tools = [{ name: 'search', title: 'Search', description: 'Find products.', inputSchema: '{"type":"object"}', annotations: { readOnlyHint: true }, execute: () => {} }, { name: 'checkout', description: undefined, inputSchema: { type: 'object', loop: null } }];
+  const context = { getTools: async () => tools, executeTool: async (tool, input) => { ran.push([tool, input]); return { content: [{ type: 'text', text: 'Found 3.' }] }; } };
+  const page = (expression, scope) => inPage(expression, { document: {}, navigator: {}, ...scope });
+  // Each tool as plain data: a schema given as text is read as the object it says, and a function is not carried.
+  assert.deepEqual(await page(list, { document: { modelContext: context } }), [{ name: 'search', title: 'Search', description: 'Find products.', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+    { name: 'checkout', description: '', inputSchema: { type: 'object', loop: null } }]);
+  assert.equal((await page(list, { navigator: { modelContext: context } })).length, 2, 'an older browser hangs it on navigator');
+  assert.equal(await page(list, {}), null, 'no WebMCP');
+  // The tool is found by its name and run with the input given.
+  assert.deepEqual(await page(call, { document: { modelContext: context } }), { result: { content: [{ type: 'text', text: 'Found 3.' }] } });
+  assert.deepEqual(ran, [[tools[0], { q: 'shoes' }]]);
+  assert.deepEqual(await page(call.replace('"search"', '"pay"'), { document: { modelContext: context } }), { problem: 'unknown', names: ['search', 'checkout'] });
+  assert.deepEqual(await page(call, {}), { problem: 'none' });
+  // An answer that is no plain data is handed on as text.
+  const circular = {}; circular.self = circular;
+  context.executeTool = async () => circular;
+  assert.deepEqual(await page(call, { document: { modelContext: context } }), { result: '[object Object]' });
 });
 
 test('a selector or a text goes into the page as data: whatever it says, none of it runs', async () => {
@@ -1235,12 +1287,12 @@ test('a page that answers being looked at with a dialog ends the call with the d
 test('the extension offers each read of the debugger as a read and the rest of it as changes, and hands it the clock and the timers it was given', async () => {
   const { methods, asked, names, timers, changes, time } = extension();
   assert.ok(Object.isFrozen(DEBUG_READ_ONLY));
-  assert.deepEqual([...DEBUG_READ_ONLY], ['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor']);
+  assert.deepEqual([...DEBUG_READ_ONLY], ['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor', 'page.tools']);
   for (const name of DEBUG_READ_ONLY) { assert.equal(typeof methods[name], 'function', name); assert.ok(READ_ONLY.includes(name), name); }
   for (const name of [...CHANGES, 'tabs.back', 'tabs.forward']) { assert.equal(typeof methods[name], 'function', name); assert.equal(READ_ONLY.includes(name), false, name + ' changes something, so it is not offered as a read'); }
   // A method added to the debugger belongs on one of the two lists, here and there.
   assert.deepEqual(Object.keys(harness().methods).sort(), [...DEBUG_READ_ONLY, ...CHANGES].sort());
-  assert.equal((await methods['browser.info']()).methods.filter(name => CHANGES.includes(name) || DEBUG_READ_ONLY.includes(name)).length, 18, 'and the extension says it has them all');
+  assert.equal((await methods['browser.info']()).methods.filter(name => CHANGES.includes(name) || DEBUG_READ_ONLY.includes(name)).length, 20, 'and the extension says it has them all');
   // The tab in front is the one the browser says is in front, and time is the time that was handed in.
   time.now += 60000;
   const view = await methods['page.console']();
@@ -1294,10 +1346,10 @@ test('a method offered as a read sends the page only what changes nothing, and r
     'Network.getCookies', 'Network.getResponseBody', 'Network.getRequestPostData']);
   // What a read may have the page work out: these, with what the caller gave carried in as data.
   const scripts = [/^document\.querySelector\("#buy"\)$/, /^!!document\.querySelector\("#buy"\)$/, /^\(function shows\(wanted\) \{[^]*\}\)\("Buy"\)$/, /^\(function byText\(wanted\) \{[^]*\}\)\("Buy"\)$/,
-    /^\(function stores\(withValues\) \{[^]*\}\)\((true|false)\)$/];
+    /^\(function stores\(withValues\) \{[^]*\}\)\((true|false)\)$/, /^\(async function offered\(\) \{[^]*\}\)\(\)$/];
   const inputs = { 'page.console': [{}, { level: 'error', since: 0, limit: 5 }], 'page.network': [{}, { failedOnly: true, query: 'api' }], 'page.networkRequest': [{ requestId: 'r1' }, { requestId: 'r1', maxChars: 100 }],
     'page.snapshot': [{}, { interactiveOnly: true, maxNodes: 10 }, { ref: 13, query: 'home' }, { selector: '#buy' }], 'page.inspect': [{ ref: 13 }, { selector: '#buy', styles: ['color'] }, { text: 'Buy', maxChars: 100 }], 'page.storage': [{}, { includeValues: true }],
-    'page.waitFor': [{ selector: '#buy' }, { text: 'Buy', timeoutMs: 100 }] };
+    'page.waitFor': [{ selector: '#buy' }, { text: 'Buy', timeoutMs: 100 }], 'page.tools': [{}] };
   assert.deepEqual(Object.keys(inputs).sort(), [...DEBUG_READ_ONLY].sort(), 'every read is tried here');
   for (const name of DEBUG_READ_ONLY) for (const input of inputs[name]) {
     // A page that answers everything, so that each read goes all the way.
@@ -1906,7 +1958,7 @@ test('page.screenshot of the tab in front does not wait to the end for a picture
 const OF_A_TAB = { 'page.read': {}, 'page.screenshot': {}, 'page.console': {}, 'page.network': {}, 'page.networkRequest': { requestId: '1' }, 'page.snapshot': {}, 'page.inspect': { selector: 'button' },
   'page.storage': { includeValues: true }, 'page.waitFor': { text: 'Allow' }, 'page.click': { text: 'Allow' }, 'page.hover': { text: 'Allow' }, 'page.type': { text: 'yes' }, 'page.press': { key: 'Enter' },
   'page.select': { selector: 'select', value: 'allow' }, 'page.scroll': { deltaY: 100 }, 'page.evaluate': { expression: 'sessionStorage.length' }, 'page.reload': {}, 'page.emulate': { reset: true },
-  'page.dialog': { accept: true }, 'page.run': { steps: [{ method: 'page.read' }] }, 'tabs.back': {}, 'tabs.forward': {}, 'tabs.navigate': { url: 'https://elsewhere.example/' } };
+  'page.dialog': { accept: true }, 'page.run': { steps: [{ method: 'page.read' }] }, 'page.tools': {}, 'page.callTool': { name: 'approve' }, 'tabs.back': {}, 'tabs.forward': {}, 'tabs.navigate': { url: 'https://elsewhere.example/' } };
 const WORKBENCH = /^This tab is DevMate's own workbench, where the owner decides at the computer\. It is not read, worked or sent elsewhere through the browser\.$/;
 test('DevMate\'s own workbench is not read, worked or sent elsewhere through the browser', async () => {
   const { methods, open, asked, names } = extension({}, { update: (id, change) => ({ id, ...change }) }, { ownPort: () => 8788 });
