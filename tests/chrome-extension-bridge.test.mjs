@@ -187,6 +187,14 @@ test('every call is noted without what it carried: what, when, whether it worked
   assert.deepEqual(activity.map(entry => [entry.method, entry.read, entry.ok, entry.code]), [['tabs.close', false, false, 'not_found'], ['tabs.list', true, true, undefined]]);
   assert.equal(JSON.stringify(activity).includes('secret words'), false);
 });
+test('a run of page methods that stopped at a step that failed is noted as not done, with the code of that step', async () => {
+  const runs = [{ tabId: 1, steps: [{ method: 'page.click', ok: false, error: { code: 'not_found', message: 'No ref.' } }], failed: 1, notDone: 1 }, { tabId: 1, steps: [{ method: 'page.read', ok: true, result: {} }] }];
+  const { bridge, ports } = harness({ methods: { 'page.run': async () => runs.shift() } });
+  bridge.open();
+  await ports[0].say({ type: 'call', id: 'a', method: 'page.run', params: {} });
+  await ports[0].say({ type: 'call', id: 'b', method: 'page.run', params: {} });
+  assert.deepEqual(bridge.state().activity.map(entry => [entry.method, entry.ok, entry.code]), [['page.run', true, undefined], ['page.run', false, 'not_found']]);
+});
 
 test('paused, nothing is run: the runtime is told so, and the refusal is noted', async () => {
   const ran = [];

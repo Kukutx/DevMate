@@ -532,7 +532,19 @@ test('a ref is taken only on the tab and for the page whose snapshot gave it: no
   // A snapshot of the new page gives its refs: those of the lines it shows, and not those it left out.
   await methods['page.snapshot']({ maxNodes: 10 });
   assert.equal((await methods['page.inspect']({ ref: 17 })).tabId, 1);
-  await refuses(methods['page.inspect']({ ref: 19 }), 'not_found', notGiven(19));
+  // 19 was given for the page before, and is said to be of a page that changed; on a tab whose snapshot left it out,
+  // it was given by none.
+  await refuses(methods['page.inspect']({ ref: 19 }), 'not_found', /has changed since the page\.snapshot that gave the ref 19/);
+  await methods['page.snapshot']({ tabId: 3, maxNodes: 10 });
+  await refuses(methods['page.inspect']({ tabId: 3, ref: 19 }), 'not_found', notGiven(19));
+  // The page may go elsewhere while the browser is asked which node a ref is: the answer is then of the next page.
+  await methods['page.snapshot']();
+  replies['DOM.resolveNode'] = ({ backendNodeId }) => { say(1, 'Page.frameNavigated', { frame: { id: 'main', url: 'https://app.example/elsewhere' } }); return { object: { type: 'object', objectId: 'next-page-' + backendNodeId } }; };
+  const mouse = sent('Input.dispatchMouseEvent').length;
+  await refuses(methods['page.click']({ ref: 13 }), 'not_found', /has changed since the page\.snapshot that gave the ref 13/);
+  assert.equal(sent('Input.dispatchMouseEvent').length, mouse, 'nothing of the next page was clicked');
+  assert.deepEqual(sent('Runtime.releaseObject').at(-1), { objectId: 'next-page-13' });
+  delete replies['DOM.resolveNode'];
   // A snapshot of a page that went away while it was read gives none for the page that came.
   replies['Accessibility.getFullAXTree'] = () => { say(1, 'Page.frameNavigated', { frame: { id: 'main', url: 'https://app.example/later' } }); return shop(); };
   await methods['page.snapshot']();
@@ -545,7 +557,7 @@ test('a ref is taken only on the tab and for the page whose snapshot gave it: no
 });
 
 test('page.snapshot lists the part of the page one element holds, by ref or selector, and keeps the lines that have the words asked for', async () => {
-  const { methods, sent, replies } = harness(shown({ 'Accessibility.getFullAXTree': shop(), 'DOM.describeNode': { node: { backendNodeId: 12 } }, 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } }));
+  const { methods, sent, replies, say } = harness(shown({ 'Accessibility.getFullAXTree': shop(), 'DOM.describeNode': { node: { backendNodeId: 12 } }, 'Runtime.evaluate': { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } }));
   await methods['page.snapshot']();
   const navigation = ['[12] navigation "Main"', '  [13] link "Home" → https://app.example/home', '    text "you are here"', '  [16] checkbox "Remember me" (checked=mixed)'];
   assert.deepEqual(await methods['page.snapshot']({ ref: 12 }), { tabId: 1, title: 'T', url: 'https://app.example/', text: navigation.join('\n'), nodes: 4, untrusted: true });
@@ -558,19 +570,29 @@ test('page.snapshot lists the part of the page one element holds, by ref or sele
   assert.equal((await methods['page.snapshot']({ query: '' })).nodes, 11, 'no words, no filter');
   // An element the tree a screen reader sees has no place for, and a node the browser does not name, are said.
   replies['DOM.describeNode'] = { node: { backendNodeId: 404 } };
-  await refuses(methods['page.snapshot']({ selector: '#veil' }), 'not_found', /^This element is not in the tree a screen reader sees: it is hidden, or only holds its parts in place\./);
+  await refuses(methods['page.snapshot']({ selector: '#veil' }), 'not_found', /^This element is not in the tree a screen reader sees: it is hidden, only holds its parts in place, or is no longer on the page\./);
+  // A page that goes elsewhere while it is read has another element, or none, by that number: said, and nothing listed.
+  replies['DOM.describeNode'] = { node: { backendNodeId: 12 } };
+  replies['Accessibility.getFullAXTree'] = () => { say(1, 'Page.frameNavigated', { frame: { id: 'main', url: 'https://app.example/next' } }); return shop(); };
+  await refuses(methods['page.snapshot']({ selector: 'nav' }), 'not_found', /^The page in this tab went elsewhere while it was read\. Take a new page\.snapshot\.$/);
+  replies['Accessibility.getFullAXTree'] = shop();
   replies['DOM.describeNode'] = () => no('Could not find node with given id');
   await refuses(methods['page.snapshot']({ selector: 'nav' }), 'not_found', /^The browser did not say which element the selector nav found\. Name it by its ref from page\.snapshot\.$/);
   await refuses(methods['page.snapshot']({ ref: 404 }), 'not_found', /has given the ref 404/);
   for (const query of [5, 'q'.repeat(201)]) await refuses(methods['page.snapshot']({ query }), 'invalid_input', /^query must be text of at most 200 characters\.$/);
 });
 
-test('a picture of one element is of the page where it is drawn, scrolled into view, in whole pixels of the document', async () => {
-  const { capture, sent, replies, listed } = harness(shown({ 'Page.getLayoutMetrics': { cssVisualViewport: { pageX: 0, pageY: 1200.5 } }, 'Page.captureScreenshot': { data: 'UE5H' } }));
+test('a picture of one element is of the page where it is drawn, in whole pixels of the document, and scrolls nothing', async () => {
+  const { capture, sent, replies, listed } = harness(shown({ 'Page.getLayoutMetrics': { cssVisualViewport: { pageX: 0, pageY: 1200.5, clientWidth: 1000, clientHeight: 700 } }, 'Page.captureScreenshot': { data: 'UE5H' } }));
   await listed();
   assert.deepEqual(await capture(1, { part: { ref: 13 } }), { tabId: 1, mimeType: 'image/png', base64: 'UE5H', element: { x: 10, y: 1220, width: 100, height: 41 } });
-  assert.deepEqual(sent('DOM.scrollIntoViewIfNeeded'), [{ objectId: 'node-13' }]);
-  assert.deepEqual(sent('Page.captureScreenshot'), [{ format: 'png', clip: { x: 10, y: 1220, width: 100, height: 41, scale: 1 }, captureBeyondViewport: true }]);
+  // A picture is a read: nothing is scrolled. One in view is pictured as it is seen, also where it is fixed or sticky.
+  assert.deepEqual(sent('DOM.scrollIntoViewIfNeeded'), []);
+  assert.deepEqual(sent('Page.captureScreenshot'), [{ format: 'png', clip: { x: 10, y: 1220, width: 100, height: 41, scale: 1 }, captureBeyondViewport: false }]);
+  // One out of view, above it, below it or beside it, has the page drawn beyond what is in view.
+  for (const quad of [[10, -50, 110, -50, 110, -10, 10, -10], [10, 650, 110, 650, 110, 750, 10, 750], [950, 20, 1050, 20, 1050, 60, 950, 60]]) {
+    replies['DOM.getContentQuads'] = { quads: [quad] }; await capture(1, { part: { ref: 13 } }); assert.equal(sent('Page.captureScreenshot').at(-1).captureBeyondViewport, true, quad.join());
+  }
   // An element in several boxes is pictured with all of them; a box the browser gives half of is passed over.
   replies['DOM.getContentQuads'] = { quads: [[10, 20, 60, 20, 60, 40, 10, 40], [0, 40, 50, 40, 50, 60, 0, 60], [1, 2]] };
   assert.deepEqual((await capture(1, { part: { ref: 13 } })).element, { x: 0, y: 1220, width: 60, height: 41 });
@@ -579,7 +601,7 @@ test('a picture of one element is of the page where it is drawn, scrolled into v
   assert.deepEqual(await capture(1, { part: { ref: 13 } }), { tabId: 1, mimeType: 'image/png', base64: 'UE5H', element: { x: 0, y: 1200, width: 4096, height: 8000 }, truncated: true, elementWidth: 5000, elementHeight: 9001 });
   // One that is not drawn has nothing to picture.
   for (const quads of [[], [[1, 2]], [[5, 5, 5, 5, 5, 5, 5, 5]]]) { replies['DOM.getContentQuads'] = { quads }; await refuses(capture(1, { part: { ref: 13 } }), 'not_found', /^The element is not shown on the page, so there is nothing of it to picture\./); }
-  assert.equal(sent('Page.captureScreenshot').length, 3, 'and is not pictured');
+  assert.equal(sent('Page.captureScreenshot').length, 6, 'and is not pictured');
   await refuses(capture(1, { part: { ref: 50 } }), 'not_found', /has given the ref 50/);
 });
 
@@ -707,6 +729,31 @@ test('what page.upload asks the page stands on its own there: a file field, for 
   assert.equal(kind({ tagName: 'INPUT', type: 'file', multiple: false }), 'one');
   assert.equal(kind({ tagName: 'INPUT', type: 'FILE', multiple: true }), 'several');
   for (const other of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'BUTTON', type: 'file' }, { tagName: 'DIV' }]) assert.equal(kind(other), null);
+});
+
+test('page.run stops before a step once the owner has paused the browser, once the debugger was taken off its tab, and once its five minutes are up', async () => {
+  let paused = false;
+  const stand = extension(shown({ 'Accessibility.getFullAXTree': shop(), 'Runtime.evaluate': { result: { type: 'string', value: 'visible' } } }), {}, { paused: async () => paused });
+  const { methods, time, sent } = stand;
+  // Paused while the first step ran: the second is not done, nor the third, and the answer says why.
+  stand.replies['Accessibility.getFullAXTree'] = () => { paused = true; return shop(); };
+  const keys = sent('Input.dispatchKeyEvent').length;
+  const run = await methods['page.run']({ steps: [{ method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }, { method: 'page.read' }] });
+  assert.deepEqual([run.failed, run.notDone, run.steps.map(step => step.ok), run.steps[1].error.code], [2, 1, [true, false], 'paused']);
+  assert.match(run.steps[1].error.message, /^The owner paused DevMate's use of this browser while the run went on/);
+  assert.equal(sent('Input.dispatchKeyEvent').length, keys, 'no key was pressed');
+  paused = false; stand.replies['Accessibility.getFullAXTree'] = shop();
+  // The debugger taken off the tab while a step ran (the owner took it off): the next step does not put it back.
+  stand.replies['Accessibility.getFullAXTree'] = () => { stand.drop(1); return shop(); };
+  const attached = stand.log.filter(call => call.method === 'attach').length;
+  const off = await methods['page.run']({ steps: [{ method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }] });
+  assert.deepEqual([off.failed, off.steps[1].error.code], [2, 'browser_error']); assert.match(off.steps[1].error.message, /^The debugger was taken off this tab while the run went on/);
+  assert.equal(stand.log.filter(call => call.method === 'attach').length, attached, 'and it was not put on again');
+  stand.replies['Accessibility.getFullAXTree'] = shop();
+  // A run that takes longer than five minutes stops before its next step.
+  stand.replies['Accessibility.getFullAXTree'] = () => { time.now += 5 * 60 * 1000 + 1; return shop(); };
+  const late = await methods['page.run']({ steps: [{ method: 'page.snapshot' }, { method: 'page.read' }] });
+  assert.deepEqual([late.failed, late.steps[1].error.code], [2, 'timeout']);
 });
 
 test('a selector or a text goes into the page as data: whatever it says, none of it runs', async () => {

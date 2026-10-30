@@ -359,7 +359,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     // Each of the two lists counts what it lost itself, once it is full.
     // page counts the pages the tab has gone to while it is debugged; refs are those the snapshots of one of them gave.
     const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: null, put: false, undrawn: false, lent: 0,
-      page: 0, refs: { page: 0, ids: new Set() } };
+      page: 0, refs: { page: 0, ids: new Set(), before: new Set() } };
     sessions.set(tabId, session);
     try {
       // A page that was showing a dialog before the debugger came answers nothing, and that dialog cannot be answered
@@ -492,9 +492,14 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   async function element(id, { ref, selector, text: shown }) {
     if (ref !== undefined) {
       const wanted = whole(ref, 'ref', { min: 1 }), session = sessions.get(id);
+      // The page went elsewhere before this snapshot: its refs are kept as those of the page before, to say so.
+      const changed = () => fail('not_found', 'The page in this tab has changed since the page.snapshot that gave the ref ' + ref + ': it went to another address or was loaded again, and its elements are others now. Take a new page.snapshot.');
+      if (!session?.refs.ids.has(wanted) && session?.refs.before.has(wanted)) throw changed();
       if (!session?.refs.ids.has(wanted)) throw fail('not_found', 'No page.snapshot of this tab has given the ref ' + ref + '. A ref belongs to the tab and the page whose snapshot listed it: take a page.snapshot of this tab and use a ref from it. (Refs are kept while the tab is debugged; it is let go after five minutes without a call.)');
-      if (session.refs.page !== session.page) throw fail('not_found', 'The page in this tab has changed since the page.snapshot that gave the ref ' + ref + ': it went to another address or was loaded again, and its elements are others now. Take a new page.snapshot.');
+      if (session.refs.page !== session.page) throw changed();
       const found = await raw(id, 'DOM.resolveNode', { backendNodeId: wanted }).catch(() => null);
+      // The page may have gone elsewhere while the browser was asked: the number then names a node of the next page.
+      if (session.refs.page !== session.page) { if (found?.object?.objectId) void raw(id, 'Runtime.releaseObject', { objectId: found.object.objectId }).catch(() => {}); throw changed(); }
       if (!found?.object?.objectId) throw fail('not_found', 'No element has the ref ' + ref + ' any more. Take a new page.snapshot.');
       return found.object.objectId;
     }
@@ -623,12 +628,14 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
           (said ? ' value="' + cut(value, 120) + '"' : '') + (address ? ' → ' + cut(address, 200) : '') + (states.length ? ' (' + states.join(', ') + ')' : '') + (frame ? ' (another page inside this one: what it holds is not listed here)' : ''), ...below];
       };
       const root = part !== undefined ? nodes.find(node => node.backendDOMNodeId === part) : nodes.find(node => !node.parentId) || nodes[0];
-      if (part !== undefined && !root) throw fail('not_found', 'This element is not in the tree a screen reader sees: it is hidden, or only holds its parts in place. page.inspect shows it; a snapshot of what is around it shows its parts.');
+      // A page that went elsewhere while it was read has a node by that number that is another element, or none.
+      if (part !== undefined && session.page !== listed) throw fail('not_found', 'The page in this tab went elsewhere while it was read. Take a new page.snapshot.');
+      if (part !== undefined && !root) throw fail('not_found', 'This element is not in the tree a screen reader sees: it is hidden, only holds its parts in place, or is no longer on the page. page.inspect shows it; a snapshot of what is around it shows its parts.');
       const all = root ? walk(root, 0, '') : [], kept = wanted === undefined ? all : all.filter(one => one.toLowerCase().includes(wanted.toLowerCase())), given = kept.slice(0, most);
       // The refs it gives are taken from now on, on this tab and for this page (see element). A page that went away
       // while it was read gives none.
       if (session.page === listed) {
-        if (session.refs.page !== listed) session.refs = { page: listed, ids: new Set() };
+        if (session.refs.page !== listed) session.refs = { page: listed, ids: new Set(), before: session.refs.ids };
         for (const one of given) { const number = /^ *\[(\d+)\]/.exec(one)?.[1]; if (number) { session.refs.ids.delete(Number(number)); session.refs.ids.add(Number(number)); } }
         for (const old of session.refs.ids) { if (session.refs.ids.size <= REFS_KEPT) break; session.refs.ids.delete(old); }
       }
@@ -859,13 +866,14 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         lent = away;
         if (lent && session.lent++ === 0) await wake(id);
         const again = lent || session.put || tab.active === false;
-        // One element: scrolled into view, and the page pictured where it is drawn (all of its boxes), at most as large
-        // as a whole page is. The browser takes the place as a place in the document, where the boxes are told in what
-        // the window shows: where the page is scrolled to is added, as for what is at a point (see atPoint).
+        // One element, where it is drawn (all of its boxes), at most as large as a whole page is. A picture is a read, so
+        // nothing is scrolled: one in view is pictured as it is seen (also one that is fixed or sticky), one that is not
+        // has the page drawn beyond what is in view, which moves what is fixed. The browser takes the place as a place in
+        // the document, where the boxes are told in what the window shows: where the page is scrolled to is added, as for
+        // what is at a point (see atPoint).
         if (part) {
           const objectId = await element(id, part);
           if (halted()) return null;
-          await raw(id, 'DOM.scrollIntoViewIfNeeded', { objectId }).catch(() => {});
           const quads = ((await raw(id, 'DOM.getContentQuads', { objectId }).catch(() => null))?.quads || []).filter(one => one.length === 8);
           const xs = quads.flatMap(one => [one[0], one[2], one[4], one[6]]), ys = quads.flatMap(one => [one[1], one[3], one[5], one[7]]);
           const metrics = await command(id, 'Page.getLayoutMetrics'), shown = metrics.cssVisualViewport || metrics.cssLayoutViewport || {};
@@ -873,7 +881,8 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
           const wide = Math.ceil(Math.max(...xs) + (shown.pageX || 0)) - x, tall = Math.ceil(Math.max(...ys) + (shown.pageY || 0)) - y;
           if (!quads.length || !(wide >= 1) || !(tall >= 1)) throw fail('not_found', 'The element is not shown on the page, so there is nothing of it to picture. page.inspect says how it is laid out.');
           const width = Math.min(wide, 4096), height = Math.min(tall, 8000);
-          const shot = await pictured({ format: 'png', clip: { x, y, width, height, scale: 1 }, captureBeyondViewport: true }, halted, again);
+          const inView = Math.min(...xs) >= 0 && Math.min(...ys) >= 0 && Math.max(...xs) <= (shown.clientWidth ?? Infinity) && Math.max(...ys) <= (shown.clientHeight ?? Infinity) && wide === width && tall === height;
+          const shot = await pictured({ format: 'png', clip: { x, y, width, height, scale: 1 }, captureBeyondViewport: !inView }, halted, again);
           return { tabId: id, mimeType: 'image/png', base64: shot.data, element: { x, y, width, height }, ...(wide > width || tall > height ? { truncated: true, elementWidth: wide, elementHeight: tall } : {}) };
         }
         if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' }, halted, again)).data };

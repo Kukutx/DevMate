@@ -27,7 +27,7 @@ function show(state) {
 let debugging = [];
 // ownPort: the local port DevMate answers the owner on, as the bridge last heard it (see own() in capabilities.js).
 const methods = createCapabilities(chrome, { version, onChange: tabs => { debugging = tabs; chrome.runtime.sendMessage({ kind: 'state' }).catch(() => {}); },
-  ownPort: () => bridge.state().runtime?.port });
+  ownPort: () => bridge.state().runtime?.port, paused: async () => (await settings.get()).paused === true });
 const letGo = () => methods['page.debugStop']({}).catch(() => {});
 
 const bridge = createBridge({

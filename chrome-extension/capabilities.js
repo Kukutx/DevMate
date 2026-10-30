@@ -9,6 +9,8 @@ import { DEBUG_READ_ONLY, createDebugger } from './debug.js';
 export const READ_ONLY = Object.freeze(['browser.info', 'bookmarks.tree', 'bookmarks.search', 'tabs.list', 'windows.list', 'tabGroups.list',
   'history.search', 'downloads.list', 'sessions.recentlyClosed', 'readingList.list', 'topSites.list', 'page.read', 'page.screenshot', ...DEBUG_READ_ONLY]);
 // What a step of page.run may be: the methods of one tab's page, without its picture, its stored values or the debugger itself.
+// A run has RUN_MS for all its steps, as long as the runtime waits for it.
+const RUN_MS = 5 * 60 * 1000;
 export const RUN_STEPS = Object.freeze(['tabs.navigate', 'tabs.back', 'tabs.forward', 'page.read', 'page.snapshot', 'page.inspect', 'page.waitFor', 'page.console', 'page.network',
   'page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.dialog', 'page.reload', 'page.tools', 'page.callTool']);
 
@@ -50,7 +52,9 @@ const download = item => ({ id: item.id, url: item.finalUrl || item.url, file: i
  * The methods, bound to a chrome object (the real one in the extension, a stand-in in tests). What else is given
  * (onChange, the clock and the timers) goes to the debugger: see createDebugger.
  */
-export function createCapabilities(chrome, { version = '', ownPort = () => undefined, ...debugging } = {}) {
+// paused: whether the owner has paused DevMate's use of the browser (the bridge refuses a call then; a run asks before
+// each of its steps).
+export function createCapabilities(chrome, { version = '', ownPort = () => undefined, paused = async () => false, ...debugging } = {}) {
   const available = (api, name) => { if (!api) throw fail('not_supported', 'This browser has no ' + name + ' for extensions.'); return api; };
   // DevMate's own workbench is not read, worked or sent elsewhere through the browser. What is decided there (what an
   // agent asks for, whether a task is handed to a coding agent, the access profile) is the owner's to decide at the
@@ -220,7 +224,9 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
   };
   // Several methods of a page one after another on one tab, as one call: what a model would otherwise ask for one at
   // a time, waiting for each answer. Each step is that method itself, checked as when it is called alone. The run
-  // stops at the first step that fails, and says which one, and how many were not done.
+  // stops at the first step that fails, and says which one, and how many were not done. It stops as well before a step
+  // once the owner has paused DevMate's use of the browser, once the debugger was taken off the tab while it ran (the
+  // owner took it off, or the tab went), and once its time is up: the runtime waits for a run no longer than that.
   methods['page.run'] = async ({ tabId, steps } = {}) => {
     if (!Array.isArray(steps) || !steps.length || steps.length > 30) throw fail('invalid_input', 'steps is a list of 1 to 30 steps, each { method, input }.');
     for (const [at, step] of steps.entries()) {
@@ -228,9 +234,15 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       if (step.input !== undefined && (step.input === null || typeof step.input !== 'object' || Array.isArray(step.input))) throw fail('invalid_input', 'Step ' + (at + 1) + ': input is an object.');
       if (step.input?.tabId !== undefined && step.input.tabId !== null) throw fail('invalid_input', 'Step ' + (at + 1) + ': a run works on one tab. Give its tabId once, for the run.');
     }
-    const page = await target(tabId), done = [];
+    const page = await target(tabId), done = [], began = (debugging.clock || Date.now)();
+    // watched: the tab had the debugger on it at some time during the run, so that its going is the owner taking it off.
+    let watched = debug.debugging().includes(page.id);
     for (const [at, step] of steps.entries()) {
-      done.push({ method: step.method, ...await answer(methods, step.method, { ...step.input, tabId: page.id }) });
+      const stop = at > 0 && await paused() ? { code: 'paused', message: 'The owner paused DevMate\'s use of this browser while the run went on: this step and those after it were not done.' }
+        : watched && !debug.debugging().includes(page.id) ? { code: 'browser_error', message: 'The debugger was taken off this tab while the run went on: the owner took it off, or the tab was closed. This step and those after it were not done.' }
+        : (debugging.clock || Date.now)() - began > RUN_MS ? { code: 'timeout', message: 'The run took longer than its ' + RUN_MS / 60000 + ' minutes: this step and those after it were not done.' } : null;
+      done.push({ method: step.method, ...(stop ? { ok: false, error: stop } : await answer(methods, step.method, { ...step.input, tabId: page.id })) });
+      watched ||= debug.debugging().includes(page.id);
       if (!done.at(-1).ok) return { tabId: page.id, steps: done, failed: at + 1, notDone: steps.length - at - 1, untrusted: true };
     }
     return { tabId: page.id, steps: done, untrusted: true };

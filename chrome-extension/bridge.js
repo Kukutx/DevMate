@@ -63,7 +63,9 @@ export function createBridge({ connect, methods, version = '', browser = '', set
       ? { ok: false, error: { code: 'paused', message: 'The owner has paused DevMate\'s use of this browser. They switch it back on in the DevMate extension.' } }
       : await answer(methods, message.method, message.params);
     send({ type: 'result', id: message.id, ...outcome });
-    activity.unshift({ at: started, method: String(message.method).slice(0, 60), read: READ_ONLY.includes(message.method), ok: outcome.ok, ...(outcome.ok ? {} : { code: outcome.error.code }), ms: clock() - started });
+    // A run that stopped at a step that failed is noted as not done, with that step's code.
+    const stopped = outcome.ok && outcome.result?.failed ? outcome.result.steps?.[outcome.result.failed - 1]?.error : null;
+    activity.unshift({ at: started, method: String(message.method).slice(0, 60), read: READ_ONLY.includes(message.method), ok: outcome.ok && !stopped, ...(outcome.ok ? stopped ? { code: String(stopped.code || 'failed') } : {} : { code: outcome.error.code }), ms: clock() - started });
     if (activity.length > ACTIVITY_KEPT) activity.length = ACTIVITY_KEPT;
     changed();
   }
