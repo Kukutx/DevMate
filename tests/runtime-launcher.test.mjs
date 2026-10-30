@@ -325,6 +325,19 @@ test('an entry that stops the runtime and starts it again finds it on the port i
   assert.equal(fs.readFileSync(path.join(instanceRoot,'port'),'utf8'),named+'\n');
 });
 
+test('a stop to start again at once is said to the runtime beside the instance, and read by it; a plain stop says nothing',{timeout:120000},async t=>{
+  const base=temp(t,false),instanceRoot=path.join(base,'again'),entryPath=path.resolve('runtime/main.mjs'),word=path.join(instanceRoot,'restarting');
+  t.after(async()=>{await stopRuntime({instanceRoot,timeoutMs:15000}).catch(()=>{});fs.rmSync(base,{recursive:true,force:true,maxRetries:10,retryDelay:100});});
+  const said=()=>(fs.readFileSync(path.join(instanceRoot,'runtime.log'),'utf8').match(/stopping to be started again/g)||[]).length;
+  for(const [again,times] of [[true,1],[false,1]]){
+    await startRuntime({instanceRoot,entryPath,port:await freePort(),timeoutMs:30000});
+    // (What the runtime does with it, a quick tunnel kept, is in runtime-ingress.test.mjs.)
+    await stopRuntime({instanceRoot,timeoutMs:15000,again});
+    assert.equal(said(),times,'again: '+again);
+    assert.equal(fs.existsSync(word),false,'the word is read and taken away by the runtime that stops');
+  }
+});
+
 test('a runtime that no launcher started is restarted from an editor on the port it ran on',{timeout:120000},async t=>{
   // One that ran before an update, or `devmate serve --port`: nothing was written down, and the first restart from an
   // editor (a stop, then a start that names no port) moved it to the usual port.

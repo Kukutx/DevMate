@@ -148,7 +148,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   }
   async function restartRuntime() {
     if (!(await confirmShared('Restart'))) return null;
-    await detachVault({ explicit: false }); await client.stop(); const result = await client.start(); await sync(); return result;
+    // (again: stopped to be started at once; a quick tunnel and its address stay.)
+    await detachVault({ explicit: false }); await client.stop({ again: true }); const result = await client.start(); await sync(); return result;
   }
   // The owner's word on this vault: read and write, read only, or not shared at all.
   async function changeSharing() {
@@ -318,7 +319,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     const saved = (await client.call('settings.read', {})).saved || {}, current = saved.connection?.kind || 'local';
     const choice = await ask('How should ChatGPT, Claude.ai and other cloud clients reach DevMate?',
       (current === 'local' ? 'Right now only apps on this computer can connect.' : 'Right now the connection is: ' + current + '.') +
-      ' A quick tunnel needs no account and no domain: DevMate starts cloudflared and gets an address, which changes whenever it starts again. For an address that stays (an OpenAI tunnel, a domain of your own) use "devmate connect" or VS Code.',
+      ' A quick tunnel needs no account and no domain: DevMate starts cloudflared and gets an address, which stays across restarts of DevMate and changes after a stop or a restart of the computer. For an address that stays (an OpenAI tunnel, a domain of your own) use "devmate connect" or VS Code.',
       [{ label: 'Quick tunnel', value: 'cloudflare-quick', primary: current !== 'cloudflare-quick' }, { label: 'This computer only', value: 'local' }]);
     if (!choice || choice === current) return null;
     let connection = { kind: 'local' };

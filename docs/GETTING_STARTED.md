@@ -52,7 +52,7 @@ ChatGPT runs in the cloud, so it needs an address that reaches your computer fro
 
 | Your situation | Which route | What it is like |
 | --- | --- | --- |
-| Trying it out | Quick tunnel | Nothing to sign up for. **The address is new after every start**, and has to be added to ChatGPT again each time |
+| Trying it out | Quick tunnel | Nothing to sign up for. The address stays across restarts and updates of DevMate. **It is new after a restart of the computer or a stop of DevMate**, and has to be added to ChatGPT again then |
 | ChatGPT only, with an account that can sign in to the OpenAI Platform | OpenAI's tunnel | The tunnel id never changes and no third party is in between. Only the ChatGPT of the account that made the tunnel can use it |
 | For good, with a domain of your own | Cloudflare tunnel | The address never changes, and sign-in can be required. The domain's DNS has to be managed by Cloudflare |
 | For good, with a server of your own | Your own relay | The address stays, and nothing of a third party is in between |
@@ -135,7 +135,8 @@ Not to be asked every time: `devmate delegation allow`. To keep clients from han
 ## Day to day
 
 - **The runtime stays in the background.** Closing VS Code or the terminal does not stop it. To stop it: `devmate stop`.
-- **After the computer was restarted, DevMate was updated or you restarted the runtime:** with a quick tunnel the address is another, and step 4 has to be done again. (In October 2026 the address of a plugin in ChatGPT could not be edited: you make a new one and uninstall the old one, renaming the old one first where its name is in the way.) That is what a quick tunnel is. Not to do it again, take one of the three routes of step 3 whose address stays.
+- **After DevMate was updated or you restarted the runtime:** nothing to do, also with a quick tunnel: the tunnel keeps running across it, and so does its address.
+- **After the computer was restarted, you signed out, or you stopped DevMate (`devmate stop`, Stop in an editor):** with a quick tunnel the address is another, and step 4 has to be done again. (In October 2026 the address of a plugin in ChatGPT could not be edited: you make a new one and uninstall the old one, renaming the old one first where its name is in the way.) That is what a quick tunnel is. Not to do it again, take one of the three routes of step 3 whose address stays.
 - **Another project:** open its folder in VS Code and run **DevMate: Change Folder Sharing**, or `devmate project add <folder>`. With more than one project shared, tell the model which one you mean.
 - **To see what it did:** `devmate ui --open` opens the workbench.
 
@@ -154,7 +155,7 @@ Run `devmate doctor` first. It checks one thing after another and says under eac
 | What you see | What to do |
 | --- | --- |
 | ChatGPT reports an error when connecting, or lists no tools | See whether `connection.public` is `[ ok ]` in `devmate doctor`. If not, the address does not reach you: wait some seconds and try again, or run `devmate restart` and copy the address anew |
-| It worked yesterday and ChatGPT cannot connect today | A quick tunnel, and the runtime was started again since: the address is another. Do step 4 again |
+| It worked yesterday and ChatGPT cannot connect today | A quick tunnel, and the computer was restarted or DevMate stopped since: the address is another (`devmate doctor` says since when it has stayed the same). Do step 4 again |
 | ChatGPT can read and not change | Your plan allows custom connectors to read only, or the project is shared read-only: `devmate project list` shows `access` |
 | The model says a folder is "shared by the owner on their own computer" | Share it yourself: open it in an editor that has DevMate, or run `devmate project add <folder>` |
 | The model says "the owner has to allow this task at their computer first" | See step 6 |

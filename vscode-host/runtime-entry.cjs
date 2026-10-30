@@ -425,7 +425,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     } else if (!before.startsWith(id + ':')) {
       // The same address working again is shown in the status bar and needs nothing from the person.
       const picked = await notify.showInformationMessage(route.temporaryAddress
-        ? 'DevMate can be reached from the cloud at a new address. Give it to your client (ChatGPT, Claude): a quick tunnel gets a new address at every start.'
+        ? 'DevMate can be reached from the cloud at a new address. Give it to your client (ChatGPT, Claude). A quick tunnel keeps its address across restarts of DevMate; it gets a new one after a stop or a restart of the computer.'
         : 'DevMate can be reached from the cloud: its public address was checked end to end.', 'Copy Address');
       if (picked === 'Copy Address') await copyMcpUrl();
     }
@@ -541,7 +541,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     await notify.showInformationMessage('Copied a one-time sign-in code. Paste it on the DevMate authorization page; it expires in 10 minutes.');
   }
   async function restart() {
-    await client.stop();
+    // (again: stopped to be started at once; a quick tunnel and its address stay.)
+    await client.stop({ again: true });
     await client.start();
     return refresh();
   }
@@ -558,7 +559,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const hostName = value => /^(https?:\/\/)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d+)?(\/.*)?$/i.test(value.trim()) ? null : 'Enter a host name such as devmate.example.com';
     const httpsAddress = value => { try { return new URL(value.trim()).protocol === 'https:' ? null : 'The address starts with https://'; } catch { return 'Enter the full address, for example https://devmate.example.com/mcp'; } };
     const choice = await vscode.window.showQuickPick([
-      { label: 'Cloudflare quick tunnel', description: 'No account, no domain, nothing to set up. Any MCP client. The address changes when it starts again', kind: 'cloudflare-quick' },
+      { label: 'Cloudflare quick tunnel', description: 'No account, no domain, nothing to set up. Any MCP client. The address stays across restarts of DevMate, not across a restart of the computer', kind: 'cloudflare-quick' },
       { label: 'Cloudflare Tunnel', description: 'Your own domain. Works with ChatGPT, Claude and any MCP client', kind: 'cloudflare' },
       { label: 'OpenAI Secure MCP Tunnel', description: 'ChatGPT and Codex. Outbound only: no domain, no public address, nothing to install, and an id that stays', kind: 'openai-tunnel' },
       { label: 'Existing HTTPS reverse proxy', description: 'A proxy you already run', kind: 'external-https' },

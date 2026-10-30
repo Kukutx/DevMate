@@ -175,6 +175,10 @@ test('a port an entry was given is named to the launcher, the usual one too; an 
   assert.equal(await asked({port:8788}),8788);
   assert.equal(await asked({port:9123}),9123);
   assert.equal(await asked({}),undefined);
+  // A stop to start again at once says so to the launcher (a quick tunnel and its address stay); a plain stop does not.
+  const stops=[],stopping=createHostClient({launcher:{stopRuntime:async args=>{stops.push(args.again);return{stopped:true};}}});
+  try{await stopping.stop({again:true});await stopping.stop();}finally{stopping.dispose();}
+  assert.deepEqual(stops,[true,false]);
   // Obsidian: a port the owner wrote in the plugin's settings, and only that.
   assert.deepEqual([chosenPort({}),chosenPort({runtimePort:8788}),chosenPort({runtimePort:9123}),chosenPort({runtimePort:'8788'}),chosenPort(undefined)],[undefined,8788,9123,undefined,undefined]);
 });

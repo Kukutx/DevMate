@@ -39,10 +39,19 @@ export function ownedProcess(file, { identify = processIdentity, terminate = pro
   const forget = () => fs.rmSync(file, { force: true });
   return {
     forget,
-    async remember(pid) {
+    // about: what the process was started for, written beside it (a connector that outlives the runtime is taken back
+    // by the next one only where it is still what that one would start).
+    async remember(pid, about = {}) {
       const identity = await identify(pid);
-      if (identity) fs.writeFileSync(file, JSON.stringify({ pid, identity }) + '\n', { mode: 0o600 });
+      if (identity) fs.writeFileSync(file, JSON.stringify({ ...about, pid, identity }) + '\n', { mode: 0o600 });
       return identity !== null;
+    },
+    /** The record of a process that still runs as the one written down, where `fits` takes it; otherwise null. */
+    async adopt(fits = () => true) {
+      let record;
+      try { record = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+      if (typeof record?.identity !== 'string' || !fits(record)) return null;
+      return await identify(record.pid) === record.identity ? record : null;
     },
     async reap() {
       let record;

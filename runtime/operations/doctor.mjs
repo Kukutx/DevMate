@@ -125,13 +125,15 @@ export async function doctor(service) {
       check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason + (verification.reachable || verification.pending ? '' : ' (asked from this computer; a client in the cloud may still get through: try it there)')),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.'
-          : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes: devmate restart gets a new one, and its address is then a new one (devmate mcp-url).'
+          : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes. For a new one, and with it a new address (devmate mcp-url): devmate connect quick --new-address, then devmate restart.'
           : connection.relay ? 'devmate restart opens the forward to the relay again.' + lastSaid
           : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '.' + lastSaid
           : 'Your proxy has to send this address on to the ingress port of this computer (ingressPort in devmate status) and ' + passOn + '.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again: what cloudflared said last is in the connection.process line above.');
     else tunnelProof('connection.public', status, connection.tunnelId);
-    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
+    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). ' +
+      (status.addressSince ? 'Its address has stayed the same since ' + status.addressSince + (status.adopted ? ', kept from before the last restart of DevMate' : '') + '. ' : '') +
+      'The address stays across restarts and updates of DevMate. It changes after devmate stop, a restart of the computer or a sign-out, a long time without a connection to Cloudflare, or devmate connect quick --new-address; the client then has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');
   }
   // OpenAI's tunnel beside that connection: a second way in, with a key and a state of its own.
@@ -147,10 +149,10 @@ export async function doctor(service) {
   }
   // What the runtime's own tunnel client hands over is served as the owner without sign-in, in either auth mode.
   const tunnelled = [status, tunnel].find(state => state?.kind === 'openai-tunnel' && state.client === 'built-in');
-  // A quick tunnel cannot ask for sign-in. Its address ends in a key that is new with every start, and that key is what
-  // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.
-  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key, new with every start, and whoever has the whole address can read and change your projects and run commands.',
-    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
+  // A quick tunnel cannot ask for sign-in. Its address ends in a key, and that key is what keeps strangers out: the
+  // host name alone, which anyone watching DNS can see, opens nothing. The key stays until the owner makes a new one.
+  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key that stays until you make a new one, and whoever has the whole address can read and change your projects and run commands.',
+    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. If it got out: devmate connect quick --new-address, then devmate restart. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
   // A relay forwards one path and no sign-in pages. It is kept private by the key and by the addresses it answers.
   else if (url && new URL(url).pathname !== '/mcp') check('security', 'warn', 'The relay has no sign-in and cannot have one: it forwards only the path its address ends in. That path ends in a key, and unless the relay was set up with --any-address it answers only the addresses ChatGPT and Claude connect from and this computer. Whoever has the whole address and comes from such an address can read and change your projects and run commands.',
     'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else.');

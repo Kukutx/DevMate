@@ -101,10 +101,27 @@ test('CLI delegates lifecycle to the selected isolated instance without opening 
     clientFactory:()=>{throw new Error('No implicit browser/client');}
   }),0);
   assert.deepEqual(received,{instanceRoot:instance,port:34567});
-  const order=[];
+  const order=[],stopped=[];
   assert.equal(await main(['restart','--instance',instance],{stdout:output(),stderr,
-    stop:async()=>{order.push('stop');return{stopped:true};},launch:async()=>{order.push('start');return{started:true};}}),0);
+    stop:async options=>{order.push('stop');stopped.push(options.again);return{stopped:true};},launch:async()=>{order.push('start');return{started:true};}}),0);
   assert.deepEqual(order,['stop','start']);
+  // A restart says that it starts again at once (a quick tunnel and its address stay); a stop does not.
+  assert.equal(await main(['stop','--instance',instance],{stdout:output(),stderr,stop:async options=>{stopped.push(options.again);return{stopped:true};}}),0);
+  assert.deepEqual(stopped,[true,undefined]);
+});
+
+test('devmate connect quick --new-address takes the key of the address away, and only a quick tunnel takes it', async t => {
+  const instance=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-cli-new-address-'));t.after(()=>fs.rmSync(instance,{recursive:true,force:true}));
+  const { quickTunnelKey }=await import('../runtime/cloudflare-connection.mjs');
+  const key=quickTunnelKey(instance),file=path.join(instance,'quick-tunnel.key');
+  const run=async(...args)=>{const stdout=output(),stderr=output();return{code:await main(['connect',...args,'--executable',process.execPath,'--instance',instance],{stdout,stderr}),stdout:stdout.text,stderr:stderr.text};};
+  assert.equal((await run('quick')).code,0);
+  assert.equal(quickTunnelKey(instance),key,'the key stays where no new address is asked for');
+  const renewed=await run('quick','--new-address');
+  assert.equal(renewed.code,0,renewed.stderr);assert.equal(fs.existsSync(file),false);
+  assert.notEqual(quickTunnelKey(instance),key);
+  const refused=await run('cloudflare','--url','https://devmate.example.com/mcp','--new-address');
+  assert.equal(refused.code,1);assert.match(refused.stderr,/does not take --new-address/);
 });
 
 test('the commands people copy from print just the value: MCP address, sign-in code, workbench link', async () => {

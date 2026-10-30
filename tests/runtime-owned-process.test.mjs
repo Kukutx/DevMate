@@ -47,6 +47,23 @@ test('a connector left behind by a runtime that died is ended by its successor, 
   assert.deepEqual(await ownedProcess(file).reap(), { reaped: false }, 'with no record there is nothing to do');
 });
 
+test('a connector that is still the one written down, and what it was started for, can be taken back instead of ended', async t => {
+  const file = path.join(temp(t), 'quick-tunnel.json');
+  const kept = await connector(t);
+  assert.equal(await ownedProcess(file).remember(kept.pid, { kind: 'cloudflare-quick', forwardsTo: 8789 }), true);
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual([record.kind, record.forwardsTo, record.pid], ['cloudflare-quick', 8789, kept.pid]);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // Taken back where it runs as written down and is what the runtime would start; left alone (not ended) otherwise.
+  assert.equal((await ownedProcess(file).adopt(about => about.forwardsTo === 8789))?.pid, kept.pid);
+  assert.equal(await ownedProcess(file).adopt(about => about.forwardsTo === 9790), null);
+  assert.equal(processTree.pidRunning(kept.pid), true, 'a record that does not fit ends nothing by itself');
+  // A record whose process is another one now is no connector to take back.
+  fs.writeFileSync(file, JSON.stringify({ ...record, identity: 'somebody else|0' }));
+  assert.equal(await ownedProcess(file).adopt(), null);
+  fs.rmSync(file); assert.equal(await ownedProcess(file).adopt(), null);
+});
+
 test('a record whose process id now belongs to something else ends nothing', async t => {
   const file = path.join(temp(t), 'connector.json');
   const stranger = await connector(t);

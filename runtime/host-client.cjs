@@ -63,9 +63,10 @@ function createHostClient(options = {}) {
       const launcher = options.launcher || await import('./launcher.mjs');
       return launcher.startRuntime({ ...options, port: startPort(), nodePath: node.executable, clientFactory: await factory() });
     },
-    async stop() {
-      const launcher = await import('./launcher.mjs');
-      return launcher.stopRuntime({ ...options, clientFactory: await factory() });
+    // again: stopped in order to be started at once (a restart): what lives on between two runtimes stays.
+    async stop({ again = false } = {}) {
+      const launcher = options.launcher || await import('./launcher.mjs');
+      return launcher.stopRuntime({ ...options, again, clientFactory: await factory() });
     },
     async status() {
       const launcher = await import('./launcher.mjs');

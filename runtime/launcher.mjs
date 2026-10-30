@@ -182,8 +182,10 @@ function rememberPort(files, ran) {
   try { fs.writeFileSync(file, ran + '\n', { mode: 0o600 }); } catch { /* the next start writes it */ }
 }
 
+// again: the runtime is stopped in order to be started again at once (a restart, an update). It is told so, and what
+// lives on between two runtimes stays (a quick tunnel and its address, ./cloudflare-connection.mjs).
 export async function stopRuntime({
-  instanceRoot, timeoutMs, clientFactory = createRuntimeClient, probe = probeInstanceLock
+  instanceRoot, timeoutMs, clientFactory = createRuntimeClient, probe = probeInstanceLock, again = false
 } = {}) {
   const files = instanceFiles(instanceRoot);
   const duration = timeout(timeoutMs);
@@ -200,8 +202,10 @@ export async function stopRuntime({
   // The port it ran on is written down before it stops: a runtime that no launcher of this version started (one that
   // ran before an update, or `devmate serve`) has none written, and a restart from an editor moved it.
   rememberPort(files, current.record.port);
-  const expectedGeneration = current.record.generation;
-  await clientFactory({ instanceRoot: files.directory }).call('runtime.stop', { expectedGeneration }, { timeoutMs: duration });
+  const expectedGeneration = current.record.generation, restarting = path.join(files.directory, 'restarting');
+  if (again) fs.writeFileSync(restarting, '', { mode: 0o600 });
+  try { await clientFactory({ instanceRoot: files.directory }).call('runtime.stop', { expectedGeneration }, { timeoutMs: duration }); }
+  catch (error) { fs.rmSync(restarting, { force: true }); throw error; }
   const deadline = Date.now() + duration;
   while (Date.now() < deadline) {
     const owner = await probe(files.directory);

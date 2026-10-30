@@ -216,7 +216,7 @@ http://127.0.0.1:8788/mcp
 
 | 通路 | 适用 | 特点 |
 | --- | --- | --- |
-| `quick` | 任何客户端 | Cloudflare 快速隧道，用来试用 DevMate。不需要账号和域名，什么都不用配；每次重新启动地址会变 |
+| `quick` | 任何客户端 | Cloudflare 快速隧道，用来试用 DevMate。不需要账号和域名，什么都不用配；DevMate 重启、更新时地址不变，执行 `devmate stop` 或电脑重启后地址会变 |
 | `openai-tunnel` | ChatGPT、Codex | OpenAI 自己的隧道，由 DevMate 直接对接：只有出站连接，不需要公网地址、域名或服务器，不用另装程序，隧道 ID 固定不变 |
 | `cloudflare` | ChatGPT、Claude 及任何客户端 | 你自己域名上的 Cloudflare 命名隧道，DevMate 负责运行 `cloudflared`。免费 |
 | `https` | 任何客户端 | 你已经在维护的反向代理 |
@@ -253,7 +253,7 @@ devmate restart
 devmate mcp-url
 ```
 
-不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 主机名，DevMate 会验证它确实能到达本机运行时。这条通路没有登录。地址的末尾是 DevMate 每次启动新生成的一段密钥（`https://<名字>.trycloudflare.com/mcp/<密钥>`），只有完整地址才打得开：光有主机名（任何能看到 DNS 的人都看得到）得到的是“未找到”。拿到完整地址的人能做你能做的一切，所以只把它给你自己的客户端，不要贴到别处；`devmate doctor` 显示的地址不带密钥。DevMate 或隧道重新启动后地址会变，用 `devmate mcp-url` 取新地址。
+不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 主机名，DevMate 会验证它确实能到达本机运行时。这条通路没有登录。地址的末尾是 DevMate 生成一次、之后一直保留的一段密钥（`https://<名字>.trycloudflare.com/mcp/<密钥>`），只有完整地址才打得开：光有主机名（任何能看到 DNS 的人都看得到）得到的是“未找到”。拿到完整地址的人能做你能做的一切，所以只把它给你自己的客户端，不要贴到别处；`devmate doctor` 显示的地址不带密钥。地址跟着 `cloudflared` 走，而 `cloudflared` 比运行时活得久：DevMate 重启、更新、从编辑器重启、运行时出错退出，地址都不变，下一个运行时会把隧道接回来。以下情况地址会变：执行 `devmate stop`（或在编辑器里点停止）、电脑重启或注销、和 Cloudflare 长时间断开（比如长时间休眠），或者你自己要一个新地址：`devmate connect quick --new-address`，再 `devmate restart`（地址外泄时就这样做）。之后用 `devmate mcp-url` 取新地址。
 
 快速隧道是 Cloudflare [提供给测试和开发用的](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)：不保证可用性，最多同时 200 个请求，不支持事件流。所以 DevMate 经它只回普通 JSON，调用进行中不发进度消息。日常使用请换成地址固定的通路，见下面几种。
 

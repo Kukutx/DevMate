@@ -12,6 +12,7 @@ import { DevMateService } from './service.mjs';
 import { DomainError } from './store.mjs';
 import { VERSION, BUILD_ID } from './version.mjs';
 import { createConnection } from './connection.mjs';
+import { endQuickTunnel, keptQuickTunnel, quickTunnelKey } from './cloudflare-connection.mjs';
 import { handleWorkbench } from './workbench.mjs';
 import { publicMcpUrl, readConfig } from './config.mjs';
 import { acquireInstanceLock } from './instance-lock.mjs';
@@ -137,6 +138,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   try { instanceId = identity.instanceId = stableInstanceId(path.join(instanceRoot, 'instance-id')); }
   catch (error) { await lock.close(); throw error; }
   const recordFile = path.join(instanceRoot, 'runtime.json'), tokenFile = path.join(instanceRoot, 'owner-token');
+  // Whether the stop under way is one to start again after: said in a file beside the instance, just before, by the
+  // launcher that asks for it. (Read once; a word older than two minutes is no word for this stop.)
+  const restarting = () => { const file = path.join(instanceRoot, 'restarting'); try { const at = fs.statSync(file).mtimeMs; fs.rmSync(file, { force: true }); return Date.now() - at < 120000; } catch { return false; } };
   const token = randomBytes(32).toString('hex');
   let config;
   try {
@@ -166,9 +170,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   // requests must name is asked for each time, never remembered.
   const quickTunnel = config.connection.kind === 'cloudflare-quick';
   // A quick tunnel cannot ask for sign-in, and its host name is no secret: a name travels through DNS in the clear.
-  // What keeps the endpoint the owner's is a path nobody can guess, new with every start, that travels only inside TLS.
+  // What keeps the endpoint the owner's is a path nobody can guess, that travels only inside TLS. It is made once and
+  // kept in the instance, so that the address stays what the owner gave their client while the tunnel lives on (see
+  // ./cloudflare-connection.mjs); the owner makes a new one at their computer (devmate connect quick --new-address).
   // A relay of the owner's own forwards one such path as well; there it is part of the configured address and stays.
-  const mcpPath = quickTunnel ? '/mcp/' + randomBytes(24).toString('base64url') : publicUrl ? new URL(publicUrl).pathname : '/mcp';
+  const mcpPath = quickTunnel ? '/mcp/' + quickTunnelKey(instanceRoot) : publicUrl ? new URL(publicUrl).pathname : '/mcp';
   const currentOrigin = () => {
     if (config.auth.mode === 'oauth') return config.auth.issuer;
     const url = publicUrl || (quickTunnel ? connection?.publicUrl?.() : null);
@@ -369,7 +375,11 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     stopPromise = new Promise(resolve => setTimeout(resolve, 20)).then(async () => {
       clearTimeout(verifyTimer); clearInterval(upkeepTimer);
       streams?.close();
-      const results = await Promise.allSettled([service?.close(), connection?.stop(), tunnelBeside?.stop(), mcpHandler?.close(), plainHandler?.close()]);
+      // A runtime that stops in order to start again (a restart, an update; whoever asks for it says so beside the
+      // instance, see ../launcher.mjs) or because it failed leaves a quick tunnel running for the next one.
+      const again = restarting(), keep = crashed || again;
+      if (again) process.stderr.write(new Date().toISOString() + ' stopping to be started again: what lives on between two runtimes stays\n');
+      const results = await Promise.allSettled([service?.close(), connection?.stop({ keep }), tunnelBeside?.stop(), mcpHandler?.close(), plainHandler?.close()]);
       const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
       if (errors.length) throw new AggregateError(errors, 'Owned processes have not all confirmed shutdown; runtime ownership is retained.');
       const closing = [server, ingress].map(listener => {
@@ -407,7 +417,12 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     port = server.address().port;
     if (hasIngress) {
       const named = ingressPort ?? config.ingressPort;
-      await listen(ingress, named ?? (requestedPort ? requestedPort + 1 : 0), named ? 'It is the port the public connection comes in by, as ingressPort names it in config.json: name another one there.'
+      // A quick tunnel left running by the runtime before forwards to the port that one came in by: taken again where
+      // it is free, so that the tunnel, and its address, can be taken back.
+      const kept = quickTunnel && named == null ? keptQuickTunnel(instanceRoot)?.forwardsTo : undefined;
+      let taken = false;
+      if (Number.isInteger(kept) && kept >= 1024 && kept <= 65535 && kept !== port) { try { await listen(ingress, kept, ''); taken = true; } catch { /* the usual one, and a new tunnel */ } }
+      if (!taken) await listen(ingress, named ?? (requestedPort ? requestedPort + 1 : 0), named ? 'It is the port the public connection comes in by, as ingressPort names it in config.json: name another one there.'
         : 'It is the port the public connection comes in by, the one after the runtime\'s. Start DevMate on another one: ' + another + ', or name a port for it as ingressPort in config.json.');
       ingressPort = ingress.address().port;
     } else ingressPort = null;
@@ -468,6 +483,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     }
     // A connector that cannot start does not take local work down with it, but it is never silent:
     // health says so, and connection.status and the doctor carry the reason.
+    // A quick tunnel an earlier runtime left running belongs to a connection that is not this one any more.
+    try { if (!quickTunnel) await endQuickTunnel(instanceRoot); }
+    catch (error) { process.stderr.write(new Date().toISOString() + ' connection: ' + error.message + '\n'); }
     try { await connection.start(); }
     catch (error) {
       service.connectionFault = { code: error.code || 'connection_error', message: error.message, at: new Date().toISOString() };
