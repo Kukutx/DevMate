@@ -37,8 +37,11 @@ const WORKBENCH = ['open_devmate_workbench', 'workbench_call'];
 const SHELL_TOOL = process.platform === 'win32' ? 'powershell' : 'bash', OTHER_SHELL_TOOL = process.platform === 'win32' ? 'bash' : 'powershell';
 
 test('a client gets the tools of the model it is: by its name, by how it reached the runtime, or as the owner chose', () => {
-  for (const [said, surface] of [[{ name: 'openai-mcp' }, 'gpt'], [{ name: 'ChatGPT' }, 'gpt'], [{ name: 'codex-mcp-client' }, 'gpt'], [{ userAgent: 'openai-mcp/1.0.0' }, 'gpt'],
-    [{ name: 'claude-ai' }, 'claude'], [{ name: 'claude-code', userAgent: 'claude-code/2.1.0' }, 'claude'], [{ userAgent: 'Claude-User' }, 'claude'], [{ name: 'Anthropic/Toolbox' }, 'claude'],
+  for (const [said, surface] of [[{ name: 'openai-mcp' }, 'gpt'], [{ name: 'ChatGPT' }, 'gpt'], [{ userAgent: 'openai-mcp/1.0.0' }, 'gpt'],
+    [{ name: 'claude-ai' }, 'claude'], [{ userAgent: 'Claude-User' }, 'claude'], [{ name: 'Anthropic/Toolbox' }, 'claude'],
+    // A coding agent on this computer, by the name it gives itself: it reads, writes and runs with tools of its own.
+    [{ name: 'claude-code', userAgent: 'claude-code/2.1.0' }, 'agent'], [{ name: 'codex-mcp-client' }, 'agent'], [{ name: ' Claude-Code ' }, 'agent'], [{ chosen: 'agent', name: 'my-script' }, 'agent'],
+    [{ userAgent: 'claude-code/2.1.0' }, 'claude'], [{ name: 'codex-mcp-client-fork' }, 'gpt'],
     [{ name: 'Visual Studio Code' }, 'generic'], [{ name: 'cursor-vscode' }, 'generic'], [{}, 'generic'], [undefined, 'generic'], [{ name: 'my-script', userAgent: 'node' }, 'generic'],
     // OpenAI's tunnel carries ChatGPT whatever it calls itself; what the client says still comes first.
     [{ tunnel: true }, 'gpt'], [{ tunnel: true, name: 'claude-ai' }, 'claude'],
@@ -51,11 +54,12 @@ test('a client gets the tools of the model it is: by its name, by how it reached
 
 test('each surface lists its tools under the names its model knows: everything that reads and the capability tools are on every list', async t => {
   const f = await fixture(t), sizes = {};
-  for (const surface of ['generic', 'gpt', 'claude']) {
+  for (const surface of ['generic', 'gpt', 'claude', 'agent']) {
     const client = await f.open({ surface, listing: true }), listed = await client.listTools();
     sizes[surface] = Buffer.byteLength(JSON.stringify(listed));
     const shown = surfaceFor(surface, f.service.processes.shell);
-    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [...shown.direct.map(name => name.replace('.', '_')), ...shown.native, ...WORKBENCH].sort(), surface);
+    // (A coding agent shows no MCP Apps: it is not given the workbench.)
+    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [...shown.direct.map(name => name.replace('.', '_')), ...shown.native, ...(surface === 'agent' ? [] : WORKBENCH)].sort(), surface);
     // A tool's name does not promise another shell than the one that runs.
     if (surface === 'claude') { assert.ok(shown.native.includes(SHELL_TOOL) && !shown.native.includes(OTHER_SHELL_TOOL), shown.native.join()); assert.ok(listed.tools.find(tool => tool.name === SHELL_TOOL).description.includes(f.service.processes.shell.label)); }
     if (surface === 'gpt') assert.ok(listed.tools.find(tool => tool.name === 'exec_command').description.startsWith('The shell here is ' + f.service.processes.shell.label), 'the first thing exec_command says is which shell this is');
@@ -71,7 +75,7 @@ test('each surface lists its tools under the names its model knows: everything t
   for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 40135, surface + ' lists ' + bytes + ' bytes');
   // A tool a model cannot see is a tool it does not use: every surface lists whatever only reads, the capability tools
   // (the owner's browser and the other engines are behind them) and taking a change back.
-  for (const surface of ['generic', 'gpt', 'claude']) {
+  for (const surface of ['generic', 'gpt', 'claude', 'agent']) {
     const listed = (await (await f.open({ surface, listing: true })).listTools()).tools, named = new Set(listed.map(tool => tool.name));
     for (const name of ['project_list', 'project_overview', 'editor_context', 'editor_diagnostics', 'workspace_files', 'workspace_find', 'workspace_search', 'workspace_history', 'workspace_restore', 'git_status', 'git_diff', 'git_log',
       'git_show', 'git_blame', 'git_branches', 'process_list', 'providers_list', 'connection_status', 'capability_list', 'capability_query', 'capability_call', 'operations_list', 'operations_query', 'operations_call'])
@@ -93,6 +97,32 @@ test('each surface lists its tools under the names its model knows: everything t
   assert.match(serverInstructions(f.service, 'gpt'), /follow it with write_stdin and stop servers with process_stop/);
   assert.match(serverInstructions(f.service, 'claude'), /Changed files stay restorable \(workspace_history, workspace_restore\)/);
   assert.match(serverInstructions(f.service, 'gpt'), /capability_list lists engines: the owner's browser \(engine "chrome": bookmarks, tabs, history; chrome\.page\.\* debugs pages/);
+});
+
+test('a coding agent on this computer is shown what DevMate adds to its own tools: the owner\'s browser, other projects, history, running commands', async t => {
+  const f = await fixture(t), listed = await (await f.open({ surface: 'agent', listing: true })).listTools(), named = new Set(listed.tools.map(tool => tool.name));
+  // Nothing of DevMate's to read, write, change or run: the agent's own tools do that.
+  for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec_command', 'write_stdin', 'bash', 'powershell', 'workspace_read', 'workspace_write', 'workspace_edit', 'workspace_patch', 'shell_run', 'show_changes', ...WORKBENCH])
+    assert.equal(named.has(name), false, name + ' is listed');
+  // The owner's browser in four tools of its own: three that only read, one that changes.
+  const browser = Object.fromEntries(listed.tools.filter(tool => tool.name.startsWith('browser_')).map(tool => [tool.name, tool.annotations.readOnlyHint]));
+  assert.deepEqual(browser, { browser_tabs: true, browser_snapshot: true, browser_screenshot: true, browser_run: false });
+  assert.ok(listed.tools.find(tool => tool.name === 'browser_run').inputSchema.properties.steps, 'browser_run takes the steps of chrome.page.run');
+  // Claude Code is told how large a result may be.
+  for (const tool of listed.tools) assert.equal(tool._meta?.['anthropic/maxResultSizeChars'], 140000, tool.name);
+  // The instructions say what is DevMate's own, and how much: within 2000 characters with full access too.
+  const words = serverInstructions(f.service, 'agent');
+  assert.match(words.slice(0, 512), /with your own tools/); assert.match(words, /browser_snapshot/); assert.doesNotMatch(words, /workspace_read|shell_run|apply_patch/);
+  await f.service.call('access.update', { profile: 'full' }, owner);
+  for (let index = 0; index < 30; index++) { const root = path.join(f.temp, 'more-' + index); fs.mkdirSync(root); await f.service.call('project.create', { root }, owner); }
+  assert.ok(serverInstructions(f.service, 'agent').length <= 2000, serverInstructions(f.service, 'agent').length + ' characters');
+  // What it is not shown it can still call, and the browser tools are the capability calls underneath: with no browser
+  // connected they say so, as capability_query would.
+  const client = await f.open({ surface: 'agent' });
+  fs.writeFileSync(path.join(f.root, 'a.txt'), 'alpha\n');
+  assert.match(f.text(await client.callTool({ name: 'workspace_read', arguments: { projectId: f.project.id, path: 'a.txt' } })), /1\talpha/);
+  const tabs = await client.callTool({ name: 'browser_tabs', arguments: {} });
+  assert.equal(tabs.isError, true); assert.match(tabs.content[0].text, /browser_unavailable/);
 });
 
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {
@@ -234,7 +264,7 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   assert.deepEqual(last(), ['some-editor[31m' + 'x'.repeat(65), 'generic', 'default']);
   const unknown = (await runtime.service.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'client');
   assert.equal(unknown.status, 'info'); assert.match(unknown.detail, /^The last MCP client called itself "some-editor\[31mx+" \(sender line "[^"]*"\) and was shown the tool names of DevMate itself, because nothing about it was recognised, at 20\d\d-/);
-  assert.match(unknown.fix, /add \?tools=gpt, \?tools=claude or \?tools=generic to the MCP address it uses/);
+  assert.match(unknown.fix, /add \?tools=gpt, \?tools=claude, \?tools=agent or \?tools=generic to the MCP address it uses/);
   // The runtime's own check of its public route arrives as the owner where no sign-in is asked for. It is not a client:
   // what the doctor says of the last client stays what it was.
   await names(await connect('devmate-connection-verify'));

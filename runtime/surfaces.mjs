@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { commandShape, fileText, line, projectPath, projectReference } from './operations/shared.mjs';
+import { BROWSER_CAPABILITIES, BROWSER_TEXT } from './chrome.mjs';
 
 // The tools a model is shown depend on which model it is: one trained on Codex's tools is given apply_patch,
 // exec_command and write_stdin, one trained on Claude Code's is given write, edit and bash, and a client that is
@@ -12,7 +13,10 @@ import { commandShape, fileText, line, projectPath, projectReference } from './o
  * it reached the runtime, or nothing of these.
  */
 export function clientSurfaceBy({ chosen, name, userAgent, tunnel } = {}) {
-  if (['gpt', 'claude', 'generic'].includes(chosen)) return { surface: chosen, by: 'address' };
+  if (['gpt', 'claude', 'generic', 'agent'].includes(chosen)) return { surface: chosen, by: 'address' };
+  // A coding agent on this computer (Claude Code, Codex) reads, writes and runs commands with tools of its own: it is
+  // shown what it does not have (see SURFACES.agent). Known by the name it gives itself.
+  if (/^(claude-code|codex-mcp-client)$/i.test(String(name || '').trim())) return { surface: 'agent', by: 'name' };
   const said = String(name || '') + ' ' + String(userAgent || '');
   if (/openai|chatgpt|codex|\bgpt\b/i.test(said)) return { surface: 'gpt', by: 'name' };
   if (/claude|anthropic/i.test(said)) return { surface: 'claude', by: 'name' };
@@ -33,7 +37,10 @@ export const SURFACES = Object.freeze({
   gpt: { native: ['read', 'apply_patch', 'exec_command', 'write_stdin', 'show_changes'], direct: CORE,
     names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.patch': 'apply_patch', 'workspace.edit': 'apply_patch', 'workspace.write': 'apply_patch', 'shell.run': 'exec_command', 'process.read': 'write_stdin', 'process.write': 'write_stdin' } },
   claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...CORE, 'process.read', 'process.write'],
-    names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } }
+    names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } },
+  // A coding agent on this computer: no tool of DevMate's to read, write or run (its own do that, and these stay
+  // callable), the owner's browser in four tools of its own, and no workbench (it shows no MCP Apps).
+  agent: { native: ['browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_run'], direct: CORE, names: {}, workbench: false }
 });
 
 /**
@@ -139,5 +146,27 @@ export const NATIVE_TOOLS = Object.freeze({
     run: async ({ call, present }, input) => present('workspace.edit', await call('workspace.edit', { projectId: input.projectId, path: input.path,
       edits: input.edits.map(item => ({ oldText: item.old_text, newText: item.new_text })) })) },
   bash: commandTool(shell => 'Run a command in the project. The shell here is ' + shell.label),
-  powershell: commandTool(shell => 'Run a PowerShell command in the project (' + shell.label + ')')
+  powershell: commandTool(shell => 'Run a PowerShell command in the project (' + shell.label + ')'),
+  browser_tabs: browserTool('tabs.list', 'Browser tabs', ['Looking at the browser\'s tabs', 'Looked at the browser\'s tabs']),
+  browser_snapshot: browserTool('page.snapshot', 'Browser page', ['Reading a page in the browser', 'Read a page in the browser']),
+  browser_screenshot: browserTool('page.screenshot', 'Browser picture', ['Picturing a page in the browser', 'Pictured a page in the browser']),
+  browser_run: browserTool('page.run', 'Browser steps', ['Working in the browser', 'Worked in the browser'])
 });
+
+/**
+ * One method of the owner's browser as a tool of its own: the same input as capability_query or capability_call
+ * takes for it, and the same call underneath (capability.query or capability.call, authorized and answered as those).
+ */
+function browserTool(method, title, labels) {
+  const capability = BROWSER_CAPABILITIES.find(item => item.method === method);
+  return { title, labels, readOnly: capability.readOnly, ...(capability.readOnly ? {} : { destructive: true, openWorld: true }),
+    description: () => 'The owner\'s browser (the DevMate extension in Chrome or Edge), ' + capability.name + ': ' + capability.description + ' Every other method: capability_list {engine:"chrome"}.',
+    shape: capability.schema.shape,
+    run: async ({ call, present }, input) => {
+      const operation = capability.readOnly ? 'capability.query' : 'capability.call';
+      const result = await call(operation, { capability: capability.name, input });
+      if (Array.isArray(result?.content)) return { content: result.content, ...(result.isError !== undefined ? { isError: result.isError } : {}) };
+      if (typeof result?.[BROWSER_TEXT] === 'string') return { content: [{ type: 'text', text: result[BROWSER_TEXT] }] };
+      return present(operation, result);
+    } };
+}

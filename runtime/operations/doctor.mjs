@@ -168,10 +168,10 @@ export async function doctor(service) {
   const client = service.lastClient;
   // (What it calls itself is its own to choose: given as a name, in quotes it cannot close, and cut short.)
   if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? named(client.name) : 'nothing') + (client.userAgent ? ' (sender line ' + named(client.userAgent, 120) + ')' : '') + ' and was shown the tool names of ' +
-    { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself' }[client.surface] + ', ' +
+    { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself', agent: 'a coding agent on this computer (what DevMate adds to its own tools)' }[client.surface] + ', ' +
     { address: 'as the address it used says (?tools=' + client.surface + ')', name: 'going by that name', tunnel: 'because it came through OpenAI\'s tunnel', default: 'because nothing about it was recognised' }[client.by] + ', at ' + client.at + '.',
   // The address is the owner's to add to; a tunnel id has no place for it.
-  client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
+  client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude, ?tools=agent or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
   // The owner's browser: connected, registered and waiting for a browser to be opened, or not set up. A quick look:
   // the system is asked about the registration only where this instance has written one.
   const browser = service.browser.status();
