@@ -134,6 +134,10 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   const links = new Map();
   // The order in which they connected: two can connect within one millisecond.
   let connected = 0;
+  // The browser that answered a call last. The ids a model knows (tab 57, bookmark 12) are that browser's: a call that
+  // names one is not handed to another browser that is used since (the owner paused that one or chose another, or one
+  // came or went), where the same id is something else.
+  let answered = null;
   // A look that is made after whatever arrived meanwhile was read: a runtime that was busy for a moment does not take
   // a host that was waiting all along for gone.
   const later = (ms, look) => { const timer = setTimeout(() => setImmediate(look), ms); timer.unref?.(); return timer; };
@@ -159,7 +163,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   }
   // Its host went away in the middle of asking, or took work and was not heard of since: new calls pass it over while
   // another browser is there, and what waits on it and can go elsewhere goes there now.
-  function lose(link) { if (links.get(link.id) !== link) return; link.lost = true; reroute(link); }
+  function lose(link) { if (links.get(link.id) !== link) return; link.lost = true; reroute(link); wake(link); }
   function hand(link) {
     if (!link.waiter || !link.queue.length) return;
     const waiter = link.waiter, items = link.queue.splice(0);
@@ -274,10 +278,11 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     // One reader at a time: an earlier one that is still waiting is answered with nothing.
     if (link.waiter) { clearTimeout(link.timer); link.waiter({ calls: [], ...told(link) }); link.waiter = null; }
     // It asks again: what it was handed has arrived, and it is the browser it was.
-    const first = !link.heard;
+    const first = !link.heard, back = link.lost;
     clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.handed.clear(); link.lost = false; link.heard = true;
-    // The first time it asks, it becomes a browser that can be used, which changes who is used: the others are told.
-    if (first) wake(link);
+    // The first time it asks, or again after it was lost sight of, it is a browser that can be used, which changes who
+    // is used: the others are told.
+    if (first || back) wake(link);
     return new Promise(resolve => {
       link.waiter = resolve;
       const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); unasked(link, lost ? Math.min(idleMs, unheardMs) : idleMs); resolve({ calls: [], ...told(link) }); if (lost) lose(link); };
@@ -294,7 +299,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     const link = owned(linkId), call = link.pending.get(id);
     if (!call) return { accepted: false };
     link.pending.delete(id); link.handed.delete(id); clearTimeout(call.timer);
-    if (ok === true) call.resolve(value);
+    if (ok === true) { answered = link; call.resolve(value); }
     else if (error?.code === 'paused') call.reject(fault('paused', PAUSED, { notStarted: true }));
     else call.reject(fault(ERROR_CODES.has(error?.code) ? error.code : 'browser_error', String(error?.message || 'The browser could not do this.').slice(0, 1000)));
     return { accepted: true };
@@ -328,6 +333,9 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     const link = current();
     if (!link) throw refuse('browser_unavailable', 'No browser is connected to DevMate. ' + HOW_TO_CONNECT);
     if (!link.methods.has(definition.method)) throw refuse('not_supported', 'The DevMate extension in this browser (version ' + (link.extension || 'unknown') + ') has no ' + definition.method + '. Update the extension.');
+    const names = OWN.some(key => params[key] !== undefined);
+    if (names && answered && answered !== link) throw refuse('browser_changed', 'DevMate uses another browser now than the one that answered before (the owner paused that one or chose another, or a browser came or went), and ' + capability +
+      ' names something by an id (a tab, a window, a bookmark, an element) that belongs to one browser, where the same id is something else in another: it was not passed on. Ask the browser that is used now what it has (tabs.list, bookmarks.tree), then call again.');
     const id = 'call-' + randomUUID();
     const answer = await new Promise((resolve, reject) => {
       // Whoever asked may give the call up. That is listened for until the call is answered and no longer: a caller at
@@ -336,7 +344,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       const over = settle => value => { signal?.removeEventListener('abort', cancelled); settle(value); };
       // The link is the one the call waits on now: another one, when the first went away and the call could go elsewhere
       // (anywhere: it only looks, hands out no credentials, and names nothing that is one browser's own).
-      const names = OWN.some(key => params[key] !== undefined), item = { id, method: definition.method, params };
+      const item = { id, method: definition.method, params };
       const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, readOnly: definition.readOnly, names, item,
         anywhere: definition.readOnly && !definition.changesWhen?.(params) && !names };
       const give = failure => { const on = entry.link; on.pending.delete(id); on.handed.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); entry.reject(failure(queued >= 0)); };

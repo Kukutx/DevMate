@@ -62,7 +62,7 @@ test('candidate is self contained and its Obsidian main materializes a verified 
     const ended=new Promise(resolve=>child.on('close',code=>resolve(code)));
     return{child,heard,ended,said:()=>said};
   };
-  const within=(promise,ms,what)=>Promise.race([promise,new Promise((resolve,reject)=>setTimeout(()=>reject(new Error(what)),ms))]);
+  const within=(promise,ms,what)=>{let timer;return Promise.race([promise,new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new Error(what)),ms);})]).finally(()=>clearTimeout(timer));};
   const until=async(check,what)=>{for(const end=Date.now()+15000;Date.now()<end;await new Promise(resolve=>setTimeout(resolve,50)))if(check())return;throw new Error('Timed out waiting for '+what);};
   // 1. The file it was started from is written anew (a global install does that).
   const rewritten=host(path.join(temporary,'instance-rewritten'));
@@ -85,15 +85,17 @@ test('candidate is self contained and its Obsidian main materializes a verified 
   assert.equal(elsewhere.child.exitCode,null,'registered as the program it is, it stays');
   fs.writeFileSync(path.join(moved,'chrome','registration.json'),JSON.stringify({node:process.execPath,cli:newer}));
   assert.equal(await within(elsewhere.ended,20000,'the host did not end after another program was registered: '+elsewhere.said()),0);
-  // A program that is registered and is not there replaces nothing: the browser could start no other.
-  const kept=path.join(temporary,'instance-kept');
-  fs.mkdirSync(path.join(kept,'chrome'),{recursive:true});
-  fs.writeFileSync(path.join(kept,'chrome','registration.json'),JSON.stringify({node:process.execPath,cli:path.join(temporary,'no-such-cli.mjs')}));
-  const staying=host(kept);
-  await until(()=>staying.heard.some(message=>message.type==='ready'),'the third host to be ready');
+  // A program that is registered and is not there replaces nothing: the browser could start no other. Nor does one
+  // that was registered already when this host started (a registration written by hand, or left half done): only a
+  // change after the start is an update, and every host would end at its first looks otherwise.
+  const kept=path.join(temporary,'instance-kept'),before=path.join(temporary,'instance-before');
+  for(const [where,cli] of [[kept,path.join(temporary,'no-such-cli.mjs')],[before,newer]]){fs.mkdirSync(path.join(where,'chrome'),{recursive:true});fs.writeFileSync(path.join(where,'chrome','registration.json'),JSON.stringify({node:process.execPath,cli}));}
+  const staying=host(kept),registered=host(before);
+  t.after(()=>{for(const one of [staying,registered])try{one.child.kill();}catch{}});
+  await until(()=>staying.heard.some(message=>message.type==='ready')&&registered.heard.some(message=>message.type==='ready'),'the last two hosts to be ready');
   await new Promise(resolve=>setTimeout(resolve,6500));
-  assert.equal(staying.child.exitCode,null);
+  assert.equal(staying.child.exitCode,null,'a registered program that is not there replaces nothing: '+staying.said());
+  assert.equal(registered.child.exitCode,null,'another program registered from the start is no update: '+registered.said());
   // And it ends, as ever, when the browser closes its end.
-  staying.child.stdin.end();
-  assert.equal(await within(staying.ended,15000,'the host did not end when the browser left'),0);
+  for(const one of [staying,registered]){one.child.stdin.end();assert.equal(await within(one.ended,15000,'the host did not end when the browser left'),0);}
 });

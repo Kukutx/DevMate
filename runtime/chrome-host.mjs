@@ -62,6 +62,20 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
   // Whether this browser is the one DevMate uses, and how many are connected: told to the extension when it changes,
   // and once for every link (a link is new after the runtime was started again, and the extension forgot what it knew).
   let standing = null;
+  // What the runtime was last told of the owner's pause for this link (null: nothing yet). The pause can change while
+  // the link is being made, after what goes with chrome.attach was put together, and a call that says it can fail: it
+  // is said again until the runtime has it, and never taken as said before it was.
+  let toldPaused = null;
+  const tellPause = async () => {
+    const link = linkId, paused = extension?.paused === true;
+    if (!link || toldPaused === paused) return;
+    const answer = await client.call('chrome.state', { linkId: link, paused }).catch(error => { log('state: ' + (error?.message || error)); return null; });
+    if (!answer || linkId !== link) return;
+    toldPaused = paused;
+    stands(answer);
+    // (It changed again meanwhile: that is said too.)
+    if ((extension?.paused === true) !== paused) await tellPause();
+  };
   const stands = answer => {
     if (typeof answer?.current !== 'boolean' || !Number.isInteger(answer.browsers)) return;
     if (standing && standing.current === answer.current && standing.browsers === answer.browsers) return;
@@ -94,11 +108,15 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     if (polling || !extension) return;
     polling = true;
     try {
-      standing = null;
+      standing = null; toldPaused = null;
       // (paused: what the owner chose in the panel, where the extension has read it by now. Not yet known counts as
-      // not paused: the extension says it right after.)
-      linkId = (await client.call('chrome.attach', { browser: extension.browser, extension: extension.version, methods: extension.methods, ...(extension.paused === true ? { paused: true } : {}) })).linkId;
+      // not paused: the extension says it right after, and what it says while the link is being made is said to the
+      // runtime once the link is there.)
+      const paused = extension.paused === true;
+      linkId = (await client.call('chrome.attach', { browser: extension.browser, extension: extension.version, methods: extension.methods, ...(paused ? { paused: true } : {}) })).linkId;
+      toldPaused = paused;
       while (!signal.aborted && linkId) {
+        await tellPause();
         const answer = await client.call('chrome.next', { linkId, waitMs: 25000 }, { timeoutMs: 40000 }), calls = answer.calls || [];
         stands(answer);
         for (const call of calls) {
@@ -189,7 +207,7 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
       // browser that is not paused, where there is one.
       if (!extension || typeof message.paused !== 'boolean') return;
       extension.paused = message.paused;
-      if (linkId) stands(await client.call('chrome.state', { linkId, paused: message.paused }).catch(error => { log('state: ' + (error?.message || error)); return null; }));
+      await tellPause();
     } else if (message.type === 'request') await asked(message);
   }
 
@@ -228,7 +246,9 @@ export async function chromeHostMain(argv, { stdin = process.stdin, stdout = pro
   const first = mark();
   let last = first;
   const replaced = () => {
-    const now = mark(), other = (now.started !== null && now.started !== first.started) || now.elsewhere !== '';
+    // (Only what changed after this program started: a registration that named another program from the start, one
+    // written by hand or left half done, would otherwise end every host at its first looks, and nothing mends it.)
+    const now = mark(), other = (now.started !== null && now.started !== first.started) || (now.elsewhere !== '' && now.elsewhere !== first.elsewhere);
     const settled = other && now.started === last.started && now.elsewhere === last.elsewhere;
     last = now;
     return settled;

@@ -25,7 +25,9 @@ function fakeWindow(instanceRoot, name, roots, { share = 'Read and write', setti
     workspace:{
       name,isTrusted:true,
       workspaceFolders:roots.map(root=>({name:path.basename(root),uri:{scheme:'file',fsPath:root}})),
-      getConfiguration:()=>({get:(key,fallback)=>key==='runtimeInstanceDirectory'?instanceRoot:Object.hasOwn(settings,key)?settings[key]:fallback}),
+      getConfiguration:()=>({get:(key,fallback)=>key==='runtimeInstanceDirectory'?instanceRoot:Object.hasOwn(settings,key)?settings[key]:fallback,
+        // (What the owner set, as VS Code says it: the settings given here are the user's.)
+        inspect:key=>({key,...(Object.hasOwn(settings,key)?{globalValue:settings[key]}:{})})}),
       onDidChangeWorkspaceFolders:()=>({dispose(){}}),
       onDidChangeConfiguration:listener=>{changed.push(listener);return{dispose(){}};},
       onDidGrantWorkspaceTrust:listener=>{trusted.push(listener);return{dispose(){}};}
@@ -42,13 +44,15 @@ function fakeWindow(instanceRoot, name, roots, { share = 'Read and write', setti
     Uri:{parse:value=>value},env:{openExternal:async()=>true}
   };
   let localClient=client;
+  // What each client of this window was made with.
+  const made=[];
   const entry=createVscodeRuntimeEntry(vscode,client?{client}:{clientFactory:options=>{
-    localClient=createHostClient({...options,...hostOptions});return localClient;
+    made.push(options);localClient=createHostClient({...options,...hostOptions});return localClient;
   }});
   const context={subscriptions:[],workspaceState:{get:(key,fallback)=>memory.has(key)?memory.get(key):fallback,update:async(key,value)=>{memory.set(key,value);}}};
   const set=(key,value)=>{settings[key]=value;for(const listener of changed)listener({affectsConfiguration:name=>name==='devMate'||name==='devMate.'+key});};
   const trust=()=>{vscode.workspace.isTrusted=true;for(const listener of trusted)listener();};
-  return {entry,commands,context,asked,shown,memory,statusBars,providers,set,trust,get client(){return localClient;},vscode,
+  return {entry,commands,context,asked,shown,memory,statusBars,providers,set,trust,made,get client(){return localClient;},vscode,
     activate:()=>entry.activate(context),bound:()=>until(()=>entry.attachment?.selectedProjectId,name+' bound its folder')};
 }
 async function freePort() {
@@ -87,6 +91,19 @@ test('two real VS Code host instances attach independent windows to the same loc
   assert.equal((await f.call('window.list')).items.length,1);
   assert.equal((await windows[1].client.call('project.list')).items[0].id,attachments[1].selectedProjectId);
   assert.equal(f.runtime.health.status,'ready');
+});
+
+test('a window names a local port only where its owner set one, the usual one too; otherwise a start takes the port the runtime ran on last',async t=>{
+  // The setting's default is 8788, and asked for its value VS Code says 8788 whether the owner wrote it or not. Only
+  // a value the owner set is their word: set back to 8788, it is how they go back to the usual port.
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-windows-port-')),instanceRoot=path.join(base,'instance');
+  t.after(()=>fs.rmSync(base,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
+  for(const [settings,port] of [[{},undefined],[{runtimePort:8788},8788],[{runtimePort:9123},9123]]){
+    const window=fakeWindow(instanceRoot,'Ports',[],{settings});
+    await window.activate();
+    assert.equal(window.made.at(-1).port,port,JSON.stringify(settings));
+    await window.entry.deactivate();
+  }
 });
 
 test('with sharing set to ask, a window shares a folder only after its user agrees, and remembers "Don\'t share"',async t=>{

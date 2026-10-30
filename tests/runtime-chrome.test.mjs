@@ -496,6 +496,63 @@ test('a browser the owner paused is not the one in use either while none of them
   link.close();
 });
 
+test('a browser that is lost sight of, and one that is back, changes who is used: a host that waits is told in that moment', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list'];
+  const soon = answer => Promise.race([answer, new Promise((resolve, reject) => setTimeout(() => reject(new Error('the host that waited was not told')), 1000))]);
+  const a = link.attach({ browser: 'Chrome A', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: a, waitMs: 1000 });
+  const b = link.attach({ browser: 'Chrome B', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: b, waitMs: 1000 });
+  // B is used. Its host goes away in the middle of asking: A is used, and its host hears it now, not in 25 seconds.
+  let waiting = link.next({ linkId: a, waitMs: 5000 });
+  const away = new AbortController();
+  const asking = link.next({ linkId: b, waitMs: 5000 }, { signal: away.signal });
+  away.abort();
+  await asking;
+  assert.deepEqual(await soon(waiting), { calls: [], current: true, browsers: 2 });
+  // B asks again: it is used again, and A is told so.
+  waiting = link.next({ linkId: a, waitMs: 5000 });
+  const back = link.next({ linkId: b, waitMs: 5000 });
+  assert.deepEqual(await soon(waiting), { calls: [], current: false, browsers: 2 });
+  link.close(); await back;
+});
+
+test('a call that names something by an id goes to no other browser than the one that answered before: not after a pause, a choice or a new browser', async () => {
+  // Tab 57 and bookmark 12 are one browser's own: in another browser the same number is something else. Pausing the
+  // browser that answered, choosing another, or one more coming made the next call that names an id go to another
+  // browser, and close a tab there that nobody meant.
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list', 'tabs.close'];
+  const a = link.attach({ browser: 'Chrome A', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: a, waitMs: 1000 });
+  const b = link.attach({ browser: 'Chrome B', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: b, waitMs: 1000 });
+  // Which of them a call is handed to, answered there.
+  const goes = async (capability, input) => {
+    const asked = link.call({ capability, input }, { readOnly: capability === 'chrome.tabs.list' });
+    const answers = await Promise.all([link.next({ linkId: a, waitMs: 60 }), link.next({ linkId: b, waitMs: 60 })]), at = answers.findIndex(answer => answer.calls.length);
+    link.result({ linkId: [a, b][at], id: answers[at].calls[0].id, ok: true, result: { items: [] } });
+    await asked;
+    return 'AB'[at];
+  };
+  const refused = () => assert.rejects(link.call({ capability: 'chrome.tabs.close', input: { tabIds: [57] } }), { code: 'browser_changed', notStarted: true });
+  assert.equal(await goes('chrome.tabs.list', {}), 'B');
+  assert.equal(await goes('chrome.tabs.close', { tabIds: [57] }), 'B', 'the browser that answered is the one asked');
+  // B is paused: what names an id is not handed to A; a look that names nothing is, and from then on A's ids are the ones known.
+  link.state({ linkId: b, paused: true });
+  await refused();
+  assert.equal(await goes('chrome.tabs.list', {}), 'A');
+  assert.equal(await goes('chrome.tabs.close', { tabIds: [57] }), 'A');
+  // The owner chooses B again ("use this browser" lifts no pause, so the pause is lifted as well).
+  link.state({ linkId: b, paused: false }); link.prefer({ linkId: b });
+  await refused();
+  assert.equal(await goes('chrome.tabs.list', {}), 'B');
+  // A third browser connects and is the one used from then on.
+  const c = link.attach({ browser: 'Chrome C', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: c, waitMs: 1000 });
+  await refused();
+  link.close();
+});
+
 test('where several browsers are connected the owner says which one is used: a paused one is passed over, and one chosen in its panel is used', async () => {
   // Every call went to the browser that connected last. One the owner had paused refused them all while another
   // stood idle, and nothing said which of two browsers was the one in use, nor let the owner choose.
@@ -604,6 +661,38 @@ test('the browser host carries the owner\'s word between a browser\'s panel and 
   input.write(frame({ type: 'state', paused: 'yes' }));
   await new Promise(resolve => setTimeout(resolve, 80));
   assert.equal(asked.filter(([name]) => name === 'chrome.state').length, states);
+  input.end(); await served;
+});
+
+test('the browser host passes on a pause the owner chose while the link was being made, and says it again until the runtime has it', async () => {
+  // The browser starts with the owner's pause already set: the first hello does not know it yet, and the extension
+  // says it while the link is being made. It was kept for a link that was not there, and never said: the runtime held
+  // a paused browser for one that is not, and asked it every time.
+  const input = new PassThrough(), output = new PassThrough(), asked = [];
+  let attached = null, refusals = 1;
+  const client = { status: async () => ({ running: true, record: { version: '4.0.6', port: 8788 } }),
+    call: async (name, args) => {
+      asked.push([name, args]);
+      if (name === 'chrome.attach') return new Promise(resolve => { attached = () => resolve({ linkId: 'link' }); });
+      if (name === 'chrome.next') return new Promise(resolve => setTimeout(() => resolve({ calls: [], current: true, browsers: 1 }), 20));
+      if (name === 'chrome.state') { if (refusals-- > 0) throw Object.assign(new Error('The runtime did not answer in time.'), { code: 'RUNTIME_TIMEOUT' }); return { current: !args.paused, browsers: 2 }; }
+      return { items: [] };
+    } };
+  const served = serveChromeHost({ origin: EXTENSION_ORIGIN, input, output, client, pollMs: 20 });
+  const states = () => asked.filter(([name]) => name === 'chrome.state').map(([, args]) => args.paused);
+  input.write(frame({ type: 'hello', protocol: 1, extension: '4.0.6', browser: 'Google Chrome', methods: [] }));
+  await until(() => attached, 'the link to be asked for');
+  input.write(frame({ type: 'state', paused: true }));
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(states(), [], 'nothing is said of a link that is not there yet');
+  assert.equal(asked.find(([name]) => name === 'chrome.attach')[1].paused, undefined);
+  attached();
+  // Said once the link is there. The runtime does not take it the first time: that is no "said", and it is said again.
+  await until(() => states().length === 2, 'the pause to be said again');
+  assert.deepEqual(states(), [true, true]);
+  // Once the runtime has it, it is not said again.
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(states().length, 2);
   input.end(); await served;
 });
 
@@ -731,7 +820,8 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   assert.equal((await looking).content[0].text, '[error] boom\n{"tabId":7,"cursor":1,"untrusted":true}');
   await model.close();
   // The link itself is the browser host's alone: a connected client cannot pose as a browser.
-  for (const [operation, input] of [['chrome.attach', { methods: [] }], ['chrome.next', { linkId: 'x' }], ['chrome.result', { linkId: 'x', id: 'y', ok: true }], ['chrome.detach', { linkId: 'x' }]])
+  for (const [operation, input] of [['chrome.attach', { methods: [] }], ['chrome.next', { linkId: 'x' }], ['chrome.result', { linkId: 'x', id: 'y', ok: true }], ['chrome.detach', { linkId: 'x' }],
+    ['chrome.state', { linkId: 'x', paused: false }], ['chrome.prefer', { linkId: 'x' }]])
     await assert.rejects(runtime.service.call(operation, input, connected), { code: 'forbidden' }, operation);
   // The doctor says how the browser stands, and with a project the browser is listed beside the project's engines.
   const doctor = await runtime.service.call('runtime.doctor', {}, owner);

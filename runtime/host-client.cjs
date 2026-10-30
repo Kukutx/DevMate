@@ -39,14 +39,12 @@ function createHostClient(options = {}) {
   const factory = () => import('./client.mjs').then(module => overrides => module.createRuntimeClient({ ...settings, ...overrides }));
   const client = () => clientPromise ||= factory().then(create => create());
   const version = () => versionPromise ||= import('./version.mjs');
-  // The port a start from this entry asks for. One the owner set in this entry, other than the usual one, is their
-  // word. Otherwise none is named, and the launcher takes the port the instance ran on last: the runtime may have
-  // been started elsewhere (a terminal, another entry) on a port this entry's settings do not name, and a start or
-  // a restart from here moved it, away from the clients on this computer and the route of a tunnel set to it.
-  const startPort = async () => {
-    const usual = (await import('./client.mjs')).DEFAULT_RUNTIME_PORT;
-    return options.port !== undefined && Number(options.port) !== usual ? options.port : undefined;
-  };
+  // The port a start from this entry asks for. An entry passes one only where the owner set it in its settings, and
+  // then it is their word, whatever number it is (the usual one too: that is how they go back to it). Otherwise none
+  // is named, and the launcher takes the port the instance ran on last: the runtime may have been started elsewhere
+  // (a terminal, another entry) on a port this entry's settings do not name, and a start or a restart from here moved
+  // it, away from the clients on this computer and the route of a tunnel set to it.
+  const startPort = () => options.port;
   return {
     async start() {
       // An editor's own executable is Electron, not Node: use the configured Node, else the one on PATH.
@@ -61,8 +59,9 @@ function createHostClient(options = {}) {
         error.cause = cause;
         throw error;
       }
-      const launcher = await import('./launcher.mjs');
-      return launcher.startRuntime({ ...options, port: await startPort(), nodePath: node.executable, clientFactory: await factory() });
+      // (launcher: a test's own, to see what a start asks for.)
+      const launcher = options.launcher || await import('./launcher.mjs');
+      return launcher.startRuntime({ ...options, port: startPort(), nodePath: node.executable, clientFactory: await factory() });
     },
     async stop() {
       const launcher = await import('./launcher.mjs');

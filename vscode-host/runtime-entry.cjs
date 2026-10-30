@@ -58,6 +58,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     })) : [] };
   }
   const settings = () => vscode.workspace.getConfiguration('devMate');
+  // The local port where the owner set one (for the user, the workspace or the folder), else undefined.
+  const chosenPort = () => { const seen = settings().inspect?.('runtimePort'), set = [seen?.workspaceFolderValue, seen?.workspaceValue, seen?.globalValue].find(value => value !== undefined); return set === undefined ? undefined : Number(set); };
   function treeItem(label, command, description = '', args) {
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     item.description = description;
@@ -658,7 +660,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const connect = () => suppliedClient || clientFactory({
       instanceRoot: settings().get('runtimeInstanceDirectory',''),
       nodePath: settings().get('nodeCommandPath',''),
-      port: settings().get('runtimePort',8788),
+      // (Only a port the owner set, in any scope of the settings: one they left alone is not named, and a start takes
+      // the port the runtime ran on last.)
+      ...(chosenPort() !== undefined ? { port: chosenPort() } : {}),
       windowId
     });
     client = connect();

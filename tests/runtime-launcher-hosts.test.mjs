@@ -165,3 +165,16 @@ test('an editor that has no usable Node says what each one it tried said, not on
   assert.equal(await refused([{source:'path',requestedExecutable:'node',reason:'spawnSync node ENOENT'}]),'DevMate needs Node.js 24 or newer and did not find one it can use (node on PATH: not found).'+WAY);
   assert.equal(await refused(undefined),'DevMate needs Node.js 24 or newer and did not find one it can use.'+WAY);
 });
+
+test('a port an entry was given is named to the launcher, the usual one too; an entry given none names none',async()=>{
+  // Set back to 8788 in an editor, the port was taken for "none named", and the runtime stayed where it was: the
+  // owner had no way back from the editor.
+  const {createHostClient}=require('../runtime/host-client.cjs');
+  const {chosenPort}=require('../obsidian-plugin/src/runtime-entry.cjs');
+  const asked=async options=>{const client=createHostClient({...options,resolveNode:()=>({executable:process.execPath}),launcher:{startRuntime:async args=>args}});try{return(await client.start()).port;}finally{client.dispose();}};
+  assert.equal(await asked({port:8788}),8788);
+  assert.equal(await asked({port:9123}),9123);
+  assert.equal(await asked({}),undefined);
+  // Obsidian: a port the owner wrote in the plugin's settings, and only that.
+  assert.deepEqual([chosenPort({}),chosenPort({runtimePort:8788}),chosenPort({runtimePort:9123}),chosenPort({runtimePort:'8788'}),chosenPort(undefined)],[undefined,8788,9123,undefined,undefined]);
+});

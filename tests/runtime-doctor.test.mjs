@@ -336,13 +336,18 @@ test('the doctor says which of several browsers is used, names the others as nam
   const { service: runtime } = await service(t, {});
   const chrome = async () => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'chrome');
   const methods = ['tabs.list'];
-  const first = runtime.browser.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId;
+  const first = runtime.browser.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId, hosts = [first];
   await runtime.browser.next({ linkId: first, waitMs: 1000 });
+  // Every browser keeps asking for work, as its host does: a doctor that takes its time on a busy computer (seen on
+  // Windows, five seconds for these looks) is no reason for a browser to be taken for gone halfway.
+  const asking = setInterval(() => { for (const linkId of hosts) runtime.browser.next({ linkId, waitMs: 1000 }).catch(() => {}); }, 300);
+  t.after(() => clearInterval(asking));
   // One browser: as it was.
   assert.deepEqual([(await chrome()).status, (await chrome()).detail], ['ok', 'The DevMate extension 4.0.6 in Google Chrome is connected: its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).']);
   // A second one, whose extension says of itself what it likes: named in quotes, on the one line, cut short.
   const second = runtime.browser.attach({ browser: 'Edge"\n[ ok ] forged: line ' + 'x'.repeat(60), extension: '4.0.6', methods }).linkId;
   await runtime.browser.next({ linkId: second, waitMs: 1000 });
+  hosts.push(second);
   runtime.browser.prefer({ linkId: first });
   let check = await chrome();
   const other = '"' + ('Edge\' [ ok ] forged: line ' + 'x'.repeat(60)).slice(0, 40) + '"';

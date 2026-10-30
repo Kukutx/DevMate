@@ -252,10 +252,12 @@ test('a runtime that ends on an error of its own is one that ended unexpectedly:
   assert.equal(code,1,said);assert.match(said,/"event":"ready"/);assert.match(said,/uncaught exception: Error: an error nothing catches/);
   const ended=await runtimeStatus({instanceRoot});
   assert.deepEqual([ended.state,ended.running,ended.crashed],['stopped',false,true],JSON.stringify(ended));
-  // What it owned is released: the port answers nobody, and the next start is the usual one.
+  // What it owned is released: the port answers nobody, and the next start works. No launcher started it, so no port is
+  // written down: a start that names none follows it on the port its record says.
   await assert.rejects(fetch('http://127.0.0.1:'+port+'/health'));
-  const next=await startRuntime({instanceRoot,entryPath:path.resolve('runtime/main.mjs'),port:await freePort(),timeoutMs:30000});
-  assert.equal(next.started,true);assert.equal((await runtimeStatus({instanceRoot})).crashed,undefined);
+  assert.equal(fs.existsSync(path.join(instanceRoot,'port')),false);
+  const next=await startRuntime({instanceRoot,entryPath:path.resolve('runtime/main.mjs'),timeoutMs:30000});
+  assert.equal(next.started,true);assert.equal(next.record.port,port);assert.equal((await runtimeStatus({instanceRoot})).crashed,undefined);
   // And one that is told to stop leaves no record: that is not an unexpected end.
   await stopRuntime({instanceRoot,timeoutMs:15000});
   assert.deepEqual([(await runtimeStatus({instanceRoot})).state,(await runtimeStatus({instanceRoot})).crashed],['stopped',undefined]);
@@ -321,6 +323,28 @@ test('an entry that stops the runtime and starts it again finds it on the port i
   const named=await freePort();
   assert.equal((await startRuntime({instanceRoot,entryPath,port:named,timeoutMs:30000})).record.port,named);
   assert.equal(fs.readFileSync(path.join(instanceRoot,'port'),'utf8'),named+'\n');
+});
+
+test('a runtime that no launcher started is restarted from an editor on the port it ran on',{timeout:120000},async t=>{
+  // One that ran before an update, or `devmate serve --port`: nothing was written down, and the first restart from an
+  // editor (a stop, then a start that names no port) moved it to the usual port.
+  const { createRequire } = await import('node:module');
+  const { createHostClient } = createRequire(import.meta.url)('../runtime/host-client.cjs');
+  const base=temp(t,false),instanceRoot=path.join(base,'served'),entryPath=path.resolve('runtime/main.mjs'),port=await freePort();
+  t.after(async()=>{
+    await stopRuntime({instanceRoot,timeoutMs:15000}).catch(()=>{});
+    fs.rmSync(base,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+  });
+  const program='import { serve } from '+JSON.stringify(pathToFileURL(entryPath).href)+';\nawait serve({ instanceRoot: '+JSON.stringify(instanceRoot)+', port: '+port+' });\n';
+  const child=spawn(process.execPath,['--input-type=module','-e',program],{stdio:['ignore','pipe','pipe'],windowsHide:true});
+  t.after(()=>{ if(child.exitCode===null) child.kill(); });
+  await new Promise((resolve,reject)=>{let said='';child.stdout.on('data',chunk=>{said+=chunk;if(said.includes('"event":"ready"'))resolve();});child.once('close',code=>reject(new Error('it ended first ('+code+')')));});
+  assert.equal(fs.existsSync(path.join(instanceRoot,'port')),false);
+  const editor=createHostClient({instanceRoot,entryPath,nodePath:process.execPath,timeoutMs:30000});
+  t.after(()=>editor.dispose());
+  await editor.stop();
+  await new Promise(resolve=>child.exitCode===null?child.once('close',resolve):resolve());
+  assert.equal((await editor.start()).record.port,port,'the restart keeps the port it ran on');
 });
 
 test('the runtime is started with the owner environment, without the variables an editor injects into its own processes', async t => {

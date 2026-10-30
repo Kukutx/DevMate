@@ -21,7 +21,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   const client = suppliedClient || require('../../runtime/host-client.cjs').createHostClient({
     instanceRoot: plugin.settings?.runtimeInstanceDirectory || '',
     nodePath: plugin.settings?.nodeCommandPath || '',
-    port: plugin.settings?.runtimePort || 8788
+    ...(chosenPort(plugin.settings) !== undefined ? { port: chosenPort(plugin.settings) } : {})
   });
   // One identity for this Obsidian window in the runtime's editor-window registry.
   const windowId = randomUUID();
@@ -515,4 +515,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   return { activate, deactivate, open, attachVault, detachVault, changeSharing, accessProfile, stopRuntime, restartRuntime, sync, status, copyMcpUrl, loginCode, configureConnection, doctor, editorContext, RuntimeView, windowId };
 }
 
-module.exports = { createObsidianRuntimeEntry, RUNTIME_VIEW_TYPE };
+// The local port where the owner set one in the plugin's settings (8788 too), else undefined: a start then takes the
+// port the runtime ran on last.
+function chosenPort(settings) { return Number.isInteger(settings?.runtimePort) ? settings.runtimePort : undefined; }
+
+module.exports = { createObsidianRuntimeEntry, chosenPort, RUNTIME_VIEW_TYPE };
