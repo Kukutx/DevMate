@@ -142,6 +142,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
   // Whether the stop under way is one to start again after: said in a file beside the instance, just before, by the
   // launcher that asks for it. (Read once; a word older than two minutes is no word for this stop.)
   const restarting = () => { const file = path.join(instanceRoot, 'restarting'); try { const at = fs.statSync(file).mtimeMs; fs.rmSync(file, { force: true }); return Date.now() - at < 120000; } catch { return false; } };
+  // A word left from a stop before (one this runtime's predecessor never read) is no word for this runtime's stop.
+  try { fs.rmSync(path.join(instanceRoot, 'restarting'), { force: true }); } catch { /* the next stop reads only a fresh one */ }
   const token = randomBytes(32).toString('hex');
   let config;
   try {

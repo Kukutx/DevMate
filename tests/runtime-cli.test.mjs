@@ -120,6 +120,14 @@ test('devmate connect quick --new-address takes the key of the address away, and
   const renewed=await run('quick','--new-address');
   assert.equal(renewed.code,0,renewed.stderr);assert.equal(fs.existsSync(file),false);
   assert.notEqual(quickTunnelKey(instance),key);
+  // Asked for alone, a new address changes nothing else: the connection stays as it is saved (the cloudflared it
+  // names, OpenAI's tunnel beside it), and only the key goes.
+  const configFile=path.join(instance,'config.json'),saved=JSON.parse(fs.readFileSync(configFile,'utf8'));
+  saved.openaiTunnel={tunnelId:'tunnel_kept'};fs.writeFileSync(configFile,JSON.stringify(saved));
+  const before=fs.readFileSync(configFile,'utf8'),again=quickTunnelKey(instance);
+  const stdout=output(),stderr=output(),alone=await main(['connect','quick','--new-address','--instance',instance],{stdout,stderr});
+  assert.equal(alone,0,stderr.text);assert.match(stdout.text,/"renewed": true/);
+  assert.equal(fs.readFileSync(configFile,'utf8'),before);assert.notEqual(quickTunnelKey(instance),again);
   const refused=await run('cloudflare','--url','https://devmate.example.com/mcp','--new-address');
   assert.equal(refused.code,1);assert.match(refused.stderr,/does not take --new-address/);
 });
@@ -144,7 +152,7 @@ test('the commands people copy from print just the value: MCP address, sign-in c
   assert.deepEqual([early.code,early.stdout],[1,'']);assert.match(early.stderr,/has not been given its address yet/);
   const quick=await run(['mcp-url'],{kind:'cloudflare-quick',phase:'connected',temporaryAddress:true,remoteMcpVerified:false,publicUrl:'https://fixture.trycloudflare.com/mcp/key-of-this-start'});
   assert.deepEqual([quick.code,quick.stdout],[0,'https://fixture.trycloudflare.com/mcp/key-of-this-start\n']);
-  assert.match(quick.stderr,/ends in the key of this start/);assert.match(quick.stderr,/not been checked end to end yet/);
+  assert.match(quick.stderr,/ends in a key that stays until you ask for a new address/);assert.match(quick.stderr,/not been checked end to end yet/);
   assert.equal((await run(['login-code'],{})).stdout,'dml_once\n');
   const link=await run(['ui'],{});
   assert.equal(link.stdout,'http://127.0.0.1:8788/?code=once\n');assert.deepEqual(link.opened,[]);

@@ -167,10 +167,11 @@ test('cloudflare connection keeps the token out of arguments, reports edge regis
 // A cloudflared as a quick tunnel's connector is seen from the runtime: a process, and its metrics server (the address
 // it was given, how many connections to Cloudflare it holds). given: the host name it holds; ready: its connections.
 function quickFixture() {
-  const spawned = [], cloudflared = { given: null, ready: 0, answers: true };
+  // events: what was done to connectors, in order ('reap' of one written down, 'spawn' of a new one).
+  const spawned = [], events = [], cloudflared = { given: null, ready: 0, answers: true };
   const spawnImpl = (file, args, options) => {
     const child = new EventEmitter(); child.pid = 5151 + spawned.length; child.exitCode = null; child.signalCode = null; child.unref = () => { child.unrefd = true; };
-    spawned.push({ file, args, options, child }); queueMicrotask(() => child.emit('spawn'));
+    spawned.push({ file, args, options, child }); events.push('spawn'); queueMicrotask(() => child.emit('spawn'));
     return child;
   };
   const terminated = [];
@@ -181,15 +182,15 @@ function quickFixture() {
     return { ok: !address.endsWith('/ready') || cloudflared.ready > 0, json: async () => body };
   };
   // The record of a kept connector, as ownedProcess keeps it in a file: here in memory, with a process that is alive
-  // for as long as `alive` says.
-  const kept = { record: null, alive: true, reaped: 0 };
+  // for as long as `alive` says. refused: the system does not say who the process is, and nothing is written.
+  const kept = { record: null, alive: true, reaped: 0, refused: false };
   const owned = {
-    async remember(pid, about = {}) { kept.record = { ...about, pid, identity: 'cloudflared|' + pid }; return true; },
+    async remember(pid, about = {}, still = () => true) { if (kept.refused || !still()) return false; kept.record = { ...about, pid, identity: 'cloudflared|' + pid }; return true; },
     async adopt(fits = () => true) { return kept.record && kept.alive && fits(kept.record) ? kept.record : null; },
-    async reap() { if (kept.record) kept.reaped++; kept.record = null; return { reaped: true }; },
+    async reap() { if (kept.record) { kept.reaped++; events.push('reap'); } kept.record = null; return { reaped: true }; },
     forget() { kept.record = null; }
   };
-  return { spawned, cloudflared, spawnImpl, terminateImpl, terminated, fetchImpl, kept, owned };
+  return { spawned, events, cloudflared, spawnImpl, terminateImpl, terminated, fetchImpl, kept, owned };
 }
 const until = async (check, what, ms = 3000) => { for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 20))) if (await check()) return; throw new Error('Timed out waiting for ' + what); };
 
@@ -224,6 +225,11 @@ test('a quick tunnel needs no credential, takes the address it is given, and its
   assert.equal(live.phase, 'connected'); assert.equal(live.edgeConnections, 2); assert.equal(live.publicUrl, 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
   assert.ok(Date.parse(live.addressSince) > 0);
   await until(() => kept.record?.since, 'the time of the address to be written down');
+  // cloudflared writes the address a failed request went to into its log, key and all: what is shown of the log
+  // (connection.status, the doctor) has the key taken out.
+  fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\nERR Request failed error="no answer" dest=https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start?x=1 connIndex=0\n');
+  const logged = (await connection.status()).diagnostic;
+  assert.match(logged, /dest=https:\/\/calm-river-quick-fixture\.trycloudflare\.com\/mcp\/<key>\?x=1/); assert.ok(!logged.includes('key-of-this-start'));
   // A restart (or a runtime that fails) leaves it running, written down; the next runtime takes it back, address and all.
   await connection.stop({ keep: true });
   assert.deepEqual(terminated, []); assert.equal(connection.publicUrl(), null); assert.ok(kept.record);
@@ -239,13 +245,39 @@ test('a quick tunnel needs no credential, takes the address it is given, and its
   // And a stop of a connector this runtime started ends it as ever.
   const third = connect(); await third.start(); await third.stop();
   assert.deepEqual(terminated, [spawned[1].child.pid]);
+  // One that could not be written down (the system did not say who the process is) is not left running by a restart:
+  // nobody could find it again to end it.
+  kept.refused = true;
+  const fourth = connect(); await fourth.start(); await fourth.stop({ keep: true });
+  assert.deepEqual(terminated, [spawned[1].child.pid, spawned[2].child.pid]);
+});
+
+test('a kept quick tunnel that does not answer for a moment keeps its address while its process is there, and one whose process is gone is started again', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-busy-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const config = { kind: 'cloudflare-quick', executable: process.execPath };
+  const { spawned, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
+  const connect = (more = {}) => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, ...more });
+  cloudflared.given = 'busy-fixture.trycloudflare.com'; cloudflared.ready = 1;
+  const first = connect(); await first.start(); await until(() => first.publicUrl(), 'the address'); await until(() => kept.record?.since, 'the record');
+  await first.stop({ keep: true });
+  const taken = connect({ lookMs: 20 }); assert.equal((await taken.start()).adopted, true);
+  // A computer under load: cloudflared answers nothing for a while, and its process is still the one written down.
+  cloudflared.answers = false;
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(spawned.length, 1, 'it is not taken for gone'); assert.equal(taken.publicUrl(), 'https://busy-fixture.trycloudflare.com/mcp/key-of-this-start');
+  // Its process is gone: it is started again.
+  kept.alive = false;
+  await until(async () => (await taken.status()).error?.code === 'cloudflared_exited', 'the end to be said');
+  await until(() => spawned.length === 2, 'a new cloudflared', 5000);
+  cloudflared.answers = true; await taken.stop();
 });
 
 test('a kept quick tunnel is taken back only where it is still the one this runtime would start, and one that lost its way is started again', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-kept-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const config = { kind: 'cloudflare-quick', executable: process.execPath };
-  const { spawned, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
+  const { spawned, events, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
   const connect = (localMcpUrl = 'http://127.0.0.1:8789/mcp/key-of-this-start', more = {}) => createConnection({ config, localMcpUrl, instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, ...more });
   cloudflared.given = 'first-fixture.trycloudflare.com'; cloudflared.ready = 1;
   const first = connect(); await first.start(); await until(() => first.publicUrl(), 'the first address'); await until(() => kept.record?.since, 'the record');
@@ -259,7 +291,8 @@ test('a kept quick tunnel is taken back only where it is still the one this runt
     const before = spawned.length, reaped = kept.reaped, other = connect(url);
     await other.start();
     assert.equal(spawned.length, before + 1, why + ': a new cloudflared');
-    assert.equal(kept.reaped, reaped + 1, why + ': what was written down is ended first');
+    assert.equal(kept.reaped, reaped + 1, why + ': what was written down is ended');
+    assert.deepEqual(events.slice(-2), ['reap', 'spawn'], why + ': ended before the new one starts');
     await until(() => other.publicUrl(), why + ': its address'); await until(() => kept.record?.since, why + ': its record');
     await other.stop({ keep: true }); kept.alive = true;
   }
@@ -278,8 +311,10 @@ test('a kept quick tunnel is taken back only where it is still the one this runt
   await new Promise(resolve => setTimeout(resolve, 80));
   assert.equal(spawned.length, before, 'a moment without a connection is no loss');
   clock += 1000;
+  // Said as lost (until the new one starts, a second later), then started again.
+  await until(async () => (await watched.status()).error?.code === 'tunnel_lost', 'the loss to be said');
+  assert.equal(watched.publicUrl(), null, 'a lost tunnel has no address');
   await until(() => spawned.length === before + 1, 'a new cloudflared after the tunnel was lost', 5000);
-  await until(async () => (await watched.status()).error?.code === 'tunnel_lost' || watched.publicUrl(), 'the loss to be said');
   cloudflared.ready = 1;
   await watched.stop();
 });
@@ -345,6 +380,18 @@ test('the key in a quick tunnel\'s address is made once and kept by the instance
   await again.stop();
   assert.deepEqual(stops.at(-1), { keep: true });
   assert.equal(fs.existsSync(path.join(instanceRoot, 'restarting')), false);
+  const fake = () => ({ async start() {}, async stop(options) { stops.push(options); }, publicUrl: () => null, status() { return { kind: 'cloudflare-quick', phase: 'connecting', remoteMcpVerified: false }; } });
+  // A runtime that fails keeps it too: the next one takes the tunnel back.
+  const failing = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake });
+  await failing.stop({}, { crashed: true });
+  assert.deepEqual(stops.at(-1), { keep: true });
+  // A word left from before this runtime started is no word for its stop, nor is one too old to be this stop's.
+  fs.writeFileSync(path.join(instanceRoot, 'restarting'), '');
+  const later = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake });
+  assert.equal(fs.existsSync(path.join(instanceRoot, 'restarting')), false, 'taken away when this runtime started');
+  fs.writeFileSync(path.join(instanceRoot, 'restarting'), ''); const old = new Date(Date.now() - 180000); fs.utimesSync(path.join(instanceRoot, 'restarting'), old, old);
+  await later.stop();
+  assert.deepEqual(stops.at(-1), { keep: false });
 });
 
 test('a runtime comes in by the port a kept quick tunnel forwards to, and ends a kept tunnel that belongs to another connection', async t => {

@@ -7,6 +7,9 @@ import {
   createRuntimeClient, DEFAULT_RUNTIME_PORT, instanceFiles, matchesRuntime, readRuntimeRecord
 } from './client.mjs';
 import { probeInstanceLock } from './instance-lock.mjs';
+// (Not ./cloudflare-connection.mjs itself: this file also runs in an editor's own process, where what that one loads,
+// the store and node:sqlite with it, has no place.)
+import { ownedProcess } from './platform/owned-process.mjs';
 import userPath from './platform/user-path.cjs';
 
 const { childExited, terminateProcessTree } = processTree;
@@ -197,6 +200,10 @@ export async function stopRuntime({
     // An explicit stop also settles a crash: nothing is left that asks a host to start the runtime again. Where the
     // runtime ran is kept all the same, for the next start.
     if (current.crashed) { try { rememberPort(files, readRuntimeRecord(files.directory)?.port); } catch { /* no record that can be read */ } discardStaleRecord(files); }
+    // A quick tunnel a runtime left running when it failed, or when a restart did not get as far as the start, is ended
+    // by a stop all the same: with no runtime it forwards its address to a port anything on this computer may take.
+    // (quick-tunnel.json is where ./cloudflare-connection.mjs writes it down.)
+    if (!again) await ownedProcess(path.join(files.directory, 'quick-tunnel.json')).reap().catch(() => {});
     return { stopped: true, alreadyStopped: true, instanceRoot: files.directory };
   }
   const stoppable = current.record && ['ready', 'stopping', 'shutdown_failed'].includes(current.health?.status) &&

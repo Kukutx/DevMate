@@ -241,6 +241,12 @@ async function offlineDoctor(instanceRoot) {
 
 async function configureConnection(kind, options, instanceRoot) {
   const { readConfig, saveConfig, publicMcpUrl } = await import('./config.mjs');
+  // A new address for the quick tunnel there is, and nothing else: the connection stays as it is saved (the cloudflared
+  // it names, OpenAI's tunnel beside it). Only its key goes, and with it the tunnel kept for that key.
+  if (kind === 'quick' && options['new-address'] && readConfig(instanceRoot).connection.kind === 'cloudflare-quick' && ['executable', 'openai-tunnel', 'organization', 'auth'].every(name => options[name] === undefined)) {
+    (await import('./cloudflare-connection.mjs')).forgetQuickTunnelKey(instanceRoot);
+    return { renewed: true, next: ['Apply it: devmate restart (the quick tunnel starts anew: another host name and another key; the old address leads nowhere)', 'Then give your client the new address: devmate mcp-url'] };
+  }
   const need = name => { if (!options[name]) throw new Error('connect ' + kind + ' needs --' + name); return options[name]; };
   const executable = () => path.resolve(need('executable'));
   // The quick tunnel needs nothing but cloudflared, which is looked for when it is not named.
@@ -635,7 +641,7 @@ export async function main(argv = process.argv.slice(2), {
       }
       stdout.write((remote || local) + '\n');
       stderr.write(connection.tunnelId ? 'In ChatGPT choose the Tunnel connection type and enter this tunnel ID. Clients on this computer use ' + local + '\n'
-        : remote ? (connection.temporaryAddress ? 'This address ends in the key of this start: give it to your own client only. ' : '') +
+        : remote ? (connection.temporaryAddress ? 'This address ends in a key that stays until you ask for a new address (devmate connect quick --new-address): give it to your own client only. ' : '') +
             (connection.remoteMcpVerified === false ? 'It has not been checked end to end yet (devmate doctor). ' : '') +
             // The address serves every client; the tunnel beside it serves ChatGPT of the account it belongs to.
             (connection.openaiTunnel?.tunnelId ? 'ChatGPT of the account the tunnel belongs to can use the Tunnel connection type instead, with the tunnel ID ' + connection.openaiTunnel.tunnelId + '. ' : '') +

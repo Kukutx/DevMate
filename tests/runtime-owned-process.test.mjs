@@ -58,6 +58,11 @@ test('a connector that is still the one written down, and what it was started fo
   assert.equal((await ownedProcess(file).adopt(about => about.forwardsTo === 8789))?.pid, kept.pid);
   assert.equal(await ownedProcess(file).adopt(about => about.forwardsTo === 9790), null);
   assert.equal(processTree.pidRunning(kept.pid), true, 'a record that does not fit ends nothing by itself');
+  // A write that comes when the process is no longer the caller's to write down (it stopped meanwhile, or another
+  // runtime wrote down its own) writes nothing.
+  const other = path.join(path.dirname(file), 'other.json');
+  assert.equal(await ownedProcess(other).remember(kept.pid, { kind: 'cloudflare-quick' }, () => false), false);
+  assert.equal(fs.existsSync(other), false);
   // A record whose process is another one now is no connector to take back.
   fs.writeFileSync(file, JSON.stringify({ ...record, identity: 'somebody else|0' }));
   assert.equal(await ownedProcess(file).adopt(), null);

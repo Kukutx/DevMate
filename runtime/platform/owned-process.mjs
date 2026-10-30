@@ -14,8 +14,10 @@ export function processIdentity(pid) {
   if (process.platform === 'linux') {
     try {
       // Field 22 of /proc/<pid>/stat is the start time; the command name before it may contain spaces and parentheses.
+      // A program replaced on disk while it runs (a package manager updated it) is named with " (deleted)" after it:
+      // still the process that was started then.
       const stat = fs.readFileSync('/proc/' + id + '/stat', 'utf8');
-      return Promise.resolve(fs.readlinkSync('/proc/' + id + '/exe') + '|' + stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+      return Promise.resolve(fs.readlinkSync('/proc/' + id + '/exe').replace(/ \(deleted\)$/, '') + '|' + stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
     } catch { return Promise.resolve(null); }
   }
   const [file, args] = process.platform === 'win32'
@@ -41,10 +43,12 @@ export function ownedProcess(file, { identify = processIdentity, terminate = pro
     forget,
     // about: what the process was started for, written beside it (a connector that outlives the runtime is taken back
     // by the next one only where it is still what that one would start).
-    async remember(pid, about = {}) {
+    // still: whether it is still to be written once its identity is known (asking the system can take seconds).
+    async remember(pid, about = {}, still = () => true) {
       const identity = await identify(pid);
-      if (identity) fs.writeFileSync(file, JSON.stringify({ ...about, pid, identity }) + '\n', { mode: 0o600 });
-      return identity !== null;
+      if (!identity || !still()) return false;
+      fs.writeFileSync(file, JSON.stringify({ ...about, pid, identity }) + '\n', { mode: 0o600 });
+      return true;
     },
     /** The record of a process that still runs as the one written down, where `fits` takes it; otherwise null. */
     async adopt(fits = () => true) {

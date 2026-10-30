@@ -522,7 +522,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const value = connection.publicUrl || connection.url || connection.tunnelId || await client.mcpUrl();
     await vscode.env.clipboard.writeText(value);
     await notify.showInformationMessage(connection.tunnelId ? 'Copied the tunnel ID. In ChatGPT choose the Tunnel connection type.'
-      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in the key of this start: give it to your own client only.' : '') +
+      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in a key that stays until you ask for a new address: give it to your own client only.' : '') +
           (connection.remoteMcpVerified === false ? ' It has not been checked end to end yet: "DevMate: Doctor" says whether it reaches this computer.' : '')
         // In a remote window the extension, and with it DevMate, runs on the remote computer.
         : 'Copied the local MCP URL' + (vscode.env.remoteName ? ' of the remote computer this window works on (' + vscode.env.remoteName + '); it answers there, not on this computer' : '') +

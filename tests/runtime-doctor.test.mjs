@@ -659,7 +659,7 @@ test('the editor says when a new address can be reached from the cloud, once, an
   // Checked end to end: this is the moment a client in the cloud can connect. It is said once, with the address one click away.
   route = { ...quick, phase: 'connected', publicUrl: first, remoteMcpVerified: true, verification: { url: first, verified: true, reachable: true } };
   assert.equal((await one.look()).text, '$(plug) DevMate'); assert.match(one.bar.tooltip, /Reachable from the cloud/);
-  assert.equal(said.length, 2); assert.match(said[0], /can be reached from the cloud at a new address/); assert.match(said[1], /Copied the public MCP URL\. It ends in the key of this start/); assert.deepEqual(copied, [first]);
+  assert.equal(said.length, 2); assert.match(said[0], /can be reached from the cloud at a new address/); assert.match(said[1], /Copied the public MCP URL\. It ends in a key that stays until you ask for a new address/); assert.deepEqual(copied, [first]);
   await one.look(); assert.equal(said.length, 2, 'not said again');
   // Another window of the same editor does not repeat it, and what the editor remembers is not the address: that ends in the key.
   const two = window(); await two.start(); await two.look();

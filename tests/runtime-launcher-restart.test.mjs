@@ -149,3 +149,21 @@ test('a runtime that no launcher started is restarted from an editor on the port
   await new Promise(resolve=>child.exitCode===null?child.once('close',resolve):resolve());
   assert.equal((await editor.start()).record.port,port,'the restart keeps the port it ran on');
 });
+
+test('a stop with no runtime running ends a quick tunnel a runtime left running; a stop to start again leaves it',{timeout:60000},async t=>{
+  // A runtime that failed, or a restart that did not get as far as the start, leaves the tunnel running for the next
+  // one. With no runtime it forwards its public address to a port anything on this computer may take: a stop ends it.
+  const { ownedProcess } = await import('../runtime/platform/owned-process.mjs');
+  const base=temp(t),instanceRoot=path.join(base,'left');fs.mkdirSync(instanceRoot);
+  const tunnel=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});
+  t.after(()=>{try{tunnel.kill('SIGKILL');}catch{}});
+  await new Promise((resolve,reject)=>{tunnel.once('spawn',resolve);tunnel.once('error',reject);});
+  const record=path.join(instanceRoot,'quick-tunnel.json');
+  assert.equal(await ownedProcess(record).remember(tunnel.pid,{kind:'cloudflare-quick',forwardsTo:8789}),true);
+  await stopRuntime({instanceRoot,timeoutMs:15000,again:true});
+  assert.equal(processTree.pidRunning(tunnel.pid),true,'kept for the start that follows');assert.equal(fs.existsSync(record),true);
+  const ended=new Promise(resolve=>tunnel.once('exit',()=>resolve(true)));
+  assert.equal((await stopRuntime({instanceRoot,timeoutMs:15000})).alreadyStopped,true);
+  let timer;assert.equal(await Promise.race([ended,new Promise(resolve=>{timer=setTimeout(()=>resolve(false),10000);})]).finally(()=>clearTimeout(timer)),true,'the tunnel was ended');
+  assert.equal(fs.existsSync(record),false);
+});

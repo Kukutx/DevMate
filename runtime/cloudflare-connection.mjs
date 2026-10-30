@@ -53,12 +53,15 @@ const freePort = () => new Promise((resolve, reject) => {
   server.once('error', reject);
   server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
 });
-// The end of cloudflared's own log: what it said last, where it failed.
+// The end of cloudflared's own log: what it said last, where it failed. cloudflared writes the address a request
+// went to into its log where one failed, the key of the address with it: that is taken out as it is read, so that
+// nothing that shows the log (the doctor, connection.status) shows the key.
+export const withoutKey = text => String(text).replace(/\/mcp\/[^\s"'/?#&<>]+/g, '/mcp/<key>');
 function tail(file, bytes = 4000) {
   try {
     const size = fs.statSync(file).size, length = Math.min(size, bytes), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
     try { fs.readSync(fd, buffer, 0, length, size - length); } finally { fs.closeSync(fd); }
-    return buffer.toString('utf8');
+    return withoutKey(buffer.toString('utf8'));
   } catch { return ''; }
 }
 export function normalizeCloudflareConfig(input) {
@@ -91,7 +94,9 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   // assigned: the address a quick tunnel was given for as long as this connector lives. since: when it was given.
   // A connector taken back from a runtime before is { pid, adopted: true }: no process object, no events of its own.
   let child = null, phase = 'stopped', diagnostic = '', lastError = null, connections = 0, metrics = null, assigned = null, since = null, queue = Promise.resolve();
-  let lookTimer = null, emptySince = null, misses = 0;
+  // recorded: the connector running now is written down (or was taken back from the record). Only one that is can be
+  // left running for the next runtime: one nobody wrote down, nobody could end.
+  let lookTimer = null, emptySince = null, misses = 0, recorded = false;
   const publicUrl = () => quick ? assigned : settings.publicUrl;
   const serial = action => { const work = queue.then(action); queue = work.catch(() => {}); return work; };
   const recovery = createConnectionRecovery({ restart: () => start(),
@@ -131,7 +136,14 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
     try { ready = await ask(metrics, '/ready'); } catch { /* no answer */ }
     if (child !== watched) return;
     if (!ready) {
-      if (watched.adopted && ++misses >= 2) return lose(watched, 'cloudflared_exited', 'cloudflared, kept from an earlier start, is not there any more.');
+      // A connector taken back that does not answer twice is looked at as a process: one that is still the one written
+      // down is busy, not gone (a computer under load), and keeps its address.
+      if (watched.adopted && ++misses >= 2) {
+        const still = await owned?.adopt(record => record.pid === watched.pid);
+        if (child !== watched) return;
+        if (still) { misses = 0; return; }
+        return lose(watched, 'cloudflared_exited', 'cloudflared, kept from an earlier start, is not there any more.');
+      }
       return;
     }
     misses = 0; connections = Number(ready.body?.readyConnections) || 0;
@@ -145,8 +157,9 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
     if (child !== lost) return;
     child = null; clearInterval(lookTimer);
     phase = 'failed'; connections = 0; metrics = null; assigned = null; since = null;
-    lastError = { code, message };
-    try { if (lost.adopted) await owned?.reap(); else { await terminateImpl(lost); owned?.forget(); } } catch { /* the next start ends what is written down */ }
+    lastError = { code, message }; recorded = false;
+    // (What is written down is forgotten only once the process is known to have ended: otherwise the next start ends it.)
+    try { if (lost.adopted) await owned?.reap(); else if ((await terminateImpl(lost))?.exitConfirmed) owned?.forget(); } catch { /* the next start ends what is written down */ }
     recovery.unexpectedExit();
   }
   // A quick tunnel an earlier runtime of this instance left running, where it is still the one this runtime would
@@ -157,18 +170,21 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
       && kept.keyId === keyId && typeof kept.metrics === 'string' && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(kept.metrics));
     const hostname = record ? await hostnameOf(record.metrics) : null;
     if (!hostname) return false;
-    child = { pid: record.pid, adopted: true }; metrics = record.metrics; assigned = 'https://' + hostname + target.pathname;
+    child = { pid: record.pid, adopted: true }; metrics = record.metrics; assigned = 'https://' + hostname + target.pathname; recorded = true;
     since = typeof record.since === 'string' ? record.since : null; diagnostic = ''; lastError = null; connections = 0; phase = 'connecting';
     return true;
   }
-  const remembered = proc => owned?.remember(proc.pid, { kind: 'cloudflare-quick', executable: settings.executable, forwardsTo: Number(target.port), keyId, metrics, ...(since ? { since } : {}) }) ?? Promise.resolve(false);
+  // Written down while it is still this connection's connector: a write that comes late (asking the system who a
+  // process is can take seconds) after a stop, or after the next runtime wrote down its own, writes nothing.
+  const current = proc => () => child === proc && phase !== 'stopping';
+  const remembered = async proc => (await owned?.remember(proc.pid, { kind: 'cloudflare-quick', executable: settings.executable, forwardsTo: Number(target.port), keyId, metrics, ...(since ? { since } : {}) }, current(proc)).catch(() => false)) === true;
   // The address a new quick tunnel is given, asked of cloudflared until it has one; written down with the connector.
   async function learn(proc) {
     for (const end = now() + 60000; child === proc && !assigned && now() < end; await new Promise(resolve => setTimeout(resolve, 500))) {
       const hostname = metrics ? await hostnameOf(metrics) : null;
       if (hostname && child === proc) { assigned = 'https://' + hostname + target.pathname; since = new Date(now()).toISOString(); }
     }
-    if (child === proc && assigned) await remembered(proc).catch(() => {});
+    if (current(proc)() && assigned && await remembered(proc) && child === proc) recorded = true;
   }
   function start() {
     return serial(async () => {
@@ -206,7 +222,7 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
         proc.unref?.();
         if (phase === 'starting') phase = 'connecting';
         // Written down at once: a runtime that stops before the address is known leaves no connector nobody knows of.
-        await remembered(proc).catch(() => {});
+        recorded = await remembered(proc) && child === proc;
         void learn(proc);
         watch();
         recovery.enable();
@@ -253,8 +269,11 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
     recovery.disable();
     return serial(async () => {
       clearInterval(lookTimer);
-      if (!child) { phase = 'stopped'; return snapshot(); }
-      if (quick && keep) { child = null; phase = 'stopped'; connections = 0; metrics = null; assigned = null; since = null; return snapshot(); }
+      // (A quick tunnel written down for this instance and not running here, kept by a runtime that failed, is ended
+      // by a stop all the same: a stop is a stop.)
+      if (!child) { if (quick && !keep) await owned?.reap().catch(() => {}); phase = 'stopped'; return snapshot(); }
+      // Kept only where it is written down: one that is not, nobody could find again to end.
+      if (quick && keep && recorded) { child = null; recorded = false; phase = 'stopped'; connections = 0; metrics = null; assigned = null; since = null; return snapshot(); }
       phase = 'stopping';
       if (child.adopted) await owned?.reap();
       else {
