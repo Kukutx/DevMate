@@ -844,7 +844,7 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   const projectRoot = path.join(temp, 'project'); fs.mkdirSync(projectRoot);
   await runtime.service.call('project.create', { root: projectRoot }, owner);
   const everything = await runtime.service.call('capability.list', { summary: true }, connected);
-  assert.deepEqual(everything.engines.at(-1).id, 'chrome'); assert.ok(everything.engines.length > 3);
+  assert.deepEqual(everything.engines.slice(-2).map(engine => engine.id), ['chrome', 'desktop']); assert.ok(everything.engines.length > 4);
   // The browser closes: the host ends, the runtime is told and keeps running.
   host.stdin.end();
   assert.equal(await new Promise(resolve => host.once('exit', resolve)), 0);

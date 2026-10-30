@@ -185,6 +185,10 @@ Leave **Developer mode** on, and that is all there is to do, updates included. T
 
 The runtime's side has been run end to end with the browser's own message framing against a real runtime. [STATUS](docs/STATUS.md) says what has been tried in a real browser.
 
+## The windows of your computer
+
+On Windows a client can read what is open on your screen, with no extension and nothing installed: `desktop.windows` lists the windows as the taskbar shows them (title, program, place, which has the focus), `desktop.snapshot` reads the controls of one window as screen readers do (kind, name, value, state; never what a password field holds), and `desktop.screenshot` pictures one window, even where another covers it, or the whole screen. It only reads: nothing clicks, types or moves a window. The system's own Windows PowerShell does the reading and ends after two minutes without a call. What a window says is handed to the model as data, never as instructions. On macOS and Linux it says that it reads windows on Windows only, for now.
+
 ## Connecting a client
 
 ### On the same computer

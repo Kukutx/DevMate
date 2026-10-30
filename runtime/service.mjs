@@ -19,6 +19,7 @@ import { CLIENT_COMMAND_ENV } from './client.mjs';
 import { createUsage } from './usage.mjs';
 import { defineOperations } from './operations/index.mjs';
 import { createBrowserLink } from './chrome.mjs';
+import { createDesktop } from './desktop.mjs';
 import { projectOverview } from './operations/projects.mjs';
 import { doctor } from './operations/doctor.mjs';
 import { snapshot } from './operations/snapshot.mjs';
@@ -98,6 +99,8 @@ export class DevMateService {
     this.notedFailures = new WeakSet();
     // The owner's browser, where the DevMate extension in it is connected (./chrome.mjs).
     this.browser = createBrowserLink();
+    // The owner's windows, read on Windows (./desktop.mjs).
+    this.desktop = createDesktop();
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
     this.config = normalizeConfig(config);
@@ -604,6 +607,7 @@ export class DevMateService {
     this.execution.abort(new DomainError('runtime_stopping', 'Runtime is stopping.'));
     this.inputs.close();
     this.browser.close();
+    this.desktop.close();
     const results = await Promise.allSettled([this.agents.close(), this.jobs?.close(), this.capabilities?.close(), this.hosts?.close(), this.auth?.close()]);
     // Jobs run through the process manager, so it closes after they have settled.
     results.push(...await Promise.allSettled([this.processes.close()]));

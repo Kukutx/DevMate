@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
+import { DESKTOP_ENGINE, isDesktopCapability } from '../desktop.mjs';
 import { resolveProjectPath } from '../workspace.mjs';
 import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
@@ -28,8 +29,10 @@ function uploads(service, args) {
 export function defineCapabilityOperations(service, add) {
   const engine = z.string().max(80);
   // The owner's browser belongs to no project: its capabilities (chrome.*) are answered whichever projects are shared,
-  // and when none is.
+  // and when none is. So do the owner's windows (desktop.*), which only read.
   const ofBrowser = args => isBrowserCapability(args.capability), listsBrowser = args => args.engine === BROWSER_ENGINE || isBrowserCapability(args.name);
+  const ofDesktop = args => isDesktopCapability(args.capability), listsDesktop = args => args.engine === DESKTOP_ENGINE || isDesktopCapability(args.name);
+  const ofOwner = args => ofBrowser(args) || ofDesktop(args), listsOwner = args => listsBrowser(args) || listsDesktop(args);
   // With words to look for, an engine keeps the capabilities that have them, and an engine that has none is left out.
   const having = (query, listed) => query && Array.isArray(listed?.engines)
     ? { ...listed, engines: listed.engines.map(item => Array.isArray(item.capabilities) ? { ...item, capabilities: item.capabilities.filter(one => hasWords(query, one.name, one.description || '')) } : item).filter(item => !Array.isArray(item.capabilities) || item.capabilities.length) }
@@ -38,22 +41,25 @@ export function defineCapabilityOperations(service, add) {
     serverId: id.optional(), cursor: z.string().max(512).optional() }, true,
     'Discover the domain capabilities of this project: browser control and QA, Godot, reverse engineering, Obsidian, configured external MCP servers, and the owner\'s own browser (engine:"chrome": bookmarks, tabs, history, downloads, the page in front; no project needed). summary:true lists names and descriptions only; engine narrows to one domain; name returns one capability with its input schema.', async (args, context) => {
       if (listsBrowser(args)) return isBrowserCapability(args.name) ? service.browser.list({ name: args.name }) : having(args.query, { engines: [service.browser.list({ full: args.summary !== true })] });
+      if (listsDesktop(args)) return isDesktopCapability(args.name) ? service.desktop.list({ name: args.name }) : having(args.query, { engines: [service.desktop.list({ full: args.summary !== true })] });
       const listed = await service.capabilities.list(args, { signal: service.waitSignal(context) });
-      // The browser is listed beside the project's own engines, by name only: its capabilities are one call away.
+      // The browser and the windows are listed beside the project's own engines, by name only: their capabilities are one call away.
       return having(args.name === undefined ? args.query : undefined, Array.isArray(listed.engines) && args.engine === undefined && args.name === undefined && args.serverId === undefined
-        ? { ...listed, engines: [...listed.engines, service.browser.list({})] } : listed);
-    }, { withoutProject: listsBrowser });
+        ? { ...listed, engines: [...listed.engines, service.browser.list({}), service.desktop.list({})] } : listed);
+    }, { withoutProject: listsOwner });
   add('capability.call', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}), ...mutation }, false,
     'Invoke one capability by the name capability_list gave it, with the input its schema describes (capability_list {name} returns that schema). The result is the capability\'s own. For a capability marked readOnly use capability_query.', (args, context) =>
       ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context), files: uploads(service, args) })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), ownerDecides: service.ownerDecides(context) }),
-    { destructive: true, openWorld: true, withoutProject: ofBrowser });
+    { destructive: true, openWorld: true, withoutProject: ofOwner });
   // The same call for what only reads. A client that asks its user before every change has nothing to ask here.
   add('capability.query', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}) }, true,
     'Invoke a read-only capability (readOnly:true in capability_list; also a dryRun capability with its dry run on): status, inspection, search, snapshots. It never changes anything; everything else goes through capability_call.', (args, context) =>
       ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), readOnly: true, caller: browserCaller(context) })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), readOnly: true }),
-    { openWorld: true, withoutProject: ofBrowser });
+    { openWorld: true, withoutProject: ofOwner });
   // Without a project these act on the whole runtime, so the project is optional and not filled in.
   add('capability.settings', { projectId: id.optional(), engine: engine.optional() }, true,
     'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
