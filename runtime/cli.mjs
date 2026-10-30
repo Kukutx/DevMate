@@ -51,6 +51,11 @@ Connecting an AI client
   devmate mcp-url                   the address to enter in ChatGPT, Claude or another MCP client
   devmate mcp                       serve MCP on standard input and output, for clients that start
                                     their servers as a program; starts the runtime when needed
+  devmate client add claude-code | codex | claude-desktop
+                                    make DevMate one of that client's MCP servers on this computer, in its own
+                                    settings; it keeps working after DevMate is updated
+  devmate client remove <client>    take it out again
+  devmate client                    which clients DevMate is added to
   devmate connect local
   devmate connect quick [--new-address]
                                     a Cloudflare quick tunnel: no account, no domain, nothing to set up;
@@ -445,6 +450,22 @@ export async function main(argv = process.argv.slice(2), {
     if (command === 'logs') {
       const lines = runtimeLogTail(instanceRoot, { bytes: 64000 }).split(/\r?\n/);
       stdout.write(lines.slice(-Math.max(1, Number(options.lines) || 40)).join('\n') + '\n');
+      return 0;
+    }
+    if (command === 'client') {
+      const action = positional[0] || 'status', which = positional[1];
+      if (!['add', 'remove', 'status'].includes(action)) throw new Error('Use client add <claude-code|codex|claude-desktop>, client remove <…>, or client alone to see where DevMate is added');
+      // What a client on this computer starts is set at this computer, by its owner.
+      if (viaClient && action !== 'status') throw new Error('devmate client ' + action + ' is run by the owner in their own terminal, not through a connected client');
+      const { createClientRegistration } = await import('./platform/client-registration.mjs');
+      const registration = createClientRegistration({ instanceRoot, cli: fileURLToPath(import.meta.url), env });
+      if (action === 'status') { print(registration.status()); return 0; }
+      if (!which) throw new Error('Name the client: devmate client ' + action + ' claude-code | codex | claude-desktop');
+      const done = action === 'add' ? registration.add(which) : registration.remove(which);
+      const app = { 'claude-code': 'Claude Code', codex: 'Codex', 'claude-desktop': 'Claude Desktop' }[which];
+      print({ ...done, next: [action === 'add' ? 'Start a new ' + app + ' session (Claude Desktop: quit it and open it again): it reads its settings when it starts, and DevMate is then one of its MCP servers, named devmate.'
+        : done.removed ? 'Start a new ' + app + ' session: DevMate is no longer one of its servers.' : 'DevMate was not added to ' + app + '.',
+      action === 'add' ? 'DevMate starts by itself when the client needs it; check with: devmate client' : null].filter(Boolean) });
       return 0;
     }
     if (command === 'chrome') {

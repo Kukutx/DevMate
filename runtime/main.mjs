@@ -24,6 +24,7 @@ import { createOutboundProxy } from './platform/proxy.mjs';
 import { clientSurfaceBy } from './surfaces.mjs';
 import { VERIFY_CLIENT } from './connection-verify.mjs';
 import { createChromeRegistration } from './platform/chrome-registration.mjs';
+import { createClientRegistration } from './platform/client-registration.mjs';
 
 const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'true-client-ip'];
 const WORKBENCH_PATHS = ['/', '/workbench', '/workbench/'];
@@ -500,6 +501,9 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
     // A browser the owner registered starts and loads this copy of DevMate from now on (nothing where none is registered).
     try { createChromeRegistration({ instanceRoot, cli: fileURLToPath(new URL('./cli.mjs', import.meta.url)) }).refresh(); }
     catch (error) { process.stderr.write(new Date().toISOString() + ' browser registration: ' + error.message + '\n'); }
+    // So does the stdio bridge of the clients the owner added DevMate to (devmate client add).
+    try { createClientRegistration({ instanceRoot, cli: fileURLToPath(new URL('./cli.mjs', import.meta.url)) }).refresh(); }
+    catch (error) { process.stderr.write(new Date().toISOString() + ' client registration: ' + error.message + '\n'); }
     health.status = 'ready';
     if (ingressPort) health.ingressPort = ingressPort;
     publish(recordFile, JSON.stringify({ pid: process.pid, port, ...(ingressPort ? { ingressPort } : {}), instanceId, generation,

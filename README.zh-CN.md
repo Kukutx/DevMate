@@ -49,7 +49,7 @@ DevMate 让聊天里的模型直接在你自己的电脑上干活：读写和搜
 用 VS Code：
 
 1. 打开一个项目文件夹，在命令面板里运行 **DevMate: Start DevMate Runtime**。这个文件夹会以读写方式共享，窗口会告诉你一次。
-2. 运行 **DevMate: Copy MCP URL**。同一台电脑上的客户端到这一步就够了：`claude mcp add --transport http devmate http://127.0.0.1:8788/mcp`。
+2. 运行 **DevMate: Copy MCP URL**。同一台电脑上的客户端到这一步就够了：`devmate client add claude-code`（或 `codex`、`claude-desktop`）。
 3. 要接 ChatGPT 网页版或 Claude.ai，先运行一次 **DevMate: Configure Connection**（见[连接客户端](#连接客户端)），再把复制到的地址作为自定义 MCP 连接器填进去。
 4. 让模型“给我一个项目概览”。它会调用 `project_overview`，然后就可以干活了。
 
@@ -203,9 +203,12 @@ http://127.0.0.1:8788/mcp
 
 | 客户端 | 配置 |
 | --- | --- |
-| Claude Code | `claude mcp add --transport http devmate http://127.0.0.1:8788/mcp` |
-| Codex CLI | `codex mcp add devmate --url http://127.0.0.1:8788/mcp` |
+| Claude Code | `devmate client add claude-code`（或手动：`claude mcp add --scope user --transport http devmate http://127.0.0.1:8788/mcp`） |
+| Codex CLI | `devmate client add codex`（或手动：`codex mcp add devmate --url http://127.0.0.1:8788/mcp`） |
+| Claude Desktop | `devmate client add claude-desktop`，然后退出 Claude Desktop 再打开 |
 | VS Code 自带的 MCP 支持 | 装了扩展就自动发现 |
+
+`devmate client add` 把 DevMate 写进那个客户端自己的设置文件，作用于你这个用户：`~/.claude.json`（Claude Code）、`CODEX_HOME` 或 `~/.codex` 下的 `config.toml`（Codex，给 DevMate 启动留 60 秒、每次调用留 120 秒）、`claude_desktop_config.json`（Claude Desktop）。客户端启动的是 DevMate 的标准输入输出桥（运行时没在跑时它会先启动运行时），经由实例目录里的一个小程序；运行时每次启动都会让它指向正在运行的这份 DevMate，所以更新后客户端那边什么都不用做，`PATH` 上也不需要有 `devmate`。`devmate client` 显示加到了哪些客户端，`devmate client remove <客户端>` 移除；这两条都要在你自己的终端里执行，连进来的客户端不能执行。加给 Claude Code 的是用户级的服务器，所以在每个项目里都有。
 | 只会启动程序的客户端 | 命令填 `devmate`，参数填 `mcp`，例如 `{ "command": "devmate", "args": ["mcp"] }` |
 
 其他客户端：添加一个 HTTP（Streamable HTTP）MCP 服务器并填这个地址。来自其他来源的浏览器端客户端会被拒绝，除非你把它的来源加进 DevMate 配置的 `allowedOrigins`；只添加你自己运行的客户端。

@@ -49,7 +49,7 @@ New to DevMate and want ChatGPT on the web or Claude.ai working on your computer
 With VS Code:
 
 1. Open a project folder and run **DevMate: Start DevMate Runtime** from the Command Palette. The folder is shared, read and write, and the window tells you so once.
-2. Run **DevMate: Copy MCP URL**. For a client on the same computer that is all: `claude mcp add --transport http devmate http://127.0.0.1:8788/mcp`.
+2. Run **DevMate: Copy MCP URL**. For a client on the same computer that is all: `devmate client add claude-code` (or `codex`, `claude-desktop`).
 3. For ChatGPT on the web or Claude.ai, run **DevMate: Configure Connection** once (see [Connecting a client](#connecting-a-client)), then add the copied address as a custom MCP connector.
 4. Ask the model for "an overview of my project". It calls `project_overview` and you are working.
 
@@ -201,9 +201,12 @@ http://127.0.0.1:8788/mcp
 
 | Client | Setup |
 | --- | --- |
-| Claude Code | `claude mcp add --transport http devmate http://127.0.0.1:8788/mcp` |
-| Codex CLI | `codex mcp add devmate --url http://127.0.0.1:8788/mcp` |
+| Claude Code | `devmate client add claude-code` (or by hand: `claude mcp add --scope user --transport http devmate http://127.0.0.1:8788/mcp`) |
+| Codex CLI | `devmate client add codex` (or by hand: `codex mcp add devmate --url http://127.0.0.1:8788/mcp`) |
+| Claude Desktop | `devmate client add claude-desktop`, then quit Claude Desktop and open it again |
 | VS Code's own MCP support | Found automatically once the extension is installed |
+
+`devmate client add` writes DevMate into the client's own settings file, for your user: `~/.claude.json` (Claude Code), `config.toml` of `CODEX_HOME` or `~/.codex` (Codex, with 60 seconds for DevMate to start and 120 for a call), `claude_desktop_config.json` (Claude Desktop). What the client starts is DevMate's stdio bridge, which starts the runtime when it does not run, through a small program in the instance directory that every start of the runtime keeps pointing at the DevMate that runs: an update needs nothing done in the client, and nothing has to be on `PATH`. `devmate client` says where it is added, `devmate client remove <client>` takes it out; both are run in your own terminal, not by a connected client. The added server of Claude Code is the user's, so it is there in every project.
 | A client that only starts programs | Command `devmate`, argument `mcp`, for example `{ "command": "devmate", "args": ["mcp"] }` |
 
 Any other client: add an HTTP (Streamable HTTP) MCP server with this address. A browser-based client on another origin is refused until you add its origin to `allowedOrigins` in the DevMate configuration; add only clients you run yourself.

@@ -131,7 +131,10 @@ export async function startRuntime({
     // it gets the owner's environment, not the variables an editor injects into its own processes.
     // An entry started from a desktop icon has a minimal PATH; the usual tool directories are added so that
     // commands, package managers and agent CLIs are found whichever entry happened to start the runtime.
-    const environment = completePath(Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ELECTRON_|VSCODE_)/i.test(name))));
+    // (Nor the marks a coding agent puts on what it starts, where its MCP server, DevMate's bridge, starts the runtime:
+    // an agent the runtime starts later would take itself for one running inside another. What the owner set for
+    // those agents themselves, CODEX_HOME or a CLAUDE_CODE_ setting, stays.)
+    const environment = completePath(Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ELECTRON_|VSCODE_)|^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CODEX_SANDBOX|CODEX_SANDBOX_NETWORK_DISABLED)$/i.test(name))));
     child = spawnImpl(nodePath, [entryPath, '--instance', files.directory, '--port', String(selectedPort)], {
       cwd: files.directory, detached: true, windowsHide: true, shell: false,
       env: environment, stdio: ['ignore', fd, fd]

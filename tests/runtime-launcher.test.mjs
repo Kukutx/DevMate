@@ -361,7 +361,9 @@ test('a runtime that no launcher started is restarted from an editor on the port
 });
 
 test('the runtime is started with the owner environment, without the variables an editor injects into its own processes', async t => {
-  const names = ['ELECTRON_RUN_AS_NODE', 'VSCODE_IPC_HOOK', 'VSCODE_PID', 'DEVMATE_LAUNCH_VISIBLE'];
+  // (And without the marks a coding agent puts on what it starts, where its MCP server, DevMate's bridge, starts the
+  // runtime; what the owner set for the agents themselves stays.)
+  const names = ['ELECTRON_RUN_AS_NODE', 'VSCODE_IPC_HOOK', 'VSCODE_PID', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'DEVMATE_LAUNCH_VISIBLE', 'CODEX_HOME', 'CLAUDE_CODE_USE_BEDROCK'];
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   for (const name of names) process.env[name] = '1';
   t.after(() => { for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; });
@@ -370,7 +372,7 @@ test('the runtime is started with the owner environment, without the variables a
   const spawnImpl = (file, args, options) => { launched = { file, args, options }; const child = new EventEmitter(); child.pid = 1; child.exitCode = 1; child.unref = () => {}; return child; };
   const instanceRoot = path.join(temp(t), 'instance');
   await assert.rejects(startRuntime({ instanceRoot, spawnImpl, port: await freePort(), timeoutMs: 2000 }), /exited before readiness/);
-  assert.deepEqual(names.filter(name => launched.options.env[name] !== undefined), ['DEVMATE_LAUNCH_VISIBLE']);
+  assert.deepEqual(names.filter(name => launched.options.env[name] !== undefined), ['DEVMATE_LAUNCH_VISIBLE', 'CODEX_HOME', 'CLAUDE_CODE_USE_BEDROCK']);
   assert.ok(Object.keys(launched.options.env).some(name => name.toLowerCase() === 'path'));
   assert.deepEqual([launched.options.detached, launched.options.shell, launched.args.slice(1, 3)], [true, false, ['--instance', instanceRoot]]);
 });

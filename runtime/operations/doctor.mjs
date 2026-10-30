@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createChromeRegistration } from '../platform/chrome-registration.mjs';
+import { createClientRegistration } from '../platform/client-registration.mjs';
 import { findOnPath, installHint, resolveTool, startable } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
@@ -184,6 +185,14 @@ export async function doctor(service) {
   else if (registration?.stale) check('chrome', 'warn', 'The browser was registered with a Node or a copy of DevMate that is no longer there, so the DevMate extension cannot reach this runtime.', 'Register it again: devmate chrome install');
   else if (registration?.registered) check('chrome', 'info', 'DevMate is registered with ' + registration.browsers.join(', ') + '; no browser with the DevMate extension is connected right now.', 'Open the browser. If the extension is not in it yet, devmate chrome says where to load it from.');
   else if (registration?.supported) check('chrome', 'info', 'The browser is not connected to DevMate: its bookmarks, tabs, history and downloads are not available to your client.', 'Connect it: devmate chrome install');
+  // The clients on this computer DevMate was added to (devmate client add): said where there is one, and where one
+  // was written for a Node that is gone or another instance.
+  try {
+    const { clients } = createClientRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) }).status();
+    const added = clients.filter(item => item.registered), stale = added.filter(item => item.stale), list = items => items.map(item => item.client).join(', ');
+    if (stale.length) check('clients', 'warn', 'DevMate was added to ' + list(stale) + ' with a Node that is not there any more: it cannot start DevMate.', 'Add it again: ' + stale.map(item => 'devmate client add ' + item.client).join('; '));
+    else if (added.length) check('clients', 'ok', 'DevMate is one of the MCP servers of ' + list(added) + ' on this computer.');
+  } catch { /* a settings file that cannot be read is said by devmate client */ }
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
   if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
     'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +
