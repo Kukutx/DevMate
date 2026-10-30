@@ -438,6 +438,8 @@ test('work that is taken out again leaves a file the mode it had', { skip: (proc
   const { service, project, root, factory, file, read } = await fixture(t);
   fs.chmodSync(file('src/a.js'), 0o755); fs.mkdirSync(file('z')); fs.writeFileSync(file('z/held.txt'), 'one\n'); fs.writeFileSync(file('run.sh'), '#!/bin/sh\n');
   git(root, 'add', '.'); git(root, 'commit', '--quiet', '-m', 'second');
+  // (The mode a new file gets is this computer's: 644 where the mask is 022, 664 where it is 002.)
+  const plain = fs.statSync(file('run.sh')).mode & 0o777;
   // The work changes one file's bytes, and of another nothing but its mode: it makes a script of it.
   factory.work = cwd => { work(cwd); fs.writeFileSync(path.join(cwd, 'z', 'held.txt'), 'one\ntwo\n'); fs.chmodSync(path.join(cwd, 'run.sh'), 0o755); };
   const done = await service.call('agents.delegate', { projectId: project.id, provider: 'codex', prompt: 'Change b', isolate: true, waitMs: 20000 }, connected);
@@ -445,11 +447,12 @@ test('work that is taken out again leaves a file the mode it had', { skip: (proc
   fs.chmodSync(file('z'), 0o555); t.after(() => { try { fs.chmodSync(file('z'), 0o755); } catch { /* gone with the fixture */ } });
   await assert.rejects(service.call('agents.apply', { agentId: done.agentId }, connected), { code: 'apply_failed' });
   assert.equal(read('src/a.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
-  assert.deepEqual([fs.statSync(file('src/a.js')).mode & 0o777, fs.statSync(file('run.sh')).mode & 0o777], [0o755, 0o644], 'the file that got its bytes back, and the one of which only the mode had been changed');
+  assert.deepEqual([fs.statSync(file('src/a.js')).mode & 0o777, fs.statSync(file('run.sh')).mode & 0o777], [0o755, plain], 'the file that got its bytes back, and the one of which only the mode had been changed');
   assert.equal(git(root, 'status', '--porcelain').trim(), '', 'Git sees the project as it was, modes included');
   fs.chmodSync(file('z'), 0o755);
   assert.equal((await service.call('agents.apply', { agentId: done.agentId }, connected)).applied, true);
-  assert.deepEqual([fs.statSync(file('src/a.js')).mode & 0o777, fs.statSync(file('run.sh')).mode & 0o777], [0o755, 0o755]);
+  // (Applied, both are scripts as Git writes one on this computer: 755 where the mask is 022, 775 where it is 002.)
+  assert.deepEqual([fs.statSync(file('src/a.js')).mode & 0o777, fs.statSync(file('run.sh')).mode & 0o777], [plain | 0o111, plain | 0o111]);
 });
 
 // Work that makes a folder of a file: what it puts into that folder was not there before, and is taken back with
