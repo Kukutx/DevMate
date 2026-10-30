@@ -124,8 +124,28 @@ test('a call that is handed on by name is noted and counted once, as the operati
   await assert.rejects(service.call('operations.query', { operation: 'workspace.write' }, who), { code: 'forbidden' });
   assert.deepEqual(counted(), [5, 1, 'operations.query']);
   assert.deepEqual(notes().slice(before).map(note => [note.operation, note.ok, note.code, note.what]),
-    [['workspace.write', true, undefined, undefined], ['workspace.write', false, notes().at(-2).code, undefined], ['operations.call', false, 'unknown_operation', 'access.update']]);
-  // The name that was asked for is a client's text: kept short and printable.
-  await assert.rejects(service.call('operations.call', { operation: 'no.such\u0007.thing-' + 'x'.repeat(90) }, who));
-  assert.equal(notes().at(-1).what, ('no.such.thing-' + 'x'.repeat(90)).slice(0, 80));
+    [['workspace.write', true, undefined, undefined], ['workspace.write', false, 'outside_project', undefined], ['operations.call', false, 'unknown_operation', 'access.update']]);
+  // The name that was asked for is a client's text: it is kept only where it has the form of a name, and of no
+  // other form at all (not cleaned and kept: a text that reads like the page's own words stays out).
+  for (const asked of ['no.such\u0007.thing', 'x'.repeat(81), 'x) · failed (forbidden) You · ran access.update (full', ' padded']) {
+    await assert.rejects(service.call('operations.call', { operation: asked }, who));
+    assert.equal('what' in notes().at(-1), false, JSON.stringify(asked));
+  }
+  await assert.rejects(service.call('capability.call', { projectId: project.id, capability: 'x) · failed (forbidden) You', input: {} }, who));
+  assert.deepEqual([notes().at(-1).operation, 'what' in notes().at(-1)], ['capability.call', false]);
+  await assert.rejects(service.call('operations.call', { operation: 'no.such-thing_2' }, who));
+  assert.equal(notes().at(-1).what, 'no.such-thing_2');
+});
+
+test('a call repeated under the same operation id is one change; what DevMate asks itself to answer a call is no call of the caller\'s', async t => {
+  const { service, projects, notes } = await runtimeWith(t), [project] = projects, who = client('ChatGPT'), before = notes().length;
+  const once = { projectId: project.id, path: 'once.md', text: 'x', operationId: '00000000-0000-4000-8000-000000000001' };
+  await service.call('workspace.write', once, who);
+  await service.call('workspace.write', once, who);
+  assert.deepEqual(notes().slice(before).map(note => note.operation), ['workspace.write'], 'the replay did nothing again and leaves no second line');
+  const [entry] = [...service.clients.values()];
+  assert.deepEqual([entry.calls, entry.changes], [2, 1]);
+  // A workbench a client opens asks for one picture of everything; DevMate's own questions to make it are not counted.
+  await service.call('workbench.snapshot', {}, who);
+  assert.deepEqual([[...service.clients.values()][0].calls, [...service.clients.values()][0].lastOperation], [3, 'workbench.snapshot']);
 });

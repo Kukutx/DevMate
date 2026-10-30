@@ -79,6 +79,8 @@ export const __test = { pruneHistory };
 
 // Calls that change something and are still no deed to note (see noteCall), and how many clients are remembered.
 const UNNOTED = /^(?:window\.|chrome\.|host\.)/, GENERIC = /^operations\.(?:call|query)$/, CLIENTS_KEPT = 20;
+// What a call names (an operation, a capability) has this form; caller's text of any other form is not kept.
+const NAMED = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 
 export class DevMateService {
   constructor({ instanceRoot, endpoint, adapterFactory, providerSettings, connection, onStop, store, config = {}, capabilitiesFactory = createCapabilities, authOptions = {}, verifier = verifyPublicMcp }) {
@@ -385,7 +387,7 @@ export class DevMateService {
   noteCall(name, input, context, seen, error, began) {
     try {
       const operation = this.operations.get(name);
-      if (!operation || context?.id !== 'owner') return;
+      if (!operation || context?.id !== 'owner' || context.inner) return;
       const generic = GENERIC.test(name);
       if (generic && (!error || this.notedFailures.has(error))) return;
       if (error && typeof error === 'object') this.notedFailures.add(error);
@@ -398,17 +400,18 @@ export class DevMateService {
         this.clients.delete(key);
         this.clients.set(key, { name: client, via: context.via || null, firstAt: known?.firstAt || at, lastAt: at, calls: (known?.calls || 0) + 1,
           // (changes: the calls that changed something. One that was refused or failed changed nothing.)
-          changes: (known?.changes || 0) + (operation.readOnly || error ? 0 : 1), lastOperation: name });
+          changes: (known?.changes || 0) + (operation.readOnly || error || seen.replayed ? 0 : 1), lastOperation: name });
         if (this.clients.size > CLIENTS_KEPT) this.clients.delete(this.clients.keys().next().value);
       }
-      if (operation.readOnly || UNNOTED.test(name) || this.closing) return;
+      // (A replayed call, see perform, did nothing again: it is counted as a call above and not noted as a change.)
+      if (operation.readOnly || UNNOTED.test(name) || seen.replayed) return;
       this.store.event('operation.called', seen.projectId ? { projectId: seen.projectId } : null, {
         operation: name, by: { surface: connected ? 'connected' : 'local', ...(context.via ? { via: context.via } : {}), ...(client ? { client } : {}), ...(context.windowId ? { window: true } : {}) },
         ok: !error, ...(error ? { code: String(error.code || 'internal_error').slice(0, 80) } : {}),
-        // Of a call to an engine, which capability: its name is DevMate's own, and what it was given is not kept.
-        // Of a generic call that came to nothing, which operation was asked for: a name, kept short and printable.
-        ...(name === 'capability.call' && typeof input?.capability === 'string' ? { what: input.capability.slice(0, 80) }
-          : generic && typeof input?.operation === 'string' ? { what: input.operation.replace(/[^\x20-\x7e]/g, '').slice(0, 80) } : {}), ms: Date.now() - began });
+        // Of a call to an engine, which capability; of a generic call that came to nothing, which operation was asked
+        // for. Each is what the caller wrote, so it is kept only where it has the form of a name: anything else is left
+        // out, and the note says only that a call was made.
+        ...(() => { const asked = name === 'capability.call' ? input?.capability : generic ? input?.operation : undefined; return typeof asked === 'string' && NAMED.test(asked) ? { what: asked } : {}; })(), ms: Date.now() - began });
     } catch { /* a note that cannot be written never fails the call it is about */ }
   }
 
@@ -497,6 +500,7 @@ export class DevMateService {
     const existing = this.store.operation(operationKey);
     if (existing) {
       if (existing.operation !== name || existing.fingerprint !== fingerprint) throw new DomainError('operation_conflict', 'Operation ID was already used with different arguments.');
+      seen.replayed = true;
       if (this.inflight.has(operationKey)) return this.inflight.get(operationKey);
       if (existing.result.pending) throw new DomainError('outcome_unknown', 'This operation was interrupted. Inspect its result before creating a new operation.');
       if (existing.result.error) throw new DomainError(existing.result.error.code, existing.result.error.message);

@@ -29,7 +29,8 @@ export async function snapshot(service, { projectId, workflowId } = {}, context)
     pendingReviews: service.store.count('approval', { projectId, status: 'pending' }) + service.store.count('input', { projectId, status: 'pending' }),
     artifacts: service.store.count('artifact', scope)
   } : { agents: 0, activeTasks: 0, pendingReviews: 0, artifacts: 0 };
-  const providers = await service.call('providers.list', {}, context);
+  // (inner: what DevMate asks itself to answer this is no call of the caller's own, see noteCall.)
+  const providers = await service.call('providers.list', {}, { ...context, inner: true });
   return {
     instance: { name: 'DevMate', version: VERSION },
     capabilities: { operations: service.visibleOperations(context).map(op => op.name) }, access: { profile: service.accessProfile }, counts,
@@ -42,7 +43,7 @@ export async function snapshot(service, { projectId, workflowId } = {}, context)
     approvals: awaiting('approval'), inputs: awaiting('input'), artifacts: scoped('artifact'), references: scoped('reference'),
     hosts: projectId ? service.hosts.list({ projectId }).hosts : [],
     // The same view of the connection the caller would get by asking for it: full at this computer, state only for a connected client.
-    providers: providers.items, connection: await service.call('connection.status', {}, context),
+    providers: providers.items, connection: await service.call('connection.status', {}, { ...context, inner: true }),
     activity: projectId ? service.store.recentEvents({ ...scope, limit: 100 }) : [],
     revision: service.store.revision, updatedAt: now()
   };
