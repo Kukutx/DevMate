@@ -895,3 +895,16 @@ test('a browser that is lost or comes back wakes the other hosts only where that
   assert.equal(now.current, true);
   link.close();
 });
+
+test('a browser that connects paused and asks for the first time tells the browser in use that there are two now', async () => {
+  const link = createBrowserLink({ idleMs: 5000, unheardMs: 5000, callTimeoutMs: 2000 }), methods = ['tabs.list'];
+  const used = link.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId;
+  await link.next({ linkId: used, waitMs: 1 });
+  const started = Date.now(), waiting = link.next({ linkId: used, waitMs: 2000 });
+  const paused = link.attach({ browser: 'Microsoft Edge', extension: '4.0.6', methods, paused: true }).linkId;
+  void link.next({ linkId: paused, waitMs: 2000 });
+  const told = await waiting;
+  assert.ok(Date.now() - started < 1000, 'the browser in use was told after ' + (Date.now() - started) + ' ms');
+  assert.deepEqual([told.current, told.browsers], [true, 2]);
+  link.close();
+});

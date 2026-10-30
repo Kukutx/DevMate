@@ -282,7 +282,9 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     clearTimeout(link.idleTimer); clearTimeout(link.unheardTimer); link.handed.clear(); link.lost = false; link.heard = true;
     // The first time it asks, or again after it was lost sight of, it is a browser that can be used, which changes who
     // is used: the others are told.
-    if ((first || back) && pick() !== was) wake(link);
+    // (The first time, the number of browsers the others are told of has changed, whoever is used; coming back changes
+    // only who may be used.)
+    if (first || (back && pick() !== was)) wake(link);
     return new Promise(resolve => {
       link.waiter = resolve;
       const left = lost => { if (link.waiter !== resolve) return; link.waiter = null; clearTimeout(link.timer); unasked(link, lost ? Math.min(idleMs, unheardMs) : idleMs); resolve({ calls: [], ...told(link) }); if (lost) lose(link); };

@@ -361,7 +361,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.3.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -374,6 +374,6 @@
     "playwright-core": "^1.63.0"
   },
   "overrides": {
-    "@hono/node-server": "2.0.10"
+    "@hono/node-server": "2.1.5"
   }
 }
